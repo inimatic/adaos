@@ -1,5 +1,5 @@
 id: greet_on_boot
-version: 0.1
+version: 0.2
 trigger: manual
 vars:
   ask_prompt: "как к вам обращаться?"
@@ -28,22 +28,29 @@ steps:
           name: ${name_answer.text}
         save_as: user_name
 
+  - name: greeting_with_name
+    when: ${user_name}
+    set:
+      greeting_line: "Привет, ${user_name}!"
+
+  - name: greeting_default
+    when: ${not user_name}
+    set:
+      greeting_line: ${vars.greet_default}
+
   - name: run_weather
-    call: skills.call_fs
+    call: skills.run
     args:
-      skill_dir: ".adaos/skills/weather_skill"
-      entry: "handle"
+      skill: weather_skill
       topic: "nlp.intent.weather.get"
       payload: {}
     save_as: weather
 
   - name: compose_message
-    call: runtime.compose_greeting
-    args:
-      name: ${user_name}
-      default_greeting: ${vars.greet_default}
-      weather: ${weather.stdout}
-    save_as: msg
+    set:
+      msg: |
+        ${greeting_line}
+        ${weather.stdout}
 
   - name: out_console
     call: io.console.print

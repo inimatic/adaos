@@ -35,6 +35,7 @@ class Settings:
     default_wall_time_sec: float = 30.0
     default_cpu_time_sec: float | None = None
     default_max_rss_mb: int | None = None
+    scenario_log_level: str = "INFO"
 
     # жёсткие (или dev-override через .env)
     skills_monorepo_url: Optional[str] = const.SKILLS_MONOREPO_URL
@@ -80,6 +81,7 @@ class Settings:
 
         base = _get_base_dir()
         profile = pick_env("ADAOS_PROFILE", "default")
+        scenario_log_level = pick_env("ADAOS_SCENARIO_LOG_LEVEL", "INFO") or "INFO"
 
         # монорепо — ТОЛЬКО из констант, а .env/ENV учитываем если явно разрешено dev-флагом
         skills_url = const.SKILLS_MONOREPO_URL
@@ -101,6 +103,7 @@ class Settings:
             skills_monorepo_branch=skills_branch,
             scenarios_monorepo_url=scenarios_url,
             scenarios_monorepo_branch=scenarios_branch,
+            scenario_log_level=scenario_log_level,
         )
 
     def with_overrides(self, **kw) -> "Settings":
