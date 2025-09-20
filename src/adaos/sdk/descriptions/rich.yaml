@@ -1,180 +1,180 @@
+events: []
 meta:
   generated_at: '2025-09-14T22:26:20Z'
   git_sha: 22bae5e
   py: '3.12'
 tools:
-- kind: tool
-  name: scenarios.create
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.create
-  summary: create scenario from template
+- examples: []
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: experimental
+    version: null
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.create
+  qualname: adaos.sdk.manage.scenarios.create
   signature: (sid:str,template:str="template")->str
-  meta:
-    stability: experimental
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples: []
   signature_detail:
     args:
     - name: sid
       type: str
-    - name: template
+    - default: template
+      name: template
       type: str
-      default: template
     returns:
       type: str
-- kind: tool
-  name: scenarios.install
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.install
+  summary: create scenario from template
+- examples: []
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: stable
+    version: null
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.install
+  qualname: adaos.sdk.manage.scenarios.install
+  signature: (sid:str)->str
+  signature_detail:
+    args:
+    - name: sid
+      type: str
+    returns:
+      type: str
   summary: install (pull) scenario into runtime
-  signature: (sid:str)->str
+- examples: []
+  kind: tool
   meta:
-    stability: stable
     idempotent: null
     side_effects: null
     since: null
+    stability: stable
     version: null
-  examples: []
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.uninstall
+  qualname: adaos.sdk.manage.scenarios.uninstall
+  signature: (sid:str)->str
   signature_detail:
     args:
     - name: sid
       type: str
     returns:
       type: str
-- kind: tool
-  name: scenarios.uninstall
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.uninstall
   summary: uninstall scenario from runtime
-  signature: (sid:str)->str
+- examples: []
+  kind: tool
   meta:
-    stability: stable
     idempotent: null
     side_effects: null
     since: null
+    stability: stable
     version: null
-  examples: []
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.pull
+  qualname: adaos.sdk.manage.scenarios.pull
+  signature: (sid:str)->str
   signature_detail:
     args:
     - name: sid
       type: str
     returns:
       type: str
-- kind: tool
-  name: scenarios.pull
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.pull
   summary: pull/update scenario sources
-  signature: (sid:str)->str
+- examples: []
+  kind: tool
   meta:
-    stability: stable
     idempotent: null
     side_effects: null
     since: null
+    stability: experimental
     version: null
-  examples: []
-  signature_detail:
-    args:
-    - name: sid
-      type: str
-    returns:
-      type: str
-- kind: tool
-  name: scenarios.push
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.push
-  summary: commit & push scenario changes
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.push
+  qualname: adaos.sdk.manage.scenarios.push
   signature: (sid:str,message:Optional[str]=null,signoff:bool=false)->str
-  meta:
-    stability: experimental
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples: []
   signature_detail:
     args:
     - name: sid
       type: str
-    - name: message
+    - default: null
+      name: message
       type: Optional[str]
-      default: null
-    - name: signoff
+    - default: false
+      name: signoff
       type: bool
-      default: false
     returns:
       type: str
-- kind: tool
-  name: scenarios.list_installed
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.list_installed
-  summary: list installed scenarios
-  signature: ()->List[str]
+  summary: commit & push scenario changes
+- examples: []
+  kind: tool
   meta:
-    stability: stable
     idempotent: null
     side_effects: null
     since: null
+    stability: stable
     version: null
-  examples: []
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.list_installed
+  qualname: adaos.sdk.manage.scenarios.list_installed
+  signature: ()->List[str]
   signature_detail:
     args: []
     returns:
       type: List[str]
-- kind: tool
-  name: scenarios.delete
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.delete
-  summary: delete scenario locally
+  summary: list installed scenarios
+- examples: []
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: experimental
+    version: null
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.delete
+  qualname: adaos.sdk.manage.scenarios.delete
   signature: (sid:str)->bool
-  meta:
-    stability: experimental
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples: []
   signature_detail:
     args:
     - name: sid
       type: str
     returns:
       type: bool
-- kind: tool
-  name: scenarios.read_proto
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.read_proto
-  summary: read scenario prototype JSON
+  summary: delete scenario locally
+- examples: []
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: experimental
+    version: null
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.read_proto
+  qualname: adaos.sdk.manage.scenarios.read_proto
   signature: (sid:str)->Dict[str, Any]
-  meta:
-    stability: experimental
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples: []
   signature_detail:
     args:
     - name: sid
       type: str
     returns:
       type: Dict[str, Any]
-- kind: tool
-  name: scenarios.write_proto
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.write_proto
-  summary: write scenario prototype JSON
+  summary: read scenario prototype JSON
+- examples: []
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: experimental
+    version: null
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.write_proto
+  qualname: adaos.sdk.manage.scenarios.write_proto
   signature: (sid:str,data:Dict[str, Any])->str
-  meta:
-    stability: experimental
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples: []
   signature_detail:
     args:
     - name: sid
@@ -183,19 +183,19 @@ tools:
       type: Dict[str, Any]
     returns:
       type: str
-- kind: tool
-  name: scenarios.read_bindings
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.read_bindings
-  summary: read scenario bindings for user
+  summary: write scenario prototype JSON
+- examples: []
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: experimental
+    version: null
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.read_bindings
+  qualname: adaos.sdk.manage.scenarios.read_bindings
   signature: (sid:str,user:str)->Dict[str, Any]
-  meta:
-    stability: experimental
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples: []
   signature_detail:
     args:
     - name: sid
@@ -204,19 +204,19 @@ tools:
       type: str
     returns:
       type: Dict[str, Any]
-- kind: tool
-  name: scenarios.write_bindings
-  module: adaos.sdk.scenarios
-  qualname: adaos.sdk.scenarios.write_bindings
-  summary: write scenario bindings for user
-  signature: (sid:str,user:str,data:Dict[str, Any])->str
+  summary: read scenario bindings for user
+- examples: []
+  kind: tool
   meta:
-    stability: experimental
     idempotent: null
     side_effects: null
     since: null
+    stability: experimental
     version: null
-  examples: []
+  module: adaos.sdk.manage.scenarios
+  name: manage.scenarios.write_bindings
+  qualname: adaos.sdk.manage.scenarios.write_bindings
+  signature: (sid:str,user:str,data:Dict[str, Any])->str
   signature_detail:
     args:
     - name: sid
@@ -227,151 +227,151 @@ tools:
       type: Dict[str, Any]
     returns:
       type: str
-- kind: tool
-  name: skills.create
-  module: adaos.sdk.skills
-  qualname: adaos.sdk.skills.create
-  summary: create skill from template
-  signature: (name:str,template:str="demo_skill",register:bool=true,push:bool=true)->str
-  meta:
-    stability: stable
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples:
+  summary: write scenario bindings for user
+- examples:
   - skills.create('demo_skill')
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: stable
+    version: null
+  module: adaos.sdk.manage.skills
+  name: manage.skills.create
+  qualname: adaos.sdk.manage.skills.create
+  signature: (name:str,template:str="demo_skill",register:bool=true,push:bool=true)->str
   signature_detail:
     args:
     - name: name
       type: str
-    - name: template
+    - default: demo_skill
+      name: template
       type: str
-      default: demo_skill
-    - name: register
+    - default: true
+      name: register
       type: bool
-      default: true
-    - name: push
+    - default: true
+      name: push
       type: bool
-      default: true
     returns:
       type: str
-- kind: tool
-  name: skills.install
-  module: adaos.sdk.skills
-  qualname: adaos.sdk.skills.install
+  summary: create skill from template
+- examples: []
+  kind: tool
+  meta:
+    idempotent: null
+    side_effects: null
+    since: null
+    stability: stable
+    version: null
+  module: adaos.sdk.manage.skills
+  name: manage.skills.install
+  qualname: adaos.sdk.manage.skills.install
+  signature: (name:str)->str
+  signature_detail:
+    args:
+    - name: name
+      type: str
+    returns:
+      type: str
   summary: install skill into runtime
-  signature: (name:str)->str
+- examples: []
+  kind: tool
   meta:
-    stability: stable
     idempotent: null
     side_effects: null
     since: null
+    stability: stable
     version: null
-  examples: []
+  module: adaos.sdk.manage.skills
+  name: manage.skills.uninstall
+  qualname: adaos.sdk.manage.skills.uninstall
+  signature: (name:str)->str
   signature_detail:
     args:
     - name: name
       type: str
     returns:
       type: str
-- kind: tool
-  name: skills.uninstall
-  module: adaos.sdk.skills
-  qualname: adaos.sdk.skills.uninstall
   summary: uninstall skill from runtime
-  signature: (name:str)->str
+- examples: []
+  kind: tool
   meta:
-    stability: stable
     idempotent: null
     side_effects: null
     since: null
+    stability: experimental
     version: null
-  examples: []
+  module: adaos.sdk.manage.skills
+  name: manage.skills.pull
+  qualname: adaos.sdk.manage.skills.pull
+  signature: (name:str)->str
   signature_detail:
     args:
     - name: name
       type: str
     returns:
       type: str
-- kind: tool
-  name: skills.pull
-  module: adaos.sdk.skills
-  qualname: adaos.sdk.skills.pull
   summary: pull skill sources
-  signature: (name:str)->str
+- examples: []
+  kind: tool
   meta:
-    stability: experimental
     idempotent: null
     side_effects: null
     since: null
+    stability: experimental
     version: null
-  examples: []
-  signature_detail:
-    args:
-    - name: name
-      type: str
-    returns:
-      type: str
-- kind: tool
-  name: skills.push
-  module: adaos.sdk.skills
-  qualname: adaos.sdk.skills.push
-  summary: push local changes of a skill
+  module: adaos.sdk.manage.skills
+  name: manage.skills.push
+  qualname: adaos.sdk.manage.skills.push
   signature: (name:str,message:str,signoff:bool=false)->str
-  meta:
-    stability: experimental
-    idempotent: null
-    side_effects: null
-    since: null
-    version: null
-  examples: []
   signature_detail:
     args:
     - name: name
       type: str
     - name: message
       type: str
-    - name: signoff
+    - default: false
+      name: signoff
       type: bool
-      default: false
     returns:
       type: str
-- kind: tool
-  name: skills.list_installed
-  module: adaos.sdk.skills
-  qualname: adaos.sdk.skills.list_installed
-  summary: list installed skills
-  signature: ()->List[str]
+  summary: push local changes of a skill
+- examples: []
+  kind: tool
   meta:
-    stability: stable
     idempotent: null
     side_effects: null
     since: null
+    stability: stable
     version: null
-  examples: []
+  module: adaos.sdk.manage.skills
+  name: manage.skills.list_installed
+  qualname: adaos.sdk.manage.skills.list_installed
+  signature: ()->List[str]
   signature_detail:
     args: []
     returns:
       type: List[str]
-- kind: tool
-  name: skills.install_all
-  module: adaos.sdk.skills
-  qualname: adaos.sdk.skills.install_all
-  summary: best-effort bulk install
-  signature: (limit:Optional[int]=null)->List[str]
+  summary: list installed skills
+- examples: []
+  kind: tool
   meta:
-    stability: experimental
     idempotent: null
     side_effects: null
     since: null
+    stability: experimental
     version: null
-  examples: []
+  module: adaos.sdk.manage.skills
+  name: manage.skills.install_all
+  qualname: adaos.sdk.manage.skills.install_all
+  signature: (limit:Optional[int]=null)->List[str]
   signature_detail:
     args:
-    - name: limit
+    - default: null
+      name: limit
       type: Optional[int]
-      default: null
     returns:
       type: List[str]
-events: []
+  summary: best-effort bulk install

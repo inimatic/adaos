@@ -9,16 +9,9 @@ import inspect
 from adaos.apps.cli.i18n import _
 from adaos.services.sandbox.bootstrap import ensure_dev_venv
 from adaos.services.agent_context import get_ctx
+from adaos.services.skill.manager import SkillManager
+from adaos.adapters.db import SqliteSkillRegistry
 from adaos.ports.sandbox import ExecLimits
-from adaos.sdk.skills import (
-    push as push_skill,
-    pull as pull_skill,
-    install as install_skill,
-    uninstall as uninstall_skill,
-    install_all as install_all_skills,
-    create as create_skill,
-    list_installed as list_installed_skills,
-)
 
 app = typer.Typer(help="Run AdaOS test suites")
 
@@ -62,6 +55,47 @@ def _prepare_skills_repo(no_clone: bool) -> None:
             ex.write_text("\n".join(merged) + "\n", encoding="utf-8")
         except Exception:
             pass
+
+
+def _skill_manager() -> SkillManager:
+    ctx = get_ctx()
+    repo = ctx.skills_repo
+    registry = SqliteSkillRegistry(ctx.sql)
+    return SkillManager(repo=repo, registry=registry, git=ctx.git, paths=ctx.paths, bus=getattr(ctx, "bus", None), caps=ctx.caps)
+
+
+def _install_all_skills(limit: int | None = None) -> list[str]:
+    ctx = get_ctx()
+    repo = ctx.skills_repo
+    try:
+        repo.ensure()
+    except Exception:
+        pass
+
+    names: list[str] = []
+    try:
+        for item in repo.list() or []:
+            name = getattr(item, "name", None)
+            if name:
+                names.append(name)
+    except Exception:
+        pass
+
+    if not names:
+        names = ["weather_skill"]
+
+    if limit:
+        names = names[:limit]
+
+    mgr = _skill_manager()
+    installed: list[str] = []
+    for name in names:
+        try:
+            mgr.install(name, validate=False)
+            installed.append(name)
+        except Exception:
+            continue
+    return installed
 
 
 def _collect_test_dirs(root: Path) -> List[str]:
@@ -312,6 +346,7 @@ def _pick_python(spec: Optional[str]) -> tuple[str, list[str]]:
 def run_tests(
     only_sdk: bool = typer.Option(False, help="Run only SDK/API tests (./tests)."),
     only_skills: bool = typer.Option(False, help="Run only skills tests."),
+    only_scenarios: bool = typer.Option(False, help="Run only scenario tests."),
     marker: Optional[str] = typer.Option(None, "--m", help="Pytest -m expression"),
     use_real_base: bool = typer.Option(False, help="Do NOT isolate ADAOS_BASE_DIR."),
     no_install: bool = typer.Option(False, help="Do not auto-install skills before running tests."),
@@ -322,6 +357,10 @@ def run_tests(
     use_current: bool = typer.Option(True, "--use-current/--no-use-current", help="Use the same interpreter that's running this CLI (ideal for your current venv)."),
     extra: Optional[List[str]] = typer.Argument(None),
 ):
+    if only_scenarios and (only_sdk or only_skills):
+        typer.secho("--only-scenarios cannot be combined with --only-sdk or --only-skills", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+
     # 0) изоляция BASE
     if not use_real_base:
         tmpdir = _ensure_tmp_base_dir()
@@ -370,7 +409,16 @@ def run_tests(
             raise typer.Exit(code=2)
 
     # 2) Подбор путей
-    if not only_skills:
+    scenario_suite = repo_root / "tests" / "test_scenarios.py"
+
+    if only_scenarios:
+        if scenario_suite.exists():
+            pytest_paths.append(str(scenario_suite))
+        else:
+            typer.secho("No scenario tests found in tests/test_scenarios.py", fg=typer.colors.YELLOW)
+            raise typer.Exit(code=1)
+
+    if not only_skills and not only_scenarios:
         sdk_tests = repo_root / "tests"
         if sdk_tests.exists():
             pytest_paths.append(str(sdk_tests))
@@ -378,11 +426,11 @@ def run_tests(
             typer.secho("No SDK tests found in ./tests", fg=typer.colors.YELLOW)
             raise typer.Exit(code=1)
 
-    if not only_sdk:
+    if not only_sdk and not only_scenarios:
         _prepare_skills_repo(no_clone=no_clone)
         if not no_install:
             try:
-                installed = install_all_skills()
+                installed = _install_all_skills()
                 if installed:
                     typer.secho(f"[AdaOS] Installed skills: {', '.join(installed)}", fg=typer.colors.BLUE)
             except Exception as e:

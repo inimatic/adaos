@@ -13,7 +13,7 @@ import typer
 # загружаем .env один раз (для переменных вроде ADAOS_TTS/ADAOS_STT)
 load_dotenv(find_dotenv())
 
-from adaos.sdk.utils.setup_env import prepare_environment
+from adaos.sdk.manage.environment import prepare_environment
 
 # контекст и настройки (PR-2)
 from adaos.services.settings import Settings

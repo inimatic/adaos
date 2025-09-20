@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import traceback
 
 import typer
@@ -18,15 +19,8 @@ from adaos.services.skill.runtime import (
     run_skill_handler_sync,
     run_skill_prep,
 )
+from adaos.services.skill.scaffold import create as scaffold_create
 from adaos.adapters.db import SqliteSkillRegistry
-from adaos.sdk.skills import (
-    push as push_skill,
-    pull as pull_skill,
-    install as install_skill,
-    uninstall as uninstall_skill,
-    install_all as install_all_skills,
-    create as create_skill,
-)
 
 app = typer.Typer(help="Управление навыками (монорепозиторий, реестр в БД)")
 
@@ -151,7 +145,8 @@ def push_command(
     Закоммитить изменения ТОЛЬКО внутри подпапки навыка и выполнить git push.
     Защищён политиками: skills.manage + git.write + net.git.
     """
-    res = push_skill(skill_name, message, signoff=signoff)
+    mgr = _mgr()
+    res = mgr.push(skill_name, message, signoff=signoff)
     if res == "nothing-to-push" or res == "nothing-to-commit":
         typer.echo("Nothing to push.")
     else:
@@ -161,15 +156,20 @@ def push_command(
 @_run_safe
 @app.command("create")
 def cmd_create(name: str, template: str = typer.Option("demo_skill", "--template", "-t")):
-    p = create_skill(name, template=template)
+    p = scaffold_create(name, template=template)
     typer.echo(f"Created: {p}")
 
 
 @_run_safe
 @app.command("install")
 def cmd_install(name: str):
-    msg = install_skill(name)
-    typer.echo(msg)
+    mgr = _mgr()
+    result = mgr.install(name, validate=False)
+    if isinstance(result, tuple):
+        meta = result[0]
+        typer.echo(str(getattr(meta, "path", name)))
+    else:
+        typer.echo(str(result))
 
 
 @app.command("run")

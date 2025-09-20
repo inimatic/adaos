@@ -274,6 +274,7 @@ def pytest_sessionstart(session):
 
 
 import asyncio
+import importlib.util
 import pytest
 
 
@@ -285,3 +286,14 @@ def event_loop():
         yield loop
     finally:
         loop.close()
+
+
+@pytest.fixture(scope="session")
+def anyio_backend():
+    """Limit AnyIO-backed tests to available async backends."""
+    backend = os.getenv("PYTEST_ANYIO_BACKEND")
+    if backend:
+        if backend == "trio" and importlib.util.find_spec("trio") is None:
+            pytest.skip("Trio backend requested but trio is not installed")
+        return backend
+    return "asyncio"
