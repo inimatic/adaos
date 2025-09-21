@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
     # 1) инициализируем AgentContext (публикуется через set_ctx внутри bootstrap_app)
 
     # 2) только теперь импортируем то, что может косвенно дернуть контекст
-    from adaos.apps.api import tool_bridge, subnet_api, observe_api, node_api, scenarios, root_endpoints
+    from adaos.apps.api import tool_bridge, subnet_api, observe_api, node_api, scenarios, root_endpoints, skills
 
     # 3) монтируем роутеры после bootstrap
     app.include_router(tool_bridge.router, prefix="/api")
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
     app.include_router(node_api.router, prefix="/api/node")
     app.include_router(observe_api.router, prefix="/api/observe")
     app.include_router(scenarios.router, prefix="/api/scenarios")
+    app.include_router(skills.router, prefix="/api/skills")
     app.include_router(root_endpoints.router)
 
     # 4) поднимаем наблюдатель и выполняем boot-последовательность

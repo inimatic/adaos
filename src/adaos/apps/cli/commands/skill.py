@@ -22,7 +22,7 @@ from adaos.services.skill.runtime import (
 from adaos.services.skill.scaffold import create as scaffold_create
 from adaos.adapters.db import SqliteSkillRegistry
 
-app = typer.Typer(help="Управление навыками (монорепозиторий, реестр в БД)")
+app = typer.Typer(help=_("cli.help_skill"))
 
 
 def _run_safe(func):
@@ -47,8 +47,8 @@ def _mgr() -> SkillManager:
 @_run_safe
 @app.command("list")
 def list_cmd(
-    json_output: bool = typer.Option(False, "--json", help="Вывести JSON"),
-    show_fs: bool = typer.Option(False, "--fs", help="Показать сверку с файловой системой"),
+    json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
+    show_fs: bool = typer.Option(False, "--fs", help=_("cli.option.fs")),
 ):
     """
     Список установленных навыков из реестра.
@@ -74,13 +74,13 @@ def list_cmd(
         return
 
     if not rows:
-        typer.echo("Установленных навыков нет (реестр пуст).")
+        typer.echo(_("skill.list.empty"))
     else:
         for r in rows:
             if not bool(getattr(r, "installed", True)):
                 continue
             av = getattr(r, "active_version", None) or "unknown"
-            typer.echo(f"- {r.name} (version: {av})")
+            typer.echo(_("cli.skill.list.item", name=r.name, version=av))
 
     if show_fs:
         present = {m.id.value for m in mgr.list_present()}
@@ -88,10 +88,9 @@ def list_cmd(
         missing = desired - present
         extra = present - desired
         if missing:
-            # TODO автоматически установить из репозитория
-            typer.echo(f"⚠ На диске отсутствуют (есть в реестре): {', '.join(sorted(missing))}")
+            typer.echo(_("cli.skill.fs_missing", items=", ".join(sorted(missing))))
         if extra:
-            typer.echo(f"⚠ На диске лишние (нет в реестре): {', '.join(sorted(extra))}")
+            typer.echo(_("cli.skill.fs_extra", items=", ".join(sorted(extra))))
 
 
 @_run_safe
@@ -100,7 +99,7 @@ def sync():
     """Применяет sparse-set к набору из реестра и делает pull."""
     mgr = _mgr()
     mgr.sync()
-    typer.echo("Синхронизация завершена.")
+    typer.echo(_("cli.skill.sync.done"))
 
 
 @_run_safe
@@ -108,7 +107,7 @@ def sync():
 def uninstall(name: str):
     mgr = _mgr()
     mgr.uninstall(name)
-    typer.echo(f"Удалён: {name}")
+    typer.echo(_("cli.skill.uninstall.done", name=name))
 
 
 @_run_safe
@@ -121,7 +120,7 @@ def reconcile_fs_to_db():
     ctx = get_ctx()
     root = Path(ctx.paths.skills_dir())
     if not root.exists():
-        typer.echo("Папка навыков ещё не создана. Сначала выполните: adaos skill sync")
+        typer.echo(_("cli.skill.reconcile.missing_root"))
         raise typer.Exit(1)
     found = []
     for name in os.listdir(root):
@@ -131,15 +130,20 @@ def reconcile_fs_to_db():
         if p.is_dir():
             mgr.reg.register(name)  # installed=1
             found.append(name)
-    typer.echo(f"В реестр добавлено/актуализировано: {', '.join(found) if found else '(ничего)'}")
+    typer.echo(
+        _(
+            "cli.skill.reconcile.added",
+            items=", ".join(found) if found else _("cli.skill.reconcile.empty"),
+        )
+    )
 
 
 @_run_safe
 @app.command("push")
 def push_command(
-    skill_name: str = typer.Argument(..., help="Имя навыка (подпапка монорепо)"),
-    message: str = typer.Option(..., "--message", "-m", help="Сообщение коммита"),
-    signoff: bool = typer.Option(False, "--signoff", help="Добавить Signed-off-by"),
+    skill_name: str = typer.Argument(..., help=_("cli.skill.push.name_help")),
+    message: str = typer.Option(..., "--message", "-m", help=_("cli.commit_message.help")),
+    signoff: bool = typer.Option(False, "--signoff", help=_("cli.option.signoff")),
 ):
     """
     Закоммитить изменения ТОЛЬКО внутри подпапки навыка и выполнить git push.
@@ -147,17 +151,17 @@ def push_command(
     """
     mgr = _mgr()
     res = mgr.push(skill_name, message, signoff=signoff)
-    if res == "nothing-to-push" or res == "nothing-to-commit":
-        typer.echo("Nothing to push.")
+    if res in {"nothing-to-push", "nothing-to-commit"}:
+        typer.echo(_("cli.skill.push.nothing"))
     else:
-        typer.echo(f"Pushed {skill_name}: {res}")
+        typer.echo(_("cli.skill.push.done", name=skill_name, revision=res))
 
 
 @_run_safe
 @app.command("create")
 def cmd_create(name: str, template: str = typer.Option("demo_skill", "--template", "-t")):
     p = scaffold_create(name, template=template)
-    typer.echo(f"Created: {p}")
+    typer.echo(_("cli.skill.create.created", path=p))
 
 
 @_run_safe
@@ -166,37 +170,45 @@ def cmd_install(name: str):
     mgr = _mgr()
     result = mgr.install(name, validate=False)
     if isinstance(result, tuple):
-        meta = result[0]
-        typer.echo(str(getattr(meta, "path", name)))
+        meta, report = result
+    elif hasattr(result, "id"):
+        meta, report = result, None
     else:
         typer.echo(str(result))
+        return
+    typer.echo(
+        _(
+            "cli.skill.install.done",
+            name=meta.id.value if hasattr(meta, "id") else name,
+            version=getattr(meta, "version", ""),
+            path=getattr(meta, "path", ""),
+        )
+    )
+    if report is not None and hasattr(report, "ok") and not report.ok:
+        typer.echo(str(report))
 
 
 @app.command("run")
 def run(
-    skill: str = typer.Argument(..., help="Имя навыка (директория в skills_root)"),
-    topic: str = typer.Option("nlp.intent.weather.get", "--topic", "-t", help="Топик/интент"),
-    payload: str = typer.Option("{}", "--payload", "-p", help='JSON-пейлоад, например: \'{"city":"Berlin"}\''),
+    skill: str = typer.Argument(..., help=_("cli.skill.run.name_help")),
+    topic: str = typer.Option("nlp.intent.weather.get", "--topic", "-t", help=_("cli.skill.run.topic_help")),
+    payload: str = typer.Option("{}", "--payload", "-p", help=_("cli.skill.run.payload_help")),
 ):
-    """
-    Запустить навык локально из каталога skills_root, определяемого через get_ctx().
-    Пример:
-    adaos skill run weather_skill --topic nlp.intent.weather.get --payload '{"city": "Berlin"}'
-    """
-    # парсим payload
+    """Execute a skill handler locally using the configured workspace."""
+
     try:
         payload_obj = json.loads(payload) if payload else {}
         if not isinstance(payload_obj, dict):
-            raise ValueError("payload должен быть JSON-объектом")
-    except Exception as e:
-        raise typer.BadParameter(f"Некорректный --payload: {e}")
+            raise ValueError(_("cli.skill.run.payload_type_error"))
+    except Exception as exc:
+        raise typer.BadParameter(_("cli.skill.run.payload_invalid", error=str(exc)))
 
     try:
         result = run_skill_handler_sync(skill, topic, payload_obj)
     except SkillRuntimeError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    typer.echo(f"OK: {result!r}")
+    typer.echo(_("cli.skill.run.success", result=repr(result)))
 
 
 @app.command("prep")
