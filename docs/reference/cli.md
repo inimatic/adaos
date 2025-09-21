@@ -11,6 +11,7 @@ adaos api serve --host 127.0.0.1 --port 8777
 
 ```bash
 adaos skill run weather_skill weather.get --event --entities '{"city":"Berlin"}'
+adaos scenario run greet_on_boot
 ```
 
 Сервисный модуль `adaos.services.skill.runtime` предоставляет те же операции для
