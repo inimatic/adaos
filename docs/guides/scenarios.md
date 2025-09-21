@@ -8,6 +8,9 @@
 CLI:
 
 ```bash
+# создание каркаса сценария по шаблону из монорепозитория
+adaos scenario create demo --template template
+
 # исполнение сценария и печать результатов
 adaos scenario run greet_on_boot
 
@@ -20,6 +23,9 @@ adaos scenario test greet_on_boot
 # запустить тесты для всех сценариев
 adaos scenario test
 ```
+
+CLI использует URL монорепозитория, заданный в `SCENARIOS_MONOREPO_URL`, чтобы
+создавать и обновлять локальные каталоги сценариев в `{BASE_DIR}/scenarios`.
 
 ## Модель данных (SQLite)
 
