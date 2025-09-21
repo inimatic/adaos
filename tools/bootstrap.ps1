@@ -2,7 +2,7 @@
 # Unified bootstrap for Windows PowerShell 5.1+
 
 $ErrorActionPreference = "Stop"
-
+$subPath = "src\adaos\integrations\inimatic"
 function Get-PythonCandidates {
     $cands = @()
 
