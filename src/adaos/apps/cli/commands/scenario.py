@@ -15,6 +15,7 @@ from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.apps.cli.i18n import _
 from adaos.services.agent_context import get_ctx
 from adaos.services.scenario.manager import ScenarioManager
+from adaos.services.scenario.scaffold import create as scaffold_create
 from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context, load_scenario
 
 app = typer.Typer(help=_("cli.help_scenario"))
@@ -107,6 +108,18 @@ def install_cmd(
     mgr = _mgr()
     meta = mgr.install(name, pin=pin)
     typer.echo(_("cli.scenario.install.done", name=meta.id.value, version=meta.version, path=meta.path))
+
+
+@_run_safe
+@app.command("create")
+def create_cmd(
+    scenario_id: str = typer.Argument(..., help=_("cli.scenario.create.name_help")),
+    template: str = typer.Option("template", "--template", "-t", help=_("cli.scenario.create.template_help")),
+):
+    """Create a new scenario scaffold from a template."""
+
+    path = scaffold_create(scenario_id, template=template)
+    typer.echo(_("cli.scenario.create.created", path=path))
 
 
 @_run_safe

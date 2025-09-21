@@ -12,6 +12,7 @@ adaos skill push <name> -m "msg"
 adaos skill reconcile-fs-to-db
 
 # Сценарии
+adaos scenario create <sid> [--template template]
 adaos scenario list [--fs]
 adaos scenario install <sid>
 adaos scenario uninstall <sid>
