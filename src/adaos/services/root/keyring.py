@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 import hashlib, base64, os
 
-from adaos.sdk.data.context import get_ctx
+from adaos.services.agent_context import get_ctx
 from adaos.ports.root import PubKey, KeypairRef
 
 
