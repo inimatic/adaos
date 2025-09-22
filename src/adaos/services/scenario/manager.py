@@ -33,6 +33,15 @@ class ScenarioManager:
         self.repo, self.reg, self.git, self.paths, self.bus, self.caps = repo, registry, git, paths, bus, caps
         self.ctx: AgentContext = get_ctx()
 
+    def _cache_root(self) -> Path:
+        getter = getattr(self.paths, "scenarios_cache_dir", None)
+        if getter is not None:
+            value = getter() if callable(getter) else getter
+        else:
+            base = getattr(self.paths, "scenarios_dir")
+            value = base() if callable(base) else base
+        return Path(value)
+
     def list_installed(self) -> list[SkillRecord]:
         self.caps.require("core", "scenarios.manage")
         return self.reg.list()
@@ -45,12 +54,13 @@ class ScenarioManager:
     def sync(self) -> None:
         self.caps.require("core", "scenarios.manage", "net.git")
         self.repo.ensure()
-        root = self.paths.scenarios_dir()
+        root = self._cache_root()
         names = [r.name for r in self.reg.list()]
-        self.git.sparse_init(root, cone=False)
-        if names:
-            self.git.sparse_set(root, names, no_cone=True)
-        self.git.pull(root)
+        prefixed = [f"scenarios/{n}" for n in names]
+        self.git.sparse_init(str(root), cone=False)
+        if prefixed:
+            self.git.sparse_set(str(root), prefixed, no_cone=True)
+        self.git.pull(str(root))
         emit(self.bus, "scenario.sync", {"count": len(names)}, "scenario.mgr")
 
     def install(self, name: str, *, pin: Optional[str] = None) -> SkillMeta:
@@ -80,22 +90,27 @@ class ScenarioManager:
         self.caps.require("core", "scenarios.manage", "net.git")
         self.repo.ensure()
         self.reg.unregister(name)
-        root = self.paths.scenarios_dir()
+        root = self._cache_root()
         names = [r.name for r in self.reg.list()]
-        self.git.sparse_init(root, cone=False)
-        if names:
-            self.git.sparse_set(root, names, no_cone=True)
-        self.git.pull(root)
-        remove_tree(str(Path(root) / name), fs=self.paths.ctx.fs if hasattr(self.paths, "ctx") else get_ctx().fs)
+        prefixed = [f"scenarios/{n}" for n in names]
+        self.git.sparse_init(str(root), cone=False)
+        if prefixed:
+            self.git.sparse_set(str(root), prefixed, no_cone=True)
+        self.git.pull(str(root))
+        remove_tree(
+            str(root / "scenarios" / name),
+            fs=self.paths.ctx.fs if hasattr(self.paths, "ctx") else get_ctx().fs,
+        )
         emit(self.bus, "scenario.removed", {"id": name}, "scenario.mgr")
 
     def push(self, name: str, message: str, *, signoff: bool = False) -> str:
         self.caps.require("core", "scenarios.manage", "git.write", "net.git")
-        root = self.paths.scenarios_dir()
+        root = self._cache_root()
         if not (Path(root) / ".git").exists():
             raise RuntimeError("Scenarios repo is not initialized. Run `adaos scenario sync` once.")
         sub = name.strip()
-        changed = self.git.changed_files(root, subpath=sub)
+        subpath = f"scenarios/{sub}"
+        changed = self.git.changed_files(str(root), subpath=subpath)
         if not changed:
             return "nothing-to-push"
         bad = check_no_denied(changed)
@@ -103,9 +118,16 @@ class ScenarioManager:
             raise PermissionError(f"push denied: sensitive files matched: {', '.join(bad)}")
         msg = sanitize_message(message)
         ctx = get_ctx()
-        sha = self.git.commit_subpath(root, subpath=sub, message=msg, author_name=ctx.settings.git_author_name, author_email=ctx.settings.git_author_email, signoff=signoff)
+        sha = self.git.commit_subpath(
+            str(root),
+            subpath=subpath,
+            message=msg,
+            author_name=ctx.settings.git_author_name,
+            author_email=ctx.settings.git_author_email,
+            signoff=signoff,
+        )
         if sha != "nothing-to-commit":
-            self.git.push(root)
+            self.git.push(str(root))
         return sha
 
     def uninstall(self, name: str) -> None:

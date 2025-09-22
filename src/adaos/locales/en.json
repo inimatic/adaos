@@ -110,5 +110,11 @@
         "cli.skill.run.payload_help": "JSON payload, e.g. '{\"city\":\"Berlin\"}'",
         "cli.skill.run.payload_type_error": "Payload must be a JSON object",
         "cli.skill.run.payload_invalid": "Invalid --payload: {error}",
-        "cli.skill.run.success": "OK: {result}"
+        "cli.skill.run.success": "OK: {result}",
+        "cli.repo.help": "Manage cached registry clones.",
+        "cli.repo.reset.help": "Repository kind (skills or scenarios)",
+        "cli.repo.reset.running": "Resetting {kind} repository at {path}",
+        "cli.repo.reset.not_initialized": "Cached {kind} repository is not initialized at {path}",
+        "cli.repo.reset.failed": "Failed to reset repository: {reason}",
+        "cli.repo.reset.done": "Repository reset at {path}"
 }
