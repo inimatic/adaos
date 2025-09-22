@@ -111,5 +111,11 @@
         "cli.skill.run.payload_help": "JSON-пейлоад, например '{\"city\":\"Berlin\"}'",
         "cli.skill.run.payload_type_error": "Payload должен быть JSON-объектом",
         "cli.skill.run.payload_invalid": "Некорректный --payload: {error}",
-        "cli.skill.run.success": "OK: {result}"
+        "cli.skill.run.success": "OK: {result}",
+        "cli.repo.help": "Управление кэшем реестра.",
+        "cli.repo.reset.help": "Тип репозитория (skills или scenarios)",
+        "cli.repo.reset.running": "Сбрасываю репозиторий {kind} в {path}",
+        "cli.repo.reset.not_initialized": "Кэшированный репозиторий {kind} не инициализирован в {path}",
+        "cli.repo.reset.failed": "Не удалось сбросить репозиторий: {reason}",
+        "cli.repo.reset.done": "Репозиторий сброшен: {path}"
 }

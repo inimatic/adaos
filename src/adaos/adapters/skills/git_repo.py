@@ -102,7 +102,18 @@ class GitSkillRepository(SkillRepository):
     # --- common
 
     def _root(self) -> Path:
-        return Path(self.paths.skills_dir())
+        cache_dir = getattr(self.paths, "skills_cache_dir", None)
+        if cache_dir is not None:
+            cache = cache_dir() if callable(cache_dir) else cache_dir
+        else:
+            base = getattr(self.paths, "skills_dir")
+            cache = base() if callable(base) else base
+        root = Path(cache)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _skill_dir(self, root: Path, name: str) -> Path:
+        return _safe_join(root, f"skills/{name}")
 
     def _ensure_monorepo(self) -> None:
         if os.getenv("ADAOS_TESTING") == "1":
@@ -121,9 +132,10 @@ class GitSkillRepository(SkillRepository):
         self.ensure()
         result: List[SkillMeta] = []
         root = self._root()
-        if not root.exists():
+        skills_root = root / "skills"
+        if not skills_root.exists():
             return result
-        for child in sorted(root.iterdir()):
+        for child in sorted(skills_root.iterdir()):
             if not child.is_dir() or child.name.startswith("."):
                 continue
             meta = _read_manifest(child)
@@ -133,7 +145,7 @@ class GitSkillRepository(SkillRepository):
     def get(self, skill_id: str) -> Optional[SkillMeta]:
         self.ensure()
         root = self._root()
-        direct = root / skill_id
+        direct = root / "skills" / skill_id
         if direct.exists():
             m = _read_manifest(direct)
             if m and m.id.value == skill_id:
@@ -169,9 +181,9 @@ class GitSkillRepository(SkillRepository):
                 raise ValueError(f"skill '{name}' not found in catalog") """
             # sparse checkout только нужного подкаталога
             self.git.sparse_init(str(root), cone=False)
-            self.git.sparse_add(str(root), name)
+            self.git.sparse_add(str(root), f"skills/{name}")
             self.git.pull(str(root))
-            p = _safe_join(root, name)
+            p = self._skill_dir(root, name)
             if not p.exists():
                 raise FileNotFoundError(f"skill '{name}' not present after sync")
             return _read_manifest(p)
@@ -187,7 +199,7 @@ class GitSkillRepository(SkillRepository):
 
     def uninstall(self, skill_id: str) -> None:
         self.ensure()
-        p = _safe_join(self._root(), skill_id)
+        p = self._skill_dir(self._root(), skill_id)
         if not p.exists():
             raise FileNotFoundError(f"skill '{skill_id}' not found")
         if remove_tree:

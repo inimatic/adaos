@@ -2,7 +2,8 @@
 
 Аналогично Skills:
 
-- `{BASE_DIR}/scenarios` — моно-репо.
+- `{BASE_DIR}/workspace/scenarios` — рабочие директории сценариев.
+- `{BASE_DIR}/scenarios` — read-only кэш монорепозитория.
 - Таблицы `scenarios` и `scenario_versions`.
 
 CLI:
@@ -17,7 +18,7 @@ adaos scenario run greet_on_boot
 # валидация структуры (проверка зарегистрированных действий)
 adaos scenario validate greet_on_boot
 
-# запуск тестов сценария (pytest из .adaos/scenarios/<id>/tests)
+# запуск тестов сценария (pytest из .adaos/workspace/scenarios/<id>/tests)
 adaos scenario test greet_on_boot
 
 # запустить тесты для всех сценариев
@@ -25,7 +26,8 @@ adaos scenario test
 ```
 
 CLI использует URL монорепозитория, заданный в `SCENARIOS_MONOREPO_URL`, чтобы
-создавать и обновлять локальные каталоги сценариев в `{BASE_DIR}/scenarios`.
+поддерживать кэш `{BASE_DIR}/scenarios` и выдавать файлы в рабочие каталоги
+`{BASE_DIR}/workspace/scenarios`.
 
 ## Модель данных (SQLite)
 
@@ -36,7 +38,7 @@ CLI использует URL монорепозитория, заданный в
 
 ## Хранилище кода
 
-- Путь: `{BASE_DIR}/scenarios` — **одно git-репо** (моно-репо сценариев).
+- Путь: `{BASE_DIR}/scenarios` — **одно git-репо** (моно-репо сценариев, read-only кэш).
 - Выборка подпапок через `git sparse-checkout` по БД.
 
 ## Сервис и CLI
