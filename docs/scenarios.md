@@ -68,7 +68,7 @@ Runtime:
 from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context
 
 ensure_runtime_context("~/.adaos")
-ScenarioRuntime().run_from_file("~/.adaos/scenarios/catalog-media/scenario.yaml")
+ScenarioRuntime().run_from_file("~/.adaos/workspace/scenarios/catalog-media/scenario.yaml")
 ```
 
 ---

@@ -22,7 +22,7 @@ from adaos.apps.cli.i18n import _
 from adaos.services.agent_context import get_ctx
 
 # общие подкоманды
-from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export
+from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo
 
 # интеграции
 from adaos.apps.cli.commands import native
@@ -182,6 +182,7 @@ app.add_typer(runtime.app, name="runtime", help=_("cli.help_runtime"))
 app.add_typer(llm.app, name="llm", help=_("cli.help_llm"))
 app.add_typer(api.app, name="api")
 app.add_typer(monitor.app, name="monitor")
+app.add_typer(repo.app, name="repo", help=_("cli.repo.help"))
 app.add_typer(scenario.app, name="scenario", help=_("cli.help_scenario"))
 app.add_typer(switch_app, name="switch", help="Переключение профилей интеграций")
 app.add_typer(secret.app, name="secret")

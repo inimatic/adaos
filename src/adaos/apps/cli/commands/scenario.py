@@ -19,12 +19,13 @@ from adaos.services.scenario.scaffold import create as scaffold_create
 from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context, load_scenario
 from adaos.apps.cli.root_ops import (
     RootCliError,
+    archive_bytes_to_b64,
     assert_safe_name,
     create_zip_bytes,
     ensure_registration,
     load_root_cli_config,
+    push_scenario_draft,
     run_preflight_checks,
-    store_scenario_draft,
 )
 
 app = typer.Typer(help=_("cli.help_scenario"))
@@ -49,6 +50,17 @@ def _mgr() -> ScenarioManager:
     repo = ctx.scenarios_repo
     reg = SqliteScenarioRegistry(ctx.sql)
     return ScenarioManager(repo=repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=ctx.bus, caps=ctx.caps)
+
+
+def _workspace_root() -> Path:
+    ctx = get_ctx()
+    attr = getattr(ctx.paths, "scenarios_workspace_dir", None)
+    if attr is not None:
+        value = attr() if callable(attr) else attr
+    else:
+        base = getattr(ctx.paths, "scenarios_dir")
+        value = base() if callable(base) else base
+    return Path(value).expanduser().resolve()
 
 
 @_run_safe
@@ -201,11 +213,14 @@ def push_cmd(
         typer.secho(str(err), fg=typer.colors.RED)
         raise typer.Exit(1)
 
+    archive_b64 = archive_bytes_to_b64(archive_bytes)
+
     try:
-        stored = store_scenario_draft(
+        stored = push_scenario_draft(
+            config,
             node_id=config.node_id,
             name=target_name,
-            archive_bytes=archive_bytes,
+            archive_b64=archive_b64,
             dry_run=dry_run,
             echo=typer.echo,
         )
@@ -220,11 +235,14 @@ def push_cmd(
 
 
 def _scenario_root() -> Path:
-    ctx_base = Path.cwd()
-    candidate = ctx_base / ".adaos" / "scenarios"
+    cwd = Path.cwd()
+    candidate = cwd / ".adaos" / "workspace" / "scenarios"
     if candidate.exists():
         return candidate
-    return ctx_base
+    legacy = cwd / ".adaos" / "scenarios"
+    if legacy.exists():
+        return legacy
+    return _workspace_root()
 
 
 def _resolve_scenario_dir(target: str) -> Path:
@@ -233,8 +251,7 @@ def _resolve_scenario_dir(target: str) -> Path:
         candidate = candidate.parent
     if candidate.exists():
         return candidate.resolve()
-    ctx = get_ctx()
-    base = Path(ctx.paths.scenarios_dir())
+    base = _workspace_root()
     candidate = (base / target).resolve()
     if candidate.is_file():
         candidate = candidate.parent

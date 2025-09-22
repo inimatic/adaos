@@ -20,11 +20,17 @@ def prepare_environment() -> None:
 
     skills_root = Path(ctx.paths.skills_dir())
     scenarios_root = Path(ctx.paths.scenarios_dir())
+    skills_cache = Path(
+        (ctx.paths.skills_cache_dir() if hasattr(ctx.paths, "skills_cache_dir") else ctx.paths.skills_dir())
+    )
+    scenarios_cache = Path(
+        (ctx.paths.scenarios_cache_dir() if hasattr(ctx.paths, "scenarios_cache_dir") else ctx.paths.scenarios_dir())
+    )
     state_root = Path(ctx.paths.state_dir())
     cache_root = Path(ctx.paths.cache_dir())
     logs_root = Path(ctx.paths.logs_dir())
 
-    for directory in (skills_root, scenarios_root, state_root, cache_root, logs_root):
+    for directory in (skills_root, scenarios_root, skills_cache, scenarios_cache, state_root, cache_root, logs_root):
         directory.mkdir(parents=True, exist_ok=True)
 
     SqliteSkillRegistry(ctx.sql)
@@ -32,7 +38,7 @@ def prepare_environment() -> None:
     if os.getenv("ADAOS_TESTING") == "1":
         return
 
-    if ctx.settings.skills_monorepo_url and not (skills_root / ".git").exists():
+    if ctx.settings.skills_monorepo_url and not (skills_cache / ".git").exists():
         GitSkillRepository(
             paths=ctx.paths,
             git=ctx.git,
@@ -40,7 +46,7 @@ def prepare_environment() -> None:
             monorepo_branch=ctx.settings.skills_monorepo_branch,
         ).ensure()
 
-    if ctx.settings.scenarios_monorepo_url and not (scenarios_root / ".git").exists():
+    if ctx.settings.scenarios_monorepo_url and not (scenarios_cache / ".git").exists():
         GitScenarioRepository(
             paths=ctx.paths,
             git=ctx.git,
