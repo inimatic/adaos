@@ -72,10 +72,93 @@ const redisClient = await createClient({ url })
 const ROOT_TOKEN = process.env['ROOT_TOKEN'] ?? 'dev-root-token'
 const FORGE_ROOT = '/tmp/forge'
 const SKILL_FORGE_KEY_PREFIX = 'forge:skills'
+const SCENARIO_FORGE_KEY_PREFIX = 'forge:scenarios'
 const TTL_SUBNET_SECONDS = 60 * 60 * 24 * 7
 const TTL_NODE_SECONDS = 60 * 60 * 24
+const TEMPLATE_OPTIONS: Record<string, string[]> = {
+        skill: ['python-minimal', 'demo_skill'],
+        scenario: ['template'],
+}
 
 await mkdir(FORGE_ROOT, { recursive: true })
+
+const requireRootToken: express.RequestHandler = (req, res, next) => {
+        const token = req.header('X-AdaOS-Token') ?? ''
+        if (token && token === ROOT_TOKEN) {
+                next()
+                return
+        }
+        res.status(401).json({ error: 'unauthorized' })
+}
+
+app.get('/healthz', (_req, res) => {
+        res.json({ ok: true })
+})
+
+app.get('/adaos/healthz', (req, res) => {
+        res.json({ ok: true, adaos: req.header('X-AdaOS-Base') ?? null })
+})
+
+app.use('/v1', requireRootToken)
+
+app.get('/v1/templates', (req, res) => {
+        const type = String(req.query['type'] ?? '').toLowerCase()
+        res.json({ templates: TEMPLATE_OPTIONS[type] ?? [] })
+})
+
+app.post('/v1/subnets/register', async (req, res) => {
+        const subnetId = generateSubnetId()
+        const record = {
+                subnet_id: subnetId,
+                subnet_name: typeof req.body?.subnet_name === 'string' ? req.body.subnet_name : undefined,
+                ts: Date.now(),
+        }
+        await redisClient.setEx(`forge:subnet:${subnetId}`, TTL_SUBNET_SECONDS, JSON.stringify(record))
+        res.json({ subnet_id: subnetId })
+})
+
+app.post('/v1/nodes/register', async (req, res) => {
+        const subnetId = req.body?.subnet_id
+        if (typeof subnetId !== 'string' || !subnetId) {
+                res.status(400).json({ error: 'subnet_id is required' })
+                return
+        }
+        const nodeId = generateNodeId()
+        const record = { node_id: nodeId, subnet_id: subnetId, ts: Date.now() }
+        await redisClient.setEx(`forge:node:${nodeId}`, TTL_NODE_SECONDS, JSON.stringify(record))
+        res.json({ node_id: nodeId, subnet_id: subnetId })
+})
+
+const draftEndpoint = (
+        kind: 'skills' | 'scenarios',
+) =>
+        app.post(`/v1/${kind}/draft`, async (req, res) => {
+                const nodeId = req.body?.node_id
+                const name = req.body?.name
+                const archiveB64 = req.body?.archive_b64
+                if (typeof nodeId !== 'string' || typeof name !== 'string' || typeof archiveB64 !== 'string') {
+                        res.status(400).json({ error: 'node_id, name and archive_b64 are required' })
+                        return
+                }
+                try {
+                        const stored = await storeDraftArchive(kind, nodeId, name, archiveB64)
+                        res.json({ stored })
+                } catch (error) {
+                        const reason = error instanceof Error ? error.message : 'unknown error'
+                        res.status(400).json({ error: reason })
+                }
+        })
+
+draftEndpoint('skills')
+draftEndpoint('scenarios')
+
+app.post('/v1/skills/pr', (_req, res) => {
+        res.json({ pr_url: 'https://example.com/mock-skill-pr' })
+})
+
+app.post('/v1/scenarios/pr', (_req, res) => {
+        res.json({ pr_url: 'https://example.com/mock-scenario-pr' })
+})
 
 function isValidGuid(guid: string) {
 	return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
@@ -111,6 +194,41 @@ const ensureForgeDir = async (nodeId: string, kind: 'skills' | 'scenarios', name
         const dir = path.join(FORGE_ROOT, nodeId, kind, name)
         await mkdir(dir, { recursive: true })
         return dir
+}
+
+const assertSafeId = (value: string, label: string) => {
+        if (!value || value.includes('..') || value.includes('/') || value.includes('\\')) {
+                throw new Error(`${label} contains forbidden characters`)
+        }
+}
+
+const storeDraftArchive = async (
+        kind: 'skills' | 'scenarios',
+        nodeId: string,
+        name: string,
+        archiveB64: string,
+) => {
+        assertSafeId(nodeId, 'node_id')
+        assertSafeName(name)
+        if (typeof archiveB64 !== 'string' || archiveB64.trim() === '') {
+            throw new Error('archive_b64 is required')
+        }
+        let buffer: Buffer
+        try {
+                buffer = Buffer.from(archiveB64, 'base64')
+        } catch (error) {
+                throw new Error('invalid archive encoding')
+        }
+        if (!buffer.length) {
+                throw new Error('archive is empty')
+        }
+        const dir = await ensureForgeDir(nodeId, kind, name)
+        const safeName = safeBasename(name) || 'draft'
+        const filename = path.join(dir, `${Date.now()}_${safeName}.zip`)
+        await writeFile(filename, buffer)
+        const keyPrefix = kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
+        await redisClient.lPush(`${keyPrefix}:${nodeId}:${name}`, filename)
+        return filename
 }
 
 const generateSubnetId = () => `sn_${uuidv4().replace(/-/g, '').slice(0, 8)}`
@@ -174,7 +292,7 @@ function saveFileChunk(sessionId: string, fileName: string, content: Array<numbe
         )
 }
 
-io.on('connect', (socket) => {
+io.on('connection', (socket) => {
 	console.log(socket.id)
 
 	socket.on('disconnecting', async () => {
