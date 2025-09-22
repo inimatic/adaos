@@ -98,7 +98,18 @@ class GitScenarioRepository(ScenarioRepository):
         self.monorepo_branch = branch
 
     def _root(self) -> Path:
-        return Path(self.paths.scenarios_dir())
+        cache_dir = getattr(self.paths, "scenarios_cache_dir", None)
+        if cache_dir is not None:
+            cache = cache_dir() if callable(cache_dir) else cache_dir
+        else:
+            base = getattr(self.paths, "scenarios_dir")
+            cache = base() if callable(base) else base
+        root = Path(cache)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _scenario_dir(self, root: Path, name: str) -> Path:
+        return _safe_join(root, f"scenarios/{name}")
 
     def _ensure_monorepo(self) -> None:
         if os.getenv("ADAOS_TESTING") == "1":
@@ -117,16 +128,17 @@ class GitScenarioRepository(ScenarioRepository):
         self.ensure()
         items: List[SkillMeta] = []
         root = self._root()
-        if not root.exists():
+        scenarios_root = root / "scenarios"
+        if not scenarios_root.exists():
             return items
-        for ch in sorted(root.iterdir()):
+        for ch in sorted(scenarios_root.iterdir()):
             if ch.is_dir() and not ch.name.startswith("."):
                 items.append(_read_manifest(ch))
         return items
 
     def get(self, scenario_id: str) -> Optional[SkillMeta]:
         self.ensure()
-        p = self._root() / scenario_id
+        p = self._root() / "scenarios" / scenario_id
         if p.exists():
             m = _read_manifest(p)
             if m.id.value == scenario_id:
@@ -160,9 +172,9 @@ class GitScenarioRepository(ScenarioRepository):
             if catalog and name not in catalog:
                 raise ValueError(f"scenario '{name}' not found in catalog")
             self.git.sparse_init(str(root), cone=False)
-            self.git.sparse_add(str(root), name)
+            self.git.sparse_add(str(root), f"scenarios/{name}")
             self.git.pull(str(root))
-            p = _safe_join(root, name)
+            p = self._scenario_dir(root, name)
             if not p.exists():
                 raise FileNotFoundError(f"scenario '{name}' not present after sync")
             return _read_manifest(p)
@@ -180,7 +192,7 @@ class GitScenarioRepository(ScenarioRepository):
 
     def uninstall(self, scenario_id: str) -> None:
         self.ensure()
-        p = _safe_join(self._root(), scenario_id)
+        p = self._scenario_dir(self._root(), scenario_id)
         if not p.exists():
             raise FileNotFoundError(f"scenario '{scenario_id}' not found")
         if remove_tree:

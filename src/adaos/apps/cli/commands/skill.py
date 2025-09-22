@@ -55,12 +55,22 @@ def _mgr() -> SkillManager:
     return SkillManager(repo=repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=getattr(ctx, "bus", None), caps=ctx.caps)
 
 
+def _workspace_root() -> Path:
+    ctx = get_ctx()
+    attr = getattr(ctx.paths, "skills_workspace_dir", None)
+    if attr is not None:
+        value = attr() if callable(attr) else attr
+    else:
+        base = getattr(ctx.paths, "skills_dir")
+        value = base() if callable(base) else base
+    return Path(value).expanduser().resolve()
+
+
 def _resolve_skill_path(target: str) -> Path:
     candidate = Path(target).expanduser()
     if candidate.exists():
         return candidate.resolve()
-    ctx = get_ctx()
-    root = Path(ctx.paths.skills_dir())
+    root = _workspace_root()
     candidate = (root / target).resolve()
     if candidate.exists():
         return candidate
