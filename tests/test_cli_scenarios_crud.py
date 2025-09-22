@@ -21,7 +21,7 @@ def test_scenario_create_command(cli_app, tmp_base_dir, tmp_path):
     result = runner.invoke(cli_app, ["scenario", "create", scenario_id, "--template", "template"])
     assert result.exit_code == 0
 
-    scenario_dir = Path(tmp_base_dir) / "scenarios" / scenario_id
+    scenario_dir = Path(tmp_base_dir) / "workspace" / "scenarios" / scenario_id
     assert scenario_dir.exists()
 
     manifest = scenario_dir / "scenario.yaml"

@@ -27,8 +27,11 @@ def _versions_list():
 class TestPaths:
     def __init__(self, base: Path):
         self._base = Path(base).resolve()
-        self._skills = self._base / "skills"
-        self._scenarios = self._base / "scenarios"
+        self._workspace = self._base / "workspace"
+        self._skills = self._workspace / "skills"
+        self._scenarios = self._workspace / "scenarios"
+        self._skills_cache = self._base / "skills"
+        self._scenarios_cache = self._base / "scenarios"
         self._state = self._base / "state"
         self._cache = self._base / "cache"
         self._logs = self._base / "logs"
@@ -68,6 +71,21 @@ class TestPaths:
 
     def scenario_templates_dir(self) -> Path:
         return self._scenario_templates
+
+    def workspace_dir(self) -> Path:
+        return self._workspace
+
+    def skills_workspace_dir(self) -> Path:
+        return self._skills
+
+    def scenarios_workspace_dir(self) -> Path:
+        return self._scenarios
+
+    def skills_cache_dir(self) -> Path:
+        return self._skills_cache
+
+    def scenarios_cache_dir(self) -> Path:
+        return self._scenarios_cache
 
     def skills_dir(self) -> Path:
         return self._skills
@@ -199,8 +217,12 @@ def _autocontext(tmp_path, monkeypatch):
     # Paths + каталоги
     paths = TestPaths(base_dir)
     for p in (
-        paths.skills_dir(),
-        paths.scenarios_dir(),
+        paths.base_dir(),
+        paths.workspace_dir(),
+        paths.skills_workspace_dir(),
+        paths.scenarios_workspace_dir(),
+        paths.skills_cache_dir(),
+        paths.scenarios_cache_dir(),
         paths.state_dir(),
         paths.cache_dir(),
         paths.logs_dir(),

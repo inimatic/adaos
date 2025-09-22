@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import time
 import zipfile
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
@@ -287,28 +286,39 @@ def push_skill_draft(
     return stored
 
 
-def store_scenario_draft(
+def push_scenario_draft(
+    config: RootCliConfig,
     *,
     node_id: Optional[str],
     name: str,
-    archive_bytes: bytes,
+    archive_b64: str,
     dry_run: bool,
     echo: Callable[[str], None],
 ) -> str:
+    url = _root_url(config, "/v1/scenarios/draft")
     target_node = node_id or "<node-id>"
-    base_dir = FORGE_ROOT / target_node / "scenarios" / name
     if dry_run:
-        predicted = base_dir / f"{DRY_RUN_PLACEHOLDER_TS}_{name}.zip"
-        echo(f"[dry-run] Would store scenario archive at {predicted}")
-        return str(predicted)
+        forge_path = FORGE_ROOT / target_node / "scenarios" / name / f"{DRY_RUN_PLACEHOLDER_TS}_{name}.zip"
+        echo(
+            f"[dry-run] POST {url} payload={{'node_id': '{target_node}', 'name': '{name}', 'archive_b64': '<omitted>'}}"
+        )
+        return str(forge_path)
 
     if not node_id:
         raise RootCliError("Node ID is not configured; run registration first")
 
-    base_dir.mkdir(parents=True, exist_ok=True)
-    filename = base_dir / f"{int(time.time())}_{name}.zip"
-    filename.write_bytes(archive_bytes)
-    return str(filename)
+    response = _request(
+        "POST",
+        url,
+        config=config,
+        json_body={"node_id": node_id, "name": name, "archive_b64": archive_b64},
+        timeout=30.0,
+    )
+    data = response.json()
+    stored = data.get("stored")
+    if not stored:
+        raise RootCliError("Root did not return stored path")
+    return stored
 
 
 __all__ = [
@@ -320,6 +330,6 @@ __all__ = [
     "ensure_registration",
     "load_root_cli_config",
     "push_skill_draft",
+    "push_scenario_draft",
     "run_preflight_checks",
-    "store_scenario_draft",
 ]

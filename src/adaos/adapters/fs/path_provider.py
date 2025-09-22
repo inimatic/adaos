@@ -39,11 +39,30 @@ class PathProvider:
     def base_dir(self) -> Path:
         return self.base
 
-    def skills_dir(self) -> Path:
+    # --- workspace helpers ---
+
+    def workspace_dir(self) -> Path:
+        return (self.base / "workspace").resolve()
+
+    def skills_workspace_dir(self) -> Path:
+        return (self.workspace_dir() / "skills").resolve()
+
+    def scenarios_workspace_dir(self) -> Path:
+        return (self.workspace_dir() / "scenarios").resolve()
+
+    # --- registry caches ---
+
+    def skills_cache_dir(self) -> Path:
         return (self.base / "skills").resolve()
 
-    def scenarios_dir(self) -> Path:
+    def scenarios_cache_dir(self) -> Path:
         return (self.base / "scenarios").resolve()
+
+    def skills_dir(self) -> Path:
+        return self.skills_workspace_dir()
+
+    def scenarios_dir(self) -> Path:
+        return self.scenarios_workspace_dir()
 
     def models_dir(self) -> Path:
         return (self.base / "models").resolve()
@@ -80,8 +99,11 @@ class PathProvider:
             self.locales_dir(),
             self.locales_base_dir(),
             self.base_dir(),
-            self.skills_dir(),
-            self.scenarios_dir(),
+            self.workspace_dir(),
+            self.skills_workspace_dir(),
+            self.scenarios_workspace_dir(),
+            self.skills_cache_dir(),
+            self.scenarios_cache_dir(),
             self.skill_templates_dir(),
             self.scenario_templates_dir(),
             self.models_dir(),
