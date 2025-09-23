@@ -65,8 +65,28 @@ def _repo(ctx: Any) -> GitScenarioRepository:
     )
 
 
+def _workspace_root(ctx: Any) -> Path:
+    attr = getattr(ctx.paths, "scenarios_workspace_dir", None)
+    if attr is not None:
+        value = attr() if callable(attr) else attr
+    else:
+        base = getattr(ctx.paths, "scenarios_dir")
+        value = base() if callable(base) else base
+    return Path(value)
+
+
+def _cache_root(ctx: Any) -> Path:
+    attr = getattr(ctx.paths, "scenarios_cache_dir", None)
+    if attr is not None:
+        value = attr() if callable(attr) else attr
+    else:
+        base = getattr(ctx.paths, "scenarios_dir")
+        value = base() if callable(base) else base
+    return Path(value)
+
+
 def _scenario_dir(ctx: Any, scenario_id: str) -> Path:
-    return Path(ctx.paths.scenarios_dir()) / scenario_id
+    return _workspace_root(ctx) / scenario_id
 
 
 @tool(
@@ -124,13 +144,14 @@ def pull(scenario_id: str) -> str:
     ctx = _require_cap("scenarios.manage")
     repo = _repo(ctx)
     repo.ensure()
+    cache_root = _cache_root(ctx)
     if hasattr(ctx.git, "sparse_add"):
         try:
-            ctx.git.sparse_add(str(ctx.paths.scenarios_dir()), scenario_id)
+            ctx.git.sparse_add(str(cache_root), f"scenarios/{scenario_id}")
         except Exception:
             pass
     if hasattr(ctx.git, "pull"):
-        ctx.git.pull(ctx.paths.scenarios_dir())
+        ctx.git.pull(str(cache_root))
     return scenario_id
 
 

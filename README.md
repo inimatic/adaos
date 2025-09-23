@@ -402,18 +402,38 @@ project_root/
     └── skills_templates/      # YAML/intent-шаблоны
 │
 └── .adaos/                  # Рабочая среда пользователя (динамическая)
+    ├── workspace/           # Редактируемые копии
+    │   ├── skills/          # Локальные исходники навыков
+    │   └── scenarios/       # Локальные исходники сценариев
+    ├── skills/              # Кэш реестра навыков (read-only sparse checkout)
+    ├── scenarios/           # Кэш реестра сценариев (read-only sparse checkout)
     ├── skill_db.sqlite      # База данных навыков (версии, установленные навыки)
     ├── models/              # Локальные модели (ASR и др.)
     │   └── vosk-model-small-ru-0.22/
     ├── runtime/             # Логи и тесты
     │   ├── logs/
     │   └── tests/
-    └── skills/              # Установленные навыки (sparse-checkout из monorepo)
-        ├── test_skill2/
-        │   ├── skill.yaml
-        │   ├── handlers/
-        │   └── intents/
-        └── test_skill3/
+
+### Root / Forge интеграция
+
+Сервер Root принимает обращения от CLI через REST API. По умолчанию используются dev-настройки:
+
+* `ROOT_TOKEN` — токен для `POST /v1/*` (значение по умолчанию: `dev-root-token`).
+* `ROOT_BASE` (`root_base` в `~/.adaos/root-cli.json`) — базовый URL Root (`http://127.0.0.1:3030`).
+* `ADAOS_BASE` и `ADAOS_TOKEN` — адрес и токен локального AdaOS моста, передаются в заголовках при `GET /adaos/healthz`.
+
+CLI автоматически выполняет preflight-проверки, регистрирует subnet/node и отправляет архив черновика:
+
+```bash
+adaos skill install weather_skill
+adaos skill create demo --template python-minimal
+adaos skill push demo
+
+adaos scenario create morning
+adaos scenario push morning
+```
+
+Для сброса кэша реестра используйте `adaos repo reset skills` или `adaos repo reset scenarios` — команда выполнит `git fetch`/`reset --hard`/`clean -fdx` внутри `.adaos/skills` или `.adaos/scenarios`.
 
 ## **Схема локальной версии (PlantUML)**
 
