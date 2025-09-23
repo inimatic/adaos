@@ -8,3 +8,8 @@ src/adaos/devportal/
 src/adaos/store/
 .adaos_1
 .adaos/logs/
+.adaos/models/
+.adaos/subnet_ctx.json
+.adaos/skill_db.sqlite
+.adaos/node.yaml
+.adaos/state/
