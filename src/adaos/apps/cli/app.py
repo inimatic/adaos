@@ -22,7 +22,7 @@ from adaos.apps.cli.i18n import _
 from adaos.services.agent_context import get_ctx
 
 # общие подкоманды
-from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo
+from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo, dev
 
 # интеграции
 from adaos.apps.cli.commands import native
@@ -188,6 +188,7 @@ app.add_typer(switch_app, name="switch", help="Переключение проф
 app.add_typer(secret.app, name="secret")
 app.add_typer(sandbox_cmd.app, name="sandbox")
 app.add_typer(_sdk_export.app, name="sdk")
+app.add_typer(dev.app, name="dev", help="Developer operations")
 
 # ---- Фильтрация интеграций по ENV ----
 _tts = _read("ADAOS_TTS", "native")

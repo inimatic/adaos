@@ -1,62 +1,122 @@
+
 import express from 'express'
-import http from 'http'
+import https from 'https'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { Server, Socket } from 'socket.io'
 import { createClient } from 'redis'
-import fs from 'fs'
-import { mkdir, stat, writeFile } from 'fs/promises'
+import fs from 'node:fs'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { randomBytes, createHash } from 'node:crypto'
+import type { PeerCertificate, TLSSocket } from 'node:tls'
+
 import { installAdaosBridge } from './adaos-bridge.js'
+import { CertificateAuthority } from './pki.js'
+import { ForgeManager, type DraftKind } from './forge.js'
+import { getPolicy } from './policy.js'
 
 type FollowerData = {
-	followerName: string
-	sessionId: string
+        followerName: string
+        sessionId: string
 }
 
 type Follower = {
-	[followerSocketId: string]: string
+        [followerSocketId: string]: string
 }
 
 type SessionData = {
-	initiatorSocketId: string
-	followers: Follower
-	timestamp: Date
+        initiatorSocketId: string
+        followers: Follower
+        timestamp: Date
 }
 
 type PublicSessionData = SessionData & {
-	type: 'public'
-	fileNames: Array<{ fileName: string; timestamp: string }>
+        type: 'public'
+        fileNames: Array<{ fileName: string; timestamp: string }>
 }
 
 type PrivateSessionData = SessionData & {
-	type: 'private'
+        type: 'private'
 }
 
 type UnionSessionData = PublicSessionData | PrivateSessionData
 
 type CommunicationData = {
-	isInitiator: boolean
-	sessionId: string
-	data: any
+        isInitiator: boolean
+        sessionId: string
+        data: any
 }
 
 type StreamInfo = {
-	stream: fs.WriteStream
-	destroyTimeout: NodeJS.Timeout
-	timestamp: string
+        stream: fs.WriteStream
+        destroyTimeout: NodeJS.Timeout
+        timestamp: string
 }
 
 type OpenedStreams = {
-	[sessionId: string]: {
-		[fileName: string]: StreamInfo
-	}
+        [sessionId: string]: {
+                [fileName: string]: StreamInfo
+        }
 }
 
+type ClientIdentity =
+        | { type: 'hub'; subnetId: string }
+        | { type: 'node'; subnetId: string; nodeId: string }
+
+declare global {
+        namespace Express {
+                interface Request {
+                        auth?: ClientIdentity
+                }
+        }
+}
+
+function normalizePem(value: string): string {
+        return value.includes('\n') ? value.replace(/\n/g, '
+') : value
+}
+
+function requireEnv(name: string): string {
+        const value = process.env[name]
+        if (!value || value.trim() === '') {
+                throw new Error(`Environment variable ${name} is required`)
+        }
+        return value
+}
+
+const HOST = process.env['HOST'] ?? '0.0.0.0'
+const PORT = Number.parseInt(process.env['PORT'] ?? '3030', 10)
+const ROOT_TOKEN = process.env['ROOT_TOKEN'] ?? 'dev-root-token'
+const CA_KEY_PEM = normalizePem(requireEnv('CA_KEY_PEM'))
+const CA_CERT_PEM = normalizePem(requireEnv('CA_CERT_PEM'))
+const TLS_KEY_PEM = normalizePem(process.env['TLS_KEY_PEM'] ?? CA_KEY_PEM)
+const TLS_CERT_PEM = normalizePem(process.env['TLS_CERT_PEM'] ?? CA_CERT_PEM)
+const FORGE_GIT_URL = requireEnv('FORGE_GIT_URL')
+const FORGE_SSH_KEY = process.env['FORGE_SSH_KEY']
+const FORGE_AUTHOR_NAME = process.env['FORGE_GIT_AUTHOR_NAME'] ?? 'AdaOS Root'
+const FORGE_AUTHOR_EMAIL = process.env['FORGE_GIT_AUTHOR_EMAIL'] ?? 'root@inimatic.local'
+const FORGE_WORKDIR = process.env['FORGE_WORKDIR']
+const SKILL_FORGE_KEY_PREFIX = 'forge:skills'
+const SCENARIO_FORGE_KEY_PREFIX = 'forge:scenarios'
+const BOOTSTRAP_TOKEN_TTL_SECONDS = 600
+
+const policy = getPolicy()
+const MAX_ARCHIVE_BYTES = policy.max_archive_mb * 1024 * 1024
 
 const app = express()
-app.use(express.json({ limit: '32mb' }))
+app.use(express.json({ limit: '64mb' }))
 
-const server = http.createServer(app)
+const server = https.createServer(
+        {
+                key: TLS_KEY_PEM,
+                cert: TLS_CERT_PEM,
+                ca: [CA_CERT_PEM],
+                requestCert: true,
+                rejectUnauthorized: false,
+        },
+        app,
+)
+
 const io = new Server(server, {
         cors: { origin: '*' },
         pingTimeout: 10000,
@@ -64,106 +124,392 @@ const io = new Server(server, {
 })
 
 installAdaosBridge(app, server)
-const url = `redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'}:6379`
-const redisClient = await createClient({ url })
-        .on('error', (err) => console.log('Redis Client Error', err))
+
+const redisUrl = `redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'}:6379`
+const redisClient = await createClient({ url: redisUrl })
+        .on('error', (err) => console.error('Redis Client Error', err))
         .connect()
 
-const ROOT_TOKEN = process.env['ROOT_TOKEN'] ?? 'dev-root-token'
-const FORGE_ROOT = '/tmp/forge'
-const SKILL_FORGE_KEY_PREFIX = 'forge:skills'
-const SCENARIO_FORGE_KEY_PREFIX = 'forge:scenarios'
-const TTL_SUBNET_SECONDS = 60 * 60 * 24 * 7
-const TTL_NODE_SECONDS = 60 * 60 * 24
-const TEMPLATE_OPTIONS: Record<string, string[]> = {
-        skill: ['python-minimal', 'demo_skill'],
-        scenario: ['template'],
+const certificateAuthority = new CertificateAuthority({ certPem: CA_CERT_PEM, keyPem: CA_KEY_PEM })
+const forgeManager = new ForgeManager({
+        repoUrl: FORGE_GIT_URL,
+        workdir: FORGE_WORKDIR,
+        authorName: FORGE_AUTHOR_NAME,
+        authorEmail: FORGE_AUTHOR_EMAIL,
+        sshKeyPath: FORGE_SSH_KEY,
+})
+await forgeManager.ensureReady()
+
+const POLICY_RESPONSE = policy
+
+function generateSubnetId(): string {
+        return `sn_${uuidv4().replace(/-/g, '').slice(0, 8)}`
 }
 
-await mkdir(FORGE_ROOT, { recursive: true })
+function generateNodeId(): string {
+        return `node_${uuidv4().replace(/-/g, '').slice(0, 8)}`
+}
 
-const requireRootToken: express.RequestHandler = (req, res, next) => {
-        const token = req.header('X-AdaOS-Token') ?? ''
-        if (token && token === ROOT_TOKEN) {
-                next()
+function assertSafeName(name: string): void {
+        if (!name || name.includes('..') || name.includes('/') || name.includes('\')) {
+                throw new Error('invalid name')
+        }
+        if (path.basename(name) !== name) {
+                throw new Error('invalid name')
+        }
+}
+
+function decodeArchive(archiveB64: string): Buffer {
+        try {
+                return Buffer.from(archiveB64, 'base64')
+        } catch (error) {
+                throw new Error('invalid archive encoding')
+        }
+}
+
+function verifySha256(buffer: Buffer, expected?: string): void {
+        if (!expected) {
                 return
         }
-        res.status(401).json({ error: 'unauthorized' })
+        const normalized = expected.trim().toLowerCase()
+        const actual = createHash('sha256').update(buffer).digest('hex').toLowerCase()
+        if (normalized !== actual) {
+                throw new Error('sha256 mismatch')
+        }
+}
+
+async function useBootstrapToken(token: string): Promise<Record<string, unknown>> {
+        const key = `bootstrap:${token}`
+        const value = await redisClient.get(key)
+        if (!value) {
+                throw new Error('invalid bootstrap token')
+        }
+        await redisClient.del(key)
+        try {
+                return JSON.parse(value)
+        } catch {
+                return {}
+        }
+}
+
+function getPeerCertificate(req: express.Request): PeerCertificate | null {
+        const tlsSocket = req.socket as TLSSocket
+        const certificate = tlsSocket.getPeerCertificate()
+        if (!certificate || Object.keys(certificate).length === 0) {
+                return null
+        }
+        return certificate
+}
+
+function parseClientIdentity(cert: PeerCertificate): ClientIdentity | null {
+        const subject = cert.subject as Record<string, string>
+        const cn = subject?.CN || subject?.cn
+        if (!cn) {
+                return null
+        }
+        if (cn.startsWith('subnet:')) {
+                const subnetId = cn.slice('subnet:'.length)
+                if (!subnetId) {
+                        return null
+                }
+                return { type: 'hub', subnetId }
+        }
+        if (cn.startsWith('node:')) {
+                const nodeId = cn.slice('node:'.length)
+                const org = subject?.O || subject?.o
+                if (!nodeId || !org || !org.startsWith('subnet:')) {
+                        return null
+                }
+                const subnetId = org.slice('subnet:'.length)
+                if (!subnetId) {
+                        return null
+                }
+                return { type: 'node', subnetId, nodeId }
+        }
+        return null
+}
+
+function getClientIdentity(req: express.Request): ClientIdentity | null {
+        const tlsSocket = req.socket as TLSSocket
+        if (!tlsSocket.authorized) {
+                return null
+        }
+        const cert = getPeerCertificate(req)
+        if (!cert) {
+                return null
+        }
+        return parseClientIdentity(cert)
 }
 
 app.get('/healthz', (_req, res) => {
-        res.json({ ok: true })
+        res.json({ ok: true, time: new Date().toISOString(), mtls: true })
 })
 
-app.get('/adaos/healthz', (req, res) => {
-        res.json({ ok: true, adaos: req.header('X-AdaOS-Base') ?? null })
-})
-
-app.use('/v1', requireRootToken)
-
-app.get('/v1/templates', (req, res) => {
-        const type = String(req.query['type'] ?? '').toLowerCase()
-        res.json({ templates: TEMPLATE_OPTIONS[type] ?? [] })
+app.post('/v1/bootstrap_token', async (req, res) => {
+        const token = req.header('X-Root-Token') ?? ''
+        if (!token || token !== ROOT_TOKEN) {
+                res.status(401).json({ error: 'unauthorized' })
+                return
+        }
+        const meta = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>
+        const oneTimeToken = randomBytes(24).toString('hex')
+        const expiresAt = new Date(Date.now() + BOOTSTRAP_TOKEN_TTL_SECONDS * 1000)
+        await redisClient.setEx(
+                `bootstrap:${oneTimeToken}`,
+                BOOTSTRAP_TOKEN_TTL_SECONDS,
+                JSON.stringify({ issued_at: new Date().toISOString(), ...meta }),
+        )
+        res.status(201).json({ one_time_token: oneTimeToken, expires_at: expiresAt.toISOString() })
 })
 
 app.post('/v1/subnets/register', async (req, res) => {
-        const subnetId = generateSubnetId()
-        const record = {
-                subnet_id: subnetId,
-                subnet_name: typeof req.body?.subnet_name === 'string' ? req.body.subnet_name : undefined,
-                ts: Date.now(),
+        const bootstrapToken = req.header('X-Bootstrap-Token') ?? ''
+        if (!bootstrapToken) {
+                res.status(401).json({ error: 'bootstrap token required' })
+                return
         }
-        await redisClient.setEx(`forge:subnet:${subnetId}`, TTL_SUBNET_SECONDS, JSON.stringify(record))
-        res.json({ subnet_id: subnetId })
+        try {
+                await useBootstrapToken(bootstrapToken)
+        } catch (error) {
+                res.status(401).json({ error: 'invalid bootstrap token' })
+                return
+        }
+
+        const csrPem = typeof req.body?.csr_pem === 'string' ? req.body.csr_pem : null
+        if (!csrPem) {
+                res.status(400).json({ error: 'csr_pem is required' })
+                return
+        }
+        const subnetName = typeof req.body?.subnet_name === 'string' ? req.body.subnet_name : undefined
+
+        const subnetId = generateSubnetId()
+        let certPem: string
+        try {
+                const result = certificateAuthority.issueClientCertificate({
+                        csrPem,
+                        subject: { commonName: `subnet:${subnetId}` },
+                })
+                certPem = result.certificatePem
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'certificate issue failed' })
+                return
+        }
+
+        await forgeManager.ensureSubnet(subnetId)
+        await redisClient.hSet(
+                'root:subnets',
+                subnetId,
+                JSON.stringify({ subnet_id: subnetId, subnet_name: subnetName, created_at: Date.now() }),
+        )
+
+        res.status(201).json({
+                subnet_id: subnetId,
+                cert_pem: certPem,
+                ca_pem: CA_CERT_PEM,
+                forge: {
+                        repo: FORGE_GIT_URL,
+                        path: `subnets/${subnetId}`,
+                },
+        })
 })
 
 app.post('/v1/nodes/register', async (req, res) => {
-        const subnetId = req.body?.subnet_id
-        if (typeof subnetId !== 'string' || !subnetId) {
+        const bootstrapToken = req.header('X-Bootstrap-Token') ?? ''
+        let subnetId: string | undefined
+
+        if (bootstrapToken) {
+                try {
+                        await useBootstrapToken(bootstrapToken)
+                } catch (error) {
+                        res.status(401).json({ error: 'invalid bootstrap token' })
+                        return
+                }
+                const bodySubnet = typeof req.body?.subnet_id === 'string' ? req.body.subnet_id : undefined
+                if (!bodySubnet) {
+                        res.status(400).json({ error: 'subnet_id is required when using bootstrap token' })
+                        return
+                }
+                subnetId = bodySubnet
+        } else {
+                const identity = getClientIdentity(req)
+                if (!identity || identity.type !== 'hub') {
+                        res.status(401).json({ error: 'hub client certificate required' })
+                        return
+                }
+                subnetId = identity.subnetId
+                const bodySubnet = typeof req.body?.subnet_id === 'string' ? req.body.subnet_id : undefined
+                if (bodySubnet && bodySubnet !== subnetId) {
+                        res.status(400).json({ error: 'subnet_id does not match certificate' })
+                        return
+                }
+        }
+
+        if (!subnetId) {
                 res.status(400).json({ error: 'subnet_id is required' })
                 return
         }
+
+        const csrPem = typeof req.body?.csr_pem === 'string' ? req.body.csr_pem : null
+        if (!csrPem) {
+                res.status(400).json({ error: 'csr_pem is required' })
+                return
+        }
+
         const nodeId = generateNodeId()
-        const record = { node_id: nodeId, subnet_id: subnetId, ts: Date.now() }
-        await redisClient.setEx(`forge:node:${nodeId}`, TTL_NODE_SECONDS, JSON.stringify(record))
-        res.json({ node_id: nodeId, subnet_id: subnetId })
+        let certPem: string
+        try {
+                const result = certificateAuthority.issueClientCertificate({
+                        csrPem,
+                        subject: {
+                                commonName: `node:${nodeId}`,
+                                organizationName: `subnet:${subnetId}`,
+                        },
+                })
+                certPem = result.certificatePem
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'certificate issue failed' })
+                return
+        }
+
+        await forgeManager.ensureSubnet(subnetId)
+        await forgeManager.ensureNode(subnetId, nodeId)
+        await redisClient.hSet(
+                'root:nodes',
+                nodeId,
+                JSON.stringify({ node_id: nodeId, subnet_id: subnetId, created_at: Date.now() }),
+        )
+
+        res.status(201).json({ node_id: nodeId, subnet_id: subnetId, cert_pem: certPem, ca_pem: CA_CERT_PEM })
 })
 
-const draftEndpoint = (
-        kind: 'skills' | 'scenarios',
-) =>
-        app.post(`/v1/${kind}/draft`, async (req, res) => {
-                const nodeId = req.body?.node_id
-                const name = req.body?.name
-                const archiveB64 = req.body?.archive_b64
-                if (typeof nodeId !== 'string' || typeof name !== 'string' || typeof archiveB64 !== 'string') {
-                        res.status(400).json({ error: 'node_id, name and archive_b64 are required' })
+const mtlsRouter = express.Router()
+
+mtlsRouter.use((req, res, next) => {
+        const tlsSocket = req.socket as TLSSocket
+        if (!tlsSocket.authorized) {
+                res.status(401).json({ error: 'client certificate required' })
+                return
+        }
+        const identity = getClientIdentity(req)
+        if (!identity) {
+                res.status(403).json({ error: 'invalid client certificate' })
+                return
+        }
+        req.auth = identity
+        next()
+})
+
+mtlsRouter.get('/policy', (_req, res) => {
+        res.json(POLICY_RESPONSE)
+})
+
+const createDraftHandler = (kind: DraftKind): express.RequestHandler => async (req, res) => {
+        const identity = req.auth
+        if (!identity || identity.type !== 'node') {
+                res.status(403).json({ error: 'node client certificate required' })
+                return
+        }
+
+        const nodeId = typeof req.body?.node_id === 'string' ? req.body.node_id : ''
+        if (!nodeId || nodeId !== identity.nodeId) {
+                res.status(403).json({ error: 'node_id mismatch' })
+                return
+        }
+        const name = typeof req.body?.name === 'string' ? req.body.name : ''
+        const archiveB64 = typeof req.body?.archive_b64 === 'string' ? req.body.archive_b64 : ''
+        const sha256 = typeof req.body?.sha256 === 'string' ? req.body.sha256 : undefined
+        if (!name || !archiveB64) {
+                res.status(400).json({ error: 'name and archive_b64 are required' })
+                return
+        }
+
+        let archive: Buffer
+        try {
+                assertSafeName(name)
+                archive = decodeArchive(archiveB64)
+                if (!archive.length) {
+                        throw new Error('archive is empty')
+                }
+                if (archive.length > MAX_ARCHIVE_BYTES) {
+                        res.status(413).json({ error: 'archive exceeds allowed size' })
                         return
                 }
-                try {
-                        const stored = await storeDraftArchive(kind, nodeId, name, archiveB64)
-                        res.json({ stored })
-                } catch (error) {
-                        const reason = error instanceof Error ? error.message : 'unknown error'
-                        res.status(400).json({ error: reason })
-                }
-        })
+                verifySha256(archive, sha256)
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'invalid archive' })
+                return
+        }
 
-draftEndpoint('skills')
-draftEndpoint('scenarios')
+        const started = Date.now()
+        try {
+                const result = await forgeManager.writeDraft({
+                        kind,
+                        subnetId: identity.subnetId,
+                        nodeId: identity.nodeId,
+                        name,
+                        archive,
+                })
+                const keyPrefix = kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
+                await redisClient.set(
+                        `${keyPrefix}:${identity.subnetId}:${identity.nodeId}:${name}`,
+                        JSON.stringify({ stored_path: result.storedPath, commit: result.commitSha, ts: Date.now() }),
+                )
+                console.log(
+                        'draft stored',
+                        JSON.stringify({
+                                kind,
+                                subnetId: identity.subnetId,
+                                nodeId: identity.nodeId,
+                                name,
+                                bytes: archive.length,
+                                ms: Date.now() - started,
+                                commit: result.commitSha,
+                        }),
+                )
+                res.json({ ok: true, stored_path: result.storedPath, commit: result.commitSha })
+        } catch (error) {
+                console.error('failed to store draft', error)
+                res.status(500).json({ error: 'failed to store draft' })
+        }
+}
 
-app.post('/v1/skills/pr', (_req, res) => {
-        res.json({ pr_url: 'https://example.com/mock-skill-pr' })
+mtlsRouter.post('/skills/draft', createDraftHandler('skills'))
+mtlsRouter.post('/scenarios/draft', createDraftHandler('scenarios'))
+
+mtlsRouter.post('/skills/pr', (req, res) => {
+        const identity = req.auth
+        if (!identity || identity.type !== 'hub') {
+                res.status(403).json({ error: 'hub client certificate required' })
+                return
+        }
+        const name = typeof req.body?.name === 'string' ? req.body.name : ''
+        const nodeId = typeof req.body?.node_id === 'string' ? req.body.node_id : ''
+        if (!name || !nodeId) {
+                res.status(400).json({ error: 'name and node_id are required' })
+                return
+        }
+        res.json({ ok: true, pr_url: 'https://github.com/stipot-com/adaos-registry/pull/mock-skill' })
 })
 
-app.post('/v1/scenarios/pr', (_req, res) => {
-        res.json({ pr_url: 'https://example.com/mock-scenario-pr' })
+mtlsRouter.post('/scenarios/pr', (req, res) => {
+        const identity = req.auth
+        if (!identity || identity.type !== 'hub') {
+                res.status(403).json({ error: 'hub client certificate required' })
+                return
+        }
+        const name = typeof req.body?.name === 'string' ? req.body.name : ''
+        const nodeId = typeof req.body?.node_id === 'string' ? req.body.node_id : ''
+        if (!name || !nodeId) {
+                res.status(400).json({ error: 'name and node_id are required' })
+                return
+        }
+        res.json({ ok: true, pr_url: 'https://github.com/stipot-com/adaos-registry/pull/mock-scenario' })
 })
+
+app.use('/v1', mtlsRouter)
 
 function isValidGuid(guid: string) {
-	return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
-		guid
-	)
+        return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(guid)
 }
 
 const openedStreams: OpenedStreams = {}
@@ -179,60 +525,7 @@ function cleanupSessionBucket(sessionId: string) {
         }
 }
 
-function assertSafeName(name: string) {
-        if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) {
-                throw new Error('invalid name')
-        }
-        if (path.basename(name) !== name) {
-                throw new Error('invalid name')
-        }
-}
-
 const safeBasename = (value: string) => path.basename(value)
-
-const ensureForgeDir = async (nodeId: string, kind: 'skills' | 'scenarios', name: string) => {
-        const dir = path.join(FORGE_ROOT, nodeId, kind, name)
-        await mkdir(dir, { recursive: true })
-        return dir
-}
-
-const assertSafeId = (value: string, label: string) => {
-        if (!value || value.includes('..') || value.includes('/') || value.includes('\\')) {
-                throw new Error(`${label} contains forbidden characters`)
-        }
-}
-
-const storeDraftArchive = async (
-        kind: 'skills' | 'scenarios',
-        nodeId: string,
-        name: string,
-        archiveB64: string,
-) => {
-        assertSafeId(nodeId, 'node_id')
-        assertSafeName(name)
-        if (typeof archiveB64 !== 'string' || archiveB64.trim() === '') {
-            throw new Error('archive_b64 is required')
-        }
-        let buffer: Buffer
-        try {
-                buffer = Buffer.from(archiveB64, 'base64')
-        } catch (error) {
-                throw new Error('invalid archive encoding')
-        }
-        if (!buffer.length) {
-                throw new Error('archive is empty')
-        }
-        const dir = await ensureForgeDir(nodeId, kind, name)
-        const safeName = safeBasename(name) || 'draft'
-        const filename = path.join(dir, `${Date.now()}_${safeName}.zip`)
-        await writeFile(filename, buffer)
-        const keyPrefix = kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
-        await redisClient.lPush(`${keyPrefix}:${nodeId}:${name}`, filename)
-        return filename
-}
-
-const generateSubnetId = () => `sn_${uuidv4().replace(/-/g, '').slice(0, 8)}`
-const generateNodeId = () => `node_${uuidv4().replace(/-/g, '').slice(0, 8)}`
 
 function saveFileChunk(sessionId: string, fileName: string, content: Array<number>) {
         if (!openedStreams[sessionId]) {
@@ -243,18 +536,10 @@ function saveFileChunk(sessionId: string, fileName: string, content: Array<numbe
 
         if (!openedStreams[sessionId][safeFile]) {
                 const timestamp = String(Date.now())
-                const stream = fs.createWriteStream(
-                        FILESPATH + timestamp + '_' + safeFile
-                )
+                const stream = fs.createWriteStream(FILESPATH + timestamp + '_' + safeFile)
                 const destroyTimeout = setTimeout(() => {
                         openedStreams[sessionId][safeFile].stream.destroy()
-                        fs.unlink(
-                                FILESPATH +
-                                openedStreams[sessionId][safeFile].timestamp +
-                                '_' +
-                                safeFile,
-                                () => {}
-                        )
+                        fs.unlink(FILESPATH + openedStreams[sessionId][safeFile].timestamp + '_' + safeFile, () => {})
                         delete openedStreams[sessionId][safeFile]
                         cleanupSessionBucket(sessionId)
                         console.log('destroy', openedStreams)
@@ -271,13 +556,10 @@ function saveFileChunk(sessionId: string, fileName: string, content: Array<numbe
         openedStreams[sessionId][safeFile].destroyTimeout = setTimeout(() => {
                 openedStreams[sessionId][safeFile].stream.destroy()
                 fs.unlink(
-                        FILESPATH +
-                        openedStreams[sessionId][safeFile].timestamp +
-                        '_' +
-                        safeFile,
+                        FILESPATH + openedStreams[sessionId][safeFile].timestamp + '_' + safeFile,
                         (error) => {
                                 if (error) console.log(error)
-                        }
+                        },
                 )
                 delete openedStreams[sessionId][safeFile]
                 cleanupSessionBucket(sessionId)
@@ -287,87 +569,79 @@ function saveFileChunk(sessionId: string, fileName: string, content: Array<numbe
         return new Promise<void>((resolve, reject) =>
                 openedStreams[sessionId][safeFile].stream.write(
                         new Uint8Array(content),
-                        (error) => (error ? reject(error) : resolve())
-                )
+                        (error) => (error ? reject(error) : resolve()),
+                ),
         )
 }
 
 io.on('connection', (socket) => {
-	console.log(socket.id)
+        console.log(socket.id)
 
-	socket.on('disconnecting', async () => {
-		const rooms = Array.from(socket.rooms).filter(
-			(roomId) => roomId != socket.id
-		)
-		if (!rooms.length) return
+        socket.on('disconnecting', async () => {
+                const rooms = Array.from(socket.rooms).filter((roomId) => roomId != socket.id)
+                if (!rooms.length) return
 
-		const sessionId = rooms[0]
-		console.log('disconnect', socket.id, socket.rooms, sessionId)
-		const sessionData: UnionSessionData = JSON.parse(
-			(await redisClient.get(sessionId))!
-		)
+                const sessionId = rooms[0]
+                console.log('disconnect', socket.id, socket.rooms, sessionId)
+                const sessionData: UnionSessionData = JSON.parse((await redisClient.get(sessionId))!)
 
-		if (sessionData == null) {
-			socket.to(sessionId).emit('initiator_disconnect')
-			return
-		}
+                if (sessionData == null) {
+                        socket.to(sessionId).emit('initiator_disconnect')
+                        return
+                }
 
-		let isInitiator = sessionData.initiatorSocketId === socket.id
-		if (isInitiator) {
-			if (sessionData.type === 'public') {
-				await Promise.all(
-					sessionData.fileNames.map((item) => {
-						const path =
-							FILESPATH + item.timestamp + '_' + item.fileName
+                const isInitiator = sessionData.initiatorSocketId === socket.id
+                if (isInitiator) {
+                        if (sessionData.type === 'public') {
+                                await Promise.all(
+                                        sessionData.fileNames.map((item) => {
+                                                const filePath = FILESPATH + item.timestamp + '_' + item.fileName
 
-						return new Promise<void>((resolve) =>
-							fs.unlink(path, () => resolve())
-						)
-					})
-				)
-			}
+                                                return new Promise<void>((resolve) => fs.unlink(filePath, () => resolve()))
+                                        }),
+                                )
+                        }
 
-			socket.to(sessionId).emit('initiator_disconnect')
-			io.socketsLeave(sessionId)
-			await redisClient.del(sessionId)
-			// delete saved files
-		} else {
-			io.to(sessionData.initiatorSocketId).emit(
-				'follower_disconnect',
-				sessionData.followers[socket.id]
-			)
+                        socket.to(sessionId).emit('initiator_disconnect')
+                        io.socketsLeave(sessionId)
+                        await redisClient.del(sessionId)
+                } else {
+                        io.to(sessionData.initiatorSocketId).emit(
+                                'follower_disconnect',
+                                sessionData.followers[socket.id],
+                        )
 
-			delete sessionData.followers[socket.id]
-			await redisClient.set(sessionId, JSON.stringify(sessionData))
-		}
-	})
+                        delete sessionData.followers[socket.id]
+                        await redisClient.set(sessionId, JSON.stringify(sessionData))
+                }
+        })
 
-	socket.on('add_initiator', async (type) => {
-		const guid = uuidv4()
-		let sessionData: UnionSessionData
-		if (type === 'private') {
-			sessionData = {
-				initiatorSocketId: socket.id,
-				followers: {},
-				timestamp: new Date(),
-				type: type,
-			}
-		} else {
-			sessionData = {
-				initiatorSocketId: socket.id,
-				followers: {},
-				timestamp: new Date(),
-				type: type,
-				fileNames: [],
-			}
-		}
+        socket.on('add_initiator', async (type) => {
+                const guid = uuidv4()
+                let sessionData: UnionSessionData
+                if (type === 'private') {
+                        sessionData = {
+                                initiatorSocketId: socket.id,
+                                followers: {},
+                                timestamp: new Date(),
+                                type: type,
+                        }
+                } else {
+                        sessionData = {
+                                initiatorSocketId: socket.id,
+                                followers: {},
+                                timestamp: new Date(),
+                                type: type,
+                                fileNames: [],
+                        }
+                }
 
-		await redisClient.set(guid, JSON.stringify(sessionData))
-		await redisClient.expire(guid, 3600)
+                await redisClient.set(guid, JSON.stringify(sessionData))
+                await redisClient.expire(guid, 3600)
 
-		socket.join(guid)
-		socket.emit('session_id', guid)
-	})
+                socket.join(guid)
+                socket.emit('session_id', guid)
+        })
 
         async function sendToPublicFollower(socket: Socket, emitObject: any) {
                 return new Promise<void>((resolve) => {
@@ -375,362 +649,142 @@ io.on('connection', (socket) => {
                 })
         }
 
-	async function distributeSessionFiles(
-		socket: Socket,
-		fileNames: Array<{ fileName: string; timestamp: string }>
-	) {
-		const chunksize = 64 * 1024
+        async function distributeSessionFiles(socket: Socket, fileNames: Array<{ fileName: string; timestamp: string }>) {
+                const chunksize = 64 * 1024
 
-		for (let item of fileNames) {
-			const path = FILESPATH + item.timestamp + '_' + item.fileName
-			const readStream = fs.createReadStream(path, {
-				highWaterMark: chunksize,
-				// encoding: 'utf8',
-			})
+                for (const item of fileNames) {
+                        const filePath = FILESPATH + item.timestamp + '_' + item.fileName
+                        const readStream = fs.createReadStream(filePath, {
+                                highWaterMark: chunksize,
+                        })
 
-			const size = (await stat(path)).size
-
-			await sendToPublicFollower(socket, {
-				type: 'transferFile',
-				fileName: item.fileName,
-				size: size,
-			})
-			console.log(size)
-
-			for await (const chunk of readStream) {
-				console.log('chunk', typeof chunk)
-
-				await sendToPublicFollower(socket, {
-					type: 'transferFile',
-					fileName: item.fileName,
-					size: size,
-					content: new Uint8Array(chunk),
-				})
-			}
+                        const size = (await stat(filePath)).size
 
                         await sendToPublicFollower(socket, {
                                 type: 'transferFile',
                                 fileName: item.fileName,
-                                size: size,
-                                end: true,
+                                size,
+                        })
+
+                        for await (const chunk of readStream) {
+                                await sendToPublicFollower(socket, {
+                                        type: 'writeFile',
+                                        fileName: item.fileName,
+                                        content: Array.from(new Uint8Array(chunk as Buffer)),
+                                        size,
+                                })
+                        }
+
+                        await sendToPublicFollower(socket, {
+                                type: 'fileTransfered',
+                                fileName: item.fileName,
                         })
                 }
         }
 
-	socket.on('add_follower', async (data) => {
-		// возможно, стоит проверять наличие других комнат у сокета,
-		// чтоб не было лишних подключений
-		const { followerName, sessionId }: FollowerData = data
-		if (!isValidGuid(sessionId)) return
-
-		const sessionData: UnionSessionData = JSON.parse(
-			(await redisClient.get(sessionId))!
-		)
-		console.log('add follower', followerName)
-
-		if (sessionData === null) {
-			socket.emit('initiator_disconnect')
-			return
-		}
-
-		sessionData.followers[socket.id] = followerName
-		socket.join(sessionId)
-
-		await redisClient.set(sessionId, JSON.stringify(sessionData))
-
-		io.to(sessionData.initiatorSocketId).emit(
-			'connect_follower',
-			followerName
-		)
-
-		if (sessionData.type === 'public') {
-			await distributeSessionFiles(socket, sessionData.fileNames)
-		}
-	})
-
-	socket.on('disconnect_follower', async (data) => {
-		const { followerName, sessionId, isInitiator } = data
-		if (!isValidGuid(sessionId)) return
-
-		const sessionData: SessionData = JSON.parse(
-			(await redisClient.get(sessionId))!
-		)
-
-		if (sessionData == null) {
-			socket.emit('initiator_disconnect')
-			return
-		}
-
-		if (isInitiator) {
-			const socketIds = Object.keys(sessionData.followers).filter(
-				(followerSocketId) =>
-					sessionData.followers[followerSocketId] === followerName
-			)
-			console.log(socketIds)
-
-			if (socketIds.length === 1) {
-				delete sessionData.followers[socketIds[0]]
-				await redisClient.set(sessionId, JSON.stringify(sessionData))
-				const sockets = await io.sockets.fetchSockets()
-				const followerSocket = sockets.filter(
-					(socket) => socket.id === socketIds[0]
-				)[0]
-				if (followerSocket) {
-					followerSocket.leave(sessionId)
-					followerSocket.emit('initiator_disconnect')
-				}
-				socket.emit('follower_disconnect', followerName)
-			}
-		} else {
-			delete sessionData.followers[socket.id]
-			await redisClient.set(sessionId, JSON.stringify(sessionData))
-			socket.leave(sessionId)
-			socket.emit('initiator_disconnect')
-			io.to(sessionData.initiatorSocketId).emit(
-				'follower_disconnect',
-				followerName
-			)
-		}
-	})
-
-	socket.on('conductor', async (data, fn) => {
-		const receivedData: CommunicationData = data
-
-		const sessionData: UnionSessionData = JSON.parse(
-			(await redisClient.get(receivedData.sessionId))!
-		)
-
-		if (sessionData == null) {
-			socket.to(receivedData.sessionId).emit('initiator_disconnect')
-			return
-		}
-
-		if (sessionData.type === 'public') {
-			const dataBody = receivedData.data
-			if (dataBody.type === 'transferFile') {
-                                await saveFileChunk(
-                                        receivedData.sessionId,
-                                        dataBody.fileName,
-                                        dataBody.content
-                                )
-
-                                if (dataBody.end) {
-                                        clearTimeout(
-                                                openedStreams[receivedData.sessionId][path.basename(dataBody.fileName)]
-                                                        .destroyTimeout
-                                        )
-                                        await new Promise<void>((resolve) =>
-                                                openedStreams[receivedData.sessionId][
-                                                        path.basename(dataBody.fileName)
-                                                ].stream.close(() => resolve())
-                                        )
-                                        sessionData.fileNames.push({
-                                                fileName: dataBody.fileName,
-                                                timestamp:
-                                                        openedStreams[receivedData.sessionId][
-                                                                path.basename(dataBody.fileName)
-                                                        ].timestamp,
-                                        })
-                                        await redisClient.set(
-                                                receivedData.sessionId,
-                                                JSON.stringify(sessionData)
-                                        )
-                                        delete openedStreams[receivedData.sessionId][
-                                                path.basename(dataBody.fileName)
-                                        ]
-                                        cleanupSessionBucket(receivedData.sessionId)
-                                        io.to(sessionData.initiatorSocketId).emit(
-                                                'saved_file',
-                                                dataBody.fileName
-					)
-				}
-			}
-		}
-		await new Promise<void>((resolve) => {
-			if (receivedData.isInitiator) {
-                                socket
-                                        .to(receivedData.sessionId)
-                                        .emit('communication', receivedData.data, () => resolve())
-                        } else {
-                                io.to(sessionData.initiatorSocketId).emit(
-                                        'communication',
-                                        receivedData.data,
-                                        () => resolve()
-                                )
-			}
-		})
-
-		if (fn) {
-			fn(1)
-		}
-	})
-})
-
-const PORT = parseInt(process.env['PORT'] || '3030')
-const HOST = process.env['HOST'] || '0.0.0.0'
-
-const tokenGuard: express.RequestHandler = (req, res, next) => {
-        const token = req.header('X-AdaOS-Token')
-        if (!token || token !== ROOT_TOKEN) {
-                res.status(401).json({ error: 'unauthorized' })
-                return
-        }
-        next()
-}
-
-const v1Router = express.Router()
-
-v1Router.post('/subnets/register', async (req, res) => {
-        try {
-                const subnetId = generateSubnetId()
-                const subnetName: string | undefined = req.body?.subnet_name
-                const payload = {
-                        subnet_id: subnetId,
-                        subnet_name: subnetName ?? null,
-                        created_at: new Date().toISOString(),
-                }
-                await redisClient.set(`subnet:${subnetId}`, JSON.stringify(payload), {
-                        EX: TTL_SUBNET_SECONDS,
-                })
-                res.json({ subnet_id: subnetId })
-        } catch (error: any) {
-                res.status(500).json({ error: 'subnet_register_failed', detail: String(error?.message ?? error) })
-        }
-})
-
-v1Router.post('/nodes/register', async (req, res) => {
-        try {
-                let subnetId: string | undefined = req.body?.subnet_id
-                if (!subnetId) {
-                        subnetId = generateSubnetId()
-                        await redisClient.set(
-                                `subnet:${subnetId}`,
-                                JSON.stringify({
-                                        subnet_id: subnetId,
-                                        subnet_name: null,
-                                        created_at: new Date().toISOString(),
-                                }),
-                                { EX: TTL_SUBNET_SECONDS }
-                        )
-                }
-                const nodeId = generateNodeId()
-                await redisClient.set(
-                        `node:${nodeId}`,
-                        JSON.stringify({
-                                node_id: nodeId,
-                                subnet_id: subnetId,
-                                created_at: new Date().toISOString(),
-                        }),
-                        { EX: TTL_NODE_SECONDS }
-                )
-                res.json({ node_id: nodeId, subnet_id: subnetId })
-        } catch (error: any) {
-                        res.status(500).json({ error: 'node_register_failed', detail: String(error?.message ?? error) })
-        }
-})
-
-const SKILL_TEMPLATES = [
-        {
-                id: 'python-minimal',
-                name: 'Python Minimal Skill',
-                description: 'Starter AdaOS skill using Python and minimal dependencies.',
-        },
-        {
-                id: 'node-basic',
-                name: 'Node.js Basic Skill',
-                description: 'Sample JavaScript skill scaffold with TypeScript typings.',
-        },
-]
-
-const SCENARIO_TEMPLATES = [
-        {
-                id: 'blank-scenario',
-                name: 'Blank Scenario',
-                description: 'Empty scenario template ready for customization.',
-        },
-        {
-                id: 'morning-routine',
-                name: 'Morning Routine',
-                description: 'Greets the user and prepares devices for the day.',
-        },
-]
-
-v1Router.get('/templates', (req, res) => {
-        const type = String(req.query?.type ?? '').toLowerCase()
-        if (type === 'skill') {
-                res.json({ items: SKILL_TEMPLATES })
-                return
-        }
-        if (type === 'scenario') {
-                res.json({ items: SCENARIO_TEMPLATES })
-                return
-        }
-        res.status(400).json({ error: 'unknown_template_type' })
-})
-
-v1Router.post('/skills/draft', async (req, res) => {
-        try {
-                const body = req.body ?? {}
-                const nodeId = body.node_id as string | undefined
-                const name = body.name as string | undefined
-                const archiveB64 = body.archive_b64 as string | undefined
-
-                if (!nodeId || !name || !archiveB64) {
-                        res.status(400).json({ error: 'missing_parameters' })
+        socket.on('set_session_data', async (sessionId: string, sessionData: SessionData) => {
+                if (!isValidGuid(sessionId)) {
+                        console.error('sessionId must be in guid format')
                         return
                 }
 
-                assertSafeName(name)
+                await redisClient.set(sessionId, JSON.stringify(sessionData))
+                await redisClient.expire(sessionId, 3600)
+        })
 
-                const forgeDir = await ensureForgeDir(nodeId, 'skills', name)
-                const timestamp = Date.now()
-                const storedPath = path.join(forgeDir, `${timestamp}_${name}.zip`)
-                const buffer = Buffer.from(archiveB64, 'base64')
-                await writeFile(storedPath, buffer)
+        socket.on('join_session', async ({ followerName, sessionId }: FollowerData) => {
+                if (!isValidGuid(sessionId)) {
+                        console.error('sessionId must be in guid format')
+                        return
+                }
 
-                const redisKey = `${SKILL_FORGE_KEY_PREFIX}:${nodeId}:${name}`
-                await redisClient.lPush(redisKey, storedPath)
+                let sessionData: UnionSessionData | null
+                try {
+                        const sessionString = await redisClient.get(sessionId)
+                        sessionData = sessionString ? JSON.parse(sessionString) : null
+                } catch (error) {
+                        console.error(error)
+                        return
+                }
 
-                res.json({ ok: true, stored: storedPath })
-        } catch (error: any) {
-                const detail = String(error?.message ?? error)
-                const status = detail === 'invalid name' ? 400 : 500
-                res.status(status).json({ error: 'skill_draft_failed', detail })
-        }
-})
+                if (sessionData == null) {
+                        socket.emit('session_unavailable')
+                        return
+                }
 
-v1Router.post('/skills/pr', async (req, res) => {
-        try {
-                        const body = req.body ?? {}
-                        const nodeId = body.node_id as string | undefined
-                        const name = body.name as string | undefined
-                        if (!nodeId || !name) {
-                                res.status(400).json({ error: 'missing_parameters' })
-                                return
+                if (sessionData.followers[socket.id]) {
+                        return
+                }
+
+                if (sessionData.type === 'public') {
+                        socket.emit('session_type', 'public')
+                        await socket.join(sessionId)
+                        sessionData.followers[socket.id] = followerName
+                        await redisClient.set(sessionId, JSON.stringify(sessionData))
+                        await distributeSessionFiles(socket, sessionData.fileNames)
+                        return
+                }
+
+                socket.join(sessionId)
+                sessionData.followers[socket.id] = followerName
+                await redisClient.set(sessionId, JSON.stringify(sessionData))
+
+                socket.emit('session_type', 'private')
+                io.to(sessionData.initiatorSocketId).emit('follower_connect', followerName)
+        })
+
+        socket.on('set_session_public_files', async ({ sessionId, fileNames }) => {
+                const sessionString = await redisClient.get(sessionId)
+                const sessionData: PublicSessionData = sessionString ? JSON.parse(sessionString) : null
+
+                if (sessionData == null) {
+                        socket.emit('session_unavailable')
+                        return
+                }
+
+                sessionData.fileNames = fileNames
+                await redisClient.set(sessionId, JSON.stringify(sessionData))
+        })
+
+        socket.on('communication', async ({ isInitiator, sessionId, data }: CommunicationData) => {
+                if (!isValidGuid(sessionId)) {
+                        console.error('sessionId must be in guid format')
+                        return
+                }
+
+                if (isInitiator) {
+                        const firstValue = data['values'][0]
+
+                        if (firstValue['type'] === 'transferFile') {
+                                const safeFileName = safeBasename(firstValue['fileName'])
+                                const pathToFile = FILESPATH + firstValue['timestamp'] + '_' + safeFileName
+                                await new Promise<void>((resolve) =>
+                                        fs.unlink(pathToFile, () => resolve()),
+                                )
+                                delete openedStreams[sessionId][safeFileName]
+                                cleanupSessionBucket(sessionId)
                         }
-                        const targetBranch = (body.target_branch as string | undefined) ?? 'main'
-                        const prUrl = `https://example.com/mock/pr/${encodeURIComponent(name)}/${Date.now()}`
-                        res.json({ ok: true, pr_url: prUrl, target_branch: targetBranch })
-        } catch (error: any) {
-                        res.status(500).json({ error: 'skill_pr_failed', detail: String(error?.message ?? error) })
-        }
+
+                        io.to(sessionId).emit('communication', data)
+                        return
+                }
+
+                const sessionData = (await redisClient.get(sessionId))!
+                const initiatorSocketId = (JSON.parse(sessionData) as SessionData).initiatorSocketId
+
+                const messageType = data['type']
+
+                if (messageType === 'writeFile') {
+                        await saveFileChunk(sessionId, data['fileName'], data['content'])
+                }
+
+                io.to(initiatorSocketId).emit('communication', data)
+        })
 })
 
-app.use('/v1', tokenGuard, v1Router)
-
-app.use((req, res) => {
-        res.status(404).send('Resource not found')
-})
-
-server.listen(PORT, HOST, () =>
-        console.log(`Started on http://${HOST}:${PORT} ...`)
-)
-
-const closeStreams = () => {
+function closeStreams() {
         for (const sessionId of Object.keys(openedStreams)) {
-                for (const fileName of Object.keys(openedStreams[sessionId])) {
-                        const info = openedStreams[sessionId][fileName]
-                        clearTimeout(info.destroyTimeout)
+                for (const info of Object.values(openedStreams[sessionId])) {
                         try {
                                 info.stream.close()
                         } catch {
@@ -753,3 +807,7 @@ const shutdown = async () => {
 
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)
+
+server.listen(PORT, HOST, () => {
+        console.log(`AdaOS backhand listening on https://${HOST}:${PORT}`)
+})
