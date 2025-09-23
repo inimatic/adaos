@@ -1,0 +1,89 @@
+# docker-compose.yaml
+services:
+    redis:
+        image: redis:latest
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 1s
+            timeout: 3s
+            retries: 5
+        command: ["redis-server"]
+    backend:
+        depends_on:
+            redis:
+                condition: service_healthy
+        build:
+            context: .
+            dockerfile: ./deployment/backend.Dockerfile
+        restart: always
+        environment:
+            - PORT=3031
+        ports:
+            - "3031:3031"
+
+    frontend:
+        depends_on:
+            backend:
+                condition: service_started
+        build:
+            context: .
+            dockerfile: ./deployment/frontend.Dockerfile
+            args:
+                BUILD_SCRIPT: ${BUILD_SCRIPT}
+                BASE_DOMAIN: ${BASE_DOMAIN}
+        restart: always
+        environment:
+            - BUILD_SCRIPT=${BUILD_SCRIPT}
+        ports:
+            - "8081:8081"
+        configs:
+            - source: nginx-dev-server
+              target: /etc/nginx/conf.d/default.conf
+    nginx:
+        image: umputun/nginx-le:latest
+        hostname: nginx
+        restart: always
+        container_name: nginx
+        depends_on:
+            frontend:
+                condition: service_started # service_healthy
+        volumes:
+            - ./deployment/etc/ssl:/etc/nginx/ssl
+            - type: bind
+              source: ./deployment/etc/service.conf
+              target: /etc/nginx/service.conf
+
+        ports:
+            - "80:80"
+            - "443:443"
+            - "3000:3000"
+        environment:
+            - TZ=Europe/Moscow
+            - LETSENCRYPT=true
+            - LE_EMAIL=connect@stipot.com
+            - LE_FQDN=ru.inimatic.com
+
+volumes:
+    cert_volume: {}
+    acme_challenge: {}
+
+configs:
+    nginx-dev-server:
+        content: |
+            server {
+              listen 8081;
+              server_name frontend;
+              charset utf-8;
+              client_max_body_size 10M;
+              root /usr/share/nginx/html;
+              index index.html index.htm;
+
+              location / {
+                try_files $$uri $$uri/ /index.html;
+              }
+
+              error_page 500 502 503 504 /502.html;
+              location = /50x.html {
+                internal;
+              }
+            }
