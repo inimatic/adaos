@@ -1,6 +1,7 @@
 # src\adaos\apps\cli\commands\skill.py
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,7 @@ from adaos.apps.cli.root_ops import (
     assert_safe_name,
     create_zip_bytes,
     ensure_registration,
+    fetch_policy,
     load_root_cli_config,
     push_skill_draft,
     run_preflight_checks,
@@ -181,6 +183,11 @@ def push_command(
     dry_run: bool = typer.Option(False, "--dry-run", help=_("cli.option.dry_run")),
     no_preflight: bool = typer.Option(False, "--no-preflight", help=_("cli.option.no_preflight")),
     subnet_name: Optional[str] = typer.Option(None, "--subnet-name", help=_("cli.option.subnet_name")),
+    show_policy: bool = typer.Option(
+        False,
+        "--policy",
+        help="Fetch and display Root policy before pushing.",
+    ),
 ):
     """
     Закоммитить изменения ТОЛЬКО внутри подпапки навыка и выполнить git push.
@@ -219,6 +226,19 @@ def push_command(
         typer.secho(str(err), fg=typer.colors.RED)
         raise typer.Exit(1)
 
+    if show_policy:
+        if dry_run:
+            typer.echo(
+                f"[dry-run] GET {config.root_base.rstrip('/')}/v1/policy using node certificate"
+            )
+        else:
+            try:
+                policy = fetch_policy(config)
+            except RootCliError as err:
+                typer.secho(str(err), fg=typer.colors.RED)
+                raise typer.Exit(1)
+            typer.echo(json.dumps(policy, ensure_ascii=False, indent=2))
+
     skill_path = _resolve_skill_path(skill_name)
 
     target_name = name_override or skill_path.name
@@ -235,6 +255,7 @@ def push_command(
         raise typer.Exit(1)
 
     archive_b64 = archive_bytes_to_b64(archive_bytes)
+    archive_hash = hashlib.sha256(archive_bytes).hexdigest()
 
     try:
         stored = push_skill_draft(
@@ -242,6 +263,7 @@ def push_command(
             node_id=config.node_id,
             name=target_name,
             archive_b64=archive_b64,
+            sha256=archive_hash,
             dry_run=dry_run,
             echo=typer.echo,
         )
