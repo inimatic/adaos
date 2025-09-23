@@ -4,7 +4,7 @@ from typing import Protocol, Sequence, Optional, List
 
 
 class GitClient(Protocol):
-    """src/adaos/adapters/git/cli_git.py"""
+    """src.adaos.adapters.git.cli_git"""
 
     def ensure_repo(self, dir: str, url: str, branch: Optional[str] = None) -> None: ...
     def pull(self, dir: str) -> None: ...
