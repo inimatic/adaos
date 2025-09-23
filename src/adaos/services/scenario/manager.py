@@ -40,7 +40,7 @@ class ScenarioManager:
     def list_present(self) -> list[SkillMeta]:
         self.caps.require("core", "scenarios.manage")
         self.repo.ensure()
-        return self.repo.list()
+        return self.ctx.scenarios_repo.list()  # .repo.list()
 
     def sync(self) -> None:
         self.caps.require("core", "scenarios.manage", "net.git")
