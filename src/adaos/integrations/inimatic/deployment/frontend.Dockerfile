@@ -2,10 +2,9 @@ FROM node:20.18.0 AS build
 WORKDIR /inimatic
 ARG BUILD_SCRIPT
 COPY package*.json ./
-# ⬇️ подавляем nx postinstall/optional бинарники и конфликт peer-deps
+# ⬇️ подавляем install-скрипты (nx postinstall), но НЕ отключаем optional
 ENV npm_config_ignore_scripts=true \
     npm_config_legacy_peer_deps=true \
-    npm_config_optional=false \
     npm_config_audit=false \
     npm_config_fund=false \
     NX_BINARY_SKIP_DOWNLOAD=true \
@@ -13,6 +12,8 @@ ENV npm_config_ignore_scripts=true \
     CI=1
 # если есть lock — ci, иначе install
 RUN (npm ci) || (echo "npm ci failed, fallback to npm install" && npm install)
+# ⬇️ точечно достраиваем esbuild (включаем скрипты только на эту команду)
+RUN npm_config_ignore_scripts=false npm rebuild esbuild
 COPY ./ /inimatic
 RUN npm run ${BUILD_SCRIPT}
 FROM nginx:latest
