@@ -69,12 +69,13 @@ class Mutex {
 
 function ghEnv(): GhAppEnv {
 	return {
-		appId: process.env.GH_APP_ID,
-		instId: process.env.GH_APP_INSTALLATION_ID,
-		privateKeyPath: process.env.GH_APP_PRIVATE_KEY_FILE,
-		repo: process.env.FORGE_REPO, // "owner/repo"
+		appId: process.env['GH_APP_ID'],
+		instId: process.env['GH_APP_INSTALLATION_ID'],
+		privateKeyPath: process.env['GH_APP_PRIVATE_KEY_FILE'],
+		repo: process.env['FORGE_REPO'], // "owner/repo"
 	};
 }
+
 
 function parseRepoOwnerNameFromUrl(url: string): string | undefined {
 	// Supports:
@@ -165,7 +166,8 @@ export class ForgeManager {
 					}
 				}
 
-				const parentGit = simpleGit({ baseDir: parent, env });
+				const parentGit = simpleGit({ baseDir: parent });
+				parentGit.env(env);
 				if (useGhApp) {
 					// Если App активна — клонируем по HTTPS с одноразовым токеном
 					// и закрепляем origin.
@@ -183,7 +185,8 @@ export class ForgeManager {
 			}
 
 			await mkdir(this.options.workdir, { recursive: true });
-			this.git = simpleGit({ baseDir: this.options.workdir, env });
+			this.git = simpleGit({ baseDir: this.options.workdir });
+			this.git.env(env);
 
 			await this.git.addConfig('user.name', this.options.authorName);
 			await this.git.addConfig('user.email', this.options.authorEmail);
