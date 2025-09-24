@@ -2,25 +2,30 @@
 FROM node:20.18.0
 WORKDIR /inimatic_backend
 
-# 1) только манифесты
+# 1) тянем только манифесты
 COPY ./package*.json ./
 
-# 2) env, чтобы nx не падал на postinstall
-ENV NX_BINARY_SKIP_DOWNLOAD=true \
-    NX_NATIVE=false \
-	npm_config_legacy_peer_deps=true \
-    npm_config_fund=false \
+# 2) отключаем скрипты и лечим peer-deps; блокируем nx native
+ENV npm_config_ignore_scripts=true \
+    npm_config_legacy_peer_deps=true \
     npm_config_audit=false \
+    npm_config_fund=false \
+    NX_BINARY_SKIP_DOWNLOAD=true \
+    NX_NATIVE=false \
     CI=1
-RUN (npm ci --legacy-peer-deps) || (echo "npm ci failed, falling back to npm install" && npm install --legacy-peer-deps)
-# 3) чистая установка (без перетягивания нативных бинари Nx)
-RUN npm ci
 
-# 4) код бэкенда
+# 3) установка зависимостей без запуска postinstall/preinstall
+#    если нет lock-файла — fallback на install
+RUN (npm ci) || (echo "npm ci failed, falling back to npm install" && npm install)
+
+# 4) код backend
 COPY ./backend ./backend
 
-# 5) сборка как и раньше
-RUN npm run build:api
+# 5) компилируем backend напрямую, минуя скрипты npm (чтобы точно не дергать nx)
+#    используем фиксированную версию tsc, чтобы не зависеть от devDeps корня
+RUN npx -y typescript@5.6.3 tsc -p backend/tsconfig.backend.json
 
 EXPOSE 3030
-CMD ["npm", "run", "serve:api"]
+
+# 6) запускаем собранный JS (без ts-node)
+CMD ["node", "backend/dist/app.js"]
