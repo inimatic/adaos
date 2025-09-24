@@ -98,7 +98,7 @@ jobs:
 
             # 3) docker compose
             export COMPOSE_PROJECT_NAME=inimatic
-            COMPOSE="docker compose -f ./deployment/docker-compose.yaml --project-directory ./ --env-file ./deployment/.env"
+            COMPOSE="sudo -n docker compose -f ./deployment/docker-compose.yaml --project-directory ./ --env-file ./deployment/.env"
             $COMPOSE pull || true
             $COMPOSE up -d --remove-orphans --wait
             $COMPOSE ps
