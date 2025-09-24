@@ -8,10 +8,11 @@ COPY ./package*.json ./
 # 2) env, чтобы nx не падал на postinstall
 ENV NX_BINARY_SKIP_DOWNLOAD=true \
     NX_NATIVE=false \
+	npm_config_legacy_peer_deps=true \
     npm_config_fund=false \
     npm_config_audit=false \
     CI=1
-
+RUN (npm ci --legacy-peer-deps) || (echo "npm ci failed, falling back to npm install" && npm install --legacy-peer-deps)
 # 3) чистая установка (без перетягивания нативных бинари Nx)
 RUN npm ci
 
