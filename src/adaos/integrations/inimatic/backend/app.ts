@@ -220,9 +220,9 @@ function getPeerCertificate(req: express.Request): PeerCertificate | null {
 }
 
 function parseClientIdentity(cert: PeerCertificate): ClientIdentity | null {
-        const subject = cert.subject
-        const subjectRecord = subject as unknown as Partial<Record<string, string>> | undefined
-        const cn = subjectRecord?.['CN'] ?? subjectRecord?.['cn']
+	const subject = cert.subject
+	const subjectRecord = subject as unknown as Partial<Record<string, string>> | undefined
+	const cn = subjectRecord?.['CN'] ?? subjectRecord?.['cn']
 	if (!cn) {
 		return null
 	}
@@ -233,9 +233,9 @@ function parseClientIdentity(cert: PeerCertificate): ClientIdentity | null {
 		}
 		return { type: 'hub', subnetId }
 	}
-        if (cn.startsWith('node:')) {
-                const nodeId = cn.slice('node:'.length)
-                const org = subjectRecord?.['O'] ?? subjectRecord?.['o']
+	if (cn.startsWith('node:')) {
+		const nodeId = cn.slice('node:'.length)
+		const org = subjectRecord?.['O'] ?? subjectRecord?.['o']
 		if (!nodeId || !org || !org.startsWith('subnet:')) {
 			return null
 		}
@@ -259,6 +259,10 @@ function getClientIdentity(req: express.Request): ClientIdentity | null {
 	}
 	return parseClientIdentity(cert)
 }
+
+app.get('/health', (_req, res) => {
+	res.status(200).type('text/plain').send('ok');
+});
 
 app.get('/healthz', (_req, res) => {
 	res.json({ ok: true, time: new Date().toISOString(), mtls: true })
