@@ -42,7 +42,15 @@ services:
             - traefik_letsencrypt:/letsencrypt
         networks:
             - proxy
-
+        labels:
+            - traefik.enable=true
+            - traefik.http.routers.traefik.rule=Host(`traefik.inimatic.com`)
+            - traefik.http.routers.traefik.entrypoints=websecure
+            - traefik.http.routers.traefik.tls.certresolver=le
+            - traefik.http.routers.traefik.service=api@internal
+            - traefik.http.middlewares.traefik-auth.basicauth.users=admin:$$2y$05$$PTGvGW05DTIfUs7wA4vt7.SqRaH4zTK.VM1sBXU.I0ojnr/I>
+            - traefik.http.routers.traefik.middlewares=traefik-auth@docker
+            - traefik.http.serversTransports.apitransport.insecureSkipVerify=true
     backend:
         profiles: ["prod"]
         image: ghcr.io/stipot-com/inimatic-backend:latest
@@ -79,7 +87,7 @@ services:
             test:
                 [
                     "CMD-SHELL",
-                    "curl -fsS http://localhost:3030/health || exit 1",
+                    'code=$(curl -sk -o /dev/null -w ''%{http_code}'' https://localhost:3030/health); [ "$code" -eq 200 ]',
                 ]
             interval: 10s
             timeout: 3s
@@ -90,7 +98,11 @@ services:
             - traefik.http.routers.api.rule=Host(`api.inimatic.com`)
             - traefik.http.routers.api.entrypoints=websecure
             - traefik.http.routers.api.tls.certresolver=le
+            # === ключевые 3 строки для HTTPS-внутри ===
             - traefik.http.services.api.loadbalancer.server.port=3030
+            - traefik.http.services.api.loadbalancer.server.scheme=https
+            - traefik.http.services.api.loadbalancer.serversTransport=apitransport@docker
+            # (остальные security/ratelimit метки — как были)
             - traefik.http.routers.api.middlewares=api-sec@docker,api-rl@docker
             - traefik.http.middlewares.api-sec.headers.stsSeconds=63072000
             - traefik.http.middlewares.api-sec.headers.stsIncludeSubdomains=true
@@ -182,7 +194,7 @@ services:
             test:
                 [
                     "CMD-SHELL",
-                    "curl -fsS http://localhost:3030/health || exit 1",
+                    "curl -fsS https://localhost:3030/health || exit 1",
                 ]
             interval: 10s
             timeout: 3s
@@ -217,15 +229,15 @@ services:
 
 secrets:
     ca_key:
-        file: ./deployment/secrets/ca.key
+        file: ./secrets/ca.key
     ca_crt:
-        file: ./deployment/secrets/ca.crt
+        file: ./secrets/ca.crt
     tls_key:
-        file: ./deployment/secrets/server.key
+        file: ./secrets/server.key
     tls_crt:
-        file: ./deployment/secrets/server.crt
+        file: ./secrets/server.crt
     gh_app_private_key:
-        file: ./deployment/secrets/gh_app_private_key.pem
+        file: ./secrets/gh_app_private_key.pem
 volumes:
     traefik_letsencrypt: {}
 
