@@ -84,17 +84,13 @@ jobs:
 
             # 1) .env из секрета
             mkdir -p deployment
-            cat > deployment/.env <<'EOF_ENV'
-            ${{ secrets.INIMATIC_ENV }}
-            EOF_ENV
+            echo "${{ secrets.INIMATIC_ENV_B64 }}" | base64 -d > deployment/.env
             chmod 600 deployment/.env
 
             # 2) ключ GitHub App как файл-secret (PEM целиком хранится в секретах)
             mkdir -p deployment/secrets
             umask 077
-            cat > deployment/secrets/gh_app_private_key.pem <<'EOF_PEM'
-            ${{ secrets.GH_APP_PRIVATE_KEY }}
-            EOF_PEM
+            echo "${{ secrets.GH_APP_PRIVATE_KEY_B64 }}" | base64 -d > deployment/secrets/gh_app_private_key.pem
 
             # 3) docker compose
             export COMPOSE_PROJECT_NAME=inimatic
