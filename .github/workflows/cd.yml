@@ -82,19 +82,29 @@ jobs:
             git reset --hard origin/rev2026
             cd src/adaos/integrations/inimatic
 
-            # 1) .env из секрета
-            mkdir -p deployment
-            echo "${{ secrets.INIMATIC_ENV_B64 }}" | base64 -d > deployment/.env
-            chmod 600 deployment/.env
-
-            # 2) ключ GitHub App как файл-secret (PEM целиком хранится в секретах)
-            mkdir -p deployment/secrets
-            umask 077
-            echo "${{ secrets.GH_APP_PRIVATE_KEY_B64 }}" | base64 -d > deployment/secrets/gh_app_private_key.pem
-
             # 3) docker compose
             export COMPOSE_PROJECT_NAME=inimatic
             COMPOSE="sudo -n docker compose -f ./deployment/docker-compose.yaml --project-directory ./ --env-file ./deployment/.env"
             $COMPOSE pull || true
             $COMPOSE up -d --remove-orphans --wait
             $COMPOSE ps
+      - name: Prepare secret files
+        run: |
+          umask 077
+          mkdir -p secrets_to_copy
+          # ключ GitHub App
+          printf '%s\n' "${{ secrets.GH_APP_PRIVATE_KEY }}" > secrets_to_copy/gh_app_private_key.pem
+          # .env для compose
+          printf '%s\n' "${{ secrets.INIMATIC_ENV }}" > secrets_to_copy/.env
+
+      - name: Upload secrets via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: |
+            secrets_to_copy/gh_app_private_key.pem
+            secrets_to_copy/.env
+          target: /home/deploy/adaos/src/adaos/integrations/inimatic/deployment/
+          strip_components: 1
