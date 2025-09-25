@@ -48,7 +48,7 @@ services:
             - traefik.http.routers.traefik.entrypoints=websecure
             - traefik.http.routers.traefik.tls.certresolver=le
             - traefik.http.routers.traefik.service=api@internal
-            - traefik.http.middlewares.traefik-auth.basicauth.users=admin:$$2y$05$$PTGvGW05DTIfUs7wA4vt7.SqRaH4zTK.VM1sBXU.I0ojnr/I>
+            - "traefik.http.middlewares.traefik-auth.basicauth.users=admin:$$2y$$05$$PTGvGW05DTIfUs7wA4vt7.SqRaH4zTK.VM1sBXU.I0ojnr/Iyvd2S"
             - traefik.http.routers.traefik.middlewares=traefik-auth@docker
             - traefik.http.serversTransports.apitransport.insecureSkipVerify=true
     backend:
@@ -87,7 +87,7 @@ services:
             test:
                 [
                     "CMD-SHELL",
-                    'code=$(curl -sk -o /dev/null -w ''%{http_code}'' https://localhost:3030/health); [ "$code" -eq 200 ]',
+                    "curl -skf https://localhost:3030/healthz || exit 1",
                 ]
             interval: 10s
             timeout: 3s
