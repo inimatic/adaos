@@ -87,7 +87,7 @@ services:
             test:
                 [
                     "CMD-SHELL",
-                    "curl -skf https://localhost:3030/healthz || exit 1",
+                    'code=$(curl -sk -o /dev/null -w ''%{http_code}'' https://localhost:3030/health); [ "$code" -eq 200 ]',
                 ]
             interval: 10s
             timeout: 3s
