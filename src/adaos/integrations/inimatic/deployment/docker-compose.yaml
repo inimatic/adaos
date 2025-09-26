@@ -50,7 +50,6 @@ services:
             - traefik.http.routers.traefik.service=api@internal
             - "traefik.http.middlewares.traefik-auth.basicauth.users=admin:$$2y$$05$$PTGvGW05DTIfUs7wA4vt7.SqRaH4zTK.VM1sBXU.I0ojnr/Iyvd2S"
             - traefik.http.routers.traefik.middlewares=traefik-auth@docker
-            - traefik.http.serversTransports.apitransport.insecureSkipVerify=true
     backend:
         profiles: ["prod"]
         image: ghcr.io/stipot-com/inimatic-backend:latest
@@ -102,6 +101,7 @@ services:
             - traefik.http.services.api.loadbalancer.server.port=3030
             - traefik.http.services.api.loadbalancer.server.scheme=https
             - traefik.http.services.api.loadbalancer.serversTransport=apitransport@docker
+            - traefik.http.serversTransports.apitransport.insecureSkipVerify=true
             # (остальные security/ratelimit метки — как были)
             - traefik.http.routers.api.middlewares=api-sec@docker,api-rl@docker
             - traefik.http.middlewares.api-sec.headers.stsSeconds=63072000
