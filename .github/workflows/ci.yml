@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: src/adaos/integrations/inimatic/frontend
+        working-directory: src/adaos/integrations/inimatic
     env:
       # иногда angular/ionic сборке нужно больше памяти
       NODE_OPTIONS: --max_old_space_size=4096
@@ -55,8 +55,8 @@ jobs:
         with:
           name: ionic-dist
           path: |
-            src/adaos/integrations/inimatic/frontend/dist/**
-            src/adaos/integrations/inimatic/frontend/www/**
+            src/adaos/integrations/inimatic/dist/**
+            src/adaos/integrations/inimatic/www/**
           if-no-files-found: warn
 
   tests:
