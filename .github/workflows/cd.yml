@@ -81,10 +81,3 @@ jobs:
             git fetch origin rev2026
             git reset --hard origin/rev2026
             cd src/adaos/integrations/inimatic
-
-            # 3) docker compose
-            export COMPOSE_PROJECT_NAME=inimatic
-            COMPOSE="sudo -n docker compose -f ./deployment/docker-compose.yaml --project-directory ./ --env-file ./deployment/.env"
-            $COMPOSE pull || true
-            $COMPOSE up -d --remove-orphans --wait
-            $COMPOSE ps
