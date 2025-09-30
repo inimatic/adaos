@@ -7,7 +7,7 @@
 ## Установка
 
 ```bash
-git clone -b rev2026 https://github.com/stipot/adaos.git
+git clone -b rev2026 https://github.com/stipot-com/adaos.git
 cd adaos
 git submodule update --init --recursive # Веб клиент
 
