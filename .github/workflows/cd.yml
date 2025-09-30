@@ -2,7 +2,7 @@ name: inimatic CD
 
 on:
   push:
-    branches: [rev2026]
+    branches: [main, rev2026]
     paths:
       - "src/adaos/integrations/inimatic/**"
       - ".github/workflows/cd.yml"

@@ -1,34 +1,126 @@
-# infra-inimatic/.github/workflows/deploy.yml
-name: Deploy on images published
+name: AdaOS CI
+
 on:
-  repository_dispatch:
-    types: [images-published]
+  push:
+    branches: [main, master, rev2026]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  deploy:
+  web:
+    name: Build Ionic frontend
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/adaos/integrations/inimatic
+    env:
+      # иногда angular/ionic сборке нужно больше памяти
+      NODE_OPTIONS: --max_old_space_size=4096
+      # если у вас есть .env.production — он подхватится инструментами сборки;
+      # секреты можно пробрасывать через env/vars репозитория при необходимости
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_KEY }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            BACKEND="${{ github.event.client_payload.backend }}"
-            FRONTEND="${{ github.event.client_payload.frontend }}"
-            echo "Deploying: $BACKEND / $FRONTEND"
+          node-version: "20"
+          cache: "pnpm"
 
-            # пробрасываем теги в окружение деплой-скрипта
-            export BACKEND_IMAGE="$BACKEND"
-            export FRONTEND_IMAGE="$FRONTEND"
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
-            cd /opt/inimatic/docker/compose
-            docker login ghcr.io -u ${{ secrets.GHCR_USER }} -p ${{ secrets.GHCR_TOKEN }} || true
-            docker pull "$BACKEND" || true
-            docker pull "$FRONTEND" || true
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
 
-            # твой существующий деплой-скрипт, который читает переменные
-            ENVF="/opt/inimatic/.env" bash /opt/inimatic/scripts/your_deploy.sh
+      # если ionic не в devDependencies, добавьте:
+      # - name: Add ionic CLI locally
+      #   run: pnpm add -D @ionic/cli
+
+      - name: Lint (optional)
+        run: pnpm run lint
+        continue-on-error: true
+
+      - name: Build (production)
+        run: npx ionic build --configuration production
+        # исторически было `--prod`; на новых ionic/angular это эквивалент конфигурации production
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ionic-dist
+          path: |
+            src/adaos/integrations/inimatic/dist/**
+            src/adaos/integrations/inimatic/www/**
+          if-no-files-found: warn
+
+  tests:
+    name: Python tests
+    # если нужно, раскомментируйте следующую строку, чтобы ждать сборку фронта:
+    # needs: [web]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONIOENCODING: utf-8
+      MONOREPO_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/stipot/adaoskills.git' }}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GIT_AUTHOR_NAME: "AdaOS CI Bot"
+      GIT_AUTHOR_EMAIL: "ci-bot@example.com"
+      GIT_COMMITTER_NAME: "AdaOS CI Bot"
+      GIT_COMMITTER_EMAIL: "ci-bot@example.com"
+      ADAOS_TESTING: "1"
+    steps:
+      - name: Force UTF-8 on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          chcp.com 65001 > $null
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+          $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
+          $env:PYTHONUTF8=1
+      - name: Force UTF-8 on Linux
+        if: runner.os == 'Linux'
+        run: |
+          export PYTHONUTF8=1
+          export PYTHONIOENCODING=utf-8
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: "pip"
+
+      - name: Install project (editable) + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -e .[dev]
+
+      - name: Run SDK tests (only)
+        run: |
+          adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
+
+      - name: Run skills tests
+        run: |
+          adaos tests run -- -q --junitxml=reports/skills-junit.xml
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.os }}-py${{ matrix.python }}
+          path: reports/*.xml
