@@ -30,20 +30,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "pnpm"
+          cache: "npm"
 
-      - name: Enable corepack (pnpm)
+      - name: Enable corepack (npm)
         run: corepack enable
 
       - name: Install deps
-        run: pnpm install --frozen-lockfile
+        run: npm install --frozen-lockfile
 
       # если ionic не в devDependencies, добавьте:
       # - name: Add ionic CLI locally
-      #   run: pnpm add -D @ionic/cli
+      #   run: npm add -D @ionic/cli
 
       - name: Lint (optional)
-        run: pnpm run lint
+        run: npm run lint
         continue-on-error: true
 
       - name: Build (production)
