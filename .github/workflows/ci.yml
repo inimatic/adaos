@@ -18,10 +18,12 @@ jobs:
       run:
         working-directory: src/adaos/integrations/inimatic
     env:
-      # иногда angular/ionic сборке нужно больше памяти
       NODE_OPTIONS: --max_old_space_size=4096
-      # если у вас есть .env.production — он подхватится инструментами сборки;
-      # секреты можно пробрасывать через env/vars репозитория при необходимости
+      # глушим постинсталлы и нативщину nx, чтобы не падало на раннере
+      npm_config_ignore_scripts: "true"
+      NX_BINARY_SKIP_DOWNLOAD: "true"
+      NX_NATIVE: "false"
+      CI: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,18 +31,22 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "20.18.0" # выровнено с Dockerfile
           cache: "npm"
+          cache-dependency-path: |
+            src/adaos/integrations/inimatic/package-lock.json
 
-      - name: Enable corepack (npm)
-        run: corepack enable
+      - name: Clean sticky esbuild folders (just in case)
+        run: |
+          rm -rf node_modules/esbuild \
+                 node_modules/vite/node_modules/esbuild || true
 
-      - name: Install deps
-        run: npm install --frozen-lockfile
+      - name: Install deps (no postinstall)
+        run: |
+          npm ci || npm install
 
-      # если ionic не в devDependencies, добавьте:
-      # - name: Add ionic CLI locally
-      #   run: npm add -D @ionic/cli
+      - name: Rebuild esbuild only
+        run: npm rebuild esbuild
 
       - name: Lint (optional)
         run: npm run lint
@@ -48,7 +54,6 @@ jobs:
 
       - name: Build (production)
         run: npx ionic build --configuration production
-        # исторически было `--prod`; на новых ionic/angular это эквивалент конфигурации production
 
       - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
@@ -61,8 +66,6 @@ jobs:
 
   tests:
     name: Python tests
-    # если нужно, раскомментируйте следующую строку, чтобы ждать сборку фронта:
-    # needs: [web]
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +90,7 @@ jobs:
           [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
           $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'
           $env:PYTHONUTF8=1
+
       - name: Force UTF-8 on Linux
         if: runner.os == 'Linux'
         run: |
