@@ -6,13 +6,24 @@ on:
     paths:
       - 'src/adaos/integrations/inimatic/**'
       - '.github/workflows/cd.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write         # для push в GHCR
+    outputs:
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      backend_rev: ${{ steps.tags.outputs.backend_rev }}
+      frontend_rev: ${{ steps.tags.outputs.frontend_rev }}
+      backend_image_rev: ${{ steps.tags.outputs.backend_image_rev }}
+      frontend_image_rev: ${{ steps.tags.outputs.frontend_image_rev }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,6 +36,16 @@ jobs:
         run: |
           SHORT_SHA="$(git rev-parse --short HEAD)"
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare image tags
+        id: tags
+        run: |
+          BACKEND_REV="rev2026-${{ steps.meta.outputs.short_sha }}"
+          FRONTEND_REV="rev2026-${{ steps.meta.outputs.short_sha }}"
+          echo "backend_rev=${BACKEND_REV}" >> "$GITHUB_OUTPUT"
+          echo "frontend_rev=${FRONTEND_REV}" >> "$GITHUB_OUTPUT"
+          echo "backend_image_rev=ghcr.io/${{ github.repository_owner }}/inimatic-backend:${BACKEND_REV}" >> "$GITHUB_OUTPUT"
+          echo "frontend_image_rev=ghcr.io/${{ github.repository_owner }}/inimatic-frontend:${FRONTEND_REV}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -41,9 +62,10 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/inimatic-backend:latest
-            ghcr.io/${{ github.repository_owner }}/inimatic-backend:rev2026-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.tags.outputs.backend_image_rev }}
           cache-from: type=gha,scope=inimatic-backend
           cache-to: type=gha,scope=inimatic-backend,mode=max
+          provenance: false
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -55,29 +77,28 @@ jobs:
             BUILD_SCRIPT=buildprod
           tags: |
             ghcr.io/${{ github.repository_owner }}/inimatic-frontend:latest
-            ghcr.io/${{ github.repository_owner }}/inimatic-frontend:rev2026-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.tags.outputs.frontend_image_rev }}
           cache-from: type=gha,scope=inimatic-frontend
           cache-to: type=gha,scope=inimatic-frontend,mode=max
+          provenance: false
 
-  deploy:
-    runs-on: ubuntu-latest
+  notify-infra:
     needs: build-and-push
-    if: ${{ github.ref == 'refs/heads/rev2026' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Notify infra-inimatic via repository_dispatch
+        uses: peter-evans/repository-dispatch@v3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            REPO_DIR=${REPO_DIR:-adaos}
-            if [ ! -d "$REPO_DIR/.git" ]; then
-              git clone https://github.com/${{ github.repository }} "$REPO_DIR"
-            fi
-            cd "$REPO_DIR"
-            git fetch origin rev2026
-            git reset --hard origin/rev2026
-            cd src/adaos/integrations/inimatic
+          repository: stipot-com/infra-inimatic
+          event-type: images-published
+          client-payload: >-
+            {
+              "sha":"${{ needs.build-and-push.outputs.short_sha }}",
+              "backend":"${{ needs.build-and-push.outputs.backend_image_rev }}",
+              "frontend":"${{ needs.build-and-push.outputs.frontend_image_rev }}"
+            }
