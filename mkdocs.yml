@@ -69,6 +69,7 @@ plugins:
             "Сценарии": "Scenarios"
             "DevPortal": "DevPortal"
             "Дорожная карта": "Roadmap"
+            "Концепции": "Concepts"
   - git-revision-date-localized:
       enable_creation_date: true
       enable_git_follow: false
@@ -124,6 +125,7 @@ nav:
   - "Сценарии": scenarios.md
   - "DevPortal": devportal.md
   - "Дорожная карта": roadmap.md
+  - "Концепции": concepts/codeflow.md
 
 copyright: |
   &copy; 2025 AdaOS
