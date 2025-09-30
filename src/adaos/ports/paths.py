@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 class PathProvider(Protocol):
-    """Contract published by :mod:`adaos.adapters.fs.path_provider`."""
+    """Contract published by :mod: adaos.adapters.fs.path_provider."""
 
     @property
     def base(self) -> Path: ...

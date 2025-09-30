@@ -38,16 +38,6 @@ class SkillManager:
         self.settings = settings
         self.ctx: AgentContext = get_ctx()
 
-    def _cache_root(self) -> Path:
-        paths = self.ctx.paths
-        getter = getattr(paths, "skills_cache_dir", None)
-        if getter is not None:
-            value = getter() if callable(getter) else getter
-        else:
-            base = getattr(paths, "skills_dir")
-            value = base() if callable(base) else base
-        return Path(value)
-
     def list_installed(self) -> list[SkillRecord]:
         self.caps.require("core", "skills.manage")
         return self.ctx.skills_repo.list()
@@ -63,7 +53,7 @@ class SkillManager:
     def sync(self) -> None:
         self.caps.require("core", "skills.manage", "net.git")
         self.ctx.skills_repo.ensure()
-        root = self._cache_root()
+        root = self.ctx.paths.skills_dir()
         names = [r.name for r in self.reg.list()]
         prefixed = [f"skills/{n}" for n in names]
         ensure_clean(self.ctx.git, str(root), prefixed)
@@ -111,7 +101,7 @@ class SkillManager:
         if not rec:
             return f"uninstalled: {name} (not found)"
         self.reg.unregister(name)
-        root = self._cache_root()
+        root = self.ctx.paths.workspace_dir()
         test_mode = os.getenv("ADAOS_TESTING") == "1"
         # в тестах/без .git — только реестр, без git операций
         if test_mode or not (root / ".git").exists():
@@ -131,7 +121,7 @@ class SkillManager:
 
     def push(self, name: str, message: str, *, signoff: bool = False) -> str:
         self.caps.require("core", "skills.manage", "git.write", "net.git")
-        root = self._cache_root()
+        root = self.ctx.paths.workspace_dir()
         if not (root / ".git").exists():
             raise RuntimeError("Skills repo is not initialized. Run `adaos skill sync` once.")
 
