@@ -4,8 +4,8 @@ on:
   push:
     branches: [rev2026]
     paths:
-      - 'src/adaos/integrations/inimatic/**'
-      - '.github/workflows/cd.yml'
+      - "src/adaos/integrations/inimatic/**"
+      - ".github/workflows/cd.yml"
   workflow_dispatch:
 
 concurrency:
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write         # для push в GHCR
+      packages: write # для push в GHCR
     outputs:
       short_sha: ${{ steps.meta.outputs.short_sha }}
       backend_rev: ${{ steps.tags.outputs.backend_rev }}
@@ -91,9 +91,7 @@ jobs:
       - name: Notify infra-inimatic via repository_dispatch
         uses: peter-evans/repository-dispatch@v3
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_KEY }}
+          token: ${{ secrets.INFRA_DISPATCH_TOKEN }} # <-- PAT c scope repo
           repository: stipot-com/infra-inimatic
           event-type: images-published
           client-payload: >-
