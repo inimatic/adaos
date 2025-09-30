@@ -62,22 +62,6 @@ def _read_manifest(skill_dir: Path) -> SkillMeta:
     return SkillMeta(id=SkillId(sid), name=sid, version="0.0.0", path=str(skill_dir.resolve()))
 
 
-def _read_catalog(paths: PathProvider) -> list[str]:
-    # ищем skills.yaml рядом с базой/директорией навыков (первое найденное)
-    candidates: list[Path] = []
-    base = getattr(paths, "base", None)
-    if base:
-        candidates.append(Path(base) / _CATALOG_FILE)
-    skills_dir = Path(paths.skills_dir())
-    candidates.extend([skills_dir.parent / _CATALOG_FILE, skills_dir / _CATALOG_FILE])
-    for c in candidates:
-        if c.exists():
-            y = yaml.safe_load(c.read_text(encoding="utf-8")) or {}
-            items = y.get("skills") or []
-            return [str(s).strip() for s in items if str(s).strip()]
-    return []
-
-
 @dataclass
 class GitSkillRepository(SkillRepository):
     """
@@ -99,43 +83,25 @@ class GitSkillRepository(SkillRepository):
         self.monorepo_url = monorepo_url
         self.monorepo_branch = monorepo_branch
 
-    # --- common
-
-    def _root(self) -> Path:
-        cache_dir = getattr(self.paths, "skills_cache_dir", None)
-        if cache_dir is not None:
-            cache = cache_dir() if callable(cache_dir) else cache_dir
-        else:
-            base = getattr(self.paths, "skills_dir")
-            cache = base() if callable(base) else base
-        root = Path(cache)
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-
-    def _skill_dir(self, root: Path, name: str) -> Path:
-        return _safe_join(root, f"skills/{name}")
-
     def _ensure_monorepo(self) -> None:
         if os.getenv("ADAOS_TESTING") == "1":
             return
-        self.git.ensure_repo(str(self._root()), self.monorepo_url, branch=self.monorepo_branch)
+        self.git.ensure_repo(str(self.paths.workspace_dir()), self.monorepo_url, branch=self.monorepo_branch)
 
     def ensure(self) -> None:
         if self.monorepo_url:
             self._ensure_monorepo()
         else:
-            self._root().mkdir(parents=True, exist_ok=True)
+            self.paths.workspace_dir().mkdir(parents=True, exist_ok=True)
 
     # --- listing / get
 
     def list(self) -> list[SkillMeta]:
         self.ensure()
         result: List[SkillMeta] = []
-        root = self._root()
-        skills_root = root / "skills"
-        if not skills_root.exists():
+        if not self.paths.skills_dir().exists():
             return result
-        for child in sorted(skills_root.iterdir()):
+        for child in sorted(self.paths.skills_dir().iterdir()):
             if not child.is_dir() or child.name.startswith("."):
                 continue
             meta = _read_manifest(child)
@@ -144,8 +110,7 @@ class GitSkillRepository(SkillRepository):
 
     def get(self, skill_id: str) -> Optional[SkillMeta]:
         self.ensure()
-        root = self._root()
-        direct = root / "skills" / skill_id
+        direct = self.paths.skills_dir() / skill_id
         if direct.exists():
             m = _read_manifest(direct)
             if m and m.id.value == skill_id:
@@ -169,37 +134,25 @@ class GitSkillRepository(SkillRepository):
         fs mode:      ref = git URL; dest_name опционален.
         """
         self.ensure()
-        root = self._root()
-
-        if self.monorepo_url:
-            # monorepo: ожидаем имя скилла из каталога
-            name = ref.strip()
-            if not _NAME_RE.match(name):
-                raise ValueError("invalid skill name")
-            """ catalog = set(_read_catalog(self.paths))
-            if catalog and name not in catalog:
-                raise ValueError(f"skill '{name}' not found in catalog") """
-            # sparse checkout только нужного подкаталога
-            self.git.sparse_init(str(root), cone=False)
-            self.git.sparse_add(str(root), f"skills/{name}")
-            self.git.pull(str(root))
-            p = self._skill_dir(root, name)
-            if not p.exists():
-                raise FileNotFoundError(f"skill '{name}' not present after sync")
-            return _read_manifest(p)
-
-        # fs mode: ожидаем полный URL
-        if not _looks_like_url(ref):
-            raise ValueError("ожидаю полный Git URL (multi-repo). " "если вы в монорежиме — задайте ADAOS_SKILLS_MONOREPO_URL и вызывайте install(<skill_name>)")
-        root.mkdir(parents=True, exist_ok=True)
-        name = dest_name or _repo_basename_from_url(ref)
-        dest = root / name
-        self.git.ensure_repo(str(dest), ref, branch=branch)
-        return _read_manifest(dest)
+        name = ref.strip()
+        p: Path = self.paths.skills_dir() / name
+        # monorepo: ожидаем имя скилла из каталога
+        if not _NAME_RE.match(name):
+            raise ValueError("invalid skill name")
+        """ catalog = set(_read_catalog(self.paths))
+        if catalog and name not in catalog:
+            raise ValueError(f"skill '{name}' not found in catalog") """
+        # sparse checkout только нужного подкаталога
+        self.git.sparse_init(str(self.paths.workspace_dir()), cone=False)
+        self.git.sparse_add(str(self.paths.workspace_dir()), f"skills/{name}")
+        self.git.pull(str(self.paths.workspace_dir()))
+        if not p.exists():
+            raise FileNotFoundError(f"skill '{name}' not present after sync")
+        return _read_manifest(p)
 
     def uninstall(self, skill_id: str) -> None:
         self.ensure()
-        p = self._skill_dir(self._root(), skill_id)
+        p: Path = self.paths.skills_dir() / skill_id
         if not p.exists():
             raise FileNotFoundError(f"skill '{skill_id}' not found")
         if remove_tree:
