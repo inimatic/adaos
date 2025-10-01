@@ -60,6 +60,23 @@ def _mgr() -> SkillManager:
     return SkillManager(repo=repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=getattr(ctx, "bus", None), caps=ctx.caps)
 
 
+def _ensure_workspace_gitignore(workspace: Path) -> None:
+    """Ensure that the shared workspace has a .gitignore with runtime exclusions."""
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    target = workspace / ".gitignore"
+    if target.exists():
+        return
+
+    entries = [
+        "skills/.runtime",
+        "skills/.devtime",
+        "scenario/.runtime",
+        "scenario/.devtime",
+    ]
+    target.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+
 def _workspace_root() -> Path:
     ctx = get_ctx()
     attr = getattr(ctx.paths, "skills_workspace_dir", None)
@@ -68,7 +85,10 @@ def _workspace_root() -> Path:
     else:
         base = getattr(ctx.paths, "skills_dir")
         value = base() if callable(base) else base
-    return Path(value).expanduser().resolve()
+    root = Path(value).expanduser().resolve()
+    workspace = root.parent if root.name.lower() == "skills" else root
+    _ensure_workspace_gitignore(workspace)
+    return root
 
 
 def _resolve_skill_path(target: str) -> Path:
@@ -562,13 +582,10 @@ def doctor(name: str):
 @_run_safe
 @app.command("migrate")
 def migrate(
-    name: Optional[str] = typer.Option(None, "--name", help="skill to migrate"),
+    name: str = typer.Argument(..., help="skill to migrate"),
     dry_run: bool = typer.Option(False, "--dry-run", help="report without applying changes"),
 ):
     service = SkillUpdateService(get_ctx())
-    if not name:
-        typer.secho("specify --name to migrate a skill", fg=typer.colors.YELLOW)
-        return
     try:
         result = service.request_update(name, dry_run=dry_run)
     except FileNotFoundError as exc:
@@ -583,7 +600,10 @@ def migrate(
 @_run_safe
 @app.command("lint")
 def lint(path: str = typer.Argument(".", help="path to skill directory")):
-    target = Path(path).resolve()
+    try:
+        target = _resolve_skill_path(path)
+    except typer.BadParameter:
+        target = Path(path).expanduser().resolve()
     if not target.exists():
         typer.secho(f"path not found: {target}", fg=typer.colors.RED)
         raise typer.Exit(1)

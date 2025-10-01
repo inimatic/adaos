@@ -162,16 +162,56 @@ class SkillManager:
 
         env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
         version = env.resolve_active_version()
+        package_dir = getattr(self.ctx.paths, "package_dir", None)
+        if callable(package_dir):
+            package_dir = package_dir()
+        package_root = Path(package_dir).resolve().parent if package_dir else None
+
+        interpreter: Path | None = None
+        python_paths: list[str] = []
+        skill_source = skill_dir
+        skill_env_path: Path | None = None
         if version:
             env.prepare_version(version)
             slot_name = env.read_active_slot(version)
             slot_paths = env.build_slot_paths(version, slot_name)
             log_path = slot_paths.logs_dir / "tests.manual.log"
+            manifest_path = slot_paths.resolved_manifest
+            if manifest_path.exists():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    manifest = {}
+                runtime_info = manifest.get("runtime", {})
+                interpreter_value = runtime_info.get("interpreter")
+                if interpreter_value:
+                    interpreter = Path(interpreter_value)
+                python_paths.extend([p for p in runtime_info.get("python_paths", []) if p])
+                source_override = manifest.get("source")
+                if source_override:
+                    skill_source = Path(source_override)
+                skill_env_raw = runtime_info.get("skill_env")
+                if skill_env_raw:
+                    skill_env_path = Path(skill_env_raw)
+                if not skill_env_path:
+                    skill_env_path = slot_paths.env_dir / ".skill_env.json"
+            else:
+                skill_source = slot_paths.source_dir
+                skill_env_path = slot_paths.env_dir / ".skill_env.json"
         else:
             env.ensure_base()
             log_path = env.data_root() / "files" / "tests.manual.log"
 
-        return run_tests(skill_dir, log_path=log_path)
+        if package_root:
+            python_paths.append(str(package_root))
+
+        return run_tests(
+            skill_source,
+            log_path=log_path,
+            interpreter=interpreter,
+            python_paths=python_paths,
+            skill_env_path=skill_env_path,
+        )
 
     def uninstall(self, name: str) -> None:
         self.caps.require("core", "skills.manage", "net.git")
@@ -311,9 +351,24 @@ class SkillManager:
         )
 
         tests: Dict[str, TestResult] = {}
+        package_dir = getattr(self.ctx.paths, "package_dir", None)
+        if callable(package_dir):
+            package_dir = package_dir()
+        package_root = None
+        if package_dir:
+            package_root = Path(package_dir).resolve().parent
         if run_tests:
             log_file = slot.logs_dir / "tests.log"
-            tests = run_tests(staged_dir, log_path=log_file)
+            extra_paths = list(python_paths)
+            if package_root:
+                extra_paths.append(str(package_root))
+            tests = run_tests(
+                staged_dir,
+                log_path=log_file,
+                interpreter=interpreter,
+                python_paths=extra_paths,
+                skill_env_path=slot.env_dir / ".skill_env.json",
+            )
             if any(result.status != "passed" for result in tests.values()):
                 env.cleanup_slot(version, slot_name)
                 raise RuntimeError("skill tests failed")
