@@ -28,7 +28,8 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
 from adaos.services.skill.tests_runner import TestResult, run_tests
 from adaos.skills.runtime_runner import execute_tool
-from adaos.services.skill.validation import SkillValidationService
+from adaos.services.skill.validation import SkillValidationService, ValidationReport
+from adaos.services.secrets.service import SecretsService
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 
@@ -49,6 +50,80 @@ class PolicyDefaults:
     telemetry_enabled: bool
     sandbox_memory_mb: int | None = None
     sandbox_cpu_seconds: float | None = None
+
+
+class _SkillSecretsBackend:
+    """Simple JSON-backed secrets store scoped to a single skill runtime."""
+
+    def __init__(self, path: Path):
+        self._path = path
+
+    def _load(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        if not self._path.exists():
+            return {"profile": {}, "global": {}}
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {"profile": {}, "global": {}}
+
+    def _save(self, data: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def put(self, key: str, value: str, *, scope: str = "profile", meta: Dict[str, Any] | None = None) -> None:
+        data = self._load()
+        bucket = data.setdefault(scope, {})
+        bucket[key] = {"value": value, "meta": meta or {}}
+        self._save(data)
+
+    def get(self, key: str, *, default: str | None = None, scope: str = "profile") -> str | None:
+        data = self._load()
+        bucket = data.get(scope, {})
+        record = bucket.get(key)
+        if not isinstance(record, dict):
+            return default
+        return record.get("value", default)
+
+    def delete(self, key: str, *, scope: str = "profile") -> None:
+        data = self._load()
+        bucket = data.get(scope, {})
+        if key in bucket:
+            bucket.pop(key)
+            self._save(data)
+
+    def list(self, *, scope: str = "profile") -> list[Dict[str, Any]]:
+        data = self._load()
+        bucket = data.get(scope, {})
+        return [
+            {"key": k, "meta": (rec.get("meta") if isinstance(rec, dict) else {})}
+            for k, rec in sorted(bucket.items())
+        ]
+
+    def import_items(self, items: Iterable[Dict[str, Any]], *, scope: str = "profile") -> int:
+        data = self._load()
+        bucket = data.setdefault(scope, {})
+        count = 0
+        for item in items:
+            key = item.get("key")
+            value = item.get("value")
+            if not key or value is None:
+                continue
+            bucket[key] = {"value": str(value), "meta": item.get("meta") or {}}
+            count += 1
+        self._save(data)
+        return count
+
+    def export_items(self, *, scope: str = "profile") -> list[Dict[str, Any]]:
+        data = self._load()
+        bucket = data.get(scope, {})
+        return [
+            {"key": k, "value": rec.get("value"), "meta": rec.get("meta") or {}}
+            for k, rec in bucket.items()
+            if isinstance(rec, dict)
+        ]
 
 
 class SkillManager:
@@ -128,6 +203,48 @@ class SkillManager:
             return meta, report
 
         return meta, report  # return f"installed: {name}"
+
+    def validate_skill(self, name: str, *, strict: bool = True, probe_tools: bool = False) -> ValidationReport:
+        """Run validation for a skill via the service layer."""
+
+        self.caps.require("core", "skills.manage")
+        ctx = self.ctx
+        previous = ctx.skill_ctx.get()
+        try:
+            report = SkillValidationService(ctx).validate(
+                name,
+                strict=strict,
+                install_mode=False,
+                probe_tools=probe_tools,
+            )
+        finally:
+            if previous is None:
+                ctx.skill_ctx.clear()
+            else:
+                ctx.skill_ctx.set(previous.name, Path(previous.path))
+        return report
+
+    def run_skill_tests(self, name: str) -> Dict[str, TestResult]:
+        """Execute runtime tests without preparing a new slot."""
+
+        self.caps.require("core", "skills.manage")
+        skills_root = Path(self.ctx.paths.skills_dir())
+        skill_dir = skills_root / name
+        if not skill_dir.exists():
+            raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
+
+        env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
+        version = env.resolve_active_version()
+        if version:
+            env.prepare_version(version)
+            slot_name = env.read_active_slot(version)
+            slot_paths = env.build_slot_paths(version, slot_name)
+            log_path = slot_paths.logs_dir / "tests.manual.log"
+        else:
+            env.ensure_base()
+            log_path = env.data_root() / "files" / "tests.manual.log"
+
+        return run_tests(skill_dir, log_path=log_path)
 
     def uninstall(self, name: str) -> None:
         self.caps.require("core", "skills.manage", "net.git")
@@ -400,16 +517,88 @@ class SkillManager:
             "resolved_manifest": status["resolved_manifest"],
         }
 
-    def run_tool(self, name: str, tool: str | None, payload: Mapping[str, Any], *, timeout: float | None = None) -> Any:
-        status = self.runtime_status(name)
-        if not status.get("ready", True):
-            pending_slot = status.get("pending_slot")
-            raise RuntimeError(
-                f"skill '{name}' version {status.get('pending_version') or status.get('version')} is not activated. "
-                f"Activate slot {pending_slot or status.get('active_slot')} and retry."
-            )
+    def setup_skill(self, name: str) -> Any:
+        """Run the optional setup tool for a skill."""
 
+        status = self.runtime_status(name)
+        env = self._runtime_env(name)
         manifest_path = Path(status["resolved_manifest"])
+        version = status.get("version")
+        slot_name = status.get("active_slot")
+        ready = status.get("ready", True)
+
+        if not ready:
+            slot_name = status.get("pending_slot") or slot_name
+            version = status.get("pending_version") or version
+            if not slot_name or not version:
+                raise RuntimeError("skill has no prepared slot available for setup")
+            env.prepare_version(version)
+            metadata = env.read_version_metadata(version)
+            slot_paths = env.build_slot_paths(version, slot_name)
+            slot_meta = metadata.get("slots", {}).get(slot_name, {})
+            manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
+
+        if not manifest_path.exists():
+            raise RuntimeError("skill runtime is not prepared; install the skill first")
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        tools = manifest.get("tools") or {}
+        if "setup" not in tools:
+            raise RuntimeError("setup not supported for this skill")
+
+        return self.run_tool(
+            name,
+            "setup",
+            {},
+            allow_inactive=not ready,
+            slot=slot_name,
+        )
+
+    def run_tool(
+        self,
+        name: str,
+        tool: str | None,
+        payload: Mapping[str, Any],
+        *,
+        timeout: float | None = None,
+        allow_inactive: bool = False,
+        slot: str | None = None,
+    ) -> Any:
+        status = self.runtime_status(name)
+        env = self._runtime_env(name)
+        version = status.get("version")
+        active_slot = status.get("active_slot")
+        manifest_path = Path(status["resolved_manifest"])
+        slot_name = active_slot
+
+        if not status.get("ready", True):
+            target_slot = slot or status.get("pending_slot")
+            target_version = status.get("pending_version") or version
+            if not allow_inactive or not target_slot or not target_version:
+                raise RuntimeError(
+                    f"skill '{name}' version {status.get('pending_version') or status.get('version')} is not activated. "
+                    f"Activate slot {target_slot or status.get('active_slot')} and retry."
+                )
+            env.prepare_version(target_version)
+            metadata = env.read_version_metadata(target_version)
+            slot_paths = env.build_slot_paths(target_version, target_slot)
+            slot_meta = metadata.get("slots", {}).get(target_slot, {})
+            manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
+            if not manifest_path.exists():
+                raise RuntimeError(f"slot {target_slot} for version {target_version} is not prepared")
+            version = target_version
+            slot_name = target_slot
+        elif slot and slot != active_slot:
+            env.prepare_version(version)
+            metadata = env.read_version_metadata(version)
+            slot_paths = env.build_slot_paths(version, slot)
+            slot_meta = metadata.get("slots", {}).get(slot, {})
+            candidate = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
+            if not candidate.exists():
+                raise RuntimeError(f"slot {slot} for version {version} is not prepared")
+            manifest_path = candidate
+            slot_name = slot
+
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         tools = data.get("tools") or {}
         if tool:
@@ -426,9 +615,8 @@ class SkillManager:
         module = tool_spec.get("module")
         attr = tool_spec.get("callable") or target_tool
         skill_dir = Path(data.get("source") or (Path(self.ctx.paths.skills_dir()) / name))
-        env = self._runtime_env(name)
-        slot_name = data.get("slot") or status.get("active_slot")
-        slot = env.build_slot_paths(status.get("version") or data.get("version"), slot_name)
+        slot_name = data.get("slot") or slot_name
+        slot = env.build_slot_paths(version or data.get("version"), slot_name)
         runtime_info = data.get("runtime", {})
         extra_paths = [Path(p) for p in runtime_info.get("python_paths", []) if p]
         skill_env_path = Path(runtime_info.get("skill_env") or (slot.env_dir / ".skill_env.json"))
@@ -436,6 +624,8 @@ class SkillManager:
         ctx = self.ctx
         previous = ctx.skill_ctx.get()
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
+        prev_secrets = ctx.secrets
+        ctx.secrets = SecretsService(_SkillSecretsBackend(env.data_root() / "files" / "secrets.json"), ctx.caps)
         execution_timeout = timeout or tool_spec.get("timeout_seconds")
         try:
             if not ctx.skill_ctx.set(name, skill_dir):
@@ -468,6 +658,7 @@ class SkillManager:
                     extra_paths=extra_paths,
                 )
         finally:
+            ctx.secrets = prev_secrets
             if previous is None:
                 ctx.skill_ctx.clear()
             else:
@@ -575,8 +766,41 @@ class SkillManager:
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"failed to install dependencies: {exc}") from exc
         if use_isolated:
-            return []
+            return self._python_site_packages(interpreter)
         return python_paths
+
+    def _python_site_packages(self, interpreter: Path) -> list[str]:
+        """Return site-packages directories for the provided interpreter."""
+
+        script = """
+import json
+import site
+paths = []
+try:
+    paths.extend(site.getsitepackages())
+except Exception:
+    pass
+try:
+    user = site.getusersitepackages()
+except Exception:
+    user = None
+if user:
+    paths.append(user)
+print(json.dumps(list(dict.fromkeys(p for p in paths if p))))
+"""
+        try:
+            output = subprocess.check_output(
+                [str(interpreter), "-c", script],
+                text=True,
+                stderr=subprocess.STDOUT,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"failed to resolve site-packages for {interpreter}: {exc}") from exc
+        try:
+            data = json.loads(output.strip() or "[]")
+        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+            raise RuntimeError(f"unexpected site-packages output: {output!r}") from exc
+        return [str(Path(p)) for p in data if p]
 
     def _collect_dependencies(self, manifest: Mapping[str, Any]) -> list[str]:
         deps = manifest.get("dependencies") or []
