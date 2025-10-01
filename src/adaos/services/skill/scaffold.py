@@ -1,10 +1,13 @@
 # src/adaos/services/skill/scaffold.py
 from __future__ import annotations
 
-import re, os
+import os
+import re
 import shutil
 from pathlib import Path
 from typing import Optional
+
+import yaml
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
@@ -96,8 +99,17 @@ def create(
 
     # гарантируем meta
     meta = target / "skill.yaml"
-    if not meta.exists():
-        meta.write_text(f"name: {name}\nversion: {version}\n", encoding="utf-8")
+    if meta.exists():
+        try:
+            data = yaml.safe_load(meta.read_text(encoding="utf-8")) or {}
+        except Exception:
+            data = {}
+        if isinstance(data, dict):
+            data["name"] = name
+            data.setdefault("version", version)
+            meta.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    else:
+        meta.write_text(yaml.safe_dump({"name": name, "version": version}, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     # регистрация в локальном реестре (идемпотентно)
     if register:
