@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import traceback
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -307,6 +308,38 @@ def cmd_scaffold(name: str, template: str = typer.Option("demo_skill", "--templa
 
 
 @_run_safe
+@app.command("validate")
+def cmd_validate(
+    name: str,
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+    strict: bool = typer.Option(True, "--strict/--no-strict", help="treat warnings as errors"),
+    probe_tools: bool = typer.Option(False, "--probe-tools", help="import handlers to verify tool exports"),
+):
+    mgr = _mgr()
+    try:
+        report = mgr.validate_skill(name, strict=strict, probe_tools=probe_tools)
+    except Exception as exc:
+        typer.secho(f"validate failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    issues = [asdict(issue) for issue in report.issues]
+    if json_output:
+        typer.echo(json.dumps({"ok": report.ok, "issues": issues}, ensure_ascii=False, indent=2))
+        if not report.ok:
+            raise typer.Exit(1)
+        return
+
+    if report.ok:
+        typer.secho("validation passed", fg=typer.colors.GREEN)
+        return
+
+    for issue in report.issues:
+        location = f" ({issue.where})" if issue.where else ""
+        typer.echo(f"[{issue.level}] {issue.code}: {issue.message}{location}")
+    raise typer.Exit(1)
+
+
+@_run_safe
 @app.command("install")
 def cmd_install(
     name: str,
@@ -339,6 +372,39 @@ def cmd_install(
         raise typer.Exit(1) from exc
 
     _echo_runtime_install(runtime)
+
+
+@_run_safe
+@app.command("test")
+def cmd_test(name: str, json_output: bool = typer.Option(False, "--json", help="machine readable output")):
+    mgr = _mgr()
+    try:
+        results = mgr.run_skill_tests(name)
+    except Exception as exc:
+        typer.secho(f"test failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        typer.echo(json.dumps({k: asdict(v) for k, v in results.items()}, ensure_ascii=False, indent=2))
+        if any(res.status != "passed" for res in results.values()):
+            raise typer.Exit(1)
+        return
+
+    if not results:
+        typer.echo("no tests discovered")
+        return
+
+    failed = False
+    for test_name, result in results.items():
+        detail = f" ({result.detail})" if result.detail else ""
+        typer.echo(f"{test_name}: {result.status}{detail}")
+        if result.status != "passed":
+            failed = True
+
+    if failed:
+        raise typer.Exit(1)
+
+    typer.secho("tests passed", fg=typer.colors.GREEN)
 
 
 @app.command("run-handler")
@@ -386,6 +452,30 @@ def run_tool(
 
     typer.echo(json.dumps(result, ensure_ascii=False))
 
+
+@_run_safe
+@app.command("setup")
+def cmd_setup(name: str, json_output: bool = typer.Option(False, "--json", help="machine readable output")):
+    mgr = _mgr()
+    try:
+        result = mgr.setup_skill(name)
+    except Exception as exc:
+        typer.secho(f"setup failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    if isinstance(result, dict):
+        payload = json.dumps(result, ensure_ascii=False)
+        typer.echo(payload)
+        if not result.get("ok", True):
+            raise typer.Exit(1)
+        return
+
+    if json_output:
+        typer.echo(json.dumps({"result": result}, ensure_ascii=False))
+    elif result is None:
+        typer.secho("setup completed", fg=typer.colors.GREEN)
+    else:
+        typer.echo(str(result))
 
 @_run_safe
 @app.command("activate")
