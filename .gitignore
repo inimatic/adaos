@@ -17,3 +17,4 @@ src/adaos/integrations/inimatic/backend/ssl/adaos_root
 src/adaos/integrations/inimatic/backend/ssl/adaos_root.pub
 src/adaos/integrations/inimatic/backend/ssl/ca.crt
 src/adaos/integrations/inimatic/backend/ssl/ca.key
+.adaos/state/adaos.db
