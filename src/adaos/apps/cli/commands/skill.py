@@ -365,6 +365,7 @@ def cmd_install(
     name: str,
     test: bool = typer.Option(False, "--test", help=_("cli.skill.install.option.test")),
     slot: Optional[str] = typer.Option(None, "--slot", help=_("cli.skill.install.option.slot")),
+    silent: bool = typer.Option(False, "--silent", help=_("cli.skill.install.option.silent")),
 ):
     mgr = _mgr()
     try:
@@ -392,6 +393,38 @@ def cmd_install(
         raise typer.Exit(1) from exc
 
     _echo_runtime_install(runtime)
+
+    if silent:
+        return
+
+    try:
+        setup_result = mgr.setup_skill(skill_name)
+    except RuntimeError as exc:
+        message = str(exc)
+        if "setup not supported" in message.lower():
+            typer.secho(_("cli.skill.install.setup_not_supported"), fg=typer.colors.YELLOW)
+            return
+        typer.secho(_("cli.skill.install.setup_failed", error=message), fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        typer.secho(_("cli.skill.install.setup_failed", error=str(exc)), fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    if isinstance(setup_result, dict):
+        ok = setup_result.get("ok")
+        if ok is False:
+            detail = setup_result.get("error") or setup_result.get("message") or ""
+            typer.secho(
+                _("cli.skill.install.setup_report_failed", detail=str(detail)),
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(1)
+        detail = setup_result.get("message") or setup_result.get("detail")
+        if detail:
+            typer.echo(_("cli.skill.install.setup_success_with_detail", detail=str(detail)))
+            return
+
+    typer.echo(_("cli.skill.install.setup_success"))
 
 
 @_run_safe
