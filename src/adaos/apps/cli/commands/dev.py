@@ -1,76 +1,245 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
-import httpx
 import typer
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
 
-from adaos.apps.cli.root_ops import (
-    RootCliError,
-    key_path,
-    keys_dir,
-    load_root_cli_config,
-    save_root_cli_config,
-)
+from adaos.services.crypto.pki import generate_rsa_key, make_csr, write_pem, write_private_key
+from adaos.services.node_config import ensure_hub, load_node, node_base_dir, save_node
+from adaos.services.root.client import RootHttpClient, RootHttpError
+from adaos.services.root.keyring import KeyringUnavailableError, load_refresh
+from adaos.services.root.service import OwnerHubsService, PkiService, RootAuthError, RootAuthService
 
 app = typer.Typer(help="Developer utilities for Root integration")
+root_app = typer.Typer(help="Root owner operations")
 hub_app = typer.Typer(help="Subnet bootstrap commands")
 node_app = typer.Typer(help="Node registration commands")
+app.add_typer(root_app, name="root")
 app.add_typer(hub_app, name="hub")
 app.add_typer(node_app, name="node")
 
 
-def _root_url(base: str, suffix: str) -> str:
-    return f"{(base or '').rstrip('/')}{suffix}"
+def _http_client() -> RootHttpClient:
+    return RootHttpClient()
 
 
-def _post_json(
-    url: str,
-    *,
-    payload: dict,
-    headers: Optional[dict[str, str]] = None,
-    cert: Optional[tuple[str, str]] = None,
-    verify: bool | str = False,
-    timeout: float = 30.0,
-) -> dict:
+def _pki_paths() -> dict[str, Path]:
+    base = node_base_dir()
+    pki_dir = base / "pki"
+    return {
+        "dir": pki_dir,
+        "hub_key": pki_dir / "hub.key",
+        "hub_cert": pki_dir / "hub.crt",
+        "chain": pki_dir / "chain.crt",
+        "node_key": pki_dir / "node.key",
+        "node_cert": pki_dir / "node.crt",
+    }
+
+
+def _print_error(message: str) -> None:
+    typer.secho(message, fg=typer.colors.RED)
+
+
+def _handle_root_error(exc: Exception) -> None:
+    if isinstance(exc, RootHttpError):
+        detail = exc.error_code or "request failed"
+        _print_error(f"Root API error ({detail}): {exc}")
+    elif isinstance(exc, RootAuthError):
+        _print_error(str(exc))
+    else:
+        _print_error(str(exc))
+
+
+@root_app.command("login")
+def root_login() -> None:
+    cfg = load_node()
     try:
-        response = httpx.post(url, json=payload, headers=headers, cert=cert, verify=verify, timeout=timeout)
-    except httpx.RequestError as exc:
-        raise RootCliError(f"POST {url} failed: {exc}") from exc
-    if response.status_code >= 400:
-        detail = response.text.strip()
-        raise RootCliError(f"POST {url} failed with status {response.status_code}: {detail or 'no body'}")
-    try:
-        return response.json()
+        ensure_hub(cfg)
     except ValueError as exc:
-        raise RootCliError(f"Root response is not valid JSON: {exc}") from exc
+        _print_error(str(exc))
+        raise typer.Exit(1)
 
+    client = _http_client()
+    auth = RootAuthService(client)
 
-def _write_private_key(path: Path, key: rsa.RSAPrivateKey) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    path.write_bytes(pem)
+    def _on_start(info: dict) -> None:
+        verify_uri = info.get("verify_uri", "https://api.inimatic.com/device")
+        user_code = info.get("user_code", "<unknown>")
+        typer.echo(f"Open {verify_uri} and enter code: {user_code}")
+
     try:
-        os.chmod(path, 0o600)
-    except PermissionError:
-        pass
+        profile = auth.login_owner(cfg, on_start=_on_start)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+    typer.secho("Owner authorization complete.", fg=typer.colors.GREEN)
+    typer.echo(f"Owner ID: {profile['owner_id']}")
+    typer.echo(f"Subject: {profile['subject'] or 'n/a'}")
+    typer.echo(f"Scopes: {', '.join(profile['scopes']) or 'none'}")
+    typer.echo(f"Access expires at: {profile['access_expires_at']}")
 
 
-def _write_pem(path: Path, data: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not data.endswith("\n"):
-        data = data + "\n"
-    path.write_text(data, encoding="utf-8")
+@root_app.command("status")
+def root_status() -> None:
+    cfg = load_node()
+    try:
+        ensure_hub(cfg)
+    except ValueError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+
+    state = cfg.root or {}
+    profile = state.get("profile")
+    if not profile:
+        typer.echo("Not logged in to root. Run 'adaos dev root login'.")
+        return
+
+    typer.echo(f"Owner ID: {profile['owner_id']}")
+    typer.echo(f"Subject: {profile['subject'] or 'n/a'}")
+    typer.echo(f"Scopes: {', '.join(profile['scopes']) or 'none'}")
+    typer.echo(f"Access expires at: {profile['access_expires_at']}")
+    hubs = profile.get("hub_ids") or []
+    if hubs:
+        typer.echo(f"Registered hubs: {', '.join(sorted(set(hubs)))}")
+    else:
+        typer.echo("Registered hubs: none")
+
+    refresh_in_keyring = False
+    try:
+        refresh_in_keyring = load_refresh(profile["owner_id"]) is not None
+    except KeyringUnavailableError:
+        typer.secho("Keyring unavailable; using fallback storage in node.yaml", fg=typer.colors.YELLOW)
+    else:
+        typer.echo("Refresh token stored in keyring" if refresh_in_keyring else "Refresh token missing from keyring")
+
+    if state.get("refresh_token_fallback"):
+        typer.echo("Fallback refresh token stored in node.yaml (consider securing keyring)")
+
+
+@root_app.command("whoami")
+def root_whoami() -> None:
+    cfg = load_node()
+    try:
+        ensure_hub(cfg)
+    except ValueError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+
+    client = _http_client()
+    auth = RootAuthService(client)
+    try:
+        info = auth.whoami(cfg)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+    typer.echo(typer.style("Current identity:", fg=typer.colors.GREEN))
+    for key, value in info.items():
+        typer.echo(f"- {key}: {value}")
+
+
+@root_app.command("logout")
+def root_logout() -> None:
+    cfg = load_node()
+    client = _http_client()
+    auth = RootAuthService(client)
+    try:
+        auth.logout(cfg)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+    typer.secho("Root session removed.", fg=typer.colors.GREEN)
+
+
+@root_app.command("sync-hubs")
+def root_sync_hubs() -> None:
+    cfg = load_node()
+    client = _http_client()
+    auth = RootAuthService(client)
+    hubs_service = OwnerHubsService(client, auth)
+    try:
+        hub_ids = hubs_service.sync(cfg)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+    typer.echo("Registered hubs:")
+    for hid in hub_ids:
+        typer.echo(f"- {hid}")
+
+
+@root_app.command("add-hub")
+def root_add_hub(hub_id: Optional[str] = typer.Option(None, help="Override hub identifier")) -> None:
+    cfg = load_node()
+    client = _http_client()
+    auth = RootAuthService(client)
+    hubs_service = OwnerHubsService(client, auth)
+    try:
+        hubs_service.add_current_hub(cfg, hub_id=hub_id)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+    typer.secho("Hub registered with root.", fg=typer.colors.GREEN)
+
+
+@hub_app.command("enroll")
+def hub_enroll(ttl: Optional[str] = typer.Option(None, help="Optional certificate TTL (e.g. 24h)")) -> None:
+    cfg = load_node()
+    try:
+        ensure_hub(cfg)
+    except ValueError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+
+    paths = _pki_paths()
+    hub_id = cfg.node_id
+    key_path = paths["hub_key"]
+    cert_path = paths["hub_cert"]
+    chain_path = paths["chain"]
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+
+    key = generate_rsa_key()
+    csr = make_csr(f"hub:{hub_id}", f"owner:{cfg.subnet_id}", key)
+
+    client = _http_client()
+    auth = RootAuthService(client)
+    pki = PkiService(client, auth)
+    try:
+        result = pki.enroll(cfg, hub_id, csr, ttl)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+    cert_pem = result.get("cert_pem")
+    chain_pem = result.get("chain_pem")
+    if not isinstance(cert_pem, str) or not isinstance(chain_pem, str):
+        _print_error("Root did not return certificate bundle")
+        raise typer.Exit(1)
+
+    write_private_key(key_path, key)
+    write_pem(cert_path, cert_pem)
+    write_pem(chain_path, chain_pem)
+
+    typer.secho("Hub certificate enrolled.", fg=typer.colors.GREEN)
+    typer.echo(f"Private key: {key_path}")
+    typer.echo(f"Certificate: {cert_path}")
+    typer.echo(f"CA chain: {chain_path}")
 
 
 @hub_app.command("init")
@@ -79,64 +248,46 @@ def hub_init(
     name: Optional[str] = typer.Option(None, "--name", help="Optional subnet display name"),
     force: bool = typer.Option(False, "--force", help="Overwrite existing hub credentials"),
 ) -> None:
+    cfg = load_node()
+    paths = _pki_paths()
+    key_path = paths["hub_key"]
+    cert_path = paths["hub_cert"]
+    chain_path = paths["chain"]
+
+    if not force and (key_path.exists() or cert_path.exists()):
+        _print_error("Hub credentials already exist; use --force to overwrite.")
+        raise typer.Exit(1)
+
+    key = generate_rsa_key()
+    csr = make_csr("subnet:pending", None, key)
+
+    client = _http_client()
     try:
-        config = load_root_cli_config()
-    except RootCliError as err:
-        typer.secho(str(err), fg=typer.colors.RED)
+        response = client.subnets_register(csr, token, name)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
+
+    subnet_id = response.get("subnet_id")
+    cert_pem = response.get("cert_pem")
+    ca_pem = response.get("ca_pem")
+    if not isinstance(subnet_id, str) or not isinstance(cert_pem, str) or not isinstance(ca_pem, str):
+        _print_error("Root response is missing certificate bundle")
         raise typer.Exit(1)
 
-    keys_dir()
-    hub_key_path = key_path('hub_key')
-    hub_cert_path = key_path('hub_cert')
-    ca_path = key_path('ca_cert')
+    write_private_key(key_path, key)
+    write_pem(cert_path, cert_pem)
+    write_pem(chain_path, ca_pem)
 
-    if not force and (hub_key_path.exists() or hub_cert_path.exists()):
-        typer.secho("Hub credentials already exist; use --force to overwrite.", fg=typer.colors.RED)
-        raise typer.Exit(1)
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
-    csr = (
-        x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "subnet:pending")]))
-        .sign(key, hashes.SHA256())
-    )
-    payload = {"csr_pem": csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")}
-    if name:
-        payload["subnet_name"] = name
-
-    url = _root_url(config.root_base, "/v1/subnets/register")
-    data = _post_json(
-        url,
-        payload=payload,
-        headers={"X-Bootstrap-Token": token},
-        verify=False,
-    )
-
-    subnet_id = data.get("subnet_id")
-    cert_pem = data.get("cert_pem")
-    ca_pem = data.get("ca_pem")
-    if not subnet_id or not cert_pem or not ca_pem:
-        raise RootCliError("Root response is missing required fields")
-
-    _write_private_key(hub_key_path, key)
-    _write_pem(hub_cert_path, cert_pem)
-    _write_pem(ca_path, ca_pem)
-
-    config.subnet_id = subnet_id
-    config.keys.hub.key = str(hub_key_path)
-    config.keys.hub.cert = str(hub_cert_path)
-    config.keys.ca = str(ca_path)
-    save_root_cli_config(config)
+    cfg.subnet_id = subnet_id
+    save_node(cfg)
 
     typer.secho(f"Registered subnet: {subnet_id}", fg=typer.colors.GREEN)
-    typer.echo(f"Hub key saved to {hub_key_path}")
-    typer.echo(f"Hub certificate saved to {hub_cert_path}")
-    typer.echo(f"CA certificate saved to {ca_path}")
-    forge_info = data.get("forge")
-    if isinstance(forge_info, dict):
-        repo = forge_info.get("repo")
-        path_hint = forge_info.get("path")
-        typer.echo(f"Forge repository: {repo} ({path_hint})")
+    typer.echo(f"Hub key saved to {key_path}")
+    typer.echo(f"Hub certificate saved to {cert_path}")
+    typer.echo(f"CA certificate saved to {chain_path}")
 
 
 @node_app.command("register")
@@ -144,78 +295,55 @@ def node_register(
     token: Optional[str] = typer.Option(None, "--token", help="Bootstrap token for node provisioning"),
     force: bool = typer.Option(False, "--force", help="Overwrite existing node credentials"),
 ) -> None:
-    try:
-        config = load_root_cli_config()
-    except RootCliError as err:
-        typer.secho(str(err), fg=typer.colors.RED)
-        raise typer.Exit(1)
-
-    if not config.subnet_id:
-        typer.secho("Subnet is not registered. Run 'adaos dev hub init' first.", fg=typer.colors.RED)
-        raise typer.Exit(1)
-
-    keys_dir()
-    node_key_path = key_path('node_key')
-    node_cert_path = key_path('node_cert')
-    hub_key_path = key_path('hub_key')
-    hub_cert_path = key_path('hub_cert')
-    ca_path = key_path('ca_cert')
+    cfg = load_node()
+    paths = _pki_paths()
+    node_key_path = paths["node_key"]
+    node_cert_path = paths["node_cert"]
+    chain_path = paths["chain"]
+    hub_key_path = paths["hub_key"]
+    hub_cert_path = paths["hub_cert"]
 
     if not force and (node_key_path.exists() or node_cert_path.exists()):
-        typer.secho("Node credentials already exist; use --force to overwrite.", fg=typer.colors.RED)
+        _print_error("Node credentials already exist; use --force to overwrite.")
         raise typer.Exit(1)
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
-    subject = x509.Name(
-        [
-            x509.NameAttribute(NameOID.COMMON_NAME, "node:pending"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, f"subnet:{config.subnet_id}"),
-        ]
-    )
-    csr = x509.CertificateSigningRequestBuilder().subject_name(subject).sign(key, hashes.SHA256())
-    payload = {"csr_pem": csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")}
+    key = generate_rsa_key()
+    csr = make_csr("node:pending", f"subnet:{cfg.subnet_id}", key)
 
-    headers: dict[str, str] = {}
-    cert: Optional[tuple[str, str]]
-    verify: bool | str
-    if token:
-        headers["X-Bootstrap-Token"] = token
-        payload["subnet_id"] = config.subnet_id
-        cert = None
-        verify = False
-    else:
-        if not hub_cert_path.exists() or not hub_key_path.exists():
-            typer.secho(
-                "Hub credentials are missing; provide --token or run 'adaos dev hub init' again.",
-                fg=typer.colors.RED,
+    client = _http_client()
+    try:
+        if token:
+            response = client.nodes_register(csr, bootstrap_token=token, mtls=None, subnet_id=cfg.subnet_id)
+        else:
+            if not hub_cert_path.exists() or not hub_key_path.exists() or not chain_path.exists():
+                _print_error("Hub credentials are missing; provide --token or run 'adaos dev hub init'.")
+                raise typer.Exit(1)
+            response = client.nodes_register(
+                csr,
+                bootstrap_token=None,
+                mtls=(str(hub_cert_path), str(hub_key_path), str(chain_path)),
+                subnet_id=cfg.subnet_id,
             )
-            raise typer.Exit(1)
-        if not ca_path.exists():
-            typer.secho("CA certificate is missing; run 'adaos dev hub init' first.", fg=typer.colors.RED)
-            raise typer.Exit(1)
-        cert = (str(hub_cert_path), str(hub_key_path))
-        verify = str(ca_path)
+    except Exception as exc:  # noqa: BLE001
+        _handle_root_error(exc)
+        raise typer.Exit(1)
+    finally:
+        client.close()
 
-    url = _root_url(config.root_base, "/v1/nodes/register")
-    data = _post_json(url, payload=payload, headers=headers or None, cert=cert, verify=verify)
+    node_id = response.get("node_id")
+    cert_pem = response.get("cert_pem")
+    ca_pem = response.get("ca_pem")
+    if not isinstance(node_id, str) or not isinstance(cert_pem, str):
+        _print_error("Root response is missing node certificate")
+        raise typer.Exit(1)
 
-    node_id = data.get("node_id")
-    cert_pem = data.get("cert_pem")
-    ca_pem = data.get("ca_pem")
-    if not node_id or not cert_pem:
-        raise RootCliError("Root response is missing required fields")
+    write_private_key(node_key_path, key)
+    write_pem(node_cert_path, cert_pem)
+    if isinstance(ca_pem, str) and ca_pem.strip():
+        write_pem(chain_path, ca_pem)
 
-    _write_private_key(node_key_path, key)
-    _write_pem(node_cert_path, cert_pem)
-    if ca_pem:
-        _write_pem(ca_path, ca_pem)
-
-    config.node_id = node_id
-    config.keys.node.key = str(node_key_path)
-    config.keys.node.cert = str(node_cert_path)
-    if ca_pem:
-        config.keys.ca = str(ca_path)
-    save_root_cli_config(config)
+    cfg.node_id = node_id
+    save_node(cfg)
 
     typer.secho(f"Registered node: {node_id}", fg=typer.colors.GREEN)
     typer.echo(f"Node key saved to {node_key_path}")
