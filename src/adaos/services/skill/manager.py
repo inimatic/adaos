@@ -171,36 +171,53 @@ class SkillManager:
         python_paths: list[str] = []
         skill_source = skill_dir
         skill_env_path: Path | None = None
-        if version:
-            env.prepare_version(version)
-            slot_name = env.read_active_slot(version)
-            slot_paths = env.build_slot_paths(version, slot_name)
-            log_path = slot_paths.logs_dir / "tests.manual.log"
-            manifest_path = slot_paths.resolved_manifest
-            if manifest_path.exists():
-                try:
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError:
-                    manifest = {}
-                runtime_info = manifest.get("runtime", {})
-                interpreter_value = runtime_info.get("interpreter")
-                if interpreter_value:
-                    interpreter = Path(interpreter_value)
-                python_paths.extend([p for p in runtime_info.get("python_paths", []) if p])
-                source_override = manifest.get("source")
-                if source_override:
-                    skill_source = Path(source_override)
-                skill_env_raw = runtime_info.get("skill_env")
-                if skill_env_raw:
-                    skill_env_path = Path(skill_env_raw)
-                if not skill_env_path:
-                    skill_env_path = slot_paths.env_dir / ".skill_env.json"
-            else:
-                skill_source = slot_paths.source_dir
-                skill_env_path = slot_paths.env_dir / ".skill_env.json"
-        else:
-            env.ensure_base()
-            log_path = env.data_root() / "files" / "tests.manual.log"
+        log_path: Path
+
+        if not version:
+            raise RuntimeError("no versions installed")
+
+        env.prepare_version(version)
+        metadata = env.read_version_metadata(version)
+        active_slot = env.read_active_slot(version)
+        slot_paths = env.build_slot_paths(version, active_slot)
+        slot_meta = metadata.get("slots", {}).get(active_slot, {})
+        manifest_override = slot_meta.get("resolved_manifest") if isinstance(slot_meta, dict) else None
+        manifest_path = Path(manifest_override or slot_paths.resolved_manifest)
+        if not manifest_path.exists():
+            for candidate in env.iter_slot_paths(version):
+                candidate_meta = metadata.get("slots", {}).get(candidate.slot, {})
+                override = candidate_meta.get("resolved_manifest") if isinstance(candidate_meta, dict) else None
+                candidate_manifest = Path(override or candidate.resolved_manifest)
+                if candidate_manifest.exists():
+                    slot_paths = candidate
+                    manifest_path = candidate_manifest
+                    break
+
+        if not manifest_path.exists():
+            raise RuntimeError(
+                "no prepared slot with resolved manifest; install the skill first"
+            )
+
+        log_path = slot_paths.logs_dir / "tests.manual.log"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+
+        runtime_info = manifest.get("runtime", {})
+        interpreter_value = runtime_info.get("interpreter")
+        if interpreter_value:
+            interpreter = Path(interpreter_value)
+        python_paths.extend([p for p in runtime_info.get("python_paths", []) if p])
+
+        source_override = manifest.get("source")
+        skill_source = Path(source_override) if source_override else slot_paths.source_dir
+
+        skill_env_raw = runtime_info.get("skill_env")
+        if skill_env_raw:
+            skill_env_path = Path(skill_env_raw)
+        if not skill_env_path:
+            skill_env_path = slot_paths.env_dir / ".skill_env.json"
 
         if package_root:
             python_paths.append(str(package_root))
