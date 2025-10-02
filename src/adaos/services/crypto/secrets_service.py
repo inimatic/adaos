@@ -1,8 +1,9 @@
-# \src\adaos\services\secrets\service.py
 from __future__ import annotations
-from typing import Iterable, Dict, Any
-from adaos.ports.secrets import Secrets, SecretScope
+
+from typing import Any, Dict, Iterable
+
 from adaos.ports import Capabilities
+from adaos.ports.secrets import SecretScope, Secrets
 
 
 class SecretsService:

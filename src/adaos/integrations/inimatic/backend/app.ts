@@ -50,9 +50,9 @@ type CommunicationData = {
 }
 
 type StreamInfo = {
-	stream: fs.WriteStream
-	destroyTimeout: NodeJS.Timeout
-	timestamp: string
+        stream: fs.WriteStream
+        destroyTimeout: NodeJS.Timeout
+        timestamp: string
 }
 
 type OpenedStreams = {
@@ -62,15 +62,46 @@ type OpenedStreams = {
 }
 
 type ClientIdentity =
-	| { type: 'hub'; subnetId: string }
-	| { type: 'node'; subnetId: string; nodeId: string }
+        | { type: 'hub'; subnetId: string }
+        | { type: 'node'; subnetId: string; nodeId: string }
+
+type OwnerHubRecord = {
+        hubId: string
+        ownerId: string
+        createdAt: Date
+        lastSeen: Date
+        revoked: boolean
+}
+
+type OwnerRecord = {
+        ownerId: string
+        subject: string | null
+        scopes: string[]
+        refreshToken: string
+        accessToken: string
+        accessExpiresAt: Date
+        hubs: Map<string, OwnerHubRecord>
+        createdAt: Date
+        updatedAt: Date
+}
+
+type DeviceAuthorization = {
+        ownerId: string
+        deviceCode: string
+        userCode: string
+        interval: number
+        expiresAt: Date
+        approved: boolean
+}
 
 declare global {
-	namespace Express {
-		interface Request {
-			auth?: ClientIdentity
-		}
-	}
+        namespace Express {
+                interface Request {
+                        auth?: ClientIdentity
+                        ownerAuth?: OwnerRecord
+                        ownerAccessToken?: string
+                }
+        }
 }
 
 function readPemFromEnvOrFile(valName: string, fileName: string): string {
@@ -151,15 +182,132 @@ const redisClient = await createClient({ url: redisUrl })
 
 const certificateAuthority = new CertificateAuthority({ certPem: CA_CERT_PEM, keyPem: CA_KEY_PEM })
 const forgeManager = new ForgeManager({
-	repoUrl: FORGE_GIT_URL,
-	workdir: FORGE_WORKDIR,
-	authorName: FORGE_AUTHOR_NAME,
-	authorEmail: FORGE_AUTHOR_EMAIL,
-	sshKeyPath: FORGE_SSH_KEY,
+        repoUrl: FORGE_GIT_URL,
+        workdir: FORGE_WORKDIR,
+        authorName: FORGE_AUTHOR_NAME,
+        authorEmail: FORGE_AUTHOR_EMAIL,
+        sshKeyPath: FORGE_SSH_KEY,
 })
 await forgeManager.ensureReady()
 
 const POLICY_RESPONSE = policy
+
+const owners = new Map<string, OwnerRecord>()
+const accessIndex = new Map<string, string>()
+const refreshIndex = new Map<string, string>()
+const deviceAuthorizations = new Map<string, DeviceAuthorization>()
+
+function generateToken(prefix: string): string {
+        return `${prefix}_${randomBytes(24).toString('hex')}`
+}
+
+function generateUserCode(): string {
+        const raw = randomBytes(4).toString('hex').toUpperCase()
+        return `${raw.slice(0, 4)}-${raw.slice(4)}`
+}
+
+function ensureOwnerRecord(ownerId: string): OwnerRecord {
+        const existing = owners.get(ownerId)
+        if (existing) {
+                return existing
+        }
+        const record: OwnerRecord = {
+                ownerId,
+                subject: `owner:${ownerId}`,
+                scopes: ['owner'],
+                refreshToken: generateToken('rt'),
+                accessToken: '',
+                accessExpiresAt: new Date(0),
+                hubs: new Map(),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+        }
+        owners.set(ownerId, record)
+        refreshIndex.set(record.refreshToken, ownerId)
+        return record
+}
+
+function issueAccessToken(owner: OwnerRecord, scopes?: string[], subject?: string | null): { token: string; expiresAt: Date } {
+        if (owner.accessToken) {
+                accessIndex.delete(owner.accessToken)
+        }
+        owner.updatedAt = new Date()
+        if (scopes && scopes.length) {
+                owner.scopes = scopes
+        }
+        if (typeof subject === 'string') {
+                owner.subject = subject
+        }
+        const token = generateToken('at')
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
+        owner.accessToken = token
+        owner.accessExpiresAt = expiresAt
+        accessIndex.set(token, owner.ownerId)
+        return { token, expiresAt }
+}
+
+function updateRefreshToken(owner: OwnerRecord, refreshToken?: string): string {
+        if (refreshToken && refreshToken !== owner.refreshToken) {
+                refreshIndex.delete(owner.refreshToken)
+                owner.refreshToken = refreshToken
+        }
+        refreshIndex.set(owner.refreshToken, owner.ownerId)
+        return owner.refreshToken
+}
+
+function authenticateOwnerBearer(req: express.Request, res: express.Response, next: express.NextFunction) {
+        const header = req.header('Authorization') ?? ''
+        const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : ''
+        if (!token || !accessIndex.has(token)) {
+                res.status(401).json({ error: 'invalid_token' })
+                return
+        }
+        const ownerId = accessIndex.get(token)!
+        const owner = owners.get(ownerId)
+        if (!owner) {
+                res.status(401).json({ error: 'invalid_token' })
+                return
+        }
+        if (owner.accessToken !== token || owner.accessExpiresAt.getTime() <= Date.now()) {
+                res.status(401).json({ error: 'token_expired' })
+                return
+        }
+        req.ownerAuth = owner
+        req.ownerAccessToken = token
+        next()
+}
+
+function requireJsonField(body: unknown, field: string): string {
+        if (!body || typeof body !== 'object') {
+                throw new Error(`${field} is required`)
+        }
+        const value = (body as Record<string, unknown>)[field]
+        if (typeof value !== 'string' || value.trim() === '') {
+                throw new Error(`${field} is required`)
+        }
+        return value.trim()
+}
+
+function parseTtl(ttl: unknown): number | undefined {
+        if (typeof ttl !== 'string' || ttl.trim() === '') {
+                return undefined
+        }
+        const match = ttl.trim().match(/^([0-9]+)([smhd])$/i)
+        if (!match) {
+                return undefined
+        }
+        const value = Number.parseInt(match[1], 10)
+        const unit = match[2].toLowerCase()
+        const seconds =
+                unit === 's'
+                        ? value
+                        : unit === 'm'
+                        ? value * 60
+                        : unit === 'h'
+                        ? value * 60 * 60
+                        : value * 24 * 60 * 60
+        return seconds / (24 * 60 * 60)
+}
 
 function generateSubnetId(): string {
 	return `sn_${uuidv4().replace(/-/g, '').slice(0, 8)}`
@@ -265,8 +413,212 @@ app.get('/health', (_req, res) => {
 });
 
 app.get('/healthz', (_req, res) => {
-	res.json({ ok: true, ver: "0.1.0", time: new Date().toISOString(), mtls: true })
+        res.json({ ok: true, ver: "0.1.0", time: new Date().toISOString(), mtls: true })
 })
+
+app.get('/v1/health', (_req, res) => {
+        res.json({ ok: true, version: '0.1.0', time: new Date().toISOString() })
+})
+
+const rootRouter = express.Router()
+
+rootRouter.post('/auth/owner/start', (req, res) => {
+        let ownerId: string
+        try {
+                ownerId = requireJsonField(req.body, 'owner_id')
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'owner_id required' })
+                return
+        }
+        const deviceCode = generateToken('dc')
+        const userCode = generateUserCode()
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
+        const record: DeviceAuthorization = {
+                ownerId,
+                deviceCode,
+                userCode,
+                interval: 5,
+                expiresAt,
+                approved: false,
+        }
+        deviceAuthorizations.set(deviceCode, record)
+        setTimeout(() => {
+                const current = deviceAuthorizations.get(deviceCode)
+                if (current) {
+                        current.approved = true
+                }
+        }, 1000).unref()
+        res.json({
+                device_code: deviceCode,
+                user_code: userCode,
+                verify_uri: 'https://api.inimatic.com/device',
+                interval: record.interval,
+                expires_in: Math.floor((expiresAt.getTime() - Date.now()) / 1000),
+        })
+})
+
+rootRouter.post('/auth/owner/poll', (req, res) => {
+        let deviceCode: string
+        try {
+                deviceCode = requireJsonField(req.body, 'device_code')
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'device_code required' })
+                return
+        }
+        const auth = deviceAuthorizations.get(deviceCode)
+        if (!auth) {
+                res.status(400).json({ error: 'invalid_device_code' })
+                return
+        }
+        if (auth.expiresAt.getTime() <= Date.now()) {
+                deviceAuthorizations.delete(deviceCode)
+                res.status(400).json({ error: 'expired_token' })
+                return
+        }
+        if (!auth.approved) {
+                res.status(400).json({ error: 'authorization_pending' })
+                return
+        }
+        const owner = ensureOwnerRecord(auth.ownerId)
+        const refreshToken = updateRefreshToken(owner)
+        const { token: accessToken, expiresAt } = issueAccessToken(owner)
+        deviceAuthorizations.delete(deviceCode)
+        res.json({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+                expires_at: expiresAt.toISOString(),
+                subject: owner.subject,
+                scopes: owner.scopes,
+                owner_id: owner.ownerId,
+                hub_ids: Array.from(owner.hubs.keys()),
+        })
+})
+
+rootRouter.post('/auth/owner/refresh', (req, res) => {
+        let refreshToken: string
+        try {
+                refreshToken = requireJsonField(req.body, 'refresh_token')
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'refresh_token required' })
+                return
+        }
+        const ownerId = refreshIndex.get(refreshToken)
+        if (!ownerId) {
+                res.status(401).json({ error: 'invalid_refresh_token' })
+                return
+        }
+        const owner = owners.get(ownerId)
+        if (!owner || owner.refreshToken !== refreshToken) {
+                res.status(401).json({ error: 'invalid_refresh_token' })
+                return
+        }
+        const { token, expiresAt } = issueAccessToken(owner)
+        res.json({ access_token: token, expires_at: expiresAt.toISOString() })
+})
+
+rootRouter.get('/whoami', authenticateOwnerBearer, (req, res) => {
+        const owner = req.ownerAuth!
+        res.json({
+                subject: owner.subject,
+                owner_id: owner.ownerId,
+                roles: ['owner'],
+                scopes: owner.scopes,
+                hub_ids: Array.from(owner.hubs.keys()),
+        })
+})
+
+rootRouter.get('/owner/hubs', authenticateOwnerBearer, (req, res) => {
+        const owner = req.ownerAuth!
+        const hubs = Array.from(owner.hubs.values()).map((hub) => ({
+                hub_id: hub.hubId,
+                owner_id: hub.ownerId,
+                created_at: hub.createdAt.toISOString(),
+                last_seen: hub.lastSeen.toISOString(),
+                revoked: hub.revoked,
+        }))
+        res.json(hubs)
+})
+
+rootRouter.post('/owner/hubs', authenticateOwnerBearer, (req, res) => {
+        const owner = req.ownerAuth!
+        let hubId: string
+        try {
+                hubId = requireJsonField(req.body, 'hub_id')
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'hub_id required' })
+                return
+        }
+        let hub = owner.hubs.get(hubId)
+        if (!hub) {
+                hub = { hubId, ownerId: owner.ownerId, createdAt: new Date(), lastSeen: new Date(), revoked: false }
+                owner.hubs.set(hubId, hub)
+        } else if (hub.revoked) {
+                hub.revoked = false
+        }
+        hub.lastSeen = new Date()
+        owner.updatedAt = new Date()
+        res.status(201).json({ hub_id: hub.hubId, owner_id: hub.ownerId })
+})
+
+rootRouter.post('/pki/enroll', authenticateOwnerBearer, (req, res) => {
+        const owner = req.ownerAuth!
+        let hubId: string
+        let csrPem: string
+        try {
+                hubId = requireJsonField(req.body, 'hub_id')
+                csrPem = requireJsonField(req.body, 'csr_pem')
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'invalid request' })
+                return
+        }
+        const ttlDays = parseTtl((req.body as Record<string, unknown> | undefined)?.['ttl'])
+        const hub = owner.hubs.get(hubId)
+        if (!hub || hub.revoked) {
+                res.status(404).json({ error: 'hub_not_registered' })
+                return
+        }
+        hub.lastSeen = new Date()
+        try {
+                const result = certificateAuthority.issueClientCertificate({
+                        csrPem,
+                        subject: { commonName: `hub:${hubId}`, organizationName: `owner:${owner.ownerId}` },
+                        validityDays: ttlDays,
+                })
+                res.json({ cert_pem: result.certificatePem, chain_pem: CA_CERT_PEM })
+        } catch (error) {
+                res.status(400).json({ error: error instanceof Error ? error.message : 'certificate issue failed' })
+        }
+})
+
+if (process.env['DEBUG_ENDPOINTS'] === 'true') {
+        rootRouter.get('/debug/owners', (_req, res) => {
+                const payload = Array.from(owners.values()).map((owner) => ({
+                        owner_id: owner.ownerId,
+                        subjects: owner.subject ? [owner.subject] : [],
+                        hubs_count: owner.hubs.size,
+                        created_at: owner.createdAt.toISOString(),
+                        updated_at: owner.updatedAt.toISOString(),
+                }))
+                res.json(payload)
+        })
+        rootRouter.get('/debug/hubs', (_req, res) => {
+                const hubs: Array<{ hub_id: string; owner_id: string; created_at: string; last_seen: string; key_fp: string }> = []
+                for (const owner of owners.values()) {
+                        for (const hub of owner.hubs.values()) {
+                                hubs.push({
+                                        hub_id: hub.hubId,
+                                        owner_id: hub.ownerId,
+                                        created_at: hub.createdAt.toISOString(),
+                                        last_seen: hub.lastSeen.toISOString(),
+                                        key_fp: '',
+                                })
+                        }
+                }
+                res.json(hubs)
+        })
+}
+
+app.use('/v1', rootRouter)
 
 app.post('/v1/bootstrap_token', async (req, res) => {
 	const token = req.header('X-Root-Token') ?? ''
