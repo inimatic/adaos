@@ -1,6 +1,7 @@
 # src\adaos\services\skill\manager.py
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
@@ -436,6 +437,7 @@ class SkillManager:
         history["last_active_slot"] = target_slot
         history["last_active_at"] = datetime.now(timezone.utc).isoformat()
         env.write_version_metadata(target_version, metadata)
+        self._smoke_import(env=env, name=name, version=target_version)
         return target_slot
 
     def rollback_runtime(self, name: str) -> str:
@@ -707,13 +709,63 @@ class SkillManager:
         raise NotImplementedError(f"runtime type '{runtime_type}' is not supported")
 
     def _stage_skill_sources(self, source: Path, slot: SkillSlotPaths) -> Path:
-        destination = slot.source_dir
-        if destination.exists():
-            self._remove_tree(destination)
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination_root = slot.source_dir
+        namespace_root = destination_root / "skills"
+        target = namespace_root / source.name
+        if destination_root.exists():
+            self._remove_tree(destination_root)
+        namespace_root.mkdir(parents=True, exist_ok=True)
         ignore = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "*.pyo", ".runtime")
-        shutil.copytree(source, destination, ignore=ignore)
-        return destination
+        shutil.copytree(source, target, ignore=ignore)
+        package_init = target / "__init__.py"
+        if not package_init.exists():
+            package_init.write_text("", encoding="utf-8")
+        handlers_dir = target / "handlers"
+        handler_main = handlers_dir / "main.py"
+        if not handler_main.exists():
+            raise FileNotFoundError(f"handler entrypoint missing: {handler_main}")
+        handlers_init = handlers_dir / "__init__.py"
+        if not handlers_init.exists():
+            handlers_init.write_text("from .main import handle  # noqa: F401\n", encoding="utf-8")
+        return target
+
+    def _smoke_import(self, *, env: SkillRuntimeEnvironment, name: str, version: str) -> None:
+        module_name = f"skills.{name}.handlers.main"
+        try:
+            current_link = env.ensure_current_link(version)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            raise RuntimeError(f"failed to prepare slot link for {name}: {exc}") from exc
+
+        src_path = current_link / "src"
+        if not src_path.exists():
+            raise RuntimeError(f"active slot for {name} lacks src directory: {src_path}")
+
+        original_sys_path = list(sys.path)
+        try:
+            # remove stale entries for this skill
+            suffixes = (
+                f"/{name}/slots/current/src",
+                f"/{name}/slots/A/src",
+                f"/{name}/slots/B/src",
+            )
+            sys.path[:] = [
+                entry
+                for entry in sys.path
+                if not any(entry.replace("\\", "/").endswith(suffix) for suffix in suffixes)
+            ]
+            sys.path.insert(0, str(src_path))
+            for mod in list(sys.modules.keys()):
+                if mod == module_name or mod.startswith(f"skills.{name}."):
+                    sys.modules.pop(mod, None)
+            importlib.invalidate_caches()
+            importlib.import_module(module_name)
+        except Exception as exc:
+            raise RuntimeError(f"failed to import handler module for {name}: {exc}") from exc
+        finally:
+            sys.path[:] = original_sys_path
+            for mod in list(sys.modules.keys()):
+                if mod == module_name or mod.startswith(f"skills.{name}."):
+                    sys.modules.pop(mod, None)
 
     def _prepare_python_runtime(
         self,
