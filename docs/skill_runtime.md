@@ -38,14 +38,14 @@ All paths are relative and compatible with Linux/Windows. Slots are created lazi
 2. Copy the current contents of `skills/<name>` into `slots/<slot>/src`.
 3. Build runtime dependencies (either reusing the host interpreter or creating an isolated virtualenv).
 4. Enrich `manifest.json` into `resolved.manifest.json`, resolving tool entry points, interpreter paths, timeouts, and policy defaults.
-5. Optionally run `runtime/tests/` (`--test`) with logs streamed to `slots/<slot>/logs/tests.log`.
+5. Optionally run `runtime/tests/` (`--test`) from the prepared slot. Commands execute inside the staged environment (interpreter, `PYTHONPATH`, `.skill_env.json`), and logs are streamed to `slots/<slot>/logs/tests.log`.
 6. Persist slot metadata (tests, timestamps, default tool) for status and rollback operations.
 
 `adaos skill activate <name>` switches the `active` marker to the prepared slot atomically, records the previous slot for `adaos skill rollback`, and writes the active version marker. Setup flows must run **after activation** so that secrets and runtime paths are stable.
 
 ## Tool execution and setup
 
-`adaos skill run <name> [<tool>]` reads the active slot’s `resolved.manifest.json`, adds the staged source directory to `sys.path`, and executes the tool callable with per-invocation timeouts. If a skill declares a `setup` tool it is available via `adaos skill setup <name>` **only after activation**; attempting to run setup while the version is pending reports a clear error instructing the operator to activate first.
+`adaos skill run <name> [<tool>]` reads the active slot’s `resolved.manifest.json`, adds the staged source directory to `sys.path`, and executes the tool callable with per-invocation timeouts. `adaos skill test <name>` reuses the same active slot to execute `runtime/tests` without preparing a new build. If a skill declares a `setup` tool it is available via `adaos skill setup <name>` **only after activation**; attempting to run setup while the version is pending reports a clear error instructing the operator to activate first.
 
 ## Secrets management
 
@@ -55,6 +55,9 @@ Use the CLI to manage secrets either globally or per skill:
 
 ```
 adaos secrets set WEATHER_API_KEY <value> --skill weather_skill
+adaos secrets list                      # lists all skills with stored secrets
+adaos secrets export > backup.json      # exports secrets grouped by skill (values redacted)
+adaos secrets import backup.json        # restores secrets into installed skills
 adaos secrets list --skill weather_skill
 adaos secrets export --skill weather_skill --show
 adaos secrets import dump.json --skill weather_skill

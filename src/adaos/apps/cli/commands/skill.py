@@ -360,11 +360,11 @@ def cmd_validate(
 
 
 @_run_safe
-@app.command("install")
+@app.command("install", help=_("cli.skill.install.help"))
 def cmd_install(
     name: str,
-    test: bool = typer.Option(False, "--test", help="run runtime tests during install"),
-    slot: Optional[str] = typer.Option(None, "--slot", help="target slot A or B"),
+    test: bool = typer.Option(False, "--test", help=_("cli.skill.install.option.test")),
+    slot: Optional[str] = typer.Option(None, "--slot", help=_("cli.skill.install.option.slot")),
 ):
     mgr = _mgr()
     try:
@@ -395,8 +395,11 @@ def cmd_install(
 
 
 @_run_safe
-@app.command("test")
-def cmd_test(name: str, json_output: bool = typer.Option(False, "--json", help="machine readable output")):
+@app.command("test", help=_("cli.skill.test.help"))
+def cmd_test(
+    name: str,
+    json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
+):
     mgr = _mgr()
     try:
         results = mgr.run_skill_tests(name)
@@ -450,12 +453,12 @@ def run_handler(
     typer.echo(_("cli.skill.run.success", result=repr(result)))
 
 
-@app.command("run")
+@app.command("run", help=_("cli.skill.run.help"))
 def run_tool(
     name: str,
-    tool: Optional[str] = typer.Argument(None, help="tool name (defaults to skill default)"),
-    payload: str = typer.Option("{}", "--json", help="JSON payload for the tool"),
-    timeout: Optional[float] = typer.Option(None, "--timeout", help="override timeout in seconds"),
+    tool: Optional[str] = typer.Argument(None, help=_("cli.skill.run.tool_help")),
+    payload: str = typer.Option("{}", "--json", help=_("cli.skill.run.payload_cli_help")),
+    timeout: Optional[float] = typer.Option(None, "--timeout", help=_("cli.skill.run.timeout_help")),
 ):
     try:
         payload_obj = json.loads(payload or "{}")
@@ -474,8 +477,11 @@ def run_tool(
 
 
 @_run_safe
-@app.command("setup")
-def cmd_setup(name: str, json_output: bool = typer.Option(False, "--json", help="machine readable output")):
+@app.command("setup", help=_("cli.skill.setup.help"))
+def cmd_setup(
+    name: str,
+    json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
+):
     mgr = _mgr()
     try:
         result = mgr.setup_skill(name)
@@ -523,7 +529,7 @@ def rollback(name: str):
 
 @_run_safe
 @app.command("status")
-def status(name: str, json_output: bool = typer.Option(False, "--json", help="machine readable output")):
+def status(name: str, json_output: bool = typer.Option(False, "--json", help=_("cli.option.json"))):
     mgr = _mgr()
     try:
         state = mgr.runtime_status(name)
