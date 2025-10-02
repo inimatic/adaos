@@ -23,18 +23,18 @@ from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 _SLOT_NAMES = ("A", "B")
 
 
-def _ensure_sys_path(skill_name: str, new_src: Path) -> None:
-    """Insert the skill source path at the beginning of ``sys.path``.
+def _ensure_sys_paths(skill_name: str, slot_root: Path) -> None:
+    """Ensure the active slot paths are positioned at the front of ``sys.path``."""
 
-    Existing entries pointing to previous slots for the same skill are removed
-    to avoid stale imports when the active slot changes.
-    """
-
-    target = str(new_src)
+    src_path = slot_root / "src"
+    vendor_path = slot_root / "vendor"
     suffixes = {
         f"/{skill_name}/slots/current/src",
         f"/{skill_name}/slots/A/src",
         f"/{skill_name}/slots/B/src",
+        f"/{skill_name}/slots/current/vendor",
+        f"/{skill_name}/slots/A/vendor",
+        f"/{skill_name}/slots/B/vendor",
     }
 
     def _is_outdated(entry: str) -> bool:
@@ -42,8 +42,16 @@ def _ensure_sys_path(skill_name: str, new_src: Path) -> None:
         return any(normalized.endswith(suffix) for suffix in suffixes)
 
     sys.path[:] = [p for p in sys.path if not _is_outdated(p)]
-    if target not in sys.path:
-        sys.path.insert(0, target)
+
+    paths_to_add = []
+    if vendor_path.is_dir():
+        paths_to_add.append(str(vendor_path))
+    if src_path.is_dir():
+        paths_to_add.append(str(src_path))
+
+    for candidate in reversed(paths_to_add):
+        if candidate not in sys.path:
+            sys.path.insert(0, candidate)
 
 
 def _clear_skill_modules(skill_name: str) -> None:
@@ -213,11 +221,7 @@ async def run_skill_handler(
             f"Skill package for '{skill_name}' not found: {skill_dir}"
         )
 
-    handler_file = skill_dir / "handlers" / "main.py"
-    if not handler_file.is_file():
-        raise SkillHandlerNotFoundError(f"Handler file not found: {handler_file}")
-
-    _ensure_sys_path(skill_name, src_path)
+    _ensure_sys_paths(skill_name, slot_path)
     _clear_skill_modules(skill_name)
     module_name = f"skills.{skill_name}.handlers.main"
     try:

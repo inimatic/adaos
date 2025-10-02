@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import sys
-import venv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -212,13 +211,13 @@ class SkillManager:
         python_paths.extend([p for p in runtime_info.get("python_paths", []) if p])
 
         source_override = manifest.get("source")
-        skill_source = Path(source_override) if source_override else slot_paths.source_dir
+        skill_source = Path(source_override) if source_override else slot_paths.src_dir
 
         skill_env_raw = runtime_info.get("skill_env")
         if skill_env_raw:
             skill_env_path = Path(skill_env_raw)
         if not skill_env_path:
-            skill_env_path = slot_paths.env_dir / ".skill_env.json"
+            skill_env_path = slot_paths.skill_env_path
 
         if package_root:
             python_paths.append(str(package_root))
@@ -385,7 +384,7 @@ class SkillManager:
                 log_path=log_file,
                 interpreter=interpreter,
                 python_paths=extra_paths,
-                skill_env_path=slot.env_dir / ".skill_env.json",
+            skill_env_path=slot.skill_env_path,
             )
             if any(result.status != "passed" for result in tests.values()):
                 env.cleanup_slot(version, slot_name)
@@ -625,7 +624,7 @@ class SkillManager:
         slot = env.build_slot_paths(version or data.get("version"), slot_name)
         runtime_info = data.get("runtime", {})
         extra_paths = [Path(p) for p in runtime_info.get("python_paths", []) if p]
-        skill_env_path = Path(runtime_info.get("skill_env") or (slot.env_dir / ".skill_env.json"))
+        skill_env_path = Path(runtime_info.get("skill_env") or slot.skill_env_path)
 
         ctx = self.ctx
         previous = ctx.skill_ctx.get()
@@ -705,11 +704,17 @@ class SkillManager:
         runtime_cfg = manifest.get("runtime") or {}
         runtime_type = (runtime_cfg.get("type") or ("python" if "python" in runtime_cfg else "python")).lower()
         if runtime_type == "python":
-            return self._prepare_python_runtime(env=env, slot=slot, manifest=manifest, runtime_cfg=runtime_cfg, skill_dir=skill_dir)
+            return self._prepare_python_runtime(
+                env=env,
+                slot=slot,
+                manifest=manifest,
+                runtime_cfg=runtime_cfg,
+                skill_dir=skill_dir,
+            )
         raise NotImplementedError(f"runtime type '{runtime_type}' is not supported")
 
     def _stage_skill_sources(self, source: Path, slot: SkillSlotPaths) -> Path:
-        destination_root = slot.source_dir
+        destination_root = slot.src_dir
         namespace_root = destination_root / "skills"
         target = namespace_root / source.name
         if destination_root.exists():
@@ -740,20 +745,30 @@ class SkillManager:
         if not src_path.exists():
             raise RuntimeError(f"active slot for {name} lacks src directory: {src_path}")
 
+        vendor_path = current_link / "vendor"
+
         original_sys_path = list(sys.path)
         try:
-            # remove stale entries for this skill
             suffixes = (
                 f"/{name}/slots/current/src",
                 f"/{name}/slots/A/src",
                 f"/{name}/slots/B/src",
+                f"/{name}/slots/current/vendor",
+                f"/{name}/slots/A/vendor",
+                f"/{name}/slots/B/vendor",
             )
             sys.path[:] = [
                 entry
                 for entry in sys.path
                 if not any(entry.replace("\\", "/").endswith(suffix) for suffix in suffixes)
             ]
-            sys.path.insert(0, str(src_path))
+            paths_to_add = []
+            if vendor_path.is_dir():
+                paths_to_add.append(str(vendor_path))
+            paths_to_add.append(str(src_path))
+            for candidate in reversed(paths_to_add):
+                if candidate not in sys.path:
+                    sys.path.insert(0, candidate)
             for mod in list(sys.modules.keys()):
                 if mod == module_name or mod.startswith(f"skills.{name}."):
                     sys.modules.pop(mod, None)
@@ -776,93 +791,93 @@ class SkillManager:
         runtime_cfg: Mapping[str, Any],
         skill_dir: Path,
     ) -> tuple[Path, list[str]]:
-        python_spec = runtime_cfg.get("python")
-        use_isolated = bool(python_spec)
-        interpreter = self._ensure_python_interpreter(slot, use_isolated=use_isolated)
+        interpreter = Path(sys.executable)
         python_paths = self._install_python_dependencies(
-            interpreter=interpreter,
             manifest=manifest,
             slot=slot,
-            use_isolated=use_isolated,
+            skill_dir=skill_dir,
         )
         self._sync_skill_env(env=env, skill_dir=skill_dir, slot=slot)
         return interpreter, python_paths
 
-    def _ensure_python_interpreter(self, slot: SkillSlotPaths, *, use_isolated: bool) -> Path:
-        if use_isolated:
-            builder = venv.EnvBuilder(with_pip=True, clear=True)
-            builder.create(str(slot.venv_dir))
-            suffix = "Scripts" if os.name == "nt" else "bin"
-            exe = "python.exe" if os.name == "nt" else "python"
-            return slot.venv_dir / suffix / exe
-        return Path(sys.executable)
-
     def _install_python_dependencies(
         self,
         *,
-        interpreter: Path,
         manifest: Mapping[str, Any],
         slot: SkillSlotPaths,
-        use_isolated: bool,
+        skill_dir: Path,
     ) -> list[str]:
+        requirements_file = skill_dir / "requirements.in"
         dependencies = self._collect_dependencies(manifest)
-        if not dependencies:
+        python_args: list[str] = []
+        if requirements_file.exists():
+            python_args.extend(["-r", str(requirements_file)])
+        if dependencies:
+            python_args.extend(dependencies)
+
+        if not python_args:
             return []
 
-        command = [
-            str(interpreter),
+        constraints = self._constraints_file()
+        base_cmd = [
+            str(sys.executable),
             "-m",
             "pip",
             "install",
             "--upgrade",
             "--disable-pip-version-check",
         ]
-        python_paths: list[str] = []
-        if not use_isolated:
-            slot.env_dir.mkdir(parents=True, exist_ok=True)
-            command.extend(["--target", str(slot.env_dir)])
-            python_paths.append(str(slot.env_dir))
-        command.extend(dependencies)
-        try:
-            subprocess.check_call(command)
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"failed to install dependencies: {exc}") from exc
-        if use_isolated:
-            return self._python_site_packages(interpreter)
-        return python_paths
+        if constraints:
+            base_cmd.extend(["-c", str(constraints)])
 
-    def _python_site_packages(self, interpreter: Path) -> list[str]:
-        """Return site-packages directories for the provided interpreter."""
+        shared_cmd = [*base_cmd, *python_args]
+        vendor_dir = slot.vendor_dir
+        try:
+            subprocess.check_call(shared_cmd)
+        except subprocess.CalledProcessError:
+            vendor_dir.mkdir(parents=True, exist_ok=True)
+            vendor_cmd = [
+                *base_cmd,
+                "--target",
+                str(vendor_dir),
+                "--no-warn-script-location",
+                *python_args,
+            ]
+            try:
+                subprocess.check_call(vendor_cmd)
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    f"failed to install dependencies for skill '{slot.skill_name}'"
+                ) from exc
+            return [str(vendor_dir)]
+        else:
+            if vendor_dir.exists():
+                for child in vendor_dir.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        try:
+                            child.unlink()
+                        except FileNotFoundError:
+                            pass
+            return []
 
-        script = """
-import json
-import site
-paths = []
-try:
-    paths.extend(site.getsitepackages())
-except Exception:
-    pass
-try:
-    user = site.getusersitepackages()
-except Exception:
-    user = None
-if user:
-    paths.append(user)
-print(json.dumps(list(dict.fromkeys(p for p in paths if p))))
-"""
-        try:
-            output = subprocess.check_output(
-                [str(interpreter), "-c", script],
-                text=True,
-                stderr=subprocess.STDOUT,
-            )
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"failed to resolve site-packages for {interpreter}: {exc}") from exc
-        try:
-            data = json.loads(output.strip() or "[]")
-        except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-            raise RuntimeError(f"unexpected site-packages output: {output!r}") from exc
-        return [str(Path(p)) for p in data if p]
+    def _constraints_file(self) -> Path | None:
+        candidates: list[Path] = []
+        workspace = Path(self.ctx.paths.workspace_dir())
+        candidates.append(workspace / "constraints.txt")
+        candidates.append(workspace / "requirements" / "constraints.txt")
+        package_dir = getattr(self.ctx.paths, "package_dir", None)
+        if callable(package_dir):
+            package_dir = package_dir()
+        if package_dir:
+            package_root = Path(package_dir).resolve().parent
+            candidates.append(package_root / "constraints.txt")
+            candidates.append(package_root / "requirements" / "constraints.txt")
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
 
     def _collect_dependencies(self, manifest: Mapping[str, Any]) -> list[str]:
         deps = manifest.get("dependencies") or []
@@ -882,7 +897,7 @@ print(json.dumps(list(dict.fromkeys(p for p in paths if p))))
     def _sync_skill_env(self, *, env: SkillRuntimeEnvironment, skill_dir: Path, slot: SkillSlotPaths) -> None:
         store_path = env.data_root() / "files" / ".skill_env.json"
         candidates = [store_path, skill_dir / ".skill_env.json"]
-        target = slot.env_dir / ".skill_env.json"
+        target = slot.skill_env_path
         for candidate in candidates:
             if candidate.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -893,7 +908,7 @@ print(json.dumps(list(dict.fromkeys(p for p in paths if p))))
                 break
 
     def _persist_skill_env(self, env: SkillRuntimeEnvironment, slot: SkillSlotPaths) -> None:
-        source = slot.env_dir / ".skill_env.json"
+        source = slot.skill_env_path
         if not source.exists():
             return
         store = env.data_root() / "files"
@@ -997,11 +1012,14 @@ print(json.dumps(list(dict.fromkeys(p for p in paths if p))))
             "runtime": {
                 "type": (manifest.get("runtime") or {}).get("type", "python"),
                 "interpreter": str(interpreter),
-                "venv": str(slot.venv_dir),
-                "env": str(slot.env_dir),
+                "src": str(slot.src_dir),
+                "vendor": str(slot.vendor_dir),
+                "runtime_dir": str(slot.runtime_dir),
+                "logs": str(slot.logs_dir),
                 "tmp": str(slot.tmp_dir),
+                "tests": str(slot.tests_dir),
                 "python_paths": list(python_paths),
-                "skill_env": str(slot.env_dir / ".skill_env.json"),
+                "skill_env": str(slot.skill_env_path),
             },
             "tools": tools,
             "default_tool": default_tool,
