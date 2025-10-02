@@ -10,15 +10,47 @@ output for the user.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import importlib.util
+import sys
 from inspect import isawaitable
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from adaos.services.agent_context import AgentContext, get_ctx
-from adaos.services.skill.context import SkillContextService
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
-_MANIFEST_NAMES = ("skill.yaml", "manifest.yaml", "adaos.skill.yaml")
+_SLOT_NAMES = ("A", "B")
+
+
+def _ensure_sys_path(skill_name: str, new_src: Path) -> None:
+    """Insert the skill source path at the beginning of ``sys.path``.
+
+    Existing entries pointing to previous slots for the same skill are removed
+    to avoid stale imports when the active slot changes.
+    """
+
+    target = str(new_src)
+    suffixes = {
+        f"/{skill_name}/slots/current/src",
+        f"/{skill_name}/slots/A/src",
+        f"/{skill_name}/slots/B/src",
+    }
+
+    def _is_outdated(entry: str) -> bool:
+        normalized = entry.replace("\\", "/")
+        return any(normalized.endswith(suffix) for suffix in suffixes)
+
+    sys.path[:] = [p for p in sys.path if not _is_outdated(p)]
+    if target not in sys.path:
+        sys.path.insert(0, target)
+
+
+def _clear_skill_modules(skill_name: str) -> None:
+    prefix = f"skills.{skill_name}"
+    for name in list(sys.modules.keys()):
+        if name == prefix or name.startswith(prefix + "."):
+            sys.modules.pop(name, None)
 
 
 class SkillRuntimeError(RuntimeError):
@@ -65,71 +97,81 @@ class SkillPrepMissingFunctionError(SkillPrepError):
     """Raised when ``run_prep`` is not defined in ``prepare.py``."""
 
 
-def find_skill_dir(skill_name: str, *, ctx: Optional[AgentContext] = None) -> Path:
-    """Locate the directory with the skill sources inside ``skills_root``.
+def _runtime_env(skill_name: str, agent_ctx: AgentContext) -> SkillRuntimeEnvironment:
+    skills_root = Path(agent_ctx.paths.skills_dir())
+    return SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name)
 
-    The lookup is performed in two stages:
 
-    1. Direct lookup by ``<skills_root>/<skill_name>``
-    2. Fallback search for ``<skills_root>/**/<skill_name>`` that contains one
-       of the known manifest files.
+def resolve_active_version(skill_name: str, *, ctx: Optional[AgentContext] = None) -> str:
+    """Return the active version for ``skill_name``.
 
-    Args:
-        skill_name: Identifier of the skill (normally matches the directory
-            name inside the monorepo checkout).
-        ctx: Optional context override.  If omitted the global agent context is
-            used via :func:`~adaos.services.agent_context.get_ctx`.
-
-    Returns:
-        ``Path`` pointing to the directory with the skill sources.
-
-    Raises:
-        SkillDirectoryNotFoundError: if no directory can be located.
-        SkillDirectoryAmbiguousError: if more than one candidate is found.
+    The version is resolved from the runtime environment metadata.  If the
+    runtime environment is not prepared yet a ``SkillDirectoryNotFoundError`` is
+    raised to mirror the previous behaviour of ``find_skill_dir``.
     """
 
     agent_ctx = ctx or get_ctx()
-    skills_root = Path(agent_ctx.paths.skills_dir())
-
-    direct = skills_root / skill_name
-    if direct.is_dir():
-        return direct
-
-    matches = []
-    for path in skills_root.rglob("*"):
-        if path.is_file() and path.name in _MANIFEST_NAMES and path.parent.name == skill_name:
-            matches.append(path.parent)
-
-    if not matches:
+    env = _runtime_env(skill_name, agent_ctx)
+    version = env.resolve_active_version()
+    if not version:
         raise SkillDirectoryNotFoundError(
-            f"Skill '{skill_name}' was not found under {skills_root}"
+            f"Skill '{skill_name}' has no active runtime version under {env.runtime_root}"
         )
+    return version
 
-    if len(matches) > 1:
-        found = "\n - " + "\n - ".join(str(match) for match in matches)
-        raise SkillDirectoryAmbiguousError(
-            f"Multiple directories match skill '{skill_name}':{found}\n"
-            "Please disambiguate by renaming duplicates or specifying a path."
+
+def _ensure_current_slot(env: SkillRuntimeEnvironment, version: str) -> Path:
+    """Ensure the ``slots/current`` link exists and return its path."""
+
+    current_link = env.ensure_current_link(version)
+    if not current_link.exists():
+        raise SkillDirectoryNotFoundError(
+            f"Active slot not found for version {version} in {env.slots_root(version)}"
         )
+    return current_link
 
-    return matches[0]
 
+def find_skill_slot(
+    skill_name: str,
+    *,
+    ctx: Optional[AgentContext] = None,
+    version: Optional[str] = None,
+) -> Path:
+    """Return the path to ``slots/current`` for ``skill_name``.
 
-def _load_handler(handler_file: Path):
-    spec = importlib.util.spec_from_file_location("adaos_skill_handler", handler_file)
-    if spec is None or spec.loader is None:
-        raise SkillHandlerImportError(f"Failed to import handler from {handler_file}")
+    The caller may provide an explicit ``version`` to bypass the version
+    resolution step.  The returned path is always the logical ``slots/current``
+    directory (which is a symlink on platforms that support it).
+    """
 
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)  # type: ignore[attr-defined]
-
-    handle_fn = getattr(module, "handle", None)
-    if handle_fn is None:
-        raise SkillHandlerMissingFunctionError(
-            "Handler module does not define handle(topic, payload)"
+    agent_ctx = ctx or get_ctx()
+    env = _runtime_env(skill_name, agent_ctx)
+    skill_version = version or resolve_active_version(skill_name, ctx=agent_ctx)
+    current_link = _ensure_current_slot(env, skill_version)
+    if not current_link.exists():
+        raise SkillDirectoryNotFoundError(
+            f"Active slot not found for skill '{skill_name}' (version {skill_version})"
         )
+    return current_link
 
-    return handle_fn
+
+def find_skill_dir(skill_name: str, *, ctx: Optional[AgentContext] = None) -> Path:
+    """Compatibility shim returning the skill package directory.
+
+    Historically :func:`find_skill_dir` returned the skill sources that were
+    executed in-process.  With the namespaced runtime layout the equivalent is
+    ``slots/current/src/skills/<skill_name>``.  The helper is retained for the
+    existing public API but callers are encouraged to migrate to
+    :func:`find_skill_slot` instead.
+    """
+
+    slot_path = find_skill_slot(skill_name, ctx=ctx)
+    skill_dir = slot_path / "src" / "skills" / skill_name
+    if not skill_dir.is_dir():
+        raise SkillDirectoryNotFoundError(
+            f"Skill package for '{skill_name}' not found at {skill_dir}"
+        )
+    return skill_dir
 
 
 async def run_skill_handler(
@@ -157,13 +199,38 @@ async def run_skill_handler(
     """
 
     agent_ctx = ctx or get_ctx()
-    skill_dir = find_skill_dir(skill_name, ctx=agent_ctx)
-    handler_path = skill_dir / "handlers" / "main.py"
+    version = resolve_active_version(skill_name, ctx=agent_ctx)
+    slot_path = find_skill_slot(skill_name, ctx=agent_ctx, version=version)
+    src_path = slot_path / "src"
+    if not src_path.is_dir():
+        raise SkillDirectoryNotFoundError(
+            f"Active slot for '{skill_name}' is missing src directory: {src_path}"
+        )
 
-    if not handler_path.is_file():
-        raise SkillHandlerNotFoundError(f"Handler file not found: {handler_path}")
+    skill_dir = src_path / "skills" / skill_name
+    if not skill_dir.is_dir():
+        raise SkillDirectoryNotFoundError(
+            f"Skill package for '{skill_name}' not found: {skill_dir}"
+        )
 
-    handle_fn = _load_handler(handler_path)
+    handler_file = skill_dir / "handlers" / "main.py"
+    if not handler_file.is_file():
+        raise SkillHandlerNotFoundError(f"Handler file not found: {handler_file}")
+
+    _ensure_sys_path(skill_name, src_path)
+    _clear_skill_modules(skill_name)
+    module_name = f"skills.{skill_name}.handlers.main"
+    try:
+        importlib.invalidate_caches()
+        module = importlib.import_module(module_name)
+    except Exception as exc:
+        raise SkillHandlerImportError(f"Failed to import handler for {skill_name}: {exc}") from exc
+
+    handle_fn = getattr(module, "handle", None)
+    if handle_fn is None:
+        raise SkillHandlerMissingFunctionError(
+            f"'handle' not found in {module_name}"
+        )
 
     skill_ctx_port = agent_ctx.skill_ctx
     previous = skill_ctx_port.get()
@@ -220,9 +287,14 @@ def run_skill_prep(skill_name: str, *, ctx: Optional[AgentContext] = None) -> Ma
     """
 
     agent_ctx = ctx or get_ctx()
-    SkillContextService(agent_ctx).set_current_skill(skill_name)
+    version = resolve_active_version(skill_name, ctx=agent_ctx)
+    slot_path = find_skill_slot(skill_name, ctx=agent_ctx, version=version)
+    skill_dir = slot_path / "src" / "skills" / skill_name
+    if not skill_dir.is_dir():
+        raise SkillDirectoryNotFoundError(
+            f"Skill package for '{skill_name}' not found: {skill_dir}"
+        )
 
-    skill_dir = find_skill_dir(skill_name, ctx=agent_ctx)
     prep_script = skill_dir / "prep" / "prepare.py"
 
     if not prep_script.exists():
@@ -241,7 +313,17 @@ def run_skill_prep(skill_name: str, *, ctx: Optional[AgentContext] = None) -> Ma
     if run_prep is None:
         raise SkillPrepMissingFunctionError(f"run_prep() is not defined in {prep_script}")
 
-    return run_prep(skill_dir)
+    skill_ctx_port = agent_ctx.skill_ctx
+    previous = skill_ctx_port.get()
+    if not skill_ctx_port.set(skill_name, skill_dir):
+        raise SkillRuntimeError(f"failed to establish context for skill '{skill_name}'")
+    try:
+        return run_prep(skill_dir)
+    finally:
+        if previous is None:
+            skill_ctx_port.clear()
+        else:
+            skill_ctx_port.set(previous.name, previous.path)
 
 
 __all__ = [
@@ -256,6 +338,8 @@ __all__ = [
     "SkillPrepScriptNotFoundError",
     "SkillPrepImportError",
     "SkillPrepMissingFunctionError",
+    "resolve_active_version",
+    "find_skill_slot",
     "find_skill_dir",
     "run_skill_handler",
     "run_skill_handler_sync",

@@ -41,6 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -164,9 +165,14 @@ class SkillRuntimeEnvironment:
         if not marker.exists():
             selected = activate_slot or _SLOT_NAMES[0]
             marker.write_text(selected, encoding="utf-8")
+            self._update_current_link(version, selected)
         current_marker = self.active_version_marker()
         if not current_marker.exists():
             current_marker.write_text(version, encoding="utf-8")
+        else:
+            # keep the active slot link in sync when prepare_version is reused
+            selected = self.read_active_slot(version)
+            self._update_current_link(version, selected)
 
     def _ensure_slot(self, slot_root: Path) -> None:
         slot_root.mkdir(parents=True, exist_ok=True)
@@ -175,6 +181,34 @@ class SkillRuntimeEnvironment:
         keep = slot_root / ".keep"
         if not keep.exists():
             keep.write_text("managed by adaos", encoding="utf-8")
+
+    def _update_current_link(self, version: str, slot: str) -> None:
+        slots_root = self.slots_root(version)
+        target = slots_root / slot
+        current_link = slots_root / "current"
+        if current_link.exists() or current_link.is_symlink():
+            if current_link.is_symlink() or current_link.is_file():
+                current_link.unlink(missing_ok=True)
+            elif current_link.is_dir():
+                self._remove_tree(current_link)
+        target.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            try:
+                os.symlink(target, current_link, target_is_directory=True)  # type: ignore[arg-type]
+            except OSError:
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(current_link), str(target)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        else:
+            os.symlink(target, current_link, target_is_directory=True)
+
+    def ensure_current_link(self, version: str) -> Path:
+        slot = self.read_active_slot(version)
+        self._update_current_link(version, slot)
+        return self.slots_root(version) / "current"
 
     # ------------------------------------------------------------------
     # Slot helpers
@@ -225,6 +259,7 @@ class SkillRuntimeEnvironment:
         prev_marker = self.previous_marker(version)
         if previous and previous != slot:
             prev_marker.write_text(previous, encoding="utf-8")
+        self._update_current_link(version, slot)
 
     def rollback_slot(self, version: str) -> str:
         current = self.read_active_slot(version)
