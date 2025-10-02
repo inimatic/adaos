@@ -177,6 +177,7 @@ class SkillManager:
             raise RuntimeError("no versions installed")
 
         env.prepare_version(version)
+        current_link = env.ensure_current_link(version)
         metadata = env.read_version_metadata(version)
         active_slot = env.read_active_slot(version)
         slot_paths = env.build_slot_paths(version, active_slot)
@@ -228,6 +229,9 @@ class SkillManager:
             interpreter=interpreter,
             python_paths=python_paths,
             skill_env_path=skill_env_path,
+            skill_name=name,
+            skill_version=version,
+            slot_current_dir=current_link,
         )
 
     def uninstall(self, name: str) -> None:
@@ -384,7 +388,10 @@ class SkillManager:
                 log_path=log_file,
                 interpreter=interpreter,
                 python_paths=extra_paths,
-            skill_env_path=slot.skill_env_path,
+                skill_env_path=slot.skill_env_path,
+                skill_name=name,
+                skill_version=version,
+                slot_current_dir=slot.root,
             )
             if any(result.status != "passed" for result in tests.values()):
                 env.cleanup_slot(version, slot_name)
