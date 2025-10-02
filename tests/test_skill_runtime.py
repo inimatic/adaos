@@ -72,10 +72,10 @@ def skill_factory() -> Callable[[str], tuple[SkillRuntimeEnvironment, str]]:
 
         for slot in slots:
             slot_paths = env.build_slot_paths(version, slot)
-            namespace_root = slot_paths.source_dir / "skills"
+            namespace_root = slot_paths.src_dir / "skills"
             target = namespace_root / name
-            if slot_paths.source_dir.exists():
-                shutil.rmtree(slot_paths.source_dir)
+            if slot_paths.src_dir.exists():
+                shutil.rmtree(slot_paths.src_dir)
             namespace_root.mkdir(parents=True, exist_ok=True)
             target.mkdir(parents=True, exist_ok=True)
             (target / "__init__.py").write_text("", encoding="utf-8")
@@ -102,7 +102,7 @@ def skill_factory() -> Callable[[str], tuple[SkillRuntimeEnvironment, str]]:
 def test_find_skill_dir_returns_package_path(skill_factory):
     env, version = skill_factory("demo_skill")
     active_slot = env.read_active_slot(version)
-    expected = env.build_slot_paths(version, active_slot).source_dir / "skills" / "demo_skill"
+    expected = env.build_slot_paths(version, active_slot).src_dir / "skills" / "demo_skill"
     assert find_skill_dir("demo_skill").resolve() == expected.resolve()
 
 
@@ -177,7 +177,7 @@ def test_run_skill_prep_executes_script(skill_factory):
     artifact_path = Path(result["artifact"])
     assert artifact_path.read_text(encoding="utf-8") == "done"
     active_slot = env.read_active_slot(version)
-    expected_artifact = env.build_slot_paths(version, active_slot).source_dir / "skills" / "prep_skill" / "prep" / "artifact.txt"
+    expected_artifact = env.build_slot_paths(version, active_slot).src_dir / "skills" / "prep_skill" / "prep" / "artifact.txt"
     assert artifact_path.resolve() == expected_artifact.resolve()
 
 
