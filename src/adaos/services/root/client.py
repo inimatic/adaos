@@ -37,12 +37,13 @@ class RootHttpClient:
         *,
         json: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
-        cert: tuple[str, str] | None = None,
-        verify: str | bool | None = None,
+        client: httpx.Client | None = None,
     ) -> Any:
-        assert self._client is not None
+        if client is None:
+            client = self._client
+        assert client is not None
         try:
-            response = self._client.request(method, path, json=json, headers=headers, cert=cert, verify=verify)
+            response = client.request(method, path, json=json, headers=headers)
         except httpx.RequestError as exc:  # pragma: no cover - network errors in tests
             raise RootHttpError(f"{method} {path} failed: {exc}", status_code=0) from exc
 
@@ -123,15 +124,18 @@ class RootHttpClient:
         if subnet_id:
             payload["subnet_id"] = subnet_id
         headers: dict[str, str] | None = None
-        cert: tuple[str, str] | None = None
-        verify: str | bool | None = None
         if bootstrap_token:
             headers = {"X-Bootstrap-Token": bootstrap_token}
-        elif mtls:
+        if mtls:
             cert_path, key_path, ca_path = mtls
-            cert = (cert_path, key_path)
-            verify = ca_path
-        return dict(self._request("POST", "/v1/nodes/register", json=payload, headers=headers, cert=cert, verify=verify))
+            with httpx.Client(
+                base_url=self.base_url,
+                timeout=self.timeout,
+                cert=(cert_path, key_path),
+                verify=ca_path,
+            ) as mtls_client:
+                return dict(self._request("POST", "/v1/nodes/register", json=payload, client=mtls_client))
+        return dict(self._request("POST", "/v1/nodes/register", json=payload, headers=headers))
 
 
 __all__ = ["RootHttpClient", "RootHttpError"]
