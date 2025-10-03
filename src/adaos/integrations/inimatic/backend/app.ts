@@ -17,6 +17,7 @@ import { CertificateAuthority } from './pki.js'
 import { ForgeManager, type DraftKind } from './forge.js'
 import { getPolicy } from './policy.js'
 import { resolveLocale, translate, type Locale, type MessageParams } from './i18n.js'
+import { buildInfo } from './build-info.js'
 
 type FollowerData = {
 	followerName: string
@@ -462,11 +463,24 @@ app.get('/health', (_req, res) => {
 });
 
 app.get('/healthz', (_req, res) => {
-        res.json({ ok: true, ver: "0.1.0", time: new Date().toISOString(), mtls: true })
+        res.json({
+                ok: true,
+                version: buildInfo.version,
+                build_date: buildInfo.buildDate,
+                commit: buildInfo.commit,
+                time: new Date().toISOString(),
+                mtls: true,
+        })
 })
 
 app.get('/v1/health', (_req, res) => {
-        res.json({ ok: true, version: '0.1.0', time: new Date().toISOString() })
+        res.json({
+                ok: true,
+                version: buildInfo.version,
+                build_date: buildInfo.buildDate,
+                commit: buildInfo.commit,
+                time: new Date().toISOString(),
+        })
 })
 
 const rootRouter = express.Router()
