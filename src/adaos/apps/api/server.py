@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 import platform, time
 
 from adaos.apps.api.auth import require_token
+from adaos.build_info import BUILD_INFO
 from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
 
@@ -45,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 
 # пересоздаём приложение с lifespan
-app = FastAPI(title="AdaOS API", lifespan=lifespan)
+app = FastAPI(title="AdaOS API", lifespan=lifespan, version=BUILD_INFO.version)
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,7 +87,10 @@ async def status():
         "time": time.time(),
         "platform": platform.platform(),
         "python": platform.python_version(),
-        "adaos": app.version,
+        "adaos": {
+            "version": BUILD_INFO.version,
+            "build_date": BUILD_INFO.build_date,
+        },
     }
 
 
@@ -101,7 +105,7 @@ async def say(payload: SayRequest):
 # --- health endpoints (без авторизации; удобно для оркестраторов/проб) ---
 @app.get("/health/live")
 async def health_live():
-    return {"ok": True}
+    return {"ok": True, "adaos": {"version": BUILD_INFO.version, "build_date": BUILD_INFO.build_date}}
 
 
 @app.get("/health/ready")
@@ -109,4 +113,4 @@ async def health_ready():
     # 200 только когда прошёл boot sequence
     if not is_ready():
         raise HTTPException(status_code=503, detail="not ready")
-    return {"ok": True}
+    return {"ok": True, "adaos": {"version": BUILD_INFO.version, "build_date": BUILD_INFO.build_date}}
