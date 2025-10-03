@@ -62,10 +62,5 @@ export function installAdaosBridge(app: Express, server: http.Server) {
 			res.status(502).json({ error: 'adaos upstream failed', detail: String(e?.message ?? e) })
 		}
 	})
-
-	// health
-	app.get('/healthz', (_req, res) =>
-		res.json({ ok: true, adaos: DEFAULT_BASE, time: new Date().toISOString() })
-	)
 }
 
