@@ -238,6 +238,15 @@ const io = new Server(server, {
         path: SOCKET_PATH,
 })
 
+type EngineAllowRequest = (
+        req: IncomingMessage,
+        callback: (err: string | null, success: boolean) => void,
+) => void
+
+const engineWithAllowRequest = io.engine as typeof io.engine & {
+        allowRequest?: EngineAllowRequest
+}
+
 function extractHandshakeToken(req: IncomingMessage, searchParams: URLSearchParams): string | undefined {
         const authHeader = req.headers['authorization']
         if (Array.isArray(authHeader)) {
@@ -279,7 +288,7 @@ function extractBearer(headerValue: string): string | undefined {
         return match ? match[1].trim() : undefined
 }
 
-io.engine.allowRequest = (req, callback) => {
+engineWithAllowRequest.allowRequest = (req, callback) => {
         try {
                 const url = new URL(req.url ?? '', 'http://localhost')
                 const searchParams = url.searchParams

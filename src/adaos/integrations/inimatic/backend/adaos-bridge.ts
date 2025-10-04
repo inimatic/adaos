@@ -37,7 +37,7 @@ export function installAdaosBridge(app: Express, server: http.Server) {
                 app.use('/adaos', adaosProxy)
                 if (ADAOS_PROXY_UPGRADE_PREFIXES.length > 0) {
                         server.on('upgrade', (req, socket, head) => {
-                                const { pathname = '' } = parse(req.url ?? '')
+                                const pathname = parse(req.url ?? '').pathname ?? ''
                                 const shouldProxy = ADAOS_PROXY_UPGRADE_PREFIXES.some((prefix) =>
                                         pathname.startsWith(prefix),
                                 )
