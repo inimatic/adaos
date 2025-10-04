@@ -11,7 +11,7 @@ import typer
 
 from adaos.sdk.data.i18n import _
 from adaos.services.agent_context import get_ctx
-from adaos.services.crypto.secrets_service import SecretsService
+from adaos.services.secrets.service import SecretsService
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from adaos.services.skill.secrets_backend import SkillSecretsBackend
 

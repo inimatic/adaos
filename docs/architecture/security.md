@@ -69,7 +69,7 @@
 ## Пример использования SecretsService
 
 ```python
-from adaos.services.crypto.secrets_service import SecretsService
+from adaos.services.secrets import SecretsService
 
 secrets = SecretsService()
 secrets.write("openai/api_key", "sk-...")
