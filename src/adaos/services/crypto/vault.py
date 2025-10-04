@@ -1,5 +1,8 @@
 from __future__ import annotations
-import base64, os
+
+import base64
+import os
+
 from cryptography.fernet import Fernet
 
 ENV_MASTER = "ADAOS_VAULT_MASTER_KEY"

@@ -29,7 +29,7 @@ from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotP
 from adaos.services.skill.tests_runner import TestResult, run_tests
 from adaos.skills.runtime_runner import execute_tool
 from adaos.services.skill.validation import SkillValidationService, ValidationReport
-from adaos.services.secrets.service import SecretsService
+from adaos.services.crypto.secrets_service import SecretsService
 from adaos.services.skill.secrets_backend import SkillSecretsBackend
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
