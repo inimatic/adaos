@@ -17,8 +17,8 @@ from adaos.adapters.git.secure_git import SecureGitClient
 from adaos.services.policy.fs import SimpleFSPolicy
 from adaos.adapters.secrets.keyring_vault import KeyringVault
 from adaos.adapters.secrets.file_vault import FileVault
-from adaos.services.secrets.service import SecretsService
-from adaos.services.secrets.crypto import load_or_create_master  # noqa: F401 (если пока не используешь)
+from adaos.services.crypto.secrets_service import SecretsService
+from adaos.services.crypto.vault import load_or_create_master  # noqa: F401 (если пока не используешь)
 from adaos.services.sandbox.runner import ProcSandbox
 from adaos.services.sandbox.service import SandboxService
 
