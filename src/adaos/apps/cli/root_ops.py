@@ -141,16 +141,20 @@ def _do_request(
     cert: Optional[tuple[str, str]] = None,
     verify: str | bool | None = None,
 ) -> httpx.Response:
+    client_params: dict[str, object] = {}
+    if cert is not None:
+        client_params["cert"] = cert
+    if verify is not None:
+        client_params["verify"] = verify
     try:
-        response = httpx.request(
-            method,
-            url,
-            json=json_body,
-            headers=headers,
-            timeout=timeout,
-            cert=cert,
-            verify=verify,
-        )
+        with httpx.Client(**client_params) as client:
+            response = client.request(
+                method,
+                url,
+                json=json_body,
+                headers=headers,
+                timeout=timeout,
+            )
     except httpx.RequestError as exc:
         raise RootCliError(f"{method} {url} failed: {exc}") from exc
     if response.status_code >= 400:
