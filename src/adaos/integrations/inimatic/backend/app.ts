@@ -800,58 +800,58 @@ app.post('/v1/bootstrap_token', async (req, res) => {
 })
 
 app.post('/v1/subnets/register', async (req, res) => {
-	const bootstrapToken = req.header('X-Bootstrap-Token') ?? ''
-	if (!bootstrapToken) {
-		respondError(req, res, 401, 'bootstrap_token_required')
-		return
-	}
-	try {
-		await useBootstrapToken(bootstrapToken)
-	} catch (error) {
-		handleError(req, res, error, { status: 401, code: 'invalid_bootstrap_token' })
-		return
-	}
+	const t0 = Date.now();
+	console.log('register: start');
 
-	const csrPem = typeof req.body?.csr_pem === 'string' ? req.body.csr_pem : null
-	if (!csrPem) {
-		respondError(req, res, 400, 'bootstrap_csr_required')
-		return
-	}
-	const subnetName = typeof req.body?.subnet_name === 'string' ? req.body.subnet_name : undefined
+	const bootstrapToken = req.header('X-Bootstrap-Token') ?? '';
+	if (!bootstrapToken) { /* ... */ }
 
-	const subnetId = generateSubnetId()
-	let certPem: string
 	try {
-		const csrPemRaw = typeof req.body?.csr_pem === 'string' ? req.body.csr_pem : null;
-		const csrPem = csrPemRaw.replace(/\r\n/g, '\n').trim() + '\n';
-		const result = certificateAuthority.issueClientCertificate({
+		await useBootstrapToken(bootstrapToken);
+		console.log('register: bootstrap token OK, dt=%dms', Date.now() - t0);
+	} catch (e) { /* ... */ }
+
+	const csrPemRaw = typeof req.body?.csr_pem === 'string' ? req.body.csr_pem : null;
+	if (!csrPemRaw) { /* ... */ }
+	const csrPem = csrPemRaw.replace(/\r\n/g, '\n').trim() + '\n';
+
+	const subnetId = generateSubnetId();
+	let certPem: string;
+	try {
+		certPem = certificateAuthority.issueClientCertificate({
 			csrPem,
 			subject: { commonName: `subnet:${subnetId}` },
-		})
-		certPem = result.certificatePem
-	} catch (error) {
-		console.error('subnet certificate issue failed', error)
-		handleError(req, res, error, { status: 400, code: 'certificate_issue_failed' })
-		return
+		}).certificatePem;
+		console.log('register: cert issued, dt=%dms', Date.now() - t0);
+	} catch (e) {
+		console.error('register: issue cert failed:', (e as any)?.message);
+		return handleError(req, res, e, { status: 400, code: 'certificate_issue_failed' });
 	}
 
-	await forgeManager.ensureSubnet(subnetId)
+	try {
+		await forgeManager.ensureSubnet(subnetId);
+		console.log('register: forge ensured, dt=%dms', Date.now() - t0);
+	} catch (e) {
+		console.error('register: forge ensureSubnet failed:', e);
+		return handleError(req, res, e, { status: 500, code: 'draft_store_failed' });
+	}
+
 	await redisClient.hSet(
 		'root:subnets',
 		subnetId,
-		JSON.stringify({ subnet_id: subnetId, subnet_name: subnetName, created_at: Date.now() }),
-	)
+		JSON.stringify({ subnet_id: subnetId, created_at: Date.now() }),
+	);
+	console.log('register: redis saved, dt=%dms', Date.now() - t0);
 
 	res.status(201).json({
 		subnet_id: subnetId,
 		cert_pem: certPem,
 		ca_pem: CA_CERT_PEM,
-		forge: {
-			repo: FORGE_GIT_URL,
-			path: `subnets/${subnetId}`,
-		},
-	})
-})
+		forge: { repo: FORGE_GIT_URL, path: `subnets/${subnetId}` },
+	});
+	console.log('register: done, total=%dms', Date.now() - t0);
+});
+
 
 app.post('/v1/nodes/register', async (req, res) => {
 	const bootstrapToken = req.header('X-Bootstrap-Token') ?? ''
