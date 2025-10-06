@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import os
 import json
 import zipfile
 from dataclasses import asdict, dataclass, field
@@ -17,7 +18,7 @@ from urllib.parse import quote
 from adaos.apps.bootstrap import get_ctx
 from adaos.services.crypto.pki import generate_rsa_key, make_csr, write_private_key
 
-DEFAULT_ROOT_BASE = "https://127.0.0.1:3030"
+DEFAULT_ROOT_BASE = "https://api.inimatic.com"
 DEFAULT_ADAOS_BASE = "http://127.0.0.1:8777"
 DEFAULT_ADAOS_TOKEN = "dev-local-token"
 CONFIG_FILENAME = "root-cli.json"
@@ -49,6 +50,8 @@ class RootCliConfig:
     keys: RootCliKeys = field(default_factory=RootCliKeys)
     adaos_base: str = DEFAULT_ADAOS_BASE
     adaos_token: str = DEFAULT_ADAOS_TOKEN
+    root_token: str | None = None
+    bootstrap_token: str | None = None
 
 
 def _config_path() -> Path:
@@ -56,6 +59,30 @@ def _config_path() -> Path:
     base_dir = Path(ctx.paths.base_dir())
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir / CONFIG_FILENAME
+
+
+def issue_bootstrap_token(
+    config: RootCliConfig,
+    meta: Optional[dict] = None,  # например, {"reason":"hub_enroll"}
+) -> str:
+    if not config.root_token:
+        raise RootCliError("ROOT_TOKEN is not configured (set ROOT_TOKEN or add root_token to config)")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Root-Token": config.root_token,
+    }
+    resp = _plain_request(
+        "POST",
+        _root_url(config, "/v1/bootstrap_token"),
+        config=config,
+        json_body=meta or {},
+        headers=headers,
+    )
+    data = resp.json()
+    token = data.get("one_time_token")
+    if not isinstance(token, str) or not token:
+        raise RootCliError("Root did not return one_time_token")
+    return token
 
 
 def load_root_cli_config() -> RootCliConfig:
@@ -70,7 +97,8 @@ def load_root_cli_config() -> RootCliConfig:
         config.subnet_id = data.get("subnet_id") or None
         config.node_id = data.get("node_id") or None
         config.adaos_base = data.get("adaos_base", config.adaos_base)
-        config.adaos_token = data.get("adaos_token", config.adaos_token)
+        config.bootstrap_token = data.get("bootstrap_token") or os.getenv("ROOT_BOOTSTRAP_TOKEN") or os.getenv("ADAOS_BOOTSTRAP_TOKEN") or None
+        config.root_token = data.get("root_token") or os.getenv("ROOT_TOKEN") or os.getenv("ADAOS_ROOT_TOKEN") or config.root_token  # как на сервере  # алиас, если хотите
         keys_data = data.get("keys") or {}
         config.keys = RootCliKeys(
             hub=_parse_key_pair(keys_data.get("hub")),
@@ -109,19 +137,13 @@ def _resolve_verify(config: RootCliConfig, *, allow_insecure: bool) -> str | boo
         return str(ca_path)
     if allow_insecure:
         return False
-    raise RootCliError(
-        "CA certificate is not configured; run 'adaos dev hub init' before using mTLS endpoints"
-    )
+    raise RootCliError("CA certificate is not configured; run 'adaos dev hub init' before using mTLS endpoints")
 
 
 def _mtls_cert_paths(config: RootCliConfig, role: Literal["hub", "node"]) -> tuple[str, str]:
     pair = config.keys.hub if role == "hub" else config.keys.node
     if not pair.cert or not pair.key:
-        raise RootCliError(
-            "{} certificate is not configured; run 'adaos dev {} init/register' first".format(
-                role, "hub" if role == "hub" else "node"
-            )
-        )
+        raise RootCliError("{} certificate is not configured; run 'adaos dev {} init/register' first".format(role, "hub" if role == "hub" else "node"))
     cert_path = Path(pair.cert).expanduser()
     key_path = Path(pair.key).expanduser()
     if not cert_path.exists():
@@ -159,9 +181,7 @@ def _do_request(
         raise RootCliError(f"{method} {url} failed: {exc}") from exc
     if response.status_code >= 400:
         detail = response.text.strip()
-        raise RootCliError(
-            f"{method} {url} failed with status {response.status_code}: {detail or 'no body'}"
-        )
+        raise RootCliError(f"{method} {url} failed with status {response.status_code}: {detail or 'no body'}")
     return response
 
 
@@ -203,11 +223,7 @@ def run_preflight_checks(
     policy_url = _root_url(config, "/v1/policy")
     if dry_run:
         echo(f"[dry-run] GET {root_health}")
-        echo(
-            f"[dry-run] GET {bridge_health} with headers "
-            f"X-AdaOS-Base={config.adaos_base or DEFAULT_ADAOS_BASE}, "
-            "X-AdaOS-Token=<masked>"
-        )
+        echo(f"[dry-run] GET {bridge_health} with headers " f"X-AdaOS-Base={config.adaos_base or DEFAULT_ADAOS_BASE}, " "X-AdaOS-Token=<masked>")
         echo(f"[dry-run] GET {policy_url} using node mTLS credentials")
         return
 
@@ -225,11 +241,7 @@ def run_preflight_checks(
             "X-AdaOS-Token": config.adaos_token or DEFAULT_ADAOS_TOKEN,
         },
     )
-    echo(
-        "Preflight OK: {url}".format(
-            url=f"{bridge_health}?base={config.adaos_base or DEFAULT_ADAOS_BASE}"
-        )
-    )
+    echo("Preflight OK: {url}".format(url=f"{bridge_health}?base={config.adaos_base or DEFAULT_ADAOS_BASE}"))
 
     _mtls_request("GET", policy_url, config=config, role="node", timeout=10.0)
     echo(f"Preflight OK: {policy_url}")
@@ -334,9 +346,7 @@ def _push_draft(
     target_node = node_id or "<node-id>"
     if dry_run:
         forge_path = _dry_run_path(config, target_node, kind, name)
-        echo(
-            f"[dry-run] POST {url} payload={{'node_id': '{target_node}', 'name': '{name}', 'archive_b64': '<omitted>'}}"
-        )
+        echo(f"[dry-run] POST {url} payload={{'node_id': '{target_node}', 'name': '{name}', 'archive_b64': '<omitted>'}}")
         return forge_path
 
     if not node_id:
@@ -422,22 +432,22 @@ def keys_dir() -> Path:
     return target
 
 
-_KEY_FILENAMES: dict[Literal['hub_key', 'hub_cert', 'node_key', 'node_cert', 'ca_cert'], str] = {
-    'hub_key': 'hub_private.pem',
-    'hub_cert': 'hub_cert.pem',
-    'node_key': 'node.key',
-    'node_cert': 'node.cert',
-    'ca_cert': 'ca.cert',
+_KEY_FILENAMES: dict[Literal["hub_key", "hub_cert", "node_key", "node_cert", "ca_cert"], str] = {
+    "hub_key": "hub_private.pem",
+    "hub_cert": "hub_cert.pem",
+    "node_key": "node.key",
+    "node_cert": "node.cert",
+    "ca_cert": "ca.cert",
 }
 
 
-def key_path(kind: Literal['hub_key', 'hub_cert', 'node_key', 'node_cert', 'ca_cert']) -> Path:
+def key_path(kind: Literal["hub_key", "hub_cert", "node_key", "node_cert", "ca_cert"]) -> Path:
     return keys_dir() / _KEY_FILENAMES[kind]
 
 
 def ensure_hub_keypair() -> tuple[Path, rsa.RSAPrivateKey]:
-    desired = key_path('hub_key')
-    legacy = keys_dir() / 'hub.key'
+    desired = key_path("hub_key")
+    legacy = keys_dir() / "hub.key"
     path = desired if desired.exists() else legacy if legacy.exists() else desired
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -478,17 +488,18 @@ def submit_subnet_registration(
     owner_token: str,
     idempotency_key: Optional[str] = None,
 ) -> dict:
-    headers = {"Content-Type": "application/json"}
+    one_time = issue_bootstrap_token(config, meta={"fingerprint": fingerprint})
+    headers = {"Content-Type": "application/json", "X-Bootstrap-Token": one_time}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
-    response = _plain_request(
+    resp = _plain_request(
         "POST",
         _root_url(config, "/v1/subnets/register"),
         config=config,
-        json_body={"csr_pem": csr_pem, "fingerprint": fingerprint, "owner_token": owner_token},
+        json_body={"csr_pem": csr_pem},  # backend читает только csr_pem (+ optional subnet_name)
         headers=headers,
     )
-    return response.json()
+    return resp.json()
 
 
 def fetch_registration_status(
@@ -498,6 +509,9 @@ def fetch_registration_status(
     owner_token: str,
 ) -> dict:
     headers = {"X-Owner-Token": owner_token}
+    if config.bootstrap_token:
+        headers["X-Bootstrap-Token"] = config.bootstrap_token
+
     encoded = quote(fingerprint, safe="")
     response = _plain_request(
         "GET",
