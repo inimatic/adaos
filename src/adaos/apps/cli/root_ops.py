@@ -489,15 +489,18 @@ def submit_subnet_registration(
     idempotency_key: Optional[str] = None,
 ) -> dict:
     one_time = issue_bootstrap_token(config, meta={"fingerprint": fingerprint})
+
     headers = {"Content-Type": "application/json", "X-Bootstrap-Token": one_time}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
+
     resp = _plain_request(
         "POST",
         _root_url(config, "/v1/subnets/register"),
         config=config,
-        json_body={"csr_pem": csr_pem},  # backend читает только csr_pem (+ optional subnet_name)
+        json_body={"csr_pem": csr_pem},
         headers=headers,
+        timeout=120.0,  # ← было 10.0, теперь 120
     )
     return resp.json()
 

@@ -1,3 +1,4 @@
+# src\adaos\apps\cli\commands\dev.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -86,10 +87,7 @@ def _handle_root_error(exc: Exception) -> None:
         typer.echo(f"Detailed logs: {log_path}")
         message_lower = str(exc).lower()
         if "certificate" in message_lower:
-            typer.echo(
-                "Verify backend TLS configuration. Run 'src/adaos/integrations/inimatic/backend/ssl/check_certs.sh' "
-                "to inspect required certificate links."
-            )
+            typer.echo("Verify backend TLS configuration. Run 'src/adaos/integrations/inimatic/backend/ssl/check_certs.sh' " "to inspect required certificate links.")
     elif isinstance(exc, RootAuthError):
         _print_error(str(exc))
     else:
@@ -102,6 +100,12 @@ def _hub_enroll(
         "--owner-token",
         envvar="ADAOS_ROOT_OWNER_TOKEN",
         help="Owner token issued by root for subnet enrollment",
+    ),
+    bootstrap_token: Optional[str] = typer.Option(
+        None,
+        "--bootstrap-token",
+        envvar="ADAOS_BOOTSTRAP_TOKEN",
+        help="Root bootstrap token (sent as X-Bootstrap-Token)",
     ),
     idempotency_key: Optional[str] = typer.Option(
         None,
@@ -120,6 +124,15 @@ def _hub_enroll(
         _print_error(str(exc))
         raise typer.Exit(1)
 
+    # if bootstrap token is provided via option/env, persist into config
+    if bootstrap_token:
+        config.bootstrap_token = bootstrap_token
+        try:
+            root_ops.save_root_cli_config(config)
+        except root_ops.RootCliError as exc:
+            _print_error(str(exc))
+            raise typer.Exit(1)
+
     try:
         key_path, key = root_ops.ensure_hub_keypair()
     except root_ops.RootCliError as exc:
@@ -128,6 +141,7 @@ def _hub_enroll(
 
     fingerprint = root_ops.fingerprint_for_key(key)
     csr_pem = root_ops.build_csr("adaos-hub", key)
+    csr_pem = csr_pem.replace("\r\n", "\n").strip() + "\n"
     idem_key = idempotency_key or new_id()
 
     try:
