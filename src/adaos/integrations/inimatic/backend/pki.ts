@@ -92,7 +92,8 @@ export class CertificateAuthority {
 		// Расширения (SKI по hash, AKI из CA)
 		const exts: any[] = [
 			{ name: 'basicConstraints', cA: false },
-			{ name: 'extendedKeyUsage', clientAuth: true },
+			// В forge это extKeyUsage:
+			{ name: 'extKeyUsage', clientAuth: true }, // можно добавить serverAuth: true при необходимости
 			{ name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
 			{ name: 'subjectKeyIdentifier', hash: true },
 		]
