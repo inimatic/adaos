@@ -82,3 +82,4 @@ export function installAdaosBridge(app: Express, server: http.Server) {
 			}
 		})
 	}
+}
