@@ -1,98 +1,130 @@
 import forge from 'node-forge'
 
+type ForgeCertificate = ReturnType<typeof forge.pki.certificateFromPem>
+type ForgeRsaPrivateKey = forge.pki.rsa.PrivateKey
+type ForgeCertificationRequest = ReturnType<typeof forge.pki.certificationRequestFromPem>
+
 export type CertificateSubject = {
-        commonName: string
-        organizationName?: string
+	commonName: string
+	organizationName?: string
 }
 
 export type CertificateAuthorityOptions = {
-        certPem: string
-        keyPem: string
-        defaultValidityDays?: number
+	certPem: string
+	keyPem: string
+	defaultValidityDays?: number
 }
 
 export type IssueCertificateOptions = {
-        csrPem: string
-        subject: CertificateSubject
-        validityDays?: number
+	csrPem: string
+	subject: CertificateSubject
+	validityDays?: number
 }
 
 export type IssueResult = {
-        certificatePem: string
-        serialNumber: string
+	certificatePem: string
+	serialNumber: string
 }
 
 export class CertificateAuthority {
-        private readonly caCert: forge.pki.Certificate
-        private readonly caKey: forge.pki.rsa.PrivateKey
-        private readonly defaultValidityDays: number
+	private readonly caCert: ForgeCertificate
+	private readonly caKey: ForgeRsaPrivateKey
+	private readonly defaultValidityDays: number
+	private readonly caSubjectKeyIdBytes?: string // binary string
 
-        constructor(options: CertificateAuthorityOptions) {
-                const { certPem, keyPem, defaultValidityDays } = options
-                this.caCert = forge.pki.certificateFromPem(certPem)
-                const privateKey = forge.pki.privateKeyFromPem(keyPem)
-                if (!isRsaPrivateKey(privateKey)) {
-                        throw new Error('Only RSA private keys are supported for the certificate authority')
-                }
-                this.caKey = privateKey
-                this.defaultValidityDays = defaultValidityDays ?? 365
-        }
+	constructor(options: CertificateAuthorityOptions) {
+		const { certPem, keyPem, defaultValidityDays } = options
 
-        issueClientCertificate(options: IssueCertificateOptions): IssueResult {
-                const { csrPem, subject } = options
-                const csr = forge.pki.certificationRequestFromPem(csrPem)
-                if (!csr.verify()) {
-                        throw new Error('CSR verification failed')
-                }
+		this.caCert = forge.pki.certificateFromPem(certPem)
 
-                const certificate = forge.pki.createCertificate()
-                certificate.serialNumber = generateSerialNumber()
-                const publicKey = csr.publicKey
-                if (!publicKey) {
-                        throw new Error('CSR does not contain a public key')
-                }
-                certificate.publicKey = publicKey
+		const privateKey = forge.pki.privateKeyFromPem(keyPem)
+		if (!isRsaPrivateKey(privateKey)) {
+			throw new Error('Only RSA private keys are supported for the certificate authority')
+		}
+		this.caKey = privateKey
+		this.defaultValidityDays = defaultValidityDays ?? 365
 
-                const now = new Date()
-                certificate.validity.notBefore = new Date(now.getTime() - 60_000)
-                const days = options.validityDays ?? this.defaultValidityDays
-                certificate.validity.notAfter = new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
+		// CA SKI для AKI
+		try {
+			const fp = forge.pki.getPublicKeyFingerprint(this.caCert.publicKey, {
+				type: 'SubjectPublicKeyInfo',
+			}) as forge.util.ByteStringBuffer
+			this.caSubjectKeyIdBytes = fp.getBytes()
+		} catch {
+			/* optional */
+		}
+	}
 
-                const attrs: forge.pki.CertificateField[] = [
-                        { name: 'commonName', value: subject.commonName },
-                ]
-                if (subject.organizationName) {
-                        attrs.push({ name: 'organizationName', value: subject.organizationName })
-                }
-                certificate.setSubject(attrs)
-                certificate.setIssuer(this.caCert.subject.attributes)
+	issueClientCertificate(options: IssueCertificateOptions): IssueResult {
+		const { subject } = options
+		const csrPem = normalizePem(options.csrPem)
 
-                certificate.setExtensions([
-                        { name: 'basicConstraints', cA: false },
-                        { name: 'extendedKeyUsage', clientAuth: true },
-                        { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-                        {
-                                name: 'subjectKeyIdentifier',
-                                subjectKeyIdentifier: forge.pki.getPublicKeyFingerprint(publicKey, {
-                                        type: 'SubjectPublicKeyInfo',
-                                }) as forge.util.ByteStringBuffer,
-                        },
-                ])
+		let csr: ForgeCertificationRequest
+		try {
+			csr = forge.pki.certificationRequestFromPem(csrPem)
+		} catch {
+			throw new Error('Failed to parse CSR PEM')
+		}
+		if (!csr.verify()) {
+			throw new Error('CSR verification failed')
+		}
+		const publicKey = csr.publicKey
+		if (!publicKey) {
+			throw new Error('CSR does not contain a public key')
+		}
 
-                certificate.sign(this.caKey, forge.md.sha256.create())
+		const cert = forge.pki.createCertificate()
+		cert.serialNumber = generateSerialNumber()
+		cert.publicKey = publicKey
 
-                return {
-                        certificatePem: forge.pki.certificateToPem(certificate),
-                        serialNumber: certificate.serialNumber,
-                }
-        }
+		const now = Date.now()
+		cert.validity.notBefore = new Date(now - 60_000)
+		const days = options.validityDays ?? this.defaultValidityDays
+		cert.validity.notAfter = new Date(now + days * 24 * 60 * 60 * 1000)
+
+		const attrs: any[] = [{ name: 'commonName', value: subject.commonName }]
+		if (subject.organizationName) {
+			attrs.push({ name: 'organizationName', value: subject.organizationName })
+		}
+		cert.setSubject(attrs)
+		cert.setIssuer(this.caCert.subject.attributes)
+
+		// Расширения (SKI по hash, AKI из CA)
+		const exts: any[] = [
+			{ name: 'basicConstraints', cA: false },
+			{ name: 'extendedKeyUsage', clientAuth: true },
+			{ name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
+			{ name: 'subjectKeyIdentifier', hash: true },
+		]
+		if (this.caSubjectKeyIdBytes) {
+			exts.push({ name: 'authorityKeyIdentifier', keyIdentifier: this.caSubjectKeyIdBytes })
+		}
+		cert.setExtensions(exts)
+
+		try {
+			cert.sign(this.caKey, forge.md.sha256.create())
+		} catch (e: any) {
+			throw new Error(`Certificate signing failed: ${e?.message || String(e)}`)
+		}
+
+		return {
+			certificatePem: forge.pki.certificateToPem(cert),
+			serialNumber: cert.serialNumber,
+		}
+	}
+}
+
+function normalizePem(input: string): string {
+	return input.replace(/\r\n/g, '\n').trim() + '\n'
 }
 
 function generateSerialNumber(): string {
-        const bytes = forge.random.getBytesSync(16)
-        return forge.util.bytesToHex(bytes)
+	const bytes = forge.random.getBytesSync(16)
+	const hex = forge.util.bytesToHex(bytes)
+	const first = (parseInt(hex.slice(0, 2), 16) & 0x7f).toString(16).padStart(2, '0')
+	return first + hex.slice(2)
 }
 
-function isRsaPrivateKey(key: forge.pki.PrivateKey): key is forge.pki.rsa.PrivateKey {
-        return typeof (key as forge.pki.rsa.PrivateKey).n !== 'undefined'
+function isRsaPrivateKey(key: forge.pki.PrivateKey): key is ForgeRsaPrivateKey {
+	return typeof (key as ForgeRsaPrivateKey).n !== 'undefined'
 }
