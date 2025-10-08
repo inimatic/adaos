@@ -187,6 +187,17 @@ export class ForgeManager {
 			await mkdir(this.options.workdir, { recursive: true });
 			this.git = simpleGit({ baseDir: this.options.workdir });
 			this.git.env(env);
+			// add logs
+			this.git.addConfig('http.lowSpeedLimit', '1');
+			this.git.addConfig('http.lowSpeedTime', '30'); // 30s «низкой скорости» => ошибка вместо подвисания
+			this.git.outputHandler((command, stdout, stderr) => {
+				console.log('[forge/git]', command);
+				stdout?.on('data', (b: Buffer) => process.stdout.write('[forge/git out] ' + b.toString()));
+				stderr?.on('data', (b: Buffer) => process.stderr.write('[forge/git err] ' + b.toString()));
+			});
+			(this.git as any).progress?.(({ method, stage, progress }: any) => {
+				console.log(`[forge/git] ${method} ${stage} ${progress}%`);
+			});
 
 			await this.git.addConfig('user.name', this.options.authorName);
 			await this.git.addConfig('user.email', this.options.authorEmail);
@@ -205,7 +216,9 @@ export class ForgeManager {
 
 	async ensureSubnet(subnetId: string): Promise<string> {
 		return this.mutex.runExclusive(async () => {
+			console.time(`[forge] ensureSubnet ${subnetId} start`);
 			await this.ensureReady();
+			console.time(`[forge] ensureReady`);
 			const dir = path.join(this.options.workdir, 'subnets', subnetId);
 			const keepPath = path.join(dir, '.keep');
 			const existed = fs.existsSync(dir);
@@ -213,10 +226,15 @@ export class ForgeManager {
 			if (!fs.existsSync(keepPath)) {
 				await writeFile(keepPath, `subnet ${subnetId}\n`);
 			}
+			console.time(`[forge] file operations finished`);
 			if (!existed) {
+				console.time(`[forge] not existed`);
 				await this.stageAll();
+				console.time(`[forge] all staged`);
 				const commit = await this.commit(`init subnet ${subnetId}`);
+				console.time(`[forge] committed`);
 				await this.push();
+				console.time(`[forge] pushed`);
 				return commit;
 			}
 			return '';
