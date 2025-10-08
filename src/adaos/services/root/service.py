@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 import shutil
+import ssl
 import time
 import zipfile
 from dataclasses import dataclass
@@ -541,7 +542,7 @@ class RootDeveloperService:
         client = self._client(cfg)
 
         authorize_cert: tuple[str, str] | None = None
-        authorize_verify: str | bool = verify_plain
+        authorize_verify = verify_plain
         try:
             start = client.device_authorize(verify=authorize_verify)
         except RootHttpError as exc:
@@ -633,13 +634,13 @@ class RootDeveloperService:
         base_url = cfg.root_settings.base_url or "https://api.inimatic.com"
         return RootHttpClient(base_url=base_url)
 
-    def _plain_verify(self, cfg: NodeConfig) -> str | bool:
+    def _plain_verify(self, cfg: NodeConfig) -> ssl.SSLContext | bool:
         ca = cfg.root_settings.ca_cert
         if ca:
             path = Path(ca).expanduser()
             default_ca_path = Path("~/.adaos/keys/ca.cert").expanduser()
             if path.exists():
-                return str(path)
+                return self._load_verify_context(path)
             if path != default_ca_path:
                 raise RootServiceError(f"CA certificate not found at {path}")
         if _insecure_tls_enabled():
@@ -650,14 +651,14 @@ class RootDeveloperService:
         self,
         cfg: NodeConfig,
         exc: RootHttpError,
-    ) -> tuple[str, tuple[str, str]] | None:
+    ) -> tuple[ssl.SSLContext, tuple[str, str]] | None:
         if not self._should_retry_with_mtls(exc):
             return None
         try:
-            cert_path, key_path, ca_path = self._mtls_material(cfg)
+            cert_path, key_path, verify = self._mtls_material(cfg)
         except RootServiceError:
             return None
-        return ca_path, (cert_path, key_path)
+        return verify, (cert_path, key_path)
 
     @staticmethod
     def _should_retry_with_mtls(exc: RootHttpError) -> bool:
@@ -667,14 +668,27 @@ class RootDeveloperService:
             return True
         return False
 
-    def _mtls_material(self, cfg: NodeConfig) -> tuple[str, str, str]:
+    def _mtls_material(self, cfg: NodeConfig) -> tuple[str, str, ssl.SSLContext]:
         ca_path = cfg.ca_cert_path()
         cert_path = cfg.hub_cert_path()
         key_path = cfg.hub_key_path()
         for label, path in ("CA certificate", ca_path), ("hub certificate", cert_path), ("hub private key", key_path):
             if not path.exists():
                 raise RootServiceError(f"{label} not found at {path}; run 'adaos dev root init' first")
-        return str(cert_path), str(key_path), str(ca_path)
+        verify = self._load_verify_context(ca_path)
+        return str(cert_path), str(key_path), verify
+
+    @staticmethod
+    def _load_verify_context(ca_path: Path) -> ssl.SSLContext:
+        try:
+            context = ssl.create_default_context()
+        except ssl.SSLError as exc:  # pragma: no cover - unexpected SSL configuration issues
+            raise RootServiceError(f"Failed to create TLS context: {exc}") from exc
+        try:
+            context.load_verify_locations(cafile=str(ca_path))
+        except (FileNotFoundError, ssl.SSLError) as exc:
+            raise RootServiceError(f"Failed to load CA certificate from {ca_path}: {exc}") from exc
+        return context
 
     def _ensure_hub_keypair(self, cfg: NodeConfig) -> tuple[Path, rsa.RSAPrivateKey]:
         key_path = cfg.hub_key_path()
@@ -751,7 +765,7 @@ class RootDeveloperService:
         archive_bytes = create_zip_bytes(source)
         archive_b64 = archive_bytes_to_b64(archive_bytes)
         digest = hashlib.sha256(archive_bytes).hexdigest()
-        cert_path, key_path, ca_path = self._mtls_material(cfg)
+        cert_path, key_path, verify = self._mtls_material(cfg)
         client = self._client(cfg)
         node_id = cfg.node_settings.id or cfg.node_id
         if kind == "skills":
@@ -759,7 +773,7 @@ class RootDeveloperService:
                 name=name,
                 archive_b64=archive_b64,
                 node_id=node_id,
-                verify=ca_path,
+                verify=verify,
                 cert=(cert_path, key_path),
                 sha256=digest,
             )
@@ -768,7 +782,7 @@ class RootDeveloperService:
                 name=name,
                 archive_b64=archive_b64,
                 node_id=node_id,
-                verify=ca_path,
+                verify=verify,
                 cert=(cert_path, key_path),
                 sha256=digest,
             )
