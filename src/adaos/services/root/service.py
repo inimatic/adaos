@@ -25,6 +25,7 @@ from adaos.services.id_gen import new_id
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 
 
@@ -701,6 +702,18 @@ class RootDeveloperService:
 
     def _ensure_hub_keypair(self, cfg: NodeConfig) -> tuple[Path, rsa.RSAPrivateKey]:
         key_path = cfg.hub_key_path()
+        cert_path = cfg.hub_cert_path()
+
+        if self._hub_certificate_requires_rotation(cert_path):
+            try:
+                key_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                cert_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
         key_path.parent.mkdir(parents=True, exist_ok=True)
         if key_path.exists():
             try:
@@ -712,6 +725,25 @@ class RootDeveloperService:
             write_private_key(key_path, private_key)
         cfg.subnet_settings.hub.key = _home_relative(key_path)
         return key_path, private_key
+
+    @staticmethod
+    def _hub_certificate_requires_rotation(cert_path: Path) -> bool:
+        if not cert_path.exists():
+            return False
+        try:
+            cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        except ValueError:
+            return True
+        try:
+            common_names = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        except Exception:  # pragma: no cover - defensive
+            return True
+        if not common_names:
+            return True
+        value = common_names[0].value
+        if not isinstance(value, str):
+            return True
+        return not value.startswith("subnet:")
 
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
         workspace_root = cfg.workspace_path()
