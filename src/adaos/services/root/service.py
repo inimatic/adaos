@@ -537,10 +537,22 @@ class RootDeveloperService:
         on_authorize: Callable[[DeviceAuthorization], None] | None = None,
     ) -> RootLoginResult:
         cfg = self._load_config()
-        verify = self._plain_verify(cfg)
+        verify_plain = self._plain_verify(cfg)
         client = self._client(cfg)
 
-        start = client.device_authorize(verify=verify)
+        authorize_cert: tuple[str, str] | None = None
+        authorize_verify: str | bool = verify_plain
+        try:
+            start = client.device_authorize(verify=authorize_verify)
+        except RootHttpError as exc:
+            fallback = self._maybe_retry_with_mtls(cfg, exc)
+            if not fallback:
+                raise RootServiceError(str(exc)) from exc
+            authorize_verify, authorize_cert = fallback
+            try:
+                start = client.device_authorize(verify=authorize_verify, cert=authorize_cert)
+            except RootHttpError as retry_exc:
+                raise RootServiceError(str(retry_exc)) from retry_exc
         device_code = start.get("device_code")
         user_code = start.get("user_code") or start.get("user_code_short")
         verification_uri = start.get("verification_uri") or start.get("verification_uri_complete")
@@ -567,7 +579,7 @@ class RootDeveloperService:
             if delay:
                 time.sleep(delay)
             try:
-                result = client.device_poll(auth.device_code, verify=verify)
+                result = client.device_poll(auth.device_code, verify=authorize_verify, cert=authorize_cert)
             except RootHttpError as exc:
                 code = exc.error_code or ""
                 if code == "authorization_pending":
@@ -635,6 +647,27 @@ class RootDeveloperService:
         if _insecure_tls_enabled():
             return False
         return True
+
+    def _maybe_retry_with_mtls(
+        self,
+        cfg: NodeConfig,
+        exc: RootHttpError,
+    ) -> tuple[str, tuple[str, str]] | None:
+        if not self._should_retry_with_mtls(exc):
+            return None
+        try:
+            cert_path, key_path, ca_path = self._mtls_material(cfg)
+        except RootServiceError:
+            return None
+        return ca_path, (cert_path, key_path)
+
+    @staticmethod
+    def _should_retry_with_mtls(exc: RootHttpError) -> bool:
+        if exc.error_code in {"invalid_client_certificate", "client_certificate_required"}:
+            return True
+        if exc.status_code == 403 and "certificate" in str(exc).lower():
+            return True
+        return False
 
     def _mtls_material(self, cfg: NodeConfig) -> tuple[str, str, str]:
         ca_path = cfg.ca_cert_path()

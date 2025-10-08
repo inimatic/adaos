@@ -131,13 +131,25 @@ class RootHttpClient:
         payload = {"csr_pem": csr_pem}
         return dict(self._request("POST", "/v1/subnets/register", json=payload, headers=headers, verify=verify, timeout=120.0))
 
-    def device_authorize(self, *, verify: str | bool | None = None, payload: Mapping[str, Any] | None = None) -> dict:
+    def device_authorize(
+        self,
+        *,
+        verify: str | bool | None = None,
+        cert: tuple[str, str] | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict:
         body = dict(payload or {})
-        return dict(self._request("POST", "/v1/device/authorize", json=body, verify=verify))
+        return dict(self._request("POST", "/v1/device/authorize", json=body, verify=verify, cert=cert))
 
-    def device_poll(self, device_code: str, *, verify: str | bool | None = None) -> dict:
+    def device_poll(
+        self,
+        device_code: str,
+        *,
+        verify: str | bool | None = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
         body = {"device_code": device_code}
-        return dict(self._request("POST", "/v1/device/poll", json=body, verify=verify))
+        return dict(self._request("POST", "/v1/device/poll", json=body, verify=verify, cert=cert))
 
     def push_skill_draft(
         self,
