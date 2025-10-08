@@ -63,20 +63,26 @@ def _config_path() -> Path:
 
 def issue_bootstrap_token(
     config: RootCliConfig,
-    meta: Optional[dict] = None,  # например, {"reason":"hub_enroll"}
+    meta: Optional[dict] = None,
 ) -> str:
     if not config.root_token:
         raise RootCliError("ROOT_TOKEN is not configured (set ROOT_TOKEN or add root_token to config)")
+
     headers = {
         "Content-Type": "application/json",
         "X-Root-Token": config.root_token,
     }
+
+    # ВАЖНО: bootstrap всегда без проверки сертификата.
+    # Фронт может быть под LE/прокси, а не под нашим CA.
     resp = _plain_request(
         "POST",
         _root_url(config, "/v1/bootstrap_token"),
         config=config,
         json_body=meta or {},
         headers=headers,
+        insecure=True,
+        timeout=15.0,
     )
     data = resp.json()
     token = data.get("one_time_token")
@@ -193,9 +199,19 @@ def _plain_request(
     json_body: Optional[dict] = None,
     timeout: float = 10.0,
     headers: Optional[dict] = None,
+    insecure: bool = False,
+    client_cert: Optional[tuple[str, str]] = None,
 ) -> httpx.Response:
-    verify = _resolve_verify(config, allow_insecure=True)
-    return _do_request(method, url, json_body=json_body, timeout=timeout, headers=headers, verify=verify)
+    verify = False if insecure else _resolve_verify(config, allow_insecure=True)
+    return _do_request(
+        method,
+        url,
+        json_body=json_body,
+        timeout=timeout,
+        headers=headers,
+        cert=client_cert,
+        verify=verify,
+    )
 
 
 def _mtls_request(
@@ -495,15 +511,34 @@ def submit_subnet_registration(
         headers["Idempotency-Key"] = idempotency_key
     if config.bootstrap_token:
         headers["X-Bootstrap-Token"] = config.bootstrap_token
+
     resp = _plain_request(
         "POST",
         _root_url(config, "/v1/subnets/register"),
         config=config,
         json_body={"csr_pem": csr_pem},
         headers=headers,
-        timeout=120.0,  # ← было 10.0, теперь 120
+        timeout=120.0,
+        insecure=True,
     )
-    return resp.json()
+    data = resp.json()
+    ca_pem = data.get("ca_pem")
+    if isinstance(ca_pem, str) and ca_pem.strip():
+        ca_path = key_path("ca_cert")
+        ca_path.write_text(ca_pem if ca_pem.endswith("\n") else ca_pem + "\n", encoding="utf-8")
+        try:
+            ca_path.chmod(0o644)
+        except PermissionError:
+            pass
+        # фиксируем в конфиге путь к CA и сохраняем
+        config.keys.ca = str(ca_path)
+        try:
+            save_root_cli_config(config)
+        except RootCliError:
+            # не фейлим основной флоу, даже если не удалось сохранить конфиг
+            pass
+
+    return data
 
 
 def fetch_registration_status(
