@@ -822,13 +822,14 @@ app.post('/v1/subnets/register', async (req, res) => {
 			csrPem,
 			subject: { commonName: `subnet:${subnetId}` },
 		}).certificatePem;
-		console.log('register: cert issued, dt=%dms', Date.now() - t0);
+		console.log('register: cert issued v2, dt=%dms', Date.now() - t0);
 	} catch (e) {
 		console.error('register: issue cert failed:', (e as any)?.message);
 		return handleError(req, res, e, { status: 400, code: 'certificate_issue_failed' });
 	}
 
 	try {
+		console.log('register: on before ensureSubnet')
 		await forgeManager.ensureSubnet(subnetId);
 		console.log('register: forge ensured, dt=%dms', Date.now() - t0);
 	} catch (e) {
