@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, MutableMapping
 
 import httpx
+import ssl
 
 
 class RootHttpError(RuntimeError):
@@ -22,7 +23,7 @@ class RootHttpClient:
 
     base_url: str = "https://api.inimatic.com"
     timeout: float = 15.0
-    verify: str | bool = True
+    verify: str | bool | ssl.SSLContext = True
 
     def _request(
         self,
@@ -31,7 +32,7 @@ class RootHttpClient:
         *,
         json: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
-        verify: str | bool | None = None,
+        verify: str | bool | ssl.SSLContext | None = None,
         cert: tuple[str, str] | None = None,
         timeout: float | None = None,
     ) -> Any:
@@ -112,7 +113,13 @@ class RootHttpClient:
     # ------------------------------------------------------------------
     # Root bootstrap & developer endpoints
     # ------------------------------------------------------------------
-    def request_bootstrap_token(self, root_token: str, *, meta: Mapping[str, Any] | None = None, verify: str | bool | None = None) -> dict:
+    def request_bootstrap_token(
+        self,
+        root_token: str,
+        *,
+        meta: Mapping[str, Any] | None = None,
+        verify: str | bool | ssl.SSLContext | None = None,
+    ) -> dict:
         headers = {"X-Root-Token": root_token}
         payload = dict(meta or {})
         return dict(self._request("POST", "/v1/bootstrap_token", json=payload, headers=headers, verify=verify, timeout=30.0))
@@ -122,7 +129,7 @@ class RootHttpClient:
         csr_pem: str,
         *,
         bootstrap_token: str,
-        verify: str | bool | None = None,
+        verify: str | bool | ssl.SSLContext | None = None,
         idempotency_key: str | None = None,
     ) -> dict:
         headers: dict[str, str] = {"X-Bootstrap-Token": bootstrap_token}
@@ -134,7 +141,7 @@ class RootHttpClient:
     def device_authorize(
         self,
         *,
-        verify: str | bool | None = None,
+        verify: str | bool | ssl.SSLContext | None = None,
         cert: tuple[str, str] | None = None,
         payload: Mapping[str, Any] | None = None,
     ) -> dict:
@@ -145,7 +152,7 @@ class RootHttpClient:
         self,
         device_code: str,
         *,
-        verify: str | bool | None = None,
+        verify: str | bool | ssl.SSLContext | None = None,
         cert: tuple[str, str] | None = None,
     ) -> dict:
         body = {"device_code": device_code}
@@ -157,7 +164,7 @@ class RootHttpClient:
         name: str,
         archive_b64: str,
         node_id: str | None,
-        verify: str | bool,
+        verify: str | bool | ssl.SSLContext,
         cert: tuple[str, str],
         sha256: str | None = None,
     ) -> dict:
@@ -183,7 +190,7 @@ class RootHttpClient:
         name: str,
         archive_b64: str,
         node_id: str | None,
-        verify: str | bool,
+        verify: str | bool | ssl.SSLContext,
         cert: tuple[str, str],
         sha256: str | None = None,
     ) -> dict:
