@@ -134,6 +134,7 @@ export class ForgeManager {
 	private git: SimpleGit | null = null;
 	private readonly mutex = new Mutex();
 	private initialized = false;
+	private initPromise?: Promise<void>;
 
 	constructor(options: ForgeManagerOptions) {
 		const workdir = options.workdir ?? DEFAULT_WORKDIR;
@@ -146,79 +147,74 @@ export class ForgeManager {
 		};
 	}
 
-	async ensureReady(): Promise<void> {
-		await this.mutex.runExclusive(async () => {
-			if (this.initialized) return;
+	private async doInit(): Promise<void> {
+		const gh = ghEnv();
+		const useGhApp = Boolean(gh.appId && gh.instId && gh.privateKeyPath);
+		const env = this.gitEnv(useGhApp);
 
-			const gh = ghEnv();
-			const useGhApp = Boolean(gh.appId && gh.instId && gh.privateKeyPath);
-			const env = this.gitEnv(useGhApp);
+		const gitDir = path.join(this.options.workdir, '.git');
 
-			const gitDir = path.join(this.options.workdir, '.git');
-			if (!fs.existsSync(gitDir)) {
-				const parent = path.dirname(this.options.workdir);
-				await mkdir(parent, { recursive: true });
-				const workdirExists = fs.existsSync(this.options.workdir);
-				if (workdirExists) {
-					const entries = fs.readdirSync(this.options.workdir);
-					if (entries.length > 0) {
-						throw new Error(`forge workdir ${this.options.workdir} exists and is not empty`);
-					}
-				}
-
-				const parentGit = simpleGit({ baseDir: parent });
-				parentGit.env(env);
-				if (useGhApp) {
-					// Если App активна — клонируем по HTTPS с одноразовым токеном
-					// и закрепляем origin.
-					// Требуется FORGE_REPO или удачный парсинг из repoUrl на будущее.
-					if (!gh.repo) {
-						// fallback: попробуем вытащить owner/repo из options.repoUrl (для совместимости)
-						gh.repo = parseRepoOwnerNameFromUrl(this.options.repoUrl);
-					}
-					const httpsUrl = await buildHttpsUrlWithToken(gh);
-					await parentGit.clone(httpsUrl, this.options.workdir);
-				} else {
-					// Старый путь: используем repoUrl как есть (SSH/HTTPS)
-					await parentGit.clone(this.options.repoUrl, this.options.workdir);
-				}
+		if (!fs.existsSync(gitDir)) {
+			const parent = path.dirname(this.options.workdir);
+			await mkdir(parent, { recursive: true });
+			const entries = fs.existsSync(this.options.workdir) ? fs.readdirSync(this.options.workdir) : [];
+			if (entries.length > 0) {
+				throw new Error(`forge workdir ${this.options.workdir} exists and is not empty`);
 			}
+			const parentGit = simpleGit({ baseDir: parent });
+			parentGit.env(env);
 
-			await mkdir(this.options.workdir, { recursive: true });
-			this.git = simpleGit({ baseDir: this.options.workdir });
-			this.git.env(env);
-			// add logs
-			this.git.addConfig('http.lowSpeedLimit', '1');
-			this.git.addConfig('http.lowSpeedTime', '30'); // 30s «низкой скорости» => ошибка вместо подвисания
-			this.git.outputHandler((command, stdout, stderr) => {
-				console.log('[forge/git]', command);
-				stdout?.on('data', (b: Buffer) => process.stdout.write('[forge/git out] ' + b.toString()));
-				stderr?.on('data', (b: Buffer) => process.stderr.write('[forge/git err] ' + b.toString()));
-			});
-			(this.git as any).progress?.(({ method, stage, progress }: any) => {
-				console.log(`[forge/git] ${method} ${stage} ${progress}%`);
-			});
-
-			await this.git.addConfig('user.name', this.options.authorName);
-			await this.git.addConfig('user.email', this.options.authorEmail);
-
-			// Перед fetch/reset убедимся, что origin указывает на свежий токен (если App)
 			if (useGhApp) {
 				if (!gh.repo) gh.repo = parseRepoOwnerNameFromUrl(this.options.repoUrl);
 				const httpsUrl = await buildHttpsUrlWithToken(gh);
-				await ensureOriginUrl(this.git, httpsUrl);
+				await parentGit.clone(httpsUrl, this.options.workdir);
+			} else {
+				await parentGit.clone(this.options.repoUrl, this.options.workdir);
 			}
+		}
 
-			await this.sync(useGhApp);
-			this.initialized = true;
+		await mkdir(this.options.workdir, { recursive: true });
+		this.git = simpleGit({ baseDir: this.options.workdir });
+		// TODO remove
+		this.git.outputHandler((cmd, stdout, stderr) => {
+			console.log('[forge/git]', cmd);
+			stdout?.on('data', b => process.stdout.write('[forge/out] ' + b.toString()));
+			stderr?.on('data', b => process.stderr.write('[forge/err] ' + b.toString()));
 		});
+		this.git.env(env);
+
+		await this.git.addConfig('user.name', this.options.authorName);
+		await this.git.addConfig('user.email', this.options.authorEmail);
+
+		// низкоскоростной таймаут — чтобы не зависало
+		await this.git.addConfig('http.lowSpeedLimit', '1').catch(() => { });
+		await this.git.addConfig('http.lowSpeedTime', '30').catch(() => { });
+
+		if (useGhApp) {
+			if (!gh.repo) gh.repo = parseRepoOwnerNameFromUrl(this.options.repoUrl);
+			const httpsUrl = await buildHttpsUrlWithToken(gh);
+			await ensureOriginUrl(this.git, httpsUrl);
+		}
+
+		await this.sync(useGhApp);
+		this.initialized = true;
+	}
+
+	async ensureReady(): Promise<void> {
+		if (this.initialized) return;
+		if (!this.initPromise) {
+			this.initPromise = this.doInit().catch((e) => { // чтобы не залипало, если init упал
+				this.initPromise = undefined;
+				throw e;
+			});
+		}
+		await this.initPromise;
 	}
 
 	async ensureSubnet(subnetId: string): Promise<string> {
+		await this.ensureReady();
 		return this.mutex.runExclusive(async () => {
-			console.time(`[forge] ensureSubnet ${subnetId} start`);
-			await this.ensureReady();
-			console.time(`[forge] ensureReady`);
+			console.log(`[forge] ensureSubnet ${subnetId}`);
 			const dir = path.join(this.options.workdir, 'subnets', subnetId);
 			const keepPath = path.join(dir, '.keep');
 			const existed = fs.existsSync(dir);
@@ -226,22 +222,21 @@ export class ForgeManager {
 			if (!fs.existsSync(keepPath)) {
 				await writeFile(keepPath, `subnet ${subnetId}\n`);
 			}
-			console.time(`[forge] file operations finished`);
 			if (!existed) {
-				console.time(`[forge] not existed`);
 				await this.stageAll();
-				console.time(`[forge] all staged`);
 				const commit = await this.commit(`init subnet ${subnetId}`);
-				console.time(`[forge] committed`);
+				await this.withFreshOrigin();
 				await this.push();
-				console.time(`[forge] pushed`);
+				console.log(`[forge] ensureSubnet ${subnetId}`);
 				return commit;
 			}
+			console.log(`[forge] ensureSubnet ${subnetId}`);
 			return '';
 		});
 	}
 
 	async ensureNode(subnetId: string, nodeId: string): Promise<string> {
+		await this.ensureReady();
 		return this.mutex.runExclusive(async () => {
 			await this.ensureReady();
 			const dir = path.join(this.options.workdir, 'subnets', subnetId, 'nodes', nodeId);
@@ -263,6 +258,7 @@ export class ForgeManager {
 
 	async writeDraft(options: WriteDraftOptions): Promise<DraftWriteResult> {
 		const { kind, subnetId, nodeId, name, archive } = options;
+		await this.ensureReady();
 		return this.mutex.runExclusive(async () => {
 			await this.ensureReady();
 			const relativeBase = path.join('subnets', subnetId, 'nodes', nodeId);
@@ -329,17 +325,17 @@ export class ForgeManager {
 		return { ...process.env, GIT_SSH_COMMAND: command };
 	}
 
+	private async withFreshOrigin(): Promise<void> {
+		const gh = ghEnv();
+		if (!(gh.appId && gh.instId && gh.privateKeyPath)) return;
+		if (!gh.repo) gh.repo = parseRepoOwnerNameFromUrl(this.options.repoUrl);
+		const httpsUrl = await buildHttpsUrlWithToken(gh);
+		await ensureOriginUrl(this.git!, httpsUrl);
+	}
+
 	private async sync(useGhApp: boolean): Promise<void> {
 		if (!this.git) return;
-
-		if (useGhApp) {
-			// Обновляем origin на свежий токен перед удалёнными операциями
-			const gh = ghEnv();
-			if (!gh.repo) gh.repo = parseRepoOwnerNameFromUrl(this.options.repoUrl);
-			const httpsUrl = await buildHttpsUrlWithToken(gh);
-			await ensureOriginUrl(this.git, httpsUrl);
-		}
-
+		if (useGhApp) await this.withFreshOrigin();
 		await this.git.fetch(['--all']);
 		await this.git.reset(['--hard', 'origin/main']);
 	}
