@@ -484,6 +484,38 @@ class RootDeveloperService:
         if not token:
             raise RootServiceError("ROOT_TOKEN is not configured; set ROOT_TOKEN or pass --token")
 
+        existing_subnet = cfg.subnet_settings.id or cfg.subnet_id
+        key_path = cfg.hub_key_path()
+        cert_path = cfg.hub_cert_path()
+        ca_path = cfg.ca_cert_path()
+
+        if (
+            existing_subnet
+            and key_path.exists()
+            and cert_path.exists()
+            and ca_path.exists()
+        ):
+            try:
+                cert_pem = cert_path.read_text(encoding="utf-8")
+            except OSError:
+                cert_pem = ""
+            if cert_pem and self._hub_certificate_matches_subnet(cert_pem, existing_subnet):
+                workspace = self._prepare_workspace(cfg, owner="pending_owner")
+                cfg.subnet_settings.id = existing_subnet
+                cfg.subnet_id = existing_subnet
+                cfg.subnet_settings.hub.key = _config_path_value(key_path)
+                cfg.subnet_settings.hub.cert = _config_path_value(cert_path)
+                cfg.root_settings.ca_cert = _config_path_value(ca_path)
+                self._save_config(cfg)
+                return RootInitResult(
+                    subnet_id=existing_subnet,
+                    reused=True,
+                    hub_key_path=key_path,
+                    hub_cert_path=cert_path,
+                    ca_cert_path=ca_path,
+                    workspace_path=workspace,
+                )
+
         key_path, private_key = self._ensure_hub_keypair(cfg)
 
         verify = self._plain_verify(cfg)
