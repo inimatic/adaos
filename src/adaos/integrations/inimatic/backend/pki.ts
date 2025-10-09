@@ -139,11 +139,11 @@ function buildSubjectAttributes(csr: ForgeCertificationRequest, subject: Certifi
                 attrs.push({ name, shortName, type, value })
         }
 
-        upsert('commonName', 'CN', forge.pki.oids.commonName, subject['commonName'])
+        upsert('commonName', 'CN', forge.pki.oids['commonName'], subject['commonName'])
         upsert(
                 'organizationName',
                 'O',
-                forge.pki.oids.organizationName,
+                forge.pki.oids['organizationName'],
                 subject['organizationName'],
         )
 
