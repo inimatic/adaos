@@ -477,25 +477,19 @@ class RootDeveloperService:
             raise RootServiceError("ROOT_TOKEN is not configured; set ROOT_TOKEN or pass --token")
 
         key_path, private_key = self._ensure_hub_keypair(cfg)
-        fingerprint = fingerprint_for_key(private_key)
-        csr_pem = make_csr("adaos-hub", None, private_key).replace("\r\n", "\n").strip() + "\n"
 
         verify = self._plain_verify(cfg)
         client = self._client(cfg)
-        meta_payload: dict[str, Any] = {"fingerprint": fingerprint}
-        if metadata:
-            meta_payload.update(metadata)
-        bootstrap = client.request_bootstrap_token(token, meta=meta_payload, verify=verify)
-        bootstrap_token = bootstrap.get("one_time_token") or bootstrap.get("token")
-        if not isinstance(bootstrap_token, str) or not bootstrap_token:
-            raise RootServiceError("Root did not return bootstrap token")
 
         previous_subnet = cfg.subnet_id
-        registration = client.register_subnet(
-            csr_pem,
-            bootstrap_token=bootstrap_token,
+        registration = self._register_hub(
+            client,
+            token,
             verify=verify,
+            private_key=private_key,
+            metadata=metadata,
         )
+        reused_flag = bool(registration.get("reused"))
 
         subnet_id = registration.get("subnet_id")
         cert_pem = registration.get("cert_pem")
@@ -507,6 +501,31 @@ class RootDeveloperService:
 
         cert_path = cfg.hub_cert_path()
         write_pem(cert_path, cert_pem)
+
+        # Some legacy Root deployments issued hub certificates without the
+        # required ``subnet:<id>`` common name.  If that happens we rotate the
+        # keypair and request a fresh certificate that matches the new
+        # constraint so subsequent mTLS flows succeed.
+        if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
+            key_path, private_key = self._ensure_hub_keypair(cfg, force_new=True)
+            registration = self._register_hub(
+                client,
+                token,
+                verify=verify,
+                private_key=private_key,
+                metadata=metadata,
+                subnet_id=subnet_id,
+            )
+            reused_flag = reused_flag or bool(registration.get("reused"))
+            cert_pem = registration.get("cert_pem")
+            ca_pem = registration.get("ca_pem") or ca_pem
+            if not isinstance(cert_pem, str) or not cert_pem.strip():
+                raise RootServiceError("Root response missing hub certificate after rotation")
+            if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
+                raise RootServiceError(
+                    "Root issued hub certificate without required subnet common name; contact support"
+                )
+            write_pem(cert_path, cert_pem)
 
         ca_path: Path | None = None
         if isinstance(ca_pem, str) and ca_pem.strip():
@@ -523,7 +542,7 @@ class RootDeveloperService:
 
         workspace = self._prepare_workspace(cfg, owner="pending_owner")
 
-        reused = bool(registration.get("reused")) or previous_subnet == subnet_id
+        reused = reused_flag or previous_subnet == subnet_id
         return RootInitResult(
             subnet_id=subnet_id,
             reused=reused,
@@ -651,6 +670,32 @@ class RootDeveloperService:
             return False
         return True
 
+    def _register_hub(
+        self,
+        client: RootHttpClient,
+        token: str,
+        *,
+        verify: ssl.SSLContext | bool,
+        private_key: rsa.RSAPrivateKey,
+        metadata: Mapping[str, Any] | None = None,
+        subnet_id: str | None = None,
+    ) -> Mapping[str, Any]:
+        fingerprint = fingerprint_for_key(private_key)
+        meta_payload: dict[str, Any] = {"fingerprint": fingerprint}
+        if metadata:
+            meta_payload.update(metadata)
+        bootstrap = client.request_bootstrap_token(token, meta=meta_payload, verify=verify)
+        bootstrap_token = bootstrap.get("one_time_token") or bootstrap.get("token")
+        if not isinstance(bootstrap_token, str) or not bootstrap_token:
+            raise RootServiceError("Root did not return bootstrap token")
+        csr_common_name = self._hub_common_name(subnet_id)
+        csr_pem = make_csr(csr_common_name, None, private_key).replace("\r\n", "\n").strip() + "\n"
+        return client.register_subnet(
+            csr_pem,
+            bootstrap_token=bootstrap_token,
+            verify=verify,
+        )
+
     def _maybe_retry_with_mtls(
         self,
         cfg: NodeConfig,
@@ -700,11 +745,25 @@ class RootDeveloperService:
             raise RootServiceError(f"Failed to load CA certificate from {ca_path}: {exc}") from exc
         return context
 
-    def _ensure_hub_keypair(self, cfg: NodeConfig) -> tuple[Path, rsa.RSAPrivateKey]:
+    def _ensure_hub_keypair(
+        self,
+        cfg: NodeConfig,
+        *,
+        force_new: bool = False,
+    ) -> tuple[Path, rsa.RSAPrivateKey]:
         key_path = cfg.hub_key_path()
         cert_path = cfg.hub_cert_path()
 
-        if self._hub_certificate_requires_rotation(cert_path):
+        if force_new:
+            try:
+                key_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                cert_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        elif self._hub_certificate_requires_rotation(cert_path):
             try:
                 key_path.unlink(missing_ok=True)
             except OSError:
@@ -744,6 +803,29 @@ class RootDeveloperService:
         if not isinstance(value, str):
             return True
         return not value.startswith("subnet:")
+
+    @staticmethod
+    def _hub_common_name(subnet_id: str | None) -> str:
+        if subnet_id:
+            return f"subnet:{subnet_id}"
+        return "adaos-hub"
+
+    @staticmethod
+    def _hub_certificate_matches_subnet(cert_pem: str, subnet_id: str) -> bool:
+        try:
+            cert = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
+        except ValueError:
+            return False
+        try:
+            common_names = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        except Exception:  # pragma: no cover - defensive
+            return False
+        if not common_names:
+            return False
+        value = common_names[0].value
+        if not isinstance(value, str):
+            return False
+        return value == f"subnet:{subnet_id}"
 
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
         workspace_root = cfg.workspace_path()
