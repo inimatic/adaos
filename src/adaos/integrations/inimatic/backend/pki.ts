@@ -57,108 +57,101 @@ export class CertificateAuthority {
 	}
 
 	issueClientCertificate(options: IssueCertificateOptions): IssueResult {
-		const { subject } = options
-		const csrPem = normalizePem(options.csrPem)
+		const { csrPem, subject } = options;
+		const csr = forge.pki.certificationRequestFromPem(csrPem);
+		if (!csr.verify()) throw new Error('CSR verification failed');
 
-		let csr: ForgeCertificationRequest
-		try {
-			csr = forge.pki.certificationRequestFromPem(csrPem)
-		} catch {
-			throw new Error('Failed to parse CSR PEM')
-		}
-		if (!csr.verify()) {
-			throw new Error('CSR verification failed')
-		}
-		const publicKey = csr.publicKey
+		const certificate = forge.pki.createCertificate();
+		const publicKey = csr.publicKey;
 		if (!publicKey) {
-			throw new Error('CSR does not contain a public key')
+			throw new Error('CSR does not contain a public key');
 		}
+		certificate.publicKey = publicKey;
+		certificate.serialNumber = generateSerialNumber();
+		const now = new Date();
+		certificate.validity.notBefore = new Date(now.getTime() - 60_000);
+		const days = options.validityDays ?? this.defaultValidityDays;
+		certificate.validity.notAfter = new Date(now.getTime() + days * 86400_000);
 
-                const cert = forge.pki.createCertificate()
-                cert.serialNumber = generateSerialNumber()
-                cert.publicKey = publicKey
+		const attrs: forge.pki.CertificateField[] = [
+			{ name: 'commonName', value: subject.commonName, type: 'utf8String' },
+		];
+		if (subject.organizationName) {
+			attrs.push({ name: 'organizationName', value: subject.organizationName, type: 'utf8String' });
+		}
+		certificate.setSubject(attrs);
+		certificate.setIssuer(this.caCert.subject.attributes);
 
-                const now = Date.now()
-                cert.validity.notBefore = new Date(now - 60_000)
-                const days = options.validityDays ?? this.defaultValidityDays
-                cert.validity.notAfter = new Date(now + days * 24 * 60 * 60 * 1000)
-
-                const subjectAttrs = buildSubjectAttributes(csr, subject)
-                cert.setSubject(subjectAttrs)
-                cert.setIssuer(this.caCert.subject.attributes)
-
-		// Расширения (SKI по hash, AKI из CA)
-		const exts: any[] = [
+		certificate.setExtensions([
 			{ name: 'basicConstraints', cA: false },
-			// В forge это extKeyUsage:
-			{ name: 'extKeyUsage', clientAuth: true }, // можно добавить serverAuth: true при необходимости
 			{ name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
-			{ name: 'subjectKeyIdentifier', hash: true },
-		]
-		if (this.caSubjectKeyIdBytes) {
-			exts.push({ name: 'authorityKeyIdentifier', keyIdentifier: this.caSubjectKeyIdBytes })
-		}
-		cert.setExtensions(exts)
+			{ name: 'extKeyUsage', clientAuth: true }, // корректный id для EKU в forge
+			{
+				name: 'subjectKeyIdentifier',
+				subjectKeyIdentifier: forge.pki.getPublicKeyFingerprint(certificate.publicKey, {
+					type: 'SubjectPublicKeyInfo',
+				}) as forge.util.ByteStringBuffer,
+			},
+		]);
 
-		try {
-			cert.sign(this.caKey, forge.md.sha256.create())
-		} catch (e: any) {
-			throw new Error(`Certificate signing failed: ${e?.message || String(e)}`)
-		}
+		certificate.sign(this.caKey, forge.md.sha256.create());
+
+		// На всякий случай нормализуем переводы строк (не обязательно, но приятно)
+		const pem = forge.pki.certificateToPem(certificate).replace(/\r\n/g, '\n').trim() + '\n';
 
 		return {
-			certificatePem: forge.pki.certificateToPem(cert),
-			serialNumber: cert.serialNumber,
-		}
+			certificatePem: pem,
+			serialNumber: certificate.serialNumber,
+		};
 	}
 }
 
 function normalizePem(input: string): string {
-        return input.replace(/\r\n/g, '\n').trim() + '\n'
+	return input.replace(/\r\n/g, '\n').trim() + '\n'
 }
 
 function buildSubjectAttributes(csr: ForgeCertificationRequest, subject: CertificateSubject): ForgeSubjectAttribute[] {
-        const attrs: ForgeSubjectAttribute[] = Array.isArray(csr.subject?.attributes)
-                ? csr.subject.attributes.map((attr) => ({ ...attr }))
-                : []
+	const attrs: ForgeSubjectAttribute[] = Array.isArray(csr.subject?.attributes)
+		? csr.subject.attributes.map((attr) => ({ ...attr }))
+		: []
 
-        const upsert = (name: string, shortName: string, type: string, value?: string) => {
-                if (!value) {
-                        return
-                }
-                const existing = attrs.find(
-                        (attr) => attr.type === type || attr.name === name || attr.shortName === shortName,
-                )
-                if (existing) {
-                        existing.value = value
-                        existing.name = name
-                        existing.shortName = shortName
-                        existing.type = type
-                        return
-                }
-                attrs.push({ name, shortName, type, value })
-        }
+	const upsert = (name: string, shortName: string, type: string, value?: string) => {
+		if (!value) {
+			return
+		}
+		const existing = attrs.find(
+			(attr) => attr.type === type || attr.name === name || attr.shortName === shortName,
+		)
+		if (existing) {
+			existing.value = value
+			existing.name = name
+			existing.shortName = shortName
+			existing.type = type
+			return
+		}
+		attrs.push({ name, shortName, type, value })
+	}
 
-        upsert('commonName', 'CN', forge.pki.oids['commonName'], subject['commonName'])
-        upsert(
-                'organizationName',
-                'O',
-                forge.pki.oids['organizationName'],
-                subject['organizationName'],
-        )
+	upsert('commonName', 'CN', forge.pki.oids['commonName'], subject['commonName'])
+	upsert(
+		'organizationName',
+		'O',
+		forge.pki.oids['organizationName'],
+		subject['organizationName'],
+	)
 
-        if (attrs.length === 0) {
-                throw new Error('Certificate subject is empty')
-        }
+	if (attrs.length === 0) {
+		throw new Error('Certificate subject is empty')
+	}
 
-        return attrs
+	return attrs
 }
 
 function generateSerialNumber(): string {
-        const bytes = forge.random.getBytesSync(16)
-        const hex = forge.util.bytesToHex(bytes)
-        const first = (parseInt(hex.slice(0, 2), 16) & 0x7f).toString(16).padStart(2, '0')
-        return first + hex.slice(2)
+	const bytes = forge.random.getBytesSync(16)
+	const hex = forge.util.bytesToHex(bytes)
+	const first = (parseInt(hex.slice(0, 2), 16) & 0x7f).toString(16).padStart(2, '0')
+	return first + hex.slice(2)
 }
 
 function isRsaPrivateKey(key: forge.pki.PrivateKey): key is ForgeRsaPrivateKey {
