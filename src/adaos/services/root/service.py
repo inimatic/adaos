@@ -12,7 +12,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping
+from typing import Any, Callable, Iterable, Literal, Mapping, Tuple
 
 from adaos.services.crypto.pki import generate_rsa_key, make_csr, write_pem, write_private_key
 from adaos.services.node_config import (
@@ -37,7 +37,6 @@ from cryptography.x509.oid import NameOID
 
 
 logger = logging.getLogger(__name__)
-
 
 
 class RootAuthError(RuntimeError):
@@ -489,17 +488,12 @@ class RootDeveloperService:
         cert_path = cfg.hub_cert_path()
         ca_path = cfg.ca_cert_path()
 
-        if (
-            existing_subnet
-            and key_path.exists()
-            and cert_path.exists()
-            and ca_path.exists()
-        ):
+        if existing_subnet and key_path.exists() and cert_path.exists() and ca_path.exists():
             try:
                 cert_pem = cert_path.read_text(encoding="utf-8")
             except OSError:
                 cert_pem = ""
-            if cert_pem and self._hub_certificate_matches_subnet(cert_pem, existing_subnet):
+            if cert_pem and self._hub_certificate_is_acceptable(cert_pem, subnet_id=existing_subnet, owner_id=None):
                 workspace = self._prepare_workspace(cfg, owner="pending_owner")
                 cfg.subnet_settings.id = existing_subnet
                 cfg.subnet_id = existing_subnet
@@ -541,8 +535,8 @@ class RootDeveloperService:
 
         cert_path = cfg.hub_cert_path()
         write_pem(cert_path, cert_pem)
-
-        if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
+        owner_id = cfg.root_settings.owner.owner_id if cfg.root_settings and cfg.root_settings.owner else None
+        if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=owner_id):
             logger.warning(
                 "Root issued hub certificate without subnet binding; rotating hub credentials",
             )
@@ -564,10 +558,8 @@ class RootDeveloperService:
             if isinstance(ca_candidate, str) and ca_candidate.strip():
                 ca_pem = ca_candidate
             reused_flag = reused_flag or bool(rotation.get("reused"))
-            if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
-                raise RootServiceError(
-                    "Root issued hub certificate without subnet binding; contact support",
-                )
+            if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=None):
+                raise RootServiceError("Root issued hub certificate without subnet binding; contact support")
 
         ca_path: Path | None = None
         if isinstance(ca_pem, str) and ca_pem.strip():
@@ -611,8 +603,14 @@ class RootDeveloperService:
             cert_path, key_path, mtls_verify = mtls_material
             authorize_cert = (cert_path, key_path)
             authorize_verify = mtls_verify
+            owner_id = cfg.subnet_id or cfg.subnet_settings.id or "local-owner"
+            start = client.device_authorize(
+                verify=authorize_verify,
+                cert=authorize_cert,
+                payload={"owner_id": owner_id},
+            )
             try:
-                start = client.device_authorize(verify=authorize_verify, cert=authorize_cert)
+                start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id})
             except RootHttpError as exc:
                 if self._is_certificate_error(exc):
                     raise RootServiceError(
@@ -621,7 +619,7 @@ class RootDeveloperService:
                 authorize_cert = None
                 authorize_verify = verify_plain
                 try:
-                    start = client.device_authorize(verify=authorize_verify)
+                    start = client.device_authorize(verify=authorize_verify, payload={"owner_id": owner_id})
                 except RootHttpError as retry_exc:
                     try:
                         fallback = self._maybe_retry_with_mtls(cfg, retry_exc)
@@ -631,12 +629,13 @@ class RootDeveloperService:
                         raise RootServiceError(str(retry_exc)) from retry_exc
                     authorize_verify, authorize_cert = fallback
                     try:
-                        start = client.device_authorize(verify=authorize_verify, cert=authorize_cert)
+                        start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id})
                     except RootHttpError as second_exc:
                         raise RootServiceError(str(second_exc)) from second_exc
         else:
             try:
-                start = client.device_authorize(verify=authorize_verify)
+                owner_id = cfg.subnet_id or cfg.subnet_settings.id or "local-owner"
+                start = client.device_authorize(verify=authorize_verify, payload={"owner_id": owner_id})
             except RootHttpError as exc:
                 try:
                     fallback = self._maybe_retry_with_mtls(cfg, exc)
@@ -646,15 +645,16 @@ class RootDeveloperService:
                     raise RootServiceError(str(exc)) from exc
                 authorize_verify, authorize_cert = fallback
                 try:
-                    start = client.device_authorize(verify=authorize_verify, cert=authorize_cert)
+                    start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id})
                 except RootHttpError as retry_exc:
                     raise RootServiceError(str(retry_exc)) from retry_exc
         device_code = start.get("device_code")
         user_code = start.get("user_code") or start.get("user_code_short")
-        verification_uri = start.get("verification_uri") or start.get("verification_uri_complete")
+        verification_uri = start.get("verify_uri")
         verification_complete = start.get("verification_uri_complete")
         interval = max(int(start.get("interval", 5)), 1)
         expires_in = int(start.get("expires_in", 600))
+        print("_log", device_code, user_code, verification_uri)
         if not isinstance(device_code, str) or not isinstance(user_code, str) or not isinstance(verification_uri, str):
             raise RootServiceError("Root did not return device authorization data")
 
@@ -783,9 +783,7 @@ class RootDeveloperService:
         try:
             cert_path, key_path, verify = self._mtls_material(cfg)
         except RootServiceError as exc:
-            raise RootServiceError(
-                f"{exc} (required for client certificate authentication)"
-            ) from exc
+            raise RootServiceError(f"{exc} (required for client certificate authentication)") from exc
         return verify, (cert_path, key_path)
 
     def _mtls_material_optional(
@@ -803,11 +801,13 @@ class RootDeveloperService:
                 cert_pem = cert_path.read_text(encoding="utf-8")
             except OSError:
                 return None
-            if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
-                logger.debug(
-                    "Skipping hub mTLS credentials due to missing subnet binding on certificate",
-                )
+
+            # Если уже известен owner_id — проверим и O, но мягко (только если O присутствует)
+            owner_id = cfg.root_settings.owner.owner_id if cfg.root_settings and cfg.root_settings.owner else None
+            if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=owner_id):
+                logger.debug("Skipping hub mTLS credentials due to subject mismatch (CN/O) on certificate")
                 return None
+
         ca_path = cfg.ca_cert_path()
         if ca_path.exists():
             verify = self._load_verify_context(ca_path)
@@ -916,28 +916,65 @@ class RootDeveloperService:
         return "adaos-hub"
 
     @staticmethod
-    def _hub_certificate_matches_subnet(cert_pem: str, subnet_id: str) -> bool:
-        common_name = RootDeveloperService._hub_certificate_common_name(cert_pem)
-        if not common_name:
+    def _hub_certificate_org(cert_pem: str) -> str | None:
+        try:
+            pem_clean = cert_pem.replace("\r\n", "\n").encode("utf-8")
+            cert = x509.load_pem_x509_certificate(pem_clean)
+        except Exception:
+            return None
+        try:
+            attrs = cert.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
+            return attrs[0].value if attrs else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _hub_certificate_is_acceptable(
+        cert_pem: str,
+        *,
+        subnet_id: str,
+        owner_id: str | None = None,
+    ) -> bool:
+        """
+        Допустимые варианты:
+        - legacy: CN='subnet:<subnet_id>'
+        - новый:  CN='hub:<hub_id>' (дополнительно, если указан owner_id, и присутствует O, то O должно быть 'owner:<owner_id>')
+        """
+        cn = RootDeveloperService._hub_certificate_common_name(cert_pem)
+        if not cn:
             return False
-        return common_name == f"subnet:{subnet_id}"
+
+        # Legacy-режим: CN=subnet:<subnet_id>
+        if cn == f"subnet:{subnet_id}":
+            return True
+
+        # Новый формат: CN=hub:<hub_id>
+        if cn.startswith("hub:"):
+            if owner_id:
+                org = RootDeveloperService._hub_certificate_org(cert_pem) or ""
+                # Если поле O присутствует — оно должно совпадать. Если поля O нет, не заваливаем проверку.
+                if org and org != f"owner:{owner_id}":
+                    return False
+            return True
+
+        return False
 
     @staticmethod
     def _hub_certificate_common_name(cert_pem: str) -> str | None:
         try:
-            cert = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
-        except ValueError:
+            # normalize line endings just in case
+            pem_clean = cert_pem.replace("\r\n", "\n").encode("utf-8")
+            cert = x509.load_pem_x509_certificate(pem_clean)
+        except Exception as e:
             return None
+
         try:
-            common_names = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-        except Exception:  # pragma: no cover - defensive
+            cn_attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+            if not cn_attrs:
+                return None
+            return cn_attrs[0].value
+        except Exception as e:
             return None
-        if not common_names:
-            return None
-        value = common_names[0].value
-        if not isinstance(value, str):
-            return None
-        return value
 
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
         workspace_root = cfg.workspace_path()

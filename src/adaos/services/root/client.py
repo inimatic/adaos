@@ -146,7 +146,7 @@ class RootHttpClient:
         payload: Mapping[str, Any] | None = None,
     ) -> dict:
         body = dict(payload or {})
-        return dict(self._request("POST", "/v1/device/authorize", json=body, verify=verify, cert=cert))
+        return dict(self._request("POST", "/v1/auth/owner/start", json=body, verify=verify, cert=cert))
 
     def device_poll(
         self,
@@ -156,7 +156,7 @@ class RootHttpClient:
         cert: tuple[str, str] | None = None,
     ) -> dict:
         body = {"device_code": device_code}
-        return dict(self._request("POST", "/v1/device/poll", json=body, verify=verify, cert=cert))
+        return dict(self._request("POST", "/v1/auth/owner/poll", json=body, verify=verify, cert=cert))
 
     def push_skill_draft(
         self,
