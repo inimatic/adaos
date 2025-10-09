@@ -756,6 +756,17 @@ class RootDeveloperService:
         key_path = cfg.hub_key_path()
         if not cert_path.exists() or not key_path.exists():
             return None
+        subnet_id = cfg.subnet_id or cfg.subnet_settings.id
+        if subnet_id:
+            try:
+                cert_pem = cert_path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+            if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
+                logger.debug(
+                    "Skipping hub mTLS credentials due to missing subnet binding on certificate",
+                )
+                return None
         ca_path = cfg.ca_cert_path()
         if ca_path.exists():
             verify = self._load_verify_context(ca_path)
