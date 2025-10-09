@@ -562,21 +562,51 @@ class RootDeveloperService:
         client = self._client(cfg)
 
         authorize_cert: tuple[str, str] | None = None
-        authorize_verify = verify_plain
-        try:
-            start = client.device_authorize(verify=authorize_verify)
-        except RootHttpError as exc:
-            try:
-                fallback = self._maybe_retry_with_mtls(cfg, exc)
-            except RootServiceError as mtls_exc:
-                raise mtls_exc from exc
-            if not fallback:
-                raise RootServiceError(str(exc)) from exc
-            authorize_verify, authorize_cert = fallback
+        authorize_verify: ssl.SSLContext | bool = verify_plain
+
+        mtls_material = self._mtls_material_optional(cfg, verify_plain)
+        if mtls_material:
+            cert_path, key_path, mtls_verify = mtls_material
+            authorize_cert = (cert_path, key_path)
+            authorize_verify = mtls_verify
             try:
                 start = client.device_authorize(verify=authorize_verify, cert=authorize_cert)
-            except RootHttpError as retry_exc:
-                raise RootServiceError(str(retry_exc)) from retry_exc
+            except RootHttpError as exc:
+                if self._is_certificate_error(exc):
+                    raise RootServiceError(
+                        "Root rejected the hub client certificate; run 'adaos dev root init' to rotate credentials",
+                    ) from exc
+                authorize_cert = None
+                authorize_verify = verify_plain
+                try:
+                    start = client.device_authorize(verify=authorize_verify)
+                except RootHttpError as retry_exc:
+                    try:
+                        fallback = self._maybe_retry_with_mtls(cfg, retry_exc)
+                    except RootServiceError as mtls_exc:
+                        raise mtls_exc from retry_exc
+                    if not fallback:
+                        raise RootServiceError(str(retry_exc)) from retry_exc
+                    authorize_verify, authorize_cert = fallback
+                    try:
+                        start = client.device_authorize(verify=authorize_verify, cert=authorize_cert)
+                    except RootHttpError as second_exc:
+                        raise RootServiceError(str(second_exc)) from second_exc
+        else:
+            try:
+                start = client.device_authorize(verify=authorize_verify)
+            except RootHttpError as exc:
+                try:
+                    fallback = self._maybe_retry_with_mtls(cfg, exc)
+                except RootServiceError as mtls_exc:
+                    raise mtls_exc from exc
+                if not fallback:
+                    raise RootServiceError(str(exc)) from exc
+                authorize_verify, authorize_cert = fallback
+                try:
+                    start = client.device_authorize(verify=authorize_verify, cert=authorize_cert)
+                except RootHttpError as retry_exc:
+                    raise RootServiceError(str(retry_exc)) from retry_exc
         device_code = start.get("device_code")
         user_code = start.get("user_code") or start.get("user_code_short")
         verification_uri = start.get("verification_uri") or start.get("verification_uri_complete")
@@ -711,6 +741,22 @@ class RootDeveloperService:
             ) from exc
         return verify, (cert_path, key_path)
 
+    def _mtls_material_optional(
+        self,
+        cfg: NodeConfig,
+        verify_hint: ssl.SSLContext | bool,
+    ) -> tuple[str, str, ssl.SSLContext | bool] | None:
+        cert_path = cfg.hub_cert_path()
+        key_path = cfg.hub_key_path()
+        if not cert_path.exists() or not key_path.exists():
+            return None
+        ca_path = cfg.ca_cert_path()
+        if ca_path.exists():
+            verify = self._load_verify_context(ca_path)
+        else:
+            verify = verify_hint
+        return str(cert_path), str(key_path), verify
+
     @staticmethod
     def _should_retry_with_mtls(exc: RootHttpError) -> bool:
         if exc.error_code in {
@@ -722,6 +768,16 @@ class RootDeveloperService:
         if exc.status_code in {400, 401, 403} and "certificate" in str(exc).lower():
             return True
         return False
+
+    @staticmethod
+    def _is_certificate_error(exc: RootHttpError) -> bool:
+        if exc.error_code in {
+            "invalid_client_certificate",
+            "client_certificate_required",
+            "client_certificate_missing",
+        }:
+            return True
+        return "certificate" in str(exc).lower()
 
     def _mtls_material(self, cfg: NodeConfig) -> tuple[str, str, ssl.SSLContext]:
         ca_path = cfg.ca_cert_path()
