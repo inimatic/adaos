@@ -74,16 +74,15 @@ export class CertificateAuthority {
 		certificate.validity.notAfter = new Date(now.getTime() + days * 86400_000);
 
 		const UTF8STRING = (forge.asn1 as any).Type.UTF8STRING as unknown as forge.asn1.Class;
-
+		const { asn1 } = forge;
 		const attrs: forge.pki.CertificateField[] = [
-			{ name: 'commonName', value: subject.commonName, valueTagClass: UTF8STRING },
+			{ name: 'commonName', value: subject.commonName, valueTagClass: asn1.Type.UTF8STRING as any },
 		];
-
 		if (subject.organizationName) {
-			attrs.push({ name: 'organizationName', value: subject.organizationName, valueTagClass: UTF8STRING });
+			attrs.push({ name: 'organizationName', value: subject.organizationName, valueTagClass: asn1.Type.UTF8STRING as any });
 		}
-
 		certificate.setSubject(attrs);
+		certificate.setIssuer(this.caCert.subject.attributes);
 
 		certificate.setExtensions([
 			{ name: 'basicConstraints', cA: false },
