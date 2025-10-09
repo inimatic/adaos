@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import logging
 import os
 import shutil
 import ssl
@@ -26,6 +27,9 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -502,30 +506,12 @@ class RootDeveloperService:
         cert_path = cfg.hub_cert_path()
         write_pem(cert_path, cert_pem)
 
-        # Some legacy Root deployments issued hub certificates without the
-        # required ``subnet:<id>`` common name.  If that happens we rotate the
-        # keypair and request a fresh certificate that matches the new
-        # constraint so subsequent mTLS flows succeed.
         if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
-            key_path, private_key = self._ensure_hub_keypair(cfg, force_new=True)
-            registration = self._register_hub(
-                client,
-                token,
-                verify=verify,
-                private_key=private_key,
-                metadata=metadata,
-                subnet_id=subnet_id,
+            common_name = self._hub_certificate_common_name(cert_pem)
+            logger.warning(
+                "Root issued hub certificate without subnet binding; continuing with common name %r",
+                common_name,
             )
-            reused_flag = reused_flag or bool(registration.get("reused"))
-            cert_pem = registration.get("cert_pem")
-            ca_pem = registration.get("ca_pem") or ca_pem
-            if not isinstance(cert_pem, str) or not cert_pem.strip():
-                raise RootServiceError("Root response missing hub certificate after rotation")
-            if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
-                raise RootServiceError(
-                    "Root issued hub certificate without required subnet common name; contact support"
-                )
-            write_pem(cert_path, cert_pem)
 
         ca_path: Path | None = None
         if isinstance(ca_pem, str) and ca_pem.strip():
@@ -846,19 +832,10 @@ class RootDeveloperService:
         if not cert_path.exists():
             return False
         try:
-            cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+            x509.load_pem_x509_certificate(cert_path.read_bytes())
         except ValueError:
             return True
-        try:
-            common_names = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-        except Exception:  # pragma: no cover - defensive
-            return True
-        if not common_names:
-            return True
-        value = common_names[0].value
-        if not isinstance(value, str):
-            return True
-        return not value.startswith("subnet:")
+        return False
 
     @staticmethod
     def _hub_common_name(subnet_id: str | None) -> str:
@@ -868,20 +845,27 @@ class RootDeveloperService:
 
     @staticmethod
     def _hub_certificate_matches_subnet(cert_pem: str, subnet_id: str) -> bool:
+        common_name = RootDeveloperService._hub_certificate_common_name(cert_pem)
+        if not common_name:
+            return False
+        return common_name == f"subnet:{subnet_id}"
+
+    @staticmethod
+    def _hub_certificate_common_name(cert_pem: str) -> str | None:
         try:
             cert = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
         except ValueError:
-            return False
+            return None
         try:
             common_names = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
         except Exception:  # pragma: no cover - defensive
-            return False
+            return None
         if not common_names:
-            return False
+            return None
         value = common_names[0].value
         if not isinstance(value, str):
-            return False
-        return value == f"subnet:{subnet_id}"
+            return None
+        return value
 
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
         workspace_root = cfg.workspace_path()
