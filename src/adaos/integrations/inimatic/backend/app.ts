@@ -457,11 +457,11 @@ function parseTtl(ttl: unknown): number | undefined {
 }
 
 function generateSubnetId(): string {
-	return `sn-${uuidv4().replace(/-/g, '').slice(0, 8)}`
+	return `sn_${uuidv4().replace(/-/g, '').slice(0, 8)}`
 }
 
 function generateNodeId(): string {
-	return `node-${uuidv4().replace(/-/g, '').slice(0, 8)}`
+	return `node_${uuidv4().replace(/-/g, '').slice(0, 8)}`
 }
 
 function assertSafeName(name: string): void {
