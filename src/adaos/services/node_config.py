@@ -247,7 +247,9 @@ def _stringify_path(value: str | None) -> str | None:
             default_resolved = default_base.resolve(strict=False)
         except TypeError:  # pragma: no cover
             default_resolved = default_base
-        if base_resolved == default_resolved:
+        env_base = os.environ.get("ADAOS_BASE_DIR")
+        env_base_path = Path(env_base).expanduser() if env_base else None
+        if env_base_path is None and base_resolved == default_resolved:
             return str(Path("~") / ".adaos" / relative_base)
         if not relative_base.parts:
             return str(base_resolved)

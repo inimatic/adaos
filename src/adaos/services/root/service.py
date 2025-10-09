@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping
 
 from adaos.services.crypto.pki import generate_rsa_key, make_csr, write_pem, write_private_key
-from adaos.services.node_config import NodeConfig, RootOwnerProfile, ensure_hub, load_node, save_node
+from adaos.services.node_config import (
+    NodeConfig,
+    RootOwnerProfile,
+    displayable_path,
+    ensure_hub,
+    load_node,
+    save_node,
+)
 
 from .client import RootHttpClient, RootHttpError
 from .keyring import KeyringUnavailableError, delete_refresh, load_refresh, save_refresh
@@ -419,12 +426,9 @@ def fingerprint_for_key(key: rsa.RSAPrivateKey) -> str:
     return "sha256:" + hashlib.sha256(public_bytes).hexdigest()
 
 
-def _home_relative(path: Path) -> str:
-    try:
-        rel = path.resolve().relative_to(Path.home().resolve())
-    except ValueError:
-        return str(path)
-    return str(Path("~") / rel)
+def _config_path_value(path: Path) -> str:
+    rendered = displayable_path(path)
+    return rendered if rendered is not None else str(path)
 
 
 def _templates_dir() -> Path:
@@ -537,12 +541,12 @@ class RootDeveloperService:
         if isinstance(ca_pem, str) and ca_pem.strip():
             ca_path = cfg.ca_cert_path()
             write_pem(ca_path, ca_pem)
-            cfg.root_settings.ca_cert = _home_relative(ca_path)
+            cfg.root_settings.ca_cert = _config_path_value(ca_path)
 
         cfg.subnet_settings.id = subnet_id
         cfg.subnet_id = subnet_id
-        cfg.subnet_settings.hub.key = _home_relative(key_path)
-        cfg.subnet_settings.hub.cert = _home_relative(cert_path)
+        cfg.subnet_settings.hub.key = _config_path_value(key_path)
+        cfg.subnet_settings.hub.cert = _config_path_value(cert_path)
 
         self._save_config(cfg)
 
@@ -694,14 +698,19 @@ class RootDeveloperService:
         return RootHttpClient(base_url=base_url)
 
     def _plain_verify(self, cfg: NodeConfig) -> ssl.SSLContext | bool:
-        ca = cfg.root_settings.ca_cert
-        if ca:
-            path = Path(ca).expanduser()
-            default_ca_path = Path("~/.adaos/keys/ca.cert").expanduser()
-            if path.exists():
-                return self._load_verify_context(path)
-            if path != default_ca_path:
-                raise RootServiceError(f"CA certificate not found at {path}")
+        ca_setting = cfg.root_settings.ca_cert
+        ca_path = cfg.ca_cert_path()
+        if ca_setting:
+            if ca_path.exists():
+                return self._load_verify_context(ca_path)
+            default_indicator = Path("~/.adaos/keys/ca.cert").expanduser()
+            try:
+                configured = Path(str(ca_setting)).expanduser()
+            except Exception:  # pragma: no cover - defensive
+                configured = ca_path
+            if configured != default_indicator:
+                display = displayable_path(ca_path) or str(ca_path)
+                raise RootServiceError(f"CA certificate not found at {display}")
         if _insecure_tls_enabled():
             return False
         return True
@@ -855,7 +864,7 @@ class RootDeveloperService:
         else:
             private_key = generate_rsa_key()
             write_private_key(key_path, private_key)
-        cfg.subnet_settings.hub.key = _home_relative(key_path)
+        cfg.subnet_settings.hub.key = _config_path_value(key_path)
         return key_path, private_key
 
     @staticmethod
