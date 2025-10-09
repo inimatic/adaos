@@ -507,11 +507,31 @@ class RootDeveloperService:
         write_pem(cert_path, cert_pem)
 
         if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
-            common_name = self._hub_certificate_common_name(cert_pem)
             logger.warning(
-                "Root issued hub certificate without subnet binding; continuing with common name %r",
-                common_name,
+                "Root issued hub certificate without subnet binding; rotating hub credentials",
             )
+            key_path, private_key = self._ensure_hub_keypair(cfg, force_new=True)
+            rotation = self._register_hub(
+                client,
+                token,
+                verify=verify,
+                private_key=private_key,
+                metadata=metadata,
+                subnet_id=subnet_id,
+            )
+            rotated_cert = rotation.get("cert_pem")
+            if not isinstance(rotated_cert, str) or not rotated_cert.strip():
+                raise RootServiceError("Root response missing hub certificate after rotation")
+            write_pem(cert_path, rotated_cert)
+            cert_pem = rotated_cert
+            ca_candidate = rotation.get("ca_pem")
+            if isinstance(ca_candidate, str) and ca_candidate.strip():
+                ca_pem = ca_candidate
+            reused_flag = reused_flag or bool(rotation.get("reused"))
+            if not self._hub_certificate_matches_subnet(cert_pem, subnet_id):
+                raise RootServiceError(
+                    "Root issued hub certificate without subnet binding; contact support",
+                )
 
         ca_path: Path | None = None
         if isinstance(ca_pem, str) and ca_pem.strip():
