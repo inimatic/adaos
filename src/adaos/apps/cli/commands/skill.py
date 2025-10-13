@@ -225,7 +225,7 @@ def push_command(
 
 @_run_safe
 @app.command("create")
-def cmd_create(name: str, template: str = typer.Option("demo_skill", "--template", "-t")):
+def cmd_create(name: str, template: str = typer.Option("skill_default", "--template", "-t")):
     p = scaffold_create(name, template=template)
     typer.echo(_("cli.skill.create.created", path=p))
     typer.echo(_("cli.skill.create.hint_push", name=name))
@@ -233,7 +233,7 @@ def cmd_create(name: str, template: str = typer.Option("demo_skill", "--template
 
 @_run_safe
 @app.command("scaffold")
-def cmd_scaffold(name: str, template: str = typer.Option("demo_skill", "--template", help="skill template name")):
+def cmd_scaffold(name: str, template: str = typer.Option("skill_default", "--template", help="skill template name")):
     path = scaffold_create(name, template=template)
     typer.secho(f"scaffold created at {path}", fg=typer.colors.GREEN)
 
@@ -447,6 +447,7 @@ def cmd_setup(
     else:
         typer.echo(str(result))
 
+
 @_run_safe
 @app.command("activate")
 def activate(name: str, slot: Optional[str] = typer.Option(None, "--slot"), version: Optional[str] = typer.Option(None, "--version")):
@@ -541,10 +542,7 @@ def migrate(
     except FileNotFoundError as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(1) from exc
-    typer.echo(
-        f"{name}: {'updated' if result.updated else 'up-to-date'}"
-        + (f" (version {result.version})" if result.version else "")
-    )
+    typer.echo(f"{name}: {'updated' if result.updated else 'up-to-date'}" + (f" (version {result.version})" if result.version else ""))
 
 
 @_run_safe

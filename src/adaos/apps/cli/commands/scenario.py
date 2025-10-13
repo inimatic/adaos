@@ -125,7 +125,7 @@ def install_cmd(
 @app.command("create")
 def create_cmd(
     scenario_id: str = typer.Argument(..., help=_("cli.scenario.create.name_help")),
-    template: str = typer.Option("template", "--template", "-t", help=_("cli.scenario.create.template_help")),
+    template: str = typer.Option("scenario_default", "--template", "-t", help=_("cli.scenario.create.template_help")),
 ):
     """Create a new scenario scaffold from a template."""
 
@@ -166,6 +166,7 @@ def push_command(
         typer.echo(_("cli.scenario.push.nothing"))
     else:
         typer.echo(_("cli.scenario.push.done", name=scenario_name, revision=result))
+
 
 @_run_safe
 @app.command("run")
