@@ -960,20 +960,44 @@ app.post('/v1/nodes/register', async (req, res) => {
 
 const mtlsRouter = express.Router()
 
+function identityFromNginxHeaders(req: express.Request): ClientIdentity | null {
+	const v = req.get('X-SSL-Client-Verify');
+	if (v !== 'SUCCESS') return null;
+
+	const subject = req.get('X-Client-Subject') ?? '';
+	const cn = /CN=([^,]+)/.exec(subject)?.[1];
+	const o = /O=([^,]+)/.exec(subject)?.[1];
+
+	if (!cn) return null;
+	if (cn.startsWith('subnet:')) {
+		const subnetId = cn.slice('subnet:'.length);
+		if (!subnetId) return null;
+		return { type: 'hub', subnetId };
+	}
+	if (cn.startsWith('node:') && o?.startsWith('subnet:')) {
+		const nodeId = cn.slice('node:'.length);
+		const subnetId = o.slice('subnet:'.length);
+		if (!nodeId || !subnetId) return null;
+		return { type: 'node', subnetId, nodeId };
+	}
+	return null;
+}
+
 mtlsRouter.use((req, res, next) => {
-	const tlsSocket = req.socket as TLSSocket
-	if (!tlsSocket.authorized) {
-		respondError(req, res, 401, 'client_certificate_required')
-		return
+	const tlsSocket = req.socket as TLSSocket;
+
+	// 1) Пробуем «напрямую по mTLS» (если вдруг идём в обход nginx)
+	if ((tlsSocket as any).encrypted && tlsSocket.authorized) {
+		const id = getClientIdentity(req);
+		if (id) { req.auth = id; return next(); }
 	}
-	const identity = getClientIdentity(req)
-	if (!identity) {
-		respondError(req, res, 403, 'invalid_client_certificate')
-		return
-	}
-	req.auth = identity
-	next()
-})
+
+	// 2) Фоллбек: фронт проверил mTLS и отдал заголовки
+	const id2 = identityFromNginxHeaders(req);
+	if (id2) { req.auth = id2; return next(); }
+
+	return respondError(req, res, 401, 'client_certificate_required');
+});
 
 mtlsRouter.get('/policy', (_req, res) => {
 	res.json(POLICY_RESPONSE)
