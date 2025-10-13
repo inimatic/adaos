@@ -587,6 +587,16 @@ app.get('/v1/health', (_req, res) => {
 
 const rootRouter = express.Router()
 
+// TODO remove
+app.get('/debug/mtls-headers', (req, res) => {
+	res.json({
+		verify: req.get('X-SSL-Client-Verify'),
+		subject: req.get('X-Client-Subject'),
+		issuer: req.get('X-Client-Issuer'),
+		hasCert: Boolean(req.get('X-Client-Cert')),
+	});
+});
+
 rootRouter.post('/auth/owner/start', (req, res) => {
 	let ownerId: string
 	try {
@@ -960,39 +970,86 @@ app.post('/v1/nodes/register', async (req, res) => {
 
 const mtlsRouter = express.Router()
 
+function parseDn(dn: string): { cn?: string; o?: string } {
+	// nginx может отдавать DN в двух форматах:
+	//   1) RFC2253-подобный: "CN=subnet:sn_xxx,O=subnet:sn_xxx"
+	//   2) slash-style:      "/CN=subnet:sn_xxx/O=subnet:sn_xxx/..."
+	const cleaned = dn.trim();
+
+	// Попробуем comma-форму
+	let cn = /(?:^|[,])\s*CN=([^,\/]+)/.exec(cleaned)?.[1];
+	let o = /(?:^|[,])\s*O=([^,\/]+)/.exec(cleaned)?.[1];
+
+	// Если не нашли — пробуем slash-форму
+	if (!cn || !o) {
+		cn = /\/CN=([^\/,]+)/.exec(cleaned)?.[1] ?? cn;
+		o = /\/O=([^\/,]+)/.exec(cleaned)?.[1] ?? o;
+	}
+	return { cn, o };
+}
+
 function identityFromNginxHeaders(req: express.Request): ClientIdentity | null {
-	const v = req.get('X-SSL-Client-Verify');
-	if (v !== 'SUCCESS') return null;
-
+	const verify = req.get('X-SSL-Client-Verify');
 	const subject = req.get('X-Client-Subject') ?? '';
-	const cn = /CN=([^,]+)/.exec(subject)?.[1];
-	const o = /O=([^,]+)/.exec(subject)?.[1];
+	const issuer = req.get('X-Client-Issuer') ?? '';
+	const hasCert = Boolean(req.get('X-Client-Cert'));
 
-	if (!cn) return null;
+	// шумный, но полезный лог до парсинга
+	console.warn('nginx mTLS headers', { verify, subject, issuer, hasCert });
+
+	if (verify !== 'SUCCESS') {
+		console.warn('nginx verify not SUCCESS:', verify);
+		return null;
+	}
+
+	const { cn, o } = parseDn(subject);
+	console.warn('parsed DN', { cn, o });
+
+	if (!cn) {
+		console.warn('missing CN in subject DN');
+		return null;
+	}
 	if (cn.startsWith('subnet:')) {
 		const subnetId = cn.slice('subnet:'.length);
-		if (!subnetId) return null;
+		if (!subnetId) {
+			console.warn('empty subnetId in CN');
+			return null;
+		}
 		return { type: 'hub', subnetId };
 	}
-	if (cn.startsWith('node:') && o?.startsWith('subnet:')) {
+	if (cn.startsWith('node:')) {
 		const nodeId = cn.slice('node:'.length);
-		const subnetId = o.slice('subnet:'.length);
-		if (!nodeId || !subnetId) return null;
+		const subnetId = o?.startsWith('subnet:') ? o.slice('subnet:'.length) : undefined;
+		if (!nodeId || !subnetId) {
+			console.warn('node identity missing nodeId or subnetId', { nodeId, subnetId, o });
+			return null;
+		}
 		return { type: 'node', subnetId, nodeId };
 	}
+
+	console.warn('unsupported CN format', { cn });
 	return null;
 }
 
 mtlsRouter.use((req, res, next) => {
-	const tlsSocket = req.socket as TLSSocket;
+	const tlsSocket = req.socket as any; // TLSSocket
+	const isEncrypted = tlsSocket?.encrypted === true;
+	const authorized = tlsSocket?.authorized === true;
+	const authError = tlsSocket?.authorizationError;
+	const peer = isEncrypted ? (tlsSocket.getPeerCertificate?.() ?? null) : null;
 
-	// 1) Пробуем «напрямую по mTLS» (если вдруг идём в обход nginx)
-	if ((tlsSocket as any).encrypted && tlsSocket.authorized) {
+	console.warn('tls gate', {
+		isEncrypted, authorized, authError,
+		hasPeer: !!peer,
+		peerSubject: peer?.subject,
+		peerIssuer: peer?.issuer,
+	});
+
+	if (isEncrypted && authorized) {
 		const id = getClientIdentity(req);
 		if (id) { req.auth = id; return next(); }
 	}
 
-	// 2) Фоллбек: фронт проверил mTLS и отдал заголовки
 	const id2 = identityFromNginxHeaders(req);
 	if (id2) { req.auth = id2; return next(); }
 
