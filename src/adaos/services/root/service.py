@@ -1020,11 +1020,12 @@ class RootDeveloperService:
 
     def _create_artifact(self, kind: Literal["skills", "scenarios"], name: str, *, template: str) -> ArtifactCreateResult:
         assert_safe_name(name)
+        # Берем как шаблон установленный навык или из шаблона.
         cfg = self._load_config()
         owner, workspace = self._owner_workspace(cfg)
         target = workspace / kind / name
         print("workspace_log", workspace, target)
-        template_path = self.ctx.paths.scenario_templates_dir() if kind == "scenarios" else self.ctx.paths.skill_templates_dir()
+        template_path = (self.ctx.paths.scenario_templates_dir() if kind == "scenarios" else self.ctx.paths.skill_templates_dir()) / template
         _copy_template(template_path, target)
         return ArtifactCreateResult(kind=kind.rstrip("s"), name=name, owner_id=owner, path=target)
 
@@ -1059,7 +1060,7 @@ class RootDeveloperService:
         archive_bytes = create_zip_bytes(source)
         archive_b64 = archive_bytes_to_b64(archive_bytes)
         digest = hashlib.sha256(archive_bytes).hexdigest()
-        cert_path, key_path, verify = self._mtls_material_for_role(cfg, "node")
+        cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
         client = self._client(cfg)
         node_id = cfg.node_settings.id or cfg.node_id
         if kind == "skills":
