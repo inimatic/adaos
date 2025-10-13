@@ -1061,74 +1061,70 @@ mtlsRouter.get('/policy', (_req, res) => {
 })
 
 const createDraftHandler = (kind: DraftKind): express.RequestHandler => async (req, res) => {
-	const identity = req.auth
-	if (!identity || identity.type !== 'node') {
-		respondError(req, res, 403, 'node_certificate_required')
-		return
+	const identity = req.auth;
+	if (!identity) return respondError(req, res, 401, 'client_certificate_required');
+
+	// Разрешаем и node, и hub
+	const name = typeof req.body?.name === 'string' ? req.body.name : '';
+	const archiveB64 = typeof req.body?.archive_b64 === 'string' ? req.body.archive_b64 : '';
+	const sha256 = typeof req.body?.sha256 === 'string' ? req.body.sha256 : undefined;
+
+	if (!name || !archiveB64) return respondError(req, res, 400, 'archive_fields_required');
+
+	// поддержка node_id в payload, если пуш идет "от хаба от имени ноды" (опционально)
+	const payloadNodeId = typeof req.body?.node_id === 'string' ? req.body.node_id : '';
+
+	// Определяем целевой контекст хранения
+	let subnetId: string;
+	let nodeId: string;
+
+	if (identity.type === 'node') {
+		subnetId = identity.subnetId;
+		nodeId = identity.nodeId;
+		if (payloadNodeId && payloadNodeId !== nodeId) {
+			return respondError(req, res, 403, 'node_mismatch');
+		}
+	} else if (identity.type === 'hub') {
+		subnetId = identity.subnetId;
+		// режим «хаб пушит черновик на уровень подсети», без привязки к конкретной ноде:
+		nodeId = payloadNodeId || 'hub';
+	} else {
+		return respondError(req, res, 403, 'invalid_client_certificate');
 	}
 
-	const nodeId = typeof req.body?.node_id === 'string' ? req.body.node_id : ''
-	if (!nodeId || nodeId !== identity.nodeId) {
-		respondError(req, res, 403, 'node_mismatch')
-		return
-	}
-	const name = typeof req.body?.name === 'string' ? req.body.name : ''
-	const archiveB64 = typeof req.body?.archive_b64 === 'string' ? req.body.archive_b64 : ''
-	const sha256 = typeof req.body?.sha256 === 'string' ? req.body.sha256 : undefined
-	if (!name || !archiveB64) {
-		respondError(req, res, 400, 'archive_fields_required')
-		return
-	}
-
-	let archive: Buffer
+	// дальше как было: decode, check size, verify SHA, writeDraft
+	let archive: Buffer;
 	try {
-		assertSafeName(name)
-		archive = decodeArchive(archiveB64)
-		if (!archive.length) {
-			throw new HttpError(400, 'archive_empty')
-		}
-		if (archive.length > MAX_ARCHIVE_BYTES) {
-			respondError(req, res, 413, 'archive_too_large')
-			return
-		}
-		verifySha256(archive, sha256)
+		assertSafeName(name);
+		archive = decodeArchive(archiveB64);
+		if (!archive.length) throw new HttpError(400, 'archive_empty');
+		if (archive.length > MAX_ARCHIVE_BYTES) return respondError(req, res, 413, 'archive_too_large');
+		verifySha256(archive, sha256);
 	} catch (error) {
-		handleError(req, res, error, { status: 400, code: 'invalid_archive' })
-		return
+		return handleError(req, res, error, { status: 400, code: 'invalid_archive' });
 	}
 
-	const started = Date.now()
+	const started = Date.now();
 	try {
 		const result = await forgeManager.writeDraft({
 			kind,
-			subnetId: identity.subnetId,
-			nodeId: identity.nodeId,
+			subnetId,
+			nodeId,
 			name,
 			archive,
-		})
-		const keyPrefix = kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
+		});
+		const keyPrefix = kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX;
 		await redisClient.set(
-			`${keyPrefix}:${identity.subnetId}:${identity.nodeId}:${name}`,
+			`${keyPrefix}:${subnetId}:${nodeId}:${name}`,
 			JSON.stringify({ stored_path: result.storedPath, commit: result.commitSha, ts: Date.now() }),
-		)
-		console.log(
-			'draft stored',
-			JSON.stringify({
-				kind,
-				subnetId: identity.subnetId,
-				nodeId: identity.nodeId,
-				name,
-				bytes: archive.length,
-				ms: Date.now() - started,
-				commit: result.commitSha,
-			}),
-		)
-		res.json({ ok: true, stored_path: result.storedPath, commit: result.commitSha })
+		);
+		res.json({ ok: true, stored_path: result.storedPath, commit: result.commitSha });
 	} catch (error) {
-		console.error('failed to store draft', error)
-		handleError(req, res, error, { status: 500, code: 'draft_store_failed' })
+		console.error('failed to store draft', error);
+		handleError(req, res, error, { status: 500, code: 'draft_store_failed' });
 	}
-}
+};
+
 
 mtlsRouter.post('/skills/draft', createDraftHandler('skills'))
 mtlsRouter.post('/scenarios/draft', createDraftHandler('scenarios'))
