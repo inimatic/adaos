@@ -587,16 +587,6 @@ app.get('/v1/health', (_req, res) => {
 
 const rootRouter = express.Router()
 
-// TODO remove
-app.get('/debug/mtls-headers', (req, res) => {
-	res.json({
-		verify: req.get('X-SSL-Client-Verify'),
-		subject: req.get('X-Client-Subject'),
-		issuer: req.get('X-Client-Issuer'),
-		hasCert: Boolean(req.get('X-Client-Cert')),
-	});
-});
-
 rootRouter.post('/auth/owner/start', (req, res) => {
 	let ownerId: string
 	try {
