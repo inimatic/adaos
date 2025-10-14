@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import json
 import logging
 import os
 import shutil
@@ -12,8 +13,11 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping, Tuple
+from typing import Any, Callable, Iterable, Literal, Mapping
+
+import yaml
 from adaos.services.agent_context import AgentContext, get_ctx
+from adaos.services.eventbus import emit
 
 from adaos.services.crypto.pki import generate_rsa_key, make_csr, write_pem, write_private_key
 from adaos.services.node_config import (
@@ -24,6 +28,8 @@ from adaos.services.node_config import (
     load_node,
     save_node,
 )
+from adaos.services.skill.scaffold import create as scaffold_skill_create
+from adaos.services.scenario.scaffold import create as scaffold_scenario_create
 
 from .client import RootHttpClient, RootHttpError
 from .keyring import KeyringUnavailableError, delete_refresh, load_refresh, save_refresh
@@ -48,6 +54,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _current_timestamp() -> str:
+    return _now().replace(microsecond=0).isoformat()
+
+
+def _parse_timestamp(value: str | None) -> datetime:
+    if not value:
+        return _EPOCH
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return _EPOCH
+
+
 def _parse_expiry(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -59,6 +81,25 @@ def _format_expiry(moment: datetime) -> str:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc).isoformat()
+
+
+def _bump_version(current: str | None, index: int) -> str:
+    parts = [0, 0, 0]
+    if current:
+        raw_parts = str(current).split(".")
+        for idx in range(min(len(raw_parts), 3)):
+            token = raw_parts[idx]
+            digits = "".join(ch for ch in token if ch.isdigit())
+            if digits:
+                try:
+                    parts[idx] = int(digits)
+                except ValueError:
+                    parts[idx] = 0
+    index = max(0, min(index, 2))
+    parts[index] += 1
+    for reset in range(index + 1, 3):
+        parts[reset] = 0
+    return ".".join(str(value) for value in parts)
 
 
 def _root_state(cfg: NodeConfig) -> dict:
@@ -322,6 +363,28 @@ class RootServiceError(RuntimeError):
     """Raised when developer workflow operations fail."""
 
 
+class TemplateResolutionError(RootServiceError):
+    """Raised when a requested scaffold template cannot be resolved."""
+
+    exit_code: int = 2
+
+    def __init__(self, message: str, *, exit_code: int | None = None) -> None:
+        super().__init__(message)
+        if exit_code is not None:
+            self.exit_code = exit_code
+
+
+class ArtifactNotFoundError(RootServiceError):
+    """Raised when a requested artifact is missing from the dev workspace."""
+
+    exit_code: int = 3
+
+    def __init__(self, message: str, *, exit_code: int | None = None) -> None:
+        super().__init__(message)
+        if exit_code is not None:
+            self.exit_code = exit_code
+
+
 @dataclass(slots=True)
 class DeviceAuthorization:
     device_code: str
@@ -355,6 +418,8 @@ class ArtifactCreateResult:
     name: str
     owner_id: str
     path: Path
+    version: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -364,6 +429,39 @@ class ArtifactPushResult:
     stored_path: str
     sha256: str
     bytes_uploaded: int
+    version: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(slots=True)
+class ArtifactDeleteResult:
+    kind: str
+    name: str
+    owner_id: str
+    path: Path
+    version: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(slots=True)
+class ArtifactListItem:
+    name: str
+    path: Path
+    version: str | None
+    updated_at: str | None
+
+
+@dataclass(slots=True)
+class ArtifactPublishResult:
+    kind: str
+    name: str
+    source_path: Path
+    target_path: Path
+    version: str
+    previous_version: str | None
+    updated_at: str
+    dry_run: bool = False
+    warnings: tuple[str, ...] = ()
 
 
 _SKIP_DIRS = {
@@ -456,6 +554,44 @@ def _ensure_keep_file(directory: Path) -> None:
         keep.write_text("", encoding="utf-8")
 
 
+def _load_manifest(manifest_path: Path) -> dict[str, Any]:
+    try:
+        raw = manifest_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RootServiceError(f"Failed to read manifest at {manifest_path}: {exc}") from exc
+
+    if manifest_path.suffix == ".json":
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RootServiceError(f"Invalid JSON manifest at {manifest_path}: {exc}") from exc
+    else:
+        try:
+            data = yaml.safe_load(raw) or {}
+        except yaml.YAMLError as exc:
+            raise RootServiceError(f"Invalid YAML manifest at {manifest_path}: {exc}") from exc
+
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _write_manifest(manifest_path: Path, data: Mapping[str, Any]) -> None:
+    try:
+        if manifest_path.suffix == ".json":
+            manifest_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            manifest_path.write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        raise RootServiceError(f"Failed to write manifest at {manifest_path}: {exc}") from exc
+
+
 def _insecure_tls_enabled() -> bool:
     value = os.getenv("ADAOS_INSECURE_TLS", "").strip().lower()
     return value in {"1", "true", "yes", "on"}
@@ -481,112 +617,141 @@ class RootDeveloperService:
     # ------------------------------------------------------------------
     def init(self, *, root_token: str | None = None, metadata: Mapping[str, Any] | None = None) -> RootInitResult:
         cfg = self._load_config()
-        token = root_token or os.getenv("ROOT_TOKEN") or os.getenv("ADAOS_ROOT_TOKEN")
-        if not token:
-            raise RootServiceError("ROOT_TOKEN is not configured; set ROOT_TOKEN or pass --token")
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.init.start", {"node_id": node_id}, "root.dev")
 
-        existing_subnet = cfg.subnet_settings.id or cfg.subnet_id
-        key_path = cfg.hub_key_path()
-        cert_path = cfg.hub_cert_path()
-        ca_path = cfg.ca_cert_path()
+        try:
+            token = root_token or os.getenv("ROOT_TOKEN") or os.getenv("ADAOS_ROOT_TOKEN")
+            if not token:
+                raise RootServiceError("ROOT_TOKEN is not configured; set ROOT_TOKEN or pass --token")
 
-        if existing_subnet and key_path.exists() and cert_path.exists() and ca_path.exists():
-            try:
-                cert_pem = cert_path.read_text(encoding="utf-8")
-            except OSError:
-                cert_pem = ""
-            if cert_pem and self._hub_certificate_is_acceptable(cert_pem, subnet_id=existing_subnet, owner_id=None):
-                workspace = self._prepare_workspace(cfg, owner="pending_owner")
-                cfg.subnet_settings.id = existing_subnet
-                cfg.subnet_id = existing_subnet
-                cfg.subnet_settings.hub.key = _config_path_value(key_path)
-                cfg.subnet_settings.hub.cert = _config_path_value(cert_path)
-                cfg.root_settings.ca_cert = _config_path_value(ca_path)
-                self._save_config(cfg)
-                return RootInitResult(
-                    subnet_id=existing_subnet,
-                    reused=True,
-                    hub_key_path=key_path,
-                    hub_cert_path=cert_path,
-                    ca_cert_path=ca_path,
-                    workspace_path=workspace,
-                )
+            existing_subnet = cfg.subnet_settings.id or cfg.subnet_id
+            key_path = cfg.hub_key_path()
+            cert_path = cfg.hub_cert_path()
+            ca_path = cfg.ca_cert_path()
 
-        key_path, private_key = self._ensure_hub_keypair(cfg)
+            if existing_subnet and key_path.exists() and cert_path.exists() and ca_path.exists():
+                try:
+                    cert_pem = cert_path.read_text(encoding="utf-8")
+                except OSError:
+                    cert_pem = ""
+                if cert_pem and self._hub_certificate_is_acceptable(cert_pem, subnet_id=existing_subnet, owner_id=None):
+                    workspace = self._prepare_workspace(cfg, owner="pending_owner")
+                    cfg.subnet_settings.id = existing_subnet
+                    cfg.subnet_id = existing_subnet
+                    cfg.subnet_settings.hub.key = _config_path_value(key_path)
+                    cfg.subnet_settings.hub.cert = _config_path_value(cert_path)
+                    cfg.root_settings.ca_cert = _config_path_value(ca_path)
+                    self._save_config(cfg)
+                    emit(
+                        self.ctx.bus,
+                        "root.dev.init.done",
+                        {
+                            "node_id": node_id,
+                            "subnet_id": existing_subnet,
+                            "reused": True,
+                            "workspace": displayable_path(workspace) or str(workspace),
+                        },
+                        "root.dev",
+                    )
+                    return RootInitResult(
+                        subnet_id=existing_subnet,
+                        reused=True,
+                        hub_key_path=key_path,
+                        hub_cert_path=cert_path,
+                        ca_cert_path=ca_path,
+                        workspace_path=workspace,
+                    )
 
-        verify = self._plain_verify(cfg)
-        client = self._client(cfg)
+            key_path, private_key = self._ensure_hub_keypair(cfg)
 
-        previous_subnet = cfg.subnet_id
-        registration = self._register_hub(
-            client,
-            token,
-            verify=verify,
-            private_key=private_key,
-            metadata=metadata,
-        )
-        reused_flag = bool(registration.get("reused"))
+            verify = self._plain_verify(cfg)
+            client = self._client(cfg)
 
-        subnet_id = registration.get("subnet_id")
-        cert_pem = registration.get("cert_pem")
-        ca_pem = registration.get("ca_pem")
-        if not isinstance(subnet_id, str) or not subnet_id:
-            raise RootServiceError("Root response missing subnet_id")
-        if not isinstance(cert_pem, str) or not cert_pem.strip():
-            raise RootServiceError("Root response missing hub certificate")
-
-        cert_path = cfg.hub_cert_path()
-        write_pem(cert_path, cert_pem)
-        owner_id = cfg.root_settings.owner.owner_id if cfg.root_settings and cfg.root_settings.owner else None
-        if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=owner_id):
-            logger.warning(
-                "Root issued hub certificate without subnet binding; rotating hub credentials",
-            )
-            key_path, private_key = self._ensure_hub_keypair(cfg, force_new=True)
-            rotation = self._register_hub(
+            previous_subnet = cfg.subnet_id
+            registration = self._register_hub(
                 client,
                 token,
                 verify=verify,
                 private_key=private_key,
                 metadata=metadata,
-                subnet_id=subnet_id,
             )
-            rotated_cert = rotation.get("cert_pem")
-            if not isinstance(rotated_cert, str) or not rotated_cert.strip():
-                raise RootServiceError("Root response missing hub certificate after rotation")
-            write_pem(cert_path, rotated_cert)
-            cert_pem = rotated_cert
-            ca_candidate = rotation.get("ca_pem")
-            if isinstance(ca_candidate, str) and ca_candidate.strip():
-                ca_pem = ca_candidate
-            reused_flag = reused_flag or bool(rotation.get("reused"))
-            if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=None):
-                raise RootServiceError("Root issued hub certificate without subnet binding; contact support")
+            reused_flag = bool(registration.get("reused"))
 
-        ca_path: Path | None = None
-        if isinstance(ca_pem, str) and ca_pem.strip():
-            ca_path = cfg.ca_cert_path()
-            write_pem(ca_path, ca_pem)
-            cfg.root_settings.ca_cert = _config_path_value(ca_path)
+            subnet_id = registration.get("subnet_id")
+            cert_pem = registration.get("cert_pem")
+            ca_pem = registration.get("ca_pem")
+            if not isinstance(subnet_id, str) or not subnet_id:
+                raise RootServiceError("Root response missing subnet_id")
+            if not isinstance(cert_pem, str) or not cert_pem.strip():
+                raise RootServiceError("Root response missing hub certificate")
 
-        cfg.subnet_settings.id = subnet_id
-        cfg.subnet_id = subnet_id
-        cfg.subnet_settings.hub.key = _config_path_value(key_path)
-        cfg.subnet_settings.hub.cert = _config_path_value(cert_path)
+            cert_path = cfg.hub_cert_path()
+            write_pem(cert_path, cert_pem)
+            owner_id = cfg.root_settings.owner.owner_id if cfg.root_settings and cfg.root_settings.owner else None
+            if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=owner_id):
+                logger.warning(
+                    "Root issued hub certificate without subnet binding; rotating hub credentials",
+                )
+                key_path, private_key = self._ensure_hub_keypair(cfg, force_new=True)
+                rotation = self._register_hub(
+                    client,
+                    token,
+                    verify=verify,
+                    private_key=private_key,
+                    metadata=metadata,
+                    subnet_id=subnet_id,
+                )
+                rotated_cert = rotation.get("cert_pem")
+                if not isinstance(rotated_cert, str) or not rotated_cert.strip():
+                    raise RootServiceError("Root response missing hub certificate after rotation")
+                write_pem(cert_path, rotated_cert)
+                cert_pem = rotated_cert
+                ca_candidate = rotation.get("ca_pem")
+                if isinstance(ca_candidate, str) and ca_candidate.strip():
+                    ca_pem = ca_candidate
+                reused_flag = reused_flag or bool(rotation.get("reused"))
+                if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=None):
+                    raise RootServiceError("Root issued hub certificate without subnet binding; contact support")
 
-        self._save_config(cfg)
+            ca_path: Path | None = None
+            if isinstance(ca_pem, str) and ca_pem.strip():
+                ca_path = cfg.ca_cert_path()
+                write_pem(ca_path, ca_pem)
+                cfg.root_settings.ca_cert = _config_path_value(ca_path)
 
-        workspace = self._prepare_workspace(cfg, owner="pending_owner")
+            cfg.subnet_settings.id = subnet_id
+            cfg.subnet_id = subnet_id
+            cfg.subnet_settings.hub.key = _config_path_value(key_path)
+            cfg.subnet_settings.hub.cert = _config_path_value(cert_path)
 
-        reused = reused_flag or previous_subnet == subnet_id
-        return RootInitResult(
-            subnet_id=subnet_id,
-            reused=reused,
-            hub_key_path=key_path,
-            hub_cert_path=cert_path,
-            ca_cert_path=ca_path,
-            workspace_path=workspace,
-        )
+            workspace = self._prepare_workspace(cfg, owner="pending_owner")
+
+            self._save_config(cfg)
+
+            reused = reused_flag or previous_subnet == subnet_id
+            emit(
+                self.ctx.bus,
+                "root.dev.init.done",
+                {
+                    "node_id": node_id,
+                    "subnet_id": subnet_id,
+                    "reused": reused,
+                    "workspace": displayable_path(workspace) or str(workspace),
+                },
+                "root.dev",
+            )
+            return RootInitResult(
+                subnet_id=subnet_id,
+                reused=reused,
+                hub_key_path=key_path,
+                hub_cert_path=cert_path,
+                ca_cert_path=ca_path,
+                workspace_path=workspace,
+            )
+        except Exception:
+            emit(self.ctx.bus, "root.dev.init.error", {"node_id": node_id}, "root.dev")
+            raise
 
     def login(
         self,
@@ -594,133 +759,485 @@ class RootDeveloperService:
         on_authorize: Callable[[DeviceAuthorization], None] | None = None,
     ) -> RootLoginResult:
         cfg = self._load_config()
-        verify_plain = self._plain_verify(cfg)
-        client = self._client(cfg)
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.login.start", {"node_id": node_id}, "root.dev")
 
-        authorize_cert: tuple[str, str] | None = None
-        authorize_verify: ssl.SSLContext | bool = verify_plain
+        try:
+            verify_plain = self._plain_verify(cfg)
+            client = self._client(cfg)
 
-        mtls_material = self._mtls_material_optional(cfg, verify_plain)
-        if mtls_material:
-            cert_path, key_path, mtls_verify = mtls_material
-            authorize_cert = (cert_path, key_path)
-            authorize_verify = mtls_verify
-            owner_id = cfg.subnet_id or cfg.subnet_settings.id or "local-owner"
-            start = client.device_authorize(
-                verify=authorize_verify,
-                cert=authorize_cert,
-                payload={"owner_id": owner_id},
-            )
-            try:
-                start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id})
-            except RootHttpError as exc:
-                if self._is_certificate_error(exc):
-                    raise RootServiceError(
-                        "Root rejected the hub client certificate; run 'adaos dev root init' to rotate credentials",
-                    ) from exc
-                authorize_cert = None
-                authorize_verify = verify_plain
+            authorize_cert: tuple[str, str] | None = None
+            authorize_verify: ssl.SSLContext | bool = verify_plain
+
+            mtls_material = self._mtls_material_optional(cfg, verify_plain)
+            if mtls_material:
+                cert_path, key_path, mtls_verify = mtls_material
+                authorize_cert = (cert_path, key_path)
+                authorize_verify = mtls_verify
+                owner_id_hint = cfg.subnet_id or cfg.subnet_settings.id or "local-owner"
+                start = client.device_authorize(
+                    verify=authorize_verify,
+                    cert=authorize_cert,
+                    payload={"owner_id": owner_id_hint},
+                )
                 try:
-                    start = client.device_authorize(verify=authorize_verify, payload={"owner_id": owner_id})
-                except RootHttpError as retry_exc:
+                    start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id_hint})
+                except RootHttpError as exc:
+                    if self._is_certificate_error(exc):
+                        raise RootServiceError(
+                            "Root rejected the hub client certificate; run 'adaos dev root init' to rotate credentials",
+                        ) from exc
+                    authorize_cert = None
+                    authorize_verify = verify_plain
                     try:
-                        fallback = self._maybe_retry_with_mtls(cfg, retry_exc)
+                        start = client.device_authorize(verify=authorize_verify, payload={"owner_id": owner_id_hint})
+                    except RootHttpError as retry_exc:
+                        try:
+                            fallback = self._maybe_retry_with_mtls(cfg, retry_exc)
+                        except RootServiceError as mtls_exc:
+                            raise mtls_exc from retry_exc
+                        if not fallback:
+                            raise RootServiceError(str(retry_exc)) from retry_exc
+                        authorize_verify, authorize_cert = fallback
+                        try:
+                            start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id_hint})
+                        except RootHttpError as second_exc:
+                            raise RootServiceError(str(second_exc)) from second_exc
+            else:
+                owner_id_hint = cfg.subnet_id or cfg.subnet_settings.id or "local-owner"
+                try:
+                    start = client.device_authorize(verify=authorize_verify, payload={"owner_id": owner_id_hint})
+                except RootHttpError as exc:
+                    try:
+                        fallback = self._maybe_retry_with_mtls(cfg, exc)
                     except RootServiceError as mtls_exc:
-                        raise mtls_exc from retry_exc
+                        raise mtls_exc from exc
                     if not fallback:
-                        raise RootServiceError(str(retry_exc)) from retry_exc
+                        raise RootServiceError(str(exc)) from exc
                     authorize_verify, authorize_cert = fallback
                     try:
-                        start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id})
-                    except RootHttpError as second_exc:
-                        raise RootServiceError(str(second_exc)) from second_exc
-        else:
-            try:
-                owner_id = cfg.subnet_id or cfg.subnet_settings.id or "local-owner"
-                start = client.device_authorize(verify=authorize_verify, payload={"owner_id": owner_id})
-            except RootHttpError as exc:
+                        start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id_hint})
+                    except RootHttpError as retry_exc:
+                        raise RootServiceError(str(retry_exc)) from retry_exc
+
+            device_code = start.get("device_code")
+            user_code = start.get("user_code") or start.get("user_code_short")
+            verification_uri = start.get("verify_uri")
+            verification_complete = start.get("verification_uri_complete")
+            interval = max(int(start.get("interval", 5)), 1)
+            expires_in = int(start.get("expires_in", 600))
+            print("_log", device_code, user_code, verification_uri)
+            if not isinstance(device_code, str) or not isinstance(user_code, str) or not isinstance(verification_uri, str):
+                raise RootServiceError("Root did not return device authorization data")
+
+            auth = DeviceAuthorization(
+                device_code=device_code,
+                user_code=user_code,
+                verification_uri=verification_uri,
+                verification_uri_complete=verification_complete if isinstance(verification_complete, str) else None,
+                interval=interval,
+                expires_in=expires_in,
+            )
+            if on_authorize:
+                on_authorize(auth)
+
+            deadline = time.monotonic() + auth.expires_in
+            delay = 0
+            while time.monotonic() < deadline:
+                if delay:
+                    time.sleep(delay)
                 try:
-                    fallback = self._maybe_retry_with_mtls(cfg, exc)
-                except RootServiceError as mtls_exc:
-                    raise mtls_exc from exc
-                if not fallback:
+                    result = client.device_poll(auth.device_code, verify=authorize_verify, cert=authorize_cert)
+                except RootHttpError as exc:
+                    code = exc.error_code or ""
+                    if code == "authorization_pending":
+                        delay = auth.interval
+                        continue
+                    if code == "slow_down":
+                        auth.interval += 5
+                        delay = auth.interval
+                        continue
+                    if code in {"expired_token", "expired_device_code"}:
+                        raise RootServiceError("Device authorization expired before completion") from exc
                     raise RootServiceError(str(exc)) from exc
-                authorize_verify, authorize_cert = fallback
-                try:
-                    start = client.device_authorize(verify=authorize_verify, cert=authorize_cert, payload={"owner_id": owner_id})
-                except RootHttpError as retry_exc:
-                    raise RootServiceError(str(retry_exc)) from retry_exc
-        device_code = start.get("device_code")
-        user_code = start.get("user_code") or start.get("user_code_short")
-        verification_uri = start.get("verify_uri")
-        verification_complete = start.get("verification_uri_complete")
-        interval = max(int(start.get("interval", 5)), 1)
-        expires_in = int(start.get("expires_in", 600))
-        print("_log", device_code, user_code, verification_uri)
-        if not isinstance(device_code, str) or not isinstance(user_code, str) or not isinstance(verification_uri, str):
-            raise RootServiceError("Root did not return device authorization data")
-
-        auth = DeviceAuthorization(
-            device_code=device_code,
-            user_code=user_code,
-            verification_uri=verification_uri,
-            verification_uri_complete=verification_complete if isinstance(verification_complete, str) else None,
-            interval=interval,
-            expires_in=expires_in,
-        )
-        if on_authorize:
-            on_authorize(auth)
-
-        deadline = time.monotonic() + auth.expires_in
-        delay = 0
-        while time.monotonic() < deadline:
-            if delay:
-                time.sleep(delay)
-            try:
-                result = client.device_poll(auth.device_code, verify=authorize_verify, cert=authorize_cert)
-            except RootHttpError as exc:
-                code = exc.error_code or ""
-                if code == "authorization_pending":
-                    delay = auth.interval
-                    continue
-                if code == "slow_down":
-                    auth.interval += 5
-                    delay = auth.interval
-                    continue
-                if code in {"expired_token", "expired_device_code"}:
-                    raise RootServiceError("Device authorization expired before completion") from exc
-                raise RootServiceError(str(exc)) from exc
+                else:
+                    token = result
+                    break
             else:
-                token = result
-                break
-        else:
-            raise RootServiceError("Device authorization expired before completion")
+                raise RootServiceError("Device authorization expired before completion")
 
-        owner_id = token.get("owner_id")
-        subnet_id = token.get("subnet_id") if isinstance(token, Mapping) else None
-        if not isinstance(owner_id, str) or not owner_id:
-            raise RootServiceError("Root did not return owner_id")
+            owner_id = token.get("owner_id")
+            subnet_id = token.get("subnet_id") if isinstance(token, Mapping) else None
+            if not isinstance(owner_id, str) or not owner_id:
+                raise RootServiceError("Root did not return owner_id")
 
-        cfg.root_settings.owner.owner_id = owner_id
-        if isinstance(subnet_id, str) and subnet_id:
-            cfg.subnet_settings.id = subnet_id
-            cfg.subnet_id = subnet_id
+            cfg.root_settings.owner.owner_id = owner_id
+            if isinstance(subnet_id, str) and subnet_id:
+                cfg.subnet_settings.id = subnet_id
+                cfg.subnet_id = subnet_id
 
-        workspace = self._activate_workspace(cfg, owner_id)
-        self._save_config(cfg)
-        return RootLoginResult(owner_id=owner_id, workspace_path=workspace, subnet_id=subnet_id if isinstance(subnet_id, str) else None)
+            workspace = self._activate_workspace(cfg, owner_id)
+            self._save_config(cfg)
+            result = RootLoginResult(owner_id=owner_id, workspace_path=workspace, subnet_id=subnet_id if isinstance(subnet_id, str) else None)
+            emit(
+                self.ctx.bus,
+                "root.dev.login.done",
+                {
+                    "node_id": node_id,
+                    "owner_id": owner_id,
+                    "subnet_id": subnet_id,
+                    "workspace": displayable_path(workspace) or str(workspace),
+                },
+                "root.dev",
+            )
+            return result
+        except Exception:
+            emit(self.ctx.bus, "root.dev.login.error", {"node_id": node_id}, "root.dev")
+            raise
 
-    def create_skill(self, name: str) -> ArtifactCreateResult:
-        return self._create_artifact("skills", name, template="skill_default")
+    def create_skill(self, name: str, template: str | None = None) -> ArtifactCreateResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.skill.create.start", {"name": name, "node_id": node_id}, "root.dev")
+        try:
+            result = self._create_artifact("skills", name, template=template)
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.create.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.skill.create.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "updated_at": result.updated_at,
+            },
+            "root.dev",
+        )
+        return result
 
-    def create_scenario(self, name: str) -> ArtifactCreateResult:
-        return self._create_artifact("scenarios", name, template="scenario_default")
+    def create_scenario(self, name: str, template: str | None = None) -> ArtifactCreateResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.scenario.create.start", {"name": name, "node_id": node_id}, "root.dev")
+        try:
+            result = self._create_artifact("scenarios", name, template=template)
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.create.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.scenario.create.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "updated_at": result.updated_at,
+            },
+            "root.dev",
+        )
+        return result
 
     def push_skill(self, name: str) -> ArtifactPushResult:
-        return self._push_artifact("skills", name)
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.skill.push.start", {"name": name, "node_id": node_id}, "root.dev")
+        try:
+            result = self._push_artifact("skills", name)
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.push.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.skill.push.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "updated_at": result.updated_at,
+                "bytes": result.bytes_uploaded,
+            },
+            "root.dev",
+        )
+        return result
 
     def push_scenario(self, name: str) -> ArtifactPushResult:
-        return self._push_artifact("scenarios", name)
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.scenario.push.start", {"name": name, "node_id": node_id}, "root.dev")
+        try:
+            result = self._push_artifact("scenarios", name)
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.push.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.scenario.push.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "updated_at": result.updated_at,
+                "bytes": result.bytes_uploaded,
+            },
+            "root.dev",
+        )
+        return result
+
+    def publish_skill(
+        self,
+        name: str,
+        *,
+        bump: Literal["major", "minor", "patch"] = "patch",
+        force: bool = False,
+        dry_run: bool = False,
+    ) -> ArtifactPublishResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(
+            self.ctx.bus,
+            "root.dev.skill.publish.start",
+            {"name": name, "node_id": node_id, "bump": bump, "dry_run": dry_run},
+            "root.dev",
+        )
+        try:
+            result = self._publish_artifact(
+                cfg,
+                "skills",
+                name,
+                bump=bump,
+                force=force,
+                dry_run=dry_run,
+            )
+        except ArtifactNotFoundError:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.publish.missing",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.publish.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.skill.publish.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+                "dry_run": result.dry_run,
+            },
+            "root.dev",
+        )
+        if not result.dry_run:
+            emit(
+                self.ctx.bus,
+                "registry.skills.published",
+                {
+                    "name": result.name,
+                    "version": result.version,
+                    "previous_version": result.previous_version,
+                    "updated_at": result.updated_at,
+                },
+                "root.dev",
+            )
+        return result
+
+    def publish_scenario(
+        self,
+        name: str,
+        *,
+        bump: Literal["major", "minor", "patch"] = "patch",
+        force: bool = False,
+        dry_run: bool = False,
+    ) -> ArtifactPublishResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(
+            self.ctx.bus,
+            "root.dev.scenario.publish.start",
+            {"name": name, "node_id": node_id, "bump": bump, "dry_run": dry_run},
+            "root.dev",
+        )
+        try:
+            result = self._publish_artifact(
+                cfg,
+                "scenarios",
+                name,
+                bump=bump,
+                force=force,
+                dry_run=dry_run,
+            )
+        except ArtifactNotFoundError:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.publish.missing",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.publish.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.scenario.publish.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+                "dry_run": result.dry_run,
+            },
+            "root.dev",
+        )
+        if not result.dry_run:
+            emit(
+                self.ctx.bus,
+                "registry.scenarios.published",
+                {
+                    "name": result.name,
+                    "version": result.version,
+                    "previous_version": result.previous_version,
+                    "updated_at": result.updated_at,
+                },
+                "root.dev",
+            )
+        return result
+
+    def delete_skill(self, name: str) -> ArtifactDeleteResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.skill.delete.start", {"name": name, "node_id": node_id}, "root.dev")
+        try:
+            result = self._delete_artifact(cfg, "skills", name)
+        except ArtifactNotFoundError:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.delete.missing",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.delete.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        registry_path = self._delete_registry_artifact("skills", result.name)
+        emit(
+            self.ctx.bus,
+            "dev.skills.deleted",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "updated_at": result.updated_at,
+                "registry_path": displayable_path(registry_path) if registry_path else None,
+            },
+            "root.dev",
+        )
+        return result
+
+    def delete_scenario(self, name: str) -> ArtifactDeleteResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(self.ctx.bus, "root.dev.scenario.delete.start", {"name": name, "node_id": node_id}, "root.dev")
+        try:
+            result = self._delete_artifact(cfg, "scenarios", name)
+        except ArtifactNotFoundError:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.delete.missing",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.delete.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "dev.scenarios.deleted",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "updated_at": result.updated_at,
+            },
+            "root.dev",
+        )
+        return result
+
+    def list_skills(self) -> list[ArtifactListItem]:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        items = self._list_artifacts(cfg, "skills")
+        self._save_config(cfg)
+        emit(
+            self.ctx.bus,
+            "root.dev.skill.list.done",
+            {"node_id": node_id, "count": len(items)},
+            "root.dev",
+        )
+        return items
+
+    def list_scenarios(self) -> list[ArtifactListItem]:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        items = self._list_artifacts(cfg, "scenarios")
+        self._save_config(cfg)
+        emit(
+            self.ctx.bus,
+            "root.dev.scenario.list.done",
+            {"node_id": node_id, "count": len(items)},
+            "root.dev",
+        )
+        return items
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -737,7 +1254,7 @@ class RootDeveloperService:
         if ca_setting:
             if ca_path.exists():
                 return self._load_verify_context(ca_path)
-            default_indicator = Path("~/.adaos/keys/ca.cert").expanduser()
+            default_indicator = self.ctx.paths.base_dir() / "keys" / "ca.cert"
             try:
                 configured = Path(str(ca_setting)).expanduser()
             except Exception:  # pragma: no cover - defensive
@@ -978,56 +1495,300 @@ class RootDeveloperService:
         except Exception as e:
             return None
 
+    def _workspace_root(self, cfg: NodeConfig) -> Path:
+        hub_id = cfg.subnet_id or "pending_hub"
+        return (self.ctx.paths.base_dir() / "dev" / hub_id).resolve()
+
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
-        workspace_root = cfg.workspace_path()
+        workspace_root = self._workspace_root(cfg)
         workspace_root.mkdir(parents=True, exist_ok=True)
-        target = workspace_root / owner
         for sub in ("skills", "scenarios", "uploads"):
-            _ensure_keep_file(target / sub)
-        return target
+            _ensure_keep_file(workspace_root / sub)
+        cfg.dev_settings.workspace = _config_path_value(workspace_root)
+        return workspace_root
 
     def _activate_workspace(self, cfg: NodeConfig, owner_id: str) -> Path:
-        workspace_root = cfg.workspace_path()
-        pending = workspace_root / "pending_owner"
-        target = workspace_root / owner_id
-        if pending.exists():
-            if target.exists():
-                for child in pending.iterdir():
-                    destination = target / child.name
-                    if destination.exists():
-                        continue
-                    child.rename(destination)
-                try:
-                    pending.rmdir()
-                except OSError:
-                    pass
-            else:
-                pending.rename(target)
-        target.mkdir(parents=True, exist_ok=True)
-        for sub in ("skills", "scenarios", "uploads"):
-            _ensure_keep_file(target / sub)
-        return target
+        return self._prepare_workspace(cfg, owner=owner_id)
 
     def _owner_workspace(self, cfg: NodeConfig) -> tuple[str, Path]:
         owner = cfg.owner_id or "pending_owner"
-        path = cfg.workspace_path() / owner
-        if not path.exists():
-            path = self._prepare_workspace(cfg, owner=owner)
-        else:
-            for sub in ("skills", "scenarios", "uploads"):
-                _ensure_keep_file(path / sub)
+        path = self._prepare_workspace(cfg, owner=owner)
+        self._save_config(cfg)
         return owner, path
 
-    def _create_artifact(self, kind: Literal["skills", "scenarios"], name: str, *, template: str) -> ArtifactCreateResult:
+    def _create_artifact(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        *,
+        template: str | None,
+    ) -> ArtifactCreateResult:
         assert_safe_name(name)
-        # Берем как шаблон установленный навык или из шаблона.
         cfg = self._load_config()
         owner, workspace = self._owner_workspace(cfg)
         target = workspace / kind / name
-        print("workspace_log", workspace, target)
-        template_path = (self.ctx.paths.scenario_templates_dir() if kind == "scenarios" else self.ctx.paths.skill_templates_dir()) / template
+
+        template_path, prototype_value = self._resolve_template(kind, template)
         _copy_template(template_path, target)
-        return ArtifactCreateResult(kind=kind.rstrip("s"), name=name, owner_id=owner, path=target)
+        manifest_meta = self._update_manifest(
+            kind,
+            target,
+            name,
+            prototype_value,
+            version_bump_index=1,
+            set_prototype=True,
+        )
+
+        return ArtifactCreateResult(
+            kind=kind.rstrip("s"),
+            name=name,
+            owner_id=owner,
+            path=target,
+            version=(manifest_meta or {}).get("version"),
+            updated_at=(manifest_meta or {}).get("updated_at"),
+        )
+
+    def _list_artifacts(self, cfg: NodeConfig, kind: Literal["skills", "scenarios"]) -> list[ArtifactListItem]:
+        owner = cfg.owner_id or "pending_owner"
+        workspace = self._prepare_workspace(cfg, owner=owner)
+        artifacts_dir = workspace / kind
+        items: list[ArtifactListItem] = []
+        if artifacts_dir.exists():
+            for entry in artifacts_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                name, version, updated_at = self._artifact_manifest_info(entry, kind)
+                items.append(
+                    ArtifactListItem(
+                        name=name,
+                        path=entry,
+                        version=version,
+                        updated_at=updated_at,
+                    )
+                )
+        items.sort(key=lambda item: (_parse_timestamp(item.updated_at), item.name.lower()), reverse=True)
+        return items
+
+    def _delete_artifact(
+        self,
+        cfg: NodeConfig,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+    ) -> ArtifactDeleteResult:
+        owner = cfg.owner_id or "pending_owner"
+        workspace = self._prepare_workspace(cfg, owner=owner)
+        target = workspace / kind / name
+        if not target.exists() or not target.is_dir():
+            raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found at {target}")
+
+        manifest_name, version, updated_at = self._artifact_manifest_info(target, kind)
+        shutil.rmtree(target)
+
+        result = ArtifactDeleteResult(
+            kind=kind.rstrip("s"),
+            name=manifest_name,
+            owner_id=owner,
+            path=target,
+            version=version,
+            updated_at=updated_at,
+        )
+        self._save_config(cfg)
+        return result
+
+    def _registry_root(self, kind: Literal["skills", "scenarios"]) -> Path:
+        if kind == "scenarios":
+            return Path(self.ctx.paths.scenarios_dir())
+        return Path(self.ctx.paths.skills_dir())
+
+    def _delete_registry_artifact(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+    ) -> Path | None:
+        root = self._registry_root(kind)
+        target = root / name
+        if not target.exists():
+            return None
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            raise RootServiceError(f"Failed to delete registry {kind[:-1]} '{name}' at {target}: {exc}") from exc
+        return target
+
+    def _manifest_payload(
+        self,
+        directory: Path,
+        kind: Literal["skills", "scenarios"],
+    ) -> tuple[Path, dict[str, Any]] | None:
+        for candidate in self._manifest_candidates(kind):
+            manifest_path = directory / candidate
+            if not manifest_path.exists():
+                continue
+            data = _load_manifest(manifest_path)
+            return manifest_path, data
+        return None
+
+    def _manifest_warnings(
+        self,
+        source: dict[str, Any] | None,
+        target: dict[str, Any] | None,
+    ) -> list[str]:
+        if not source or not target:
+            return []
+        ignore = {"version", "updated_at"}
+        keys = sorted(set(source.keys()) | set(target.keys()))
+        warnings: list[str] = []
+        for key in keys:
+            if key in ignore:
+                continue
+            if key not in source:
+                warnings.append(f"Registry metadata contains '{key}' absent in dev copy")
+                continue
+            if key not in target:
+                warnings.append(f"Dev metadata contains new field '{key}' not present in registry")
+                continue
+            if source[key] != target[key]:
+                warnings.append(f"Field '{key}' differs between dev and registry metadata")
+        return warnings
+
+    def _workspace_templates_dir(self, kind: Literal["skills", "scenarios"]) -> Path:
+        if kind == "scenarios":
+            return self.ctx.paths.scenarios_workspace_dir()
+        return self.ctx.paths.skills_workspace_dir()
+
+    def _builtin_templates_dir(self, kind: Literal["skills", "scenarios"]) -> Path:
+        if kind == "scenarios":
+            return self.ctx.paths.scenario_templates_dir()
+        return self.ctx.paths.skill_templates_dir()
+
+    def _default_template_name(self, kind: Literal["skills", "scenarios"]) -> str:
+        return "scenario_default" if kind == "scenarios" else "skill_default"
+
+    def _collect_templates(self, directory: Path) -> list[str]:
+        if not directory.exists():
+            return []
+        return sorted(
+            entry.name
+            for entry in directory.iterdir()
+            if entry.is_dir()
+        )
+
+    def _resolve_template(
+        self,
+        kind: Literal["skills", "scenarios"],
+        template: str | None,
+    ) -> tuple[Path, str]:
+        workspace_dir = self._workspace_templates_dir(kind)
+        builtin_dir = self._builtin_templates_dir(kind)
+        default_name = self._default_template_name(kind)
+
+        if isinstance(template, str):
+            template = template.strip() or None
+
+        template_name = template or default_name
+
+        search_candidates: list[Path] = []
+        if template:
+            search_candidates.extend(
+                [
+                    workspace_dir / template_name,
+                    builtin_dir / template_name,
+                ]
+            )
+        else:
+            search_candidates.append(builtin_dir / template_name)
+
+        for candidate in search_candidates:
+            if candidate.exists():
+                prototype_value = template if template else "default"
+                return candidate, prototype_value
+
+        available_user = self._collect_templates(workspace_dir)
+        available_builtin = self._collect_templates(builtin_dir)
+
+        limit = 20
+        lines = [f"Template '{template_name}' not found for {kind[:-1]}."]
+        lines.append("Available templates (use --template <name>):")
+
+        remaining = limit
+        if available_user:
+            lines.append("  Workspace templates:")
+            for name in available_user[:remaining]:
+                lines.append(f"    - {name}")
+            remaining -= min(len(available_user), remaining)
+        if available_builtin and remaining > 0:
+            lines.append("  Built-in templates:")
+            for name in available_builtin[:remaining]:
+                lines.append(f"    - {name}")
+            remaining -= min(len(available_builtin), remaining)
+        if not available_user and not available_builtin:
+            lines.append("  (no templates available)")
+        elif remaining == 0 and (len(available_user) + len(available_builtin)) > limit:
+            lines.append("  …")
+
+        lines.append("Specify a template explicitly with --template <name>.")
+
+        raise TemplateResolutionError("\n".join(lines))
+
+    def _update_manifest(
+        self,
+        kind: Literal["skills", "scenarios"],
+        target: Path,
+        name: str,
+        prototype: str | None,
+        *,
+        version_bump_index: int | None,
+        set_prototype: bool,
+        explicit_version: str | None = None,
+    ) -> dict[str, str] | None:
+        for candidate in self._manifest_candidates(kind):
+            manifest_path = target / candidate
+            if not manifest_path.exists():
+                continue
+            data = _load_manifest(manifest_path)
+            data["name"] = name
+            if set_prototype and prototype is not None:
+                data["prototype"] = prototype
+
+            existing_version = data.get("version") if isinstance(data.get("version"), str) else None
+            if explicit_version is not None:
+                data["version"] = explicit_version
+            elif version_bump_index is not None:
+                data["version"] = _bump_version(existing_version, version_bump_index)
+
+            timestamp = _current_timestamp()
+            data["updated_at"] = timestamp
+
+            _write_manifest(manifest_path, data)
+            return {
+                "version": data.get("version") if isinstance(data.get("version"), str) else None,
+                "updated_at": timestamp,
+            }
+        return None
+
+    def _manifest_candidates(self, kind: Literal["skills", "scenarios"]) -> list[str]:
+        if kind == "skills":
+            return ["skill.yaml"]
+        return ["scenario.yaml", "scenario.yml", "scenario.json"]
+
+    def _artifact_manifest_info(
+        self,
+        entry: Path,
+        kind: Literal["skills", "scenarios"],
+    ) -> tuple[str, str | None, str | None]:
+        for candidate in self._manifest_candidates(kind):
+            manifest_path = entry / candidate
+            if not manifest_path.exists():
+                continue
+            data = _load_manifest(manifest_path)
+            name_raw = data.get("name")
+            name = name_raw.strip() if isinstance(name_raw, str) and name_raw.strip() else entry.name
+            version_raw = data.get("version")
+            version = version_raw if isinstance(version_raw, str) and version_raw else None
+            updated_raw = data.get("updated_at")
+            updated_at = updated_raw if isinstance(updated_raw, str) and updated_raw else None
+            return name, version, updated_at
+        return entry.name, None, None
 
     def _mtls_material_for_role(self, cfg: NodeConfig, role: Literal["hub", "node"]) -> tuple[str, str, ssl.SSLContext]:
         ca_path = cfg.ca_cert_path()
@@ -1057,6 +1818,14 @@ class RootDeveloperService:
         source = workspace / kind / name
         if not source.exists():
             raise RootServiceError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
+        manifest_meta = self._update_manifest(
+            kind,
+            source,
+            name,
+            None,
+            version_bump_index=2,
+            set_prototype=False,
+        )
         archive_bytes = create_zip_bytes(source)
         archive_b64 = archive_bytes_to_b64(archive_bytes)
         digest = hashlib.sha256(archive_bytes).hexdigest()
@@ -1090,6 +1859,122 @@ class RootDeveloperService:
             stored_path=stored,
             sha256=digest,
             bytes_uploaded=len(archive_bytes),
+            version=(manifest_meta or {}).get("version"),
+            updated_at=(manifest_meta or {}).get("updated_at"),
+        )
+
+    def _publish_artifact(
+        self,
+        cfg: NodeConfig,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        *,
+        bump: Literal["major", "minor", "patch"],
+        force: bool,
+        dry_run: bool,
+    ) -> ArtifactPublishResult:
+        bump_map = {"major": 0, "minor": 1, "patch": 2}
+        if bump not in bump_map:
+            raise RootServiceError(f"Unsupported version bump '{bump}'")
+        bump_index = bump_map[bump]
+
+        workspace_root = self._workspace_root(cfg)
+        source = workspace_root / kind / name
+        if not source.exists() or not source.is_dir():
+            raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
+
+        registry_root = self._registry_root(kind)
+        registry_root.mkdir(parents=True, exist_ok=True)
+        target = registry_root / name
+
+        source_payload = self._manifest_payload(source, kind)
+        source_data = source_payload[1] if source_payload else {}
+        target_payload = self._manifest_payload(target, kind) if target.exists() else None
+        target_data = target_payload[1] if target_payload else {}
+        warnings = self._manifest_warnings(source_data, target_data)
+
+        previous_version: str | None = None
+        if target.exists():
+            _, previous_version, _ = self._artifact_manifest_info(target, kind)
+
+        new_version = _bump_version(previous_version, bump_index)
+
+        if warnings and not force and not dry_run:
+            warning_text = "; ".join(warnings)
+            raise RootServiceError(
+                "; ".join(
+                    [
+                        "Manifest metadata differences detected",
+                        warning_text,
+                        "Re-run with --force to publish anyway.",
+                    ]
+                )
+            )
+
+        if dry_run:
+            timestamp = _current_timestamp()
+            return ArtifactPublishResult(
+                kind=kind.rstrip("s"),
+                name=name,
+                source_path=source,
+                target_path=target,
+                version=new_version,
+                previous_version=previous_version,
+                updated_at=timestamp,
+                dry_run=True,
+                warnings=tuple(warnings),
+            )
+
+        backup: Path | None = None
+        if target.exists():
+            backup = target.parent / f".{target.name}.publish-backup"
+            if backup.exists():
+                shutil.rmtree(backup)
+            target.rename(backup)
+
+        scaffold = scaffold_skill_create if kind == "skills" else scaffold_scenario_create
+        created = False
+        manifest_meta: dict[str, str] | None = None
+        try:
+            scaffold(name, template=str(source), version=new_version, register=True, push=False)
+            created = True
+            manifest_meta = self._update_manifest(
+                kind,
+                target,
+                name,
+                None,
+                version_bump_index=None,
+                set_prototype=False,
+                explicit_version=new_version,
+            )
+        except Exception:
+            if created and target.exists():
+                try:
+                    shutil.rmtree(target)
+                except OSError:
+                    pass
+            if backup and backup.exists():
+                try:
+                    backup.rename(target)
+                except OSError:
+                    pass
+            raise
+        else:
+            if backup and backup.exists():
+                shutil.rmtree(backup)
+
+        updated_at = (manifest_meta or {}).get("updated_at") or _current_timestamp()
+
+        return ArtifactPublishResult(
+            kind=kind.rstrip("s"),
+            name=name,
+            source_path=source,
+            target_path=target,
+            version=new_version,
+            previous_version=previous_version,
+            updated_at=updated_at,
+            dry_run=False,
+            warnings=tuple(warnings),
         )
 
 
@@ -1100,11 +1985,16 @@ __all__ = [
     "RootAuthError",
     "RootDeveloperService",
     "RootServiceError",
+    "TemplateResolutionError",
+    "ArtifactNotFoundError",
     "DeviceAuthorization",
     "RootInitResult",
     "RootLoginResult",
     "ArtifactCreateResult",
     "ArtifactPushResult",
+    "ArtifactDeleteResult",
+    "ArtifactListItem",
+    "ArtifactPublishResult",
     "assert_safe_name",
     "create_zip_bytes",
     "archive_bytes_to_b64",
