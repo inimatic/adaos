@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict, List
 
@@ -8,10 +9,15 @@ import typer
 from adaos.services.node_config import displayable_path
 from adaos.services.root.service import (
     DeviceAuthorization,
+    ArtifactDeleteResult,
+    ArtifactListItem,
+    ArtifactNotFoundError,
+    ArtifactPublishResult,
     RootDeveloperService,
     RootInitResult,
     RootLoginResult,
     RootServiceError,
+    TemplateResolutionError,
 )
 
 app = typer.Typer(help="Developer utilities for Root and Forge workflows.")
@@ -51,6 +57,70 @@ def _parse_metadata(pairs: List[str]) -> Dict[str, str]:
             raise typer.BadParameter("Metadata key must not be empty")
         result[key] = value
     return result
+
+
+def _echo_artifact_list(items: List[ArtifactListItem], json_output: bool) -> None:
+    if json_output:
+        payload = [
+            {
+                "name": item.name,
+                "version": item.version,
+                "updated_at": item.updated_at,
+            }
+            for item in items
+        ]
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    if not items:
+        typer.echo("No artifacts found.")
+        return
+
+    headers = ["Name", "Version", "Updated"]
+    rows = [
+        [
+            item.name,
+            item.version or "—",
+            item.updated_at or "—",
+        ]
+        for item in items
+    ]
+    widths = [max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))]
+    header_line = "  ".join(headers[i].ljust(widths[i]) for i in range(len(headers)))
+    separator = "  ".join("-" * widths[i] for i in range(len(headers)))
+    typer.echo(header_line)
+    typer.echo(separator)
+    for row in rows:
+        typer.echo("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
+
+
+def _echo_delete_result(kind_label: str, result: ArtifactDeleteResult) -> None:
+    typer.secho(f"{kind_label} '{result.name}' deleted.", fg=typer.colors.GREEN)
+    typer.echo(f"Location: {_display_path(result.path)}")
+    if result.version:
+        typer.echo(f"Last version: {result.version}")
+    if result.updated_at:
+        typer.echo(f"Last updated: {result.updated_at}")
+
+
+def _echo_publish_result(kind_label: str, result: ArtifactPublishResult) -> None:
+    if result.dry_run:
+        typer.secho(
+            f"Dry run: would publish {kind_label.lower()} '{result.name}' to the registry.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        typer.secho(f"{kind_label} '{result.name}' published to the registry.", fg=typer.colors.GREEN)
+    typer.echo(f"Source: {_display_path(result.source_path)}")
+    typer.echo(f"Target: {_display_path(result.target_path)}")
+    typer.echo(f"Version: {result.version}")
+    if result.previous_version:
+        typer.echo(f"Previous version: {result.previous_version}")
+    typer.echo(f"Updated at: {result.updated_at}")
+    if result.warnings:
+        typer.secho("Warnings:", fg=typer.colors.YELLOW)
+        for warning in result.warnings:
+            typer.echo(f"  - {warning}")
 
 
 @root_app.command("init")
@@ -116,10 +186,21 @@ def _echo_login_result(result: RootLoginResult) -> None:
 
 
 @skill_app.command("create")
-def skill_create(name: str) -> None:
+def skill_create(
+    name: str,
+    template: str | None = typer.Option(
+        None,
+        "--template",
+        "-t",
+        help="Skill template name. Defaults to the built-in skill_default template.",
+    ),
+) -> None:
     service = _service()
     try:
-        result = service.create_skill(name)
+        result = service.create_skill(name, template=template)
+    except TemplateResolutionError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
@@ -141,11 +222,84 @@ def skill_push(name: str) -> None:
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
 
 
-@scenario_app.command("create")
-def scenario_create(name: str) -> None:
+@skill_app.command("list")
+def skill_list(json_output: bool = typer.Option(False, "--json", help="Render output as JSON.")) -> None:
     service = _service()
     try:
-        result = service.create_scenario(name)
+        items = service.list_skills()
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_artifact_list(items, json_output)
+
+
+@skill_app.command("delete")
+def skill_delete(
+    name: str,
+    yes: bool = typer.Option(False, "--yes", help="Delete without confirmation."),
+) -> None:
+    if not yes:
+        confirm = typer.confirm(f"Delete skill '{name}' from the dev workspace?", default=False)
+        if not confirm:
+            typer.echo("Aborted.")
+            raise typer.Exit(0)
+
+    service = _service()
+    try:
+        result = service.delete_skill(name)
+    except ArtifactNotFoundError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_delete_result("Skill", result)
+
+
+@skill_app.command("publish")
+def skill_publish(
+    name: str,
+    bump: str = typer.Option(
+        "patch",
+        "--bump",
+        help="Which semantic version component to increment (patch, minor, major).",
+        show_default=True,
+    ),
+    force: bool = typer.Option(False, "--force", help="Ignore manifest metadata differences."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without modifying files."),
+) -> None:
+    bump_normalized = bump.lower()
+    if bump_normalized not in {"patch", "minor", "major"}:
+        raise typer.BadParameter("--bump must be one of patch, minor, or major")
+
+    service = _service()
+    try:
+        result = service.publish_skill(name, bump=bump_normalized, force=force, dry_run=dry_run)
+    except ArtifactNotFoundError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_publish_result("Skill", result)
+
+
+@scenario_app.command("create")
+def scenario_create(
+    name: str,
+    template: str | None = typer.Option(
+        None,
+        "--template",
+        "-t",
+        help="Scenario template name. Defaults to the built-in scenario_default template.",
+    ),
+) -> None:
+    service = _service()
+    try:
+        result = service.create_scenario(name, template=template)
+    except TemplateResolutionError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
@@ -165,3 +319,65 @@ def scenario_push(name: str) -> None:
     typer.echo(f"Stored path: {result.stored_path}")
     typer.echo(f"SHA256: {result.sha256}")
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
+
+
+@scenario_app.command("list")
+def scenario_list(json_output: bool = typer.Option(False, "--json", help="Render output as JSON.")) -> None:
+    service = _service()
+    try:
+        items = service.list_scenarios()
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_artifact_list(items, json_output)
+
+
+@scenario_app.command("delete")
+def scenario_delete(
+    name: str,
+    yes: bool = typer.Option(False, "--yes", help="Delete without confirmation."),
+) -> None:
+    if not yes:
+        confirm = typer.confirm(f"Delete scenario '{name}' from the dev workspace?", default=False)
+        if not confirm:
+            typer.echo("Aborted.")
+            raise typer.Exit(0)
+
+    service = _service()
+    try:
+        result = service.delete_scenario(name)
+    except ArtifactNotFoundError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_delete_result("Scenario", result)
+
+
+@scenario_app.command("publish")
+def scenario_publish(
+    name: str,
+    bump: str = typer.Option(
+        "patch",
+        "--bump",
+        help="Which semantic version component to increment (patch, minor, major).",
+        show_default=True,
+    ),
+    force: bool = typer.Option(False, "--force", help="Ignore manifest metadata differences."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without modifying files."),
+) -> None:
+    bump_normalized = bump.lower()
+    if bump_normalized not in {"patch", "minor", "major"}:
+        raise typer.BadParameter("--bump must be one of patch, minor, or major")
+
+    service = _service()
+    try:
+        result = service.publish_scenario(name, bump=bump_normalized, force=force, dry_run=dry_run)
+    except ArtifactNotFoundError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_publish_result("Scenario", result)
