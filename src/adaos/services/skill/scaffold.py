@@ -33,10 +33,16 @@ def _safe_subdir(root: Path, name: str) -> Path:
 def _resolve_template_dir(template: str) -> Path:
     """
     Находит директорию шаблона навыка:
-    1) как пакетный ресурс (adaos.skills_templates/<template>)
-    2) рядом с исходниками (…/src/adaos/skills_templates/<template>)
-    3) на случай запуска из корня репо (cwd/src/adaos/skills_templates/<template>)
+    1) явный путь к каталогу (поддерживает абсолютные и относительные значения)
+    2) как пакетный ресурс (adaos.skills_templates/<template>)
+    3) рядом с исходниками (…/src/adaos/skills_templates/<template>)
+    4) на случай запуска из корня репо (cwd/src/adaos/skills_templates/<template>)
     """
+
+    explicit = Path(template).expanduser()
+    if explicit.exists():
+        return explicit.resolve()
+
     # 1) пакетный ресурс
     try:
         import importlib.resources as ir

@@ -12,6 +12,7 @@ from adaos.services.root.service import (
     ArtifactDeleteResult,
     ArtifactListItem,
     ArtifactNotFoundError,
+    ArtifactPublishResult,
     RootDeveloperService,
     RootInitResult,
     RootLoginResult,
@@ -100,6 +101,26 @@ def _echo_delete_result(kind_label: str, result: ArtifactDeleteResult) -> None:
         typer.echo(f"Last version: {result.version}")
     if result.updated_at:
         typer.echo(f"Last updated: {result.updated_at}")
+
+
+def _echo_publish_result(kind_label: str, result: ArtifactPublishResult) -> None:
+    if result.dry_run:
+        typer.secho(
+            f"Dry run: would publish {kind_label.lower()} '{result.name}' to the registry.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        typer.secho(f"{kind_label} '{result.name}' published to the registry.", fg=typer.colors.GREEN)
+    typer.echo(f"Source: {_display_path(result.source_path)}")
+    typer.echo(f"Target: {_display_path(result.target_path)}")
+    typer.echo(f"Version: {result.version}")
+    if result.previous_version:
+        typer.echo(f"Previous version: {result.previous_version}")
+    typer.echo(f"Updated at: {result.updated_at}")
+    if result.warnings:
+        typer.secho("Warnings:", fg=typer.colors.YELLOW)
+        for warning in result.warnings:
+            typer.echo(f"  - {warning}")
 
 
 @root_app.command("init")
@@ -235,6 +256,34 @@ def skill_delete(
     _echo_delete_result("Skill", result)
 
 
+@skill_app.command("publish")
+def skill_publish(
+    name: str,
+    bump: str = typer.Option(
+        "patch",
+        "--bump",
+        help="Which semantic version component to increment (patch, minor, major).",
+        show_default=True,
+    ),
+    force: bool = typer.Option(False, "--force", help="Ignore manifest metadata differences."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without modifying files."),
+) -> None:
+    bump_normalized = bump.lower()
+    if bump_normalized not in {"patch", "minor", "major"}:
+        raise typer.BadParameter("--bump must be one of patch, minor, or major")
+
+    service = _service()
+    try:
+        result = service.publish_skill(name, bump=bump_normalized, force=force, dry_run=dry_run)
+    except ArtifactNotFoundError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_publish_result("Skill", result)
+
+
 @scenario_app.command("create")
 def scenario_create(
     name: str,
@@ -304,3 +353,31 @@ def scenario_delete(
         _print_error(str(exc))
         raise typer.Exit(1)
     _echo_delete_result("Scenario", result)
+
+
+@scenario_app.command("publish")
+def scenario_publish(
+    name: str,
+    bump: str = typer.Option(
+        "patch",
+        "--bump",
+        help="Which semantic version component to increment (patch, minor, major).",
+        show_default=True,
+    ),
+    force: bool = typer.Option(False, "--force", help="Ignore manifest metadata differences."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without modifying files."),
+) -> None:
+    bump_normalized = bump.lower()
+    if bump_normalized not in {"patch", "minor", "major"}:
+        raise typer.BadParameter("--bump must be one of patch, minor, or major")
+
+    service = _service()
+    try:
+        result = service.publish_scenario(name, bump=bump_normalized, force=force, dry_run=dry_run)
+    except ArtifactNotFoundError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_publish_result("Scenario", result)

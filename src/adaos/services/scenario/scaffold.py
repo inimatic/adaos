@@ -29,6 +29,10 @@ def _safe_subdir(root: Path, name: str) -> Path:
 def _resolve_template_dir(template: str) -> Path:
     """Locate a scenario template shipped with AdaOS or alongside sources."""
 
+    explicit = Path(template).expanduser()
+    if explicit.exists():
+        return explicit.resolve()
+
     try:
         import importlib.resources as ir
         import adaos.scenario_templates as templates_pkg

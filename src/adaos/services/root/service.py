@@ -28,6 +28,8 @@ from adaos.services.node_config import (
     load_node,
     save_node,
 )
+from adaos.services.skill.scaffold import create as scaffold_skill_create
+from adaos.services.scenario.scaffold import create as scaffold_scenario_create
 
 from .client import RootHttpClient, RootHttpError
 from .keyring import KeyringUnavailableError, delete_refresh, load_refresh, save_refresh
@@ -447,6 +449,19 @@ class ArtifactListItem:
     path: Path
     version: str | None
     updated_at: str | None
+
+
+@dataclass(slots=True)
+class ArtifactPublishResult:
+    kind: str
+    name: str
+    source_path: Path
+    target_path: Path
+    version: str
+    previous_version: str | None
+    updated_at: str
+    dry_run: bool = False
+    warnings: tuple[str, ...] = ()
 
 
 _SKIP_DIRS = {
@@ -990,6 +1005,142 @@ class RootDeveloperService:
         )
         return result
 
+    def publish_skill(
+        self,
+        name: str,
+        *,
+        bump: Literal["major", "minor", "patch"] = "patch",
+        force: bool = False,
+        dry_run: bool = False,
+    ) -> ArtifactPublishResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(
+            self.ctx.bus,
+            "root.dev.skill.publish.start",
+            {"name": name, "node_id": node_id, "bump": bump, "dry_run": dry_run},
+            "root.dev",
+        )
+        try:
+            result = self._publish_artifact(
+                cfg,
+                "skills",
+                name,
+                bump=bump,
+                force=force,
+                dry_run=dry_run,
+            )
+        except ArtifactNotFoundError:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.publish.missing",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.skill.publish.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.skill.publish.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+                "dry_run": result.dry_run,
+            },
+            "root.dev",
+        )
+        if not result.dry_run:
+            emit(
+                self.ctx.bus,
+                "registry.skills.published",
+                {
+                    "name": result.name,
+                    "version": result.version,
+                    "previous_version": result.previous_version,
+                    "updated_at": result.updated_at,
+                },
+                "root.dev",
+            )
+        return result
+
+    def publish_scenario(
+        self,
+        name: str,
+        *,
+        bump: Literal["major", "minor", "patch"] = "patch",
+        force: bool = False,
+        dry_run: bool = False,
+    ) -> ArtifactPublishResult:
+        cfg = self._load_config()
+        node_id = cfg.node_settings.id or cfg.node_id
+        emit(
+            self.ctx.bus,
+            "root.dev.scenario.publish.start",
+            {"name": name, "node_id": node_id, "bump": bump, "dry_run": dry_run},
+            "root.dev",
+        )
+        try:
+            result = self._publish_artifact(
+                cfg,
+                "scenarios",
+                name,
+                bump=bump,
+                force=force,
+                dry_run=dry_run,
+            )
+        except ArtifactNotFoundError:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.publish.missing",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        except Exception:
+            emit(
+                self.ctx.bus,
+                "root.dev.scenario.publish.error",
+                {"name": name, "node_id": node_id},
+                "root.dev",
+            )
+            raise
+        emit(
+            self.ctx.bus,
+            "root.dev.scenario.publish.done",
+            {
+                "name": result.name,
+                "node_id": node_id,
+                "version": result.version,
+                "previous_version": result.previous_version,
+                "updated_at": result.updated_at,
+                "dry_run": result.dry_run,
+            },
+            "root.dev",
+        )
+        if not result.dry_run:
+            emit(
+                self.ctx.bus,
+                "registry.scenarios.published",
+                {
+                    "name": result.name,
+                    "version": result.version,
+                    "previous_version": result.previous_version,
+                    "updated_at": result.updated_at,
+                },
+                "root.dev",
+            )
+        return result
+
     def delete_skill(self, name: str) -> ArtifactDeleteResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
@@ -1012,6 +1163,7 @@ class RootDeveloperService:
                 "root.dev",
             )
             raise
+        registry_path = self._delete_registry_artifact("skills", result.name)
         emit(
             self.ctx.bus,
             "dev.skills.deleted",
@@ -1020,6 +1172,7 @@ class RootDeveloperService:
                 "node_id": node_id,
                 "version": result.version,
                 "updated_at": result.updated_at,
+                "registry_path": displayable_path(registry_path) if registry_path else None,
             },
             "root.dev",
         )
@@ -1343,7 +1496,7 @@ class RootDeveloperService:
             return None
 
     def _workspace_root(self, cfg: NodeConfig) -> Path:
-        hub_id = cfg.node_settings.id or cfg.node_id or "pending_hub"
+        hub_id = cfg.subnet_id or "pending_hub"
         return (self.ctx.paths.base_dir() / "dev" / hub_id).resolve()
 
     def _prepare_workspace(self, cfg: NodeConfig, *, owner: str) -> Path:
@@ -1442,6 +1595,62 @@ class RootDeveloperService:
         self._save_config(cfg)
         return result
 
+    def _registry_root(self, kind: Literal["skills", "scenarios"]) -> Path:
+        if kind == "scenarios":
+            return Path(self.ctx.paths.scenarios_dir())
+        return Path(self.ctx.paths.skills_dir())
+
+    def _delete_registry_artifact(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+    ) -> Path | None:
+        root = self._registry_root(kind)
+        target = root / name
+        if not target.exists():
+            return None
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            raise RootServiceError(f"Failed to delete registry {kind[:-1]} '{name}' at {target}: {exc}") from exc
+        return target
+
+    def _manifest_payload(
+        self,
+        directory: Path,
+        kind: Literal["skills", "scenarios"],
+    ) -> tuple[Path, dict[str, Any]] | None:
+        for candidate in self._manifest_candidates(kind):
+            manifest_path = directory / candidate
+            if not manifest_path.exists():
+                continue
+            data = _load_manifest(manifest_path)
+            return manifest_path, data
+        return None
+
+    def _manifest_warnings(
+        self,
+        source: dict[str, Any] | None,
+        target: dict[str, Any] | None,
+    ) -> list[str]:
+        if not source or not target:
+            return []
+        ignore = {"version", "updated_at"}
+        keys = sorted(set(source.keys()) | set(target.keys()))
+        warnings: list[str] = []
+        for key in keys:
+            if key in ignore:
+                continue
+            if key not in source:
+                warnings.append(f"Registry metadata contains '{key}' absent in dev copy")
+                continue
+            if key not in target:
+                warnings.append(f"Dev metadata contains new field '{key}' not present in registry")
+                continue
+            if source[key] != target[key]:
+                warnings.append(f"Field '{key}' differs between dev and registry metadata")
+        return warnings
+
     def _workspace_templates_dir(self, kind: Literal["skills", "scenarios"]) -> Path:
         if kind == "scenarios":
             return self.ctx.paths.scenarios_workspace_dir()
@@ -1530,6 +1739,7 @@ class RootDeveloperService:
         *,
         version_bump_index: int | None,
         set_prototype: bool,
+        explicit_version: str | None = None,
     ) -> dict[str, str] | None:
         for candidate in self._manifest_candidates(kind):
             manifest_path = target / candidate
@@ -1541,7 +1751,9 @@ class RootDeveloperService:
                 data["prototype"] = prototype
 
             existing_version = data.get("version") if isinstance(data.get("version"), str) else None
-            if version_bump_index is not None:
+            if explicit_version is not None:
+                data["version"] = explicit_version
+            elif version_bump_index is not None:
                 data["version"] = _bump_version(existing_version, version_bump_index)
 
             timestamp = _current_timestamp()
@@ -1651,6 +1863,120 @@ class RootDeveloperService:
             updated_at=(manifest_meta or {}).get("updated_at"),
         )
 
+    def _publish_artifact(
+        self,
+        cfg: NodeConfig,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        *,
+        bump: Literal["major", "minor", "patch"],
+        force: bool,
+        dry_run: bool,
+    ) -> ArtifactPublishResult:
+        bump_map = {"major": 0, "minor": 1, "patch": 2}
+        if bump not in bump_map:
+            raise RootServiceError(f"Unsupported version bump '{bump}'")
+        bump_index = bump_map[bump]
+
+        workspace_root = self._workspace_root(cfg)
+        source = workspace_root / kind / name
+        if not source.exists() or not source.is_dir():
+            raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
+
+        registry_root = self._registry_root(kind)
+        registry_root.mkdir(parents=True, exist_ok=True)
+        target = registry_root / name
+
+        source_payload = self._manifest_payload(source, kind)
+        source_data = source_payload[1] if source_payload else {}
+        target_payload = self._manifest_payload(target, kind) if target.exists() else None
+        target_data = target_payload[1] if target_payload else {}
+        warnings = self._manifest_warnings(source_data, target_data)
+
+        previous_version: str | None = None
+        if target.exists():
+            _, previous_version, _ = self._artifact_manifest_info(target, kind)
+
+        new_version = _bump_version(previous_version, bump_index)
+
+        if warnings and not force and not dry_run:
+            warning_text = "; ".join(warnings)
+            raise RootServiceError(
+                "; ".join(
+                    [
+                        "Manifest metadata differences detected",
+                        warning_text,
+                        "Re-run with --force to publish anyway.",
+                    ]
+                )
+            )
+
+        if dry_run:
+            timestamp = _current_timestamp()
+            return ArtifactPublishResult(
+                kind=kind.rstrip("s"),
+                name=name,
+                source_path=source,
+                target_path=target,
+                version=new_version,
+                previous_version=previous_version,
+                updated_at=timestamp,
+                dry_run=True,
+                warnings=tuple(warnings),
+            )
+
+        backup: Path | None = None
+        if target.exists():
+            backup = target.parent / f".{target.name}.publish-backup"
+            if backup.exists():
+                shutil.rmtree(backup)
+            target.rename(backup)
+
+        scaffold = scaffold_skill_create if kind == "skills" else scaffold_scenario_create
+        created = False
+        manifest_meta: dict[str, str] | None = None
+        try:
+            scaffold(name, template=str(source), version=new_version, register=True, push=False)
+            created = True
+            manifest_meta = self._update_manifest(
+                kind,
+                target,
+                name,
+                None,
+                version_bump_index=None,
+                set_prototype=False,
+                explicit_version=new_version,
+            )
+        except Exception:
+            if created and target.exists():
+                try:
+                    shutil.rmtree(target)
+                except OSError:
+                    pass
+            if backup and backup.exists():
+                try:
+                    backup.rename(target)
+                except OSError:
+                    pass
+            raise
+        else:
+            if backup and backup.exists():
+                shutil.rmtree(backup)
+
+        updated_at = (manifest_meta or {}).get("updated_at") or _current_timestamp()
+
+        return ArtifactPublishResult(
+            kind=kind.rstrip("s"),
+            name=name,
+            source_path=source,
+            target_path=target,
+            version=new_version,
+            previous_version=previous_version,
+            updated_at=updated_at,
+            dry_run=False,
+            warnings=tuple(warnings),
+        )
+
 
 __all__ = [
     "RootAuthService",
@@ -1668,6 +1994,7 @@ __all__ = [
     "ArtifactPushResult",
     "ArtifactDeleteResult",
     "ArtifactListItem",
+    "ArtifactPublishResult",
     "assert_safe_name",
     "create_zip_bytes",
     "archive_bytes_to_b64",
