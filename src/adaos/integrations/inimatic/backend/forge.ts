@@ -1,7 +1,8 @@
 // src/adaos/integrations/inimatic/backend/forge.ts
 import fs from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path, { resolve as pathResolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import AdmZip from 'adm-zip';
 import { simpleGit, type SimpleGit } from 'simple-git';
@@ -36,8 +37,38 @@ export type WriteDraftOptions = {
 };
 
 export type DraftWriteResult = {
-	storedPath: string;
-	commitSha: string;
+        storedPath: string;
+        commitSha: string;
+};
+
+export type DeleteDraftArgs = {
+        kind: DraftKind;
+        subnetId: string;
+        name: string;
+        nodeId?: string;
+        allNodes?: boolean;
+};
+
+export type DeleteDraftResult = {
+        deleted: Array<{ node_id: string; storedPath?: string }>;
+        redisKeys?: string[];
+        auditId: string;
+};
+
+export type DeleteRegistryArgs = {
+        kind: DraftKind;
+        subnetId: string;
+        name: string;
+        version?: string;
+        allVersions?: boolean;
+        force?: boolean;
+};
+
+export type DeleteRegistryResult = {
+        deleted: Array<{ version: string }>;
+        skipped?: Array<{ version: string; reason: string }>;
+        tombstoned?: boolean;
+        auditId: string;
 };
 
 const DEFAULT_WORKDIR = '/var/lib/adaos/forge';
@@ -256,11 +287,11 @@ export class ForgeManager {
 		});
 	}
 
-	async writeDraft(options: WriteDraftOptions): Promise<DraftWriteResult> {
-		const { kind, subnetId, nodeId, name, archive } = options;
-		await this.ensureReady();
-		return this.mutex.runExclusive(async () => {
-			await this.ensureReady();
+        async writeDraft(options: WriteDraftOptions): Promise<DraftWriteResult> {
+                const { kind, subnetId, nodeId, name, archive } = options;
+                await this.ensureReady();
+                return this.mutex.runExclusive(async () => {
+                        await this.ensureReady();
 			const relativeBase = path.join('subnets', subnetId, 'nodes', nodeId);
 			const targetDir = path.join(this.options.workdir, relativeBase, kind, name);
 			await rm(targetDir, { recursive: true, force: true });
@@ -298,14 +329,274 @@ export class ForgeManager {
 			await this.stageAll();
 			const commitSha = await this.commit(`node:${nodeId} ${kind.slice(0, -1)}:${name} draft`);
 			await this.push();
-			return {
-				storedPath: path.join(relativeBase, kind, name),
-				commitSha,
-			};
-		});
-	}
+                        return {
+                                storedPath: path.join(relativeBase, kind, name),
+                                commitSha,
+                        };
+                });
+        }
 
-	/** Если используем GH App — не ставим GIT_SSH_COMMAND (он мешает HTTPS). */
+        async deleteDraft(options: DeleteDraftArgs): Promise<DeleteDraftResult> {
+                const { kind, subnetId, name } = options;
+                await this.ensureReady();
+                return this.mutex.runExclusive(async () => {
+                        await this.ensureReady();
+                        const started = Date.now();
+                        const auditId = randomUUID();
+                        const nodesRoot = path.join(this.options.workdir, 'subnets', subnetId, 'nodes');
+                        const tombstoneRoot = path.join(this.options.workdir, 'subnets', subnetId, 'tombstones', kind);
+                        const keyPrefix = kind === 'skills' ? 'forge:skills' : 'forge:scenarios';
+
+                        const nodes: string[] = [];
+                        if (options.allNodes) {
+                                if (fs.existsSync(nodesRoot)) {
+                                        const entries = await readdir(nodesRoot, { withFileTypes: true });
+                                        for (const entry of entries) {
+                                                if (entry.isDirectory()) nodes.push(entry.name);
+                                        }
+                                }
+                        } else {
+                                nodes.push(options.nodeId ?? 'hub');
+                        }
+
+                        const tombstoneNodes: string[] = [];
+                        if (nodes.length === 0 && fs.existsSync(tombstoneRoot)) {
+                                const entries = await readdir(tombstoneRoot, { withFileTypes: true });
+                                for (const entry of entries) {
+                                        if (!entry.isDirectory()) continue;
+                                        const candidate = path.join(tombstoneRoot, entry.name, `${name}.json`);
+                                        if (fs.existsSync(candidate)) {
+                                                tombstoneNodes.push(entry.name);
+                                        }
+                                }
+                        }
+
+                        if (nodes.length === 0 && tombstoneNodes.length === 0) {
+                                const error: any = new Error('draft not found');
+                                error.code = 'not_found';
+                                throw error;
+                        }
+
+                        const redisKeyNodes = Array.from(new Set([...nodes, ...tombstoneNodes]));
+                        const redisKeys = redisKeyNodes.map((node) => `${keyPrefix}:${subnetId}:${node}:${name}`);
+                        const deleted: Array<{ node_id: string; storedPath?: string }> = [];
+                        let changed = false;
+                        let hadAny = tombstoneNodes.length > 0;
+
+                        for (const node of nodes) {
+                                const relativeBase = path.join('subnets', subnetId, 'nodes', node);
+                                const storedPath = path.join(relativeBase, kind, name);
+                                const targetDir = path.join(this.options.workdir, storedPath);
+                                const tombstonePath = path.join(tombstoneRoot, node, `${name}.json`);
+                                const exists = fs.existsSync(targetDir);
+                                const tombstoneExists = fs.existsSync(tombstonePath);
+
+                                if (!exists && !tombstoneExists) {
+                                        continue;
+                                }
+
+                                if (exists) {
+                                        await rm(targetDir, { recursive: true, force: true });
+                                        await mkdir(path.dirname(tombstonePath), { recursive: true });
+                                        await writeFile(
+                                                tombstonePath,
+                                                JSON.stringify({
+                                                        auditId,
+                                                        deletedAt: new Date().toISOString(),
+                                                        kind,
+                                                        name,
+                                                        node,
+                                                }) + '\n',
+                                        );
+                                        deleted.push({ node_id: node, storedPath });
+                                        changed = true;
+                                }
+
+                                hadAny = true;
+                        }
+
+                        if (!changed && !hadAny) {
+                                const error: any = new Error('draft not found');
+                                error.code = 'not_found';
+                                throw error;
+                        }
+
+                        if (changed) {
+                                await this.stageAll();
+                                const nodesLabel = redisKeyNodes.join(',') || 'none';
+                                const commitMessage = `chore(draft): delete ${kind.slice(0, -1)} ${name} nodes:${nodesLabel} [audit:${auditId}]`;
+                                await this.commit(commitMessage);
+                                await this.push();
+                        }
+
+                        console.info('[forge] deleteDraft', {
+                                action: 'delete_draft',
+                                kind,
+                                subnetId,
+                                name,
+                                nodeId: options.nodeId,
+                                allNodes: Boolean(options.allNodes),
+                                redisKeys,
+                                deleted,
+                                auditId,
+                                duration_ms: Date.now() - started,
+                        });
+
+                        return { deleted: changed ? deleted : [], redisKeys, auditId };
+                });
+        }
+
+        async deleteRegistry(options: DeleteRegistryArgs): Promise<DeleteRegistryResult> {
+                const { kind, subnetId, name, version, allVersions } = options;
+                await this.ensureReady();
+                return this.mutex.runExclusive(async () => {
+                        await this.ensureReady();
+                        const started = Date.now();
+                        const auditId = randomUUID();
+                        const registryRoot = path.join(this.options.workdir, 'subnets', subnetId, 'registry', kind, name);
+                        const tombstoneRoot = path.join(
+                                this.options.workdir,
+                                'subnets',
+                                subnetId,
+                                'registry',
+                                '.tombstones',
+                                kind,
+                                name,
+                        );
+
+                        let versions: string[] = [];
+                        if (version) {
+                                versions = [version];
+                        } else if (allVersions) {
+                                if (fs.existsSync(registryRoot)) {
+                                        const entries = await readdir(registryRoot, { withFileTypes: true });
+                                        versions = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+                                }
+                        }
+
+                        const deleted: Array<{ version: string }> = [];
+                        const skipped: Array<{ version: string; reason: string }> = [];
+                        const tombstoneVersions: string[] = [];
+                        let changed = false;
+
+                        if (!versions.length) {
+                                const tombstonePath = version
+                                        ? path.join(tombstoneRoot, `${version}.json`)
+                                        : path.join(tombstoneRoot, '__all__.json');
+                                if (fs.existsSync(tombstonePath)) {
+                                        console.info('[forge] deleteRegistry idempotent', {
+                                                action: 'delete_registry',
+                                                kind,
+                                                subnetId,
+                                                name,
+                                                version: version ?? 'all',
+                                                auditId,
+                                        });
+                                        return {
+                                                deleted: [],
+                                                skipped,
+                                                tombstoned: Boolean(allVersions),
+                                                auditId,
+                                        };
+                                }
+                                const error: any = new Error('registry artifact not found');
+                                error.code = 'not_found';
+                                throw error;
+                        }
+
+                        for (const ver of versions) {
+                                const targetDir = path.join(registryRoot, ver);
+                                const tombstonePath = path.join(tombstoneRoot, `${ver}.json`);
+                                const exists = fs.existsSync(targetDir);
+                                const tombstoneExists = fs.existsSync(tombstonePath);
+
+                                if (!exists) {
+                                        if (tombstoneExists) tombstoneVersions.push(ver);
+                                        continue;
+                                }
+
+                                await rm(targetDir, { recursive: true, force: true });
+                                await mkdir(path.dirname(tombstonePath), { recursive: true });
+                                await writeFile(
+                                        tombstonePath,
+                                        JSON.stringify({
+                                                auditId,
+                                                deletedAt: new Date().toISOString(),
+                                                kind,
+                                                name,
+                                                version: ver,
+                                        }) + '\n',
+                                );
+                                deleted.push({ version: ver });
+                                changed = true;
+                        }
+
+                        if (!deleted.length && !tombstoneVersions.length) {
+                                const error: any = new Error('registry artifact not found');
+                                error.code = 'not_found';
+                                throw error;
+                        }
+
+                        let tombstoned = false;
+                        if (allVersions) {
+                                let remaining = false;
+                                if (fs.existsSync(registryRoot)) {
+                                        const entries = await readdir(registryRoot, { withFileTypes: true });
+                                        remaining = entries.some((entry) => entry.isDirectory());
+                                }
+                                if (!remaining) {
+                                        tombstoned = true;
+                                        const tombstonePath = path.join(tombstoneRoot, '__all__.json');
+                                        await mkdir(path.dirname(tombstonePath), { recursive: true });
+                                        await writeFile(
+                                                tombstonePath,
+                                                JSON.stringify({
+                                                        auditId,
+                                                        deletedAt: new Date().toISOString(),
+                                                        kind,
+                                                        name,
+                                                        allVersions: true,
+                                                }) + '\n',
+                                        );
+                                }
+                        }
+
+                        if (changed) {
+                                await this.stageAll();
+                                const summary = deleted.length === 1
+                                        ? deleted[0].version
+                                        : allVersions
+                                                ? 'all_versions'
+                                                : versions.join(',');
+                                const commitMessage = `chore(registry): delete ${kind}/${name}@${summary} [audit:${auditId}]`;
+                                await this.commit(commitMessage);
+                                await this.push();
+                        }
+
+                        console.info('[forge] deleteRegistry', {
+                                action: 'delete_registry',
+                                kind,
+                                subnetId,
+                                name,
+                                version,
+                                allVersions: Boolean(allVersions),
+                                force: Boolean(options.force),
+                                deleted,
+                                tombstoneVersions,
+                                auditId,
+                                duration_ms: Date.now() - started,
+                        });
+
+                        return {
+                                deleted: changed ? deleted : [],
+                                skipped,
+                                tombstoned: tombstoned || (allVersions ? tombstoneVersions.length > 0 : false),
+                                auditId,
+                        };
+                });
+        }
+
+        /** Если используем GH App — не ставим GIT_SSH_COMMAND (он мешает HTTPS). */
 	private gitEnv(useGhApp: boolean): NodeJS.ProcessEnv {
 		if (useGhApp) {
 			// Полностью наследуем окружение, не подсовывая ssh-команду.
