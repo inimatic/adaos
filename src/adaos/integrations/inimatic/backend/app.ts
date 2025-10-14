@@ -1165,7 +1165,7 @@ const deleteDraftHandler = (kind: DraftKind): express.RequestHandler => async (r
 		const keyPrefix = kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX;
 		const keysToDelete = result.redisKeys ?? [];
 		if (keysToDelete.length) {
-			await redisClient.del(...keysToDelete);
+			await redisClient.del(keysToDelete);
 		}
 
 		console.info('draft deleted', {
