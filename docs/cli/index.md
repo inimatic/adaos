@@ -49,7 +49,7 @@ adaos tests run
 adaos dev skill list
 ````
 
-Команда выводит навыки, найденные в каталоге `base/dev/{hub_id}/skills` текущего хаба.
+Команда выводит навыки, найденные в каталоге `base/dev/{subnet_id}/skills` текущего сабнета.
 В табличном представлении отображаются три столбца:
 
 - `Name` — имя навыка из `skill.yaml`.
@@ -64,7 +64,7 @@ adaos dev skill list
 adaos dev scenario list
 ````
 
-Перечисляет сценарии из `base/dev/{hub_id}/scenarios` с теми же полями `name`, `version` и `updated_at`.
+Перечисляет сценарии из `base/dev/{subnet_id}/scenarios` с теми же полями `name`, `version` и `updated_at`.
 Флаг `--json` доступен по аналогии с `skill list`.
 
 ### Удаление dev-артефактов
@@ -74,9 +74,25 @@ adaos dev skill delete <NAME> [--yes]
 adaos dev scenario delete <NAME> [--yes]
 ````
 
-Команды удаляют соответствующие каталоги из `base/dev/{hub_id}/skills` или `base/dev/{hub_id}/scenarios`.
+Команды удаляют соответствующие каталоги из `base/dev/{subnet_id}/skills` или `base/dev/{subnet_id}/scenarios`.
 По умолчанию CLI спрашивает подтверждение, флаг `--yes` пропускает вопрос.
 Если указанный артефакт не найден, команда завершается с кодом 3.
+Удаление навыка также вычищает опубликованную версию из реестра навыков на root-сервере.
+
+### Публикация dev-артефактов
+
+```bash
+adaos dev skill publish <NAME> [--bump patch|minor|major] [--force] [--dry-run]
+adaos dev scenario publish <NAME> [--bump patch|minor|major] [--force] [--dry-run]
+````
+
+Команды копируют артефакт из `base/dev/{subnet_id}/skills|scenarios/<NAME>` в рабочее пространство реестра (`workspace/skills` или `workspace/scenarios`).
+
+* `--bump` — компонент семантической версии для инкремента (по умолчанию `patch`).
+* `--force` — игнорировать предупреждения о различиях манифестов между dev-копией и опубликованной версией.
+* `--dry-run` — показать, какая версия будет опубликована, не изменяя файлы.
+
+После успешной публикации отправляется событие `registry.{skill|scenario}.published`.
 
 ---
 
