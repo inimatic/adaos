@@ -112,15 +112,15 @@ class HttpError extends Error {
 }
 
 function respondError(
-	req: express.Request,
-	res: express.Response,
-	status: number,
-	code: string,
-	params?: MessageParams,
+        req: express.Request,
+        res: express.Response,
+        status: number,
+        code: string,
+        params?: MessageParams,
 ): void {
-	const locale = req.locale ?? resolveLocale(req)
-	const message = translate(locale, `errors.${code}`, params)
-	res.status(status).json({ error: code, message })
+        const locale = req.locale ?? resolveLocale(req)
+        const message = translate(locale, `errors.${code}`, params)
+        res.status(status).json({ error: code, code, message })
 }
 
 function handleError(
@@ -1113,11 +1113,163 @@ const createDraftHandler = (kind: DraftKind): express.RequestHandler => async (r
 		console.error('failed to store draft', error);
 		handleError(req, res, error, { status: 500, code: 'draft_store_failed' });
 	}
+
+const deleteDraftHandler = (kind: DraftKind): express.RequestHandler => async (req, res) => {
+        const identity = req.auth;
+        if (!identity) return respondError(req, res, 401, 'client_certificate_required');
+
+        const name = typeof req.query?.name === 'string' ? req.query.name : '';
+        const payloadNodeId = typeof req.query?.node_id === 'string' ? req.query.node_id : '';
+        const allNodes = req.query?.all_nodes === 'true';
+        if (!name) return respondError(req, res, 400, 'missing_params');
+
+        try {
+                assertSafeName(name);
+        } catch {
+                return respondError(req, res, 400, 'invalid_name');
+        }
+
+        let subnetId: string;
+        let nodeId: string | undefined;
+
+        if (identity.type === 'node') {
+                subnetId = identity.subnetId;
+                nodeId = identity.nodeId;
+                if ((payloadNodeId && payloadNodeId !== nodeId) || allNodes) {
+                        return respondError(req, res, 403, 'node_mismatch');
+                }
+        } else if (identity.type === 'hub') {
+                subnetId = identity.subnetId;
+                nodeId = payloadNodeId || undefined;
+        } else {
+                return respondError(req, res, 403, 'invalid_client_certificate');
+        }
+
+        const started = Date.now();
+        try {
+                const result = await forgeManager.deleteDraft({
+                        kind,
+                        subnetId,
+                        name,
+                        nodeId,
+                        allNodes,
+                });
+
+                const keyPrefix = kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX;
+                const keysToDelete = result.redisKeys ?? [];
+                if (keysToDelete.length) {
+                        await redisClient.del(...keysToDelete);
+                }
+
+                console.info('draft deleted', {
+                        action: 'delete_draft',
+                        kind,
+                        subnetId,
+                        nodeId,
+                        name,
+                        allNodes,
+                        duration_ms: Date.now() - started,
+                        auditId: result.auditId,
+                        deleted: result.deleted,
+                });
+
+                if (!result.deleted.length) {
+                        return res.status(204).end();
+                }
+
+                return res.json({ ok: true, deleted: result.deleted, audit_id: result.auditId });
+        } catch (error: any) {
+                if (error?.code === 'not_found') {
+                        return respondError(req, res, 404, 'not_found');
+                }
+                if (error?.code === 'invalid_name') {
+                        return respondError(req, res, 400, 'invalid_name');
+                }
+                console.error('failed to delete draft', error);
+                return handleError(req, res, error, { status: 500, code: 'draft_delete_failed' });
+        }
+};
+
+
+const deleteRegistryHandler = (kind: DraftKind): express.RequestHandler => async (req, res) => {
+        const identity = req.auth;
+        if (!identity) return respondError(req, res, 401, 'client_certificate_required');
+
+        const name = typeof req.query?.name === 'string' ? req.query.name : '';
+        const version = typeof req.query?.version === 'string' ? req.query.version : undefined;
+        const allVersions = req.query?.all_versions === 'true';
+        const force = req.query?.force === 'true';
+
+        if (!name) return respondError(req, res, 400, 'missing_params');
+        if (!version && !allVersions) return respondError(req, res, 400, 'missing_params');
+
+        try {
+                assertSafeName(name);
+                if (version) assertSafeName(version);
+        } catch {
+                return respondError(req, res, 400, 'invalid_name');
+        }
+
+        const subnetId = identity.subnetId;
+
+        const started = Date.now();
+        try {
+                const result = await forgeManager.deleteRegistry({
+                        kind,
+                        subnetId,
+                        name,
+                        version,
+                        allVersions,
+                        force,
+                });
+
+                console.info('registry artifact deleted', {
+                        action: 'delete_registry',
+                        kind,
+                        subnetId,
+                        name,
+                        version,
+                        allVersions,
+                        force,
+                        duration_ms: Date.now() - started,
+                        auditId: result.auditId,
+                        deleted: result.deleted,
+                        skipped: result.skipped ?? [],
+                        tombstoned: !!result.tombstoned,
+                });
+
+                if (result.deleted?.length) {
+                        return res.json({
+                                ok: true,
+                                deleted: result.deleted,
+                                skipped: result.skipped ?? [],
+                                audit_id: result.auditId,
+                                tombstoned: !!result.tombstoned,
+                        });
+                }
+
+                return res.status(204).end();
+        } catch (error: any) {
+                if (error?.code === 'not_found') {
+                        return respondError(req, res, 404, 'not_found');
+                }
+                if (error?.code === 'in_use') {
+                        return respondError(req, res, 409, 'in_use', { refs: error.refs || [] });
+                }
+                console.error('failed to delete registry artifact', error);
+                return handleError(req, res, error, { status: 500, code: 'registry_delete_failed' });
+        }
 };
 
 
 mtlsRouter.post('/skills/draft', createDraftHandler('skills'))
 mtlsRouter.post('/scenarios/draft', createDraftHandler('scenarios'))
+
+mtlsRouter.delete('/skills/draft', deleteDraftHandler('skills'))
+mtlsRouter.delete('/scenarios/draft', deleteDraftHandler('scenarios'))
+
+mtlsRouter.delete('/skills/registry', deleteRegistryHandler('skills'))
+mtlsRouter.delete('/scenarios/registry', deleteRegistryHandler('scenarios'))
 
 mtlsRouter.post('/skills/pr', (req, res) => {
 	const identity = req.auth
