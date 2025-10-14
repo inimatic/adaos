@@ -12,6 +12,7 @@ from adaos.services.root.service import (
     RootInitResult,
     RootLoginResult,
     RootServiceError,
+    TemplateResolutionError,
 )
 
 app = typer.Typer(help="Developer utilities for Root and Forge workflows.")
@@ -116,10 +117,21 @@ def _echo_login_result(result: RootLoginResult) -> None:
 
 
 @skill_app.command("create")
-def skill_create(name: str) -> None:
+def skill_create(
+    name: str,
+    template: str | None = typer.Option(
+        None,
+        "--template",
+        "-t",
+        help="Skill template name. Defaults to the built-in skill_default template.",
+    ),
+) -> None:
     service = _service()
     try:
-        result = service.create_skill(name)
+        result = service.create_skill(name, template=template)
+    except TemplateResolutionError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
@@ -142,10 +154,21 @@ def skill_push(name: str) -> None:
 
 
 @scenario_app.command("create")
-def scenario_create(name: str) -> None:
+def scenario_create(
+    name: str,
+    template: str | None = typer.Option(
+        None,
+        "--template",
+        "-t",
+        help="Scenario template name. Defaults to the built-in scenario_default template.",
+    ),
+) -> None:
     service = _service()
     try:
-        result = service.create_scenario(name)
+        result = service.create_scenario(name, template=template)
+    except TemplateResolutionError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
