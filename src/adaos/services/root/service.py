@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import json
 import logging
 import os
 import shutil
@@ -12,7 +13,9 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping, Tuple
+from typing import Any, Callable, Iterable, Literal, Mapping
+
+import yaml
 from adaos.services.agent_context import AgentContext, get_ctx
 
 from adaos.services.crypto.pki import generate_rsa_key, make_csr, write_pem, write_private_key
@@ -320,6 +323,17 @@ class PkiService:
 
 class RootServiceError(RuntimeError):
     """Raised when developer workflow operations fail."""
+
+
+class TemplateResolutionError(RootServiceError):
+    """Raised when a requested scaffold template cannot be resolved."""
+
+    exit_code: int = 2
+
+    def __init__(self, message: str, *, exit_code: int | None = None) -> None:
+        super().__init__(message)
+        if exit_code is not None:
+            self.exit_code = exit_code
 
 
 @dataclass(slots=True)
@@ -710,11 +724,11 @@ class RootDeveloperService:
         self._save_config(cfg)
         return RootLoginResult(owner_id=owner_id, workspace_path=workspace, subnet_id=subnet_id if isinstance(subnet_id, str) else None)
 
-    def create_skill(self, name: str) -> ArtifactCreateResult:
-        return self._create_artifact("skills", name, template="skill_default")
+    def create_skill(self, name: str, template: str | None = None) -> ArtifactCreateResult:
+        return self._create_artifact("skills", name, template=template)
 
-    def create_scenario(self, name: str) -> ArtifactCreateResult:
-        return self._create_artifact("scenarios", name, template="scenario_default")
+    def create_scenario(self, name: str, template: str | None = None) -> ArtifactCreateResult:
+        return self._create_artifact("scenarios", name, template=template)
 
     def push_skill(self, name: str) -> ArtifactPushResult:
         return self._push_artifact("skills", name)
@@ -737,7 +751,7 @@ class RootDeveloperService:
         if ca_setting:
             if ca_path.exists():
                 return self._load_verify_context(ca_path)
-            default_indicator = Path("~/.adaos/keys/ca.cert").expanduser()
+            default_indicator = self.ctx.paths.base_dir() / "keys" / "ca.cert"
             try:
                 configured = Path(str(ca_setting)).expanduser()
             except Exception:  # pragma: no cover - defensive
@@ -1018,16 +1032,142 @@ class RootDeveloperService:
                 _ensure_keep_file(path / sub)
         return owner, path
 
-    def _create_artifact(self, kind: Literal["skills", "scenarios"], name: str, *, template: str) -> ArtifactCreateResult:
+    def _create_artifact(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        *,
+        template: str | None,
+    ) -> ArtifactCreateResult:
         assert_safe_name(name)
-        # Берем как шаблон установленный навык или из шаблона.
         cfg = self._load_config()
         owner, workspace = self._owner_workspace(cfg)
         target = workspace / kind / name
-        print("workspace_log", workspace, target)
-        template_path = (self.ctx.paths.scenario_templates_dir() if kind == "scenarios" else self.ctx.paths.skill_templates_dir()) / template
+
+        template_path, prototype_value = self._resolve_template(kind, template)
         _copy_template(template_path, target)
+        self._update_manifest(kind, target, name, prototype_value)
+
         return ArtifactCreateResult(kind=kind.rstrip("s"), name=name, owner_id=owner, path=target)
+
+    def _workspace_templates_dir(self, kind: Literal["skills", "scenarios"]) -> Path:
+        base = self.ctx.paths.base_dir()
+        return (base / "workspace" / kind / "templates").resolve()
+
+    def _builtin_templates_dir(self, kind: Literal["skills", "scenarios"]) -> Path:
+        if kind == "scenarios":
+            return self.ctx.paths.scenario_templates_dir()
+        return self.ctx.paths.skill_templates_dir()
+
+    def _default_template_name(self, kind: Literal["skills", "scenarios"]) -> str:
+        return "scenario_default" if kind == "scenarios" else "skill_default"
+
+    def _collect_templates(self, directory: Path) -> list[str]:
+        if not directory.exists():
+            return []
+        return sorted(
+            entry.name
+            for entry in directory.iterdir()
+            if entry.is_dir()
+        )
+
+    def _resolve_template(
+        self,
+        kind: Literal["skills", "scenarios"],
+        template: str | None,
+    ) -> tuple[Path, str]:
+        workspace_dir = self._workspace_templates_dir(kind)
+        builtin_dir = self._builtin_templates_dir(kind)
+        default_name = self._default_template_name(kind)
+
+        if isinstance(template, str):
+            template = template.strip() or None
+
+        template_name = template or default_name
+
+        search_candidates: list[Path] = []
+        if template:
+            search_candidates.extend(
+                [
+                    workspace_dir / template_name,
+                    builtin_dir / template_name,
+                ]
+            )
+        else:
+            search_candidates.append(builtin_dir / template_name)
+
+        for candidate in search_candidates:
+            if candidate.exists():
+                prototype_value = template if template else "default"
+                return candidate, prototype_value
+
+        available_user = self._collect_templates(workspace_dir)
+        available_builtin = self._collect_templates(builtin_dir)
+
+        limit = 20
+        lines = [f"Template '{template_name}' not found for {kind[:-1]}."]
+        lines.append("Available templates (use --template <name>):")
+
+        remaining = limit
+        if available_user:
+            lines.append("  Workspace templates:")
+            for name in available_user[:remaining]:
+                lines.append(f"    - {name}")
+            remaining -= min(len(available_user), remaining)
+        if available_builtin and remaining > 0:
+            lines.append("  Built-in templates:")
+            for name in available_builtin[:remaining]:
+                lines.append(f"    - {name}")
+            remaining -= min(len(available_builtin), remaining)
+        if not available_user and not available_builtin:
+            lines.append("  (no templates available)")
+        elif remaining == 0 and (len(available_user) + len(available_builtin)) > limit:
+            lines.append("  …")
+
+        lines.append("Specify a template explicitly with --template <name>.")
+
+        raise TemplateResolutionError("\n".join(lines))
+
+    def _update_manifest(
+        self,
+        kind: Literal["skills", "scenarios"],
+        target: Path,
+        name: str,
+        prototype: str,
+    ) -> None:
+        if kind == "skills":
+            candidates = ["skill.yaml"]
+        else:
+            candidates = ["scenario.yaml", "scenario.yml", "scenario.json"]
+
+        for candidate in candidates:
+            manifest_path = target / candidate
+            if not manifest_path.exists():
+                continue
+            try:
+                if manifest_path.suffix == ".json":
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        data = {}
+                    data["name"] = name
+                    data["prototype"] = prototype
+                    manifest_path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                    if not isinstance(data, dict):
+                        data = {}
+                    data["name"] = name
+                    data["prototype"] = prototype
+                    manifest_path.write_text(
+                        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                        encoding="utf-8",
+                    )
+            except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
+                raise RootServiceError(f"Failed to update manifest at {manifest_path}: {exc}") from exc
+            break
 
     def _mtls_material_for_role(self, cfg: NodeConfig, role: Literal["hub", "node"]) -> tuple[str, str, ssl.SSLContext]:
         ca_path = cfg.ca_cert_path()
@@ -1100,6 +1240,7 @@ __all__ = [
     "RootAuthError",
     "RootDeveloperService",
     "RootServiceError",
+    "TemplateResolutionError",
     "DeviceAuthorization",
     "RootInitResult",
     "RootLoginResult",
