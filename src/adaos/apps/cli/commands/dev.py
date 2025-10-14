@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict, List
 
@@ -8,6 +9,7 @@ import typer
 from adaos.services.node_config import displayable_path
 from adaos.services.root.service import (
     DeviceAuthorization,
+    ArtifactListItem,
     RootDeveloperService,
     RootInitResult,
     RootLoginResult,
@@ -52,6 +54,43 @@ def _parse_metadata(pairs: List[str]) -> Dict[str, str]:
             raise typer.BadParameter("Metadata key must not be empty")
         result[key] = value
     return result
+
+
+def _echo_artifact_list(items: List[ArtifactListItem], json_output: bool) -> None:
+    if json_output:
+        payload = [
+            {
+                "name": item.name,
+                "path": _display_path(item.path),
+                "version": item.version,
+                "updated_at": item.updated_at,
+            }
+            for item in items
+        ]
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    if not items:
+        typer.echo("No artifacts found.")
+        return
+
+    headers = ["Name", "Version", "Updated", "Path"]
+    rows = [
+        [
+            item.name,
+            item.version or "—",
+            item.updated_at or "—",
+            _display_path(item.path) or str(item.path),
+        ]
+        for item in items
+    ]
+    widths = [max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))]
+    header_line = "  ".join(headers[i].ljust(widths[i]) for i in range(len(headers)))
+    separator = "  ".join("-" * widths[i] for i in range(len(headers)))
+    typer.echo(header_line)
+    typer.echo(separator)
+    for row in rows:
+        typer.echo("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
 
 
 @root_app.command("init")
@@ -153,6 +192,17 @@ def skill_push(name: str) -> None:
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
 
 
+@skill_app.command("list")
+def skill_list(json_output: bool = typer.Option(False, "--json", help="Render output as JSON.")) -> None:
+    service = _service()
+    try:
+        items = service.list_skills()
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_artifact_list(items, json_output)
+
+
 @scenario_app.command("create")
 def scenario_create(
     name: str,
@@ -188,3 +238,14 @@ def scenario_push(name: str) -> None:
     typer.echo(f"Stored path: {result.stored_path}")
     typer.echo(f"SHA256: {result.sha256}")
     typer.echo(f"Bytes uploaded: {result.bytes_uploaded}")
+
+
+@scenario_app.command("list")
+def scenario_list(json_output: bool = typer.Option(False, "--json", help="Render output as JSON.")) -> None:
+    service = _service()
+    try:
+        items = service.list_scenarios()
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_artifact_list(items, json_output)
