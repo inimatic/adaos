@@ -1130,7 +1130,11 @@ class RootDeveloperService:
         bump: Literal["major", "minor", "patch"] = "patch",
         force: bool = False,
         dry_run: bool = False,
+        signoff: bool = False,
     ) -> ArtifactPublishResult:
+        root = self.ctx.paths.workspace_dir()
+        if not (Path(root) / ".git").exists():
+            raise RuntimeError("Skills repo is not initialized. Run `adaos skill sync` once.")
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
         emit(
@@ -1189,6 +1193,22 @@ class RootDeveloperService:
                 },
                 "root.dev",
             )
+        try:
+            self.ctx.git.sparse_add(str(self.ctx.paths.workspace_dir()), f"scenarios/{name}")
+        except Exception:
+            pass
+        # Создаём менеджер навыков вручную и пушим подпуть
+        mgr = ScenarioManager(
+            repo=self.ctx.scenarios_repo,
+            registry=SqliteSkillRegistry(self.ctx.sql),
+            git=self.ctx.git,
+            paths=self.ctx.paths,
+            bus=getattr(self.ctx, "bus", None),
+            caps=self.ctx.caps,
+        )
+        msg = f"publish(scenario): {result.name} v{result.version}"
+        sha = mgr.push(result.name, msg, signoff=signoff)
+        # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
     def delete_skill(self, name: str) -> ArtifactDeleteResult:

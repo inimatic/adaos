@@ -139,4 +139,21 @@ class CliGitClient(GitClient):
 
     def push(self, dir: StrOrPath, remote: str = "origin", branch: Optional[str] = None) -> None:
         branch = branch or self._current_branch(dir)
+        # 1) сначала пробуем обычный fast-forward pull (быстро и дёшево)
+        try:
+            _run_git(["pull", "--ff-only", remote, branch], cwd=dir)
+        except GitError:
+            # 2) если не вышло (non-ff), делаем rebase с автосбросом стэша
+            #    но shallow-репо могут не иметь базовой истории → разшалловим и повторим
+            try:
+                _run_git(["-c", "rebase.autoStash=true", "pull", "--rebase", remote, branch], cwd=dir)
+            except GitError:
+                # попытка «расшалловить» историю и снова rebase
+                try:
+                    _run_git(["fetch", "--prune", "--unshallow", remote], cwd=dir)
+                except GitError:
+                    # если git старый и не знает --unshallow, просто увеличим глубину
+                    _run_git(["fetch", "--prune", "--depth=50", remote], cwd=dir)
+                _run_git(["-c", "rebase.autoStash=true", "pull", "--rebase", remote, branch], cwd=dir)
+        # 3) когда локальная ветка на вершине origin/<branch> — пушим
         _run_git(["push", remote, branch], cwd=dir)
