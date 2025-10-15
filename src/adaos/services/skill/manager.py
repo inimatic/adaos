@@ -195,9 +195,7 @@ class SkillManager:
                     break
 
         if not manifest_path.exists():
-            raise RuntimeError(
-                "no prepared slot with resolved manifest; install the skill first"
-            )
+            raise RuntimeError("no prepared slot with resolved manifest; install the skill first")
 
         log_path = slot_paths.logs_dir / "tests.manual.log"
         try:
@@ -267,10 +265,7 @@ class SkillManager:
             remove_error = exc
         self.cleanup_runtime(name, purge_data=True)
         if remove_error is not None:
-            raise RuntimeError(
-                f"не удалось удалить рабочую копию навыка '{name}'. Закройте файлы под "
-                f"путем {(root / 'skills' / name)} и повторите попытку."
-            ) from remove_error
+            raise RuntimeError(f"не удалось удалить рабочую копию навыка '{name}'. Закройте файлы под " f"путем {(root / 'skills' / name)} и повторите попытку.") from remove_error
         emit(self.bus, "skill.uninstalled", {"id": name}, "skill.mgr")
 
     def push(self, name: str, message: str, *, signoff: bool = False) -> str:
@@ -434,9 +429,7 @@ class SkillManager:
         slot_meta = metadata.get("slots", {}).get(target_slot, {})
         manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
         if not manifest_path.exists():
-            raise RuntimeError(
-                f"slot {target_slot} of version {target_version} is not prepared; run 'adaos skill install {name} --slot={target_slot}' first"
-            )
+            raise RuntimeError(f"slot {target_slot} of version {target_version} is not prepared; run 'adaos skill install {name} --slot={target_slot}' first")
         env.set_active_slot(target_version, target_slot)
         env.active_version_marker().write_text(target_version, encoding="utf-8")
         history = metadata.setdefault("history", {})
@@ -545,10 +538,7 @@ class SkillManager:
         status = self.runtime_status(name)
         if not status.get("ready", True):
             pending_version = status.get("pending_version") or status.get("version")
-            raise RuntimeError(
-                f"skill '{name}' version {pending_version or '<unknown>'} is not activated. "
-                "Run 'adaos skill activate' before setup."
-            )
+            raise RuntimeError(f"skill '{name}' version {pending_version or '<unknown>'} is not activated. " "Run 'adaos skill activate' before setup.")
 
         manifest_path = Path(status["resolved_manifest"])
         if not manifest_path.exists():
@@ -639,6 +629,7 @@ class SkillManager:
         prev_secrets = ctx.secrets
         ctx.secrets = SecretsService(SkillSecretsBackend(env.data_root() / "files" / "secrets.json"), ctx.caps)
         execution_timeout = timeout or tool_spec.get("timeout_seconds")
+
         def _call_tool() -> Any:
             with use_ctx(ctx):
                 return execute_tool(
@@ -764,11 +755,7 @@ class SkillManager:
                 f"/{name}/slots/A/vendor",
                 f"/{name}/slots/B/vendor",
             )
-            sys.path[:] = [
-                entry
-                for entry in sys.path
-                if not any(entry.replace("\\", "/").endswith(suffix) for suffix in suffixes)
-            ]
+            sys.path[:] = [entry for entry in sys.path if not any(entry.replace("\\", "/").endswith(suffix) for suffix in suffixes)]
             paths_to_add = []
             if vendor_path.is_dir():
                 paths_to_add.append(str(vendor_path))
@@ -853,9 +840,7 @@ class SkillManager:
             try:
                 subprocess.check_call(vendor_cmd)
             except subprocess.CalledProcessError as exc:
-                raise RuntimeError(
-                    f"failed to install dependencies for skill '{slot.skill_name}'"
-                ) from exc
+                raise RuntimeError(f"failed to install dependencies for skill '{slot.skill_name}'") from exc
             return [str(vendor_dir)]
         else:
             if vendor_dir.exists():

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping
-
+from fastapi import APIRouter, Depends
 import yaml
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
@@ -36,6 +36,11 @@ from .keyring import KeyringUnavailableError, delete_refresh, load_refresh, save
 from adaos.adapters.db import sqlite as sqlite_db
 from adaos.apps.api.auth import require_owner_token
 from adaos.services.id_gen import new_id
+from adaos.adapters.scenarios.git_repo import GitScenarioRepository
+from adaos.services.scenario.manager import ScenarioManager
+from adaos.services.skill.manager import SkillManager
+from adaos.adapters.db import SqliteScenarioRegistry
+from adaos.adapters.db import SqliteSkillRegistry
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -48,6 +53,27 @@ logger = logging.getLogger(__name__)
 
 class RootAuthError(RuntimeError):
     pass
+
+
+def _get_scenario_manager(ctx: AgentContext = Depends(get_ctx)) -> ScenarioManager:
+    repo = ctx.scenarios_repo
+    reg = SqliteScenarioRegistry(ctx.sql)
+    return ScenarioManager(repo=repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=ctx.bus, caps=ctx.caps)
+
+
+def _get_skill_manager(ctx: AgentContext = Depends(get_ctx)) -> SkillManager:
+    # используем skills_repo, а не scenarios_repo
+    repo = ctx.skills_repo
+    registry = SqliteSkillRegistry(ctx.sql)
+    return SkillManager(
+        repo=repo,
+        registry=registry,
+        git=ctx.git,
+        paths=ctx.paths,
+        bus=getattr(ctx, "bus", None),
+        caps=ctx.caps,
+        settings=ctx.settings,
+    )
 
 
 def _now() -> datetime:
@@ -1012,7 +1038,13 @@ class RootDeveloperService:
         bump: Literal["major", "minor", "patch"] = "patch",
         force: bool = False,
         dry_run: bool = False,
+        signoff: bool = False,
     ) -> ArtifactPublishResult:
+        # TODO self.caps.require("core", "skills.manage", "git.write", "net.git")
+        # Проверяем именно skills workspace-репо
+        root = self.ctx.paths.workspace_dir()
+        if not (Path(root) / ".git").exists():
+            raise RuntimeError("Skills repo is not initialized. Run `adaos skill sync` once.")
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
         emit(
@@ -1071,6 +1103,24 @@ class RootDeveloperService:
                 },
                 "root.dev",
             )
+        # гарантируем, что подпуть есть в sparse-checkout (на случай узкой sparse-конфигурации)
+        try:
+            self.ctx.git.sparse_add(str(self.ctx.paths.workspace_dir()), f"skills/{name}")
+        except Exception:
+            pass
+        # Создаём менеджер навыков вручную и пушим подпуть
+        mgr = SkillManager(
+            repo=self.ctx.skills_repo,
+            registry=SqliteSkillRegistry(self.ctx.sql),
+            git=self.ctx.git,
+            paths=self.ctx.paths,
+            bus=getattr(self.ctx, "bus", None),
+            caps=self.ctx.caps,
+            settings=self.ctx.settings,
+        )
+        msg = f"publish(skill): {result.name} v{result.version}"
+        sha = mgr.push(result.name, msg, signoff=signoff)
+        # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
     def publish_scenario(
@@ -1163,7 +1213,10 @@ class RootDeveloperService:
                 "root.dev",
             )
             raise
-        registry_path = self._delete_registry_artifact("skills", result.name)
+        # 1) удаляем драфт на root (он и был у тебя в репозитории)
+        draft_audit = self._delete_draft_remote("skills", result.name, node_id=node_id, all_nodes=False)
+        # 2) best-effort: удаляем из registry (может вернуться 404 — это ок)
+        audit = self._delete_registry_remote("skills", result.name, version=None, all_versions=True, force=False)
         emit(
             self.ctx.bus,
             "dev.skills.deleted",
@@ -1172,7 +1225,9 @@ class RootDeveloperService:
                 "node_id": node_id,
                 "version": result.version,
                 "updated_at": result.updated_at,
-                "registry_path": displayable_path(registry_path) if registry_path else None,
+                "draft_deleted": (draft_audit or {}).get("deleted", []),
+                "registry_deleted_versions": (audit or {}).get("deleted", []),
+                "registry_audit_id": (audit or {}).get("audit_id"),
             },
             "root.dev",
         )
@@ -1200,6 +1255,8 @@ class RootDeveloperService:
                 "root.dev",
             )
             raise
+        draft_audit = self._delete_draft_remote("scenarios", result.name, node_id=node_id, all_nodes=False)
+        audit = self._delete_registry_remote("scenarios", result.name, version=None, all_versions=True, force=False)
         emit(
             self.ctx.bus,
             "dev.scenarios.deleted",
@@ -1208,6 +1265,9 @@ class RootDeveloperService:
                 "node_id": node_id,
                 "version": result.version,
                 "updated_at": result.updated_at,
+                "draft_deleted": (draft_audit or {}).get("deleted", []),
+                "registry_deleted_versions": (audit or {}).get("deleted", []),
+                "registry_audit_id": (audit or {}).get("audit_id"),
             },
             "root.dev",
         )
@@ -1595,25 +1655,89 @@ class RootDeveloperService:
         self._save_config(cfg)
         return result
 
-    def _registry_root(self, kind: Literal["skills", "scenarios"]) -> Path:
-        if kind == "scenarios":
-            return Path(self.ctx.paths.scenarios_dir())
-        return Path(self.ctx.paths.skills_dir())
-
-    def _delete_registry_artifact(
+    def _delete_registry_remote(
         self,
         kind: Literal["skills", "scenarios"],
         name: str,
-    ) -> Path | None:
-        root = self._registry_root(kind)
-        target = root / name
-        if not target.exists():
-            return None
+        *,
+        version: str | None,
+        all_versions: bool,
+        force: bool,
+    ) -> dict | None:
+        cfg = self._load_config()
+        owner_id = cfg.owner_id
+        if not owner_id:
+            raise RootServiceError("Owner is not configured; run 'adaos dev root login' first")
+        cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
+        client = self._client(cfg)
         try:
-            shutil.rmtree(target)
-        except OSError as exc:
-            raise RootServiceError(f"Failed to delete registry {kind[:-1]} '{name}' at {target}: {exc}") from exc
-        return target
+            if kind == "skills":
+                resp = client.delete_skill_registry(
+                    name=name,
+                    version=version,
+                    all_versions=all_versions,
+                    force=force,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                )
+            else:
+                resp = client.delete_scenario_registry(
+                    name=name,
+                    version=version,
+                    all_versions=all_versions,
+                    force=force,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                )
+        except RootHttpError as exc:
+            # 404 — артефакт не публиковался в registry: это не ошибка для delete
+            if getattr(exc, "status_code", None) == 404:
+                return None
+            # 409 — используется: подскажи юзеру про --force (пока не реализуем)
+            if getattr(exc, "status_code", None) == 409:
+                raise RootServiceError(f"Cannot delete {kind[:-1]} '{name}' from registry: artifact is in use") from exc
+            raise
+        except Exception as exc:
+            raise RootServiceError(f"Failed to delete {kind[:-1]} '{name}' from registry on root") from exc
+        return resp or {}
+
+    def _delete_draft_remote(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        *,
+        node_id: str | None,
+        all_nodes: bool,
+    ) -> dict | None:
+        cfg = self._load_config()
+        if not cfg.owner_id:
+            raise RootServiceError("Owner is not configured; run 'adaos dev root login' first")
+        cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
+        client = self._client(cfg)
+        try:
+            if kind == "skills":
+                resp = client.delete_skill_draft(
+                    name=name,
+                    node_id=node_id,
+                    all_nodes=all_nodes,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                )
+            else:
+                resp = client.delete_scenario_draft(
+                    name=name,
+                    node_id=node_id,
+                    all_nodes=all_nodes,
+                    verify=verify,
+                    cert=(cert_path, key_path),
+                )
+        except RootHttpError as exc:
+            if getattr(exc, "status_code", None) == 404:
+                return None
+            raise
+        except Exception as exc:
+            raise RootServiceError(f"Failed to delete {kind[:-1]} draft '{name}' on root") from exc
+        return resp or {}
 
     def _manifest_payload(
         self,
@@ -1667,11 +1791,7 @@ class RootDeveloperService:
     def _collect_templates(self, directory: Path) -> list[str]:
         if not directory.exists():
             return []
-        return sorted(
-            entry.name
-            for entry in directory.iterdir()
-            if entry.is_dir()
-        )
+        return sorted(entry.name for entry in directory.iterdir() if entry.is_dir())
 
     def _resolve_template(
         self,
@@ -1883,9 +2003,7 @@ class RootDeveloperService:
         if not source.exists() or not source.is_dir():
             raise ArtifactNotFoundError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
 
-        registry_root = self._registry_root(kind)
-        registry_root.mkdir(parents=True, exist_ok=True)
-        target = registry_root / name
+        target = (self.ctx.paths.scenarios_dir() if kind == "scenarios" else self.ctx.paths.skills_dir()) / name
 
         source_payload = self._manifest_payload(source, kind)
         source_data = source_payload[1] if source_payload else {}

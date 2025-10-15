@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping, MutableMapping
-
 import httpx
 import ssl
 
@@ -31,10 +30,13 @@ class RootHttpClient:
         path: str,
         *,
         json: Mapping[str, Any] | None = None,
+        data: Any | None = None,
+        params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
         verify: str | bool | ssl.SSLContext | None = None,
         cert: tuple[str, str] | None = None,
         timeout: float | None = None,
+        accept_204: bool = False,
     ) -> Any:
         request_headers: MutableMapping[str, str] | None = None
         if headers:
@@ -47,7 +49,14 @@ class RootHttpClient:
                 verify=effective_verify,
                 cert=cert,
             ) as client:
-                response = client.request(method, path, json=json, headers=request_headers)
+                response = client.request(
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    data=data,
+                    headers=request_headers,
+                )
         except httpx.RequestError as exc:  # pragma: no cover - network errors are environment specific
             raise RootHttpError(f"{method} {path} failed: {exc}", status_code=0) from exc
 
@@ -57,6 +66,9 @@ class RootHttpClient:
                 content = response.json()
             except ValueError:
                 content = response.text
+
+        if response.status_code == 204 and accept_204:
+            return {}
 
         if response.status_code >= 400:
             error_code: str | None = None
@@ -70,7 +82,7 @@ class RootHttpClient:
                     error_code = code
             raise RootHttpError(message, status_code=response.status_code, error_code=error_code, payload=content)
 
-        return content
+        return content if content is not None else {}
 
     # ------------------------------------------------------------------
     # Legacy owner authentication endpoints (used by internal services)
@@ -183,6 +195,78 @@ class RootHttpClient:
                 timeout=120.0,
             )
         )
+
+    def delete_draft_artifact(
+        self,
+        *,
+        kind: str,
+        name: str,
+        node_id: str | None,  # если хаб удаляет драфт «от имени ноды»
+        all_nodes: bool,  # true — для хаба удалить у всех нод
+        verify: str | bool | ssl.SSLContext,
+        cert: tuple[str, str],
+        timeout: float = 30.0,
+    ) -> dict:
+        params: dict[str, Any] = {"name": name}
+        if node_id:
+            params["node_id"] = node_id
+        if all_nodes:
+            params["all_nodes"] = "true"
+        return dict(self._request("DELETE", f"/v1/{kind}/draft", params=params, verify=verify, cert=cert, timeout=timeout, accept_204=True))
+
+    def delete_skill_draft(self, **kw) -> dict:
+        kw["kind"] = "skills"
+        return self.delete_draft_artifact(**kw)
+
+    def delete_scenario_draft(self, **kw) -> dict:
+        kw["kind"] = "scenarios"
+        return self.delete_draft_artifact(**kw)
+
+    def delete_registry_artifact(
+        self,
+        *,
+        kind: str,  # 'skills' | 'scenarios'
+        name: str,
+        version: str | None,
+        all_versions: bool,
+        force: bool,
+        verify: str | bool | ssl.SSLContext,
+        cert: tuple[str, str],
+        timeout: float = 30.0,
+    ) -> dict:
+        params: dict[str, Any] = {"name": name}
+        if version:
+            params["version"] = version
+        if all_versions:
+            params["all_versions"] = "true"
+        if force:
+            params["force"] = "true"
+        try:
+            return dict(
+                self._request(
+                    "DELETE",
+                    f"/v1/{kind}/registry",
+                    params=params,
+                    verify=verify,
+                    cert=cert,
+                    timeout=timeout,
+                    accept_204=True,
+                )
+            )
+        except RootHttpError as exc:
+            # registry может отсутствовать — это НЕ ошибка удаления (идемпотентность)
+            if getattr(exc, "status_code", None) == 404:
+                return {}
+            raise
+
+    # шорткаты
+    def delete_skill_registry(self, **kw) -> dict:
+        kw["kind"] = "skills"
+        return self.delete_registry_artifact(**kw)
+
+    def delete_scenario_registry(self, **kw) -> dict:
+        kw["kind"] = "scenarios"
+        return self.delete_registry_artifact(**kw)
 
     def push_scenario_draft(
         self,
