@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import json
+import json, os, traceback
 from pathlib import Path
 from typing import Dict, List
+from dataclasses import asdict
 
 import typer
 
+from adaos.apps.cli.commands.skill import _mgr
 from adaos.services.node_config import displayable_path
 from adaos.services.root.service import (
     DeviceAuthorization,
@@ -29,6 +31,18 @@ scenario_app = typer.Typer(help="Manage owner scenarios in the local Forge works
 app.add_typer(root_app, name="root")
 app.add_typer(skill_app, name="skill")
 app.add_typer(scenario_app, name="scenario")
+
+
+def _run_safe(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if os.getenv("ADAOS_CLI_DEBUG") == "1":
+                traceback.print_exc()
+            raise
+
+    return wrapper
 
 
 def _service() -> RootDeveloperService:
@@ -286,6 +300,34 @@ def skill_publish(
     _echo_publish_result("Skill", result)
 
 
+@scenario_app.command("publish")
+def scenario_publish(
+    name: str,
+    bump: str = typer.Option(
+        "patch",
+        "--bump",
+        help="Which semantic version component to increment (patch, minor, major).",
+        show_default=True,
+    ),
+    force: bool = typer.Option(False, "--force", help="Ignore manifest metadata differences."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without modifying files."),
+) -> None:
+    bump_normalized = bump.lower()
+    if bump_normalized not in {"patch", "minor", "major"}:
+        raise typer.BadParameter("--bump must be one of patch, minor, or major")
+
+    service = _service()
+    try:
+        result = service.publish_scenario(name, bump=bump_normalized, force=force, dry_run=dry_run)
+    except ArtifactNotFoundError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(exc.exit_code)
+    except RootServiceError as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1)
+    _echo_publish_result("Scenario", result)
+
+
 @scenario_app.command("create")
 def scenario_create(
     name: str,
@@ -357,29 +399,46 @@ def scenario_delete(
     _echo_delete_result("Scenario", result)
 
 
-@scenario_app.command("publish")
-def scenario_publish(
-    name: str,
-    bump: str = typer.Option(
-        "patch",
-        "--bump",
-        help="Which semantic version component to increment (patch, minor, major).",
-        show_default=True,
-    ),
-    force: bool = typer.Option(False, "--force", help="Ignore manifest metadata differences."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without modifying files."),
-) -> None:
-    bump_normalized = bump.lower()
-    if bump_normalized not in {"patch", "minor", "major"}:
-        raise typer.BadParameter("--bump must be one of patch, minor, or major")
-
-    service = _service()
+@_run_safe
+@skill_app.command("validate")
+def dev_skill_validate(
+    name: str = typer.Argument(..., help="skill name in DEV space"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+    strict: bool = typer.Option(True, "--strict/--no-strict", help="treat warnings as errors"),
+    probe_tools: bool = typer.Option(False, "--probe-tools", help="import handlers to verify tool exports"),
+    path: Path = typer.Option(None, "--path", exists=True, file_okay=False, dir_okay=True, readable=True, help="validate skill at explicit folder path (overrides DEV lookup)"),
+):
+    """
+    Validate a skill from the DEV space (or explicit --path).
+    """
+    mgr = _mgr()
     try:
-        result = service.publish_scenario(name, bump=bump_normalized, force=force, dry_run=dry_run)
-    except ArtifactNotFoundError as exc:
-        _print_error(str(exc))
-        raise typer.Exit(exc.exit_code)
-    except RootServiceError as exc:
-        _print_error(str(exc))
-        raise typer.Exit(1)
-    _echo_publish_result("Scenario", result)
+        report = mgr.validate_skill(
+            name,
+            strict=strict,
+            probe_tools=probe_tools,
+            source="dev",
+            path=path,
+        )
+    except FileNotFoundError as exc:
+        typer.secho(f"validate failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        typer.secho(f"validate failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    issues = [asdict(issue) for issue in report.issues]
+    if json_output:
+        typer.echo(json.dumps({"ok": report.ok, "issues": issues}, ensure_ascii=False, indent=2))
+        if not report.ok:
+            raise typer.Exit(1)
+        return
+
+    if report.ok:
+        typer.secho("validation passed", fg=typer.colors.GREEN)
+        return
+
+    for issue in report.issues:
+        location = f" ({issue.where})" if getattr(issue, "where", None) else ""
+        typer.echo(f"[{issue.level}] {issue.code}: {issue.message}{location}")
+    raise typer.Exit(1)

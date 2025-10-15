@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional, Dict
 from adaos.config import const
+import yaml
 
 
 def _parse_env_file(path: str) -> Dict[str, str]:
@@ -42,6 +43,15 @@ class Settings:
     skills_monorepo_branch: Optional[str] = const.SKILLS_MONOREPO_BRANCH
     scenarios_monorepo_url: Optional[str] = const.SCENARIOS_MONOREPO_URL
     scenarios_monorepo_branch: Optional[str] = const.SCENARIOS_MONOREPO_BRANCH
+    # node / root context
+    owner_id: Optional[str] = None
+    subnet_id: Optional[str] = None
+    api_base: str = "https://api.inimatic.com"
+    app_base: str = "https://app.inimatic.com"
+
+    # имена каталогов для PathProvider (dev/workspace)
+    dev_skills_dirname: str = "skills"
+    dev_scenarios_dirname: str = "scenarios"
 
     @staticmethod
     def from_sources(env_file: Optional[str] = ".env") -> "Settings":
@@ -96,6 +106,37 @@ class Settings:
             scenarios_url = pick_env("ADAOS_SCENARIOS_MONOREPO_URL", scenarios_url) or scenarios_url
             scenarios_branch = pick_env("ADAOS_SCENARIOS_MONOREPO_BRANCH", scenarios_branch) or scenarios_branch
 
+        # --- node.yaml (низший приоритет из внешних источников) ---
+        # пробуем <base_dir>/node.yaml, затем ~/.adaos/node.yaml
+        node_paths = [base / "node.yaml", Path.home() / ".adaos" / "node.yaml"]
+        node_cfg: dict = {}
+        for np in node_paths:
+            try:
+                if np.exists():
+                    node_cfg = yaml.safe_load(np.read_text(encoding="utf-8")) or {}
+                    break
+            except Exception:
+                # игнорируем ошибки парсинга — не критично
+                pass
+
+        # читаем поля из node.yaml (могут отсутствовать)
+        owner_id = node_cfg.get("owner_id")
+        subnet_id = node_cfg.get("subnet_id")
+        root_cfg = node_cfg.get("root") or {}
+        api_base = root_cfg.get("api_base") or "https://api.inimatic.com"
+        app_base = root_cfg.get("app_base") or "https://app.inimatic.com"
+        dev_cfg = node_cfg.get("dev") or {}
+        dev_skills_dirname = dev_cfg.get("skills_dirname") or "skills"
+        dev_scenarios_dirname = dev_cfg.get("scenarios_dirname") or "scenarios"
+
+        # --- ENV/.env имеют приоритет над node.yaml ---
+        owner_id = pick_env("ADAOS_OWNER_ID", owner_id or None) or owner_id
+        subnet_id = pick_env("ADAOS_SUBNET_ID", subnet_id or None) or subnet_id
+        api_base = pick_env("ADAOS_API_BASE", api_base) or api_base
+        app_base = pick_env("ADAOS_APP_BASE", app_base) or app_base
+        dev_skills_dirname = pick_env("ADAOS_DEV_SKILLS_DIRNAME", dev_skills_dirname) or dev_skills_dirname
+        dev_scenarios_dirname = pick_env("ADAOS_DEV_SCENARIOS_DIRNAME", dev_scenarios_dirname) or dev_scenarios_dirname
+
         return Settings(
             base_dir=base,
             profile=profile,
@@ -104,9 +145,21 @@ class Settings:
             scenarios_monorepo_url=scenarios_url,
             scenarios_monorepo_branch=scenarios_branch,
             scenario_log_level=scenario_log_level,
+            owner_id=owner_id,
+            subnet_id=subnet_id,
+            api_base=api_base,
+            app_base=app_base,
+            dev_skills_dirname=dev_skills_dirname,
+            dev_scenarios_dirname=dev_scenarios_dirname,
         )
 
     def with_overrides(self, **kw) -> "Settings":
         # перегружать можно ТОЛЬКО безопасные поля (base_dir/profile)
         safe = {k: v for k, v in kw.items() if k in {"base_dir", "profile"} and v is not None}
         return replace(self, **safe)
+
+    # Утилита для компонентов путей:
+    def require_subnet_id(self) -> str:
+        if not self.subnet_id:
+            raise RuntimeError("subnet_id is not configured (set ADAOS_SUBNET_ID or provide node.yaml).")
+        return self.subnet_id

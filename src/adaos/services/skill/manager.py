@@ -31,6 +31,7 @@ from adaos.skills.runtime_runner import execute_tool
 from adaos.services.skill.validation import SkillValidationService, ValidationReport
 from adaos.services.crypto.secrets_service import SecretsService
 from adaos.services.skill.secrets_backend import SkillSecretsBackend
+from adaos.services.skill.resolver import SkillPathResolver
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 
@@ -131,17 +132,37 @@ class SkillManager:
 
         return meta, report  # return f"installed: {name}"
 
-    def validate_skill(self, name: str, *, strict: bool = True, probe_tools: bool = False) -> ValidationReport:
+    def validate_skill(
+        self,
+        name: str,
+        *,
+        strict: bool = True,
+        probe_tools: bool = False,
+        source: str = "workspace",  # "dev" | "workspace" | "installed" (строка для простоты)
+        path: Path | None = None,  # явный путь имеет приоритет
+    ) -> ValidationReport:
         """Run validation for a skill via the service layer."""
 
         self.caps.require("core", "skills.manage")
-        ctx = self.ctx
+        ctx: AgentContext = self.ctx
         previous = ctx.skill_ctx.get()
         try:
-            report = SkillValidationService(ctx).validate(
-                name,
+            svc = SkillValidationService(ctx)
+
+            if path is None:
+                # собираем резолвер из путей контекста
+                resolver = SkillPathResolver(
+                    dev_root=ctx.paths.dev_skills_dir(),
+                    workspace_root=ctx.paths.skills_workspace_dir(),
+                )
+                root_path = resolver.resolve(name, space=source)  # FileNotFoundError bubbling up -> handled by caller
+            else:
+                root_path = Path(path).resolve()
+
+            report = svc.validate_path(
+                root_path,
+                name=name,
                 strict=strict,
-                install_mode=False,
                 probe_tools=probe_tools,
             )
         finally:
@@ -151,14 +172,34 @@ class SkillManager:
                 ctx.skill_ctx.set(previous.name, Path(previous.path))
         return report
 
-    def run_skill_tests(self, name: str) -> Dict[str, TestResult]:
-        """Execute runtime tests without preparing a new slot."""
+    def run_skill_tests(
+        self,
+        name: str,
+        *,
+        source: str = "workspace",  # "dev" | "workspace" | "installed"
+        path: Path | None = None,  # явный путь имеет приоритет
+    ) -> Dict[str, TestResult]:
+        """Execute runtime tests without preparing a new slot.
+        Location-agnostic via resolver: dev/workspace/installed or explicit path.
+        NOTE: semantics unchanged — tests rely on installed versions/slots.
+        """
 
-        self.caps.require("core", "skills.manage")
-        skills_root = Path(self.ctx.paths.skills_dir())
-        skill_dir = skills_root / name
-        if not skill_dir.exists():
-            raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
+        # 1) resolve skill_dir via explicit path or resolver (space)
+        if path is not None:
+            skill_dir = Path(path).resolve()
+            if not skill_dir.exists() or not skill_dir.is_dir():
+                raise FileNotFoundError(f"skill path not found or not a directory: {skill_dir}")
+        else:
+            from .resolver import SkillPathResolver
+
+            resolver = SkillPathResolver(
+                dev_root=self.ctx.paths.dev_skills_dir(),
+                workspace_root=self.ctx.paths.skills_workspace_dir(),
+            )
+            skill_dir = resolver.resolve(name, space=source if source in ("dev", "workspace", "installed") else "installed")
+
+        # 2) derive skills_root as parent folder that contains this skill directory
+        skills_root = skill_dir.parent
 
         env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
         version = env.resolve_active_version()
