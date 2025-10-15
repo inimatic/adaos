@@ -11,6 +11,7 @@ class PathProvider:
 
     base: Path
     package_dir: Path
+    subnet_id: str
 
     # --- конструкторы ---
     @classmethod
@@ -21,6 +22,7 @@ class PathProvider:
     def __init__(self, settings: Settings | str | Path):
         base = settings.base_dir
         package_dir = settings.package_dir
+        self.subnet_id = settings.subnet_id
         object.__setattr__(self, "base", base.expanduser().resolve())
         object.__setattr__(self, "package_dir", package_dir.expanduser().resolve())
 
@@ -90,6 +92,17 @@ class PathProvider:
         """Scenario locales managed through the global context."""
 
         return self.locales_base_dir()
+
+    # dev section
+
+    def dev_dir(self) -> Path:
+        return (self.base / "dev" / self.subnet_id).resolve()
+
+    def dev_skills_dir(self) -> Path:
+        return (self.dev_dir() / "skills").resolve()
+
+    def dev_scenarios_dir(self) -> Path:
+        return (self.dev_dir() / "scenarios").resolve()
 
     def tmp_dir(self) -> Path:
         return (self.base / "tmp").resolve()
