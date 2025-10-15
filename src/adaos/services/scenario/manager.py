@@ -1,7 +1,8 @@
 from __future__ import annotations
+from dataclasses import dataclass
 import re, os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 from adaos.domain import SkillMeta, SkillRecord
 from adaos.ports import EventBus, GitClient, Capabilities
@@ -14,6 +15,19 @@ from adaos.services.git.safe_commit import sanitize_message, check_no_denied
 from adaos.adapters.db import SqliteScenarioRegistry
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
+
+
+@dataclass(slots=True)
+class ArtifactPublishResult:
+    kind: str
+    name: str
+    source_path: Path
+    target_path: Path
+    version: str
+    previous_version: str | None
+    updated_at: str
+    dry_run: bool = False
+    warnings: tuple[str, ...] = ()
 
 
 class ScenarioManager:
@@ -122,6 +136,31 @@ class ScenarioManager:
         if sha != "nothing-to-commit":
             self.git.push(str(root))
         return sha
+
+    def publish(self, name: str, *, bump: Literal["major", "minor", "patch"] = "patch", force: bool = False, dry_run: bool = False, signoff: bool = False) -> ArtifactPublishResult:
+        """
+        Полный publish: локальная сборка версии (dev→workspace) + git commit/push подпути в workspace репо.
+        """
+        result = self._publish_artifact(
+            self.ctx.config,  # или self._load_config() если нужно
+            "skills",
+            name,
+            bump=bump,
+            force=force,
+            dry_run=dry_run,
+        )
+        if result.dry_run:
+            return result
+        # гарантируем, что подпуть есть в sparse-checkout (на случай узкой sparse-конфигурации)
+        try:
+            self.ctx.git.sparse_add(str(self.ctx.paths.workspace_dir()), f"skills/{name}")
+        except Exception:
+            pass
+        # коммитим и пушим изменения только своего подпути
+        msg = f"publish(skill): {result.name} v{result.version}"
+        sha = self.push(result.name, msg, signoff=signoff)
+        # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
+        return result
 
     def uninstall(self, name: str) -> None:
         """Alias for :meth:`remove` to keep parity with :class:`SkillManager`."""

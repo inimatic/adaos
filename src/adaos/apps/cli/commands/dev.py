@@ -19,6 +19,7 @@ from adaos.services.root.service import (
     RootServiceError,
     TemplateResolutionError,
 )
+from adaos.services.skill.manager import SkillManager
 
 app = typer.Typer(help="Developer utilities for Root and Forge workflows.")
 root_app = typer.Typer(help="Bootstrap and authenticate against the Root service.")
@@ -267,6 +268,7 @@ def skill_publish(
     ),
     force: bool = typer.Option(False, "--force", help="Ignore manifest metadata differences."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without modifying files."),
+    signoff: bool = typer.Option(False, "--signoff", help="Add Signed-off-by"),
 ) -> None:
     bump_normalized = bump.lower()
     if bump_normalized not in {"patch", "minor", "major"}:
