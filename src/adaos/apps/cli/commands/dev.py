@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json, os, traceback
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import asdict
 
 import typer
 
+from adaos.apps.cli.i18n import _
 from adaos.apps.cli.commands.skill import _mgr
+from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import displayable_path
 from adaos.services.root.service import (
     DeviceAuthorization,
@@ -22,6 +24,7 @@ from adaos.services.root.service import (
     TemplateResolutionError,
 )
 from adaos.services.skill.manager import SkillManager
+from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context, load_scenario
 
 app = typer.Typer(help="Developer utilities for Root and Forge workflows.")
 root_app = typer.Typer(help="Bootstrap and authenticate against the Root service.")
@@ -442,3 +445,41 @@ def dev_skill_validate(
         location = f" ({issue.where})" if getattr(issue, "where", None) else ""
         typer.echo(f"[{issue.level}] {issue.code}: {issue.message}{location}")
     raise typer.Exit(1)
+
+
+@_run_safe
+@scenario_app.command("validate")
+def validate_cmd(
+    scenario_id: str = typer.Argument(..., help=_("cli.scenario.validate.name_help")),
+    path: Optional[Path] = typer.Option(None, "--path", help=_("cli.scenario.validate.path_help")),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    """
+    Validate scenario from workspace (default), dev space, or explicit --path.
+    """
+    ctx = get_ctx()
+    if path:
+        scenario_path = Path(path).expanduser().resolve()
+        if scenario_path.is_dir():
+            scenario_path = scenario_path
+        else:
+            # если указали путь до файла – поддержим и это
+            scenario_path = scenario_path.parent
+    else:
+        scenario_path = ctx.paths.dev_scenarios_dir()
+    scenario_path = scenario_path / scenario_id
+    model = load_scenario(scenario_path)
+    runtime = ScenarioRuntime()
+    errors = runtime.validate(model)
+
+    if json_output:
+        payload = {"ok": not bool(errors), "errors": errors, "scenario_id": model.id}
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        raise typer.Exit(0 if not errors else 1)
+
+    if errors:
+        typer.secho(_("cli.scenario.validate.errors"), fg=typer.colors.RED)
+        for err in errors:
+            typer.echo(_("cli.scenario.validate.error_item", error=str(err)))
+        raise typer.Exit(code=1)
+    typer.secho(_("cli.scenario.validate.success", scenario_id=model.id), fg=typer.colors.GREEN)

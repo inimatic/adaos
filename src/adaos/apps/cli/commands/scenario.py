@@ -42,17 +42,6 @@ def _mgr() -> ScenarioManager:
     return ScenarioManager(repo=repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=ctx.bus, caps=ctx.caps)
 
 
-def _workspace_root() -> Path:
-    ctx = get_ctx()
-    attr = getattr(ctx.paths, "scenarios_workspace_dir", None)
-    if attr is not None:
-        value = attr() if callable(attr) else attr
-    else:
-        base = getattr(ctx.paths, "scenarios_dir")
-        value = base() if callable(base) else base
-    return Path(value).expanduser().resolve()
-
-
 @_run_safe
 @app.command("list")
 def list_cmd(
@@ -174,8 +163,8 @@ def run_cmd(
     scenario_id: str = typer.Argument(..., help=_("cli.scenario.run.name_help")),
     path: Optional[str] = typer.Option(None, "--path", help=_("cli.scenario.run.path_help")),
 ) -> None:
-    scenario_path = _scenario_path(scenario_id, path)
-    ensure_runtime_context(_base_dir_for(scenario_path))
+    ctx = get_ctx()
+    scenario_path = (path if path else ctx.paths.scenarios_workspace_dir()) / scenario_id / "scenario.json"
     runtime = ScenarioRuntime()
     result = runtime.run_from_file(str(scenario_path))
     meta = result.get("meta") or {}
@@ -190,22 +179,43 @@ def run_cmd(
 @app.command("validate")
 def validate_cmd(
     scenario_id: str = typer.Argument(..., help=_("cli.scenario.validate.name_help")),
-    path: Optional[str] = typer.Option(None, "--path", help=_("cli.scenario.validate.path_help")),
+    path: Optional[Path] = typer.Option(None, "--path", help=_("cli.scenario.validate.path_help")),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
 ) -> None:
-    scenario_path = _scenario_path(scenario_id, path)
+    """
+    Validate scenario from workspace (default), dev space, or explicit --path.
+    """
+    ctx = get_ctx()
+    if path:
+        scenario_path = Path(path).expanduser().resolve()
+        if scenario_path.is_dir():
+            scenario_path = scenario_path
+        else:
+            # если указали путь до файла – поддержим и это
+            scenario_path = scenario_path.parent
+    else:
+        scenario_path = ctx.paths.scenarios_workspace_dir()
+    scenario_path = scenario_path / scenario_id
     model = load_scenario(scenario_path)
     runtime = ScenarioRuntime()
     errors = runtime.validate(model)
+
+    if json_output:
+        payload = {"ok": not bool(errors), "errors": errors, "scenario_id": model.id}
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        raise typer.Exit(0 if not errors else 1)
+
     if errors:
         typer.secho(_("cli.scenario.validate.errors"), fg=typer.colors.RED)
         for err in errors:
             typer.echo(_("cli.scenario.validate.error_item", error=str(err)))
         raise typer.Exit(code=1)
-    typer.secho(_("cli.scenario.validate.success", scenario_id=scenario_id), fg=typer.colors.GREEN)
+    typer.secho(_("cli.scenario.validate.success", scenario_id=model.id), fg=typer.colors.GREEN)
 
 
 def _collect_scenario_tests(scenario_id: Optional[str]) -> list[Path]:
-    root = _scenario_root()
+    ctx = get_ctx()
+    root = ctx.paths.scenarios_workspace_dir()
     tests: list[Path] = []
     if not root.exists():
         return tests

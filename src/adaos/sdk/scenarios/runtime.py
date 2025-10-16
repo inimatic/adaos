@@ -93,11 +93,15 @@ class ScenarioModel:
         )
 
 
+from adaos.services.agent_context import get_ctx, AgentContext
+
+
 class ScenarioRuntime:
     def __init__(self, registry: Optional[ActionRegistry] = None) -> None:
         self._registry = registry or default_registry()
         self._logger: Optional[logging.Logger] = None
         self._log_path: Optional[Path] = None
+        self.ctx: AgentContext = get_ctx()
 
     def _log(self, level: int, message: str, *, extra: Optional[Mapping[str, Any]] = None) -> None:
         if not self._logger:
@@ -119,8 +123,13 @@ class ScenarioRuntime:
 
     def validate(self, scenario: ScenarioModel) -> List[str]:
         errors: List[str] = []
+        seen: set[str] = set()
 
         def _check(step: ScenarioStep) -> None:
+            if step.name in seen:
+                errors.append(f"duplicate step name '{step.name}'")
+            else:
+                seen.add(step.name)
             if step.call and not self._registry.has(step.call):
                 errors.append(f"unknown route '{step.call}' in step '{step.name}'")
             for child in step.children:
@@ -173,15 +182,14 @@ class ScenarioRuntime:
         self._log(logging.INFO, "step.finish", extra={"step": step.name})
 
     def run_from_file(self, path: str | Path) -> Dict[str, Any]:
-        scenario_path = Path(path).expanduser().resolve()
-        model = load_scenario(scenario_path)
-        base_dir = _locate_base_dir(scenario_path)
+        model = load_scenario(path)
+        base_dir = self.ctx
         ctx = ensure_runtime_context(base_dir)
         self._logger, self._log_path = setup_scenario_logger(model.id)
         self._log(
             logging.INFO,
             "scenario.loaded",
-            extra={"scenario_id": model.id, "path": str(scenario_path)},
+            extra={"scenario_id": model.id, "path": str(path)},
         )
         state: Dict[str, Any] = {"vars": dict(model.vars)}
         state.setdefault("meta", {})["log_file"] = str(self._log_path)
@@ -190,7 +198,8 @@ class ScenarioRuntime:
 
 
 def load_scenario(path: Path | str) -> ScenarioModel:
-    scenario_path = Path(path).expanduser().resolve()
+    """load scenario.yaml"""
+    scenario_path = Path(path).expanduser().resolve() / "scenario.yaml"
     payload = yaml.safe_load(scenario_path.read_text(encoding="utf-8")) or {}
     return ScenarioModel.from_payload(payload, fallback_id=scenario_path.stem)
 
@@ -405,4 +414,3 @@ __all__ = [
     "ensure_runtime_context",
     "load_scenario",
 ]
-
