@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-SkillSpace = Literal["dev", "workspace", "installed"]
+SkillSpace = Literal["dev", "workspace"]
 
 
 @dataclass(frozen=True)
