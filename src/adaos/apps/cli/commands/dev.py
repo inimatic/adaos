@@ -482,6 +482,19 @@ def cmd_test(
             failed = True
 
     if failed:
+        # попытаемся угадать путь к логу и показать хвост
+        from pathlib import Path
+
+        dev_root = _mgr().ctx.paths.dev_skills_dir()
+        log_path = Path(dev_root) / name / "logs" / "tests.dev.log"
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="ignore")
+            tail = "\n".join(text.splitlines()[-80:])  # хвост 80 строк
+            typer.echo("\n--- tests log tail ---")
+            typer.echo(tail)
+            typer.echo(f"--- end (full log: {log_path}) ---")
+        except Exception:
+            pass
         raise typer.Exit(1)
 
     typer.secho("tests passed", fg=typer.colors.GREEN)

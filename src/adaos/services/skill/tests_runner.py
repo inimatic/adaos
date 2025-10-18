@@ -39,36 +39,62 @@ def run_tests(
 ) -> Dict[str, TestResult]:
     results: Dict[str, TestResult] = {}
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    python_paths = list(python_paths or [])
+
     env_template = os.environ.copy()
     if extra_env:
         env_template.update({k: str(v) for k, v in extra_env.items()})
     if skill_env_path:
         env_template["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
-    python_entries = []
+
+    # стабильные переменные для тестов
+    if skill_name:
+        env_template["ADAOS_SKILL_NAME"] = skill_name
+        env_template["ADAOS_SKILL_PACKAGE"] = f"skills.{skill_name}"
+    env_template["ADAOS_SKILL_ROOT"] = str(root)
+    env_template["ADAOS_SKILL_MODE"] = "dev" if dev_mode else "runtime"
+    # DEV hints для автобутстрапа рантайма:
+    if dev_mode:
+        # Путь к .adaos/dev/<subnet> (родитель 'skills')
+        env_template["ADAOS_DEV_DIR"] = os.getenv("ADAOS_DEV_DIR", "")  # см. ниже — проставим в менеджере
+        # Полный путь к корню навыка
+        env_template["ADAOS_DEV_SKILL_DIR"] = str(root)
+
+    python_entries: list[str] = []
     if root.exists():
         python_entries.append(str(root))
-    # DEV-режим: для импорта пакета skills.<name> нужен уровень выше (<dev>/skills)
-    dev_tests_root = root / "tests"
-    runtime_tests_root = root / "runtime" / "tests"
-    if dev_mode and root.parent and root.parent.exists():
-        python_entries.append(str(root.parent))
-    for path in python_paths:
-        if path:
-            python_entries.append(path)
+
+    # PYTHONPATH по режимам
+    if dev_mode:
+        python_entries.append(str(root))
+    else:
+        # runtime: src + vendor
+        src_root = root  # root у нас = src/skills/<name>, см. существующую логику вызова
+        vendor_root = src_root.parent / "vendor"
+        if vendor_root.exists():
+            python_entries.append(str(vendor_root))
+        python_entries.append(str(src_root))
+
+    for p in python_paths or []:
+        if p:
+            python_entries.append(p)
+
     existing = env_template.get("PYTHONPATH")
     if existing:
         python_entries.extend(existing.split(os.pathsep))
     if python_entries:
         env_template["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(python_entries))
+
+    dev_tests_root = root / "tests"
+    runtime_tests_root = (slot_current_dir / "runtime" / "tests") if slot_current_dir else (root / "runtime" / "tests")
+
     with log_path.open("w", encoding="utf-8") as log:
         if not dev_mode:
-            # СТАРЫЙ (runtime) РЕЖИМ — как было
+            # старые suite-скрипты
             for suite in ("smoke", "contract", "e2e-dryrun"):
                 suite_dir = runtime_tests_root / suite
                 if not suite_dir.exists():
                     continue
-                outcome = _run_suite(
+                results[suite] = _run_suite(
                     suite,
                     suite_dir,
                     timeout=_TEST_TIMEOUTS.get(suite, 30),
@@ -79,31 +105,33 @@ def run_tests(
                     skill_version=skill_version,
                     slot_dir=slot_current_dir,
                 )
-                results[suite] = outcome
-        elif dev_mode:
-            # НОВЫЙ DEV-РЕЖИМ — pytest по исходникам
-            dev_suites: list[tuple[str, Path]] = []
-            for name in ("smoke", "contract", "e2e-dryrun"):
-                suite_dir = dev_tests_root / name
+        else:
+            # pytest в DEV: сначала директории, затем маркеры
+            dev_groups: list[tuple[str, Path | None, str | None]] = []
+            for suite in ("smoke", "contract", "e2e"):
+                suite_dir = dev_tests_root / suite
                 if suite_dir.exists():
-                    dev_suites.append((name, suite_dir))
-            if not dev_suites:
-                dev_suites = [("pytest", dev_tests_root)]
-            for suite_name, suite_dir in dev_suites:
+                    dev_groups.append((suite, suite_dir, None))
+                else:
+                    # маркерная группа (папки нет)
+                    dev_groups.append((suite, None, suite))
+            # если нет ни папок, ни маркеров — один прогон всех tests/
+            if not any((dev_tests_root / n).exists() for n in ("smoke", "contract", "e2e-dryrun", "e2e")):
+                dev_groups = [("pytest", dev_tests_root, None)]
+
+            for suite_name, suite_dir, marker in dev_groups:
                 outcome = _run_pytest_suite(
-                    suite_name,
-                    suite_dir,
+                    suite_name=suite_name,
+                    tests_dir=suite_dir or dev_tests_root,
+                    marker=marker,
                     timeout=_TEST_TIMEOUTS.get(suite_name, 60),
                     log=log,
                     interpreter=interpreter,
                     env=env_template,
                 )
-                results[suite_name] = outcome
                 if outcome is not None:
                     results[suite_name] = outcome
-        else:
-            # Тестов нет — возвращаем пустой results
-            pass
+
     return results
 
 
@@ -111,41 +139,53 @@ def _run_pytest_suite(
     suite_name: str,
     tests_dir: Path,
     *,
+    marker: str | None,  # <-- НОВОЕ
     timeout: int,
     log,
     interpreter: Path | None,
     env: Mapping[str, str],
 ) -> TestResult | None:
-    """
-    Запускает pytest для заданной директории тестов.
-    Возвращает TestResult со статусом passed/failed/error.
-    """
-    cmd = [str(interpreter or sys.executable), "-m", "pytest", "-q", "."]
+    # Запуск из каталога тестов, цель "."; расширяем правило поиска файлов
+    local_cfg = tests_dir / "pytest.dev.ini"
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(tests_dir),
-            stdout=log,
-            stderr=log,
-            env=dict(env),
-            timeout=timeout,
-            check=False,
+        local_cfg.write_text(
+            "[pytest]\n" "testpaths = .\n" "python_files = test_*.py *_test.py *.spec.py\n" "addopts = -q -vv -s --maxfail=1\n" "log_cli = false\n",
+            encoding="utf-8",
         )
-        print(proc)
-        if proc.returncode == 0:
-            return TestResult(name=suite_name, status="passed", detail=None)
-        # pytest возвращает разные коды: 1 — провал тестов, 2 — ошибка использования, 5 — не найдено тестов и т.п.
-        if proc.returncode == 5:
-            # нет тестов — для DEV вернём None, чтобы CLI показал 'no tests discovered'
-            return None
-        if proc.returncode == 5:
-            # нет тестов — не считаем ошибкой; пусть CLI скажет "no tests discovered"
-            return None
-        detail = f"pytest exit code {proc.returncode}"
-        status = "failed" if proc.returncode == 1 else "error"
-        return TestResult(name=suite_name, status=status, detail=detail)
-    except subprocess.TimeoutExpired:
-        return TestResult(name=suite_name, status="error", detail="timeout")
+    except Exception:
+        pass
+
+    # Запускаем из каталога тестов, цель "." и свой конфиг
+    cmd = [str(interpreter or sys.executable), "-m", "pytest", "-c", str(local_cfg), "."]
+    if marker:
+        cmd.extend(["-m", marker])
+    log.write(
+        "$ " + " ".join(cmd) + "\n"
+        f"CWD={tests_dir}\n"
+        f"ENV.ADAOS_SKILL_PACKAGE={env.get('ADAOS_SKILL_PACKAGE')}\n"
+        f"ENV.ADAOS_SKILL_NAME={env.get('ADAOS_SKILL_NAME')}\n"
+        f"ENV.ADAOS_DEV_DIR={env.get('ADAOS_DEV_DIR')}\n"
+        f"ENV.ADAOS_DEV_SKILL_DIR={env.get('ADAOS_DEV_SKILL_DIR')}\n"
+        f"ENV.PYTHONPATH={env.get('PYTHONPATH','')}\n\n"
+    )
+    proc = subprocess.run(
+        cmd,
+        cwd=str(tests_dir),
+        stdout=log,
+        stderr=log,
+        env=dict(env),
+        timeout=timeout,
+        check=False,
+        text=False,
+    )
+    if proc.returncode == 0:
+        return TestResult(name=suite_name, status="passed", detail=None)
+    if proc.returncode == 5:
+        # нет подходящих тестов — пропускаем эту группу
+        return None
+    detail = f"pytest exit code {proc.returncode}"
+    status = "failed" if proc.returncode == 1 else "error"
+    return TestResult(name=suite_name, status=status, detail=detail)
 
 
 def _run_suite(
