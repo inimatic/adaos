@@ -196,7 +196,7 @@ class SkillManager:
                 dev_root=self.ctx.paths.dev_skills_dir(),
                 workspace_root=self.ctx.paths.skills_workspace_dir(),
             )
-            skill_dir = resolver.resolve(name, space=source if source in ("dev", "workspace", "installed") else "installed")
+            skill_dir = resolver.resolve(name, space=source if source in ("dev", "workspace") else "workspace")
 
         # 2) derive skills_root as parent folder that contains this skill directory
         skills_root = skill_dir.parent
@@ -262,7 +262,14 @@ class SkillManager:
         if package_root:
             python_paths.append(str(package_root))
 
-        return run_tests(
+        # ВСЕ dev-пути — только из PathProvider:
+        # - dev_dir() — родитель каталога 'skills' (для импорта `skills.*`)
+        # - skill_dir — корень конкретного навыка (удобно для относительных импортов)
+        dev_dir = Path(self.ctx.paths.dev_dir()).resolve()
+        python_paths.insert(0, str(skill_dir))
+        python_paths.insert(0, str(dev_dir))
+
+        results = run_tests(
             skill_source,
             log_path=log_path,
             interpreter=interpreter,
@@ -272,6 +279,13 @@ class SkillManager:
             skill_version=version,
             slot_current_dir=current_link,
         )
+        for r in results.values():
+            if r and r.status in ("error", "failed"):
+                if r.detail:
+                    r.detail = f"{r.detail} (log: {log_path})"
+                else:
+                    r.detail = f"log: {log_path}"
+        return results
 
     def uninstall(self, name: str) -> None:
         self.caps.require("core", "skills.manage", "net.git")
@@ -1156,6 +1170,21 @@ class SkillManager:
         package_root = Path(package_dir).resolve().parent if package_dir else None
         if package_root:
             python_paths.append(str(package_root))
+        try:
+            python_paths.append(str(Path(self.ctx.paths.package_path()).resolve()))
+        except Exception:
+            pass
+
+        dev_dir = Path(self.ctx.paths.dev_dir()).resolve()  # ...\.adaos\dev\sn_xxxx\
+        python_paths.insert(0, str(skill_dir))  # ...\.adaos\dev\sn_xxxx\skills\<name>\
+        python_paths.insert(0, str(dev_dir))  # родитель 'skills' — нужен для 'import skills.*'
+
+        extra_env = {
+            "ADAOS_DEV_DIR": str(dev_dir),
+            "ADAOS_DEV_SKILL_DIR": str(skill_dir),
+            "ADAOS_SKILL_NAME": name,
+            "ADAOS_SKILL_PACKAGE": f"skills.{name}",
+        }
 
         # Директория логов — в корне навыка (не .runtime)
         logs_dir = skill_dir / "logs"
@@ -1183,4 +1212,5 @@ class SkillManager:
             skill_version=manifest.get("version") or "dev",
             slot_current_dir=skill_dir,  # для совместимости сигнатуры; слотов нет
             dev_mode=True,
+            extra_env=extra_env,
         )

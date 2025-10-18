@@ -21,15 +21,18 @@ class PathProvider:
     # совместимость со старым стилем: PathProvider(settings)
     def __init__(self, settings: Settings | str | Path):
         base = settings.base_dir
-        package_dir = settings.package_dir
+        package_dir: Path = settings.package_dir
         self.subnet_id = settings.subnet_id
         object.__setattr__(self, "base", base.expanduser().resolve())
         object.__setattr__(self, "package_dir", package_dir.expanduser().resolve())
 
     # --- базовые каталоги ---
+    def package_path(self) -> Path:
+        """Package-level locales shipped with AdaOS (see ``get_ctx().paths``)."""
+        return (self.package_dir).resolve()
+
     def locales_dir(self) -> Path:
         """Package-level locales shipped with AdaOS (see ``get_ctx().paths``)."""
-
         return (self.package_dir / "locales").resolve()
 
     def skill_templates_dir(self) -> Path:
