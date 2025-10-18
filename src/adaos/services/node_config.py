@@ -7,14 +7,7 @@ import os
 import sys
 import uuid
 import yaml
-
-try:
-    from adaos.services.agent_context import get_ctx, AgentContext  # type: ignore
-except Exception:
-    get_ctx = None  # type: ignore
-
-    class AgentContext:
-        pass  # type: ignore
+from adaos.services.agent_context import get_ctx, AgentContext  # type: ignore
 
 
 def _default_base_dir() -> Path:
@@ -28,18 +21,11 @@ def _default_base_dir() -> Path:
 
 
 def _base_dir(ctx: AgentContext | None = None) -> Path:
-    if ctx and getattr(ctx, "paths", None):
-        return Path(getattr(ctx.paths, "base"))
-    if "adaos" in sys.modules and get_ctx:
-        try:
-            return Path(get_ctx().paths.base_dir())  # type: ignore[attr-defined]
-        except Exception:
-            pass
-    return _default_base_dir()
+    return get_ctx().paths.base_dir()
 
 
 def _config_path(ctx: AgentContext | None = None) -> Path:
-    p = _base_dir(ctx) / "node.yaml"
+    p = get_ctx().paths.base_dir() / "node.yaml"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -394,7 +380,7 @@ def _normalize_root_state(raw: Any) -> RootState | None:
 
 
 def load_node(ctx: AgentContext | None = None) -> NodeConfig:
-    path = _config_path(ctx)
+    path = _config_path()
     if not path.exists():
         conf = _default_conf()
         save_node(conf, ctx=ctx)
