@@ -402,6 +402,84 @@ def scenario_delete(
     _echo_delete_result("Scenario", result)
 
 
+
+def _resolve_dev_scenario_file(name: str, base: Path) -> Path | None:
+    base = base.expanduser().resolve()
+    if base.is_file():
+        return base if base.exists() else None
+
+    search_roots: list[Path] = []
+    if base.is_dir():
+        search_roots.extend([base / name, base])
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for filename in ("scenario.yaml", "scenario.yml", "scenario.json"):
+            candidate = root / filename
+            if candidate.exists():
+                return candidate
+    return None
+
+
+@_run_safe
+@scenario_app.command("run")
+def scenario_run(
+    name: str = typer.Argument(..., help="scenario name in DEV space"),
+    path: Optional[Path] = typer.Option(None, "--path", help="override scenario location (dir or file)"),
+) -> None:
+    ctx = get_ctx()
+    base = Path(path).expanduser().resolve() if path is not None else Path(ctx.paths.dev_scenarios_dir())
+    scenario_file = _resolve_dev_scenario_file(name, base)
+
+    if scenario_file is None or not scenario_file.exists():
+        target = scenario_file if scenario_file is not None else (path or name)
+        typer.secho(f"Scenario file not found: {target}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    runtime = ScenarioRuntime()
+    result = runtime.run_from_file(str(scenario_file))
+    meta = result.get("meta") or {}
+    log_file = meta.get("log_file")
+    typer.secho(f"Scenario '{name}' executed.", fg=typer.colors.GREEN)
+    if log_file:
+        typer.echo(f"Log: {log_file}")
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@_run_safe
+@scenario_app.command("validate")
+def scenario_validate(
+    name: str = typer.Argument(..., help="scenario name in DEV space"),
+    path: Optional[Path] = typer.Option(None, "--path", help="override scenario location (dir or file)"),
+    json_output: bool = typer.Option(False, "--json", help="machine readable output"),
+) -> None:
+    ctx = get_ctx()
+    base = Path(path).expanduser().resolve() if path is not None else Path(ctx.paths.dev_scenarios_dir())
+    scenario_file = _resolve_dev_scenario_file(name, base)
+
+    if scenario_file is None or not scenario_file.exists():
+        target = scenario_file if scenario_file is not None else (path or name)
+        typer.secho(f"Scenario file not found: {target}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    model = load_scenario(scenario_file)
+    runtime = ScenarioRuntime()
+    errors = runtime.validate(model)
+
+    if json_output:
+        payload = {"ok": not bool(errors), "errors": errors, "scenario_id": model.id}
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        raise typer.Exit(0 if not errors else 1)
+
+    if errors:
+        typer.secho("Validation failed:", fg=typer.colors.RED)
+        for err in errors:
+            typer.echo(f"- {err}")
+        raise typer.Exit(1)
+
+    typer.secho(f"Scenario '{model.id}' is valid.", fg=typer.colors.GREEN)
+
 @_run_safe
 @skill_app.command("validate")
 def dev_skill_validate(
