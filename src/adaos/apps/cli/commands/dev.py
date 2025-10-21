@@ -495,6 +495,23 @@ def cmd_test(
             typer.echo(f"--- end (full log: {log_path}) ---")
         except Exception:
             pass
-        raise typer.Exit(1)
+    raise typer.Exit(1)
 
     typer.secho("tests passed", fg=typer.colors.GREEN)
+
+
+@_run_safe
+@skill_app.command("activate")
+def dev_skill_activate(
+    name: str = typer.Argument(..., help="skill name in DEV space"),
+    slot: Optional[str] = typer.Option(None, "--slot", help="activate specific slot (A/B)"),
+    version: Optional[str] = typer.Option(None, "--version", help="activate specific version (defaults to manifest or 'dev')"),
+) -> None:
+    """Activate the DEV skill runtime under .adaos/dev/<subnet>/skills/<name>."""
+    mgr = _mgr()
+    try:
+        target = mgr.activate_dev_runtime(name, version=version, slot=slot)
+    except Exception as exc:
+        typer.secho(f"activate failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    typer.secho(f"skill {name} now active on slot {target}", fg=typer.colors.GREEN)
