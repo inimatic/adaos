@@ -2,6 +2,7 @@ from __future__ import annotations
 import importlib
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 
 # Рантайм проставит эти env
@@ -16,13 +17,27 @@ def _lazy_dev_bootstrap() -> None:
     dev_dir = os.getenv("ADAOS_DEV_DIR")
     skill_dir = os.getenv("ADAOS_DEV_SKILL_DIR")
     skill_name = os.getenv("ADAOS_SKILL_NAME")
-    if not (dev_dir and skill_dir and skill_name):
+    # Allow deriving dev_dir from skill_dir if not provided
+    if not (skill_dir and skill_name):
         return
+    if not dev_dir and skill_dir:
+        try:
+            dev_dir = str(Path(skill_dir).resolve().parent.parent)
+        except Exception:
+            dev_dir = None
+        if dev_dir:
+            os.environ["ADAOS_DEV_DIR"] = dev_dir
     # пробуем официальный bootstrap, если есть
     try:
         mod = importlib.import_module("adaos.services.testing.bootstrap")
         init_from_env = getattr(mod, "init_from_env", None)
         if callable(init_from_env):
+            # Ensure env carries derived dev_dir for the bootstrap helper
+            if not os.getenv("ADAOS_DEV_DIR") and skill_dir:
+                try:
+                    os.environ["ADAOS_DEV_DIR"] = str(Path(skill_dir).resolve().parent.parent)
+                except Exception:
+                    pass
             init_from_env()
             return
     except Exception:

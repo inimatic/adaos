@@ -735,6 +735,12 @@ class SkillManager:
             skill_name=name,
         )
 
+    def _runtime_env_dev(self, name: str) -> SkillRuntimeEnvironment:
+        return SkillRuntimeEnvironment(
+            skills_root=self.ctx.paths.dev_skills_dir(),
+            skill_name=name,
+        )
+
     def _load_manifest(self, skill_dir: Path) -> Dict[str, Any]:
         candidates = ["resolved.manifest.json", "skill.yaml", "manifest.yaml", "manifest.json", "skill.json"]
         for name in candidates:
@@ -1131,6 +1137,155 @@ class SkillManager:
         except OSError:
             pass
 
+    def prepare_dev_runtime(
+        self,
+        name: str,
+        *,
+        version_override: str | None = None,
+        run_tests: bool = False,
+        preferred_slot: str | None = None,
+    ) -> RuntimeInstallResult:
+        """Prepare a runtime for a DEV skill under .adaos/dev/<subnet>/skills.
+
+        Mirrors prepare_runtime but uses the DEV skills root as the source and runtime root.
+        """
+        dev_root = self.ctx.paths.dev_skills_dir()
+        skill_dir = (dev_root / name)
+        if not skill_dir.exists():
+            raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
+
+        try:
+            manifest = self._load_manifest(skill_dir)
+        except FileNotFoundError:
+            manifest = {}
+        version = version_override or str(manifest.get("version") or "dev")
+
+        env = SkillRuntimeEnvironment(skills_root=dev_root, skill_name=name)
+        env.prepare_version(version)
+
+        slot_name = preferred_slot or env.select_inactive_slot(version)
+        slot = env.build_slot_paths(version, slot_name)
+
+        # Ensure clean slot state before preparing runtime
+        env.cleanup_slot(version, slot_name)
+        env.prepare_version(version)
+        slot = env.build_slot_paths(version, slot_name)
+
+        try:
+            staged_dir = self._stage_skill_sources(skill_dir, slot)
+        except Exception:
+            env.cleanup_slot(version, slot_name)
+            raise
+
+        try:
+            interpreter, python_paths = self._prepare_runtime_environment(
+                env=env,
+                slot=slot,
+                manifest=manifest,
+                skill_dir=staged_dir,
+            )
+        except Exception:
+            env.cleanup_slot(version, slot_name)
+            raise
+        defaults = self._policy_defaults()
+        policy_overrides = self._policy_overrides()
+
+        resolved = self._enrich_manifest(
+            manifest=manifest,
+            slot=slot,
+            interpreter=interpreter,
+            python_paths=python_paths,
+            defaults=defaults,
+            policy_overrides=policy_overrides,
+            skill_dir=staged_dir,
+        )
+
+        tests: Dict[str, TestResult] = {}
+        if run_tests:
+            log_file = slot.logs_dir / "tests.log"
+            tests = run_tests(
+                staged_dir,
+                log_path=log_file,
+                interpreter=interpreter,
+                python_paths=python_paths,
+                skill_env_path=slot.skill_env_path,
+                skill_name=name,
+                skill_version=version,
+                slot_current_dir=slot.root,
+            )
+            if any(result.status != "passed" for result in tests.values()):
+                env.cleanup_slot(version, slot_name)
+                raise RuntimeError("skill tests failed")
+
+        self._write_resolved_manifest(slot, resolved)
+
+        metadata = env.read_version_metadata(version)
+        slots_meta = metadata.setdefault("slots", {})
+        slots_meta[slot_name] = {
+            "resolved_manifest": str(slot.resolved_manifest),
+            "installed_at": datetime.now(timezone.utc).isoformat(),
+            "tests": {name: result.status for name, result in tests.items()},
+        }
+        metadata["version"] = version
+        history = metadata.setdefault("history", {})
+        history["last_install_slot"] = slot_name
+        history["last_install_version"] = version
+        history["last_install_at"] = datetime.now(timezone.utc).isoformat()
+        history["last_default_tool"] = resolved.get("default_tool")
+        env.write_version_metadata(version, metadata)
+
+        return RuntimeInstallResult(
+            name=name,
+            version=version,
+            slot=slot_name,
+            resolved_manifest=slot.resolved_manifest,
+            tests=tests,
+        )
+
+    def activate_dev_runtime(self, name: str, *, version: str | None = None, slot: str | None = None) -> str:
+        """Activate a prepared DEV runtime (under .adaos/dev/<subnet>/skills).
+
+        If the requested version/slot is not prepared yet, prepare from the DEV skill sources first.
+        """
+        env = self._runtime_env_dev(name)
+        dev_root = self.ctx.paths.dev_skills_dir()
+        skill_dir = (dev_root / name)
+        if not skill_dir.exists():
+            raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
+
+        target_version = version or env.resolve_active_version()
+        if not target_version:
+            # derive version from manifest, default to 'dev'
+            try:
+                manifest = self._load_manifest(skill_dir)
+            except FileNotFoundError:
+                manifest = {}
+            target_version = str(manifest.get("version") or "dev")
+
+        # Ensure version layout exists and slot is prepared
+        env.prepare_version(target_version)
+        metadata = env.read_version_metadata(target_version)
+        target_slot = slot or self._preferred_activation_slot(env, target_version, metadata)
+        slot_paths = env.build_slot_paths(target_version, target_slot)
+        slot_meta = metadata.get("slots", {}).get(target_slot, {})
+        manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
+        if not manifest_path.exists():
+            # prepare from DEV sources when missing
+            self.prepare_dev_runtime(name, version_override=target_version, run_tests=False, preferred_slot=target_slot)
+            metadata = env.read_version_metadata(target_version)
+            slot_meta = metadata.get("slots", {}).get(target_slot, {})
+            manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
+            if not manifest_path.exists():
+                raise RuntimeError(f"slot {target_slot} of version {target_version} is not prepared")
+
+        env.set_active_slot(target_version, target_slot)
+        env.active_version_marker().write_text(target_version, encoding="utf-8")
+        history = metadata.setdefault("history", {})
+        history["last_active_slot"] = target_slot
+        history["last_active_at"] = datetime.now(timezone.utc).isoformat()
+        env.write_version_metadata(target_version, metadata)
+        self._smoke_import(env=env, name=name, version=target_version)
+        return target_slot
     def run_dev_skill_tests(self, name: str) -> Dict[str, TestResult]:
         """Запуск тестов DEV-навыка прямо из исходников (без install/slots/.runtime).
         - Ищем тесты в <dev>/skills/<name>/tests/**/*.py (pytest discovery).
