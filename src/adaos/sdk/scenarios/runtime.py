@@ -11,6 +11,7 @@ import io
 import logging
 import os
 import re
+import json
 
 import yaml
 
@@ -183,7 +184,7 @@ class ScenarioRuntime:
 
     def run_from_file(self, path: str | Path) -> Dict[str, Any]:
         model = load_scenario(path)
-        base_dir = self.ctx
+        base_dir = self.ctx.paths.base_dir()
         ctx = ensure_runtime_context(base_dir)
         self._logger, self._log_path = setup_scenario_logger(model.id)
         self._log(
@@ -198,10 +199,39 @@ class ScenarioRuntime:
 
 
 def load_scenario(path: Path | str) -> ScenarioModel:
-    """load scenario.yaml"""
-    scenario_path = Path(path).expanduser().resolve() / "scenario.yaml"
-    payload = yaml.safe_load(scenario_path.read_text(encoding="utf-8")) or {}
-    return ScenarioModel.from_payload(payload, fallback_id=scenario_path.stem)
+    """Load a scenario definition from YAML or JSON."""
+
+    candidate = Path(path).expanduser().resolve()
+    search: list[Path] = []
+    if candidate.is_dir():
+        search.extend(
+            [
+                candidate / "scenario.yaml",
+                candidate / "scenario.yml",
+                candidate / "scenario.json",
+            ]
+        )
+    else:
+        search.append(candidate)
+
+    for scenario_path in search:
+        if not scenario_path.exists():
+            continue
+
+        suffix = scenario_path.suffix.lower()
+        if suffix in {".yaml", ".yml"}:
+            payload = yaml.safe_load(scenario_path.read_text(encoding="utf-8")) or {}
+        elif suffix == ".json":
+            payload = json.loads(scenario_path.read_text(encoding="utf-8")) or {}
+        else:
+            continue
+
+        fallback_id = scenario_path.stem
+        if fallback_id == "scenario":
+            fallback_id = scenario_path.parent.name or "scenario"
+        return ScenarioModel.from_payload(payload, fallback_id=fallback_id)
+
+    raise FileNotFoundError(f"scenario file not found at {candidate}")
 
 
 def _is_placeholder(value: str) -> bool:
