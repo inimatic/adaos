@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from adaos.adapters.db import SqliteScenarioRegistry
-from adaos.services.agent_context import get_ctx
+from adaos.services.agent_context import get_ctx, AgentContext
 from adaos.services.eventbus import emit
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_\-/]+$")
@@ -26,41 +26,12 @@ def _safe_subdir(root: Path, name: str) -> Path:
     return target
 
 
-def _resolve_template_dir(template: str) -> Path:
+def _resolve_template_dir(template: str, ctx: AgentContext) -> Path:
     """Locate a scenario template shipped with AdaOS or alongside sources."""
-
-    explicit = Path(template).expanduser()
-    if explicit.exists():
-        return explicit.resolve()
-
-    try:
-        import importlib.resources as ir
-        import adaos.scenario_templates as templates_pkg
-
-        res = ir.files(templates_pkg) / template
-        with ir.as_file(res) as fp:
-            template_path = Path(fp)
-            if template_path.exists():
-                return template_path
-    except Exception:
-        pass
-
-    here = Path(__file__).resolve()
-    candidates: list[Path] = []
-    if len(here.parents) >= 3:
-        candidates.append(here.parents[2] / "scenario_templates" / template)
-    if len(here.parents) >= 4:
-        candidates.append(here.parents[3] / "src" / "adaos" / "scenario_templates" / template)
-    candidates.append(Path.cwd() / "src" / "adaos" / "scenario_templates" / template)
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    raise FileNotFoundError(
-        f"template '{template}' not found; tried package resource and: "
-        + ", ".join(str(c) for c in candidates if c)
-    )
+    path = ctx.paths.scenarios_workspace_dir() / template
+    if not path.exists():
+        path = ctx.paths.scenario_templates_dir / "scenario_default"
+    return path
 
 
 def _write_default_manifest(target: Path, scenario_id: str, version: str) -> None:
@@ -72,7 +43,7 @@ def _write_default_manifest(target: Path, scenario_id: str, version: str) -> Non
         [
             "# yaml-language-server: $schema=../../../src/adaos/abi/scenario.schema.json",
             f"id: {scenario_id}",
-            f"version: \"{version}\"",
+            f'version: "{version}"',
             "trigger: manual",
             "vars: {}",
             "steps: []",
@@ -137,15 +108,13 @@ def create(
     scenarios_root = Path(ctx.paths.scenarios_dir())
     scenarios_root.mkdir(parents=True, exist_ok=True)
 
-    repo_ready = _maybe_init_repo(
-        scenarios_root, getattr(ctx.settings, "scenarios_monorepo_url", None), getattr(ctx.settings, "scenarios_monorepo_branch", None)
-    )
+    repo_ready = _maybe_init_repo(scenarios_root, getattr(ctx.settings, "scenarios_monorepo_url", None), getattr(ctx.settings, "scenarios_monorepo_branch", None))
 
     target = _safe_subdir(scenarios_root, name)
     if target.exists():
         raise FileExistsError(f"scenario '{name}' already exists at {target}")
 
-    template_root = _resolve_template_dir(template)
+    template_root = _resolve_template_dir(template, ctx)
     shutil.copytree(template_root, target)
 
     _write_default_manifest(target, name, version)

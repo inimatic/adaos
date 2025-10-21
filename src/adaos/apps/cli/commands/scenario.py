@@ -116,10 +116,9 @@ def create_cmd(
     scenario_id: str = typer.Argument(..., help=_("cli.scenario.create.name_help")),
     template: str = typer.Option("scenario_default", "--template", "-t", help=_("cli.scenario.create.template_help")),
 ):
-    """Create a new scenario scaffold from a template."""
-
-    path = scaffold_create(scenario_id, template=template)
-    typer.echo(_("cli.scenario.create.created", path=path))
+    """Create a new scenario scaffold from a template. Deprecated. Use adaos dev scenario create"""
+    typer.secho("Deprecated. Use adaos dev scenario create.", fg=typer.colors.RED)
+    raise typer.Exit(1)
 
 
 @_run_safe
@@ -164,7 +163,7 @@ def run_cmd(
     path: Optional[str] = typer.Option(None, "--path", help=_("cli.scenario.run.path_help")),
 ) -> None:
     ctx = get_ctx()
-    scenario_path = (path if path else ctx.paths.scenarios_workspace_dir()) / scenario_id / "scenario.json"
+    scenario_path = (path if path else ctx.paths.scenarios_workspace_dir()) / scenario_id
     runtime = ScenarioRuntime()
     result = runtime.run_from_file(str(scenario_path))
     meta = result.get("meta") or {}

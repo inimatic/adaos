@@ -402,7 +402,6 @@ def scenario_delete(
     _echo_delete_result("Scenario", result)
 
 
-
 def _resolve_dev_scenario_file(name: str, base: Path) -> Path | None:
     base = base.expanduser().resolve()
     if base.is_file():
@@ -426,19 +425,15 @@ def _resolve_dev_scenario_file(name: str, base: Path) -> Path | None:
 @scenario_app.command("run")
 def scenario_run(
     name: str = typer.Argument(..., help="scenario name in DEV space"),
-    path: Optional[Path] = typer.Option(None, "--path", help="override scenario location (dir or file)"),
 ) -> None:
     ctx = get_ctx()
-    base = Path(path).expanduser().resolve() if path is not None else Path(ctx.paths.dev_scenarios_dir())
-    scenario_file = _resolve_dev_scenario_file(name, base)
-
-    if scenario_file is None or not scenario_file.exists():
-        target = scenario_file if scenario_file is not None else (path or name)
-        typer.secho(f"Scenario file not found: {target}", fg=typer.colors.RED)
+    scenario_folder = ctx.paths.dev_scenarios_dir() / name
+    if scenario_folder is None or not scenario_folder.exists():
+        typer.secho(f"Scenario file not found: {name}", fg=typer.colors.RED)
         raise typer.Exit(1)
 
     runtime = ScenarioRuntime()
-    result = runtime.run_from_file(str(scenario_file))
+    result = runtime.run_from_file(str(scenario_folder))
     meta = result.get("meta") or {}
     log_file = meta.get("log_file")
     typer.secho(f"Scenario '{name}' executed.", fg=typer.colors.GREEN)
@@ -479,6 +474,7 @@ def scenario_validate(
         raise typer.Exit(1)
 
     typer.secho(f"Scenario '{model.id}' is valid.", fg=typer.colors.GREEN)
+
 
 @_run_safe
 @skill_app.command("validate")
@@ -589,6 +585,7 @@ def cmd_test(
         raise typer.Exit(1)
 
     typer.secho("tests passed", fg=typer.colors.GREEN)
+
 
 @_run_safe
 @skill_app.command("setup")
