@@ -4,16 +4,7 @@ from typing import Any, Dict, Optional
 import json, os, requests
 from adaos.ports.subnet_kv import SubnetKVPort
 from adaos.services.node_config import load_config
-
-
-def _default_base_dir() -> Path:
-    env = os.environ.get("ADAOS_BASE_DIR")
-    if env:
-        return Path(env).expanduser()
-    if os.name == "nt":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "AdaOS"
-    return Path.home() / ".adaos"
+from adaos.services.settings import Settings
 
 
 def _resolve_base_dir() -> Path:
@@ -26,7 +17,8 @@ def _resolve_base_dir() -> Path:
             pass
     except Exception:
         pass
-    return _default_base_dir()
+    # Fallback: derive from Settings to keep a single source of truth
+    return Settings.from_sources().base_dir
 
 
 class HubSubnetKV(SubnetKVPort):

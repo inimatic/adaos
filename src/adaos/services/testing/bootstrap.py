@@ -22,6 +22,7 @@ __all__ = [
     "load_test_secrets",
     "mount_skill_paths_for_testing",
     "unmount_skill_paths",
+    "skill_tests_root",
 ]
 
 
@@ -129,6 +130,15 @@ def _infer_base_dir(slot_dir: Path) -> Path:
     for parent in slot_dir.resolve().parents:
         if parent.name == ".adaos":
             return parent
+    try:
+        ctx = get_ctx()
+    except RuntimeError:
+        ctx = None
+    else:
+        paths = getattr(ctx, "paths", None)
+        if paths is not None and hasattr(paths, "base_dir"):
+            base_dir = paths.base_dir()
+            return base_dir if isinstance(base_dir, Path) else Path(base_dir).resolve()
     override = os.getenv("ADAOS_BASE_DIR")
     if override:
         return Path(override).expanduser().resolve()
@@ -149,14 +159,19 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return data
 
 
+def skill_tests_root(skill_slot_dir: Path, skill_name: str) -> Path:
+    return skill_slot_dir / "src" / "skills" / skill_name / "tests"
+
+
 def load_test_secrets(
     skill_slot_dir: Path,
     *,
+    skill_name: str,
     env_prefix: str | None = None,
 ) -> dict[str, str]:
     """Collect secrets for skill tests from the environment and config files."""
 
-    tests_root = skill_slot_dir / "runtime" / "tests"
+    tests_root = skill_tests_root(skill_slot_dir, skill_name)
     prefix = env_prefix if env_prefix is not None else os.getenv("ADAOS_SKILL_TEST_ENV_PREFIX")
     secrets: dict[str, str] = {}
 

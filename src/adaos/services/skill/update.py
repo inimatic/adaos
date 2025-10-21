@@ -23,7 +23,7 @@ class SkillUpdateService:
         if meta is None:
             raise FileNotFoundError(f"skill '{skill_id}' is not installed")
 
-        root = Path(self.ctx.paths.skills_dir())
+        root = self.ctx.paths.skills_dir()
         skill_path = Path(getattr(meta, "path", root / skill_id))
         version = getattr(meta, "version", None)
 

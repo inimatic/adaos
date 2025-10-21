@@ -14,12 +14,13 @@ from adaos.services.testing.bootstrap import (
     bootstrap_test_ctx,
     load_test_secrets,
     mount_skill_paths_for_testing,
+    skill_tests_root,
     unmount_skill_paths,
 )
 
 
-def _install_hooks(slot_dir: Path, ctx) -> None:
-    hooks_path = slot_dir / "runtime" / "tests" / "hooks.py"
+def _install_hooks(skill_name: str, slot_dir: Path, ctx) -> None:
+    hooks_path = skill_tests_root(slot_dir, skill_name) / "hooks.py"
     if not hooks_path.is_file():
         return
     spec = importlib.util.spec_from_file_location("adaos_skill_test_hooks", hooks_path)
@@ -54,12 +55,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     slot_dir = Path(args.slot_dir).resolve()
     inserted_paths = mount_skill_paths_for_testing(args.skill_name, args.skill_version, slot_dir)
     env_prefix = args.env_prefix if args.env_prefix is not None else f"{args.skill_name.upper()}_"
-    secrets = load_test_secrets(slot_dir, env_prefix=env_prefix)
+    secrets = load_test_secrets(slot_dir, skill_name=args.skill_name, env_prefix=env_prefix)
     ctx_handle = bootstrap_test_ctx(skill_name=args.skill_name, skill_slot_dir=slot_dir, secrets=secrets)
 
     exit_code = 0
     try:
-        _install_hooks(slot_dir, ctx_handle.ctx)
+        _install_hooks(args.skill_name, slot_dir, ctx_handle.ctx)
         if args.pytest:
             import pytest
 

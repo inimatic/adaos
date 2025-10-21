@@ -691,7 +691,7 @@ python cli.py skill versions AlarmSkill
 ### Запуск теста вручную
 
 ```bash
-python cli.py test run runtime/tests/test_alarm.yaml
+python cli.py test run src/skills/AlarmSkill/tests/test_alarm.yaml
 ```
 
 ### Откат последнего коммита

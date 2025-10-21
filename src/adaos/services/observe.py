@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from adaos.services.node_config import load_config
+from adaos.services.settings import Settings
 from adaos.sdk.data import bus as bus_module  # будем мягко оборачивать emit
 
 try:
@@ -16,23 +17,14 @@ except Exception:  # noqa: BLE001
     get_ctx = None  # type: ignore
 
 
-def _default_base_dir() -> Path:
-    env = os.environ.get("ADAOS_BASE_DIR")
-    if env:
-        return Path(env).expanduser()
-    if os.name == "nt":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "AdaOS"
-    return Path.home() / ".adaos"
-
-
 def _resolve_base_dir() -> Path:
     if get_ctx:
         try:
             return Path(get_ctx().paths.base_dir())  # type: ignore[attr-defined]
         except Exception:
             pass
-    return _default_base_dir()
+    # Fallback: derive from Settings to keep a single source of truth
+    return Settings.from_sources().base_dir
 
 
 BASE_DIR = _resolve_base_dir()

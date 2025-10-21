@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence
 
+from adaos.services.testing.bootstrap import skill_tests_root
+
 
 @dataclass(slots=True, frozen=True)
 class TestResult:
@@ -85,7 +87,10 @@ def run_tests(
         env_template["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(python_entries))
 
     dev_tests_root = root / "tests"
-    runtime_tests_root = (slot_current_dir / "runtime" / "tests") if slot_current_dir else (root / "runtime" / "tests")
+    if not dev_mode and slot_current_dir is not None and skill_name:
+        runtime_tests_root = skill_tests_root(slot_current_dir, skill_name)
+    else:
+        runtime_tests_root = dev_tests_root
 
     with log_path.open("w", encoding="utf-8") as log:
         if not dev_mode:

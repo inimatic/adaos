@@ -265,7 +265,7 @@ class SkillManager:
         # ВСЕ dev-пути — только из PathProvider:
         # - dev_dir() — родитель каталога 'skills' (для импорта `skills.*`)
         # - skill_dir — корень конкретного навыка (удобно для относительных импортов)
-        dev_dir = Path(self.ctx.paths.dev_dir()).resolve()
+        dev_dir = self.ctx.paths.dev_dir()
         python_paths.insert(0, str(skill_dir))
         python_paths.insert(0, str(dev_dir))
 
@@ -373,7 +373,7 @@ class SkillManager:
         run_tests: bool = False,
         preferred_slot: str | None = None,
     ) -> RuntimeInstallResult:
-        skills_root = Path(self.ctx.paths.skills_dir())
+        skills_root = self.ctx.paths.skills_dir()
         skill_dir = skills_root / name
         if not skill_dir.exists():
             raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
@@ -559,7 +559,7 @@ class SkillManager:
                 pass
 
     def gc_runtime(self, name: str | None = None) -> Dict[str, Iterable[str]]:
-        skills_root = Path(self.ctx.paths.skills_dir())
+        skills_root = self.ctx.paths.skills_dir()
         targets = [name] if name else [p.name for p in (skills_root / ".runtime").glob("*") if p.is_dir()]
         cleaned: Dict[str, Iterable[str]] = {}
         for skill in targets:
@@ -671,7 +671,7 @@ class SkillManager:
 
         module = tool_spec.get("module")
         attr = tool_spec.get("callable") or target_tool
-        skill_dir = Path(data.get("source") or (Path(self.ctx.paths.skills_dir()) / name))
+        skill_dir = Path(data.get("source") or (self.ctx.paths.skills_dir() / name))
         slot_name = data.get("slot") or slot_name
         slot = env.build_slot_paths(version or data.get("version"), slot_name)
         runtime_info = data.get("runtime", {})
@@ -731,7 +731,7 @@ class SkillManager:
     # ------------------------------------------------------------------
     def _runtime_env(self, name: str) -> SkillRuntimeEnvironment:
         return SkillRuntimeEnvironment(
-            skills_root=Path(self.ctx.paths.skills_dir()),
+            skills_root=self.ctx.paths.skills_dir(),
             skill_name=name,
         )
 
@@ -911,7 +911,7 @@ class SkillManager:
 
     def _constraints_file(self) -> Path | None:
         candidates: list[Path] = []
-        workspace = Path(self.ctx.paths.workspace_dir())
+        workspace = self.ctx.paths.workspace_dir()
         candidates.append(workspace / "constraints.txt")
         candidates.append(workspace / "requirements" / "constraints.txt")
         package_dir = getattr(self.ctx.paths, "package_dir", None)
@@ -1143,7 +1143,7 @@ class SkillManager:
         if not _name_re.match(sub):
             raise ValueError("invalid skill name")
 
-        dev_root = Path(self.ctx.paths.dev_skills_dir()).resolve()
+        dev_root = self.ctx.paths.dev_skills_dir()
         skill_dir = (dev_root / sub).resolve()
         try:
             skill_dir.relative_to(dev_root)
@@ -1171,11 +1171,11 @@ class SkillManager:
         if package_root:
             python_paths.append(str(package_root))
         try:
-            python_paths.append(str(Path(self.ctx.paths.package_path()).resolve()))
+            python_paths.append(str(self.ctx.paths.package_path()))
         except Exception:
             pass
 
-        dev_dir = Path(self.ctx.paths.dev_dir()).resolve()  # ...\.adaos\dev\sn_xxxx\
+        dev_dir = self.ctx.paths.dev_dir()  # ...\.adaos\dev\sn_xxxx\
         python_paths.insert(0, str(skill_dir))  # ...\.adaos\dev\sn_xxxx\skills\<name>\
         python_paths.insert(0, str(dev_dir))  # родитель 'skills' — нужен для 'import skills.*'
 
