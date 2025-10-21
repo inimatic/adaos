@@ -108,7 +108,7 @@ class Settings:
 
         # --- node.yaml (низший приоритет из внешних источников) ---
         # пробуем <base_dir>/node.yaml, затем ~/.adaos/node.yaml
-        node_paths = [base / "node.yaml", Path.home() / ".adaos" / "node.yaml"]
+        node_paths = [base / "node.yaml"]
         node_cfg: dict = {}
         for np in node_paths:
             try:

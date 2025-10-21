@@ -9,18 +9,20 @@ from adaos.services.testing.bootstrap import (
     bootstrap_test_ctx,
     load_test_secrets,
     mount_skill_paths_for_testing,
+    skill_tests_root,
     unmount_skill_paths,
 )
 from adaos.services.skill.tests_entry import main as run_skill_tests_entry
 
 
 @pytest.fixture
-def skill_slot(tmp_path) -> Path:
+def skill_slot(tmp_path: Path) -> Path:
     base = tmp_path / ".adaos"
     slot = base / "workspace" / "skills" / ".runtime" / "demo" / "1.0.0" / "slots" / "current"
     (slot / "vendor").mkdir(parents=True, exist_ok=True)
-    (slot / "src").mkdir(parents=True, exist_ok=True)
-    (slot / "runtime" / "tests").mkdir(parents=True, exist_ok=True)
+    namespace_root = slot / "src" / "skills" / "demo"
+    namespace_root.mkdir(parents=True, exist_ok=True)
+    (namespace_root / "tests").mkdir(parents=True, exist_ok=True)
     return slot
 
 
@@ -45,12 +47,12 @@ def test_mount_skill_paths_for_testing_prioritises_vendor(skill_slot):
 
 def test_load_test_secrets_merges_sources(skill_slot, monkeypatch):
     monkeypatch.setenv("DEMO_API_KEY", "env")
-    tests_root = skill_slot / "runtime" / "tests"
+    tests_root = skill_tests_root(skill_slot, "demo")
     (tests_root / ".env").write_text("DEMO_API_KEY=dot\nPLAIN=value\n", encoding="utf-8")
     config = {"DEMO_API_KEY": "json", "API_KEY": "cfg"}
     (tests_root / "test.config.json").write_text(json.dumps(config), encoding="utf-8")
 
-    secrets = load_test_secrets(skill_slot, env_prefix="DEMO_")
+    secrets = load_test_secrets(skill_slot, skill_name="demo", env_prefix="DEMO_")
     assert secrets["DEMO_API_KEY"] == "json"
     assert secrets["PLAIN"] == "value"
     assert secrets["API_KEY"] == "cfg"
@@ -91,7 +93,7 @@ def test_tests_entry_executes_script_with_context(monkeypatch, skill_slot):
         encoding="utf-8",
     )
 
-    tests_root = skill_slot / "runtime" / "tests"
+    tests_root = skill_tests_root(skill_slot, "demo")
     (tests_root / ".env").write_text("API_KEY=from_env\n", encoding="utf-8")
     script = tests_root / "smoke" / "test_script.py"
     script.parent.mkdir(parents=True, exist_ok=True)

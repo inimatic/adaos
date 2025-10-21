@@ -52,14 +52,16 @@ class RootOwnerSettings:
 @dataclass
 class RootSettings:
     base_url: str = "https://api.inimatic.com"
-    ca_cert: str | None = "~/.adaos/keys/ca.cert"
+    # Store relative/default-friendly path; resolve via _expand_path
+    ca_cert: str | None = "keys/ca.cert"
     owner: RootOwnerSettings = field(default_factory=RootOwnerSettings)
 
 
 @dataclass
 class HubKeypair:
-    key: str | None = "~/.adaos/keys/hub_private.pem"
-    cert: str | None = "~/.adaos/keys/hub_cert.pem"
+    # Store relative/default-friendly paths; resolve via _expand_path
+    key: str | None = "keys/hub_private.pem"
+    cert: str | None = "keys/hub_cert.pem"
 
 
 @dataclass
@@ -75,7 +77,8 @@ class NodeSettings:
 
 @dataclass
 class DevSettings:
-    workspace: str = "~/.adaos/dev"
+    # Store relative path under base_dir; resolve via _expand_path
+    workspace: str = "dev"
 
 
 @dataclass
@@ -135,10 +138,10 @@ class NodeConfig:
             self.root_settings.base_url = "https://api.inimatic.com"
             changed = True
         if not self.root_settings.ca_cert:
-            self.root_settings.ca_cert = "~/.adaos/keys/ca.cert"
+            self.root_settings.ca_cert = "keys/ca.cert"
             changed = True
         if not self.dev_settings.workspace:
-            self.dev_settings.workspace = "~/.adaos/dev"
+            self.dev_settings.workspace = "dev"
             changed = True
         return changed
 
@@ -170,16 +173,16 @@ class NodeConfig:
         return data
 
     def hub_key_path(self) -> Path:
-        return _expand_path(self.subnet_settings.hub.key, "~/.adaos/keys/hub_private.pem")
+        return _expand_path(self.subnet_settings.hub.key, "keys/hub_private.pem")
 
     def hub_cert_path(self) -> Path:
-        return _expand_path(self.subnet_settings.hub.cert, "~/.adaos/keys/hub_cert.pem")
+        return _expand_path(self.subnet_settings.hub.cert, "keys/hub_cert.pem")
 
     def ca_cert_path(self) -> Path:
-        return _expand_path(self.root_settings.ca_cert, "~/.adaos/keys/ca.cert")
+        return _expand_path(self.root_settings.ca_cert, "keys/ca.cert")
 
     def workspace_path(self) -> Path:
-        return _expand_path(self.dev_settings.workspace, "~/.adaos/dev")
+        return _expand_path(self.dev_settings.workspace, "dev")
 
     def owner_workspace(self) -> Path | None:
         owner = self.owner_id
@@ -198,6 +201,7 @@ def _expand_path(value: str | None, fallback: str) -> Path:
 
     text = str(candidate).replace("\\", "/")
     if text.startswith("~"):
+        # Backward-compatibility: map legacy ~/.adaos paths into current base_dir
         if text.startswith("~/.adaos"):
             suffix = text.split("~/.adaos", 1)[1].lstrip("/\\")
             if suffix:
@@ -228,15 +232,7 @@ def _stringify_path(value: str | None) -> str | None:
     except ValueError:
         pass
     else:
-        default_base = _default_base_dir()
-        try:
-            default_resolved = default_base.resolve(strict=False)
-        except TypeError:  # pragma: no cover
-            default_resolved = default_base
-        env_base = os.environ.get("ADAOS_BASE_DIR")
-        env_base_path = Path(env_base).expanduser() if env_base else None
-        if env_base_path is None and base_resolved == default_resolved:
-            return str(Path("~") / ".adaos" / relative_base)
+        # Always stringify under the active base_dir; avoid emitting legacy ~/.adaos
         if not relative_base.parts:
             return str(base_resolved)
         return str(base_resolved / relative_base)
@@ -295,7 +291,7 @@ def _settings_from_dict(settings_cls: type, payload: Any):
         owner_id = owner_raw.get("owner_id") if isinstance(owner_raw, dict) else None
         return RootSettings(
             base_url=base_url or "https://api.inimatic.com",
-            ca_cert=ca_cert or "~/.adaos/keys/ca.cert",
+            ca_cert=ca_cert or "keys/ca.cert",
             owner=RootOwnerSettings(owner_id=owner_id),
         )
     if settings_cls is SubnetSettings:
@@ -310,7 +306,7 @@ def _settings_from_dict(settings_cls: type, payload: Any):
         return NodeSettings(id=payload.get("id") if isinstance(payload, dict) else None)
     if settings_cls is DevSettings:
         workspace = payload.get("workspace") if isinstance(payload, dict) else None
-        return DevSettings(workspace=workspace or "~/.adaos/dev")
+        return DevSettings(workspace=workspace or "dev")
     raise TypeError(f"Unsupported settings class: {settings_cls!r}")
 
 

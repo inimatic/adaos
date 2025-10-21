@@ -17,9 +17,9 @@ skills/.runtime/<name>/<version>/
         A/
             src/
                 skills/<name>/...
+                    tests/
             vendor/
             runtime/
-                tests/
                 logs/
                 tmp/
             resolved.manifest.json
@@ -181,11 +181,10 @@ class SkillRuntimeEnvironment:
         src_dir = slot_root / "src"
         vendor_dir = slot_root / "vendor"
         runtime_dir = slot_root / "runtime"
-        tests_dir = runtime_dir / "tests"
         logs_dir = runtime_dir / "logs"
         tmp_dir = runtime_dir / "tmp"
 
-        for path in (src_dir, vendor_dir, runtime_dir, tests_dir, logs_dir, tmp_dir):
+        for path in (src_dir, vendor_dir, runtime_dir, logs_dir, tmp_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         keep = runtime_dir / ".keep"
@@ -233,7 +232,7 @@ class SkillRuntimeEnvironment:
             src_dir=slot_root / "src",
             vendor_dir=slot_root / "vendor",
             runtime_dir=slot_root / "runtime",
-            tests_dir=slot_root / "runtime" / "tests",
+            tests_dir=slot_root / "src" / "skills" / self._skill_name / "tests",
             logs_dir=slot_root / "runtime" / "logs",
             tmp_dir=slot_root / "runtime" / "tmp",
             resolved_manifest=slot_root / "resolved.manifest.json",
