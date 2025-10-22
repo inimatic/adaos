@@ -53,6 +53,15 @@ class Settings:
     dev_skills_dirname: str = "skills"
     dev_scenarios_dirname: str = "scenarios"
 
+    # Chat IO / Telegram / IO bus settings
+    tg_secret_token: Optional[str] = None
+    tg_bot_token: Optional[str] = None
+    io_bus_kind: str = "local"  # local|nats|http
+    nats_url: Optional[str] = None
+    files_tmp_dir: Optional[str] = None
+    route_rules_path: Optional[str] = None
+    default_hub: Optional[str] = None
+
     @staticmethod
     def from_sources(env_file: Optional[str] = ".env") -> "Settings":
         def is_android() -> bool:
@@ -151,6 +160,14 @@ class Settings:
             app_base=app_base,
             dev_skills_dirname=dev_skills_dirname,
             dev_scenarios_dirname=dev_scenarios_dirname,
+            # IO/Telegram specific (from env/.env only)
+            tg_secret_token=pick_env("TG_SECRET_TOKEN", None) or None,
+            tg_bot_token=pick_env("TG_BOT_TOKEN", None) or None,
+            io_bus_kind=(pick_env("IO_BUS_KIND", "local") or "local").lower(),
+            nats_url=pick_env("NATS_URL", None) or None,
+            files_tmp_dir=pick_env("FILES_TMP_DIR", str(base / "tmp")),
+            route_rules_path=pick_env("ROUTE_RULES_PATH", None) or None,
+            default_hub=pick_env("DEFAULT_HUB", None) or None,
         )
 
     def with_overrides(self, **kw) -> "Settings":

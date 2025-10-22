@@ -2,9 +2,15 @@ from __future__ import annotations
 import os
 from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Request
+import hashlib
+import json
+import time
 
+from adaos.services.agent_context import get_ctx
 from adaos.integrations.telegram.webhook import validate_secret
 from adaos.integrations.telegram.normalize import to_input_event
+from adaos.integrations.telegram.files import get_file_path, download_file, convert_opus_to_wav16k
+from adaos.adapters.db import sqlite as sqlite_db
 from adaos.services.chat_io import pairing as pairing_svc  # generic pairing
 
 router = APIRouter()
@@ -16,20 +22,87 @@ async def telegram_webhook(
     bot_id: str,
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None),
 ):
-    expected = os.getenv("TG_SECRET_TOKEN")
+    # Settings-based secret (ENV/.env fallback via Settings)
+    expected = get_ctx().settings.tg_secret_token or os.getenv("TG_SECRET_TOKEN")
     if not validate_secret(x_telegram_bot_api_secret_token, expected):
         raise HTTPException(status_code=401, detail="invalid secret")
 
     update = await request.json()
     evt = to_input_event(bot_id, update, hub_id=None)
-    # TODO: publish evt to EventBus when bus impl lands
-    return {"ok": True}
+
+    # Idempotency: dedup by {bot_id, update_id}
+    idem_key = f"tg:{bot_id}:{evt.update_id}"
+    raw_body = json.dumps(update, ensure_ascii=False, separators=(",", ":"))
+    body_hash = hashlib.sha256(raw_body.encode("utf-8")).hexdigest()
+    path = f"/io/tg/{bot_id}/webhook"
+    cached = sqlite_db.idem_get(idem_key, "POST", path, bot_id, body_hash)
+    if cached:
+        try:
+            payload = json.loads(cached["body_json"]) if cached.get("body_json") else {"ok": True, "cached": True}
+        except Exception:
+            payload = {"ok": True, "cached": True}
+        return payload
+
+    # Enrich payload with downloaded media paths
+    settings = get_ctx().settings
+    token = settings.tg_bot_token or os.getenv("TG_BOT_TOKEN")
+    files_root = settings.files_tmp_dir or (str(get_ctx().paths.tmp_dir()))
+    dest_root = os.path.join(files_root, "telegram", bot_id)
+
+    try:
+        if evt.type == "audio" and token and evt.payload.get("file_id"):
+            fpath = get_file_path(token, evt.payload["file_id"])  # type: ignore
+            if fpath:
+                local = download_file(token, fpath, dest_root)
+                # try convert to wav16k
+                wav_path = local.with_suffix(".wav")
+                if convert_opus_to_wav16k(local, wav_path):
+                    evt.payload["audio_path"] = str(wav_path)
+                else:
+                    evt.payload["audio_path"] = str(local)
+        elif evt.type == "photo" and token and evt.payload.get("file_id"):
+            fpath = get_file_path(token, evt.payload["file_id"])  # type: ignore
+            if fpath:
+                local = download_file(token, fpath, dest_root)
+                evt.payload["image_path"] = str(local)
+        elif evt.type == "document" and token and evt.payload.get("file_id"):
+            fpath = get_file_path(token, evt.payload["file_id"])  # type: ignore
+            if fpath:
+                local = download_file(token, fpath, dest_root)
+                evt.payload["document_path"] = str(local)
+    except Exception:
+        # Non-fatal; continue without media enrichment
+        pass
+
+    # Handle /start <code> pairing in text updates
+    if evt.type == "text":
+        txt = (evt.payload.get("text") or "").strip()
+        if txt.lower().startswith("/start "):
+            code = txt.split(" ", 1)[1].strip()
+            await pairing_svc.confirm_pair_code(code=code, platform_user={"platform": "telegram", "user_id": evt.user_id, "bot_id": bot_id})
+
+    # TODO: publish evt to IO bus (NATS/HTTP) when impl lands
+    # For now, respond OK and store idempotency record
+    response = {"ok": True}
+    sqlite_db.idem_put(
+        idem_key,
+        "POST",
+        path,
+        bot_id,
+        body_hash,
+        200,
+        json.dumps(response, ensure_ascii=False),
+        event_id=evt.update_id,
+        server_time_utc=str(int(time.time())),
+        ttl=86400,
+    )
+    return response
 
 
 @router.post("/io/tg/pair/create")
-async def tg_pair_create(hub: Optional[str] = None, ttl: Optional[str] = None):
-    # TODO: parse ttl to seconds (default 600)
-    res = await pairing_svc.issue_pair_code(bot_id="main-bot", hub_id=hub, ttl_sec=600)
+async def tg_pair_create(hub: Optional[str] = None, ttl: Optional[int] = None, bot: Optional[str] = None):
+    ttl_sec = int(ttl or 600)
+    res = await pairing_svc.issue_pair_code(bot_id=bot or "main-bot", hub_id=hub, ttl_sec=ttl_sec)
     return {"ok": True, **res}
 
 
