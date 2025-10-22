@@ -6,6 +6,10 @@ from pathlib import Path
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.sdk.data import bus
 from adaos.services.node_config import load_config, set_role as cfg_set_role, NodeConfig
+from adaos.services.eventbus import LocalEventBus
+from adaos.services.io_bus.local_bus import LocalIoBus
+from adaos.services.io_bus.http_fallback import HttpFallbackBus
+from adaos.services.io_bus.nats_bus import NatsIoBus
 from adaos.ports.heartbeat import HeartbeatPort
 from adaos.ports.skills_loader import SkillsLoaderPort
 from adaos.ports.subnet_registry import SubnetRegistryPort
@@ -24,6 +28,7 @@ class BootstrapService:
         self._ready = asyncio.Event()
         self._booted = False
         self._app: Any = None
+        self._io_bus: Any = None
 
     def is_ready(self) -> bool:
         return self._ready.is_set()
@@ -114,6 +119,29 @@ class BootstrapService:
         self._app = app
         conf = load_config(ctx=self.ctx)
         self._prepare_environment()
+        # --- select IO bus based on settings ---
+        bus_kind = (self.ctx.settings.io_bus_kind or "local").lower()
+        io_bus: Any
+        if bus_kind == "nats" and (self.ctx.settings.nats_url or ""):
+            io_bus = NatsIoBus(self.ctx.settings.nats_url or "nats://127.0.0.1:4222")
+            await io_bus.connect()
+            print(f"[bootstrap] IO bus: NATS connected at {self.ctx.settings.nats_url}")
+        elif bus_kind == "http":
+            io_bus = HttpFallbackBus(self.ctx.settings.api_base)
+            await io_bus.connect()
+            print(f"[bootstrap] IO bus: HTTP fallback at {self.ctx.settings.api_base}")
+        else:
+            # local adapter over LocalEventBus
+            core_bus = self.ctx.bus if isinstance(self.ctx.bus, LocalEventBus) else LocalEventBus()
+            io_bus = LocalIoBus(core=core_bus)
+            await io_bus.connect()
+            print("[bootstrap] IO bus: LocalEventBus")
+        self._io_bus = io_bus
+        # expose in app.state
+        try:
+            setattr(app.state, "bus", io_bus)
+        except Exception:
+            pass
         await bus.emit("sys.boot.start", {"role": conf.role, "node_id": conf.node_id, "subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
         # paths.skills_dir() может быть функцией; нормализуем до Path/str
         skills_dir_attr = getattr(self.ctx.paths, "skills_dir", None)
@@ -143,6 +171,38 @@ class BootstrapService:
                 self._ready.set()
                 self._booted = True
                 await bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
+
+        # After IO bus is ready, wire outbound subscriber for Telegram if NATS/local
+        try:
+            if hasattr(self._io_bus, "subscribe_output"):
+                from adaos.integrations.telegram.sender import TelegramSender
+                bot_id = "main-bot"  # one-bot assumption for MVP
+                sender = TelegramSender(bot_id)
+
+                async def _handler(subject: str, data: bytes) -> None:
+                    import json as _json
+                    from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
+                    from adaos.services.chat_io import telemetry as tm
+                    try:
+                        payload = _json.loads(data.decode("utf-8"))
+                        # payload may already match ChatOutputEvent schema
+                        messages = [ChatOutputMessage(**m) for m in payload.get("messages", [])]
+                        out = ChatOutputEvent(target=payload.get("target", {}), messages=messages, options=payload.get("options"))
+                        await sender.send(out)
+                        for m in messages:
+                            tm.record_event("outbound_total", {"type": m.type})
+                    except Exception as e:
+                        # On error, emit DLQ if possible
+                        try:
+                            dlq_env = {"error": str(e), "subject": subject, "data": payload if 'payload' in locals() else None}
+                            if hasattr(self._io_bus, "publish_dlq"):
+                                await self._io_bus.publish_dlq("output", dlq_env)
+                        except Exception:
+                            pass
+
+                await self._io_bus.subscribe_output(bot_id, _handler)
+        except Exception:
+            pass
 
     async def shutdown(self) -> None:
         await bus.emit("sys.stopping", {}, source="lifecycle", actor="system")
