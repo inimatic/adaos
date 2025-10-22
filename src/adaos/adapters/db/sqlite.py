@@ -344,3 +344,128 @@ def device_upsert_hub(
         "issued_at": issued_at,
         "expires_at": expires_at,
     }
+
+
+# ---- Pairing (pair_codes) and bindings (chat_bindings) ---------------------------------
+
+def pair_issue(bot_id: str, hub_id: str | None, *, ttl_sec: int = 600) -> dict:
+    """Create one-time pair code with TTL. Returns {code, bot_id, hub_id, expires_at}."""
+    sql = get_ctx().sql
+    now = int(time.time())
+    expires_at = now + max(1, int(ttl_sec))
+    # generate simple base32-like uppercase code 8-10 chars using new_id
+    raw = new_id().replace("-", "").upper()
+    code = raw[:10]
+    with sql.connect() as con:
+        con.execute(
+            """
+            INSERT INTO pair_codes(code, bot_id, hub_id, expires_at, state, created_at, note)
+            VALUES(?, ?, ?, ?, 'issued', ?, NULL)
+            """,
+            (code, bot_id, hub_id, expires_at, now),
+        )
+        con.commit()
+    return {"code": code, "bot_id": bot_id, "hub_id": hub_id, "expires_at": expires_at, "state": "issued"}
+
+
+def pair_get(code: str) -> dict | None:
+    sql = get_ctx().sql
+    with sql.connect() as con:
+        cur = con.execute(
+            "SELECT code, bot_id, hub_id, expires_at, state, created_at FROM pair_codes WHERE code=?",
+            (code,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "code": row[0],
+        "bot_id": row[1],
+        "hub_id": row[2],
+        "expires_at": int(row[3]) if row[3] is not None else None,
+        "state": row[4],
+        "created_at": int(row[5]) if row[5] is not None else None,
+    }
+
+
+def pair_confirm(code: str) -> dict | None:
+    sql = get_ctx().sql
+    now = int(time.time())
+    rec = pair_get(code)
+    if not rec:
+        return None
+    if rec.get("expires_at") and rec["expires_at"] < now:
+        # expire
+        with sql.connect() as con:
+            con.execute("UPDATE pair_codes SET state='expired' WHERE code=?", (code,))
+            con.commit()
+        rec["state"] = "expired"
+        return rec
+    if rec.get("state") not in ("issued",):
+        return rec
+    with sql.connect() as con:
+        con.execute("UPDATE pair_codes SET state='confirmed' WHERE code=?", (code,))
+        con.commit()
+    rec["state"] = "confirmed"
+    return rec
+
+
+def pair_revoke(code: str) -> bool:
+    sql = get_ctx().sql
+    with sql.connect() as con:
+        cur = con.execute("UPDATE pair_codes SET state='revoked' WHERE code=?", (code,))
+        con.commit()
+        return cur.rowcount > 0
+
+
+def binding_upsert(platform: str, user_id: str, bot_id: str, *, hub_id: str | None, ada_user_id: str | None = None) -> dict:
+    """Upsert chat binding and return the record."""
+    sql = get_ctx().sql
+    now = int(time.time())
+    ada_user_id = ada_user_id or new_id()
+    with sql.connect() as con:
+        con.execute(
+            """
+            INSERT INTO chat_bindings(platform, user_id, bot_id, ada_user_id, hub_id, created_at, last_seen)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(platform, user_id, bot_id) DO UPDATE SET
+              hub_id=excluded.hub_id,
+              ada_user_id=COALESCE(chat_bindings.ada_user_id, excluded.ada_user_id),
+              last_seen=excluded.last_seen
+            """,
+            (platform, user_id, bot_id, ada_user_id, hub_id, now, now),
+        )
+        con.commit()
+    return get_binding_by_user(platform, user_id, bot_id) or {
+        "platform": platform,
+        "user_id": user_id,
+        "bot_id": bot_id,
+        "ada_user_id": ada_user_id,
+        "hub_id": hub_id,
+        "created_at": now,
+        "last_seen": now,
+    }
+
+
+def get_binding_by_user(platform: str, user_id: str, bot_id: str) -> dict | None:
+    sql = get_ctx().sql
+    with sql.connect() as con:
+        cur = con.execute(
+            """
+            SELECT platform, user_id, bot_id, ada_user_id, hub_id, created_at, last_seen
+            FROM chat_bindings WHERE platform=? AND user_id=? AND bot_id=?
+            """,
+            (platform, user_id, bot_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "platform": row[0],
+        "user_id": row[1],
+        "bot_id": row[2],
+        "ada_user_id": row[3],
+        "hub_id": row[4],
+        "created_at": int(row[5]) if row[5] is not None else None,
+        "last_seen": int(row[6]) if row[6] is not None else None,
+    }

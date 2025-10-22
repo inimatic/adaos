@@ -72,7 +72,15 @@ class _CtxHolder:
         ):
             fs.allow_root(root)
 
-        bus = LocalEventBus()
+        # Select EventBus implementation by settings.io_bus_kind
+        bus_kind = (settings.io_bus_kind or "local").lower()
+        bus: LocalEventBus
+        if bus_kind == "local":
+            bus = LocalEventBus()
+        else:
+            # Placeholders for future implementations; fallback to local
+            # nats or http fallback can be wired here once available
+            bus = LocalEventBus()
         root_logger = setup_logging(paths)
         attach_event_logger(bus, root_logger.getChild("events"))
 

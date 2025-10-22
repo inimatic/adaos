@@ -37,6 +37,14 @@ async def lifespan(app: FastAPI):
     # Chat IO webhooks (mounted without /api prefix to keep exact paths)
     app.include_router(io_webhooks.router)
 
+    # 3.5) сохранить ссылки на контекст/шину в state для внешних компонентов
+    try:
+        from adaos.services.agent_context import get_ctx as _get_ctx
+        app.state.ctx = _get_ctx()
+        app.state.bus = app.state.ctx.bus
+    except Exception:
+        pass
+
     # 4) поднимаем наблюдатель и выполняем boot-последовательность
     await start_observer()
     await run_boot_sequence(app)

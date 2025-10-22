@@ -208,6 +208,41 @@ def _echo_login_result(result: RootLoginResult) -> None:
     typer.echo(f"Workspace: {_display_path(result.workspace_path)}")
 
 
+@app.command("login")
+@_run_safe
+def dev_login(
+    telegram: bool = typer.Option(False, "--telegram", help="Login via Telegram pairing (create a pair code)."),
+    hub: Optional[str] = typer.Option(None, "--hub", help="Preferred hub id for binding."),
+    ttl: int = typer.Option(600, "--ttl", help="Pair code TTL in seconds."),
+    api_base: str = typer.Option("http://127.0.0.1:8000", "--api", help="API base URL for webhooks service."),
+):
+    if not telegram:
+        typer.echo("Use --telegram to start Telegram pairing.")
+        raise typer.Exit(0)
+    try:
+        import requests
+    except Exception:
+        _print_error("'requests' is required for --telegram flow.")
+        raise typer.Exit(1)
+
+    url = f"{api_base.rstrip('/')}/io/tg/pair/create"
+    resp = requests.post(url, params={"hub": hub, "ttl": ttl})
+    if resp.status_code != 200:
+        _print_error(f"API error: {resp.status_code} {resp.text}")
+        raise typer.Exit(1)
+    data = resp.json()
+    code = data.get("pair_code") or data.get("code")
+    if not code:
+        _print_error("No pair_code in response.")
+        raise typer.Exit(1)
+    deep_link = data.get("deep_link") or f"https://t.me/<your-bot>?start={code}"
+    typer.secho("Telegram pairing:", fg=typer.colors.GREEN)
+    typer.echo(f"  pair_code: {code}")
+    typer.echo(f"  deep_link: {deep_link}")
+    if data.get("expires_at"):
+        typer.echo(f"  expires_at: {data['expires_at']}")
+
+
 @skill_app.command("create")
 def skill_create(
     name: str,
