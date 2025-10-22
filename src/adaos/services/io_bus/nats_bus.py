@@ -59,8 +59,11 @@ class NatsIoBus:
             await handler(msg.subject, msg.data)
         return await self._js.subscribe(subject, cb=_cb)
 
+    async def publish_dlq(self, stream: str, envelope: dict) -> None:
+        subject = f"tg.dlq.{stream}"
+        await self._js.publish(subject, json_bytes(envelope))
+
 
 def json_bytes(payload: dict) -> bytes:
     import json
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
-

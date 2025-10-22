@@ -15,3 +15,14 @@ class HttpFallbackBus:
         with urllib.request.urlopen(req) as resp:
             return resp.status
 
+    # IO bus parity methods
+    async def connect(self) -> None:
+        return None
+
+    async def publish_input(self, hub_id: str, envelope: Mapping[str, Any]) -> None:
+        # Convention path for fallback bus
+        self.post(f"/io/bus/tg.input.{hub_id}", envelope)
+
+    async def subscribe_output(self, bot_id: str, handler):  # pragma: no cover - simplistic fallback
+        # Not supported; user should switch to NATS or local bus
+        raise NotImplementedError("HTTP fallback output subscription is not supported")

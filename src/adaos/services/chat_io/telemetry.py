@@ -1,11 +1,24 @@
 from __future__ import annotations
 
-"""Telemetry helpers for chat IO (placeholder)."""
+"""Telemetry helpers for chat IO (MVP in-memory counters)."""
 
-from typing import Mapping, Any
+from typing import Mapping, Any, Dict, Tuple
+
+_COUNTERS: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], float] = {}
 
 
 def record_event(metric: str, labels: Mapping[str, str] | None = None, value: float = 1.0) -> None:
-    # TODO: integrate with metrics system
-    return
+    key = (metric, tuple(sorted((labels or {}).items())))
+    _COUNTERS[key] = _COUNTERS.get(key, 0.0) + float(value)
+
+
+def snapshot() -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for (metric, labels), val in _COUNTERS.items():
+        if not labels:
+            out[metric] = val
+        else:
+            label_str = ",".join(f"{k}={v}" for k, v in labels)
+            out[f"{metric}{{{label_str}}}"] = val
+    return out
 

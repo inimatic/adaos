@@ -12,6 +12,11 @@ from adaos.integrations.telegram.normalize import to_input_event
 from adaos.integrations.telegram.files import get_file_path, download_file, convert_opus_to_wav16k
 from adaos.adapters.db import sqlite as sqlite_db
 from adaos.services.chat_io import pairing as pairing_svc  # generic pairing
+from adaos.services.chat_io.router import resolve_hub_id
+from adaos.services.chat_io import telemetry as tm
+from dataclasses import asdict
+from uuid import uuid4
+from datetime import datetime
 
 router = APIRouter()
 
@@ -29,6 +34,7 @@ async def telegram_webhook(
 
     update = await request.json()
     evt = to_input_event(bot_id, update, hub_id=None)
+    tm.record_event("updates_total", {"type": evt.type})
 
     # Idempotency: dedup by {bot_id, update_id}
     idem_key = f"tg:{bot_id}:{evt.update_id}"
@@ -81,22 +87,57 @@ async def telegram_webhook(
             code = txt.split(" ", 1)[1].strip()
             await pairing_svc.confirm_pair_code(code=code, platform_user={"platform": "telegram", "user_id": evt.user_id, "bot_id": bot_id})
 
-    # TODO: publish evt to IO bus (NATS/HTTP) when impl lands
-    # For now, respond OK and store idempotency record
-    response = {"ok": True}
+    # Resolve hub and publish to IO bus
+    lang = (evt.payload.get("meta") or {}).get("lang") if isinstance(evt.payload, dict) else None
+    hub = resolve_hub_id(platform="telegram", user_id=evt.user_id, bot_id=bot_id, locale=lang)
+    if not hub:
+        hub = get_ctx().settings.default_hub
+    evt.hub_id = hub
+
+    if not hub:
+        # no route; 202 Accepted but not queued
+        response = {"ok": True, "routed": False}
+        status_code = 202
+    else:
+        envelope = {
+            "event_id": uuid4().hex,
+            "kind": "io.input",
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "dedup_key": f"{bot_id}:{evt.update_id}",
+            "payload": asdict(evt),
+            "meta": {"bot_id": bot_id, "hub_id": hub, "trace_id": uuid4().hex, "retries": 0},
+        }
+        # Publish via IO bus
+        try:
+            bus = getattr(request.app.state, "bus", None)
+            if bus and hasattr(bus, "publish_input"):
+                await bus.publish_input(hub, envelope)
+                tm.record_event("enqueue_total", {"hub_id": hub})
+            response = {"ok": True, "routed": True}
+            status_code = 200
+        except Exception:
+            # DLQ on intake failure (optional)
+            try:
+                if bus and hasattr(bus, "publish_dlq"):
+                    await bus.publish_dlq("input", {"error": "publish_failed", "envelope": envelope})
+            except Exception:
+                pass
+            response = {"ok": True, "routed": False}
+            status_code = 202
     sqlite_db.idem_put(
         idem_key,
         "POST",
         path,
         bot_id,
         body_hash,
-        200,
+        status_code,
         json.dumps(response, ensure_ascii=False),
         event_id=evt.update_id,
         server_time_utc=str(int(time.time())),
         ttl=86400,
     )
-    return response
+    from fastapi import Response
+    return Response(content=json.dumps(response, ensure_ascii=False), media_type="application/json", status_code=status_code)
 
 
 @router.post("/io/tg/pair/create")

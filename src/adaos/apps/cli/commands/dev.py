@@ -214,6 +214,8 @@ def dev_login(
     telegram: bool = typer.Option(False, "--telegram", help="Login via Telegram pairing (create a pair code)."),
     hub: Optional[str] = typer.Option(None, "--hub", help="Preferred hub id for binding."),
     ttl: int = typer.Option(600, "--ttl", help="Pair code TTL in seconds."),
+    status: Optional[str] = typer.Option(None, "--status", help="Check pairing status for code."),
+    revoke: Optional[str] = typer.Option(None, "--revoke", help="Revoke pairing code."),
     api_base: str = typer.Option("http://127.0.0.1:8000", "--api", help="API base URL for webhooks service."),
 ):
     if not telegram:
@@ -225,7 +227,16 @@ def dev_login(
         _print_error("'requests' is required for --telegram flow.")
         raise typer.Exit(1)
 
-    url = f"{api_base.rstrip('/')}/io/tg/pair/create"
+    base = api_base.rstrip('/')
+    if status:
+        resp = requests.get(f"{base}/io/tg/pair/status", params={"code": status})
+        typer.echo(resp.text)
+        raise typer.Exit(0)
+    if revoke:
+        resp = requests.post(f"{base}/io/tg/pair/revoke", params={"code": revoke})
+        typer.echo(resp.text)
+        raise typer.Exit(0)
+    url = f"{base}/io/tg/pair/create"
     resp = requests.post(url, params={"hub": hub, "ttl": ttl})
     if resp.status_code != 200:
         _print_error(f"API error: {resp.status_code} {resp.text}")
