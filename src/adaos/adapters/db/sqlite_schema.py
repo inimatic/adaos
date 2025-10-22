@@ -91,6 +91,29 @@ _SCHEMA = (
     """
     CREATE INDEX IF NOT EXISTS idx_idem_exp ON idempotency_cache(expires_at);
     """,
+    """
+    CREATE TABLE IF NOT EXISTS pair_codes (
+        code TEXT PRIMARY KEY,
+        bot_id TEXT,
+        hub_id TEXT,
+        expires_at INT,
+        state TEXT,
+        created_at INT,
+        note TEXT
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chat_bindings (
+        platform TEXT,
+        user_id TEXT,
+        bot_id TEXT,
+        ada_user_id TEXT,
+        hub_id TEXT,
+        created_at INT,
+        last_seen INT,
+        PRIMARY KEY(platform, user_id, bot_id)
+    );
+    """,
 )
 
 
