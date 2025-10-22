@@ -24,6 +24,7 @@ async def lifespan(app: FastAPI):
 
     # 2) только теперь импортируем то, что может косвенно дернуть контекст
     from adaos.apps.api import tool_bridge, subnet_api, observe_api, node_api, scenarios, root_endpoints, skills
+    from adaos.apps.api import io_webhooks
 
     # 3) монтируем роутеры после bootstrap
     app.include_router(tool_bridge.router, prefix="/api")
@@ -33,6 +34,8 @@ async def lifespan(app: FastAPI):
     app.include_router(scenarios.router, prefix="/api/scenarios")
     app.include_router(skills.router, prefix="/api/skills")
     app.include_router(root_endpoints.router)
+    # Chat IO webhooks (mounted without /api prefix to keep exact paths)
+    app.include_router(io_webhooks.router)
 
     # 4) поднимаем наблюдатель и выполняем boot-последовательность
     await start_observer()
