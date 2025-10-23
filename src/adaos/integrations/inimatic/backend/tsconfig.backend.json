@@ -1,31 +1,22 @@
 {
-	"compileOnSave": false,
-	"ts-node": { "esm": true, "experimentalResolver": true },
 	"compilerOptions": {
-		"baseUrl": "./",
-		"outDir": "../dist/out-tsc",
-		"forceConsistentCasingInFileNames": true,
-		"strict": true,
-		"noImplicitOverride": true,
-		"noPropertyAccessFromIndexSignature": true,
-		"noImplicitReturns": true,
-		"noFallthroughCasesInSwitch": true,
-		"sourceMap": true,
-		"declaration": false,
-		"downlevelIteration": true,
-		"typeRoots": ["./types", "./node_modules/@types"],
-		"experimentalDecorators": true,
-		"moduleResolution": "NodeNext",
-		"types": ["node"],
-		"importHelpers": true,
-		"skipLibCheck": true,
 		"target": "ES2022",
 		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+
+		"lib": ["ES2023"],
+		"types": ["node"],
+
+		"outDir": "./dist",
+		"rootDir": "./",
+
+		"resolveJsonModule": true,
+		"verbatimModuleSyntax": true,
 		"esModuleInterop": true,
-		"lib": ["es2018", "dom"],
-		"useDefineForClassFields": false,
-		"allowSyntheticDefaultImports": true,
-		"resolveJsonModule": true
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+
+		"strict": true
 	},
 	"include": ["./**/*.ts", "./types/**/*.d.ts"]
 }
