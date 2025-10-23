@@ -1,15 +1,19 @@
-import IORedis from 'ioredis'
+// src/adaos/integrations/inimatic/backend/io/idem/kv.ts
+import Redis from 'ioredis'
 
-const REDIS_URL = process.env['REDIS_URL'] || `redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'}:6379`
-export const redis = new IORedis(REDIS_URL)
+const REDIS_URL =
+	process.env['REDIS_URL'] ||
+	`redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'}:6379/0`
 
-export async function idemGet(key: string) {
-  const raw = await redis.get(key)
-  if (!raw) return null
-  try { return JSON.parse(raw) } catch { return null }
+export const redis = new Redis(REDIS_URL)
+
+export async function idemGet<T = any>(key: string): Promise<T | null> {
+	const raw = await redis.get(key)
+	if (!raw) return null
+	try { return JSON.parse(raw) as T } catch { return null }
 }
 
-export async function idemPut(key: string, value: { status: number; body: any }, ttlSec: number) {
-  await redis.set(key, JSON.stringify(value), 'EX', Math.max(1, ttlSec))
+export async function idemPut(key: string, value: unknown, ttlSec: number) {
+	const ttl = Math.max(1, ttlSec | 0)
+	await redis.set(key, JSON.stringify(value), 'EX', ttl)
 }
-

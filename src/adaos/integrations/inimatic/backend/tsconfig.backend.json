@@ -13,17 +13,19 @@
 		"sourceMap": true,
 		"declaration": false,
 		"downlevelIteration": true,
+		"typeRoots": ["./types", "./node_modules/@types"],
 		"experimentalDecorators": true,
-                "moduleResolution": "NodeNext",
-                "types": ["node"],
-                "importHelpers": true,
-                "skipLibCheck": true,
-                "target": "ES2022",
-                "module": "NodeNext",
-                "esModuleInterop": true,
-                "lib": ["es2018", "dom"],
-                "useDefineForClassFields": false,
-                "allowSyntheticDefaultImports": true,
-                "resolveJsonModule": true
-        }
+		"moduleResolution": "NodeNext",
+		"types": ["node"],
+		"importHelpers": true,
+		"skipLibCheck": true,
+		"target": "ES2022",
+		"module": "NodeNext",
+		"esModuleInterop": true,
+		"lib": ["es2018", "dom"],
+		"useDefineForClassFields": false,
+		"allowSyntheticDefaultImports": true,
+		"resolveJsonModule": true
+	},
+	"include": ["./**/*.ts", "./types/**/*.d.ts"]
 }
