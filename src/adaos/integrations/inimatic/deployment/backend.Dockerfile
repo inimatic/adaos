@@ -28,4 +28,4 @@ RUN npx --yes --package typescript@5.6.3 --package @types/node@20 tsc -p backend
 EXPOSE 3030
 
 # 6) запускаем собранный JS (без ts-node)
-CMD ["node", "dist/out-tsc/app.js"]
+CMD ["node", "--enable-source-maps", "dist/app.js"]
