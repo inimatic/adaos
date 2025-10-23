@@ -1,15 +1,6 @@
 // src/adaos/integrations/inimatic/backend/io/bus/nats.ts
-import {
-	connect,
-	NatsConnection,
-	StringCodec,
-	consumerOpts,
-	createInbox,
-	type JetStreamManager,
-	RetentionPolicy,
-	DiscardPolicy,
-	StorageType,
-} from 'nats'
+import { connect, StringCodec, consumerOpts, createInbox, RetentionPolicy, DiscardPolicy, StorageType } from 'nats'
+import type { NatsConnection, JetStreamManager } from 'nats'
 
 export class NatsBus {
 	private nc!: NatsConnection
