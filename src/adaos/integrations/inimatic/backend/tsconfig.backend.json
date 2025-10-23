@@ -1,21 +1,14 @@
 {
 	"compilerOptions": {
-		"target": "ES2022",
-		"module": "NodeNext",
-		"moduleResolution": "NodeNext",
-
-		"lib": ["ES2023"],
-		"types": ["node"],
-
 		"outDir": "./dist",
 		"rootDir": "./",
-
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"target": "ES2022",
 		"resolveJsonModule": true,
 		"verbatimModuleSyntax": true,
 		"esModuleInterop": true,
-		"skipLibCheck": true,
-		"forceConsistentCasingInFileNames": true,
-
+		"types": ["node"],
 		"strict": true
 	},
 	"include": ["./**/*.ts", "./types/**/*.d.ts"]
