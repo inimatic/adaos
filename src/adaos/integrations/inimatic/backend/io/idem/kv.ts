@@ -1,7 +1,11 @@
 // src/adaos/integrations/inimatic/backend/io/idem/kv.ts
-import Redis from 'ioredis'
-const REDIS_URL = process.env['REDIS_URL'] || `redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'}:6379/0`
-export const redis = new Redis(REDIS_URL)
+import * as IORedis from 'ioredis'
+
+const REDIS_URL =
+	process.env['REDIS_URL'] ||
+	`redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'}:6379/0`
+
+export const redis = new (IORedis as any).Redis(REDIS_URL)
 
 export async function idemGet<T = any>(key: string): Promise<T | null> {
 	const raw = await redis.get(key)

@@ -3,7 +3,7 @@ import { fetch, FormData, File, type Response as UndiciResponse } from 'undici'
 import fs from 'node:fs'
 import path from 'node:path'
 import pino from 'pino'
-import { ChatOutputEvent, ChatOutputMessage } from '../types.js'
+import type { ChatOutputEvent, ChatOutputMessage } from '../types.js'
 import { redis } from '../idem/kv.js'
 import { outbound_total, retry_total } from '../telemetry.js'
 
