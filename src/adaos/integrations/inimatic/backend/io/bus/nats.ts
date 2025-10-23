@@ -62,14 +62,21 @@ export class NatsBus {
 
 	async subscribe_output(bot_id: string, handler: (subject: string, data: Uint8Array) => Promise<void>) {
 		const js = this.nc.jetstream()
-		const durable = `tg-out.${bot_id}`
-		const subj = `tg.output.${bot_id}.>`
+
+		// Имя durable: только буквы/цифры/подчёркивание/дефис
+		const safeBot = bot_id.replace(/[^A-Za-z0-9_-]/g, '_')
+		const durable = `tg_out_${safeBot}`           // без точки
+		const subj = `tg.output.${bot_id}.>`       // subject с точками допустим
+
 		const opts = consumerOpts()
 		opts.durable(durable)
 		opts.deliverTo(createInbox())
 		opts.ackNone()
+
 		const sub = await js.subscribe(subj, opts)
-			; (async () => { for await (const m of sub) await handler(m.subject, m.data) })().catch(() => { })
+			; (async () => {
+				for await (const m of sub) await handler(m.subject, m.data)
+			})().catch(() => { })
 		return sub
 	}
 
