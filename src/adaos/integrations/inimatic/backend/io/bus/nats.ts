@@ -1,28 +1,54 @@
-// src/adaos/integrations/inimatic/backend/io/bus/nats.ts
 import { connect, StringCodec, consumerOpts, createInbox, RetentionPolicy, DiscardPolicy, StorageType } from 'nats'
 import type { NatsConnection, JetStreamManager } from 'nats'
+
+export type NatsOpts = {
+	servers: string
+	user?: string
+	pass?: string
+}
+
+function toOpts(urlOrOpts: string | NatsOpts): NatsOpts {
+	if (typeof urlOrOpts !== 'string') return urlOrOpts
+	// парсим строку-URL и делаем поля сервера/учётки отдельно
+	const u = new URL(urlOrOpts.trim())
+	const proto = u.protocol && u.protocol !== ':' ? u.protocol : 'nats:'
+	const host = u.hostname || 'nats'
+	const port = u.port || '4222'
+	const servers = `${proto}//${host}:${port}`
+	const user = u.username || undefined
+	const pass = u.password ? decodeURIComponent(u.password) : undefined
+	return { servers, user, pass }
+}
 
 export class NatsBus {
 	private nc!: NatsConnection
 	private sc = StringCodec()
+	private opts: NatsOpts
 
-	constructor(private url: string) { }
+	// перегрузка: принимаем и строку, и объект
+	constructor(urlOrOpts: string | NatsOpts) {
+		this.opts = toOpts(urlOrOpts)
+	}
 
 	async connect() {
-		this.nc = await connect({ servers: this.url })
+		// ключевое — auth не в URL, а отдельными полями
+		this.nc = await connect({
+			servers: this.opts.servers,
+			user: this.opts.user,
+			pass: this.opts.pass,
+		})
+
 		const jsm: JetStreamManager = await this.nc.jetstreamManager()
 		const ensure = async (name: string, subjects: string[]) => {
 			try {
 				await jsm.streams.add({
 					name,
 					subjects,
-					retention: RetentionPolicy.Limits, // вместо 'limits'
-					discard: DiscardPolicy.Old,        // вместо 'old'
-					storage: StorageType.File,         // опционально, но явно
+					retention: RetentionPolicy.Limits,
+					discard: DiscardPolicy.Old,
+					storage: StorageType.File,
 				})
-			} catch {
-				/* already exists */
-			}
+			} catch { /* already exists */ }
 		}
 		await ensure('TG_INPUT', ['tg.input.*'])
 		await ensure('TG_OUTPUT', ['tg.output.*'])
@@ -42,13 +68,8 @@ export class NatsBus {
 		opts.durable(durable)
 		opts.deliverTo(createInbox())
 		opts.ackNone()
-
 		const sub = await js.subscribe(subj, opts)
-			; (async () => {
-				for await (const m of sub) {
-					await handler(m.subject, m.data)
-				}
-			})().catch(() => { })
+			; (async () => { for await (const m of sub) await handler(m.subject, m.data) })().catch(() => { })
 		return sub
 	}
 

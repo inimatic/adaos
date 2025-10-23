@@ -40,6 +40,8 @@ dependencies = [
   "ovos_config",
   "uvicorn",
   "fastapi",
+  "httpx>=0.27.0",
+  "nats-py>=2.6.0",
   "ipykernel",
   "keyring>=24.2.0",
   "cryptography>=42.0.0",
