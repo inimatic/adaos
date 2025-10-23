@@ -30,6 +30,6 @@ export function makeRootDispatcher(s: RootSettings | null): Dispatcher | undefin
 	const cert = readFileSync(s.mtls.certPath)
 	const key = readFileSync(s.mtls.keyPath)
 	const ca = s.mtls.caPath ? readFileSync(s.mtls.caPath) : undefined
-	const rejectUnauthorized = s.mtls.rejectUnauthorized !== false
+	const rejectUnauthorized = true
 	return new Agent({ connect: { cert, key, ca, rejectUnauthorized } })
 }

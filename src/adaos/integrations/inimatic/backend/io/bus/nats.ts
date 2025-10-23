@@ -1,5 +1,15 @@
 // src/adaos/integrations/inimatic/backend/io/bus/nats.ts
-import { connect, NatsConnection, StringCodec, consumerOpts, createInbox, type JetStreamManager } from 'nats'
+import {
+	connect,
+	NatsConnection,
+	StringCodec,
+	consumerOpts,
+	createInbox,
+	type JetStreamManager,
+	RetentionPolicy,
+	DiscardPolicy,
+	StorageType,
+} from 'nats'
 
 export class NatsBus {
 	private nc!: NatsConnection
@@ -9,12 +19,16 @@ export class NatsBus {
 
 	async connect() {
 		this.nc = await connect({ servers: this.url })
-
-		// Ensure streams via JetStream Manager
 		const jsm: JetStreamManager = await this.nc.jetstreamManager()
 		const ensure = async (name: string, subjects: string[]) => {
 			try {
-				await jsm.streams.add({ name, subjects, retention: 'limits', discard: 'old' })
+				await jsm.streams.add({
+					name,
+					subjects,
+					retention: RetentionPolicy.Limits, // вместо 'limits'
+					discard: DiscardPolicy.Old,        // вместо 'old'
+					storage: StorageType.File,         // опционально, но явно
+				})
 			} catch {
 				/* already exists */
 			}
