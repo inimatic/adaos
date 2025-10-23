@@ -4,7 +4,7 @@
 	"type": "module",
 	"dependencies": {
 		"undici": "^6.19.8",
-		"nats": "^2.19.0",
+		"nats": "2.18.0",
 		"ioredis": "^5.4.1",
 		"yaml": "^2.5.1",
 		"pino": "^9.4.0",
