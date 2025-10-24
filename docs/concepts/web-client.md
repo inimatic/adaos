@@ -1,5 +1,211 @@
 # Веб интеграция
 
+##
+
+# 1) роли и каналы
+
+* **owner CLI**: `adaos dev root init`, `adaos dev root login`
+* **owner browser**: `app.inimatic.com` (SPA), WebAuthn + Socket.IO
+* **root api**: http + socket.io, proxy fallback
+* **hub**: `adaos api serve` (socket.io клиент к root, e2e шины к браузеру через root-прокси при необходимости)
+
+# 2) модель доверия (коротко)
+
+* корневой **Root-CA** выпускает: `subnet_id`, `hub_id`, ключи/серты хаба.
+* **Browser** не ставим mTLS; аутентификация — WebAuthn + связка с owner/subnet.
+* **Transport browser↔hub**: *рекомендуемый безопасный вариант*: ключ пары для канала генерирует **браузер** и отдаёт **только публичный ключ** (или общий секрет по ECDH) в хаб через root. (Если делать «хаб генерит и шлёт приватный» — оставим как временный debug-режим, но сразу помечаем как insecure.)
+* **Root** может проксировать сообщения (socket proxy) без доступа к контенту, если шифруем end-to-end (JOSE/Noise).
+
+# 3) идентификаторы и хранилище (Redis/DB)
+
+```
+subnet:{subnet_id}
+hub:{hub_id}
+owner:{owner_id}
+session:web:{sid}            -> { owner_id?, browser_key_id?, stage, exp }
+device_code:{code}           -> { owner_id, hub_id, exp, bind_sid? }
+webauthn:cred:{cred_id}      -> { owner_id, browser_pubkey, sign_count }
+pairing:challenge:{sid}      -> { challenge, exp }
+e2e:browser_pub:{sid}        -> { pubkey, alg, exp }
+online:hub:{hub_id}          -> socket_id
+online:browser:{sid}         -> socket_id
+route:{sid}                  -> { hub_id, e2e=on|off, last_seen }
+```
+
+# 4) HTTP эндпойнты (root)
+
+```
+POST  /v1/owner/login/device-code
+-> { device_code: "123-456", verify_uri: "https://app.inimatic.com/owner-auth", expires_in }
+
+POST  /v1/owner/login/verify
+body: { device_code, sid }  // sid = web session id
+-> { ok, owner_id, subnet_id, hub_id? }
+
+POST  /v1/owner/webauthn/registration/challenge
+body: { sid }
+-> { publicKeyCredentialCreationOptions }
+
+POST  /v1/owner/webauthn/registration/finish
+body: { sid, credential }
+-> { browser_key_id }
+
+POST  /v1/owner/webauthn/login/challenge
+body: { sid }
+-> { publicKeyCredentialRequestOptions }
+
+POST  /v1/owner/webauthn/login/finish
+body: { sid, credential }
+-> { session_jwt, browser_key_id }
+
+POST  /v1/browser/pairing/offer
+body: { sid, e2e_pubkey? }  // браузер генерит и присылает свой pubkey (рекомендовано)
+-> { routed_to_hub: bool }
+
+POST  /v1/hub/pairing/accept     // вызывается хабом через сокет-ивент, root просто валидирует
+body: { sid, hub_id, hub_e2e_pubkey? }
+-> { ok }
+```
+
+# 5) Socket.IO пространства / события
+
+**namespaces**
+
+* `/hub` (аутентификация по hub_id + токен/сертификат)
+* `/owner` (браузер, авторизуется по session_jwt после WebAuthn)
+
+**events**
+
+* hub→root: `hub.online {hub_id}`
+* browser→root: `owner.online {sid}`
+* root→hub: `pairing.request {sid, owner_id, subnet_id, browser_pub?}`
+* hub→root: `pairing.accept {sid, hub_e2e_pub?}`
+* root: связывает и создаёт `route:{sid} -> hub_id`
+* e2e relay (если прямого нет): `relay.to_hub {sid, frame}` / `relay.to_browser {sid, frame}`
+  (где `frame` уже зашифрован end-to-end браузер↔хаб)
+
+# 6) сценарии (последовательности)
+
+## А. первичное подключение owner browser (через 6-значный код)
+
+1. **owner CLI**: `adaos dev root login`
+   → root: `device_code` (TTL ~10 мин)
+
+2. **browser**: открывает `app.inimatic.com`
+   SPA получает `sid`, показывает QR сессии + поле ввода кода (если не авторизован).
+
+3. **owner вводит device_code** → `POST /v1/owner/login/verify {code,sid}`
+   root: связывает `sid ↔ owner_id` (и, если есть, выбранный `hub_id`), `stage=preauth`.
+
+4. **WebAuthn регистрация**:
+
+   * `POST /webauthn/registration/challenge {sid}`
+   * браузер `navigator.credentials.create`
+   * `POST /webauthn/registration/finish {sid, credential}`
+     root сохраняет `webauthn:cred:{cred_id}` и `browser_pubkey` (из attestation).
+
+5. **Логин WebAuthn** (сразу после регистрации либо при следующих входах):
+
+   * `POST /webauthn/login/challenge {sid}`
+   * `navigator.credentials.get`
+   * `POST /webauthn/login/finish {sid, credential}`
+     → `session_jwt` для сокета `/owner`.
+
+6. **pairing c hub**:
+
+   * browser (уже в `/owner`) вызывает `POST /browser/pairing/offer {sid, e2e_pub?}`
+   * root ищет онлайн-хаб `hub:{hub_id}`; если оффлайн, ставит `route:{sid}` и «ожидание».
+   * root→hub: `pairing.request {sid, ...}` по `/hub`.
+   * hub подтверждает: `pairing.accept {sid, hub_e2e_pub?}`.
+   * root фиксирует `route:{sid}->{hub_id}`, публикует обе стороны, начинает relay (если нет прямого p2p).
+
+7. **установка E2E** (рекомендовано)
+
+   * если обе стороны прислали `e2e_pub`, стороны делают ECDH и согласуют `session_key` (JOSE/Noise NK).
+   * root больше не видит содержимого `frame`.
+
+## B. последующие входы
+
+1. browser открывает SPA → `sid`
+2. WebAuthn **login** (challenge → assertion → `session_jwt`)
+3. root проверяет `route:{sid}`:
+
+   * если хаб онлайн — создаём сокет-мост и «прозрачно» восстанавливаем канал;
+   * если нет — в статус-строке SPA показываем «hub offline» и подписываемся на `hub.online`.
+
+## C. запуск хаба
+
+* `adaos api serve` поднимает `/hub` сокет к root с mTLS/токеном.
+* шлёт `hub.online {hub_id}`; root отмечает `online:hub:{hub_id}`.
+* root проверяет ожидающие `route:{sid}` для этого `hub_id` и рассылает `pairing.request` (авто-rebind).
+
+# 7) безопасность / защита
+
+* **device_code**: 6 цифр, TTL 10 мин, одноразовый, rate-limit по IP/сид.
+* **WebAuthn**: platform authenticator (отпечаток/face), RPID: `app.inimatic.com`. Сохраняем `sign_count` и проверяем.
+* **E2E**: JOSE (ECDH-ES + A256GCM) или Noise NK/IK. Минимум — ECDH поверх X25519 + HKDF, nonce-счётчик.
+* **replay-защита**: все кадры `frame` — с монотонным `ctr`, root отбрасывает дубликаты даже в relay-режиме.
+* **binding к owner/subnet**: `sid` после `verify` привязывается к `owner_id` и `subnet_id`; любые pairing-операции валидируются.
+* **инвальдация**: logout стирает `session_jwt`; при компрометации — revoke `webauthn:cred:{cred_id}` и все `route:{sid}`.
+* **debug-режим (временный)**: если очень надо, «хаб генерит секрет для канала» → зашифровать его на webauthn-публичный браузера (через `webauthn/registration` мы знаем его) и передать как `sealed_secret`. Браузер расшифрует через SubtleCrypto, root не видит.
+
+# 8) состояния сессии (state-машина)
+
+```
+NEW -> PREAUTH (device_code verified) 
+-> WEBREG (webauthn challenge issued) 
+-> AUTH (webauthn finished, session_jwt valid) 
+-> PAIRED (route:{sid} bound to hub) 
+-> ONLINE (both sockets up, e2e ready)
+```
+
+# 9) сообщения Socket.IO (минимум полей)
+
+**/owner**
+
+* `owner.online { sid, session_jwt, browser_key_id }`
+* `relay.to_hub { sid, frame, ctr }`
+* `status { route, hub_online, lag_ms }`
+
+**/hub**
+
+* `hub.online { hub_id, subnet_id, caps }`
+* `pairing.request { sid, owner_id, subnet_id, browser_pub? }`
+* `pairing.accept { sid, hub_e2e_pub? }`
+* `relay.to_browser { sid, frame, ctr }`
+
+# 10) UI логика SPA (вкладка public как «единственная» до авторизации)
+
+1. нет ключа → поле ввода кода + QR текущего `sid`.
+2. ввели код → прячем поле, запускаем WebAuthn регистрацию (если первый раз) → логин.
+3. показываем статус-бар:
+
+   * «auth ok • hub: connecting…»
+   * «hub: online (latency 42ms)»
+   * «hub: offline (auto-reconnect)»
+4. если разрыв — не выкидываем пользователя, сидим в `AUTH`, ждём `hub.online`.
+
+# 11) CLI контур (ожидаемые ответы)
+
+* `adaos dev root init` → печатает `subnet_id`, `hub_id`, путь к ключам, время жизни.
+* `adaos dev root login` → `Open app.inimatic.com/owner-auth and enter code 123-456 (valid 10m)`; при успешном verify — подсветка «owner browser paired».
+* `adaos api serve` → лог `connected to root as hub:{hub_id}`; после первого `pairing.accept` — «paired with sid:…».
+
+# 12) обработка сбоев
+
+* device_code неверный/просрочен → унифицированная ошибка `invalid_device_code`.
+* WebAuthn провал → `registration_required` / `assertion_failed`.
+* hub недоступен → SPA продолжает в `AUTH`, route остаётся, периодический ping на root.
+* ротация ключей хаба → route переустанавливается прозрачно; e2e заново согласуется.
+
+# 13) что кодим прямо сейчас (короткий план работ)
+
+1. **root api**: эндпойнты из §4 + хранение из §3; socket пространства `/hub`, `/owner`; relay.
+2. **hub**: клиент `/hub`, обработка `pairing.request` → `pairing.accept`; e2e-согласование.
+3. **browser (SPA)**: экран ввода кода + WebAuthn (register/login) + сокет `/owner` + статус-бар.
+4. **cli**: `login` печатает код и крутит «waiting for verify…» до успеха; `api serve` — авто-reconnect.
+5. **безопасный e2e**: форсируем «браузер генерит pubkey», «хаб публикует свой pubkey», JOSE/Noise.
+
 ### что фиксируем как принцип
 
 * **веб-представление живёт у сценария**, а навыки — это «сервисы» и «виджеты», которые сценарий вызывает.
