@@ -206,7 +206,579 @@ NEW -> PREAUTH (device_code verified)
 4. **cli**: `login` печатает код и крутит «waiting for verify…» до успеха; `api serve` — авто-reconnect.
 5. **безопасный e2e**: форсируем «браузер генерит pubkey», «хаб публикует свой pubkey», JOSE/Noise.
 
-### что фиксируем как принцип
+супер, идём без «хаб генерит ключ для браузера». фиксирую план «после авторизации» и первый набор артефактов (ui-layout, сценарий desktop, skill icon-manager, расширение weather_skill, базовые админ-скиллы). всё — mvp-уровень, готово к кодингу.
+
+# 1) post-auth поведение web-клиента
+
+* сразу после `AUTH + PAIRED + ONLINE`: скрываем поле кода и qr, показываем **чистый контейнер рабочего стола**.
+* верхняя полоска-статус (узкая): `owner • hub:{hub_id} • online (xx ms)`; при оффлайне — «offline (auto-reconnect)».
+* корневой контейнер: **DesktopScenario** (см. §3), рендерит решётку иконок (icon-manager) + модалки.
+
+# 2) расширение контракта skill-манифеста (для визуальных навыков)
+
+добавим в `skills/<skill>/manifest.json`:
+
+```json
+{
+  "id": "weather_skill",
+  "version": "2.1.0",
+  "capabilities": {
+    "visual": true,
+    "ui": {
+      "icon": "sun-cloud",          // ключ из icon-сет или data:svg
+      "title": "Погода",
+      "entrypoint": "/v1/ui/panel", // http endpoint (через hub proxy)
+      "modes": ["modal", "panel"],  // modal для всплывашки
+      "sizeHints": { "w": 480, "h": 360 }
+    },
+    "streams": {
+      "supportsDeclarativeInterest": true
+    }
+  },
+  "permissions": {
+    "ownerOnly": false
+  }
+}
+```
+
+# 3) сценарий «Рабочий стол» (DesktopScenario)
+
+минимальный DSL (json) для сценария:
+
+```json
+{
+  "id": "scenario.desktop",
+  "version": "0.1.0",
+  "uses": ["skill.icon_manager"],
+  "layout": {
+    "grid": { "cols": 4, "gap": 16, "padding": 24 },
+    "statusBar": true
+  },
+  "behavior": {
+    "sourceOfApps": "icon_manager:list_installed",
+    "onIconClick": "icon_manager:open_modal(skill_id)"
+  },
+  "policy": {
+    "allowSkills": ["*"],       // mvp — все визуальные
+    "ownerOnlySkills": ["skill.logs", "skill.hub_status"]
+  }
+}
+```
+
+runtime поведения:
+
+* при монтировании: `icon_manager.list_installed()` → отдаёт набор иконок с метаданными ui.
+* по клику: `icon_manager.open_modal(skill_id)` → создаёт модал и встраивает ui указанного skill (через iframe-sandbox, см. §6).
+
+# 4) skill «Менеджер иконок» (icon_manager)
+
+## обязанности
+
+* агрегировать установленные визуальные навыки (из registry/root).
+* хранить user-prefs (пины, порядок, группы) per owner.
+* отдавать решётку иконок, открывать модалки с ui навыка.
+
+## http-api (через hub→root proxy)
+
+```
+GET  /v1/icons
+-> [{ skill_id, title, icon, entrypoint, modes, sizeHints, pinned, order }]
+
+POST /v1/icons/pin
+{ skill_id, pinned: true/false }
+
+POST /v1/icons/order
+{ order: [ "weather_skill", "skill.logs", ... ] }
+
+POST /v1/open
+{ skill_id, mode: "modal"|"panel" }
+-> { ticket, entryUrl } // см. §6 безопасная загрузка UI
+```
+
+минимальная модель хранения (на hub в sqlite):
+
+```
+icons(owner_id, skill_id, pinned, order)
+```
+
+# 5) weather_skill — декларативный интерес + ui-панель
+
+## новые эндпойнты навыка
+
+```
+POST /v1/interest
+{ 
+  "streams": [
+    {
+      "topic": "weather.now",
+      "area": { "lat": 55.75, "lon": 37.62, "radius_km": 50 },
+      "period": "5m",          // желаемая частота
+      "ttl": "8h",
+      "format": "compact"      // hint
+    }
+  ]
+}
+-> { subscription_id, nextUpdateIn: "PT300S" }
+
+GET /v1/ui/manifest
+-> { title, icon, modes:["modal","panel"], sizeHints:{w:480,h:360} }
+
+GET /v1/ui/panel
+-> html/js (встраиваемый виджет; mvp — простая страница)
+```
+
+## event-bus (внутри subnet, для сценариев)
+
+* topic: `weather.update`
+* payload.schema (пример):
+
+```json
+{
+  "type":"object",
+  "required":["ts","place","temp_c","conditions"],
+  "properties":{
+    "ts":{"type":"string","format":"date-time"},
+    "place":{"type":"string"},
+    "temp_c":{"type":"number"},
+    "conditions":{"type":"string"},
+    "forecast":{"type":"array","items":{"type":"object","properties":{
+      "ts":{"type":"string","format":"date-time"},
+      "temp_c":{"type":"number"},
+      "conditions":{"type":"string"}
+    }}}
+  }
+}
+```
+
+* acl: `role:OWNER read`, `scenario.desktop read`, `skill.weather publish`.
+
+# 6) как встраиваем ui навыка (безопасно)
+
+**mvp: iframe-sandbox**:
+
+* `icon_manager.open_modal` вызывает `/v1/open { skill_id }`.
+* root/hub выдаёт **одноразовый ticket (jwt)** и `entryUrl` вида:
+
+  ```
+  https://api.inimatic.com/skill-ui/{skill_id}/v1/ui/panel?ticket=...
+  ```
+
+* браузер создаёт `<iframe sandbox="allow-scripts allow-same-origin">` на `entryUrl`.
+* обмен данными с контейнером — через `postMessage` с проверкой origin и валидацией `ticket` (внутри iframe начальная загрузка валидирует ticket у root).
+* CSP: запрещаем внешние источники по умолчанию; разрешаем только собственный домен навыка через прокси.
+
+(позже можно перейти на web-components/Module Federation; для mvp iframe даёт изоляцию и простоту.)
+
+# 7) админ-скиллы (owner-only)
+
+1. **skill.logs** (просмотр логов)
+
+   * manifest: `ownerOnly: true`, `visual: true`.
+   * api:
+
+     ```
+     GET /v1/logs?level=info&tail=500
+     GET /v1/logs/stream (sse/ws)
+     GET /v1/ui/panel (таблица + live tail)
+     ```
+
+   * источник: логи hub (journald/docker logs) через адаптер.
+
+2. **skill.hub_status**
+
+   * показывает: uptime, cpu/mem, версии, online-сокеты, pending routes.
+   * api:
+
+     ```
+     GET /v1/status/summary
+     GET /v1/ui/panel
+     ```
+
+(дальше можно добавить `skill.registry` — управлять установкой/обновлением навыков.)
+
+# 8) изменения в front (SPA)
+
+* роут `/` → контейнер DesktopScenario.
+* компоненты:
+
+  * `StatusBar` (hub online, latency, reconnect spinner)
+  * `IconGrid` (данные из icon_manager `/v1/icons`)
+  * `ModalHost` (iframe tickets)
+* состояние:
+
+  * `authState`: AUTH/PAIRED/ONLINE
+  * `desktopState`: icons[], pinned[], order[]
+  * `modalState`: { open: bool, skill_id?, entryUrl?, sizeHints? }
+* сокеты:
+
+  * `/owner` для статуса и relay.
+* поведение при оффлайне: блокируем открытие новых модалок, но не очищаем иконки.
+
+# 9) протокол открытия модалки (события)
+
+**browser → icon_manager**
+
+```
+open_modal(skill_id)
+```
+
+**icon_manager → root/hub**
+
+```
+POST /v1/open { skill_id } -> { ticket, entryUrl, sizeHints }
+```
+
+**browser**:
+
+* создаёт iframe на `entryUrl`, подписывается на `message` события.
+* первым делом iframe шлёт `hello {ticket}` → контейнер проверяет.
+* далее обмен: `resize {w,h}` (по желанию), `request {api}` если нужно.
+
+# 10) принятие интереса от weather_skill
+
+* DesktopScenario при первом старте вызывает:
+
+  ```
+  POST hub:/skills/weather_skill/v1/interest 
+  {
+    "streams":[{ "topic":"weather.now", "area":{...}, "period":"5m", "ttl":"8h" }]
+  }
+  ```
+
+* hub регистрирует subscription и пересылает обновления в шину `weather.update`.
+* DesktopScenario (или сам weather_widget внутри iframe) слушает через relay (или запрашивает `GET /v1/state` раз в N минут, mvp-вариант).
+
+# 11) права и безопасность
+
+* визуальные навыки могут отдавать только свои `/v1/ui/*`.
+* root выдаёт tickets c `aud=skill_ui` и `sub=owner:{owner_id}`, `skill_id`, exp=5m, one-time-use.
+* skills не видят device_code/sid, только `owner_id` (scope-ограниченно) и свой `skill_id`.
+* admin-скиллы помечены `ownerOnly`. DesktopScenario фильтрует их для других ролей.
+
+# 12) backlog на код (минимум)
+
+**root**
+
+* [ ] выдача одноразовых tickets `/v1/skill-ui/open`
+* [ ] registry визуальных навыков (чтение manifest из hub) + кэш
+* [ ] proxy `/skill-ui/{skill_id}/v1/ui/panel` с проверкой ticket
+
+**hub**
+
+* [ ] sqlite: таблицы icons, skills
+* [ ] adapter skills discovery (манифесты)
+* [ ] icon_manager service + http controller
+* [ ] weather_skill: `/v1/interest`, `/v1/ui/{manifest|panel}`, публикация `weather.update`
+
+**spa**
+
+* [ ] DesktopScenario container + StatusBar
+* [ ] IconGrid: `GET /v1/icons`, pin/order
+* [ ] ModalHost: iframe + ticket-flow + postMessage
+* [ ] weather widget (mvp: встроенный iframe к weather_skill/panel)
+
+**tests / приёмка**
+
+* [ ] e2e: login → webauthn → desktop shows icons
+* [ ] open weather modal → виден текущий прогноз (stub ok)
+* [ ] offline hub → статус «offline», иконки остаются; при восстановлении — модалки открываются снова
+* [ ] owner-only skills видны только owner
+
+# 13) быстрые админ-идеи на потом
+
+* «events tail» — live-лента шины событий.
+* «skill manager» — обновление/enable/disable навыков.
+* «network diag» — pings, latency, socket health.
+
+если ок, в следующем шаге дам короткий openapi-фрагмент для `/v1/icons`, `/v1/open`, `/v1/skill-ui/open`, `/skills/weather_skill/v1/…` и шаблон манифеста навыка, чтобы сразу отдать codex.
+
+--------------
+
+# 1) post-auth поведение web-клиента
+
+* сразу после `AUTH + PAIRED + ONLINE`: скрываем поле кода и qr, показываем **чистый контейнер рабочего стола**.
+* верхняя полоска-статус (узкая): `owner • hub:{hub_id} • online (xx ms)`; при оффлайне — «offline (auto-reconnect)».
+* корневой контейнер: **DesktopScenario** (см. §3), рендерит решётку иконок (icon-manager) + модалки.
+
+# 2) расширение контракта skill-манифеста (для визуальных навыков)
+
+добавим в `skills/<skill>/manifest.json`:
+
+```json
+{
+  "id": "weather_skill",
+  "version": "2.1.0",
+  "capabilities": {
+    "visual": true,
+    "ui": {
+      "icon": "sun-cloud",          // ключ из icon-сет или data:svg
+      "title": "Погода",
+      "entrypoint": "/v1/ui/panel", // http endpoint (через hub proxy)
+      "modes": ["modal", "panel"],  // modal для всплывашки
+      "sizeHints": { "w": 480, "h": 360 }
+    },
+    "streams": {
+      "supportsDeclarativeInterest": true
+    }
+  },
+  "permissions": {
+    "ownerOnly": false
+  }
+}
+```
+
+# 3) сценарий «Рабочий стол» (DesktopScenario)
+
+минимальный DSL (json) для сценария:
+
+```json
+{
+  "id": "scenario.desktop",
+  "version": "0.1.0",
+  "uses": ["skill.icon_manager"],
+  "layout": {
+    "grid": { "cols": 4, "gap": 16, "padding": 24 },
+    "statusBar": true
+  },
+  "behavior": {
+    "sourceOfApps": "icon_manager:list_installed",
+    "onIconClick": "icon_manager:open_modal(skill_id)"
+  },
+  "policy": {
+    "allowSkills": ["*"],       // mvp — все визуальные
+    "ownerOnlySkills": ["skill.logs", "skill.hub_status"]
+  }
+}
+```
+
+runtime поведения:
+
+* при монтировании: `icon_manager.list_installed()` → отдаёт набор иконок с метаданными ui.
+* по клику: `icon_manager.open_modal(skill_id)` → создаёт модал и встраивает ui указанного skill (через iframe-sandbox, см. §6).
+
+# 4) skill «Менеджер иконок» (icon_manager)
+
+## обязанности
+
+* агрегировать установленные визуальные навыки (из registry/root).
+* хранить user-prefs (пины, порядок, группы) per owner.
+* отдавать решётку иконок, открывать модалки с ui навыка.
+
+## http-api (через hub→root proxy)
+
+```
+GET  /v1/icons
+-> [{ skill_id, title, icon, entrypoint, modes, sizeHints, pinned, order }]
+
+POST /v1/icons/pin
+{ skill_id, pinned: true/false }
+
+POST /v1/icons/order
+{ order: [ "weather_skill", "skill.logs", ... ] }
+
+POST /v1/open
+{ skill_id, mode: "modal"|"panel" }
+-> { ticket, entryUrl } // см. §6 безопасная загрузка UI
+```
+
+минимальная модель хранения (на hub в sqlite):
+
+```
+icons(owner_id, skill_id, pinned, order)
+```
+
+# 5) weather_skill — декларативный интерес + ui-панель
+
+## новые эндпойнты навыка
+
+```
+POST /v1/interest
+{ 
+  "streams": [
+    {
+      "topic": "weather.now",
+      "area": { "lat": 55.75, "lon": 37.62, "radius_km": 50 },
+      "period": "5m",          // желаемая частота
+      "ttl": "8h",
+      "format": "compact"      // hint
+    }
+  ]
+}
+-> { subscription_id, nextUpdateIn: "PT300S" }
+
+GET /v1/ui/manifest
+-> { title, icon, modes:["modal","panel"], sizeHints:{w:480,h:360} }
+
+GET /v1/ui/panel
+-> html/js (встраиваемый виджет; mvp — простая страница)
+```
+
+## event-bus (внутри subnet, для сценариев)
+
+* topic: `weather.update`
+* payload.schema (пример):
+
+```json
+{
+  "type":"object",
+  "required":["ts","place","temp_c","conditions"],
+  "properties":{
+    "ts":{"type":"string","format":"date-time"},
+    "place":{"type":"string"},
+    "temp_c":{"type":"number"},
+    "conditions":{"type":"string"},
+    "forecast":{"type":"array","items":{"type":"object","properties":{
+      "ts":{"type":"string","format":"date-time"},
+      "temp_c":{"type":"number"},
+      "conditions":{"type":"string"}
+    }}}
+  }
+}
+```
+
+* acl: `role:OWNER read`, `scenario.desktop read`, `skill.weather publish`.
+
+# 6) как встраиваем ui навыка (безопасно)
+
+**mvp: iframe-sandbox**:
+
+* `icon_manager.open_modal` вызывает `/v1/open { skill_id }`.
+* root/hub выдаёт **одноразовый ticket (jwt)** и `entryUrl` вида:
+
+  ```
+  https://api.inimatic.com/skill-ui/{skill_id}/v1/ui/panel?ticket=...
+  ```
+
+* браузер создаёт `<iframe sandbox="allow-scripts allow-same-origin">` на `entryUrl`.
+* обмен данными с контейнером — через `postMessage` с проверкой origin и валидацией `ticket` (внутри iframe начальная загрузка валидирует ticket у root).
+* CSP: запрещаем внешние источники по умолчанию; разрешаем только собственный домен навыка через прокси.
+
+(позже можно перейти на web-components/Module Federation; для mvp iframe даёт изоляцию и простоту.)
+
+# 7) админ-скиллы (owner-only)
+
+1. **skill.logs** (просмотр логов)
+
+   * manifest: `ownerOnly: true`, `visual: true`.
+   * api:
+
+     ```
+     GET /v1/logs?level=info&tail=500
+     GET /v1/logs/stream (sse/ws)
+     GET /v1/ui/panel (таблица + live tail)
+     ```
+
+   * источник: логи hub (journald/docker logs) через адаптер.
+
+2. **skill.hub_status**
+
+   * показывает: uptime, cpu/mem, версии, online-сокеты, pending routes.
+   * api:
+
+     ```
+     GET /v1/status/summary
+     GET /v1/ui/panel
+     ```
+
+(дальше можно добавить `skill.registry` — управлять установкой/обновлением навыков.)
+
+# 8) изменения в front (SPA)
+
+* роут `/` → контейнер DesktopScenario.
+* компоненты:
+
+  * `StatusBar` (hub online, latency, reconnect spinner)
+  * `IconGrid` (данные из icon_manager `/v1/icons`)
+  * `ModalHost` (iframe tickets)
+* состояние:
+
+  * `authState`: AUTH/PAIRED/ONLINE
+  * `desktopState`: icons[], pinned[], order[]
+  * `modalState`: { open: bool, skill_id?, entryUrl?, sizeHints? }
+* сокеты:
+
+  * `/owner` для статуса и relay.
+* поведение при оффлайне: блокируем открытие новых модалок, но не очищаем иконки.
+
+# 9) протокол открытия модалки (события)
+
+**browser → icon_manager**
+
+```
+open_modal(skill_id)
+```
+
+**icon_manager → root/hub**
+
+```
+POST /v1/open { skill_id } -> { ticket, entryUrl, sizeHints }
+```
+
+**browser**:
+
+* создаёт iframe на `entryUrl`, подписывается на `message` события.
+* первым делом iframe шлёт `hello {ticket}` → контейнер проверяет.
+* далее обмен: `resize {w,h}` (по желанию), `request {api}` если нужно.
+
+# 10) принятие интереса от weather_skill
+
+* DesktopScenario при первом старте вызывает:
+
+  ```
+  POST hub:/skills/weather_skill/v1/interest 
+  {
+    "streams":[{ "topic":"weather.now", "area":{...}, "period":"5m", "ttl":"8h" }]
+  }
+  ```
+
+* hub регистрирует subscription и пересылает обновления в шину `weather.update`.
+* DesktopScenario (или сам weather_widget внутри iframe) слушает через relay (или запрашивает `GET /v1/state` раз в N минут, mvp-вариант).
+
+# 11) права и безопасность
+
+* визуальные навыки могут отдавать только свои `/v1/ui/*`.
+* root выдаёт tickets c `aud=skill_ui` и `sub=owner:{owner_id}`, `skill_id`, exp=5m, one-time-use.
+* skills не видят device_code/sid, только `owner_id` (scope-ограниченно) и свой `skill_id`.
+* admin-скиллы помечены `ownerOnly`. DesktopScenario фильтрует их для других ролей.
+
+# 12) backlog на код (минимум)
+
+**root**
+
+* [ ] выдача одноразовых tickets `/v1/skill-ui/open`
+* [ ] registry визуальных навыков (чтение manifest из hub) + кэш
+* [ ] proxy `/skill-ui/{skill_id}/v1/ui/panel` с проверкой ticket
+
+**hub**
+
+* [ ] sqlite: таблицы icons, skills
+* [ ] adapter skills discovery (манифесты)
+* [ ] icon_manager service + http controller
+* [ ] weather_skill: `/v1/interest`, `/v1/ui/{manifest|panel}`, публикация `weather.update`
+
+**spa**
+
+* [ ] DesktopScenario container + StatusBar
+* [ ] IconGrid: `GET /v1/icons`, pin/order
+* [ ] ModalHost: iframe + ticket-flow + postMessage
+* [ ] weather widget (mvp: встроенный iframe к weather_skill/panel)
+
+**tests / приёмка**
+
+* [ ] e2e: login → webauthn → desktop shows icons
+* [ ] open weather modal → виден текущий прогноз (stub ok)
+* [ ] offline hub → статус «offline», иконки остаются; при восстановлении — модалки открываются снова
+* [ ] owner-only skills видны только owner
+
+# 13) быстрые админ-идеи на потом
+
+* «events tail» — live-лента шины событий.
+* «skill manager» — обновление/enable/disable навыков.
+* «network diag» — pings, latency, socket health.
+
+--------------
+
+## что фиксируем как принцип
 
 * **веб-представление живёт у сценария**, а навыки — это «сервисы» и «виджеты», которые сценарий вызывает.
 * сценарий может быть **многостраничным/многокомпонентным**: у него есть своё дерево маршрутов, состояние, права, тема.
@@ -235,8 +807,6 @@ NEW -> PREAUTH (device_code verified)
 
 > правило: каждый навык **обязан** уметь говорить на уровне 1, может повышать детальность до 2, и только при необходимости — 3.
 
----
-
 ### 2) событийная шина UI
 
 унифицированные темы (названия условные):
@@ -260,8 +830,6 @@ NEW -> PREAUTH (device_code verified)
 }
 ```
 
----
-
 ### 3) слой разметки (layout) и capability-negotiation
 
 * **слоты**: `header`, `main`, `aside`, `modal`, `toast` — навык адресует, где отрисовать
@@ -269,16 +837,12 @@ NEW -> PREAUTH (device_code verified)
   навык может деградировать: если нет чартов → рендерит таблицу, если нет aside → вкладка в main.
 * **theme tokens**: цвет/типографика как дизайн-токены, без произвольного CSS навыка
 
----
-
 ### 4) LLM-friendly ограничения
 
 * без произвольного HTML/JS от навыка на уровнях 1–2
 * фиксированный словарь компонентов + строгие схемы
 * короткие, предсказуемые action_id и поля форм
 * авто-валидация по JSON-Schema с понятными сообщениями об ошибках
-
----
 
 ### 5) мини-спека USDL (v0)
 
@@ -316,8 +880,6 @@ NEW -> PREAUTH (device_code verified)
 * `data.source: "lazy"` — клиент сам будет вызывать `ui.query` при скролле/странице
 * чарт: `{"type":"Chart","spec":{"$vegaLite":{…}},"data":{"bind":"$.series"}}`
 
----
-
 ### 6) UI-Markdown (ULM) — пример
 
 ```
@@ -339,15 +901,11 @@ NEW -> PREAUTH (device_code verified)
 
 клиент преобразует в USDL, вешает обработчики и генерит `ui.action/ui.query`.
 
----
-
 ### 7) жизненный цикл и состояние
 
 * **server-driven UI**: навык шлёт первый `ui.render` (ULM/USDL), далее — `ui.patch`
 * **viewModel** живёт на клиенте; навык присылает патчи (JSON Patch) для реактивности
 * долгие операции → `progress`/`spinner` + отмена (`action: cancel`)
-
----
 
 ### 8) безопасность и изоляция
 
@@ -355,15 +913,11 @@ NEW -> PREAUTH (device_code verified)
 * уровень 3 (UMF): iframe + CSP + postMessage API, список разрешённых capability
 * запрет прямого доступа к токенам/куки; всё через событийную шину
 
----
-
 ### 9) доступность, локализация, офлайн
 
 * все базовые компоненты имеют ARIA-роли; клавиатурная навигация по умолчанию
 * `i18n` ключи внутри USDL: `"text": {"i18n": "notes.add"}`
 * офлайн-кеш USDL/viewModel и отложенные `ui.action` (replay)
-
----
 
 ### 10) интеграция с текущим фронтом
 
@@ -372,8 +926,6 @@ NEW -> PREAUTH (device_code verified)
 * **сборка**: один «UI-движок» в приложении; навыки ничего не билдят
 * **DevTools**: правый инспектор USDL/ULM, лог `ui.*` событий, визуальный diff patch
 
----
-
 ### 11) мини-гайд для навыка (LLM-программист)
 
 * всегда поддерживай **ULM** (на крайний случай)
@@ -381,8 +933,6 @@ NEW -> PREAUTH (device_code verified)
 * отправляй **краткие** `ui.patch`, не перерисовывай всё
 * используй короткие `action_id` и валидируй вход по JSON-Schema
 * для больших наборов — `ui.query` с пагинацией/фильтрами
-
----
 
 ### 12) пример: навык отвечает USDL
 
@@ -422,8 +972,6 @@ NEW -> PREAUTH (device_code verified)
   {"op":"replace","path":"/viewModel/now","value":{"temp":14.5,"desc":"cloudy"}}
 ]
 ```
-
----
 
 ### 13) версионирование и эволюция
 

@@ -125,7 +125,20 @@ nav:
   - "Сценарии": scenarios.md
   - "DevPortal": devportal.md
   - "Дорожная карта": roadmap.md
-  - "Концепции": concepts/codeflow.md
+  - "Концепции":
+      - "Кодовая база": concepts/codeflow.md
+      - "Веб клиент": concepts/web-client.md
+      - "Интерфейс пользователя": concepts/ui.md
+      - "Запуск сценария": concepts/start_scenario.md
+      - "Runtime сценария": concepts/scenario-runtime.md
+      - "Безопасность": concepts/security.md
+      - "Инициализация устройства": concepts/init_device.md
+      - "Управление событиями": concepts/event_mgmnt.md
+      - "Разработка сценариев": docs/concepts/dev-scenarios.md
+      - "Этапы LLM DevOps": docs/concepts/dev_stages.md
+      - "Этапы LLM DevOps - подготовка": docs/concepts/dev_stage_prepare.md
+      - "Управление данными": docs/concepts/data_mgmnt.md
+      - "Компрессия контекста": docs/concepts/context_compression.md
 
 copyright: |
   &copy; 2025 AdaOS
