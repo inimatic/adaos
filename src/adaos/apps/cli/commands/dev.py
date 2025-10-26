@@ -29,6 +29,7 @@ from adaos.services.skill.runtime import (
     SkillPrepScriptNotFoundError,
     run_dev_skill_prep,
 )
+from adaos.services.root.client import RootHttpClient
 from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context, load_scenario
 
 app = typer.Typer(help="Developer utilities for Root and Forge workflows.")
@@ -217,6 +218,8 @@ def dev_login(
     revoke: Optional[str] = typer.Option(None, "--revoke", help="Revoke pairing code."),
     api_base: str = typer.Option("http://127.0.0.1:8000", "--api", help="API base URL for webhooks service."),
 ):
+    ctx = get_ctx()
+
     if not telegram:
         typer.echo("Use --telegram to start Telegram pairing.")
         raise typer.Exit(0)
@@ -226,26 +229,29 @@ def dev_login(
         _print_error("'requests' is required for --telegram flow.")
         raise typer.Exit(1)
 
-    base = api_base.rstrip("/")
+    client = RootHttpClient.from_settings(
+        ctx.settings,
+    )
+
+    base = getattr(ctx.settings, "api_base", None) or api_base
     if status:
-        resp = requests.get(f"{base}/io/tg/pair/status", params={"code": status})
-        typer.echo(resp.text)
+        data = client.request("GET", f"{base}/io/tg/pair/status", params={"code": status})
+        typer.echo(data)
         raise typer.Exit(0)
     if revoke:
-        resp = requests.post(f"{base}/io/tg/pair/revoke", params={"code": revoke})
-        typer.echo(resp.text)
+        data = client.request("GET", f"{base}/io/tg/pair/revoke", params={"code": revoke})
+        typer.echo(data)
         raise typer.Exit(0)
-    url = f"{base}/io/tg/pair/create"
-    resp = requests.post(url, params={"hub": hub, "ttl": ttl})
-    if resp.status_code != 200:
+    data = client.request("POST", f"{base}/io/tg/pair/create", params={"hub": hub, "ttl": ttl})
+    # TODO Перенести обработку ошибок из метода _request на уровень  логики.
+    """ if resp.status_code != 200:
         _print_error(f"API error: {resp.status_code} {resp.text}")
-        raise typer.Exit(1)
-    data = resp.json()
+        raise typer.Exit(1) """
     code = data.get("pair_code") or data.get("code")
     if not code:
         _print_error("No pair_code in response.")
         raise typer.Exit(1)
-    deep_link = data.get("deep_link") or f"https://t.me/<your-bot>?start={code}"
+    deep_link = data.get("deep_link") or f"https://t.me/adaos_bot?start={code}"
     typer.secho("Telegram pairing:", fg=typer.colors.GREEN)
     typer.echo(f"  pair_code: {code}")
     typer.echo(f"  deep_link: {deep_link}")
