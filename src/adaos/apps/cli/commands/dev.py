@@ -209,7 +209,6 @@ def _echo_login_result(result: RootLoginResult) -> None:
 
 
 @app.command("login")
-@_run_safe
 def dev_login(
     telegram: bool = typer.Option(False, "--telegram", help="Login via Telegram pairing (create a pair code)."),
     hub: Optional[str] = typer.Option(None, "--hub", help="Preferred hub id for binding."),
@@ -227,7 +226,7 @@ def dev_login(
         _print_error("'requests' is required for --telegram flow.")
         raise typer.Exit(1)
 
-    base = api_base.rstrip('/')
+    base = api_base.rstrip("/")
     if status:
         resp = requests.get(f"{base}/io/tg/pair/status", params={"code": status})
         typer.echo(resp.text)
