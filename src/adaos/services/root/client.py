@@ -1,9 +1,10 @@
+# src\adaos\services\root\client.py
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Mapping, MutableMapping
+from dataclasses import dataclass, field
+from typing import Any, Mapping, MutableMapping, Optional, Tuple
 import httpx
-import ssl
+import ssl, os
 
 
 class RootHttpError(RuntimeError):
@@ -23,6 +24,85 @@ class RootHttpClient:
     base_url: str = "https://api.inimatic.com"
     timeout: float = 15.0
     verify: str | bool | ssl.SSLContext = True
+    # mTLS client cert (cert_file, key_file)
+    cert: Optional[Tuple[str, str]] = None
+    # default headers applied to every request (can be overridden/extended)
+    default_headers: dict[str, str] = field(default_factory=dict)
+
+    # ---------- public helpers ------------------------------------------------
+    @classmethod
+    def from_settings(
+        cls,
+        settings: Any,
+        *,
+        access_token: str | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> "RootHttpClient":
+        """
+        Factory that extracts base_url, mTLS paths and composes default headers.
+
+        Expected settings fields (optional):
+          - settings.api_base or settings.root.api_base
+          - settings.pki.ca, settings.pki.cert, settings.pki.key
+        """
+        # base_url resolution
+        base_url = getattr(settings, "api_base", None) or getattr(getattr(settings, "root", None), "api_base", None) or "https://api.inimatic.com"
+
+        # TLS verification (CA) & client cert
+        ca_path = getattr(getattr(settings, "pki", None), "ca", None)
+        cert_path = getattr(getattr(settings, "pki", None), "cert", None)
+        key_path = getattr(getattr(settings, "pki", None), "key", None)
+
+        verify: str | bool | ssl.SSLContext = True
+        cert_tuple: Optional[Tuple[str, str]] = None
+
+        if ca_path and os.path.exists(ca_path):
+            verify = ca_path
+        if cert_path and key_path and os.path.exists(cert_path) and os.path.exists(key_path):
+            cert_tuple = (cert_path, key_path)
+
+        # default headers
+        headers: dict[str, str] = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+        if extra_headers:
+            headers.update({str(k): str(v) for k, v in extra_headers.items()})
+
+        return cls(base_url=base_url, verify=verify, cert=cert_tuple, default_headers=headers)
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Mapping[str, Any] | None = None,
+        data: Any | None = None,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        accept_204: bool = False,
+        timeout: float | None = None,
+    ) -> Any:
+        """
+        Public wrapper that automatically applies mTLS and default headers.
+        """
+        merged_headers: MutableMapping[str, str] | None = None
+        if self.default_headers or headers:
+            merged_headers = dict(self.default_headers)
+            if headers:
+                merged_headers.update({str(k): str(v) for k, v in headers.items()})
+
+        return self._request(
+            method,
+            path,
+            json=json,
+            data=data,
+            params=params,
+            headers=merged_headers,
+            verify=self.verify,
+            cert=self.cert,
+            timeout=timeout or self.timeout,
+            accept_204=accept_204,
+        )
 
     def _request(
         self,
@@ -134,7 +214,7 @@ class RootHttpClient:
     ) -> dict:
         headers = {"X-Root-Token": root_token}
         payload = dict(meta or {})
-        return dict(self._request("POST", "/v1/bootstrap_token", json=payload, headers=headers, verify=verify, timeout=30.0))
+        return dict(self._request("POST", "/v1/bootstrap_token", json=payload, headers=headers, verify=(verify if verify is not None else self.verify), timeout=30.0))
 
     def register_subnet(
         self,
@@ -148,7 +228,7 @@ class RootHttpClient:
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         payload = {"csr_pem": csr_pem}
-        return dict(self._request("POST", "/v1/subnets/register", json=payload, headers=headers, verify=verify, timeout=120.0))
+        return dict(self._request("POST", "/v1/subnets/register", json=payload, headers=headers, verify=(verify if verify is not None else self.verify), timeout=120.0))
 
     def device_authorize(
         self,
@@ -158,7 +238,9 @@ class RootHttpClient:
         payload: Mapping[str, Any] | None = None,
     ) -> dict:
         body = dict(payload or {})
-        return dict(self._request("POST", "/v1/auth/owner/start", json=body, verify=verify, cert=cert))
+        return dict(
+            self._request("POST", "/v1/auth/owner/start", json=body, verify=(verify if verify is not None else self.verify), cert=(cert if cert is not None else self.cert))
+        )
 
     def device_poll(
         self,
@@ -168,7 +250,7 @@ class RootHttpClient:
         cert: tuple[str, str] | None = None,
     ) -> dict:
         body = {"device_code": device_code}
-        return dict(self._request("POST", "/v1/auth/owner/poll", json=body, verify=verify, cert=cert))
+        return dict(self._request("POST", "/v1/auth/owner/poll", json=body, verify=(verify if verify is not None else self.verify), cert=(cert if cert is not None else self.cert)))
 
     def push_skill_draft(
         self,
@@ -176,8 +258,8 @@ class RootHttpClient:
         name: str,
         archive_b64: str,
         node_id: str | None,
-        verify: str | bool | ssl.SSLContext,
-        cert: tuple[str, str],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
         sha256: str | None = None,
     ) -> dict:
         payload: dict[str, Any] = {"name": name, "archive_b64": archive_b64}
@@ -186,14 +268,7 @@ class RootHttpClient:
         if sha256:
             payload["sha256"] = sha256
         return dict(
-            self._request(
-                "POST",
-                "/v1/skills/draft",
-                json=payload,
-                verify=verify,
-                cert=cert,
-                timeout=120.0,
-            )
+            self._request("POST", "/v1/skills/draft", json=payload, verify=(self.verify if verify is None else verify), cert=(self.cert if cert is None else cert), timeout=120.0)
         )
 
     def delete_draft_artifact(
@@ -203,8 +278,8 @@ class RootHttpClient:
         name: str,
         node_id: str | None,  # если хаб удаляет драфт «от имени ноды»
         all_nodes: bool,  # true — для хаба удалить у всех нод
-        verify: str | bool | ssl.SSLContext,
-        cert: tuple[str, str],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
         timeout: float = 30.0,
     ) -> dict:
         params: dict[str, Any] = {"name": name}
@@ -212,7 +287,17 @@ class RootHttpClient:
             params["node_id"] = node_id
         if all_nodes:
             params["all_nodes"] = "true"
-        return dict(self._request("DELETE", f"/v1/{kind}/draft", params=params, verify=verify, cert=cert, timeout=timeout, accept_204=True))
+        return dict(
+            self._request(
+                "DELETE",
+                f"/v1/{kind}/draft",
+                params=params,
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=timeout,
+                accept_204=True,
+            )
+        )
 
     def delete_skill_draft(self, **kw) -> dict:
         kw["kind"] = "skills"
@@ -230,8 +315,8 @@ class RootHttpClient:
         version: str | None,
         all_versions: bool,
         force: bool,
-        verify: str | bool | ssl.SSLContext,
-        cert: tuple[str, str],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
         timeout: float = 30.0,
     ) -> dict:
         params: dict[str, Any] = {"name": name}
@@ -247,8 +332,8 @@ class RootHttpClient:
                     "DELETE",
                     f"/v1/{kind}/registry",
                     params=params,
-                    verify=verify,
-                    cert=cert,
+                    verify=(self.verify if verify is None else verify),
+                    cert=(self.cert if cert is None else cert),
                     timeout=timeout,
                     accept_204=True,
                 )
@@ -274,8 +359,8 @@ class RootHttpClient:
         name: str,
         archive_b64: str,
         node_id: str | None,
-        verify: str | bool | ssl.SSLContext,
-        cert: tuple[str, str],
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
         sha256: str | None = None,
     ) -> dict:
         payload: dict[str, Any] = {"name": name, "archive_b64": archive_b64}
@@ -285,12 +370,7 @@ class RootHttpClient:
             payload["sha256"] = sha256
         return dict(
             self._request(
-                "POST",
-                "/v1/scenarios/draft",
-                json=payload,
-                verify=verify,
-                cert=cert,
-                timeout=120.0,
+                "POST", "/v1/scenarios/draft", json=payload, verify=(self.verify if verify is None else verify), cert=(self.cert if cert is None else cert), timeout=120.0
             )
         )
 
