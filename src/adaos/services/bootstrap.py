@@ -9,7 +9,6 @@ from adaos.services.node_config import load_config, set_role as cfg_set_role, No
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.io_bus.local_bus import LocalIoBus
 from adaos.services.io_bus.http_fallback import HttpFallbackBus
-from adaos.services.io_bus.nats_bus import NatsIoBus
 from adaos.ports.heartbeat import HeartbeatPort
 from adaos.ports.skills_loader import SkillsLoaderPort
 from adaos.ports.subnet_registry import SubnetRegistryPort
@@ -122,10 +121,11 @@ class BootstrapService:
         # --- select IO bus based on settings ---
         bus_kind = (self.ctx.settings.io_bus_kind or "local").lower()
         io_bus: Any
-        if bus_kind == "nats" and (self.ctx.settings.nats_url or ""):
-            io_bus = NatsIoBus(self.ctx.settings.nats_url or "nats://127.0.0.1:4222")
+        if bus_kind == "nats":
+            # NATS on HUB is deprecated/removed; fallback to backend HTTP API
+            io_bus = HttpFallbackBus(self.ctx.settings.api_base)
             await io_bus.connect()
-            print(f"[bootstrap] IO bus: NATS connected at {self.ctx.settings.nats_url}")
+            print(f"[bootstrap] IO bus: 'nats' deprecated on hub, using HTTP at {self.ctx.settings.api_base}")
         elif bus_kind == "http":
             io_bus = HttpFallbackBus(self.ctx.settings.api_base)
             await io_bus.connect()

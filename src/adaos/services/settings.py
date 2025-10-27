@@ -56,7 +56,7 @@ class Settings:
     # Chat IO / Telegram / IO bus settings
     tg_secret_token: Optional[str] = None
     tg_bot_token: Optional[str] = None
-    io_bus_kind: str = "local"  # local|nats|http
+    io_bus_kind: str = "local"  # local|http (nats deprecated on hub)
     nats_url: Optional[str] = None
     files_tmp_dir: Optional[str] = None
     route_rules_path: Optional[str] = None
