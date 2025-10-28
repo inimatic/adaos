@@ -128,15 +128,16 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 								try {
 									await bus.publishSubject(subject, out)
 								} catch (e) {
-									log.warn({ bot_id, update_id: evt.update_id, err: String(e) }, 'welcome publish via bus failed, fallback to direct send')
-									try {
-										const token = process.env['TG_BOT_TOKEN'] || ''
-										if (token) {
-											const { TelegramSender } = await import('../telegram/sender.js')
-											await new TelegramSender(token).send(out as any)
-										}
-									} catch { /* ignore */ }
+									log.warn({ bot_id, update_id: evt.update_id, err: String(e) }, 'welcome publish via bus failed')
 								}
+								// Also send directly to Telegram to ensure user feedback
+								try {
+									const token = process.env['TG_BOT_TOKEN'] || ''
+									if (token) {
+										const { TelegramSender } = await import('../telegram/sender.js')
+										await new TelegramSender(token).send(out as any)
+									}
+								} catch { /* ignore */ }
 							}
 						} catch (e) {
 							log.warn({ bot_id, update_id: evt.update_id, err: String(e) }, 'bindingUpsert failed after confirm')
