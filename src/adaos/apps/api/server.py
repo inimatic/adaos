@@ -10,6 +10,8 @@ from adaos.apps.api.auth import require_token
 from adaos.build_info import BUILD_INFO
 from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
+from adaos.integrations.ovos.tts import OVOSTTSAdapter
+from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 
 from adaos.apps.bootstrap import bootstrap_app
 from adaos.services.bootstrap import run_boot_sequence, shutdown, is_ready
@@ -168,7 +170,10 @@ class SayResponse(BaseModel):
 
 def _make_tts():
     mode = get_tts_backend()
-    # можно расширить OVOS/Rhasspy позже
+    if mode == "ovos":
+        return OVOSTTSAdapter()
+    if mode == "rhasspy":
+        return RhasspyTTSAdapter()
     return NativeTTS()
 
 
