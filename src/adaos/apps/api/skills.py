@@ -72,6 +72,7 @@ class RuntimeActivateReq(BaseModel):
     name: str
     slot: str | None = None
     version: str | None = None
+    auto_prepare: bool = True
 
 
 class RuntimeSetupReq(BaseModel):
@@ -104,13 +105,29 @@ async def sync(mgr: SkillManager = Depends(_get_manager)):
 
 @router.post("/install")
 async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
-    result = mgr.install(
-        body.name,
-        pin=body.pin,
-        validate=body.perform_validation,
-        strict=body.strict,
-        probe_tools=body.probe_tools,
-    )
+    # Best-effort sync to ensure monorepo workspace exists
+    try:
+        mgr.sync()
+    except Exception:
+        pass
+    try:
+        result = mgr.install(
+            body.name,
+            pin=body.pin,
+            validate=body.perform_validation,
+            strict=body.strict,
+            probe_tools=body.probe_tools,
+        )
+    except FileNotFoundError:
+        # Retry once after an explicit sync in case the repo was missing
+        mgr.sync()
+        result = mgr.install(
+            body.name,
+            pin=body.pin,
+            validate=body.perform_validation,
+            strict=body.strict,
+            probe_tools=body.probe_tools,
+        )
     if isinstance(result, tuple):
         meta, report = result
     else:
@@ -129,6 +146,14 @@ async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
         else:
             payload["report"] = repr(report)
     return payload
+
+
+@router.post("/uninstall")
+async def uninstall(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
+    mgr.uninstall(
+        body.name,
+    )
+    return {"ok": True}
 
 
 @router.get("/{name}")
@@ -170,8 +195,21 @@ async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_
 
 @router.post("/runtime/activate")
 async def runtime_activate(body: RuntimeActivateReq, mgr: SkillManager = Depends(_get_manager)):
-    slot = mgr.activate_runtime(body.name, version=body.version, slot=body.slot)
-    return {"ok": True, "slot": slot}
+    try:
+        slot = mgr.activate_runtime(body.name, version=body.version, slot=body.slot)
+        return {"ok": True, "slot": slot}
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        if not body.auto_prepare or ("is not prepared" not in msg and "no installed versions" not in msg):
+            # expose as 422 Unprocessable if activation cannot proceed
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=422, detail=str(exc))
+        # auto-prepare then retry
+        pref_slot = body.slot
+        prep = mgr.prepare_runtime(body.name, run_tests=False, preferred_slot=pref_slot)
+        slot = mgr.activate_runtime(body.name, version=prep.version, slot=prep.slot)
+        return {"ok": True, "slot": slot, "prepared": prep.slot}
 
 
 @router.get("/runtime/status/{name}")

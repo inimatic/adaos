@@ -32,6 +32,7 @@ from adaos.services.skill.validation import SkillValidationService, ValidationRe
 from adaos.services.crypto.secrets_service import SecretsService
 from adaos.services.skill.secrets_backend import SkillSecretsBackend
 from adaos.services.skill.resolver import SkillPathResolver
+from adaos.services.capacity import install_skill_in_capacity, uninstall_skill_from_capacity
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 
@@ -320,6 +321,10 @@ class SkillManager:
         if remove_error is not None:
             raise RuntimeError(f"не удалось удалить рабочую копию навыка '{name}'. Закройте файлы под " f"путем {(root / 'skills' / name)} и повторите попытку.") from remove_error
         emit(self.bus, "skill.uninstalled", {"id": name}, "skill.mgr")
+        try:
+            uninstall_skill_from_capacity(name)
+        except Exception:
+            pass
 
     def push(self, name: str, message: str, *, signoff: bool = False) -> str:
         self.caps.require("core", "skills.manage", "git.write", "net.git")
@@ -490,6 +495,10 @@ class SkillManager:
         history["last_active_at"] = datetime.now(timezone.utc).isoformat()
         env.write_version_metadata(target_version, metadata)
         self._smoke_import(env=env, name=name, version=target_version)
+        try:
+            install_skill_in_capacity(name, target_version, active=True)
+        except Exception:
+            pass
         return target_slot
 
     def rollback_runtime(self, name: str) -> str:

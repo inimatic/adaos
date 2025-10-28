@@ -10,7 +10,7 @@ from adaos.services.eventbus import LocalEventBus
 from adaos.domain import Event
 from adaos.services.node_config import load_config
 from .rules_loader import load_rules, watch_rules
-from adaos.services.subnet_registry_mem import get_subnet_registry
+from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
 
 
@@ -62,8 +62,10 @@ class RouterService:
     def _resolve_node_base_url(self, node_id: str, role: str, hub_url: str | None) -> str | None:
         try:
             if role == "hub":
-                info = get_subnet_registry().get_node(node_id)
-                return info.base_url if info else None
+                directory = get_directory()
+                if not directory.is_online(node_id):
+                    return None
+                return directory.get_node_base_url(node_id)
             # member: ask hub
             if not hub_url:
                 return None
@@ -102,4 +104,3 @@ class RouterService:
                 pass
             self._stop_watch = None
         self._started = False
-
