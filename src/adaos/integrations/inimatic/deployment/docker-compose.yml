@@ -184,38 +184,6 @@ services:
     volumes:
       - nats_data:/data
 
-  api:
-    image: python:3.11-slim
-    working_dir: /app
-    command: ["bash", "-lc", "pip install --no-cache-dir . && adaos api serve --host 0.0.0.0 --port 8000"]
-    volumes:
-      - ../../../..:/app:rw
-    environment:
-      IO_BUS_KIND: ${IO_BUS_KIND:-nats}
-      NATS_URL: ${NATS_URL:-nats://nats:4222}
-      TG_BOT_TOKEN: ${TG_BOT_TOKEN}
-      TG_SECRET_TOKEN: ${TG_SECRET_TOKEN}
-      FILES_TMP_DIR: ${FILES_TMP_DIR:-/data/tmp}
-      ROUTE_RULES_PATH: ${ROUTE_RULES_PATH:-/data/route_rules.yaml}
-      DEFAULT_HUB: ${DEFAULT_HUB:-hub-a}
-    depends_on:
-      - nats
-    networks: [proxy]
-
-  hub-mock:
-    image: python:3.11-slim
-    working_dir: /app
-    command: ["bash", "-lc", "pip install --no-cache-dir nats-py httpx pyyaml && python src/adaos/services/testing/hub_mock.py"]
-    volumes:
-      - ../../../..:/app:rw
-    environment:
-      NATS_URL: ${NATS_URL:-nats://nats:4222}
-      DEFAULT_HUB: ${DEFAULT_HUB:-hub-a}
-      BOT_ID: ${BOT_ID:-main-bot}
-    depends_on:
-      - nats
-    networks: [proxy]
-
 volumes:
   nats_data:
     name: inimatic_nats_data
