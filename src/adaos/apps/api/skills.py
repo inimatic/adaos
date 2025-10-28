@@ -61,6 +61,23 @@ class PushReq(BaseModel):
     signoff: bool = False
 
 
+# --- Runtime management API ---
+class RuntimePrepareReq(BaseModel):
+    name: str
+    run_tests: bool = False
+    slot: str | None = None
+
+
+class RuntimeActivateReq(BaseModel):
+    name: str
+    slot: str | None = None
+    version: str | None = None
+
+
+class RuntimeSetupReq(BaseModel):
+    name: str
+
+
 @router.get("/list")
 async def list_skills(fs: bool = False, mgr: SkillManager = Depends(_get_manager)):
     rows = mgr.list_installed()
@@ -132,3 +149,40 @@ async def remove(name: str, mgr: SkillManager = Depends(_get_manager)):
 async def push(body: PushReq, mgr: SkillManager = Depends(_get_manager)):
     revision = mgr.push(body.name, body.message, signoff=body.signoff)
     return {"ok": True, "revision": revision}
+
+
+# --- Runtime management endpoints ---
+
+
+@router.post("/runtime/prepare")
+async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_get_manager)):
+    result = mgr.prepare_runtime(body.name, run_tests=body.run_tests, preferred_slot=body.slot)
+    payload = {
+        "ok": True,
+        "name": result.name,
+        "version": result.version,
+        "slot": result.slot,
+        "resolved_manifest": str(result.resolved_manifest),
+        "tests": {k: v.status for k, v in (result.tests or {}).items()},
+    }
+    return payload
+
+
+@router.post("/runtime/activate")
+async def runtime_activate(body: RuntimeActivateReq, mgr: SkillManager = Depends(_get_manager)):
+    slot = mgr.activate_runtime(body.name, version=body.version, slot=body.slot)
+    return {"ok": True, "slot": slot}
+
+
+@router.get("/runtime/status/{name}")
+async def runtime_status(name: str, mgr: SkillManager = Depends(_get_manager)):
+    state = mgr.runtime_status(name)
+    return {"ok": True, "state": state}
+
+
+@router.post("/runtime/setup")
+async def runtime_setup(body: RuntimeSetupReq, mgr: SkillManager = Depends(_get_manager)):
+    result = mgr.setup_skill(body.name)
+    if isinstance(result, dict):
+        return {"ok": bool(result.get("ok", True)), **result}
+    return {"ok": True, "result": result}
