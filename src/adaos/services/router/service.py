@@ -5,6 +5,7 @@ from pathlib import Path
 import asyncio
 import json
 import requests
+import os
 
 from adaos.services.eventbus import LocalEventBus
 import logging
@@ -13,6 +14,10 @@ from adaos.services.node_config import load_config
 from .rules_loader import load_rules, watch_rules
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
+from adaos.sdk.data.env import get_tts_backend
+from adaos.adapters.audio.tts.native_tts import NativeTTS
+from adaos.integrations.ovos.tts import OVOSTTSAdapter
+from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 
 
 class RouterService:
@@ -24,6 +29,22 @@ class RouterService:
         self._rules: list[dict[str, Any]] = []
         self._subscribed = False
 
+    def _pick_target_node(self, desired_io: str, this_node: str) -> str:
+        node = this_node
+        for r in self._rules:
+            try:
+                target = r.get("target") or {}
+                if str(target.get("io_type") or "stdout").lower() == desired_io.lower():
+                    nid = target.get("node_id")
+                    if nid == "this" or not nid:
+                        node = this_node
+                    else:
+                        node = str(nid)
+                    break
+            except Exception:
+                continue
+        return node
+
     def _on_event(self, ev: Event) -> None:
         payload = ev.payload or {}
         text = (payload or {}).get("text")
@@ -32,17 +53,7 @@ class RouterService:
 
         conf = load_config()
         this_node = conf.node_id
-        target_node = this_node
-
-        rule = self._rules[0] if self._rules else None
-        if isinstance(rule, dict):
-            target = rule.get("target") or {}
-            if isinstance(target, dict):
-                node_id = target.get("node_id")
-                if node_id == "this" or not node_id:
-                    target_node = this_node
-                else:
-                    target_node = str(node_id)
+        target_node = self._pick_target_node("stdout", this_node)
 
         if target_node == this_node:
             print_text(text, node_id=this_node, origin={"source": ev.source})
@@ -116,6 +127,50 @@ class RouterService:
         # Subscribe to ui.notify on local event bus
         if not self._subscribed:
             self.bus.subscribe("ui.notify", self._on_event)
+            # ui.say routing (TTS)
+            def _on_say(ev: Event) -> None:
+                payload = ev.payload or {}
+                text = (payload or {}).get("text")
+                if not isinstance(text, str) or not text:
+                    return
+                voice = (payload or {}).get("voice")
+                conf = load_config()
+                this_node = conf.node_id
+                target_node = self._pick_target_node("say", this_node)
+                base_url = self._resolve_node_base_url(target_node, conf.role, conf.hub_url)
+                token = conf.token or "dev-local-token"
+                if base_url and target_node != this_node:
+                    try:
+                        requests.post(
+                            f"{base_url.rstrip('/')}/api/say",
+                            json={"text": text, "voice": voice},
+                            headers={"X-AdaOS-Token": token, "Content-Type": "application/json"},
+                            timeout=3.0,
+                        )
+                        return
+                    except Exception:
+                        pass
+                # local fallback via API if self base_url known, else direct adapter
+                self_url = os.environ.get("ADAOS_SELF_BASE_URL")
+                if self_url:
+                    try:
+                        requests.post(
+                            f"{self_url.rstrip('/')}/api/say",
+                            json={"text": text, "voice": voice},
+                            headers={"X-AdaOS-Token": token, "Content-Type": "application/json"},
+                            timeout=3.0,
+                        )
+                        return
+                    except Exception:
+                        pass
+                try:
+                    mode = get_tts_backend()
+                    adapter = NativeTTS() if mode == "native" else (OVOSTTSAdapter() if mode == "ovos" else RhasspyTTSAdapter())
+                    adapter.say(text)
+                except Exception:
+                    print_text(text, node_id=this_node, origin={"source": ev.source})
+
+            self.bus.subscribe("ui.say", _on_say)
             self._subscribed = True
         # Watch rules file
         def _reload(rules: list[dict]):

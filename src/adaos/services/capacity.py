@@ -77,6 +77,12 @@ def load_capacity_from_node_yaml(base_dir: Path | None = None) -> Dict[str, Any]
             "capabilities": ["text", "lang:ru", "lang:en"],
             "priority": 50,
         })
+    if not any(x.get("io_type") == "say" for x in io_list):
+        io_list.append({
+            "io_type": "say",
+            "capabilities": ["text", "lang:ru", "lang:en"],
+            "priority": 40,
+        })
 
     return {"io": io_list, "skills": skills_list, "scenarios": scenarios_list}
 

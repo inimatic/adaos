@@ -57,3 +57,6 @@ Selection prefers active runtimes and most recent `last_seen`.
 2. Skills install/activate on member → node updates `.adaos/node.yaml` → heartbeat propagates updated capacity → hub persists it.
 3. Hub restarts → restores nodes from SQLite as offline → first heartbeats mark them online again.
 4. Hub receives `/api/tools/call` for a skill not present locally → proxies to an online member with that skill.
+- TTS (“say”): Router also listens to `ui.say` events with payload `{ text, voice? }` and routes them to the target node’s `/api/say`.
+  - Advertise capability via `capacity.io: [{ io_type: "say", capabilities: ["text",...], priority: 40 }]`.
+  - Selection uses the same rule structure with `target.io_type: "say"`.
