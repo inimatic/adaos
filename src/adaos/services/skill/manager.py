@@ -323,6 +323,16 @@ class SkillManager:
         emit(self.bus, "skill.uninstalled", {"id": name}, "skill.mgr")
         try:
             uninstall_skill_from_capacity(name)
+            try:
+                from adaos.services.node_config import load_config
+                from adaos.services.capacity import get_local_capacity
+                from adaos.services.registry.subnet_directory import get_directory
+                conf = load_config()
+                if conf.role == "hub":
+                    cap = get_local_capacity()
+                    get_directory().repo.replace_skill_capacity(conf.node_id, cap.get("skills") or [])
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -497,6 +507,16 @@ class SkillManager:
         self._smoke_import(env=env, name=name, version=target_version)
         try:
             install_skill_in_capacity(name, target_version, active=True)
+            try:
+                from adaos.services.node_config import load_config
+                from adaos.services.capacity import get_local_capacity
+                from adaos.services.registry.subnet_directory import get_directory
+                conf = load_config()
+                if conf.role == "hub":
+                    cap = get_local_capacity()
+                    get_directory().repo.replace_skill_capacity(conf.node_id, cap.get("skills") or [])
+            except Exception:
+                pass
         except Exception:
             pass
         return target_slot
@@ -1549,3 +1569,4 @@ class SkillManager:
             dev_mode=True,
             extra_env=extra_env,
         )
+

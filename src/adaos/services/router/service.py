@@ -7,6 +7,7 @@ import json
 import requests
 
 from adaos.services.eventbus import LocalEventBus
+import logging
 from adaos.domain import Event
 from adaos.services.node_config import load_config
 from .rules_loader import load_rules, watch_rules
@@ -50,7 +51,35 @@ class RouterService:
         # Cross-node delivery: resolve base_url and POST
         base_url = self._resolve_node_base_url(target_node, conf.role, conf.hub_url)
         if not base_url:
-            return
+            # Try fallback to any online node with stdout capability (hub only)
+            if conf.role == "hub":
+                try:
+                    directory = get_directory()
+                    candidates = []
+                    for n in directory.list_known_nodes():
+                        if not n.get("online"):
+                            continue
+                        for io in (n.get("capacity") or {}).get("io", []):
+                            if (io.get("io_type") == "stdout"):
+                                candidates.append((int(io.get("priority") or 50), n))
+                                break
+                    candidates.sort(key=lambda x: x[0], reverse=True)
+                    for _, cand in candidates:
+                        nid = cand.get("node_id")
+                        if not nid:
+                            continue
+                        base_url = self._resolve_node_base_url(str(nid), conf.role, conf.hub_url)
+                        if base_url:
+                            break
+                except Exception:
+                    base_url = None
+            if not base_url:
+                try:
+                    logging.getLogger("adaos.router").warning(f"router: target {target_node} offline/unresolved; fallback to local print")
+                except Exception:
+                    pass
+                print_text(text, node_id=this_node, origin={"source": ev.source})
+                return
         url = f"{base_url.rstrip('/')}/api/io/console/print"
         headers = {"X-AdaOS-Token": conf.token or "dev-local-token", "Content-Type": "application/json"}
         body = {"text": text, "origin": {"source": ev.source, "from": this_node}}

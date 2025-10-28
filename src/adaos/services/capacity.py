@@ -30,8 +30,10 @@ def load_capacity_from_node_yaml(base_dir: Path | None = None) -> Dict[str, Any]
     except Exception:
         data = {}
 
-    # Allow future extensions from node.yaml, but ensure stdout entry exists
+    # Read capacity section: io + skills
     io_list: list[dict[str, Any]] = []
+    skills_list: list[dict[str, Any]] = []
+    scenarios_list: list[dict[str, Any]] = []
     io_cfg = (data or {}).get("capacity") or {}
     raw = io_cfg.get("io") if isinstance(io_cfg, dict) else None
     if isinstance(raw, list):
@@ -42,6 +44,32 @@ def load_capacity_from_node_yaml(base_dir: Path | None = None) -> Dict[str, Any]
                     "capabilities": list(item.get("capabilities") or []),
                     "priority": int(item.get("priority") or 50),
                 })
+    raw_sk = io_cfg.get("skills") if isinstance(io_cfg, dict) else None
+    if isinstance(raw_sk, list):
+        for s in raw_sk:
+            if isinstance(s, dict):
+                name = s.get("name") or s.get("id")
+                if not name:
+                    continue
+                skills_list.append({
+                    "name": str(name),
+                    "version": str(s.get("version") or "unknown"),
+                    "active": bool(s.get("active", True)),
+                    "dev": bool(s.get("dev", False)),
+                })
+    raw_sc = io_cfg.get("scenarios") if isinstance(io_cfg, dict) else None
+    if isinstance(raw_sc, list):
+        for s in raw_sc:
+            if isinstance(s, dict):
+                name = s.get("name") or s.get("id")
+                if not name:
+                    continue
+                scenarios_list.append({
+                    "name": str(name),
+                    "version": str(s.get("version") or "unknown"),
+                    "active": bool(s.get("active", True)),
+                    "dev": bool(s.get("dev", False)),
+                })
 
     if not any(x.get("io_type") == "stdout" for x in io_list):
         io_list.append({
@@ -50,7 +78,7 @@ def load_capacity_from_node_yaml(base_dir: Path | None = None) -> Dict[str, Any]
             "priority": 50,
         })
 
-    return {"io": io_list}
+    return {"io": io_list, "skills": skills_list, "scenarios": scenarios_list}
 
 
 def get_local_capacity() -> Dict[str, Any]:
@@ -88,7 +116,7 @@ def _save_node_yaml(data: Dict[str, Any], base_dir: Path | None = None) -> None:
     path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
-def install_skill_in_capacity(name: str, version: str, *, active: bool = True, base_dir: Path | None = None) -> None:
+def install_skill_in_capacity(name: str, version: str, *, active: bool = True, dev: bool = False, base_dir: Path | None = None) -> None:
     data = _load_node_yaml(base_dir)
     cap = data.setdefault("capacity", {})
     skills: List[Dict[str, Any]] = cap.setdefault("skills", [])  # type: ignore[assignment]
@@ -101,7 +129,12 @@ def install_skill_in_capacity(name: str, version: str, *, active: bool = True, b
             found = True
             break
     if not found:
-        skills.append({"name": name, "version": version, "active": bool(active)})
+        skills.append({"name": name, "version": version, "active": bool(active), "dev": bool(dev)})
+    else:
+        try:
+            s["dev"] = bool(dev)  # type: ignore[name-defined]
+        except Exception:
+            pass
     _save_node_yaml(data, base_dir)
 
 
@@ -110,6 +143,31 @@ def uninstall_skill_from_capacity(name: str, *, base_dir: Path | None = None) ->
     cap = data.setdefault("capacity", {})
     skills: List[Dict[str, Any]] = cap.setdefault("skills", [])  # type: ignore[assignment]
     cap["skills"] = [s for s in skills if not (isinstance(s, dict) and s.get("name") == name)]
+    _save_node_yaml(data, base_dir)
+
+
+def install_scenario_in_capacity(name: str, version: str, *, active: bool = True, dev: bool = False, base_dir: Path | None = None) -> None:
+    data = _load_node_yaml(base_dir)
+    cap = data.setdefault("capacity", {})
+    scenarios: List[Dict[str, Any]] = cap.setdefault("scenarios", [])  # type: ignore[assignment]
+    found = False
+    for s in scenarios:
+        if isinstance(s, dict) and s.get("name") == name:
+            s["version"] = version
+            s["active"] = bool(active)
+            s["dev"] = bool(dev)
+            found = True
+            break
+    if not found:
+        scenarios.append({"name": name, "version": version, "active": bool(active), "dev": bool(dev)})
+    _save_node_yaml(data, base_dir)
+
+
+def uninstall_scenario_from_capacity(name: str, *, base_dir: Path | None = None) -> None:
+    data = _load_node_yaml(base_dir)
+    cap = data.setdefault("capacity", {})
+    scenarios: List[Dict[str, Any]] = cap.setdefault("scenarios", [])  # type: ignore[assignment]
+    cap["scenarios"] = [s for s in scenarios if not (isinstance(s, dict) and s.get("name") == name)]
     _save_node_yaml(data, base_dir)
 
 
@@ -141,4 +199,3 @@ def uninstall_io_from_capacity(io_type: str, *, base_dir: Path | None = None) ->
     io: List[Dict[str, Any]] = cap.setdefault("io", [])  # type: ignore[assignment]
     cap["io"] = [it for it in io if not (isinstance(it, dict) and it.get("io_type") == io_type)]
     _save_node_yaml(data, base_dir)
-

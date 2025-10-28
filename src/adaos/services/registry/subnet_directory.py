@@ -35,6 +35,7 @@ class SubnetDirectory:
         capacity = node_info.get("capacity") or {}
         self.repo.replace_io_capacity(node["node_id"], capacity.get("io") or [])
         self.repo.replace_skill_capacity(node["node_id"], capacity.get("skills") or [])
+        self.repo.replace_scenario_capacity(node["node_id"], capacity.get("scenarios") or [])
         self.live[node["node_id"]] = {"online": True, "last_seen": node["last_seen"]}
 
     def on_heartbeat(self, node_id: str, capacity: Optional[Dict[str, Any]]) -> None:
@@ -72,8 +73,36 @@ class SubnetDirectory:
         for n in self.repo.list_nodes():
             node = dict(n)
             node["online"] = self.is_online(n["node_id"])  # overlay live
+            node["capacity"] = {
+                "io": self.repo.io_for_node(n["node_id"]),
+                "skills": self.repo.skills_for_node(n["node_id"]),
+                "scenarios": self.repo.scenarios_for_node(n["node_id"]),
+            }
             items.append(node)
         return items
+
+    def ingest_snapshot(self, snapshot: List[Dict[str, Any]]) -> None:
+        """Ingest hub-provided nodes snapshot on member.
+        Upserts nodes and replaces per-node capacity.
+        """
+        for item in snapshot or []:
+            node = {
+                "node_id": item.get("node_id"),
+                "subnet_id": item.get("subnet_id"),
+                "roles": list(item.get("roles") or []),
+                "hostname": item.get("hostname"),
+                "base_url": item.get("base_url"),
+                "last_seen": float(item.get("last_seen") or 0.0),
+            }
+            self.repo.upsert_node(node)
+            cap = (item.get("capacity") or {}) if isinstance(item, dict) else {}
+            self.repo.replace_io_capacity(node["node_id"], cap.get("io") or [])
+            self.repo.replace_skill_capacity(node["node_id"], cap.get("skills") or [])
+            # update liveness flag from snapshot
+            st = self.live.get(node["node_id"]) or {}
+            st["online"] = bool(item.get("online", False))
+            st["last_seen"] = node["last_seen"]
+            self.live[node["node_id"]] = st
 
 
 _DIR: SubnetDirectory | None = None
@@ -84,4 +113,3 @@ def get_directory() -> SubnetDirectory:
     if _DIR is None:
         _DIR = SubnetDirectory()
     return _DIR
-
