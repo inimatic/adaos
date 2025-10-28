@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from pydantic import BaseModel, Field
-import platform, time
+import platform, time, os
 
 from adaos.apps.api.auth import require_token
 from adaos.build_info import BUILD_INFO
@@ -62,6 +62,24 @@ async def lifespan(app: FastAPI):
         await router_service.start()
     except Exception:
         pass
+    # hub: seed self node into directory (base_url + capacity)
+    try:
+        conf = load_config()
+        from adaos.services.registry.subnet_directory import get_directory
+        from adaos.services.capacity import get_local_capacity
+        directory = get_directory()
+        base_url = os.environ.get("ADAOS_SELF_BASE_URL")
+        node_item = {
+            "node_id": conf.node_id,
+            "subnet_id": conf.subnet_id,
+            "hostname": platform.node(),
+            "roles": [conf.role],
+            "base_url": base_url,
+            "capacity": get_local_capacity(),
+        }
+        directory.on_register(node_item)
+    except Exception:
+        pass
     # Start directory staler on hub to mark nodes offline after TTL
     try:
         conf = load_config()
@@ -75,6 +93,31 @@ async def lifespan(app: FastAPI):
                     await _asyncio.sleep(5.0)
 
             staler_task = _asyncio.create_task(_staler(), name="subnet-directory-staler")
+        else:
+            # member: periodically fetch snapshot from hub and ingest locally
+            import asyncio as _asyncio
+            import requests as _requests
+
+            async def _pull_snapshot():
+                directory = get_directory()
+                while True:
+                    try:
+                        if conf.hub_url:
+                            url = f"{conf.hub_url.rstrip('/')}/api/subnet/nodes"
+                            r = await _asyncio.to_thread(
+                                _requests.get,
+                                url,
+                                headers={"X-AdaOS-Token": conf.token or "dev-local-token"},
+                                timeout=3.0,
+                            )
+                            if r.status_code == 200:
+                                payload = r.json() or {}
+                                directory.ingest_snapshot(payload.get("nodes") or [])
+                    except Exception:
+                        pass
+                    await _asyncio.sleep(10.0)
+
+            staler_task = _asyncio.create_task(_pull_snapshot(), name="subnet-directory-snapshot-puller")
     except Exception:
         pass
 

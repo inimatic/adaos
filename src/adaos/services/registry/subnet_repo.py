@@ -64,6 +64,25 @@ class SubnetRepo:
                 )
                 """
             )
+            # best-effort add dev flag for existing DBs
+            try:
+                con.execute("ALTER TABLE subnet_capacity_skills ADD COLUMN dev INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
+            # scenarios capacity table
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS subnet_capacity_scenarios (
+                  node_id     TEXT NOT NULL,
+                  name        TEXT NOT NULL,
+                  version     TEXT NOT NULL,
+                  active      INTEGER NOT NULL,
+                  updated_at  REAL NOT NULL,
+                  dev         INTEGER NOT NULL DEFAULT 0,
+                  PRIMARY KEY (node_id, name)
+                )
+                """
+            )
             con.commit()
 
     # -------------------- nodes --------------------
@@ -173,12 +192,13 @@ class SubnetRepo:
                     continue
                 version = str(s.get("version") or "").strip() or "unknown"
                 active = 1 if bool(s.get("active", True)) else 0
+                dev = 1 if bool(s.get("dev", False)) else 0
                 con.execute(
                     """
-                    INSERT INTO subnet_capacity_skills(node_id, name, version, active, updated_at)
-                    VALUES(?,?,?,?,?)
+                    INSERT INTO subnet_capacity_skills(node_id, name, version, active, updated_at, dev)
+                    VALUES(?,?,?,?,?,?)
                     """,
-                    (node_id, name, version, active, now),
+                    (node_id, name, version, active, now, dev),
                 )
             con.commit()
 
@@ -220,6 +240,64 @@ class SubnetRepo:
                         "priority": int(r[2] or 50),
                         "id_hint": r[3],
                         "updated_at": r[4],
+                    }
+                )
+            return out
+
+    def skills_for_node(self, node_id: str) -> List[Dict[str, Any]]:
+        with self.sql.connect() as con:
+            cur = con.execute(
+                "SELECT name, version, active, updated_at, dev FROM subnet_capacity_skills WHERE node_id=?",
+                (node_id,),
+            )
+            out: List[Dict[str, Any]] = []
+            for r in cur.fetchall():
+                out.append(
+                    {
+                        "name": r[0],
+                        "version": r[1],
+                        "active": bool(r[2]),
+                        "updated_at": r[3],
+                        "dev": bool(r[4]) if len(r) > 4 else False,
+                    }
+                )
+            return out
+
+    def replace_scenario_capacity(self, node_id: str, scenarios: List[Dict[str, Any]]) -> None:
+        now = _now()
+        with self.sql.connect() as con:
+            con.execute("DELETE FROM subnet_capacity_scenarios WHERE node_id=?", (node_id,))
+            for s in scenarios or []:
+                name = str(s.get("name") or s.get("id") or "").strip()
+                if not name:
+                    continue
+                version = str(s.get("version") or "").strip() or "unknown"
+                active = 1 if bool(s.get("active", True)) else 0
+                dev = 1 if bool(s.get("dev", False)) else 0
+                con.execute(
+                    """
+                    INSERT INTO subnet_capacity_scenarios(node_id, name, version, active, updated_at, dev)
+                    VALUES(?,?,?,?,?,?)
+                    """,
+                    (node_id, name, version, active, now, dev),
+                )
+            con.commit()
+
+    def scenarios_for_node(self, node_id: str) -> List[Dict[str, Any]]:
+        with self.sql.connect() as con:
+            cur = con.execute(
+                "SELECT name, version, active, updated_at, dev FROM subnet_capacity_scenarios WHERE node_id=?",
+                (node_id,),
+            )
+            out: List[Dict[str, Any]] = []
+            for r in cur.fetchall():
+                out.append(
+                    {
+                        "name": r[0],
+                        "version": r[1],
+                        "active": bool(r[2]),
+                        "updated_at": r[3],
+                        "dev": bool(r[4]) if len(r) > 4 else False,
                     }
                 )
             return out
