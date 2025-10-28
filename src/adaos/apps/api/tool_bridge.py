@@ -25,6 +25,7 @@ class ToolCall(BaseModel):
     arguments: Dict[str, Any] | None = None
     context: Dict[str, Any] | None = None
     timeout: float | None = Field(default=None)
+    dev: bool = Field(default=False, description="Run tool from DEV workspace instead of installed runtime")
     model_config = {"extra": "ignore"}
 
 
@@ -52,7 +53,10 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     trace = attach_http_trace_headers(request.headers, response.headers)
     payload: Dict[str, Any] = body.arguments or {}
     try:
-        result = mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
+        if body.dev:
+            result = mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
+        else:
+            result = mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
     except KeyError as e:
         # неверное имя инструмента или отсутствует дефолтный инструмент
         raise HTTPException(status_code=404, detail=str(e))
