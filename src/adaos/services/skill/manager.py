@@ -766,9 +766,11 @@ class SkillManager:
 
             if execution_timeout:
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+                from contextvars import copy_context
 
                 with ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(_call_tool)
+                    ctxvars = copy_context()
+                    future = pool.submit(lambda: ctxvars.run(_call_tool))
                     try:
                         result = future.result(timeout=execution_timeout)
                     except FuturesTimeoutError as exc:

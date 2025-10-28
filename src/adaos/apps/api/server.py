@@ -14,6 +14,10 @@ from adaos.adapters.audio.tts.native_tts import NativeTTS
 from adaos.apps.bootstrap import bootstrap_app
 from adaos.services.bootstrap import run_boot_sequence, shutdown, is_ready
 from adaos.services.observe import start_observer, stop_observer
+from adaos.services.node_config import load_config
+from adaos.services.router import RouterService
+from adaos.services.agent_context import get_ctx as _get_ctx
+from adaos.services.io_console import print_text
 
 bootstrap_app()
 
@@ -39,20 +43,31 @@ async def lifespan(app: FastAPI):
 
     # 3.5) сохранить ссылки на контекст/шину в state для внешних компонентов
     try:
-        from adaos.services.agent_context import get_ctx as _get_ctx
         app.state.ctx = _get_ctx()
         app.state.bus = app.state.ctx.bus
     except Exception:
         pass
 
+    # 3.6) стартуем RouterService с локальной шиной
+    router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
+    app.state.router_service = router_service
+
     # 4) поднимаем наблюдатель и выполняем boot-последовательность
     await start_observer()
     await run_boot_sequence(app)
+    try:
+        await router_service.start()
+    except Exception:
+        pass
 
     try:
         yield
     finally:
         await stop_observer()
+        try:
+            await router_service.stop()
+        except Exception:
+            pass
         await shutdown()
 
 
@@ -111,6 +126,19 @@ async def say(payload: SayRequest):
     _make_tts().say(payload.text)
     dt = int((time.perf_counter() - t0) * 1000)
     return SayResponse(ok=True, duration_ms=dt)
+
+
+# --- IO console endpoint for cross-node routing ---
+class SayRequestLike(BaseModel):
+    text: str
+    origin: dict | None = None
+
+
+@app.post("/api/io/console/print", dependencies=[Depends(require_token)])
+async def io_console_print(payload: SayRequestLike):
+    conf = load_config()
+    print_text(payload.text, node_id=conf.node_id)
+    return {"ok": True}
 
 
 # --- health endpoints (без авторизации; удобно для оркестраторов/проб) ---

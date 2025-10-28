@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, Dict
 
 from adaos.apps.api.auth import require_token
 from adaos.services.node_config import load_config
@@ -21,6 +21,8 @@ class RegisterRequest(BaseModel):
     subnet_id: str
     hostname: str | None = None
     roles: list[str] | None = None
+    base_url: str | None = None
+    capacity: Dict[str, Any] | None = None
 
 
 class RegisterResponse(BaseModel):
@@ -30,6 +32,7 @@ class RegisterResponse(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     node_id: str
+    capacity: Dict[str, Any] | None = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -65,11 +68,17 @@ async def register(body: RegisterRequest):
     was = reg.get_node(body.node_id)
     reg.register_node(
         body.node_id,
-        meta={"hostname": body.hostname, "roles": body.roles or []},
+        meta={
+            "hostname": body.hostname,
+            "roles": body.roles or [],
+            "subnet_id": body.subnet_id,
+            "base_url": body.base_url,
+            "capacity": body.capacity or {},
+        },
     )
 
     # Сигнализируем о появлении ноды (node.up)
-    if was is None or (isinstance(was, dict) and was.get("status") != "up"):
+    if was is None or getattr(was, "status", None) != "up":
         await bus.emit("net.subnet.node.up", {"node_id": body.node_id}, source="subnet_api", actor="system")
 
     return RegisterResponse(ok=True, lease_seconds=LEASE_SECONDS_DEFAULT)
@@ -89,10 +98,14 @@ async def heartbeat(body: HeartbeatRequest):
     if not info:
         # Неизвестная нода — просим повторную регистрацию
         raise HTTPException(status_code=404, detail="node not registered")
+    # Опционально обновляем capacity
+    try:
+        if body.capacity is not None:
+            info.capacity = dict(body.capacity)
+    except Exception:
+        pass
 
-    # Если статус был 'down' и поднялся в 'up' — шлём node.up
-    if info and isinstance(info, dict) and info.get("status") == "down" and info.status == "up":
-        await bus.emit("net.subnet.node.up", {"node_id": body.node_id}, source="subnet_api", actor="system")
+    # Можно расширить логикой переходов статуса при необходимости
 
     return HeartbeatResponse(ok=True, lease_seconds=LEASE_SECONDS_DEFAULT)
 
@@ -141,7 +154,19 @@ async def nodes_list():
     if conf.role != "hub":
         raise HTTPException(status_code=403, detail="only hub node lists nodes")
     reg = get_subnet_registry()
-    items = [{"node_id": n.node_id, "last_seen": n.last_seen, "status": n.status, "meta": n.meta} for n in reg.list_nodes()]
+    items = [
+        {
+            "node_id": n.node_id,
+            "subnet_id": n.subnet_id,
+            "roles": n.roles,
+            "hostname": n.hostname,
+            "base_url": n.base_url,
+            "last_seen": n.last_seen,
+            "status": n.status,
+            "capacity": n.capacity,
+        }
+        for n in reg.list_nodes()
+    ]
     return {"ok": True, "nodes": items}
 
 
@@ -156,4 +181,14 @@ async def node_get(node_id: str):
     info = get_subnet_registry().get_node(node_id)
     if not info:
         raise HTTPException(status_code=404, detail="node not found")
-    return {"ok": True, "node": info}
+    node = {
+        "node_id": info.node_id,
+        "subnet_id": info.subnet_id,
+        "roles": info.roles,
+        "hostname": info.hostname,
+        "base_url": info.base_url,
+        "last_seen": info.last_seen,
+        "status": info.status,
+        "capacity": info.capacity,
+    }
+    return {"ok": True, "node": node}

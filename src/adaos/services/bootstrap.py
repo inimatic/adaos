@@ -176,6 +176,7 @@ class BootstrapService:
         try:
             if hasattr(self._io_bus, "subscribe_output"):
                 from adaos.integrations.telegram.sender import TelegramSender
+
                 bot_id = "main-bot"  # one-bot assumption for MVP
                 sender = TelegramSender(bot_id)
 
@@ -183,6 +184,7 @@ class BootstrapService:
                     import json as _json
                     from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
                     from adaos.services.chat_io import telemetry as tm
+
                     try:
                         payload = _json.loads(data.decode("utf-8"))
                         # payload may already match ChatOutputEvent schema
@@ -194,7 +196,7 @@ class BootstrapService:
                     except Exception as e:
                         # On error, emit DLQ if possible
                         try:
-                            dlq_env = {"error": str(e), "subject": subject, "data": payload if 'payload' in locals() else None}
+                            dlq_env = {"error": str(e), "subject": subject, "data": payload if "payload" in locals() else None}
                             if hasattr(self._io_bus, "publish_dlq"):
                                 await self._io_bus.publish_dlq("output", dlq_env)
                         except Exception:

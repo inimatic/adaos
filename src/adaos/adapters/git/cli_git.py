@@ -17,6 +17,7 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
         cwd = str(Path(cwd))  # единая точка приведения к str
     p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     # TODO Проверить, git нет, но папка не пустая. Вместо операции c git даем дружественную ошибку
+    # destination path 'C:\git\MUIV\adaos_test\adaos\.adaos_1\workspace' already exists and is not an empty directory
     if p.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed: {p.stderr.strip()}")
     return p.stdout.strip()
