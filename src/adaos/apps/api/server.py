@@ -16,6 +16,7 @@ from adaos.services.bootstrap import run_boot_sequence, shutdown, is_ready
 from adaos.services.observe import start_observer, stop_observer
 from adaos.services.node_config import load_config
 from adaos.services.router import RouterService
+from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.agent_context import get_ctx as _get_ctx
 from adaos.services.io_console import print_text
 
@@ -51,12 +52,29 @@ async def lifespan(app: FastAPI):
     # 3.6) стартуем RouterService с локальной шиной
     router_service = RouterService(eventbus=app.state.bus, base_dir=app.state.ctx.paths.base_dir())
     app.state.router_service = router_service
+    # Periodic liveness staler (hub only)
+    staler_task = None
 
     # 4) поднимаем наблюдатель и выполняем boot-последовательность
     await start_observer()
     await run_boot_sequence(app)
     try:
         await router_service.start()
+    except Exception:
+        pass
+    # Start directory staler on hub to mark nodes offline after TTL
+    try:
+        conf = load_config()
+        if conf.role == "hub":
+            import asyncio as _asyncio
+
+            async def _staler():
+                directory = get_directory()
+                while True:
+                    directory.mark_stale_if_expired(45.0)
+                    await _asyncio.sleep(5.0)
+
+            staler_task = _asyncio.create_task(_staler(), name="subnet-directory-staler")
     except Exception:
         pass
 
@@ -66,6 +84,11 @@ async def lifespan(app: FastAPI):
         await stop_observer()
         try:
             await router_service.stop()
+        except Exception:
+            pass
+        try:
+            if staler_task:
+                staler_task.cancel()
         except Exception:
             pass
         await shutdown()
