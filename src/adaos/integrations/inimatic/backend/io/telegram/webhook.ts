@@ -19,11 +19,22 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 			const expected = process.env['TG_SECRET_TOKEN']
 			const header = String(req.header('X-Telegram-Bot-Api-Secret-Token') || '')
 			if (expected && header !== expected) {
+				log.warn({ have_header: !!header }, 'tg webhook: invalid secret token')
 				return res.status(401).json({ error: 'invalid_secret' })
 			}
 
 			const bot_id = String(req.params['bot_id'])
 			const update = req.body
+			// minimal diagnostics for incoming webhook
+			try {
+				const updType = update?.message ? 'message' : (update?.edited_message ? 'edited_message' : (update?.callback_query ? 'callback_query' : 'unknown'))
+				const chat_id = update?.message?.chat?.id || update?.edited_message?.chat?.id || update?.callback_query?.message?.chat?.id
+				const user_id = update?.message?.from?.id || update?.edited_message?.from?.id || update?.callback_query?.from?.id
+				const text = update?.message?.text || update?.edited_message?.text || update?.callback_query?.data
+				log.info({ bot_id, updType, update_id: update?.update_id, chat_id: chat_id ? String(chat_id) : undefined, user_id: user_id ? String(user_id) : undefined, has_text: !!text }, 'tg webhook: received')
+			} catch (e) {
+				log.warn({ err: String(e) }, 'tg webhook: failed to log envelope')
+			}
 			const evt = toInputEvent(bot_id, update, null)
 			tg_updates_total.inc({ type: evt.type })
 
@@ -130,6 +141,7 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 								}
 								try {
 									await bus.publishSubject(subject, out)
+									log.info({ subject, hub_id: hubId, chat_id: String(evt.chat_id) }, 'welcome sent via bus')
 								} catch (e) {
 									log.warn({ bot_id, update_id: evt.update_id, err: String(e) }, 'welcome publish via bus failed')
 								}
@@ -181,17 +193,18 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 					if (base) {
 						const path = `/io/bus/tg.input.${hub}`
 						const url = (new URL(path, base)).toString()
-						const { request } = await import('undici')
-						const token = process.env['ADAOS_TOKEN'] || ''
-						const resp = await request(url, {
+							const { request } = await import('undici')
+							const token = process.env['ADAOS_TOKEN'] || ''
+							const resp = await request(url, {
 							method: 'POST',
 							headers: { 'content-type': 'application/json', ...(token ? { 'X-AdaOS-Token': token } : {}) },
 							body: JSON.stringify(evt),
 						})
-						if (resp.statusCode >= 200 && resp.statusCode < 300) {
-							status = 200
-							body = { ok: true, routed: true }
-						}
+							if (resp.statusCode >= 200 && resp.statusCode < 300) {
+								log.info({ url, hub, bot_id }, 'http fallback to hub: routed')
+								status = 200
+								body = { ok: true, routed: true }
+							}
 					}
 				} catch (e) {
 					log.error({ bot_id, hub_id: hub, update_id: evt.update_id, err: String(e) }, 'http fallback to hub failed')
