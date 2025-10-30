@@ -1,6 +1,6 @@
 // src\adaos\integrations\inimatic\backend\io\pairing\api.ts
 import express from 'express'
-import { pairConfirm, pairCreate, pairGet, pairRevoke, bindingUpsert } from './store.js'
+import { pairConfirm, pairCreate, pairGet, pairRevoke, bindingUpsert, tgLinkGet } from './store.js'
 
 export function installPairingApi(app: express.Express) {
 	app.post('/io/tg/pair/create', async (req, res) => {
@@ -34,11 +34,19 @@ export function installPairingApi(app: express.Express) {
 		res.json({ ok: true, state: rec.state, expires_in: ttl })
 	})
 
-	app.post('/io/tg/pair/revoke', async (req, res) => {
-		const code = String(req.body?.code || req.query['code'] || '')
-		if (!code) return res.status(400).json({ error: 'code_required' })
-		const ok = await pairRevoke(code)
-		res.json({ ok })
+  app.post('/io/tg/pair/revoke', async (req, res) => {
+    const code = String(req.body?.code || req.query['code'] || '')
+    if (!code) return res.status(400).json({ error: 'code_required' })
+    const ok = await pairRevoke(code)
+    res.json({ ok })
+  })
+
+	// Debug/diagnostic: check hub→telegram link presence
+	app.get('/io/tg/pair/link', async (req, res) => {
+		const hub_id = String(req.query['hub_id'] || '')
+		if (!hub_id) return res.status(400).json({ error: 'hub_id_required' })
+		const link = await tgLinkGet(hub_id)
+		if (!link) return res.status(404).json({ ok: false, error: 'pairing_not_found', hub_id })
+		return res.json({ ok: true, link })
 	})
 }
-

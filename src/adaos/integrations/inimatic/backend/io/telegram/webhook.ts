@@ -119,6 +119,7 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 							await bindingUpsert('telegram', evt.user_id, bot_id, hubId)
 							// store simplified hub→chat link for outbound
 							await tgLinkSet(hubId, String(evt.user_id), bot_id, String(evt.chat_id))
+							log.info({ hub_id: hubId, bot_id, chat_id: String(evt.chat_id) }, 'telegram pairing linked')
 							// Send welcome message right after successful pairing
 							if (bus) {
 								const subject = `tg.output.${bot_id}.chat.${evt.chat_id}`
