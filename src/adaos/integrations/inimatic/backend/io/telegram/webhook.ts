@@ -119,6 +119,11 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 						} catch (e) {
 							log.error({ bot_id, update_id: evt.update_id, err: String(e) }, 'remote pairConfirm error')
 						}
+						// Fallback to local confirm if remote failed to return hubId
+						if (!hubId) {
+							const rec = await pairConfirm(code)
+							if (rec && rec.state === 'confirmed') hubId = rec.hub_id || undefined
+						}
 					} else {
 						const rec = await pairConfirm(code)
 						if (rec && rec.state === 'confirmed') hubId = rec.hub_id || undefined

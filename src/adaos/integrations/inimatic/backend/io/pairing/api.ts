@@ -1,6 +1,6 @@
 // src\adaos\integrations\inimatic\backend\io\pairing\api.ts
 import express from 'express'
-import { pairConfirm, pairCreate, pairGet, pairRevoke, bindingUpsert, tgLinkGet } from './store.js'
+import { pairConfirm, pairCreate, pairGet, pairRevoke, bindingUpsert, tgLinkGet, tgLinkSet } from './store.js'
 
 export function installPairingApi(app: express.Express) {
 	app.post('/io/tg/pair/create', async (req, res) => {
@@ -12,6 +12,15 @@ export function installPairingApi(app: express.Express) {
 		res.json({ ok: true, pair_code: rec.code, deep_link, expires_at: rec.expires_at })
 	})
 
+	// alias under /v1 for clients using the old path
+	app.post('/v1/pair/create', async (req, res) => {
+		const hub = typeof req.query['hub'] === 'string' ? (req.query['hub'] as string) : undefined
+		const ttl = Number.parseInt(String(req.query['ttl'] ?? '600'), 10) || 600
+		const bot = typeof req.query['bot'] === 'string' ? (req.query['bot'] as string) : (process.env['BOT_ID'] || 'main-bot')
+		const rec = await pairCreate(bot, hub, ttl)
+		res.json({ ok: true, pair_code: rec.code, expires_at: rec.expires_at })
+	})
+
 	app.post('/io/tg/pair/confirm', async (req, res) => {
 		const code = String(req.body?.code || req.query['code'] || '')
 		if (!code) return res.status(400).json({ error: 'code_required' })
@@ -19,9 +28,33 @@ export function installPairingApi(app: express.Express) {
 		if (!rec) return res.status(404).json({ ok: false, error: 'not_found' })
 		if (rec.state === 'expired') return res.status(400).json({ ok: false, error: 'expired' })
 		if (rec.state === 'revoked') return res.status(400).json({ ok: false, error: 'revoked' })
-		const user_id = String(req.body?.user_id || req.query['user_id'] || '')
+		// allow treating user_id as hub_id as per MVP
+		const user_id = String(req.body?.user_id || req.query['user_id'] || rec.hub_id || '')
 		const bot_id = String(req.body?.bot_id || req.query['bot_id'] || rec.bot_id || '')
 		const binding = await bindingUpsert('telegram', user_id, bot_id, rec.hub_id)
+		// optional: if chat_id is provided explicitly, persist hub→chat link now
+		const chat_id = (req.body?.chat_id || req.query['chat_id']) as string | undefined
+		if (chat_id && rec.hub_id) {
+			try { await tgLinkSet(rec.hub_id, user_id || rec.hub_id!, bot_id, String(chat_id)) } catch {}
+		}
+		res.json({ ok: true, hub_id: binding.hub_id, ada_user_id: binding.ada_user_id })
+	})
+
+	// alias under /v1 for clients using the old path
+	app.post('/v1/pair/confirm', async (req, res) => {
+		const code = String(req.body?.code || req.query['code'] || '')
+		if (!code) return res.status(400).json({ error: 'code_required' })
+		const rec = await pairConfirm(code)
+		if (!rec) return res.status(404).json({ ok: false, error: 'not_found' })
+		if (rec.state === 'expired') return res.status(400).json({ ok: false, error: 'expired' })
+		if (rec.state === 'revoked') return res.status(400).json({ ok: false, error: 'revoked' })
+		const user_id = String(req.body?.user_id || req.query['user_id'] || rec.hub_id || '')
+		const bot_id = String(req.body?.bot_id || req.query['bot_id'] || rec.bot_id || '')
+		const binding = await bindingUpsert('telegram', user_id, bot_id, rec.hub_id)
+		const chat_id = (req.body?.chat_id || req.query['chat_id']) as string | undefined
+		if (chat_id && rec.hub_id) {
+			try { await tgLinkSet(rec.hub_id, user_id || rec.hub_id!, bot_id, String(chat_id)) } catch {}
+		}
 		res.json({ ok: true, hub_id: binding.hub_id, ada_user_id: binding.ada_user_id })
 	})
 
