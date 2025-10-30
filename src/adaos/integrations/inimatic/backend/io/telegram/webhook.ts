@@ -9,7 +9,7 @@ import { pairConfirm, tgLinkSet } from '../pairing/store.js'
 import { NatsBus } from '../bus/nats.js'
 import { randomUUID } from 'crypto'
 import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
-import { loadRootSettings, makeRootDispatcher } from '../root/settings.js'
+// Local pairing only: resolve hub_id by locally issued code (pairCreate/pairConfirm)
 
 const log = pino({ name: 'tg-webhook' })
 
@@ -97,37 +97,10 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 				if (code) {
 					let hubId: string | undefined
 
-					// Prefer external RootSettings endpoint if configured
-					const rs = loadRootSettings()
-					if (rs) {
-						try {
-							const url = new URL(rs.tgPairingPath, rs.baseUrl).toString()
-							const dispatcher = makeRootDispatcher(rs)
-							const { request } = await import('undici')
-							const resp = await request(url, {
-								method: 'POST',
-								headers: { 'content-type': 'application/json' },
-								body: JSON.stringify({ code, user_id: evt.user_id, bot_id }),
-								dispatcher,
-							})
-							if (resp.statusCode >= 200 && resp.statusCode < 300) {
-								const data: any = await resp.body.json()
-								hubId = data?.hub_id || undefined
-							} else {
-								log.warn({ bot_id, update_id: evt.update_id, status: resp.statusCode }, 'remote pairConfirm failed')
-							}
-						} catch (e) {
-							log.error({ bot_id, update_id: evt.update_id, err: String(e) }, 'remote pairConfirm error')
-						}
-						// Fallback to local confirm if remote failed to return hubId
-						if (!hubId) {
-							const rec = await pairConfirm(code)
-							if (rec && rec.state === 'confirmed') hubId = rec.hub_id || undefined
-						}
-					} else {
-						const rec = await pairConfirm(code)
-						if (rec && rec.state === 'confirmed') hubId = rec.hub_id || undefined
-					}
+					// Local confirm: find locally issued pair and resolve hub_id
+					const rec = await pairConfirm(code)
+					if (rec && rec.state === 'confirmed') hubId = rec.hub_id || undefined
+					else log.warn({ bot_id, update_id: evt.update_id }, 'local pairConfirm failed or missing hub_id')
 
 					if (hubId) {
 						try {
