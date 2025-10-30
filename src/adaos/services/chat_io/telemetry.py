@@ -1,3 +1,4 @@
+# src\adaos\services\chat_io\telemetry.py
 from __future__ import annotations
 
 """Telemetry helpers for chat IO (MVP in-memory counters)."""
@@ -21,4 +22,3 @@ def snapshot() -> Dict[str, float]:
             label_str = ",".join(f"{k}={v}" for k, v in labels)
             out[f"{metric}{{{label_str}}}"] = val
     return out
-

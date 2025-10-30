@@ -1,3 +1,4 @@
+# src\adaos\services\chat_io\router.py
 from __future__ import annotations
 
 """Routing helpers for chat IO (placeholder).
@@ -40,7 +41,7 @@ def resolve_hub_id(*, platform: str, user_id: str, bot_id: str, locale: Optional
     # 1) binding lookup
     b = sqlite_db.get_binding_by_user(platform, user_id, bot_id)
     if b and b.get("hub_id"):
-        _cache_set(user_id, b["hub_id"]) 
+        _cache_set(user_id, b["hub_id"])
         return b["hub_id"]
 
     # 2) route rules

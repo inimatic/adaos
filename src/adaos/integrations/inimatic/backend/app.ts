@@ -579,24 +579,24 @@ app.get('/healthz', (_req, res) => {
 })
 
 app.get('/v1/health', (_req, res) => {
-    res.json({
-        ok: true,
-        version: buildInfo.version,
-        build_date: buildInfo.buildDate,
-        commit: buildInfo.commit,
-        time: new Date().toISOString(),
-    })
+	res.json({
+		ok: true,
+		version: buildInfo.version,
+		build_date: buildInfo.buildDate,
+		commit: buildInfo.commit,
+		time: new Date().toISOString(),
+	})
 })
 
 // Prometheus metrics endpoint
 import client from 'prom-client'
 app.get('/metrics', async (_req, res) => {
-    try {
-        res.set('Content-Type', client.register.contentType)
-        res.send(await client.register.metrics())
-    } catch (e) {
-        res.status(500).send(String(e))
-    }
+	try {
+		res.set('Content-Type', client.register.contentType)
+		res.send(await client.register.metrics())
+	} catch (e) {
+		res.status(500).send(String(e))
+	}
 })
 
 const rootRouter = express.Router()
@@ -805,51 +805,62 @@ app.use('/v1', rootRouter)
 // --- IO (Telegram) wiring ---
 let ioBus: NatsBus | null = null
 if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.env['NATS_URL']) {
-    try {
-        ioBus = new NatsBus(process.env['NATS_URL']!)
-        await ioBus.connect()
-        console.log(`[io] NATS connected at ${process.env['NATS_URL']}`)
-        // subscribe to outbound for a single configured bot
-        const botId = process.env['BOT_ID'] || 'main-bot'
-        const { TelegramSender } = await import('./io/telegram/sender.js')
-        const sender = new TelegramSender(process.env['TG_BOT_TOKEN'] || '')
-        await ioBus.subscribe_output(botId, async (_subject, data) => {
-            try {
-                const payload = JSON.parse(new TextDecoder().decode(data))
-                await sender.send(payload)
-            } catch (e) {
-                try { await ioBus!.publish_dlq('output', { error: String(e) }) } catch {}
-            }
-        })
-    } catch (e) {
-        console.error('[io] NATS init failed', e)
-        ioBus = null
-    }
+	try {
+		ioBus = new NatsBus(process.env['NATS_URL']!)
+		await ioBus.connect()
+		console.log(`[io] NATS connected at ${process.env['NATS_URL']}`)
+		// subscribe to outbound for a single configured bot
+		const botId = process.env['BOT_ID'] || 'main-bot'
+		const { TelegramSender } = await import('./io/telegram/sender.js')
+		const sender = new TelegramSender(process.env['TG_BOT_TOKEN'] || '')
+		await ioBus.subscribe_output(botId, async (_subject, data) => {
+			try {
+				const payload = JSON.parse(new TextDecoder().decode(data))
+				await sender.send(payload)
+			} catch (e) {
+				try { await ioBus!.publish_dlq('output', { error: String(e) }) } catch { }
+			}
+		})
+	} catch (e) {
+		console.error('[io] NATS init failed', e)
+		ioBus = null
+	}
 }
 installTelegramWebhookRoutes(app, ioBus)
 installPairingApi(app)
 
-// Simple dev endpoint to send a message to a Telegram chat via NATS -> TelegramSender
+// Send a message to Telegram resolving hub_id -> chat_id/bot_id via pairing store
 app.post('/io/tg/send', async (req, res) => {
-    try {
-        if (!ioBus) return res.status(503).json({ ok: false, error: 'io_bus_unavailable' })
-        const bot_id = typeof req.body?.bot_id === 'string' && req.body.bot_id ? req.body.bot_id : (process.env['BOT_ID'] || 'main-bot')
-        const chat_id = String((req.body as any)?.chat_id || '')
-        const text = String((req.body as any)?.text || '')
-        if (!chat_id) return res.status(400).json({ ok: false, error: 'chat_id_required' })
-        if (!text) return res.status(400).json({ ok: false, error: 'text_required' })
+	try {
+		const text = String((req.body as any)?.text || '')
+		const hub_id = String((req.body as any)?.hub_id || '')
+		const explicitBot = typeof req.body?.bot_id === 'string' ? String(req.body.bot_id) : ''
+		const explicitChat = typeof req.body?.chat_id === 'string' ? String(req.body.chat_id) : ''
+		if (!hub_id && !explicitChat) return res.status(400).json({ ok: false, error: 'hub_id_or_chat_id_required' })
+		if (!text) return res.status(400).json({ ok: false, error: 'text_required' })
 
-        const payload = {
-            target: { bot_id, hub_id: (req.body as any)?.hub_id || (process.env['DEFAULT_HUB'] || 'hub-a'), chat_id },
-            messages: [{ type: 'text', text }],
-        }
-        const subject = `tg.output.${bot_id}.chat.${chat_id}`
-        await ioBus.publishSubject(subject, payload)
-        return res.status(202).json({ ok: true, subject })
-    } catch (e) {
-        console.error('tg/send failed', e)
-        return res.status(500).json({ ok: false })
-    }
+		let bot_id = explicitBot || (process.env['BOT_ID'] || 'adaos_bot')
+		let chat_id = explicitChat
+		if (!chat_id) {
+			const { tgLinkGet } = await import('./io/pairing/store.js')
+			const link = await tgLinkGet(hub_id)
+			if (!link) return res.status(404).json({ ok: false, error: 'pairing_not_found', hub_id })
+			chat_id = link.chat_id
+			if (!explicitBot) bot_id = link.bot_id || bot_id
+		}
+
+		if (!ioBus) return res.status(503).json({ ok: false, error: 'io_bus_unavailable' })
+		const payload = {
+			target: { bot_id, hub_id: hub_id || (process.env['DEFAULT_HUB'] || 'hub-a'), chat_id },
+			messages: [{ type: 'text', text }],
+		}
+		const subject = `tg.output.${bot_id}.chat.${chat_id}`
+		await ioBus.publishSubject(subject, payload)
+		return res.status(202).json({ ok: true, subject })
+	} catch (e) {
+		console.error('tg/send failed', e)
+		return res.status(500).json({ ok: false })
+	}
 })
 
 app.post('/v1/bootstrap_token', async (req, res) => {

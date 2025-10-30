@@ -5,7 +5,7 @@ import { getFilePath, downloadFile, convertOpusToWav16k } from './media.js'
 import { resolveHubId } from '../router/resolve.js'
 import { idemGet, idemPut } from '../idem/kv.js'
 import { extractStartCode } from './pairing.js'
-import { pairConfirm } from '../pairing/store.js'
+import { pairConfirm, tgLinkSet } from '../pairing/store.js'
 import { NatsBus } from '../bus/nats.js'
 import { randomUUID } from 'crypto'
 import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
@@ -117,6 +117,8 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 						try {
 							const { bindingUpsert } = await import('../pairing/store.js')
 							await bindingUpsert('telegram', evt.user_id, bot_id, hubId)
+							// store simplified hub→chat link for outbound
+							await tgLinkSet(hubId, String(evt.user_id), bot_id, String(evt.chat_id))
 							// Send welcome message right after successful pairing
 							if (bus) {
 								const subject = `tg.output.${bot_id}.chat.${evt.chat_id}`
@@ -170,6 +172,28 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 				} catch (e) {
 					log.error({ bot_id, hub_id: hub, update_id: evt.update_id, err: String(e) }, 'publish_input failed')
 					await bus.publish_dlq('input', { error: 'publish_failed', envelope })
+				}
+			} else if (hub) {
+				// HTTP fallback to hub if bus is unavailable
+				try {
+					const base = process.env['HUB_BASE_URL'] || process.env['ADAOS_HUB_API_BASE'] // should include protocol and optional /api
+					if (base) {
+						const path = `/io/bus/tg.input.${hub}`
+						const url = (new URL(path, base)).toString()
+						const { request } = await import('undici')
+						const token = process.env['ADAOS_TOKEN'] || ''
+						const resp = await request(url, {
+							method: 'POST',
+							headers: { 'content-type': 'application/json', ...(token ? { 'X-AdaOS-Token': token } : {}) },
+							body: JSON.stringify(evt),
+						})
+						if (resp.statusCode >= 200 && resp.statusCode < 300) {
+							status = 200
+							body = { ok: true, routed: true }
+						}
+					}
+				} catch (e) {
+					log.error({ bot_id, hub_id: hub, update_id: evt.update_id, err: String(e) }, 'http fallback to hub failed')
 				}
 			}
 

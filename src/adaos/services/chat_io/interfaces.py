@@ -1,3 +1,4 @@
+# src\adaos\services\chat_io\interfaces.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, Optional, Dict, Any, List, Mapping

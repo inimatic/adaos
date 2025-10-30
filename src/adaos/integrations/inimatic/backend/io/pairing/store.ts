@@ -74,3 +74,17 @@ export async function bindingGet(platform: string, user_id: string, bot_id: stri
   return raw ? (JSON.parse(raw) as Binding) : null
 }
 
+// Telegram hub↔chat link by hub_id to simplify outbound sending
+export type TgLink = { hub_id: string; owner_id: string; bot_id: string; chat_id: string; updated_at: number }
+
+export async function tgLinkSet(hub_id: string, owner_id: string, bot_id: string, chat_id: string): Promise<TgLink> {
+  const key = `tgpair:${hub_id}`
+  const rec: TgLink = { hub_id, owner_id, bot_id, chat_id, updated_at: Math.floor(Date.now() / 1000) }
+  await redis.set(key, JSON.stringify(rec))
+  return rec
+}
+
+export async function tgLinkGet(hub_id: string): Promise<TgLink | null> {
+  const raw = await redis.get(`tgpair:${hub_id}`)
+  return raw ? (JSON.parse(raw) as TgLink) : null
+}
