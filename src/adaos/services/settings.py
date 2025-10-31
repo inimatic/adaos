@@ -129,7 +129,7 @@ class Settings:
                 pass
 
         # читаем поля из node.yaml (могут отсутствовать)
-        owner_id = node_cfg.get("owner_id")
+        owner_id = node_cfg["root"]["root"]["root"]
         subnet_id = node_cfg.get("subnet_id")
         root_cfg = node_cfg.get("root") or {}
         api_base = root_cfg.get("api_base") or "https://api.inimatic.com"
@@ -139,8 +139,6 @@ class Settings:
         dev_scenarios_dirname = dev_cfg.get("scenarios_dirname") or "scenarios"
 
         # --- ENV/.env имеют приоритет над node.yaml ---
-        owner_id = pick_env("ADAOS_OWNER_ID", owner_id or None) or owner_id
-        subnet_id = pick_env("ADAOS_SUBNET_ID", subnet_id or None) or subnet_id
         api_base = pick_env("ADAOS_API_BASE", api_base) or api_base
         app_base = pick_env("ADAOS_APP_BASE", app_base) or app_base
         dev_skills_dirname = pick_env("ADAOS_DEV_SKILLS_DIRNAME", dev_skills_dirname) or dev_skills_dirname

@@ -14,6 +14,7 @@ import typer
 load_dotenv(find_dotenv())
 
 from adaos.sdk.manage.environment import prepare_environment
+from adaos.apps.bootstrap import bootstrap_app
 
 # контекст и настройки (PR-2)
 from adaos.services.settings import Settings
@@ -33,6 +34,9 @@ from adaos.apps.cli.commands import sandbox as sandbox_cmd
 
 app = typer.Typer(help=_("cli.help"))
 
+bootstrap_app()
+ctx = get_ctx()
+print("ctx.settings.owner_id", ctx.settings.owner_id)
 # -------- вспомогательные --------
 
 

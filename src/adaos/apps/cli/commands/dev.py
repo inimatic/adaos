@@ -209,31 +209,18 @@ def _echo_login_result(result: RootLoginResult) -> None:
     typer.echo(f"Workspace: {_display_path(result.workspace_path)}")
 
 
-@app.command("login")
+@app.command("login-tg")
 def dev_login(
-    telegram: bool = typer.Option(False, "--telegram", help="Login via Telegram pairing (create a pair code)."),
-    hub: Optional[str] = typer.Option(None, "--hub", help="Preferred hub id for binding."),
-    ttl: int = typer.Option(600, "--ttl", help="Pair code TTL in seconds."),
     status: Optional[str] = typer.Option(None, "--status", help="Check pairing status for code."),
     revoke: Optional[str] = typer.Option(None, "--revoke", help="Revoke pairing code."),
-    api_base: str = typer.Option("http://127.0.0.1:8000", "--api", help="API base URL for webhooks service."),
 ):
     ctx = get_ctx()
-
-    if not telegram:
-        typer.echo("Use --telegram to start Telegram pairing.")
-        raise typer.Exit(0)
-    try:
-        import requests
-    except Exception:
-        _print_error("'requests' is required for --telegram flow.")
-        raise typer.Exit(1)
 
     client = RootHttpClient.from_settings(
         ctx.settings,
     )
-
-    base = getattr(ctx.settings, "api_base", None) or api_base
+    base = ctx.settings.api_base
+    hub = ctx.settings.owner_id
     if status:
         data = client.request("GET", f"{base}/io/tg/pair/status", params={"code": status})
         typer.echo(data)
@@ -242,7 +229,8 @@ def dev_login(
         data = client.request("GET", f"{base}/io/tg/pair/revoke", params={"code": revoke})
         typer.echo(data)
         raise typer.Exit(0)
-    data = client.request("POST", f"{base}/io/tg/pair/create", params={"hub": hub, "ttl": ttl})
+    print("hub_log", hub)
+    data = client.request("POST", f"{base}/io/tg/pair/create", params={"code": "PING", "hub_id": hub})
     # TODO Перенести обработку ошибок из метода _request на уровень  логики.
     """ if resp.status_code != 200:
         _print_error(f"API error: {resp.status_code} {resp.text}")
