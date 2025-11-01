@@ -133,8 +133,8 @@ class Settings:
         root_cfg = node_cfg.get("root") or {}
         api_base = root_cfg.get("api_base") or "https://api.inimatic.com"
         app_base = root_cfg.get("app_base") or "https://app.inimatic.com"
-        owner_cfg = root_cfg["owner"] or {}
-        owner_id = owner_cfg["owner_id"] or None
+        owner_cfg = root_cfg.get("owner") or {}
+        owner_id = owner_cfg.get("owner_id") or None
         dev_cfg = node_cfg.get("dev") or {}
         dev_skills_dirname = dev_cfg.get("skills_dirname") or "skills"
         dev_scenarios_dirname = dev_cfg.get("scenarios_dirname") or "scenarios"
