@@ -213,6 +213,7 @@ def _echo_login_result(result: RootLoginResult) -> None:
 def dev_login(
     status: Optional[str] = typer.Option(None, "--status", help="Check pairing status for code."),
     revoke: Optional[str] = typer.Option(None, "--revoke", help="Revoke pairing code."),
+    hub: Optional[str] = typer.Option(None, "--hub", help="Explicit hub id to bind (overrides defaults)."),
 ):
     ctx = get_ctx()
 
@@ -220,7 +221,8 @@ def dev_login(
         ctx.settings,
     )
     base = ctx.settings.api_base
-    hub = ctx.settings.owner_id
+    # Prefer explicit CLI option, then configured default_hub, then subnet_id, then owner_id as a last resort
+    hub_id = hub or ctx.settings.default_hub or ctx.settings.subnet_id or ctx.settings.owner_id
     if status:
         data = client.request("GET", f"{base}/io/tg/pair/status", params={"code": status})
         typer.echo(data)
@@ -229,8 +231,9 @@ def dev_login(
         data = client.request("GET", f"{base}/io/tg/pair/revoke", params={"code": revoke})
         typer.echo(data)
         raise typer.Exit(0)
-    print("hub_log", hub)
-    data = client.request("POST", f"{base}/io/tg/pair/create", params={"code": "PING", "hub_id": hub})
+    print("hub_log", hub_id)
+    # Send hub id in JSON body using the expected key; avoid query param 'hub_id' which backend ignores
+    data = client.request("POST", f"{base}/io/tg/pair/create", json={"code": "PING", "hub_id": hub_id})
     # TODO Перенести обработку ошибок из метода _request на уровень  логики.
     """ if resp.status_code != 200:
         _print_error(f"API error: {resp.status_code} {resp.text}")
