@@ -63,16 +63,19 @@ class RouterService:
 
         conf = load_config()
         this_node = conf.node_id
-        # Prefer explicit telegram IO if a rule exists; otherwise default to stdout
+        # Multi-target routing: attempt telegram and stdout independently if rules exist
+        did_any = False
+
+        # Telegram route (if configured in rules)
         if self._has_rule_for("telegram"):
-            target_node = self._pick_target_node("telegram", this_node)
+            target_node_tg = self._pick_target_node("telegram", this_node)
             try:
                 # Resolve hub_id for target node
-                if target_node == this_node:
+                if target_node_tg == this_node:
                     hub_id = conf.subnet_id
                 else:
                     directory = get_directory()
-                    node = directory.get_node(target_node)
+                    node = directory.get_node(target_node_tg)
                     hub_id = (node or {}).get("subnet_id")
                 if not hub_id:
                     raise RuntimeError("hub_id unresolved for telegram routing")
@@ -82,56 +85,65 @@ class RouterService:
                 url = f"{api_base.rstrip('/')}/io/tg/send"
                 body = {"hub_id": hub_id, "text": text}
                 requests.post(url, json=body, headers={"Content-Type": "application/json"}, timeout=3.0)
+                did_any = True
             except Exception:
-                # fallback to local print on any error
-                print_text(text, node_id=this_node, origin={"source": ev.source})
-            return
-
-        # Default stdout routing
-        target_node = self._pick_target_node("stdout", this_node)
-        if target_node == this_node:
-            print_text(text, node_id=this_node, origin={"source": ev.source})
-            return
-
-        # Cross-node delivery: resolve base_url and POST
-        base_url = self._resolve_node_base_url(target_node, conf.role, conf.hub_url)
-        if not base_url:
-            # Try fallback to any online node with stdout capability (hub only)
-            if conf.role == "hub":
+                # swallow to allow stdout route below
                 try:
-                    directory = get_directory()
-                    candidates = []
-                    for n in directory.list_known_nodes():
-                        if not n.get("online"):
-                            continue
-                        for io in (n.get("capacity") or {}).get("io", []):
-                            if (io.get("io_type") == "stdout"):
-                                candidates.append((int(io.get("priority") or 50), n))
-                                break
-                    candidates.sort(key=lambda x: x[0], reverse=True)
-                    for _, cand in candidates:
-                        nid = cand.get("node_id")
-                        if not nid:
-                            continue
-                        base_url = self._resolve_node_base_url(str(nid), conf.role, conf.hub_url)
-                        if base_url:
-                            break
-                except Exception:
-                    base_url = None
-            if not base_url:
-                try:
-                    logging.getLogger("adaos.router").warning(f"router: target {target_node} offline/unresolved; fallback to local print")
+                    logging.getLogger("adaos.router").warning("router: telegram route failed; will continue with other routes")
                 except Exception:
                     pass
+
+        # Stdout route (if configured in rules)
+        if self._has_rule_for("stdout"):
+            target_node_out = self._pick_target_node("stdout", this_node)
+            if target_node_out == this_node:
                 print_text(text, node_id=this_node, origin={"source": ev.source})
-                return
-        url = f"{base_url.rstrip('/')}/api/io/console/print"
-        headers = {"X-AdaOS-Token": conf.token or "dev-local-token", "Content-Type": "application/json"}
-        body = {"text": text, "origin": {"source": ev.source, "from": this_node}}
-        try:
-            requests.post(url, json=body, headers=headers, timeout=2.5)
-        except Exception:
-            pass
+                did_any = True
+            else:
+                # Cross-node delivery: resolve base_url and POST
+                base_url = self._resolve_node_base_url(target_node_out, conf.role, conf.hub_url)
+                if not base_url and conf.role == "hub":
+                    try:
+                        directory = get_directory()
+                        candidates = []
+                        for n in directory.list_known_nodes():
+                            if not n.get("online"):
+                                continue
+                            for io in (n.get("capacity") or {}).get("io", []):
+                                if (io.get("io_type") == "stdout"):
+                                    candidates.append((int(io.get("priority") or 50), n))
+                                    break
+                        candidates.sort(key=lambda x: x[0], reverse=True)
+                        for _, cand in candidates:
+                            nid = cand.get("node_id")
+                            if not nid:
+                                continue
+                            base_url = self._resolve_node_base_url(str(nid), conf.role, conf.hub_url)
+                            if base_url:
+                                break
+                    except Exception:
+                        base_url = None
+
+                if base_url:
+                    url = f"{base_url.rstrip('/')}/api/io/console/print"
+                    headers = {"X-AdaOS-Token": conf.token or "dev-local-token", "Content-Type": "application/json"}
+                    body = {"text": text, "origin": {"source": ev.source, "from": this_node}}
+                    try:
+                        requests.post(url, json=body, headers=headers, timeout=2.5)
+                        did_any = True
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        logging.getLogger("adaos.router").warning(f"router: stdout target {target_node_out} offline/unresolved; fallback to local print")
+                    except Exception:
+                        pass
+                    print_text(text, node_id=this_node, origin={"source": ev.source})
+                    did_any = True
+
+        # If no route matched or everything failed, fallback to local stdout
+        if not did_any:
+            print_text(text, node_id=this_node, origin={"source": ev.source})
 
     def _resolve_node_base_url(self, node_id: str, role: str, hub_url: str | None) -> str | None:
         try:
