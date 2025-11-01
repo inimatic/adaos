@@ -36,7 +36,6 @@ app = typer.Typer(help=_("cli.help"))
 
 bootstrap_app()
 ctx = get_ctx()
-print("ctx.settings.owner_id", ctx.settings.owner_id)
 # -------- вспомогательные --------
 
 
