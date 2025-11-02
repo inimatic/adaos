@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
     try:
         conf = load_config()
         from adaos.services.registry.subnet_directory import get_directory
+
         directory = get_directory()
         base_url = os.environ.get("ADAOS_SELF_BASE_URL")
         node_item = {
@@ -91,6 +92,7 @@ async def lifespan(app: FastAPI):
             ctx = _get_ctx()
             api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
             import requests as _requests
+
             link_url = f"{api_base.rstrip('/')}/io/tg/pair/link"
             r = _requests.get(link_url, params={"hub_id": conf.subnet_id}, timeout=3.0)
             if r.status_code == 200 and (r.json() or {}).get("ok"):
@@ -98,6 +100,7 @@ async def lifespan(app: FastAPI):
                 install_io_in_capacity("telegram", ["text", "lang:ru", "lang:en"], priority=60)
                 try:
                     from adaos.services.registry.subnet_directory import get_directory as _get_dir
+
                     cap = get_local_capacity()
                     _get_dir().repo.replace_io_capacity(conf.node_id, cap.get("io") or [])
                 except Exception:
@@ -105,6 +108,7 @@ async def lifespan(app: FastAPI):
                 # Send greeting via Root
                 try:
                     from adaos.sdk.data.i18n import _ as _t
+
                     text = _t("subnet.started")
                 except Exception:
                     text = "subnet.started"
@@ -172,10 +176,12 @@ async def lifespan(app: FastAPI):
                 api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
                 try:
                     from adaos.sdk.data.i18n import _ as _t
+
                     text = _t("subnet.stopped")
                 except Exception:
                     text = "subnet.stopped"
                 import requests as _requests
+
                 _requests.post(f"{api_base.rstrip('/')}/io/tg/send", json={"hub_id": conf.subnet_id, "text": text}, timeout=2.5)
         except Exception:
             pass
