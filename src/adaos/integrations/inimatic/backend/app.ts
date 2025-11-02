@@ -21,6 +21,7 @@ import { getPolicy } from './policy.js'
 import { resolveLocale, translate, type Locale, type MessageParams } from './i18n.js'
 import { NatsBus } from './io/bus/nats.js'
 import { installTelegramWebhookRoutes } from './io/telegram/webhook.js'
+import { ensureSchema as ensureTgSchema } from './db/tg.repo.js'
 import { installPairingApi } from './io/pairing/api.js'
 import { buildInfo } from './build-info.js'
 
@@ -803,6 +804,7 @@ if (process.env['DEBUG_ENDPOINTS'] === 'true') {
 app.use('/v1', rootRouter)
 
 // --- IO (Telegram) wiring ---
+try { if (process.env['PG_URL']) await ensureTgSchema() } catch {}
 let ioBus: NatsBus | null = null
 if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.env['NATS_URL']) {
 	try {

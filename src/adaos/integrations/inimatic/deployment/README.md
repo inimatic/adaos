@@ -40,10 +40,10 @@ The dev profile runs Redis, the backend, and the frontend without Traefik.  TLS 
 Start the stack with:
 
 ```bash
-docker compose --project-directory . -f deployment/docker-compose.yaml --profile dev up -d
+docker compose --project-directory . -f deployment/docker-compose.yaml -f deployment/docker-compose.pg.override.yml --profile dev up -d
 ```
 
-This exposes the backend on `http://localhost:3030` and the frontend on `http://localhost:8080`.
+This exposes the backend on `http://localhost:3030` and the frontend on `http://localhost:8080`. The override file adds a PostgreSQL service and wires `PG_URL` into the backend for Telegram multi-hub routing.
 
 ## CI/CD pipeline
 
