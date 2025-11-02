@@ -1,8 +1,11 @@
 import { listBindings, getDefaultBinding, setDefault, getByAlias, renameAlias, unlinkAlias, upsertBinding, setSession, bindTopic, unbindTopic } from '../../db/tg.repo.js'
+import pino from 'pino'
 import type { InlineKeyboardButton } from './keyboards.js'
 import { keyboardPicker } from './keyboards.js'
 
 export type CmdCtx = { chat_id: number, text: string, topic_id?: number }
+
+const log = pino({ name: 'tg-commands' })
 
 const HELP = [
   'Доступные команды:',
@@ -24,6 +27,7 @@ export async function handleCommand(ctx: CmdCtx): Promise<{ text: string, keyboa
   if (cmd === '/help') return { text: HELP }
 
   if (cmd === '/current') {
+    log.info({ chat_id: ctx.chat_id, cmd }, 'tg: /current')
     const list = await listBindings(ctx.chat_id)
     const def = list.find(b => b.is_default)
     const current = def // for MVP, show default as current unless session logic added here
@@ -32,13 +36,16 @@ export async function handleCommand(ctx: CmdCtx): Promise<{ text: string, keyboa
   }
 
   if (cmd === '/list') {
+    log.info({ chat_id: ctx.chat_id, cmd }, 'tg: /list')
     const list = await listBindings(ctx.chat_id)
+    log.info({ chat_id: ctx.chat_id, count: list.length, items: list }, 'tg: /list result')
     const kb = keyboardPicker(list.map(b => ({ alias: b.alias, is_default: b.is_default })))
     return { text: 'Подсети:', keyboard: kb }
   }
 
   if (cmd === '/use' && parts[1]) {
     const key = parts[1]
+    log.info({ chat_id: ctx.chat_id, cmd, key }, 'tg: /use')
     const b = (await getByAlias(ctx.chat_id, key))
     if (!b) return { text: 'Не найден alias' }
     await setSession(ctx.chat_id, b.hub_id, 'manual')
@@ -47,6 +54,7 @@ export async function handleCommand(ctx: CmdCtx): Promise<{ text: string, keyboa
 
   if (cmd === '/default' && parts[1]) {
     const alias = parts[1]
+    log.info({ chat_id: ctx.chat_id, cmd, alias }, 'tg: /default')
     const b = await getByAlias(ctx.chat_id, alias)
     if (!b) return { text: 'Не найден alias' }
     await setDefault(ctx.chat_id, alias)
@@ -56,12 +64,14 @@ export async function handleCommand(ctx: CmdCtx): Promise<{ text: string, keyboa
   if (cmd === '/alias' && parts[1] && parts[2]) {
     const key = parts[1]
     const next = parts[2]
+    log.info({ chat_id: ctx.chat_id, cmd, key, next }, 'tg: /alias')
     const ok = await renameAlias(ctx.chat_id, key, next)
     return { text: ok ? `Переименовано: ${key} → ${next}` : 'Не найдено' }
   }
 
   if (cmd === '/unlink' && parts[1]) {
     const alias = parts[1]
+    log.info({ chat_id: ctx.chat_id, cmd, alias }, 'tg: /unlink')
     const ok = await unlinkAlias(ctx.chat_id, alias)
     return { text: ok ? `Отвязано: ${alias}` : 'Не найдено' }
   }
@@ -69,6 +79,7 @@ export async function handleCommand(ctx: CmdCtx): Promise<{ text: string, keyboa
   if (cmd === '/bind_here' && parts[1]) {
     if (!ctx.topic_id) return { text: 'Команда доступна только в темах' }
     const alias = parts[1]
+    log.info({ chat_id: ctx.chat_id, cmd, alias, topic_id: ctx.topic_id }, 'tg: /bind_here')
     const b = await getByAlias(ctx.chat_id, alias)
     if (!b) return { text: 'Не найден alias' }
     await bindTopic(ctx.chat_id, ctx.topic_id, b.hub_id)
@@ -76,6 +87,7 @@ export async function handleCommand(ctx: CmdCtx): Promise<{ text: string, keyboa
   }
   if (cmd === '/unbind_here') {
     if (!ctx.topic_id) return { text: 'Команда доступна только в темах' }
+    log.info({ chat_id: ctx.chat_id, cmd, topic_id: ctx.topic_id }, 'tg: /unbind_here')
     await unbindTopic(ctx.chat_id, ctx.topic_id)
     return { text: 'Привязка темы снята' }
   }
