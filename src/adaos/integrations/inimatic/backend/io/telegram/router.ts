@@ -83,8 +83,17 @@ export async function onTelegramUpdate(bot_id: string, update: Update): Promise<
 
   // Commands
   if (ctx.is_command && ctx.text) {
-    const res = await handleCommand({ chat_id: ctx.chat_id, text: ctx.text, topic_id: ctx.topic_id })
-    if (res) { try { await sendToTelegram({ chat_id: ctx.chat_id, text: res.text, keyboard: res.keyboard }) } catch {} ; return { status: 200, body: { ok: true, routed: false } } }
+    try {
+      const res = await handleCommand({ chat_id: ctx.chat_id, text: ctx.text, topic_id: ctx.topic_id });
+      if (res) {
+        try { await sendToTelegram({ chat_id: ctx.chat_id, text: res.text, keyboard: res.keyboard }) } catch {}
+        return { status: 200, body: { ok: true, routed: false } }
+      }
+    } catch (e) {
+      log.warn({ chat_id: ctx.chat_id, err: String(e) }, 'tg: handleCommand failed');
+      try { await sendToTelegram({ chat_id: ctx.chat_id, text: 'Command failed, try again later' }) } catch {}
+      return { status: 200, body: { ok: true, routed: false } }
+    }
   }
 
   // Resolve target by priorities
