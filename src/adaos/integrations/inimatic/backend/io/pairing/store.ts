@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto'
 import { redis } from '../idem/kv.js'
+import { tgLinkSetDb, tgLinkGetDb } from '../../db/tg.repo.js'
 
 export type PairRecord = {
   bot_id: string
@@ -78,13 +79,23 @@ export async function bindingGet(platform: string, user_id: string, bot_id: stri
 export type TgLink = { hub_id: string; owner_id: string; bot_id: string; chat_id: string; updated_at: number }
 
 export async function tgLinkSet(hub_id: string, owner_id: string, bot_id: string, chat_id: string): Promise<TgLink> {
-  const key = `tgpair:${hub_id}`
-  const rec: TgLink = { hub_id, owner_id, bot_id, chat_id, updated_at: Math.floor(Date.now() / 1000) }
-  await redis.set(key, JSON.stringify(rec))
-  return rec
+  try {
+    const rec = await tgLinkSetDb(hub_id, owner_id, bot_id, chat_id)
+    return rec
+  } catch {
+    // fallback to redis if db unavailable
+    const key = `tgpair:${hub_id}`
+    const rec: TgLink = { hub_id, owner_id, bot_id, chat_id, updated_at: Math.floor(Date.now() / 1000) }
+    await redis.set(key, JSON.stringify(rec))
+    return rec
+  }
 }
 
 export async function tgLinkGet(hub_id: string): Promise<TgLink | null> {
+  try {
+    const rec = await tgLinkGetDb(hub_id)
+    if (rec) return rec
+  } catch { /* ignore */ }
   const raw = await redis.get(`tgpair:${hub_id}`)
   return raw ? (JSON.parse(raw) as TgLink) : null
 }

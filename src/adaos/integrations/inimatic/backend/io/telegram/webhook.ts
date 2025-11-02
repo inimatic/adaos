@@ -1,11 +1,13 @@
 import express from 'express'
 import pino from 'pino'
 import { toInputEvent } from './normalize.js'
+import { onTelegramUpdate, initTgRouting } from './router.js'
 import { getFilePath, downloadFile, convertOpusToWav16k } from './media.js'
 import { resolveHubId } from '../router/resolve.js'
 import { idemGet, idemPut } from '../idem/kv.js'
 import { extractStartCode } from './pairing.js'
 import { pairConfirm, tgLinkSet } from '../pairing/store.js'
+import { ensureSchema } from '../../db/tg.repo.js'
 import { NatsBus } from '../bus/nats.js'
 import { randomUUID } from 'crypto'
 import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
@@ -14,17 +16,24 @@ import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
 const log = pino({ name: 'tg-webhook' })
 
 export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus | null) {
-	app.post('/io/tg/:bot_id/webhook', async (req, res) => {
-		try {
-			const expected = process.env['TG_SECRET_TOKEN']
+    app.post('/io/tg/:bot_id/webhook', async (req, res) => {
+        try {
+            try { if (process.env['PG_URL']) await ensureSchema() } catch {}
+            const expected = process.env['TG_SECRET_TOKEN']
 			const header = String(req.header('X-Telegram-Bot-Api-Secret-Token') || '')
 			if (expected && header !== expected) {
 				log.warn({ have_header: !!header }, 'tg webhook: invalid secret token')
 				return res.status(401).json({ error: 'invalid_secret' })
 			}
 
-			const bot_id = String(req.params['bot_id'])
-			const update = req.body
+            const bot_id = String(req.params['bot_id'])
+            const update = req.body
+            // Optional: new multi-hub router (MVP) gate by env flag
+            if ((process.env['TG_ROUTER_ENABLED'] || '0') === '1') {
+                try { await initTgRouting() } catch {}
+                const out = await onTelegramUpdate(bot_id, update)
+                return res.status(out.status).json(out.body)
+            }
 			// minimal diagnostics for incoming webhook
 			try {
 				const updType = update?.message ? 'message' : (update?.edited_message ? 'edited_message' : (update?.callback_query ? 'callback_query' : 'unknown'))
