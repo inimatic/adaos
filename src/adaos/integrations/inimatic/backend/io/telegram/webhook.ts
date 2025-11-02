@@ -66,7 +66,7 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
                                 }
                             } catch {}
                         }
-                        return res.status(200).json({ ok: true, routed: false })
+                        return res.status(200).json({ ok: true, routed: false, diag: { step: 'fast_start', hub_id: hubId, chat_id: chat_id } })
                     }
                 }
             } catch {}
@@ -157,13 +157,13 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 						try {
 							const { bindingUpsert } = await import('../pairing/store.js')
 							await bindingUpsert('telegram', evt.user_id, bot_id, hubId)
-							// store simplified hubв†’chat link for outbound
+							// store simplified hubРІвЂ вЂ™chat link for outbound
 							await tgLinkSet(hubId, String(evt.user_id), bot_id, String(evt.chat_id))
 							log.info({ hub_id: hubId, bot_id, chat_id: String(evt.chat_id) }, 'telegram pairing linked')
 							// Send welcome message right after successful pairing
 							if (bus) {
 								const subject = `tg.output.${bot_id}.chat.${evt.chat_id}`
-								const welcome = process.env['TG_WELCOME_TEXT'] || 'вњ… Successfully paired. You can start messaging.'
+								const welcome = process.env['TG_WELCOME_TEXT'] || 'РІСљвЂ¦ Successfully paired. You can start messaging.'
 								const out = {
 									target: { bot_id, hub_id: hubId, chat_id: String(evt.chat_id) },
 									messages: [{ type: 'text', text: welcome }],

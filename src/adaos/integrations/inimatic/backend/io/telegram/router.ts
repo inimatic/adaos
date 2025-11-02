@@ -46,7 +46,7 @@ export async function onTelegramUpdate(bot_id: string, update: Update): Promise<
   try {
     const start = (ctx.text || '').trim()
     if (start.startsWith('/start ')) {
-      const payload = start.slice('/start '.length)
+      const payload = start.slice('/start '.length); log.info({ chat_id: ctx.chat_id, payload }, 'tg: /start payload')
       if (payload.startsWith('bind:')) {
         const hub = payload.slice('bind:'.length)
         if (hub) {
@@ -56,9 +56,9 @@ export async function onTelegramUpdate(bot_id: string, update: Update): Promise<
           return { status: 200, body: { ok: true, routed: false } }
         }
       } else {
-        const code = payload
+        const code = payload; log.info({ chat_id: ctx.chat_id, code }, 'tg: /start code')
         try {
-          const rec = await pairConfirm(code)
+          const rec = await pairConfirm(code); log.info({ chat_id: ctx.chat_id, state: rec?.state, hub_id: rec?.hub_id }, 'tg: pairConfirm result')
           const hubId = rec && rec.state === 'confirmed' ? (rec.hub_id || undefined) : undefined
           if (hubId) {
             try { await tgLinkSet(hubId, String(ctx.chat_id), bot_id, String(ctx.chat_id)) } catch {}
