@@ -28,6 +28,23 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 
             const bot_id = String(req.params['bot_id'])
             const update = req.body
+            // Fast-path: handle /start <code> via legacy pairing even when TG_ROUTER_ENABLED=1
+            try {
+                const startText: string | undefined = update?.message?.text || update?.edited_message?.text || update?.callback_query?.data
+                if (typeof startText === 'string' && startText.trim().startsWith('/start ')) {
+                    const payload = startText.trim().slice('/start '.length)
+                    if (!payload.startsWith('bind:')) {
+                        const code = payload
+                        const rec = await pairConfirm(code)
+                        const hubId = rec && rec.state === 'confirmed' ? (rec.hub_id || undefined) : undefined
+                        const chat_id = update?.message?.chat?.id || update?.edited_message?.chat?.id || update?.callback_query?.message?.chat?.id
+                        if (hubId && chat_id) {
+                            try { await tgLinkSet(hubId, String(chat_id), bot_id, String(chat_id)) } catch {}
+                        }
+                        return res.status(200).json({ ok: true, routed: false })
+                    }
+                }
+            } catch {}
             // Optional: new multi-hub router (MVP) gate by env flag
             if ((process.env['TG_ROUTER_ENABLED'] || '0') === '1') {
                 try { await initTgRouting() } catch {}

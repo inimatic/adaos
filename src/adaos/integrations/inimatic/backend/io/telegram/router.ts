@@ -51,12 +51,10 @@ export async function onTelegramUpdate(bot_id: string, update: Update): Promise<
         const hub = payload.slice('bind:'.length)
         if (hub) {
           const alias = 'hub'
-          await upsertBinding(ctx.chat_id, hub, alias, false)
-          await sendToTelegram({ chat_id: ctx.chat_id, text: `Связка создана для ${hub} как ${alias}` })
-          return { status: 200, body: { ok: true, routed: false } }
+          await upsertBinding(ctx.chat_id, hub, alias, false)\n          try { await sendToTelegram({ chat_id: ctx.chat_id, text: Linked to  as  }) } catch {}\n          return { status: 200, body: { ok: true, routed: false } }
         }
       } else {
-        // Treat payload as pair code; confirm from Redis and persist hub↔chat in DB
+        // Treat payload as pair code; confirm from Redis and persist hubР Р†РІР‚В РІР‚Сњchat in DB
         const code = payload
         try {
           const rec = await pairConfirm(code)
@@ -79,9 +77,7 @@ export async function onTelegramUpdate(bot_id: string, update: Update): Promise<
               if (makeDefault) {
                 try { await setSession(ctx.chat_id, hubId, 'manual') } catch {}
               }
-            } catch { /* ignore binding errors */ }
-            await sendToTelegram({ chat_id: ctx.chat_id, text: 'Пара успешно подтверждена' })
-            return { status: 200, body: { ok: true, routed: false } }
+            } catch { /* ignore binding errors */ }\n            try { try { await sendToTelegram({ chat_id: ctx.chat_id, text: 'Pick a subnet: use /list and /use <alias> or send @alias <text>' }) } catch {} } catch {}\n            return { status: 200, body: { ok: true, routed: false } }
           }
         } catch (e) {
           log.warn({ err: String(e) }, 'pair confirm failed in router')
@@ -94,9 +90,7 @@ export async function onTelegramUpdate(bot_id: string, update: Update): Promise<
   // Commands
   if (ctx.is_command && ctx.text) {
     const res = await handleCommand({ chat_id: ctx.chat_id, text: ctx.text, topic_id: ctx.topic_id })
-    if (res) {
-      await sendToTelegram({ chat_id: ctx.chat_id, text: res.text, keyboard: res.keyboard })
-      return { status: 200, body: { ok: true, routed: false } }
+    if (res) {\n            try { try { await sendToTelegram({ chat_id: ctx.chat_id, text: 'Pick a subnet: use /list and /use <alias> or send @alias <text>' }) } catch {} } catch {}\n            return { status: 200, body: { ok: true, routed: false } }
     }
   }
 
@@ -136,12 +130,12 @@ export async function onTelegramUpdate(bot_id: string, update: Update): Promise<
           return { status: 200, body: { ok: true, routed: true } }
         }
         if (count <= 1) {
-          await sendToTelegram({ chat_id: ctx.chat_id, text: 'Нет настроенных связок. Используйте /start bind:<hub_id> или /start <code>' })
+          try { await sendToTelegram({ chat_id: ctx.chat_id, text: 'Pick a subnet: use /list and /use <alias> or send @alias <text>' }) } catch {}
           try { await logMessage(ctx.chat_id, ctx.msg_id, null, null, 'none') } catch {}
           return { status: 200, body: { ok: true, routed: false } }
         }
       } catch { /* fallthrough to prompt */ }
-      await sendToTelegram({ chat_id: ctx.chat_id, text: 'Выберите подсеть: используйте /list и /use <alias> или отправьте @alias текст' })
+      try { await sendToTelegram({ chat_id: ctx.chat_id, text: 'Pick a subnet: use /list and /use <alias> or send @alias <text>' }) } catch {}
       try { await logMessage(ctx.chat_id, ctx.msg_id, null, null, 'none') } catch {}
       return { status: 200, body: { ok: true, routed: false } }
     }
