@@ -81,6 +81,22 @@ export class NatsBus {
 		return sub
 	}
 
+	// Backward-compat: some hubs publish to a legacy subject `io.tg.out`
+	// Subscribe and route through the same handler contract.
+	async subscribe_compat_out(handler: (subject: string, data: Uint8Array) => Promise<void>) {
+		const js = this.nc.jetstream()
+		const durable = `tg_out_compat`
+		const opts = consumerOpts()
+		opts.durable(durable)
+		opts.deliverTo(createInbox())
+		opts.ackNone()
+		const sub = await js.subscribe('io.tg.out', opts)
+		;(async () => {
+			for await (const m of sub) await handler(m.subject, m.data)
+		})().catch(() => { })
+		return sub
+	}
+
 	async publish_dlq(stage: string, payload: any) {
 		const js = this.nc.jetstream()
 		await js.publish(`tg.dlq.${stage}`, this.sc.encode(JSON.stringify(payload)))
