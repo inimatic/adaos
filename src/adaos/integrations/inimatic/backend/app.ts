@@ -815,9 +815,24 @@ if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.
 		const botId = process.env['BOT_ID'] || 'main-bot'
 		const { TelegramSender } = await import('./io/telegram/sender.js')
 		const sender = new TelegramSender(process.env['TG_BOT_TOKEN'] || '')
-		await ioBus.subscribe_output(botId, async (_subject, data) => {
+		console.log(`[io] Subscribing to tg.output.${botId}.>`)
+		await ioBus.subscribe_output(botId, async (subject, data) => {
 			try {
-				const payload = JSON.parse(new TextDecoder().decode(data))
+				const text = new TextDecoder().decode(data)
+				const payload = JSON.parse(text)
+				console.log(`[io] Outbound received on ${subject}`)
+				await sender.send(payload)
+			} catch (e) {
+				try { await ioBus!.publish_dlq('output', { error: String(e) }) } catch { }
+			}
+		})
+		// Backward compatibility: legacy hubs may publish to io.tg.out
+		console.log(`[io] Subscribing to legacy io.tg.out`)
+		await ioBus.subscribe_compat_out(async (subject, data) => {
+			try {
+				const text = new TextDecoder().decode(data)
+				const payload = JSON.parse(text)
+				console.log(`[io] Legacy outbound received on ${subject}`)
 				await sender.send(payload)
 			} catch (e) {
 				try { await ioBus!.publish_dlq('output', { error: String(e) }) } catch { }

@@ -74,9 +74,25 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 			// Optional: new multi-hub router (MVP) gate by env flag
 			if ((process.env['TG_ROUTER_ENABLED'] || '0') === '1') {
 				// Try router path; if it fails or does not route, fall back to classic publish
+				// Validate NATS_URL early to avoid cryptic "Invalid URL" errors
+				const natsUrl = String(process.env['NATS_URL'] || '')
+				let natsUrlOk = true
+				if (!natsUrl) {
+					log.warn({ natsUrl }, 'tg webhook: router disabled (missing NATS_URL)')
+					natsUrlOk = false
+				} else {
+					try { new URL(natsUrl) } catch (e) {
+						log.warn({ natsUrl, err: String(e) }, 'tg webhook: NATS_URL invalid; router will be skipped')
+						natsUrlOk = false
+					}
+				}
 				try {
-					await initTgRouting();
-					log.info({ ok: true }, 'tg webhook: router init ok')
+					if (natsUrlOk) {
+						await initTgRouting();
+						log.info({ ok: true }, 'tg webhook: router init ok')
+					} else {
+						throw new Error('router_init_skipped_invalid_nats_url')
+					}
 				} catch (e) {
 					log.warn({ err: String(e) }, 'tg webhook: router init failed (will use classic path)')
 				}
