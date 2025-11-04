@@ -838,6 +838,43 @@ if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.
 				try { await ioBus!.publish_dlq('output', { error: String(e) }) } catch { }
 			}
 		})
+		// Optional: debug taps (comma-separated subjects) e.g. IO_TAP_SUBJECTS="tg.input.>,tg.output.>,io.tg.out"
+		const tap = (process.env['IO_TAP_SUBJECTS'] || '').trim()
+		if (tap) {
+			for (const subj of tap.split(',').map(s => s.trim()).filter(Boolean)) {
+				console.log(`[io] Tap subscribe ${subj}`)
+				await ioBus.subscribe(subj, async (s, data) => {
+					const txt = new TextDecoder().decode(data)
+					console.log(`[io][tap] ${s} ${txt.slice(0, 512)}`)
+				})
+			}
+		}
+
+		// Optional legacy bridge: republish tg.input.<hub> text to io.tg.in.<hub>.text
+		if ((process.env['IO_BRIDGE_TG_INPUT_TO_LEGACY'] || '0') === '1') {
+			console.log('[io] Legacy bridge enabled: tg.input.* -> io.tg.in.*.text')
+			await ioBus.subscribe('tg.input.>', async (subject, data) => {
+				try {
+					const txt = new TextDecoder().decode(data)
+					const env = JSON.parse(txt)
+					const hubMatch = subject.match(/^tg\.input\.(.+)$/)
+					const hub = hubMatch ? hubMatch[1] : (env?.meta?.hub_id || '')
+					if (hub && env?.payload?.type === 'text') {
+						const e = env.payload
+						const legacy = {
+							text: e?.payload?.text || e?.text || '',
+							chat_id: Number(e?.chat_id || 0),
+							tg_msg_id: Number(e?.payload?.meta?.msg_id || e?.meta?.msg_id || 0),
+							route: { via: 'session' },
+							meta: { is_command: false },
+						}
+						const legacySubj = `io.tg.in.${hub}.text`
+						await ioBus.publish_subject(legacySubj, legacy)
+						console.log(`[io] bridged ${subject} -> ${legacySubj}`)
+					}
+				} catch { /* ignore */ }
+			})
+		}
 	} catch (e) {
 		console.error('[io] NATS init failed', e)
 		ioBus = null

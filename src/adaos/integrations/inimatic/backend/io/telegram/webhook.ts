@@ -244,6 +244,21 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 					const subject = `tg.input.${hub}`
 					log.info({ subject, event_id: envelope.event_id }, 'tg webhook: publishing to NATS')
 					await bus.publish_input(hub, envelope)
+					// Legacy mirror for hubs listening on io.tg.in.<hub>.text
+					try {
+						if (evt.type === 'text') {
+							const legacy = {
+								text: (evt.payload as any)?.text || '',
+								chat_id: Number(evt.chat_id),
+								tg_msg_id: Number((evt.payload as any)?.meta?.msg_id || 0),
+								route: { via: 'session' },
+								meta: { is_command: false },
+							}
+							const legacySubj = `io.tg.in.${hub}.text`
+							await bus.publish_subject(legacySubj, legacy)
+							log.info({ legacySubj, chat_id: legacy.chat_id }, 'tg webhook: legacy mirror published')
+						}
+					} catch { /* ignore legacy mirror errors */ }
 					enqueue_total.inc({ hub })
 					status = 200
 					body = { ok: true, routed: true }
