@@ -62,5 +62,10 @@ export class NatsBus {
   async publishSubject(subject: string, payload: any) {
     return this.publish_subject(subject, payload)
   }
-}
 
+  async subscribe(subject: string, handler: (subject: string, data: Uint8Array) => Promise<void>) {
+    const sub: Subscription = this.nc.subscribe(subject)
+    ;(async () => { for await (const m of sub) await handler(m.subject, m.data) })().catch(() => {})
+    return sub
+  }
+}
