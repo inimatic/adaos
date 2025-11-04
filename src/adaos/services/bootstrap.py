@@ -223,6 +223,12 @@ class BootstrapService:
                     npass = npass or nc.get('pass')
                 except Exception:
                     pass
+            # normalize scheme: if someone saved https://.../nats, transform to wss://.../nats
+            try:
+                if isinstance(nurl, str) and nurl.startswith('http'):
+                    nurl = 'ws' + nurl[4:]
+            except Exception:
+                pass
             hub_id = load_config(ctx=self.ctx).subnet_id
             if nurl and hub_id:
                 async def _nats_bridge() -> None:
@@ -235,14 +241,54 @@ class BootstrapService:
                             user = nuser or os.getenv('NATS_USER') or None
                             pw = npass or os.getenv('NATS_PASS') or None
                             pw_mask = (pw[:3] + '***' + pw[-2:]) if pw and len(pw) > 6 else ('***' if pw else None)
-                            print(f"[hub-io] Connecting NATS {nurl} user={user} pass={pw_mask}")
-                            nc = await _nats.connect(servers=[nurl], user=user, password=pw, name=f'hub-{hub_id}')
+                            # Build candidate WS endpoints to improve resilience when the path differs.
+                            candidates = []
+                            def _dedup_push(url: str) -> None:
+                                if url and url not in candidates:
+                                    candidates.append(url)
+
+                            base = (nurl or '').rstrip('/')
+                            _dedup_push(base)
+                            # Common alternates: /nats and /ws
+                            try:
+                                from urllib.parse import urlparse, urlunparse
+                                pr = urlparse(base)
+                                path = pr.path or ''
+                                if path == '' or path == '/':
+                                    _dedup_push(urlunparse(pr._replace(path='/nats')))
+                                    _dedup_push(urlunparse(pr._replace(path='/ws')))
+                                elif path.endswith('/nats'):
+                                    _dedup_push(urlunparse(pr._replace(path='/ws')))
+                                elif path.endswith('/ws'):
+                                    _dedup_push(urlunparse(pr._replace(path='/nats')))
+                                # Trailing slash variants
+                                if not path.endswith('/'):
+                                    _dedup_push(urlunparse(pr._replace(path=path + '/')))
+                            except Exception:
+                                # If parsing fails, fall back to simple heuristics
+                                if base.endswith('/nats'):
+                                    _dedup_push(base[:-5] + '/ws')
+                                elif base.endswith('/ws'):
+                                    _dedup_push(base[:-3] + '/nats')
+                                else:
+                                    _dedup_push(base + '/nats')
+                                    _dedup_push(base + '/ws')
+
+                            # Allow explicit alternates via env (comma-separated)
+                            extra = os.getenv('NATS_WS_URL_ALT')
+                            if extra:
+                                for it in [x.strip() for x in extra.split(',') if x.strip()]:
+                                    _dedup_push(it)
+
+                            print(f"[hub-io] Connecting NATS candidates={candidates} user={user} pass={pw_mask}")
+                            nc = await _nats.connect(servers=candidates, user=user, password=pw, name=f'hub-{hub_id}')
                             subj = f"tg.input.{hub_id}"
                             subj_legacy = f"io.tg.in.{hub_id}.text"
                             print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
                             break
                         except Exception as e:
                             print(f"[hub-io] NATS connect failed: {e}")
+                            # On failure, keep retrying with backoff; candidates are rebuilt each attempt.
                             await asyncio.sleep(backoff)
                             backoff = min(backoff * 2.0, 30.0)
                     async def cb(msg):

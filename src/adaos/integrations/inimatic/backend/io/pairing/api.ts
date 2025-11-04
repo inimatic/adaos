@@ -23,7 +23,12 @@ export function installPairingApi(app: express.Express) {
 			try { if (rec.hub_id) hub_token = await ensureHubToken(rec.hub_id) } catch {}
 			const deep_link = process.env['BOT_USERNAME'] ? `https://t.me/${process.env['BOT_USERNAME']}?start=${rec.code}` : undefined
 			log.info({ tag: 'PAIR', route: 'create', hub: rec.hub_id, code: rec.code, expires_at: rec.expires_at }, '[PAIR] create: issued')
-			const ws_url = process.env['NATS_WS_PUBLIC'] || `${(process.env['TG_WEBHOOK_BASE']||'https://api.inimatic.com').replace(/\/+$/, '')}/nats`
+			// Build public WSS URL; prefer explicit NATS_WS_PUBLIC, else derive from TG_WEBHOOK_BASE (https->wss) and append /nats
+			const baseHttp = (process.env['TG_WEBHOOK_BASE'] || 'https://api.inimatic.com').replace(/\/+$/, '')
+			const baseUrl = new URL(baseHttp)
+			const wsProto = baseUrl.protocol.startsWith('http') ? baseUrl.protocol.replace('http', 'ws') : 'wss:'
+			baseUrl.protocol = wsProto
+			const ws_url = process.env['NATS_WS_PUBLIC'] || `${baseUrl.toString().replace(/\/+$/, '')}/nats`
 			const nats_user = rec.hub_id ? `hub_${rec.hub_id}` : undefined
 			res.json({ ok: true, pair_code: rec.code, deep_link, expires_at: rec.expires_at, hub_id: rec.hub_id, hub_nats_token: hub_token, nats_ws_url: ws_url, nats_user })
 		} catch (e) {
@@ -47,7 +52,11 @@ export function installPairingApi(app: express.Express) {
 			let hub_token: string | undefined
 			try { if (rec.hub_id) hub_token = await ensureHubToken(rec.hub_id) } catch {}
 			log.info({ tag: 'PAIR', route: 'create.v1', hub: rec.hub_id, code: rec.code, expires_at: rec.expires_at }, '[PAIR] v1/create: issued')
-			const ws_url = process.env['NATS_WS_PUBLIC'] || `${(process.env['TG_WEBHOOK_BASE']||'https://api.inimatic.com').replace(/\/+$/, '')}/nats`
+			const baseHttp = (process.env['TG_WEBHOOK_BASE'] || 'https://api.inimatic.com').replace(/\/+$/, '')
+			const baseUrl = new URL(baseHttp)
+			const wsProto = baseUrl.protocol.startsWith('http') ? baseUrl.protocol.replace('http', 'ws') : 'wss:'
+			baseUrl.protocol = wsProto
+			const ws_url = process.env['NATS_WS_PUBLIC'] || `${baseUrl.toString().replace(/\/+$/, '')}/nats`
 			const nats_user = rec.hub_id ? `hub_${rec.hub_id}` : undefined
 			res.json({ ok: true, pair_code: rec.code, expires_at: rec.expires_at, hub_id: rec.hub_id, hub_nats_token: hub_token, nats_ws_url: ws_url, nats_user })
 		} catch (e) {
