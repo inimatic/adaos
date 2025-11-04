@@ -84,23 +84,17 @@ services:
         container_name: nats
         restart: unless-stopped
         networks: [proxy]
-        expose: ['4222', '8222']
+        expose: ['4222', '8222', '8080']
         environment:
-            - NATS_USER=${NATS_USER}
-            - NATS_PASS=${NATS_PASS}
             - NATS_HTTP_PORT=${NATS_HTTP_PORT:-8222}
+            - NATS_ISSUER_PUB=${NATS_ISSUER_PUB}
+            - NATS_AUTH_PASSWORD=${NATS_AUTH_PASSWORD}
         command:
-            - '-js'
-            - '-sd'
-            - '/data'
-            - '--http_port'
-            - '${NATS_HTTP_PORT:-8222}'
-            - '--user'
-            - '${NATS_USER}'
-            - '--pass'
-            - '${NATS_PASS}'
+            - '-c'
+            - '/etc/nats/nats.conf'
         volumes:
             - nats_data:/data
+            - ./deployment/scripts/nats.conf:/etc/nats/nats.conf:ro
         healthcheck:
             test:
                 [

@@ -14,8 +14,10 @@ function toOpts(urlOrOpts: string | NatsOpts): NatsOpts {
   const host = u.hostname || 'nats'
   const port = u.port || '4222'
   const servers = `${proto}//${host}:${port}`
-  const user = u.username || undefined
-  const pass = u.password ? decodeURIComponent(u.password) : undefined
+  const envUser = process.env['NATS_USER'] || undefined
+  const envPass = process.env['NATS_PASS'] || undefined
+  const user = (u.username || envUser) || undefined
+  const pass = (u.password ? decodeURIComponent(u.password) : envPass) || undefined
   return { servers, user, pass }
 }
 

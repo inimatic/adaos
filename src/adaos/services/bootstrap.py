@@ -209,17 +209,29 @@ class BootstrapService:
         # Inbound bridge from root NATS -> local event bus (tg.input.<hub_id>)
         # Enabled when settings.nats_url is provided; safe no-op otherwise.
         try:
-            nurl = getattr(self.ctx.settings, "nats_url", None)
+            nurl = os.getenv("NATS_WS_URL") or getattr(self.ctx.settings, "nats_url", None)
             hub_id = load_config(ctx=self.ctx).subnet_id
             if nurl and hub_id:
                 async def _nats_bridge() -> None:
                     import json as _json
                     import nats as _nats
                     from adaos.domain import Event
-                    nc = await _nats.connect(servers=nurl)
-                    subj = f"tg.input.{hub_id}"
-                    subj_legacy = f"io.tg.in.{hub_id}.text"
-                    print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
+                    backoff = 1.0
+                    while True:
+                        try:
+                            user = os.getenv('NATS_USER') or None
+                            pw = os.getenv('NATS_PASS') or None
+                            pw_mask = (pw[:3] + '***' + pw[-2:]) if pw and len(pw) > 6 else ('***' if pw else None)
+                            print(f"[hub-io] Connecting NATS {nurl} user={user} pass={pw_mask}")
+                            nc = await _nats.connect(servers=[nurl], user=user, password=pw, name=f'hub-{hub_id}')
+                            subj = f"tg.input.{hub_id}"
+                            subj_legacy = f"io.tg.in.{hub_id}.text"
+                            print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
+                            break
+                        except Exception as e:
+                            print(f"[hub-io] NATS connect failed: {e}")
+                            await asyncio.sleep(backoff)
+                            backoff = min(backoff * 2.0, 30.0)
                     async def cb(msg):
                         try:
                             data = _json.loads(msg.data.decode("utf-8"))

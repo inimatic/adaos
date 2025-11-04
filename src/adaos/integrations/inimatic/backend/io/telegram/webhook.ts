@@ -8,7 +8,7 @@ import { idemGet, idemPut } from '../idem/kv.js'
 import { extractStartCode } from './pairing.js'
 import { pairConfirm, tgLinkSet } from '../pairing/store.js'
 import { ensureSchema } from '../../db/tg.repo.js'
-import { upsertBinding, listBindings, setSession } from '../../db/tg.repo.js'
+import { upsertBinding, listBindings, setSession, ensureHubToken } from '../../db/tg.repo.js'
 import { NatsBus } from '../bus/nats.js'
 import { randomUUID } from 'crypto'
 import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
@@ -50,6 +50,7 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 								if (names.has(alias)) { let i = 2; while (names.has(`hub-${i}`)) i++; alias = `hub-${i}` }
 								const makeDefault = (existing || []).length === 0
 								await upsertBinding(Number(chat_id), hubId, alias, makeDefault)
+								try { await ensureHubToken(hubId) } catch {}
 								if (makeDefault) { try { await setSession(Number(chat_id), hubId, 'manual') } catch { } }
 							} catch { }
 							// Send quick ack to user
@@ -190,6 +191,7 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 							await bindingUpsert('telegram', evt.user_id, bot_id, hubId)
 							// store simplified hub. chat link for outbound
 							await tgLinkSet(hubId, String(evt.user_id), bot_id, String(evt.chat_id))
+							try { await ensureHubToken(hubId) } catch {}
 							log.info({ hub_id: hubId, bot_id, chat_id: String(evt.chat_id) }, 'telegram pairing linked')
 							// Send welcome message right after successful pairing
 							if (bus) {
