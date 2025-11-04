@@ -56,9 +56,11 @@ export async function installNatsAuth(app: express.Express) {
       let jwtMod: any, nkeysMod: any
       try {
         // eslint-disable-next-line no-new-func
-        jwtMod = await (new Function('m', 'return import(m)'))('@nats-io/jwt')
+        try { jwtMod = await (new Function('m', 'return import(m)'))('@nats-io/jwt') } catch { /* try alt pkg */ }
+        if (!jwtMod) { jwtMod = await (new Function('m', 'return import(m)'))('nats-jwt') }
         // eslint-disable-next-line no-new-func
-        nkeysMod = await (new Function('m', 'return import(m)'))('@nats-io/nkeys.js')
+        try { nkeysMod = await (new Function('m', 'return import(m)'))('@nats-io/nkeys.js') } catch { /* try alt pkg */ }
+        if (!nkeysMod) { nkeysMod = await (new Function('m', 'return import(m)'))('nkeys.js') }
       } catch (e) {
         log.error({ err: String(e) }, 'authz: nats jwt/nkeys import failed')
         return res.status(500).json({ error: 'jwt_lib_unavailable' })
@@ -68,15 +70,38 @@ export async function installNatsAuth(app: express.Express) {
       try {
         const kp = nkeysMod.fromSeed(issuerSeed)
         const pub = kp.getPublicKey()
-        // user jwt
-        const uj = new jwtMod.UserJWT()
-        uj.issuer = pub
-        uj.name = `hub_${hubId}`
-        uj.sub = pub
-        uj.audience = 'APP'
-        uj.tags = ['hub']
-        uj.permissions = { publish: { allow: perms.pub }, subscribe: { allow: perms.sub } }
-        const userJwt = uj.encode(kp)
+        let userJwt: string | undefined
+        // Attempt API for @nats-io/jwt style
+        if (jwtMod.UserJWT) {
+          const uj = new jwtMod.UserJWT()
+          uj.issuer = pub
+          uj.name = `hub_${hubId}`
+          uj.sub = pub
+          uj.audience = 'APP'
+          uj.tags = ['hub']
+          uj.permissions = { publish: { allow: perms.pub }, subscribe: { allow: perms.sub } }
+          userJwt = uj.encode(kp)
+        } else if (jwtMod.User) {
+          // Fallback for nats-jwt package API
+          const u = new jwtMod.User()
+          u.issuer = pub
+          u.name = `hub_${hubId}`
+          u.sub = pub
+          u.audience = 'APP'
+          u.tags = ['hub']
+          u.permissions = { publish: { allow: perms.pub }, subscribe: { allow: perms.sub } }
+          userJwt = u.encode(kp)
+        } else if (jwtMod.createUserJWT) {
+          userJwt = await jwtMod.createUserJWT({
+            issuer: pub,
+            name: `hub_${hubId}`,
+            sub: pub,
+            audience: 'APP',
+            tags: ['hub'],
+            permissions: { publish: { allow: perms.pub }, subscribe: { allow: perms.sub } },
+          }, kp)
+        }
+        if (!userJwt) throw new Error('jwt_api_unsupported')
         return res.json({ jwt: userJwt })
       } catch (e) {
         log.error({ hub_id: hubId, err: String(e) }, 'authz: jwt build failed')
@@ -89,4 +114,3 @@ export async function installNatsAuth(app: express.Express) {
     }
   })
 }
-
