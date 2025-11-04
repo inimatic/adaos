@@ -869,7 +869,7 @@ if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.
 							meta: { is_command: false },
 						}
 						const legacySubj = `io.tg.in.${hub}.text`
-						await ioBus.publish_subject(legacySubj, legacy)
+							await ioBus!.publish_subject(legacySubj, legacy)
 						console.log(`[io] bridged ${subject} -> ${legacySubj}`)
 					}
 				} catch { /* ignore */ }
