@@ -41,28 +41,40 @@ This document explains how a single Telegram chat can be linked to multiple hubs
 
 ## NATS Protocol
 
-Inbound from Telegram to hub:
+Inbound from Telegram to hub (modern):
+- Subject: `tg.input.<hub_id>`
+- Envelope: `{ event_id, kind: 'io.input', ts, payload: ChatInputEvent, meta: { bot_id, hub_id, trace_id } }`
+
+Inbound mirror for legacy hubs (text-only):
 - Subject: `io.tg.in.<hub_id>.text`
-- Payload: `{ text, chat_id, tg_msg_id, route: { via, alias, session_id }, meta: { is_command } }`
+- Payload: `{ text, chat_id, tg_msg_id, route, meta }`
 
 Outbound from hub to Telegram:
-- Subject: `io.tg.out`
-- Payload: `{ hub_id, chat_id, reply_to_tg_msg_id?, text, alias? }`
-- Delivery adds prefix `🔹[alias]` when provided.
+- Modern: `tg.output.<bot_id>.chat.<chat_id>` with `{ target, messages[] }` (see types in backend)
+- Legacy: `io.tg.out` with `{ target, messages[] }`
 
 ## Deployment
 
-Environment variables:
+Environment variables (root backend):
 - `PG_URL=postgres://user:pass@postgres:5432/inimatic`
-- `NATS_URL=nats://nats:4222`
 - `TG_BOT_TOKEN=...`
 - `TG_ROUTER_ENABLED=1`
 - `TG_WEBHOOK_PATH_PREFIX=/io/tg`
+- NATS core or WS:
+  - `NATS_URL=nats://nats:4222` (internal)
+  - `NATS_ISSUER_SEED/ NATS_ISSUER_PUB/ NATS_AUTH_PASSWORD` (WS+Auth Callout)
 
-Docker Compose (override file `docker-compose.pg.override.yml`):
-- Adds `postgres` service and wires `PG_URL` into backend.
+Environment variables (hub, WS client):
+- `NATS_WS_URL=wss://api.inimatic.com/nats`
+- `NATS_USER=hub_<hub_id>`
+- `NATS_PASS=<hub_nats_token>`
+- `HUB_ID=<hub_id>`
 
-Schema (`src/adaos/integrations/inimatic/backend/db/schema.sql`) is applied automatically at startup/webhook.
+Docker Compose:
+- NATS server enables WebSocket (`/nats` via Nginx) and Auth Callout to backend `/internal/nats/authz`.
+- Postgres service provides storage for Telegram tables.
+
+Schema is applied automatically by the backend at startup/webhook.
 
 ## User Flow
 
@@ -70,4 +82,3 @@ Schema (`src/adaos/integrations/inimatic/backend/db/schema.sql`) is applied auto
 2) Set default/current alias: `/default <alias>`, `/use <alias>`.
 3) Send `@alias hello` to route to a specific hub; reply to route back to the same hub.
 4) Hubs publish to `io.tg.out` to reply; messages appear with `🔹[alias]` prefix.
-

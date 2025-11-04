@@ -2,6 +2,7 @@
 import express from 'express'
 import pino from 'pino'
 import { pairConfirm, pairCreate, pairGet, pairRevoke, bindingUpsert, tgLinkGet, tgLinkSet } from './store.js'
+import { ensureHubToken } from '../../db/tg.repo.js'
 
 const log = pino({ name: 'pair-api' })
 
@@ -58,6 +59,7 @@ export function installPairingApi(app: express.Express) {
 		const user_id = String(req.body?.user_id || req.query['user_id'] || rec.hub_id || '')
 		const bot_id = String(req.body?.bot_id || req.query['bot_id'] || rec.bot_id || '')
 		const binding = await bindingUpsert('telegram', user_id, bot_id, rec.hub_id)
+		try { if (binding.hub_id) await ensureHubToken(binding.hub_id) } catch {}
 		// optional: if chat_id is provided explicitly, persist hub→chat link now
 		const chat_id = (req.body?.chat_id || req.query['chat_id']) as string | undefined
 		if (chat_id && rec.hub_id) {
@@ -81,6 +83,7 @@ export function installPairingApi(app: express.Express) {
 		const user_id = String(req.body?.user_id || req.query['user_id'] || rec.hub_id || '')
 		const bot_id = String(req.body?.bot_id || req.query['bot_id'] || rec.bot_id || '')
 		const binding = await bindingUpsert('telegram', user_id, bot_id, rec.hub_id)
+		try { if (binding.hub_id) await ensureHubToken(binding.hub_id) } catch {}
 		const chat_id = (req.body?.chat_id || req.query['chat_id']) as string | undefined
 		if (chat_id && rec.hub_id) {
 			try { await tgLinkSet(rec.hub_id, user_id || rec.hub_id!, bot_id, String(chat_id)) } catch {}

@@ -44,6 +44,20 @@ location ^~ /io/tg/webhook/ {
 }
 
 location = /healthz { ssl_verify_client off; }
+# --- NATS WebSocket passthrough ---
+location /nats {
+  # No client cert required for WS bridge
+  ssl_verify_client off;
+
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_set_header Host $host;
+  proxy_read_timeout  60s;
+  proxy_send_timeout  60s;
+  proxy_connect_timeout 5s;
+  proxy_pass http://nats:8080;
+}
 
 # --- защищённые пути под mTLS ---
 location ~ ^/v1/(owner|pki|registry|drafts|devices)/ {

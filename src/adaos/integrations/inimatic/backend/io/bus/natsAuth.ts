@@ -1,0 +1,92 @@
+import express from 'express'
+import pino from 'pino'
+import { verifyHubToken } from '../../db/tg.repo.js'
+
+const log = pino({ name: 'nats-authz' })
+
+type AuthzRequest = {
+  jwt?: string
+  connect_opts?: { user?: string, pass?: string }
+  user?: string
+  pass?: string
+}
+
+function getPerms(hubId: string) {
+  return {
+    pub: ['tg.output.*', 'route.to_browser.*'],
+    sub: [`tg.input.${hubId}`, 'route.to_hub.*`'],
+  }
+}
+
+function maskToken(tok?: string): string | undefined {
+  if (!tok) return tok
+  if (tok.length <= 6) return '***'
+  return tok.slice(0, 3) + '***' + tok.slice(-2)
+}
+
+export async function installNatsAuth(app: express.Express) {
+  app.post('/_health/internal', (_req, res) => res.json({ ok: true }))
+
+  app.post('/internal/nats/authz', async (req, res) => {
+    try {
+      const body = req.body as AuthzRequest
+      const co = body?.connect_opts || {}
+      const userRaw = (co.user || (body as any)?.user || '').trim()
+      const passRaw = (co.pass || (body as any)?.pass || '').trim()
+      if (!userRaw || !passRaw) {
+        log.warn({ have_user: !!userRaw, have_pass: !!passRaw }, 'authz: missing creds')
+        return res.status(401).json({ error: 'missing_credentials' })
+      }
+      const hubId = userRaw.startsWith('hub_') ? userRaw.slice(4) : userRaw
+      const ok = await verifyHubToken(hubId, passRaw)
+      if (!ok) {
+        log.warn({ hub_id: hubId, user: userRaw, pass: maskToken(passRaw) }, 'authz: invalid token')
+        return res.status(403).json({ error: 'invalid_credentials' })
+      }
+
+      // Build a NATS user JWT signed by issuer seed
+      const issuerSeed = process.env['NATS_ISSUER_SEED'] || ''
+      const issuerPub = process.env['NATS_ISSUER_PUB'] || ''
+      if (!issuerSeed || !issuerPub) {
+        log.warn({ have_seed: !!issuerSeed, have_pub: !!issuerPub }, 'authz: issuer material missing')
+        return res.status(500).json({ error: 'issuer_missing' })
+      }
+
+      // dynamic import to avoid hard dep if not configured
+      let jwtMod: any, nkeysMod: any
+      try {
+        // eslint-disable-next-line no-new-func
+        jwtMod = await (new Function('m', 'return import(m)'))('@nats-io/jwt')
+        // eslint-disable-next-line no-new-func
+        nkeysMod = await (new Function('m', 'return import(m)'))('@nats-io/nkeys.js')
+      } catch (e) {
+        log.error({ err: String(e) }, 'authz: nats jwt/nkeys import failed')
+        return res.status(500).json({ error: 'jwt_lib_unavailable' })
+      }
+
+      const perms = getPerms(hubId)
+      try {
+        const kp = nkeysMod.fromSeed(issuerSeed)
+        const pub = kp.getPublicKey()
+        // user jwt
+        const uj = new jwtMod.UserJWT()
+        uj.issuer = pub
+        uj.name = `hub_${hubId}`
+        uj.sub = pub
+        uj.audience = 'APP'
+        uj.tags = ['hub']
+        uj.permissions = { publish: { allow: perms.pub }, subscribe: { allow: perms.sub } }
+        const userJwt = uj.encode(kp)
+        return res.json({ jwt: userJwt })
+      } catch (e) {
+        log.error({ hub_id: hubId, err: String(e) }, 'authz: jwt build failed')
+        return res.status(500).json({ error: 'jwt_build_failed' })
+      }
+
+    } catch (e) {
+      log.error({ err: String(e) }, 'authz: failure')
+      return res.status(500).json({ error: 'internal_error' })
+    }
+  })
+}
+

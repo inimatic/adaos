@@ -27,6 +27,9 @@ create table if not exists tg_bindings (
 create unique index if not exists ux_tg_bindings_chat_alias on tg_bindings(chat_id, alias);
 create unique index if not exists ux_tg_bindings_chat_hub on tg_bindings(chat_id, hub_id);
 
+-- nats ws token for hub auth
+alter table if exists tg_bindings add column if not exists hub_nats_token text;
+
 create table if not exists tg_sessions (
   chat_id bigint primary key,
   current_hub_id text,
@@ -87,6 +90,29 @@ export async function upsertBinding(chatId: number, hubId: string, alias: string
     [chatId, hubId, alias, isDefault]
   )
   if (isDefault) await setDefault(chatId, alias)
+}
+
+export async function getHubToken(hubId: string): Promise<string | null> {
+  const { rows } = await pg().query('select hub_nats_token from tg_bindings where hub_id=$1 and hub_nats_token is not null limit 1', [hubId])
+  return (rows[0]?.hub_nats_token as string | undefined) || null
+}
+
+export async function setHubToken(hubId: string, token: string): Promise<void> {
+  await pg().query('update tg_bindings set hub_nats_token=$2 where hub_id=$1', [hubId, token])
+}
+
+export async function ensureHubToken(hubId: string): Promise<string> {
+  const existing = await getHubToken(hubId)
+  if (existing) return existing
+  const { randomBytes } = await import('crypto')
+  const token = randomBytes(36).toString('base64url')
+  await setHubToken(hubId, token)
+  return token
+}
+
+export async function verifyHubToken(hubId: string, token: string): Promise<boolean> {
+  const { rowCount } = await pg().query('select 1 from tg_bindings where hub_id=$1 and hub_nats_token=$2 limit 1', [hubId, token])
+  return (rowCount || 0) > 0
 }
 
 export async function setDefault(chatId: number, alias: string): Promise<void> {
