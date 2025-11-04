@@ -881,7 +881,7 @@ if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.
 	}
 }
 installTelegramWebhookRoutes(app, ioBus)
-\(\'\.\/io\/bus\/natsAuth\.js\'\).then(m=>m.installNatsAuth(app)).catch(()=>{});
+import('./io/bus/natsAuth.js').then(m => m.installNatsAuth(app)).catch(() => {})
 
 // Send a message to Telegram resolving hub_id -> chat_id/bot_id via pairing store
 app.post('/io/tg/send', async (req, res) => {
