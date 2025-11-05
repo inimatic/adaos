@@ -213,17 +213,20 @@ class BootstrapService:
             nurl = os.getenv("NATS_WS_URL") or getattr(self.ctx.settings, "nats_url", None)
             nuser = os.getenv("NATS_USER") or None
             npass = os.getenv("NATS_PASS") or None
-            if not nurl or not nuser or not npass:
-                try:
-                    from adaos.services.capacity import _load_node_yaml as _load_node
+            # Always consult node.yaml; prefer WS url from node over TCP env to avoid mixing issues.
+            try:
+                from adaos.services.capacity import _load_node_yaml as _load_node
 
-                    nd = _load_node()
-                    nc = (nd or {}).get("nats") or {}
-                    nurl = nurl or nc.get("ws_url")
-                    nuser = nuser or nc.get("user")
-                    npass = npass or nc.get("pass")
-                except Exception:
-                    pass
+                nd = _load_node()
+                nc = (nd or {}).get("nats") or {}
+                node_ws = nc.get("ws_url")
+                # If node.yaml provides WS url and current nurl is empty or non-WS, prefer node WS
+                if node_ws and (not nurl or not str(nurl).lower().startswith("ws")):
+                    nurl = node_ws
+                nuser = nuser or nc.get("user")
+                npass = npass or nc.get("pass")
+            except Exception:
+                pass
             # normalize scheme: if someone saved https://.../nats, transform to wss://.../nats
             try:
                 if isinstance(nurl, str) and nurl.startswith("http"):
@@ -244,46 +247,69 @@ class BootstrapService:
                             user = nuser or os.getenv("NATS_USER") or None
                             pw = npass or os.getenv("NATS_PASS") or None
                             pw_mask = (pw[:3] + "***" + pw[-2:]) if pw and len(pw) > 6 else ("***" if pw else None)
-                            # Build candidate WS endpoints to improve resilience when the path differs.
-                            candidates = ["wss://nats.inimatic.com"]
+                            # Build candidates without mixing WS and TCP schemes to avoid client errors.
+                            candidates: List[str] = []
 
                             def _dedup_push(url: str) -> None:
                                 if url and url not in candidates:
                                     candidates.append(url)
 
                             base = (nurl or "").rstrip("/")
-                            _dedup_push(base)
-                            # Common alternates: /nats and /ws
+
                             try:
                                 from urllib.parse import urlparse, urlunparse
+                                pr = urlparse(base) if base else None
+                                scheme = (pr.scheme if pr else "").lower()
+                                # If base is http(s), normalize to ws(s)
+                                if scheme in ("http", "https"):
+                                    base = "ws" + base[4:]
+                                    pr = urlparse(base)
+                                    scheme = pr.scheme.lower()
+                                # Default to WS mode when uncertain or when base points to cluster alias
+                                is_ws_mode = (not base) or scheme.startswith("ws")
+                                if not is_ws_mode and scheme == "nats":
+                                    host = (pr.hostname or "").lower()
+                                    # Avoid using internal docker alias from host-based hub
+                                    if host in ("nats", "localhost", "127.0.0.1"):
+                                        is_ws_mode = True
 
-                                pr = urlparse(base)
-                                path = pr.path or ""
-                                if path == "" or path == "/":
-                                    _dedup_push(urlunparse(pr._replace(path="/nats")))
-                                    _dedup_push(urlunparse(pr._replace(path="/ws")))
-                                elif path.endswith("/nats"):
-                                    _dedup_push(urlunparse(pr._replace(path="/ws")))
-                                elif path.endswith("/ws"):
-                                    _dedup_push(urlunparse(pr._replace(path="/nats")))
-                                # Trailing slash variants
-                                if not path.endswith("/"):
-                                    _dedup_push(urlunparse(pr._replace(path=path + "/")))
-                            except Exception:
-                                # If parsing fails, fall back to simple heuristics
-                                if base.endswith("/nats"):
-                                    _dedup_push(base[:-5] + "/ws")
-                                elif base.endswith("/ws"):
-                                    _dedup_push(base[:-3] + "/nats")
+                                if is_ws_mode:
+                                    # Prefer WS endpoints only
+                                    _dedup_push("wss://nats.inimatic.com")
+                                    if base:
+                                        _dedup_push(base)
+                                        path = pr.path or ""
+                                        if path == "" or path == "/":
+                                            _dedup_push(urlunparse(pr._replace(path="/nats")))
+                                            _dedup_push(urlunparse(pr._replace(path="/ws")))
+                                        elif path.endswith("/nats"):
+                                            _dedup_push(urlunparse(pr._replace(path="/ws")))
+                                        elif path.endswith("/ws"):
+                                            _dedup_push(urlunparse(pr._replace(path="/nats")))
+                                        if not path.endswith("/"):
+                                            _dedup_push(urlunparse(pr._replace(path=path + "/")))
+                                    # Allow explicit WS alternates via env (comma-separated)
+                                    extra = os.getenv("NATS_WS_URL_ALT")
+                                    if extra:
+                                        for it in [x.strip() for x in extra.split(",") if x.strip()]:
+                                            if it.startswith("ws"):
+                                                _dedup_push(it)
                                 else:
-                                    _dedup_push(base + "/nats")
-                                    _dedup_push(base + "/ws")
-
-                            # Allow explicit alternates via env (comma-separated)
-                            extra = os.getenv("NATS_WS_URL_ALT")
-                            if extra:
-                                for it in [x.strip() for x in extra.split(",") if x.strip()]:
-                                    _dedup_push(it)
+                                    # TCP mode: only nats:// endpoints
+                                    if base:
+                                        _dedup_push(base)
+                                    # Optional TCP alternates via env (comma-separated)
+                                    extra = os.getenv("NATS_TCP_URL_ALT")
+                                    if extra:
+                                        for it in [x.strip() for x in extra.split(",") if x.strip()]:
+                                            if it.startswith("nats://"):
+                                                _dedup_push(it)
+                            except Exception:
+                                # Fallback: if base present, use it only; otherwise default to WS domain
+                                if base:
+                                    _dedup_push(base)
+                                else:
+                                    _dedup_push("wss://nats.inimatic.com")
 
                             print(f"[hub-io] Connecting NATS candidates={candidates} user={user} pass={pw_mask}")
                             nc = await _nats.connect(servers=candidates, user=user, password=pw, name=f"hub-{hub_id}")
