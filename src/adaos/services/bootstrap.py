@@ -220,8 +220,8 @@ class BootstrapService:
                 nd = _load_node()
                 nc = (nd or {}).get("nats") or {}
                 node_ws = nc.get("ws_url")
-                # If node.yaml provides WS url and current nurl is empty or non-WS, prefer node WS
-                if node_ws and (not nurl or not str(nurl).lower().startswith("ws")):
+                # Always prefer node.yaml WS url
+                if node_ws:
                     nurl = node_ws
                 nuser = nuser or nc.get("user")
                 npass = npass or nc.get("pass")
@@ -276,7 +276,7 @@ class BootstrapService:
                                 if is_ws_mode:
                                     # Prefer WS endpoints only
                                     _dedup_push("wss://nats.inimatic.com")
-                                    if base:
+                                    if base and pr.hostname not in ("api.inimatic.com",):
                                         _dedup_push(base)
                                         path = pr.path or ""
                                         if path == "" or path == "/":
@@ -292,7 +292,7 @@ class BootstrapService:
                                     extra = os.getenv("NATS_WS_URL_ALT")
                                     if extra:
                                         for it in [x.strip() for x in extra.split(",") if x.strip()]:
-                                            if it.startswith("ws"):
+                                            if it.startswith("ws") and ("api.inimatic.com" not in it):
                                                 _dedup_push(it)
                                 else:
                                     # TCP mode: only nats:// endpoints
