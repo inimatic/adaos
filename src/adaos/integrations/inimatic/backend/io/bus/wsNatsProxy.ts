@@ -73,7 +73,8 @@ export function installWsNatsProxy(server: HttpsServer) {
             connected = true
           })
           upstreamSock.on('data', (chunk) => {
-            try { ws.send(chunk) } catch {}
+            // NATS over WebSocket expects TEXT frames; forward as UTF-8 string
+            try { ws.send(chunk.toString('utf8')) } catch {}
           })
           upstreamSock.on('error', (err) => {
             log.warn({ err: String(err) }, 'upstream error')
