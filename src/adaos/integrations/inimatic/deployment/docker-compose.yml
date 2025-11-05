@@ -87,24 +87,18 @@ services:
     expose: ["4222", "8222", "8080"]
     environment:
       - NATS_HTTP_PORT=${NATS_HTTP_PORT:-8222}
+      - NATS_ISSUER_PUB=${NATS_ISSUER_PUB}
       - NATS_AUTH_PASSWORD=${NATS_AUTH_PASSWORD}
       - NATS_USER=${NATS_USER}
       - NATS_PASS=${NATS_PASS}
       - NATS_PORT=${NATS_PORT:-4222}
     command:
-      - "-js"
-      - "-sd"
-      - "/data"
-      - "-m"
-      - "${NATS_HTTP_PORT:-8222}"
-      - "-p"
-      - "${NATS_PORT:-4222}"
-      - "-user"
-      - "${NATS_USER}"
-      - "-pass"
-      - "${NATS_PASS}"
+      - "-c"
+      - "/etc/nats/nats.conf"
     volumes:
       - nats_data:/data
+      # Config file with WS + mixed auth (static user + callout)
+      - /opt/inimatic/scripts/nats.conf:/etc/nats/nats.conf:ro
     healthcheck:
       test:
         [
@@ -201,11 +195,12 @@ services:
     env_file:
       - /opt/inimatic/.env
     environment:
-      VIRTUAL_HOST: api.inimatic.com
+      VIRTUAL_HOST: api.inimatic.com, nats.inimatic.com
       VIRTUAL_PORT: "3030"
       VIRTUAL_PROTO: "https"
-      LETSENCRYPT_HOST: api.inimatic.com
+      LETSENCRYPT_HOST: api.inimatic.com, nats.inimatic.com
       LETSENCRYPT_EMAIL: connect@stipot.com
+      WS_NATS_PATH: "/"
       GH_APP_PRIVATE_KEY_FILE: /run/inimatic/secrets/github-app.pem
       CA_KEY_PEM_FILE: /run/inimatic/secrets/ca/ca.key
       CA_CERT_PEM_FILE: /run/inimatic/secrets/ca/ca.crt
@@ -215,6 +210,8 @@ services:
       NATS_URL: ${NATS_URL}
       NATS_USER: ${NATS_USER}
       NATS_PASS: ${NATS_PASS}
+      NATS_ISSUER_SEED: ${NATS_ISSUER_SEED}
+      NATS_ISSUER_PUB: ${NATS_ISSUER_PUB}
       TG_BOTS: ${TG_BOTS}
       BOT_ID: adaos_bot
       TG_ADAOS_BOT_BOT_TOKEN_FILE: ${TG_ADAOS_BOT_BOT_TOKEN_FILE}
@@ -274,11 +271,12 @@ services:
     env_file:
       - /opt/inimatic/.env
     environment:
-      VIRTUAL_HOST: api.inimatic.com
+      VIRTUAL_HOST: api.inimatic.com, nats.inimatic.com
       VIRTUAL_PORT: "3030"
       VIRTUAL_PROTO: "https"
-      LETSENCRYPT_HOST: api.inimatic.com
+      LETSENCRYPT_HOST: api.inimatic.com, nats.inimatic.com
       LETSENCRYPT_EMAIL: connect@stipot.com
+      WS_NATS_PATH: "/"
       GH_APP_PRIVATE_KEY_FILE: /run/inimatic/secrets/github-app.pem
       CA_KEY_PEM_FILE: /run/inimatic/secrets/ca/ca.key
       CA_CERT_PEM_FILE: /run/inimatic/secrets/ca/ca.crt
@@ -287,6 +285,8 @@ services:
       NATS_URL: ${NATS_URL}
       NATS_USER: ${NATS_USER}
       NATS_PASS: ${NATS_PASS}
+      NATS_ISSUER_SEED: ${NATS_ISSUER_SEED}
+      NATS_ISSUER_PUB: ${NATS_ISSUER_PUB}
       BOT_ID: adaos_bot
       TG_BOTS: ${TG_BOTS}
       TG_ADAOS_BOT_BOT_TOKEN_FILE: ${TG_ADAOS_BOT_BOT_TOKEN_FILE}

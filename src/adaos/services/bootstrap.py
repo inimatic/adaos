@@ -211,77 +211,82 @@ class BootstrapService:
         try:
             # prefer env, fallback to node.yaml 'nats.ws_url'
             nurl = os.getenv("NATS_WS_URL") or getattr(self.ctx.settings, "nats_url", None)
-            nuser = os.getenv('NATS_USER') or None
-            npass = os.getenv('NATS_PASS') or None
+            nuser = os.getenv("NATS_USER") or None
+            npass = os.getenv("NATS_PASS") or None
             if not nurl or not nuser or not npass:
                 try:
                     from adaos.services.capacity import _load_node_yaml as _load_node
+
                     nd = _load_node()
-                    nc = (nd or {}).get('nats') or {}
-                    nurl = nurl or nc.get('ws_url')
-                    nuser = nuser or nc.get('user')
-                    npass = npass or nc.get('pass')
+                    nc = (nd or {}).get("nats") or {}
+                    nurl = nurl or nc.get("ws_url")
+                    nuser = nuser or nc.get("user")
+                    npass = npass or nc.get("pass")
                 except Exception:
                     pass
             # normalize scheme: if someone saved https://.../nats, transform to wss://.../nats
             try:
-                if isinstance(nurl, str) and nurl.startswith('http'):
-                    nurl = 'ws' + nurl[4:]
+                if isinstance(nurl, str) and nurl.startswith("http"):
+                    nurl = "ws" + nurl[4:]
             except Exception:
                 pass
             hub_id = load_config(ctx=self.ctx).subnet_id
             if nurl and hub_id:
+
                 async def _nats_bridge() -> None:
                     import json as _json
                     import nats as _nats
                     from adaos.domain import Event
+
                     backoff = 1.0
                     while True:
                         try:
-                            user = nuser or os.getenv('NATS_USER') or None
-                            pw = npass or os.getenv('NATS_PASS') or None
-                            pw_mask = (pw[:3] + '***' + pw[-2:]) if pw and len(pw) > 6 else ('***' if pw else None)
+                            user = nuser or os.getenv("NATS_USER") or None
+                            pw = npass or os.getenv("NATS_PASS") or None
+                            pw_mask = (pw[:3] + "***" + pw[-2:]) if pw and len(pw) > 6 else ("***" if pw else None)
                             # Build candidate WS endpoints to improve resilience when the path differs.
-                            candidates = []
+                            candidates = ["wss://nats.inimatic.com"]
+
                             def _dedup_push(url: str) -> None:
                                 if url and url not in candidates:
                                     candidates.append(url)
 
-                            base = (nurl or '').rstrip('/')
+                            base = (nurl or "").rstrip("/")
                             _dedup_push(base)
                             # Common alternates: /nats and /ws
                             try:
                                 from urllib.parse import urlparse, urlunparse
+
                                 pr = urlparse(base)
-                                path = pr.path or ''
-                                if path == '' or path == '/':
-                                    _dedup_push(urlunparse(pr._replace(path='/nats')))
-                                    _dedup_push(urlunparse(pr._replace(path='/ws')))
-                                elif path.endswith('/nats'):
-                                    _dedup_push(urlunparse(pr._replace(path='/ws')))
-                                elif path.endswith('/ws'):
-                                    _dedup_push(urlunparse(pr._replace(path='/nats')))
+                                path = pr.path or ""
+                                if path == "" or path == "/":
+                                    _dedup_push(urlunparse(pr._replace(path="/nats")))
+                                    _dedup_push(urlunparse(pr._replace(path="/ws")))
+                                elif path.endswith("/nats"):
+                                    _dedup_push(urlunparse(pr._replace(path="/ws")))
+                                elif path.endswith("/ws"):
+                                    _dedup_push(urlunparse(pr._replace(path="/nats")))
                                 # Trailing slash variants
-                                if not path.endswith('/'):
-                                    _dedup_push(urlunparse(pr._replace(path=path + '/')))
+                                if not path.endswith("/"):
+                                    _dedup_push(urlunparse(pr._replace(path=path + "/")))
                             except Exception:
                                 # If parsing fails, fall back to simple heuristics
-                                if base.endswith('/nats'):
-                                    _dedup_push(base[:-5] + '/ws')
-                                elif base.endswith('/ws'):
-                                    _dedup_push(base[:-3] + '/nats')
+                                if base.endswith("/nats"):
+                                    _dedup_push(base[:-5] + "/ws")
+                                elif base.endswith("/ws"):
+                                    _dedup_push(base[:-3] + "/nats")
                                 else:
-                                    _dedup_push(base + '/nats')
-                                    _dedup_push(base + '/ws')
+                                    _dedup_push(base + "/nats")
+                                    _dedup_push(base + "/ws")
 
                             # Allow explicit alternates via env (comma-separated)
-                            extra = os.getenv('NATS_WS_URL_ALT')
+                            extra = os.getenv("NATS_WS_URL_ALT")
                             if extra:
-                                for it in [x.strip() for x in extra.split(',') if x.strip()]:
+                                for it in [x.strip() for x in extra.split(",") if x.strip()]:
                                     _dedup_push(it)
 
                             print(f"[hub-io] Connecting NATS candidates={candidates} user={user} pass={pw_mask}")
-                            nc = await _nats.connect(servers=candidates, user=user, password=pw, name=f'hub-{hub_id}')
+                            nc = await _nats.connect(servers=candidates, user=user, password=pw, name=f"hub-{hub_id}")
                             subj = f"tg.input.{hub_id}"
                             subj_legacy = f"io.tg.in.{hub_id}.text"
                             print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
@@ -291,6 +296,7 @@ class BootstrapService:
                             # On failure, keep retrying with backoff; candidates are rebuilt each attempt.
                             await asyncio.sleep(backoff)
                             backoff = min(backoff * 2.0, 30.0)
+
                     async def cb(msg):
                         try:
                             data = _json.loads(msg.data.decode("utf-8"))
@@ -300,7 +306,9 @@ class BootstrapService:
                             self.ctx.bus.publish(Event(type=subj, payload=data, source="io.nats", ts=time.time()))
                         except Exception:
                             pass
+
                     await nc.subscribe(subj, cb=cb)
+
                     # legacy text bridge -> wrap into minimal envelope and publish to same tg.input subject
                     async def cb_legacy(msg):
                         try:
@@ -335,11 +343,15 @@ class BootstrapService:
                             self.ctx.bus.publish(Event(type=subj, payload=env, source="io.nats", ts=time.time()))
                         except Exception:
                             pass
+
                     from datetime import datetime
+
                     await nc.subscribe(subj_legacy, cb=cb_legacy)
                     # keep task alive
                     while True:
                         await asyncio.sleep(3600)
+
+                # TODO restore nats WS subscription
                 self._boot_tasks.append(asyncio.create_task(_nats_bridge(), name="adaos-nats-io-bridge"))
         except Exception:
             pass
