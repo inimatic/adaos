@@ -23,6 +23,12 @@ location = /v1/pair/confirm {
     include /etc/nginx/vhost.d/api.inimatic.com_location;
 }
 
+location /nats {
+  # No client cert required for WS bridge
+  proxy_pass http://nats:8080;
+  include /etc/nginx/vhost.d/api.inimatic.com_location;
+}
+
 # --- защищённые пути под mTLS ---
 location ~ ^/v1/(owner|pki|registry|drafts|devices)/ {
     if ($ssl_client_verify != SUCCESS) { return 400; }
