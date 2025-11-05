@@ -1,6 +1,6 @@
 # src\adaos\services\bootstrap.py
 from __future__ import annotations
-import asyncio, socket, time, uuid, os
+import asyncio, socket, time, uuid, os, logging
 from typing import Any, List, Optional, Sequence
 from pathlib import Path
 from adaos.services.agent_context import AgentContext, get_ctx
@@ -28,6 +28,7 @@ class BootstrapService:
         self._booted = False
         self._app: Any = None
         self._io_bus: Any = None
+        self._log = logging.getLogger("adaos.hub-io")
 
     def is_ready(self) -> bool:
         return self._ready.is_set()
@@ -208,141 +209,147 @@ class BootstrapService:
 
         # Inbound bridge from root NATS -> local event bus (tg.input.<hub_id>)
         # Enabled when settings.nats_url is provided; safe no-op otherwise.
-        try:
-            # prefer env, fallback to node.yaml 'nats.ws_url'
-            nurl = os.getenv("NATS_WS_URL") or getattr(self.ctx.settings, "nats_url", None)
-            nuser = os.getenv('NATS_USER') or None
-            npass = os.getenv('NATS_PASS') or None
-            if not nurl or not nuser or not npass:
-                try:
-                    from adaos.services.capacity import _load_node_yaml as _load_node
-                    nd = _load_node()
-                    nc = (nd or {}).get('nats') or {}
-                    nurl = nurl or nc.get('ws_url')
-                    nuser = nuser or nc.get('user')
-                    npass = npass or nc.get('pass')
-                except Exception:
-                    pass
-            # normalize scheme: if someone saved https://.../nats, transform to wss://.../nats
-            try:
-                if isinstance(nurl, str) and nurl.startswith('http'):
-                    nurl = 'ws' + nurl[4:]
-            except Exception:
-                pass
-            hub_id = load_config(ctx=self.ctx).subnet_id
-            if nurl and hub_id:
-                async def _nats_bridge() -> None:
-                    import json as _json
-                    import nats as _nats
-                    from adaos.domain import Event
-                    backoff = 1.0
-                    while True:
-                        try:
-                            user = nuser or os.getenv('NATS_USER') or None
-                            pw = npass or os.getenv('NATS_PASS') or None
-                            pw_mask = (pw[:3] + '***' + pw[-2:]) if pw and len(pw) > 6 else ('***' if pw else None)
-                            # Build candidate WS endpoints to improve resilience when the path differs.
-                            candidates = []
-                            def _dedup_push(url: str) -> None:
-                                if url and url not in candidates:
-                                    candidates.append(url)
+        # prefer env, fallback to node.yaml 'nats.ws_url'
+        nurl = os.getenv("NATS_WS_URL") or getattr(self.ctx.settings, "nats_url", None)
+        nuser = os.getenv("NATS_USER") or None
+        npass = os.getenv("NATS_PASS") or None
+        if not nurl or not nuser or not npass:
+            from adaos.services.capacity import _load_node_yaml as _load_node
 
-                            base = (nurl or '').rstrip('/')
-                            _dedup_push(base)
-                            # Common alternates: /nats and /ws
-                            try:
-                                from urllib.parse import urlparse, urlunparse
-                                pr = urlparse(base)
-                                path = pr.path or ''
-                                if path == '' or path == '/':
-                                    _dedup_push(urlunparse(pr._replace(path='/nats')))
-                                    _dedup_push(urlunparse(pr._replace(path='/ws')))
-                                elif path.endswith('/nats'):
-                                    _dedup_push(urlunparse(pr._replace(path='/ws')))
-                                elif path.endswith('/ws'):
-                                    _dedup_push(urlunparse(pr._replace(path='/nats')))
-                                # Trailing slash variants
-                                if not path.endswith('/'):
-                                    _dedup_push(urlunparse(pr._replace(path=path + '/')))
-                            except Exception:
-                                # If parsing fails, fall back to simple heuristics
-                                if base.endswith('/nats'):
-                                    _dedup_push(base[:-5] + '/ws')
-                                elif base.endswith('/ws'):
-                                    _dedup_push(base[:-3] + '/nats')
-                                else:
-                                    _dedup_push(base + '/nats')
-                                    _dedup_push(base + '/ws')
+            nd = _load_node()
+            nc = (nd or {}).get("nats") or {}
+            nurl = nurl or nc.get("ws_url")
+            nuser = nuser or nc.get("user")
+            npass = npass or nc.get("pass")
+        # normalize scheme: if someone saved https://.../nats, transform to wss://.../nats
+        if isinstance(nurl, str) and nurl.startswith("http"):
+            nurl = "ws" + nurl[4:]
 
-                            # Allow explicit alternates via env (comma-separated)
-                            extra = os.getenv('NATS_WS_URL_ALT')
-                            if extra:
-                                for it in [x.strip() for x in extra.split(',') if x.strip()]:
-                                    _dedup_push(it)
+        hub_id = load_config(ctx=self.ctx).subnet_id
+        if not hub_id:
+            self._log.debug("NATS WS bridge: no hub_id; skipping")
+        if not nurl:
+            self._log.debug("NATS WS bridge: no NATS_WS_URL / nats.ws_url; skipping")
 
-                            print(f"[hub-io] Connecting NATS candidates={candidates} user={user} pass={pw_mask}")
-                            nc = await _nats.connect(servers=candidates, user=user, password=pw, name=f'hub-{hub_id}')
-                            subj = f"tg.input.{hub_id}"
-                            subj_legacy = f"io.tg.in.{hub_id}.text"
-                            print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
-                            break
-                        except Exception as e:
-                            print(f"[hub-io] NATS connect failed: {e}")
-                            # On failure, keep retrying with backoff; candidates are rebuilt each attempt.
-                            await asyncio.sleep(backoff)
-                            backoff = min(backoff * 2.0, 30.0)
-                    async def cb(msg):
-                        try:
-                            data = _json.loads(msg.data.decode("utf-8"))
-                        except Exception:
-                            data = {}
-                        try:
-                            self.ctx.bus.publish(Event(type=subj, payload=data, source="io.nats", ts=time.time()))
-                        except Exception:
-                            pass
-                    await nc.subscribe(subj, cb=cb)
-                    # legacy text bridge -> wrap into minimal envelope and publish to same tg.input subject
-                    async def cb_legacy(msg):
-                        try:
-                            data = _json.loads(msg.data.decode("utf-8"))
-                        except Exception:
-                            data = {}
-                        # transform into minimal io.input envelope compatible with downstream
-                        try:
-                            text = (data or {}).get("text") or ""
-                            chat_id = str((data or {}).get("chat_id") or "")
-                            tg_msg_id = (data or {}).get("tg_msg_id") or 0
-                            env = {
-                                "event_id": str(uuid.uuid4()).replace("-", ""),
-                                "kind": "io.input",
-                                "ts": datetime.utcnow().isoformat() + "Z",
-                                "dedup_key": f"legacy:{chat_id}:{tg_msg_id}",
-                                "payload": {
-                                    "type": "text",
-                                    "source": "telegram",
-                                    "bot_id": "",
-                                    "hub_id": hub_id,
-                                    "chat_id": chat_id,
-                                    "user_id": chat_id,
-                                    "update_id": str(tg_msg_id),
-                                    "payload": {"text": text, "meta": {"msg_id": tg_msg_id}},
-                                },
-                                "meta": {"hub_id": hub_id},
-                            }
-                        except Exception:
-                            env = data
-                        try:
-                            self.ctx.bus.publish(Event(type=subj, payload=env, source="io.nats", ts=time.time()))
-                        except Exception:
-                            pass
-                    from datetime import datetime
-                    await nc.subscribe(subj_legacy, cb=cb_legacy)
-                    # keep task alive
-                    while True:
-                        await asyncio.sleep(3600)
-                self._boot_tasks.append(asyncio.create_task(_nats_bridge(), name="adaos-nats-io-bridge"))
-        except Exception:
-            pass
+        if nurl and hub_id:
+
+            async def _nats_bridge() -> None:
+                import json as _json
+                import nats as _nats
+                from adaos.domain import Event
+                from urllib.parse import urlparse, urlunparse
+                from datetime import datetime
+
+                def _build_candidates(url: str) -> list[str]:
+                    base = (url or "").rstrip("/")
+                    seen: set[str] = set()
+                    out: list[str] = []
+
+                    def add(u: str) -> None:
+                        if u and u not in seen:
+                            seen.add(u)
+                            out.append(u)
+
+                    add(base)
+                    try:
+                        pr = urlparse(base)
+                        path = pr.path or ""
+                        if path in ("", "/"):
+                            add(urlunparse(pr._replace(path="/nats")))
+                            add(urlunparse(pr._replace(path="/ws")))
+                        elif path.endswith("/nats"):
+                            add(urlunparse(pr._replace(path="/ws")))
+                        elif path.endswith("/ws"):
+                            add(urlunparse(pr._replace(path="/nats")))
+                        if not path.endswith("/") and path:
+                            add(urlunparse(pr._replace(path=path + "/")))
+                    except Exception:
+                        if base.endswith("/nats"):
+                            add(base[:-5] + "/ws")
+                        elif base.endswith("/ws"):
+                            add(base[:-3] + "/nats")
+                        else:
+                            add(base + "/nats")
+                            add(base + "/ws")
+
+                    extra = os.getenv("NATS_WS_URL_ALT")
+                    if extra:
+                        for it in [x.strip() for x in extra.split(",") if x.strip()]:
+                            add(it)
+                    return out
+
+                backoff = 1.0
+                while True:
+                    try:
+                        user = nuser or os.getenv("NATS_USER") or None
+                        pw = npass or os.getenv("NATS_PASS") or None
+                        pw_mask = (pw[:3] + "***" + pw[-2:]) if pw and len(pw) > 6 else ("***" if pw else None)
+                        candidates = _build_candidates(nurl)
+                        self._log.info("NATS WS connect candidates=%s user=%s pass=%s", candidates, user, pw_mask)
+                        nc = await _nats.connect(servers=candidates, user=user, password=pw, name=f"hub-{hub_id}")
+                        subj = f"tg.input.{hub_id}"
+                        subj_legacy = f"io.tg.in.{hub_id}.text"
+                        self._log.info("NATS WS connected; subscribe %s and legacy %s", subj, subj_legacy)
+                        break
+                    except Exception as e:
+                        self._log.warning("NATS WS connect failed: %s", e, exc_info=True)
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2.0, 30.0)
+
+                async def cb(msg):
+                    try:
+                        data = _json.loads(msg.data.decode("utf-8"))
+                    except Exception:
+                        data = {}
+                    try:
+                        self.ctx.bus.publish(Event(type=subj, payload=data, source="io.nats", ts=time.time()))
+                    except Exception:
+                        self._log.exception("Failed to publish inbound NATS message")
+
+                await nc.subscribe(subj, cb=cb)
+
+                # legacy text bridge -> wrap into minimal envelope and publish to same tg.input subject
+                async def cb_legacy(msg):
+                    try:
+                        data = _json.loads(msg.data.decode("utf-8"))
+                    except Exception:
+                        data = {}
+                    # transform into minimal io.input envelope compatible with downstream
+                    try:
+                        text = (data or {}).get("text") or ""
+                        chat_id = str((data or {}).get("chat_id") or "")
+                        tg_msg_id = (data or {}).get("tg_msg_id") or 0
+                        env = {
+                            "event_id": str(uuid.uuid4()).replace("-", ""),
+                            "kind": "io.input",
+                            "ts": datetime.utcnow().isoformat() + "Z",
+                            "dedup_key": f"legacy:{chat_id}:{tg_msg_id}",
+                            "payload": {
+                                "type": "text",
+                                "source": "telegram",
+                                "bot_id": "",
+                                "hub_id": hub_id,
+                                "chat_id": chat_id,
+                                "user_id": chat_id,
+                                "update_id": str(tg_msg_id),
+                                "payload": {"text": text, "meta": {"msg_id": tg_msg_id}},
+                            },
+                            "meta": {"hub_id": hub_id},
+                        }
+                    except Exception:
+                        env = data
+                    try:
+                        self.ctx.bus.publish(Event(type=subj, payload=env, source="io.nats", ts=time.time()))
+                    except Exception:
+                        self._log.exception("Failed to publish legacy inbound NATS message")
+
+                await nc.subscribe(subj_legacy, cb=cb_legacy)
+                # keep task alive
+                while True:
+                    await asyncio.sleep(3600)
+
+            self._log.info("Scheduling NATS WS bridge task (url=%s)", nurl)
+            self._boot_tasks.append(asyncio.create_task(_nats_bridge(), name="adaos-nats-io-bridge"))
 
     async def shutdown(self) -> None:
         await bus.emit("sys.stopping", {}, source="lifecycle", actor="system")
