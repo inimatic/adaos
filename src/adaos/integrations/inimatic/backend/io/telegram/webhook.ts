@@ -8,7 +8,7 @@ import { idemGet, idemPut } from '../idem/kv.js'
 import { extractStartCode } from './pairing.js'
 import { pairConfirm, tgLinkSet } from '../pairing/store.js'
 import { ensureSchema } from '../../db/tg.repo.js'
-import { upsertBinding, listBindings, setSession, ensureHubToken } from '../../db/tg.repo.js'
+import { upsertBinding, listBindings, setSession, ensureHubToken, getByAlias } from '../../db/tg.repo.js'
 import { NatsBus } from '../bus/nats.js'
 import { randomUUID } from 'crypto'
 import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
@@ -256,6 +256,26 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 			} catch {}
 			log.info({ hub, user_id: evt.user_id, bot_id }, 'tg webhook: hub resolved')
 			evt.hub_id = hub || null
+
+			// Filter control commands handled by backend router; do not send to hub
+			if (evt.type === 'text') {
+				const t = String((evt.payload as any)?.text || '').trim()
+				const lower = t.toLowerCase()
+				const isCtrl = lower === '/list' || lower === '/help' || lower.startsWith('/use ') || lower === '/current' || lower === '/default' || lower.startsWith('/alias') || lower === '/bind_here' || lower === '/unbind_here'
+				if (isCtrl) {
+					try {
+						if (lower.startsWith('/use ')) {
+							const alias = t.slice(5).trim()
+							if (alias) {
+								const rec = await getByAlias(Number(evt.chat_id), alias)
+								if (rec?.hub_id) { try { await setSession(Number(evt.chat_id), String(rec.hub_id), 'manual') } catch {} }
+							}
+						}
+					} catch {}
+					await idemPut(idemKey, { status: 200, body: { ok: true, routed: false, info: 'handled_by_router' } }, 24 * 3600)
+					return res.status(200).json({ ok: true, routed: false })
+				}
+			}
 
 			let status = 202
 			let body: any = { ok: true, routed: false }

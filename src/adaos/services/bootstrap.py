@@ -336,13 +336,10 @@ class BootstrapService:
 
                     await nc.subscribe(subj, cb=cb)
 
-                    # Optional compatibility: also listen to additional hub aliases (e.g. "dev")
+                    # Optional compatibility: also listen to additional hub aliases if explicitly configured
                     try:
                         aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
                         aliases: List[str] = [a.strip() for a in aliases_env.split(",") if a.strip()]
-                        # If router fallback publishes to 'dev', include it by default unless user opted out
-                        if not aliases_env:
-                            aliases.append("dev")
                         seen = set([hub_id])
                         for aid in aliases:
                             if aid in seen:
@@ -391,21 +388,20 @@ class BootstrapService:
 
                     from datetime import datetime
 
-                    await nc.subscribe(subj_legacy, cb=cb_legacy)
-                    # Legacy alias for classic path (e.g., 'dev')
+                    # Legacy classic path subscription only when explicitly enabled
                     try:
-                        aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
-                        aliases: List[str] = [a.strip() for a in aliases_env.split(",") if a.strip()]
-                        if not aliases_env:
-                            aliases.append("dev")
-                        seen = set([hub_id])
-                        for aid in aliases:
-                            if aid in seen:
-                                continue
-                            seen.add(aid)
-                            alt_legacy = f"io.tg.in.{aid}.text"
-                            print(f"[hub-io] NATS subscribe (alias legacy) {alt_legacy}")
-                            await nc.subscribe(alt_legacy, cb=cb_legacy)
+                        if os.getenv("HUB_LISTEN_LEGACY", "0") == "1":
+                            await nc.subscribe(subj_legacy, cb=cb_legacy)
+                            aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
+                            aliases: List[str] = [a.strip() for a in aliases_env.split(",") if a.strip()]
+                            seen = set([hub_id])
+                            for aid in aliases:
+                                if aid in seen:
+                                    continue
+                                seen.add(aid)
+                                alt_legacy = f"io.tg.in.{aid}.text"
+                                print(f"[hub-io] NATS subscribe (alias legacy) {alt_legacy}")
+                                await nc.subscribe(alt_legacy, cb=cb_legacy)
                     except Exception:
                         pass
                     # keep task alive
