@@ -8,7 +8,7 @@ import { idemGet, idemPut } from '../idem/kv.js'
 import { extractStartCode } from './pairing.js'
 import { pairConfirm, tgLinkSet } from '../pairing/store.js'
 import { ensureSchema } from '../../db/tg.repo.js'
-import { upsertBinding, listBindings, setSession, ensureHubToken, getByAlias, setDefault } from '../../db/tg.repo.js'
+import { upsertBinding, listBindings, setSession, ensureHubToken, getByAlias, setDefault, getSession } from '../../db/tg.repo.js'
 import { NatsBus } from '../bus/nats.js'
 import { randomUUID } from 'crypto'
 import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
@@ -247,7 +247,11 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 
 			// resolve hub (session/default)
 			const locale = (evt.payload as any)?.meta?.lang
-            let hub = (await resolveHubId('telegram', evt.user_id, bot_id, locale)) || process.env['DEFAULT_HUB']
+            let hub = await resolveHubId('telegram', evt.user_id, bot_id, locale)
+            if (!hub) {
+                try { const sess = await getSession(Number(evt.chat_id)); if (sess?.current_hub_id) hub = String(sess.current_hub_id) } catch {}
+            }
+            if (!hub) hub = process.env['DEFAULT_HUB']
             // Optional address override: leading @<hub_id|alias> text -> route to that hub and strip the address token
             try {
                 if (evt.type === 'text') {
@@ -279,11 +283,11 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
             evt.hub_id = hub || null
 
             // Filter control commands handled by backend router; do not send to hub
-            if (evt.type === 'text') {
-                const t = String((evt.payload as any)?.text || '').trim()
-                const lower = t.toLowerCase()
-                const isCtrl = lower === '/list' || lower === '/help' || lower.startsWith('/use ') || lower === '/current' || lower === '/default' || lower.startsWith('/alias') || lower === '/bind_here' || lower === '/unbind_here'
-                if (isCtrl) {
+                if (evt.type === 'text') {
+                    const t = String((evt.payload as any)?.text || '').trim()
+                    const lower = t.toLowerCase()
+                    const isCtrl = lower === '/list' || lower === '/help' || lower.startsWith('/use ') || lower === '/current' || lower === '/default' || lower.startsWith('/alias') || lower === '/bind_here' || lower === '/unbind_here'
+                    if (isCtrl) {
                     try {
                         if (lower.startsWith('/use ')) {
                             const alias = t.slice(5).trim()
@@ -298,6 +302,32 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
                     } catch {}
                     await idemPut(idemKey, { status: 200, body: { ok: true, routed: false, info: 'handled_by_router' } }, 24 * 3600)
                     return res.status(200).json({ ok: true, routed: false })
+                } else if ((evt as any)?.payload && typeof (evt as any).payload === 'object') {
+                    // Allow addressing in caption for media: reuse @addr parsing by mapping caption to text
+                    const cap = String(((evt as any).payload as any)?.text || '').trim()
+                    if (cap.startsWith('@')) {
+                        const fakeTextEvt: any = { type: 'text', payload: { text: cap }, hub_id: hub, chat_id: evt.chat_id, user_id: evt.user_id, update_id: evt.update_id }
+                        // Re-run minimal address override logic
+                        const m = cap.match(/^\s*@([A-Za-z0-9_\-]+)\s+(.*)$/)
+                        if (m) {
+                            const addr = m[1]
+                            let routedHub = ''
+                            if (addr.startsWith('sn_')) routedHub = addr
+                            else {
+                                try {
+                                    const bindings = await listBindings(Number(evt.chat_id))
+                                    const hit = (bindings || []).find(b => String(b.alias) === addr)
+                                    routedHub = hit ? String(hit.hub_id) : ''
+                                } catch { routedHub = '' }
+                            }
+                            if (routedHub) {
+                                (evt as any).payload.text = (m[2] ?? '') as string
+                                hub = routedHub
+                                ;(evt as any).__addr_override = true
+                                log.info({ hub, addr }, 'tg webhook: address override (caption)')
+                            }
+                        }
+                    }
                 }
             }
 
