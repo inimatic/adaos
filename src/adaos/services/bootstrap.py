@@ -356,7 +356,16 @@ class BootstrapService:
                                 import mimetypes as _mtypes
                                 req = _ureq.Request(url, headers={"X-AdaOS-Token": token})
                                 with _ureq.urlopen(req, timeout=20) as resp:
+                                    # Prefer filename from header; fallback to Content-Disposition; then use type
                                     fname = resp.headers.get("X-File-Name") or ""
+                                    if not fname:
+                                        cd = resp.headers.get("Content-Disposition") or ""
+                                        try:
+                                            import cgi as _cgi
+                                            _val, _params = _cgi.parse_header(cd)
+                                            fname = _params.get('filename') or ''
+                                        except Exception:
+                                            fname = ''
                                     if fname:
                                         import os as _os
                                         fname = _os.path.basename(fname)
