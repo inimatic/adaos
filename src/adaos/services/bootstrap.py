@@ -336,6 +336,24 @@ class BootstrapService:
 
                     await nc.subscribe(subj, cb=cb)
 
+                    # Optional compatibility: also listen to additional hub aliases (e.g. "dev")
+                    try:
+                        aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
+                        aliases: List[str] = [a.strip() for a in aliases_env.split(",") if a.strip()]
+                        # If router fallback publishes to 'dev', include it by default unless user opted out
+                        if not aliases_env:
+                            aliases.append("dev")
+                        seen = set([hub_id])
+                        for aid in aliases:
+                            if aid in seen:
+                                continue
+                            seen.add(aid)
+                            alt = f"tg.input.{aid}"
+                            print(f"[hub-io] NATS subscribe (alias) {alt}")
+                            await nc.subscribe(alt, cb=cb)
+                    except Exception:
+                        pass
+
                     # legacy text bridge -> wrap into minimal envelope and publish to same tg.input subject
                     async def cb_legacy(msg):
                         try:
@@ -374,6 +392,22 @@ class BootstrapService:
                     from datetime import datetime
 
                     await nc.subscribe(subj_legacy, cb=cb_legacy)
+                    # Legacy alias for classic path (e.g., 'dev')
+                    try:
+                        aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
+                        aliases: List[str] = [a.strip() for a in aliases_env.split(",") if a.strip()]
+                        if not aliases_env:
+                            aliases.append("dev")
+                        seen = set([hub_id])
+                        for aid in aliases:
+                            if aid in seen:
+                                continue
+                            seen.add(aid)
+                            alt_legacy = f"io.tg.in.{aid}.text"
+                            print(f"[hub-io] NATS subscribe (alias legacy) {alt_legacy}")
+                            await nc.subscribe(alt_legacy, cb=cb_legacy)
+                    except Exception:
+                        pass
                     # keep task alive
                     while True:
                         await asyncio.sleep(3600)
