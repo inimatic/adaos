@@ -95,10 +95,10 @@ export function installWsNatsProxy(server: HttpsServer) {
             connected = true
           })
       upstreamSock.on('data', (chunk) => {
-        // NATS over WebSocket is line-based text; send TEXT frames
+        // Forward upstream INFO/PING/PONG as binary to satisfy clients expecting bytes (e.g., python nats ws)
         const txt = chunk.toString('utf8')
-        pushDbg({ from: rip, event: 'upstream_data', details: { len: txt.length, sample: txt.slice(0, 200) } })
-        try { ws.send(txt) } catch {}
+        pushDbg({ from: rip, event: 'upstream_data', details: { len: chunk.length, sample: txt.slice(0, 200) } })
+        try { ws.send(chunk, { binary: true }) } catch {}
       })
           upstreamSock.on('error', (err) => {
             log.warn({ err: String(err) }, 'upstream error')
