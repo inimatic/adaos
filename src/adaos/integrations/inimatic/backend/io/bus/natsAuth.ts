@@ -33,6 +33,8 @@ export async function installNatsAuth(app: express.Express) {
       const co = body?.connect_opts || {}
       const userRaw = (co.user || (body as any)?.user || '').trim()
       const passRaw = (co.pass || (body as any)?.pass || '').trim()
+      const rip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || ''
+      log.info({ from: rip, user: userRaw, pass: maskToken(passRaw) }, 'authz: request')
       if (!userRaw || !passRaw) {
         log.warn({ have_user: !!userRaw, have_pass: !!passRaw }, 'authz: missing creds')
         return res.status(401).json({ error: 'missing_credentials' })
@@ -102,6 +104,7 @@ export async function installNatsAuth(app: express.Express) {
           }, kp)
         }
         if (!userJwt) throw new Error('jwt_api_unsupported')
+        log.info({ hub_id: hubId, from: rip, pub_allow: perms.pub, sub_allow: perms.sub }, 'authz: ok')
         return res.json({ jwt: userJwt })
       } catch (e) {
         log.error({ hub_id: hubId, err: String(e) }, 'authz: jwt build failed')

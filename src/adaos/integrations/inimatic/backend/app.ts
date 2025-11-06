@@ -20,6 +20,7 @@ import { ForgeManager, type DraftKind } from './forge.js'
 import { getPolicy } from './policy.js'
 import { resolveLocale, translate, type Locale, type MessageParams } from './i18n.js'
 import { NatsBus } from './io/bus/nats.js'
+import { installWsNatsProxy } from './io/bus/wsNatsProxy.js'
 import { installTelegramWebhookRoutes } from './io/telegram/webhook.js'
 import { ensureSchema as ensureTgSchema } from './db/tg.repo.js'
 import { installPairingApi } from './io/pairing/api.js'
@@ -883,6 +884,9 @@ if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.
 installTelegramWebhookRoutes(app, ioBus)
 installPairingApi(app)
 import('./io/bus/natsAuth.js').then(m => m.installNatsAuth(app)).catch(() => {})
+
+// Install WS->NATS proxy for hubs (accepts NATS WS handshake, rewrites creds)
+try { installWsNatsProxy(server) } catch (e) { console.error('ws nats proxy init failed', e) }
 
 // Send a message to Telegram resolving hub_id -> chat_id/bot_id via pairing store
 app.post('/io/tg/send', async (req, res) => {
