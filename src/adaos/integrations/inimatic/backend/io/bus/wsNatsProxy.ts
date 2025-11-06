@@ -6,6 +6,19 @@ import { verifyHubToken } from '../../db/tg.repo.js'
 
 const log = pino({ name: 'ws-nats-proxy' })
 
+type DebugEvent = {
+  ts: string
+  from?: string
+  event: string
+  details?: any
+}
+
+const _recent: DebugEvent[] = []
+function pushDbg(ev: Omit<DebugEvent, 'ts'>) {
+  _recent.push({ ts: new Date().toISOString(), ...ev })
+  if (_recent.length > 200) _recent.shift()
+}
+
 type UpstreamOpts = {
   host: string
   port: number
@@ -50,16 +63,36 @@ export function installWsNatsProxy(server: HttpsServer) {
     ;(Promise.resolve(mod).then((m: any) => {
       WebSocketServerCtor = m.WebSocketServer || m.Server
       if (!WebSocketServerCtor) throw new Error('ws package missing WebSocketServer export')
-      const wss = new WebSocketServerCtor({ server, path })
+      const wss = new WebSocketServerCtor({
+        server,
+        path,
+        perMessageDeflate: false,
+        handleProtocols: (protocols: string[], _req: any) => {
+          // Prefer NATS subprotocol when offered by client
+          return protocols.includes('nats') ? 'nats' : (protocols[0] || undefined)
+        },
+      })
 
-      wss.on('connection', (ws: any, req: any) => {
-        const rip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || ''
-        log.info({ from: rip }, 'conn open')
+  wss.on('connection', (ws: any, req: any) => {
+    const rip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || ''
+    log.info({ from: rip }, 'conn open')
+    pushDbg({ from: rip, event: 'conn_open' })
 
         let connected = false
         let handshaked = false
         let clientBuf = Buffer.alloc(0)
         let upstreamSock: net.Socket | null = null
+        let upstreamPingTimer: NodeJS.Timeout | null = null
+        function armUpstreamPingWatch() {
+          if (upstreamPingTimer) clearTimeout(upstreamPingTimer)
+          upstreamPingTimer = setTimeout(() => {
+            try { upstreamSock?.write(Buffer.from('PONG\r\n', 'utf8')) } catch {}
+            upstreamPingTimer = null
+          }, 1500)
+        }
+        function disarmUpstreamPingWatch() {
+          if (upstreamPingTimer) { clearTimeout(upstreamPingTimer); upstreamPingTimer = null }
+        }
 
         function closeBoth(code?: number, reason?: string) {
           try { ws.close(code || 1000, reason) } catch {}
@@ -72,10 +105,13 @@ export function installWsNatsProxy(server: HttpsServer) {
           upstreamSock.on('connect', () => {
             connected = true
           })
-          upstreamSock.on('data', (chunk) => {
-            // Forward as binary Buffer to match clients expecting bytes (e.g., python nats ws)
-            try { ws.send(chunk) } catch {}
-          })
+      upstreamSock.on('data', (chunk) => {
+        // Forward upstream INFO/PING/PONG as binary to satisfy clients expecting bytes (e.g., python nats ws)
+        const txt = chunk.toString('utf8')
+        pushDbg({ from: rip, event: 'upstream_data', details: { len: chunk.length, sample: txt.slice(0, 200) } })
+        if (txt.includes('PING')) armUpstreamPingWatch()
+        try { ws.send(chunk, { binary: true }) } catch {}
+      })
           upstreamSock.on('error', (err) => {
             log.warn({ err: String(err) }, 'upstream error')
             closeBoth(1011, 'upstream_error')
@@ -85,12 +121,19 @@ export function installWsNatsProxy(server: HttpsServer) {
 
         function tryProcessHandshake(): boolean {
           const s = clientBuf.toString('utf8')
-          const idx = s.indexOf('\r\n')
+          // support both CRLF and LF
+          let idx = s.indexOf('\r\n')
+          let eolLen = 2
+          if (idx === -1) {
+            idx = s.indexOf('\n')
+            eolLen = 1
+          }
           if (idx === -1) return false
           const line = s.slice(0, idx)
-          const rest = Buffer.from(s.slice(idx + 2), 'utf8')
+          const rest = Buffer.from(s.slice(idx + eolLen), 'utf8')
           if (!line.startsWith('CONNECT ')) {
             log.warn({ from: rip, line }, 'unexpected first line (expected CONNECT)')
+            pushDbg({ from: rip, event: 'unexpected_first_line', details: { line: line.slice(0, 200) } })
             closeBoth(1008, 'protocol_error')
             return true
           }
@@ -98,6 +141,7 @@ export function installWsNatsProxy(server: HttpsServer) {
           let obj: any
           try { obj = JSON.parse(jsonRaw) } catch (e) {
             log.warn({ from: rip, err: String(e) }, 'bad CONNECT json')
+            pushDbg({ from: rip, event: 'bad_connect_json', details: { err: String(e), json_sample: jsonRaw.slice(0, 200) } })
             closeBoth(1008, 'bad_connect')
             return true
           }
@@ -109,6 +153,7 @@ export function installWsNatsProxy(server: HttpsServer) {
             .then((ok) => {
               if (!ok) {
                 log.warn({ from: rip, hub_id: hubId, user: userRaw, pass: mask(passRaw) }, 'auth failed')
+                pushDbg({ from: rip, event: 'auth_failed', details: { hub_id: hubId, user: userRaw } })
                 closeBoth(1008, 'auth_failed')
                 return
               }
@@ -121,14 +166,18 @@ export function installWsNatsProxy(server: HttpsServer) {
                   if (rest.length) upstreamSock?.write(rest)
                   clientBuf = Buffer.alloc(0)
                   handshaked = true
+                  log.info({ from: rip, hub_id: hubId }, 'auth ok')
+                  pushDbg({ from: rip, event: 'auth_ok', details: { hub_id: hubId } })
                 } catch (e) {
                   log.warn({ err: String(e) }, 'write upstream failed')
+                  pushDbg({ from: rip, event: 'upstream_write_failed', details: { err: String(e) } })
                   closeBoth(1011, 'upstream_write_failed')
                 }
               }, 0)
             })
             .catch((e) => {
               log.error({ from: rip, err: String(e) }, 'auth error')
+              pushDbg({ from: rip, event: 'auth_error', details: { err: String(e) } })
               closeBoth(1011, 'auth_error')
             })
           return true
@@ -136,20 +185,29 @@ export function installWsNatsProxy(server: HttpsServer) {
 
         ws.on('message', (data: any) => {
           if (handshaked) {
+            // cancel upstream ping watchdog if client replied with PONG
+            try {
+              const s = typeof data === 'string' ? data : (data as Buffer).toString('utf8')
+              if (s.includes('PONG')) disarmUpstreamPingWatch()
+            } catch {}
             try { upstreamSock?.write(data as Buffer) } catch {}
             return
           }
           const buf = typeof data === 'string' ? Buffer.from(data) : (data as Buffer)
+          const isStr = typeof data === 'string'
+          pushDbg({ from: rip, event: 'client_frame', details: { type: isStr ? 'text' : 'binary', len: (isStr ? (data as string).length : (data as Buffer).length), sample: (isStr ? (data as string).slice(0, 120) : (data as Buffer).toString('utf8', 0, 120)) } })
           clientBuf = Buffer.concat([clientBuf, buf])
           tryProcessHandshake()
         })
 
         ws.on('error', (err: any) => {
           log.warn({ from: rip, err: String(err) }, 'ws error')
+          pushDbg({ from: rip, event: 'ws_error', details: { err: String(err) } })
           closeBoth()
         })
         ws.on('close', () => {
           log.info({ from: rip }, 'conn close')
+          pushDbg({ from: rip, event: 'conn_close' })
           try { upstreamSock?.destroy() } catch {}
         })
 
@@ -161,5 +219,15 @@ export function installWsNatsProxy(server: HttpsServer) {
     }))
   } catch (e) {
     log.error({ err: String(e) }, 'ws dynamic import failed')
+  }
+}
+
+export function installWsNatsProxyDebugRoute(app: any) {
+  try {
+    app.get('/internal/debug/ws-nats-proxy', (_req: any, res: any) => {
+      res.json({ recent: _recent.slice(-100) })
+    })
+  } catch (e) {
+    log.warn({ err: String(e) }, 'failed to install ws-nats-proxy debug route')
   }
 }
