@@ -319,7 +319,14 @@ class BootstrapService:
                             print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
                             break
                         except Exception as e:
-                            print(f"[hub-io] NATS connect failed: {e}")
+                            try:
+                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and "UnexpectedEOF" in str(e):
+                                    # dev-only: hush idle EOF noise
+                                    pass
+                                else:
+                                    print(f"[hub-io] NATS connect failed: {e}")
+                            except Exception:
+                                pass
                             # On failure, keep retrying with backoff; candidates are rebuilt each attempt.
                             await asyncio.sleep(backoff)
                             backoff = min(backoff * 2.0, 30.0)
@@ -346,10 +353,21 @@ class BootstrapService:
                                 cache_dir.mkdir(parents=True, exist_ok=True)
                                 import urllib.request as _ureq
                                 import uuid as _uuid
-                                dest = cache_dir / f"tg_{_uuid.uuid4().hex}"
+                                import mimetypes as _mtypes
                                 req = _ureq.Request(url, headers={"X-AdaOS-Token": token})
-                                with _ureq.urlopen(req, timeout=20) as resp, open(dest, "wb") as out:
-                                    out.write(resp.read())
+                                with _ureq.urlopen(req, timeout=20) as resp:
+                                    fname = resp.headers.get("X-File-Name") or ""
+                                    if fname:
+                                        import os as _os
+                                        fname = _os.path.basename(fname)
+                                    else:
+                                        # fallback to type-based extension
+                                        ctype = resp.headers.get("Content-Type") or "application/octet-stream"
+                                        ext = _mtypes.guess_extension(ctype) or ""
+                                        fname = f"tg_{_uuid.uuid4().hex}{ext}"
+                                    dest = cache_dir / fname
+                                    with open(dest, "wb") as out:
+                                        out.write(resp.read())
                                 media_path = str(dest)
                                 # annotate
                                 if isinstance(p, dict):
