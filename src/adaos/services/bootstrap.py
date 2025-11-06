@@ -281,11 +281,11 @@ class BootstrapService:
                                         _dedup_push(base)
                                         path = pr.path or ""
                                         # If no explicit path, prefer '/nats'
-                                        if path == "" or path == "/":
+                                        """ if path == "" or path == "/":
                                             _dedup_push(urlunparse(pr._replace(path="/nats")))
                                         # If path is exactly '/ws', switch to '/nats'
                                         elif path.endswith("/ws"):
-                                            _dedup_push(urlunparse(pr._replace(path="/nats")))
+                                            _dedup_push(urlunparse(pr._replace(path="/nats"))) """
                                         # Avoid generating trailing slash variants which may 400
                                     # Known public endpoint as a fallback
                                     _dedup_push("wss://nats.inimatic.com")
@@ -319,7 +319,14 @@ class BootstrapService:
                             print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
                             break
                         except Exception as e:
-                            print(f"[hub-io] NATS connect failed: {e}")
+                            try:
+                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and "UnexpectedEOF" in str(e):
+                                    # dev-only: hush idle EOF noise
+                                    pass
+                                else:
+                                    print(f"[hub-io] NATS connect failed: {e}")
+                            except Exception:
+                                pass
                             # On failure, keep retrying with backoff; candidates are rebuilt each attempt.
                             await asyncio.sleep(backoff)
                             backoff = min(backoff * 2.0, 30.0)
@@ -330,11 +337,77 @@ class BootstrapService:
                         except Exception:
                             data = {}
                         try:
+                            # Media fetch: if event includes telegram media, download to local cache and annotate path
+                            p = (data or {}).get("payload") or {}
+                            typ = p.get("type") or (data.get("type") if isinstance(data.get("type"), str) else None)
+                            bot_id = p.get("bot_id") or data.get("bot_id") or ""
+                            file_id = p.get("file_id") if isinstance(p, dict) else None
+                            if not file_id and isinstance(p, dict):
+                                file_id = p.get("payload", {}).get("file_id") if isinstance(p.get("payload"), dict) else None
+                            media_path = None
+                            if isinstance(typ, str) and file_id and bot_id and typ in ("photo", "document", "audio", "voice"):
+                                base = self.ctx.settings.api_base.rstrip("/")
+                                token = os.getenv("ADAOS_TOKEN", "")
+                                url = f"{base}/internal/tg/file?bot_id={bot_id}&file_id={file_id}"
+                                cache_dir = self.ctx.paths.cache_dir()
+                                cache_dir.mkdir(parents=True, exist_ok=True)
+                                import urllib.request as _ureq
+                                import uuid as _uuid
+                                import mimetypes as _mtypes
+                                req = _ureq.Request(url, headers={"X-AdaOS-Token": token})
+                                with _ureq.urlopen(req, timeout=20) as resp:
+                                    # Prefer filename from header; fallback to Content-Disposition; then use type
+                                    fname = resp.headers.get("X-File-Name") or ""
+                                    if not fname:
+                                        cd = resp.headers.get("Content-Disposition") or ""
+                                        try:
+                                            import cgi as _cgi
+                                            _val, _params = _cgi.parse_header(cd)
+                                            fname = _params.get('filename') or ''
+                                        except Exception:
+                                            fname = ''
+                                    if fname:
+                                        import os as _os
+                                        fname = _os.path.basename(fname)
+                                    else:
+                                        # fallback to type-based extension
+                                        ctype = resp.headers.get("Content-Type") or "application/octet-stream"
+                                        ext = _mtypes.guess_extension(ctype) or ""
+                                        fname = f"tg_{_uuid.uuid4().hex}{ext}"
+                                    dest = cache_dir / fname
+                                    with open(dest, "wb") as out:
+                                        out.write(resp.read())
+                                media_path = str(dest)
+                                # annotate
+                                if isinstance(p, dict):
+                                    if isinstance(p.get("payload"), dict):
+                                        p["payload"]["file_path"] = media_path
+                                    else:
+                                        p["file_path"] = media_path
+                                data["payload"] = p
+                        except Exception:
+                            pass
+                        try:
                             self.ctx.bus.publish(Event(type=subj, payload=data, source="io.nats", ts=time.time()))
                         except Exception:
                             pass
 
                     await nc.subscribe(subj, cb=cb)
+
+                    # Optional compatibility: also listen to additional hub aliases if explicitly configured
+                    try:
+                        aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
+                        aliases: List[str] = [a.strip() for a in aliases_env.split(",") if a.strip()]
+                        seen = set([hub_id])
+                        for aid in aliases:
+                            if aid in seen:
+                                continue
+                            seen.add(aid)
+                            alt = f"tg.input.{aid}"
+                            print(f"[hub-io] NATS subscribe (alias) {alt}")
+                            await nc.subscribe(alt, cb=cb)
+                    except Exception:
+                        pass
 
                     # legacy text bridge -> wrap into minimal envelope and publish to same tg.input subject
                     async def cb_legacy(msg):
@@ -373,7 +446,22 @@ class BootstrapService:
 
                     from datetime import datetime
 
-                    await nc.subscribe(subj_legacy, cb=cb_legacy)
+                    # Legacy classic path subscription only when explicitly enabled
+                    try:
+                        if os.getenv("HUB_LISTEN_LEGACY", "0") == "1":
+                            await nc.subscribe(subj_legacy, cb=cb_legacy)
+                            aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
+                            aliases: List[str] = [a.strip() for a in aliases_env.split(",") if a.strip()]
+                            seen = set([hub_id])
+                            for aid in aliases:
+                                if aid in seen:
+                                    continue
+                                seen.add(aid)
+                                alt_legacy = f"io.tg.in.{aid}.text"
+                                print(f"[hub-io] NATS subscribe (alias legacy) {alt_legacy}")
+                                await nc.subscribe(alt_legacy, cb=cb_legacy)
+                    except Exception:
+                        pass
                     # keep task alive
                     while True:
                         await asyncio.sleep(3600)
