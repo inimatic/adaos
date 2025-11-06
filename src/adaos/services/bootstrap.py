@@ -330,6 +330,37 @@ class BootstrapService:
                         except Exception:
                             data = {}
                         try:
+                            # Media fetch: if event includes telegram media, download to local cache and annotate path
+                            p = (data or {}).get("payload") or {}
+                            typ = p.get("type") or (data.get("type") if isinstance(data.get("type"), str) else None)
+                            bot_id = p.get("bot_id") or data.get("bot_id") or ""
+                            file_id = p.get("file_id") if isinstance(p, dict) else None
+                            if not file_id and isinstance(p, dict):
+                                file_id = p.get("payload", {}).get("file_id") if isinstance(p.get("payload"), dict) else None
+                            media_path = None
+                            if isinstance(typ, str) and file_id and bot_id and typ in ("photo", "document", "audio", "voice"):
+                                base = self.ctx.settings.api_base.rstrip("/")
+                                token = os.getenv("ADAOS_TOKEN", "")
+                                url = f"{base}/internal/tg/file?bot_id={bot_id}&file_id={file_id}"
+                                cache_dir = self.ctx.paths.cache_dir()
+                                cache_dir.mkdir(parents=True, exist_ok=True)
+                                import urllib.request as _ureq
+                                import uuid as _uuid
+                                dest = cache_dir / f"tg_{_uuid.uuid4().hex}"
+                                req = _ureq.Request(url, headers={"X-AdaOS-Token": token})
+                                with _ureq.urlopen(req, timeout=20) as resp, open(dest, "wb") as out:
+                                    out.write(resp.read())
+                                media_path = str(dest)
+                                # annotate
+                                if isinstance(p, dict):
+                                    if isinstance(p.get("payload"), dict):
+                                        p["payload"]["file_path"] = media_path
+                                    else:
+                                        p["file_path"] = media_path
+                                data["payload"] = p
+                        except Exception:
+                            pass
+                        try:
                             self.ctx.bus.publish(Event(type=subj, payload=data, source="io.nats", ts=time.time()))
                         except Exception:
                             pass

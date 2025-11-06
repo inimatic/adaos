@@ -61,53 +61,56 @@ export function toInputEvent(
 	}
 
 	// VOICE
-	if (baseMsg?.voice?.file_id) {
-		const v = baseMsg.voice
-		return {
-			type: 'audio',
-			source: 'telegram',
-			bot_id,
-			hub_id,
-			chat_id,
-			user_id,
-			update_id: upd_id,
-			payload: {
-				file_id: v.file_id,
-				meta: { msg_id: baseMsg.message_id, mime: 'audio/ogg', duration: v.duration },
-			},
-		}
-	}
+    if (baseMsg?.voice?.file_id) {
+        const v = baseMsg.voice
+        return {
+            type: 'audio',
+            source: 'telegram',
+            bot_id,
+            hub_id,
+            chat_id,
+            user_id,
+            update_id: upd_id,
+            payload: {
+                file_id: v.file_id,
+                // voice messages have no caption in Telegram API; keep meta only
+                meta: { msg_id: baseMsg.message_id, mime: 'audio/ogg', duration: v.duration },
+            },
+        }
+    }
 
 	// PHOTO (берём последний размер)
-	if (Array.isArray(baseMsg?.photo) && baseMsg.photo.length > 0) {
-		const sizes = baseMsg.photo
-		const file_id = sizes[sizes.length - 1]?.file_id
-		return {
-			type: 'photo',
-			source: 'telegram',
-			bot_id,
-			hub_id,
-			chat_id,
-			user_id,
-			update_id: upd_id,
-			payload: { file_id, meta: { msg_id: baseMsg.message_id } },
-		}
-	}
+    if (Array.isArray(baseMsg?.photo) && baseMsg.photo.length > 0) {
+        const sizes = baseMsg.photo
+        const file_id = sizes[sizes.length - 1]?.file_id
+        const caption: string | undefined = typeof baseMsg.caption === 'string' && baseMsg.caption.length > 0 ? baseMsg.caption : undefined
+        return {
+            type: 'photo',
+            source: 'telegram',
+            bot_id,
+            hub_id,
+            chat_id,
+            user_id,
+            update_id: upd_id,
+            payload: { file_id, ...(caption ? { text: caption } : {}), meta: { msg_id: baseMsg.message_id } },
+        }
+    }
 
 	// DOCUMENT
-	if (baseMsg?.document?.file_id) {
-		const d = baseMsg.document
-		return {
-			type: 'document',
-			source: 'telegram',
-			bot_id,
-			hub_id,
-			chat_id,
-			user_id,
-			update_id: upd_id,
-			payload: { file_id: d.file_id, meta: { msg_id: baseMsg.message_id } },
-		}
-	}
+    if (baseMsg?.document?.file_id) {
+        const d = baseMsg.document
+        const caption: string | undefined = typeof baseMsg.caption === 'string' && baseMsg.caption.length > 0 ? baseMsg.caption : undefined
+        return {
+            type: 'document',
+            source: 'telegram',
+            bot_id,
+            hub_id,
+            chat_id,
+            user_id,
+            update_id: upd_id,
+            payload: { file_id: d.file_id, ...(caption ? { text: caption } : {}), meta: { msg_id: baseMsg.message_id } },
+        }
+    }
 
 	// UNKNOWN
 	return {
