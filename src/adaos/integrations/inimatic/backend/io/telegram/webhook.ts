@@ -225,9 +225,35 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 				}
 			}
 
-			// resolve hub
+			// resolve hub (session/default)
 			const locale = (evt.payload as any)?.meta?.lang
-			const hub = (await resolveHubId('telegram', evt.user_id, bot_id, locale)) || process.env['DEFAULT_HUB']
+			let hub = (await resolveHubId('telegram', evt.user_id, bot_id, locale)) || process.env['DEFAULT_HUB']
+			// Optional address override: leading @<hub_id|alias> text -> route to that hub and strip the address token
+			try {
+				if (evt.type === 'text') {
+					const txt0 = String((evt.payload as any)?.text || '')
+					const m = txt0.match(/^\s*@([A-Za-z0-9_\-]+)\s+(.*)$/)
+					if (m) {
+						const addr = m[1]
+						let routedHub = ''
+						if (addr.startsWith('sn_')) routedHub = addr
+						else {
+							try {
+								const bindings = await listBindings(Number(evt.chat_id))
+								const hit = (bindings || []).find(b => String(b.alias) === addr)
+								routedHub = hit ? String(hit.hub_id) : ''
+							} catch { routedHub = '' }
+						}
+						if (routedHub) {
+							const stripped = m[2]
+							(evt.payload as any).text = stripped
+							// Also adjust legacy mirror text via evt later
+							hub = routedHub
+							log.info({ hub, addr }, 'tg webhook: address override')
+						}
+					}
+				}
+			} catch {}
 			log.info({ hub, user_id: evt.user_id, bot_id }, 'tg webhook: hub resolved')
 			evt.hub_id = hub || null
 

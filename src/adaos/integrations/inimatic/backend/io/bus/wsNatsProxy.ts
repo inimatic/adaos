@@ -82,6 +82,17 @@ export function installWsNatsProxy(server: HttpsServer) {
         let handshaked = false
         let clientBuf = Buffer.alloc(0)
         let upstreamSock: net.Socket | null = null
+        let upstreamPingTimer: NodeJS.Timeout | null = null
+        function armUpstreamPingWatch() {
+          if (upstreamPingTimer) clearTimeout(upstreamPingTimer)
+          upstreamPingTimer = setTimeout(() => {
+            try { upstreamSock?.write(Buffer.from('PONG\r\n', 'utf8')) } catch {}
+            upstreamPingTimer = null
+          }, 1500)
+        }
+        function disarmUpstreamPingWatch() {
+          if (upstreamPingTimer) { clearTimeout(upstreamPingTimer); upstreamPingTimer = null }
+        }
 
         function closeBoth(code?: number, reason?: string) {
           try { ws.close(code || 1000, reason) } catch {}
@@ -98,6 +109,7 @@ export function installWsNatsProxy(server: HttpsServer) {
         // Forward upstream INFO/PING/PONG as binary to satisfy clients expecting bytes (e.g., python nats ws)
         const txt = chunk.toString('utf8')
         pushDbg({ from: rip, event: 'upstream_data', details: { len: chunk.length, sample: txt.slice(0, 200) } })
+        if (txt.includes('PING')) armUpstreamPingWatch()
         try { ws.send(chunk, { binary: true }) } catch {}
       })
           upstreamSock.on('error', (err) => {
@@ -173,6 +185,11 @@ export function installWsNatsProxy(server: HttpsServer) {
 
         ws.on('message', (data: any) => {
           if (handshaked) {
+            // cancel upstream ping watchdog if client replied with PONG
+            try {
+              const s = typeof data === 'string' ? data : (data as Buffer).toString('utf8')
+              if (s.includes('PONG')) disarmUpstreamPingWatch()
+            } catch {}
             try { upstreamSock?.write(data as Buffer) } catch {}
             return
           }
