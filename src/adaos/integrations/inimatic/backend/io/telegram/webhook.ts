@@ -30,7 +30,11 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
             const meta = await getFilePath(botToken, file_id)
             if (!meta || typeof meta === 'string') return res.status(404).json({ error: 'not_found' })
             const tmp = await downloadFile(botToken, meta.file_path, bot_id || 'default')
-            res.setHeader('Content-Type', 'application/octet-stream')
+            const name = require('node:path').basename(String(meta.file_path || 'file'))
+            const mime = require('node:mime-types').lookup(name) || 'application/octet-stream'
+            res.setHeader('Content-Type', String(mime))
+            res.setHeader('Content-Disposition', `attachment; filename="${name}"`)
+            res.setHeader('X-File-Name', name)
             res.sendFile(tmp)
         } catch (e) {
             log.error({ err: String(e) }, 'tg file proxy failed')
