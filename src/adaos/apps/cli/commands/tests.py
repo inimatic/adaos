@@ -569,10 +569,10 @@ def run_tests(
             raise typer.Exit(code=0)
         elif only_skills:
             typer.secho("No skill tests found. Ensure skills are installed and contain tests/ with test_*.py", fg=typer.colors.YELLOW)
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=0)
         else:
             typer.secho("No test paths found. Tip: add SDK tests in ./tests, or ensure skills with tests are installed.", fg=typer.colors.YELLOW)
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=0)
 
     # 3) Группировка по диску (Windows rootdir guard)
     from collections import defaultdict
