@@ -541,7 +541,7 @@ def run_tests(
             pytest_paths.append(str(sdk_tests))
         elif only_sdk:
             typer.secho("No SDK tests found in ./tests", fg=typer.colors.YELLOW)
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=0)
 
     if not only_sdk and not only_scenarios:
         _prepare_skills_repo(no_clone=no_clone)
@@ -566,11 +566,13 @@ def run_tests(
     if not pytest_paths:
         if only_sdk:
             typer.secho("No SDK tests found. Create ./tests with test_*.py", fg=typer.colors.YELLOW)
+            raise typer.Exit(code=0)
         elif only_skills:
             typer.secho("No skill tests found. Ensure skills are installed and contain tests/ with test_*.py", fg=typer.colors.YELLOW)
+            raise typer.Exit(code=1)
         else:
             typer.secho("No test paths found. Tip: add SDK tests in ./tests, or ensure skills with tests are installed.", fg=typer.colors.YELLOW)
-        raise typer.Exit(code=1)
+            raise typer.Exit(code=1)
 
     # 3) Группировка по диску (Windows rootdir guard)
     from collections import defaultdict
