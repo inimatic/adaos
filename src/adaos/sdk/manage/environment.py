@@ -18,17 +18,17 @@ def prepare_environment() -> None:
 
     ctx = get_ctx()
 
-    skills_root = Path(ctx.paths.skills_dir())
-    scenarios_root = Path(ctx.paths.scenarios_dir())
+    skills_root = ctx.paths.skills_dir()
+    scenarios_root = ctx.paths.scenarios_dir()
     skills_cache = Path(
         (ctx.paths.skills_cache_dir() if hasattr(ctx.paths, "skills_cache_dir") else ctx.paths.skills_dir())
     )
     scenarios_cache = Path(
         (ctx.paths.scenarios_cache_dir() if hasattr(ctx.paths, "scenarios_cache_dir") else ctx.paths.scenarios_dir())
     )
-    state_root = Path(ctx.paths.state_dir())
-    cache_root = Path(ctx.paths.cache_dir())
-    logs_root = Path(ctx.paths.logs_dir())
+    state_root = ctx.paths.state_dir()
+    cache_root = ctx.paths.cache_dir()
+    logs_root = ctx.paths.logs_dir()
 
     for directory in (skills_root, scenarios_root, skills_cache, scenarios_cache, state_root, cache_root, logs_root):
         directory.mkdir(parents=True, exist_ok=True)

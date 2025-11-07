@@ -591,7 +591,7 @@ app.get('/v1/health', (_req, res) => {
 })
 
 // Prometheus metrics endpoint
-import client from 'prom-client'
+/* import client from 'prom-client'
 app.get('/metrics', async (_req, res) => {
 	try {
 		res.set('Content-Type', client.register.contentType)
@@ -599,7 +599,7 @@ app.get('/metrics', async (_req, res) => {
 	} catch (e) {
 		res.status(500).send(String(e))
 	}
-})
+}) */
 
 const rootRouter = express.Router()
 
@@ -805,7 +805,7 @@ if (process.env['DEBUG_ENDPOINTS'] === 'true') {
 app.use('/v1', rootRouter)
 
 // --- IO (Telegram) wiring ---
-try { if (process.env['PG_URL']) await ensureTgSchema() } catch {}
+try { if (process.env['PG_URL']) await ensureTgSchema() } catch { }
 let ioBus: NatsBus | null = null
 if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.env['NATS_URL']) {
 	try {
@@ -870,7 +870,7 @@ if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.
 							meta: { is_command: false },
 						}
 						const legacySubj = `io.tg.in.${hub}.text`
-							await ioBus!.publish_subject(legacySubj, legacy)
+						await ioBus!.publish_subject(legacySubj, legacy)
 						console.log(`[io] bridged ${subject} -> ${legacySubj}`)
 					}
 				} catch { /* ignore */ }
@@ -883,8 +883,8 @@ if ((process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' && process.
 }
 installTelegramWebhookRoutes(app, ioBus)
 installPairingApi(app)
-import('./io/bus/natsAuth.js').then(m => m.installNatsAuth(app)).catch(() => {})
-try { installWsNatsProxyDebugRoute(app) } catch {}
+import('./io/bus/natsAuth.js').then(m => m.installNatsAuth(app)).catch(() => { })
+try { installWsNatsProxyDebugRoute(app) } catch { }
 
 // Install WS->NATS proxy for hubs (accepts NATS WS handshake, rewrites creds)
 try { installWsNatsProxy(server) } catch (e) { console.error('ws nats proxy init failed', e) }

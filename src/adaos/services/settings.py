@@ -63,6 +63,25 @@ class Settings:
 
     @staticmethod
     def from_sources(env_file: Optional[str] = ".env") -> "Settings":
+        # Optional runtime guard: disallow ad-hoc calls outside composition roots when ADAOS_STRICT_CTX=1
+        try:
+            if os.getenv("ADAOS_STRICT_CTX", "0") == "1":
+                import inspect
+                stack = inspect.stack()
+                caller_files = [str(f.filename) for f in stack[1:6] if getattr(f, "filename", None)]
+                allow = (
+                    "/apps/bootstrap.py" in "".join(caller_files)
+                    or "/apps/cli/app.py" in "".join(caller_files)
+                    or "/apps/api/server.py" in "".join(caller_files)
+                    or "/services/testing/bootstrap.py" in "".join(caller_files)
+                )
+                if not allow:
+                    raise RuntimeError(
+                        "Settings.from_sources() is restricted; use init_ctx()/get_ctx() or enable at composition root."
+                    )
+        except Exception:
+            # Guard is best-effort; never break prod if inspect stack is unavailable
+            pass
         def is_android() -> bool:
             return "ANDROID_BOOTLOGO" in os.environ or os.getenv("KIVY_BUILD", "") == "android"
 

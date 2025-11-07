@@ -172,7 +172,7 @@ def reconcile_fs_to_db():
     """
     mgr = _mgr()
     ctx = get_ctx()
-    root = Path(ctx.paths.skills_dir())
+    root = ctx.paths.skills_dir()
     if not root.exists():
         typer.echo(_("cli.skill.reconcile.missing_root"))
         raise typer.Exit(1)

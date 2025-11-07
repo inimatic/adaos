@@ -306,7 +306,7 @@ def ensure_runtime_context(base_dir: Path):
         current_base = None
         if hasattr(ctx.paths, "base_dir"):
             try:
-                current_base = Path(ctx.paths.base_dir()).resolve()
+                current_base = ctx.paths.base_dir()
             except Exception:
                 current_base = None
         if current_base == base_dir.resolve():

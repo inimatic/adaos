@@ -518,7 +518,7 @@ def scenario_validate(
     json_output: bool = typer.Option(False, "--json", help="machine readable output"),
 ) -> None:
     ctx = get_ctx()
-    base = Path(path).expanduser().resolve() if path is not None else Path(ctx.paths.dev_scenarios_dir())
+    base = Path(path).expanduser().resolve() if path is not None else ctx.paths.dev_scenarios_dir()
     scenario_file = _resolve_dev_scenario_file(name, base)
 
     if scenario_file is None or not scenario_file.exists():
