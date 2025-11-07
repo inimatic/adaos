@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio, socket, time, uuid, os, logging
 from typing import Any, List, Optional, Sequence
 from pathlib import Path
+import json as _json
+
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.sdk.data import bus
 from adaos.services.node_config import load_config, set_role as cfg_set_role, NodeConfig
@@ -15,6 +17,12 @@ from adaos.ports.subnet_registry import SubnetRegistryPort
 from adaos.adapters.db.sqlite_schema import ensure_schema
 from adaos.adapters.skills.git_repo import GitSkillRepository
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
+from adaos.sdk.core.decorators import register_subscriptions
+from adaos.integrations.telegram.sender import TelegramSender
+from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
+from adaos.services.chat_io import telemetry as tm
+import nats as _nats
+from adaos.domain import Event
 
 
 class BootstrapService:
@@ -119,24 +127,11 @@ class BootstrapService:
         self._app = app
         conf = load_config(ctx=self.ctx)
         self._prepare_environment()
-        # --- select IO bus based on settings ---
-        bus_kind = (self.ctx.settings.io_bus_kind or "local").lower()
-        io_bus: Any
-        if bus_kind == "nats":
-            # NATS on HUB is deprecated/removed; fallback to backend HTTP API
-            io_bus = HttpFallbackBus(self.ctx.settings.api_base)
-            await io_bus.connect()
-            print(f"[bootstrap] IO bus: 'nats' deprecated on hub, using HTTP at {self.ctx.settings.api_base}")
-        elif bus_kind == "http":
-            io_bus = HttpFallbackBus(self.ctx.settings.api_base)
-            await io_bus.connect()
-            print(f"[bootstrap] IO bus: HTTP fallback at {self.ctx.settings.api_base}")
-        else:
-            # local adapter over LocalEventBus
-            core_bus = self.ctx.bus if isinstance(self.ctx.bus, LocalEventBus) else LocalEventBus()
-            io_bus = LocalIoBus(core=core_bus)
-            await io_bus.connect()
-            print("[bootstrap] IO bus: LocalEventBus")
+        # local adapter over LocalEventBus
+        core_bus = self.ctx.bus if isinstance(self.ctx.bus, LocalEventBus) else LocalEventBus()
+        io_bus: Any = LocalIoBus(core=core_bus)
+        await io_bus.connect()
+        print("[bootstrap] IO bus: LocalEventBus")
         self._io_bus = io_bus
         # expose in app.state
         try:
@@ -144,12 +139,7 @@ class BootstrapService:
         except Exception:
             pass
         await bus.emit("sys.boot.start", {"role": conf.role, "node_id": conf.node_id, "subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
-        # paths.skills_dir() может быть функцией; нормализуем до Path/str
-        skills_dir_attr = getattr(self.ctx.paths, "skills_dir", None)
-        skills_root = skills_dir_attr() if callable(skills_dir_attr) else skills_dir_attr
-        await self.skills_loader.import_all_handlers(skills_root)
-        from adaos.sdk.core.decorators import register_subscriptions
-
+        await self.skills_loader.import_all_handlers(self.ctx.paths.skills_dir())
         await register_subscriptions()
         await bus.emit("sys.bus.ready", {}, source="lifecycle", actor="system")
         if conf.role == "hub":
@@ -176,16 +166,11 @@ class BootstrapService:
         # After IO bus is ready, wire outbound subscriber for Telegram if NATS/local
         try:
             if hasattr(self._io_bus, "subscribe_output"):
-                from adaos.integrations.telegram.sender import TelegramSender
 
                 bot_id = "main-bot"  # one-bot assumption for MVP
                 sender = TelegramSender(bot_id)
 
                 async def _handler(subject: str, data: bytes) -> None:
-                    import json as _json
-                    from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
-                    from adaos.services.chat_io import telemetry as tm
-
                     try:
                         payload = _json.loads(data.decode("utf-8"))
                         # payload may already match ChatOutputEvent schema
@@ -208,7 +193,6 @@ class BootstrapService:
             pass
 
         # Inbound bridge from root NATS -> local event bus (tg.input.<hub_id>)
-        # Enabled when settings.nats_url is provided; safe no-op otherwise.
         try:
             # prefer env, fallback to node.yaml 'nats.ws_url'
             nurl = os.getenv("NATS_WS_URL") or getattr(self.ctx.settings, "nats_url", None)
@@ -228,20 +212,10 @@ class BootstrapService:
                 npass = npass or nc.get("pass")
             except Exception:
                 pass
-            # normalize scheme: if someone saved https://.../nats, transform to wss://.../nats
-            try:
-                if isinstance(nurl, str) and nurl.startswith("http"):
-                    nurl = "ws" + nurl[4:]
-            except Exception:
-                pass
             hub_id = load_config(ctx=self.ctx).subnet_id
             if nurl and hub_id:
 
                 async def _nats_bridge() -> None:
-                    import json as _json
-                    import nats as _nats
-                    from adaos.domain import Event
-
                     backoff = 1.0
                     while True:
                         try:
@@ -279,13 +253,6 @@ class BootstrapService:
                                     # Prefer WS endpoints only. Always include provided base (even api.inimatic.com)
                                     if base:
                                         _dedup_push(base)
-                                        path = pr.path or ""
-                                        # If no explicit path, prefer '/nats'
-                                        """ if path == "" or path == "/":
-                                            _dedup_push(urlunparse(pr._replace(path="/nats")))
-                                        # If path is exactly '/ws', switch to '/nats'
-                                        elif path.endswith("/ws"):
-                                            _dedup_push(urlunparse(pr._replace(path="/nats"))) """
                                         # Avoid generating trailing slash variants which may 400
                                     # Known public endpoint as a fallback
                                     _dedup_push("wss://nats.inimatic.com")
@@ -354,6 +321,7 @@ class BootstrapService:
                                 import urllib.request as _ureq
                                 import uuid as _uuid
                                 import mimetypes as _mtypes
+
                                 req = _ureq.Request(url, headers={"X-AdaOS-Token": token})
                                 with _ureq.urlopen(req, timeout=20) as resp:
                                     # Prefer filename from header; fallback to Content-Disposition; then use type
@@ -362,12 +330,14 @@ class BootstrapService:
                                         cd = resp.headers.get("Content-Disposition") or ""
                                         try:
                                             import cgi as _cgi
+
                                             _val, _params = _cgi.parse_header(cd)
-                                            fname = _params.get('filename') or ''
+                                            fname = _params.get("filename") or ""
                                         except Exception:
-                                            fname = ''
+                                            fname = ""
                                     if fname:
                                         import os as _os
+
                                         fname = _os.path.basename(fname)
                                     else:
                                         # fallback to type-based extension

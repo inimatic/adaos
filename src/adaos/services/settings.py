@@ -56,7 +56,6 @@ class Settings:
     # Chat IO / Telegram / IO bus settings
     tg_secret_token: Optional[str] = None
     tg_bot_token: Optional[str] = None
-    io_bus_kind: str = "local"  # local|http (nats deprecated on hub)
     nats_url: Optional[str] = None
     files_tmp_dir: Optional[str] = None
     route_rules_path: Optional[str] = None
@@ -161,7 +160,6 @@ class Settings:
             # IO/Telegram specific (from env/.env only)
             tg_secret_token=pick_env("TG_SECRET_TOKEN", None) or None,
             tg_bot_token=pick_env("TG_BOT_TOKEN", None) or None,
-            io_bus_kind=(pick_env("IO_BUS_KIND", "local") or "local").lower(),
             nats_url=pick_env("NATS_URL", None) or None,
             files_tmp_dir=pick_env("FILES_TMP_DIR", str(base / "tmp")),
             route_rules_path=pick_env("ROUTE_RULES_PATH", None) or None,

@@ -258,6 +258,7 @@ def dev_login(
     if hub_id_resp and hub_token and nats_user:
         try:
             from adaos.services.capacity import _load_node_yaml as _load_node, _save_node_yaml as _save_node
+
             data_yaml = _load_node()
             nats_cfg = data_yaml.get("nats") or {}
             nats_cfg["ws_url"] = nats_ws_url

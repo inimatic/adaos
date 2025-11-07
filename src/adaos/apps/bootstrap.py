@@ -47,7 +47,7 @@ class _CtxHolder:
 
     @classmethod
     def reload(cls, **overrides) -> AgentContext:
-        """Иммутабельная перегрузка (без дубликатов): создаём новый Settings и пересобираем контекст."""
+        """Immutable reload (singleton): create new Settings and rebuild context."""
         with cls._lock:
             old = cls._ctx or cls._build(Settings.from_sources())
             new_settings = old.settings.with_overrides(**overrides)
@@ -72,15 +72,7 @@ class _CtxHolder:
         ):
             fs.allow_root(root)
 
-        # Select EventBus implementation by settings.io_bus_kind
-        bus_kind = (settings.io_bus_kind or "local").lower()
-        bus: LocalEventBus
-        if bus_kind == "local":
-            bus = LocalEventBus()
-        else:
-            # Placeholders for future implementations; fallback to local
-            # nats or http fallback can be wired here once available
-            bus = LocalEventBus()
+        bus = LocalEventBus()
         root_logger = setup_logging(paths)
         attach_event_logger(bus, root_logger.getChild("events"))
 
@@ -189,8 +181,3 @@ def init_ctx(settings: Optional[Settings] = None) -> AgentContext:
 def reload_ctx(**overrides) -> AgentContext:
     """Пересборка с overrides и публикация контекста."""
     return _CtxHolder.reload(**overrides)
-
-
-def bootstrap_app(settings: Optional[Settings] = None) -> AgentContext:
-    """Синоним init_ctx: удобно вызывать из точек входа CLI/API."""
-    return init_ctx(settings)
