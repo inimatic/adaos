@@ -648,7 +648,7 @@ class SkillManager:
     def doctor_runtime(self, name: str) -> Dict[str, Any]:
         status = self.runtime_status(name)
         ctx = self.ctx
-        base = Path(ctx.paths.skills_dir())
+        base = ctx.paths.skills_dir()
         return {
             "skill_root": str((base / name).resolve()),
             "runtime_root": str((base / ".runtime" / name).resolve()),

@@ -99,7 +99,7 @@ def create(scenario_id: str, template: str = "template") -> str:
     ctx = _require_cap("scenarios.manage")
     repo = _repo(ctx)
     repo.ensure()
-    template_dir = Path(ctx.paths.scenario_templates_dir()) / template
+    template_dir = ctx.paths.scenario_templates_dir() / template
     if not template_dir.exists():
         raise FileNotFoundError(f"template '{template}' not found")
     dest = _scenario_dir(ctx, scenario_id)

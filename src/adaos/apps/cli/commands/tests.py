@@ -41,7 +41,7 @@ def _prepare_skills_repo(no_clone: bool) -> None:
     if no_clone:
         return
     ctx = get_ctx()
-    root = Path(ctx.paths.skills_dir())
+    root = ctx.paths.skills_dir()
     if not (root / ".git").exists():
         # ровно один раз: clone (ветка/URL из settings, allow-list в SecureGit)
         ctx.git.ensure_repo(str(root), ctx.settings.skills_monorepo_url, branch=ctx.settings.skills_monorepo_branch)
@@ -444,7 +444,7 @@ def run_tests(
             except Exception as e:
                 typer.secho(f"[AdaOS] Auto-install skipped/failed: {e}", fg=typer.colors.YELLOW)
 
-        skills_root = Path(ctx.paths.skills_dir()).resolve()
+        skills_root = ctx.paths.skills_dir()
         pytest_paths.extend(_collect_test_dirs(skills_root))
 
         # при разработке — добавим тесты из исходников, если есть

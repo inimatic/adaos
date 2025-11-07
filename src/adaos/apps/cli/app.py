@@ -13,7 +13,7 @@ load_dotenv(find_dotenv())
 
 from adaos.sdk.manage.environment import prepare_environment
 from adaos.services.settings import Settings
-from adaos.apps.bootstrap import init_ctx, get_ctx, reload_ctx
+from adaos.apps.bootstrap import init_ctx, reload_ctx
 from adaos.apps.cli.i18n import _
 from adaos.services.agent_context import get_ctx
 from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo, dev
@@ -80,10 +80,10 @@ def ensure_environment():
     if os.getenv("ADAOS_TESTING") == "1":
         return  # В CI/юнит-тестах окружение не готовим и ничего не скачиваем
     ctx = get_ctx()
-    base_dir = Path(ctx.settings.base_dir)
+    base_dir = ctx.paths.base_dir()
 
     # для совместимости со старым кодом, который читает env напрямую
-    os.environ["ADAOS_BASE_DIR"] = str(ctx.settings.base_dir)
+    os.environ["ADAOS_BASE_DIR"] = str(base_dir)
     os.environ["ADAOS_PROFILE"] = ctx.settings.profile
 
     if not base_dir.exists():

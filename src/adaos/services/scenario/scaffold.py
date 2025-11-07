@@ -105,7 +105,7 @@ def create(
         raise ValueError("invalid scenario name")
 
     ctx = get_ctx()
-    scenarios_root = Path(ctx.paths.scenarios_dir())
+    scenarios_root = ctx.paths.scenarios_dir()
     scenarios_root.mkdir(parents=True, exist_ok=True)
 
     repo_ready = _maybe_init_repo(scenarios_root, getattr(ctx.settings, "scenarios_monorepo_url", None), getattr(ctx.settings, "scenarios_monorepo_branch", None))
