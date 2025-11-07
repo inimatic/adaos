@@ -13,7 +13,7 @@ from adaos.adapters.audio.tts.native_tts import NativeTTS
 from adaos.integrations.ovos.tts import OVOSTTSAdapter
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 
-from adaos.apps.bootstrap import bootstrap_app
+from adaos.apps.bootstrap import init_ctx
 from adaos.services.bootstrap import run_boot_sequence, shutdown, is_ready
 from adaos.services.observe import start_observer, stop_observer
 from adaos.services.node_config import load_config
@@ -23,7 +23,7 @@ from adaos.services.agent_context import get_ctx as _get_ctx
 from adaos.services.io_console import print_text
 from adaos.services.capacity import install_io_in_capacity, get_local_capacity
 
-bootstrap_app()
+init_ctx()
 
 
 @asynccontextmanager
@@ -198,13 +198,11 @@ app = FastAPI(title="AdaOS API", lifespan=lifespan, version=BUILD_INFO.version)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "*"],  # под dev и/или произвольный origin
+    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "*"],  # from local web app
     allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
     allow_headers=["Content-Type", "X-AdaOS-Token", "Authorization"],
     allow_credentials=False,  # токен идёт в заголовке, куки не нужны
 )
-
-# --- базовые эндпоинты (для проверки, что всё живо) ---
 
 
 @app.get("/api/ping")
@@ -224,8 +222,6 @@ class SayResponse(BaseModel):
 
 def _make_tts():
     mode = get_tts_backend()
-    if mode == "ovos":
-        return OVOSTTSAdapter()
     if mode == "rhasspy":
         return RhasspyTTSAdapter()
     return NativeTTS()
@@ -245,6 +241,7 @@ async def status():
     }
 
 
+# TODO deprecated use bus instead. No external interface
 @app.post("/api/say", response_model=SayResponse, dependencies=[Depends(require_token)])
 async def say(payload: SayRequest):
     t0 = time.perf_counter()
@@ -259,6 +256,7 @@ class SayRequestLike(BaseModel):
     origin: dict | None = None
 
 
+# TODO deprecated use bus instead. No external interface
 @app.post("/api/io/console/print", dependencies=[Depends(require_token)])
 async def io_console_print(payload: SayRequestLike):
     conf = load_config()
@@ -274,7 +272,6 @@ async def health_live():
 
 @app.get("/health/ready")
 async def health_ready():
-    # 200 только когда прошёл boot sequence
     if not is_ready():
         raise HTTPException(status_code=503, detail="not ready")
     return {"ok": True, "adaos": {"version": BUILD_INFO.version, "build_date": BUILD_INFO.build_date}}
