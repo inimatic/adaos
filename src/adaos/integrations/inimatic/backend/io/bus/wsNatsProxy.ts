@@ -102,6 +102,7 @@ export function installWsNatsProxy(server: HttpsServer) {
         function connectUpstream() {
           if (connected) return
           upstreamSock = net.createConnection({ host: upstream.host, port: upstream.port })
+          try { (upstreamSock as any).setNoDelay?.(true) } catch {}
           upstreamSock.on('connect', () => {
             connected = true
           })
@@ -109,6 +110,10 @@ export function installWsNatsProxy(server: HttpsServer) {
         // Forward upstream INFO/PING/PONG as binary to satisfy clients expecting bytes (e.g., python nats ws)
         const txt = chunk.toString('utf8')
         pushDbg({ from: rip, event: 'upstream_data', details: { len: chunk.length, sample: txt.slice(0, 200) } })
+        if (txt.startsWith('-ERR')) {
+          log.warn({ from: rip, err: txt.trim() }, 'upstream -ERR')
+          pushDbg({ from: rip, event: 'upstream_err', details: { line: txt.trim() } })
+        }
         if (txt.includes('PING')) armUpstreamPingWatch()
         try { ws.send(chunk, { binary: true }) } catch {}
       })
@@ -116,7 +121,11 @@ export function installWsNatsProxy(server: HttpsServer) {
             log.warn({ err: String(err) }, 'upstream error')
             closeBoth(1011, 'upstream_error')
           })
-          upstreamSock.on('close', () => closeBoth())
+          upstreamSock.on('close', (hadError: any) => {
+            log.info({ from: rip, hadError: !!hadError }, 'upstream close')
+            pushDbg({ from: rip, event: 'upstream_close', details: { hadError: !!hadError } })
+            closeBoth()
+          })
         }
 
         function tryProcessHandshake(): boolean {
@@ -162,6 +171,7 @@ export function installWsNatsProxy(server: HttpsServer) {
               connectUpstream()
               setTimeout(() => {
                 try {
+                  pushDbg({ from: rip, event: 'rewrite_connect', details: { user: mask(upstream.user) } })
                   upstreamSock?.write(rewritten)
                   if (rest.length) upstreamSock?.write(rest)
                   clientBuf = Buffer.alloc(0)
@@ -205,9 +215,12 @@ export function installWsNatsProxy(server: HttpsServer) {
           pushDbg({ from: rip, event: 'ws_error', details: { err: String(err) } })
           closeBoth()
         })
-        ws.on('close', () => {
-          log.info({ from: rip }, 'conn close')
-          pushDbg({ from: rip, event: 'conn_close' })
+        ws.on('close', (code: number, reasonBuf: any) => {
+          const reason = (() => {
+            try { return typeof reasonBuf === 'string' ? reasonBuf : Buffer.isBuffer(reasonBuf) ? (reasonBuf as Buffer).toString('utf8') : '' } catch { return '' }
+          })()
+          log.info({ from: rip, code, reason }, 'conn close')
+          pushDbg({ from: rip, event: 'conn_close', details: { code, reason } })
           try { upstreamSock?.destroy() } catch {}
         })
 
