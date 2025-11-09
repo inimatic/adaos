@@ -18,7 +18,6 @@ from adaos.apps.cli.i18n import _
 from adaos.services.agent_context import get_ctx
 from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo, dev
 from adaos.apps.cli.commands import native
-from adaos.apps.cli.commands import ovos as ovos_cmd
 from adaos.apps.cli.commands import rhasspy as rhasspy_cmd
 from adaos.apps.cli.commands import secret
 from adaos.apps.cli.commands import sandbox as sandbox_cmd

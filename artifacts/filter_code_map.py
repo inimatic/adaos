@@ -54,8 +54,7 @@ def main():
     for rec in data:
         p = rec.get("path", "")
         # базовый игнор OVOS, если нет принудительного include/тегов
-        if (not force_include) and (not tags) and "src/adaos/integrations/ovos/" in p:
-            continue
+        # OVOS integration removed; no special-case filtering needed
 
         if globs and not match_any(p, globs):
             continue

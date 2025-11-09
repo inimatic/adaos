@@ -291,7 +291,14 @@ class BootstrapService:
                                     # dev-only: hush idle EOF noise
                                     pass
                                 else:
-                                    print(f"[hub-io] NATS connect failed: {e}")
+                                    msg = str(e)
+                                    if "getaddrinfo" in msg or "gaierror" in msg:
+                                        print(
+                                            f"[hub-io] NATS connect failed: DNS resolve error for {candidates}. "
+                                            "Check network/DNS or set NATS_WS_URL_ALT/NATS_TCP_URL_ALT."
+                                        )
+                                    else:
+                                        print(f"[hub-io] NATS connect failed: {e}")
                             except Exception:
                                 pass
                             # On failure, keep retrying with backoff; candidates are rebuilt each attempt.
@@ -436,8 +443,24 @@ class BootstrapService:
                     while True:
                         await asyncio.sleep(3600)
 
+                # Supervisor wrapper: never crash on unhandled errors; restart with backoff
+                async def _nats_bridge_supervisor() -> None:
+                    delay = 1.0
+                    while True:
+                        try:
+                            await _nats_bridge()
+                            # If bridge returns cleanly, keep it alive
+                            await asyncio.sleep(3600)
+                        except Exception as e:
+                            try:
+                                print(f"[hub-io] nats: encountered error: {e}")
+                            except Exception:
+                                pass
+                            await asyncio.sleep(delay)
+                            delay = min(delay * 2.0, 30.0)
+
                 # TODO restore nats WS subscription
-                self._boot_tasks.append(asyncio.create_task(_nats_bridge(), name="adaos-nats-io-bridge"))
+                self._boot_tasks.append(asyncio.create_task(_nats_bridge_supervisor(), name="adaos-nats-io-bridge"))
         except Exception:
             pass
 

@@ -10,7 +10,6 @@ from adaos.apps.api.auth import require_token
 from adaos.build_info import BUILD_INFO
 from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
-from adaos.integrations.ovos.tts import OVOSTTSAdapter
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 
 from adaos.apps.bootstrap import init_ctx
@@ -113,7 +112,13 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     text = "subnet.started"
                 try:
-                    _requests.post(f"{api_base.rstrip('/')}/io/tg/send", json={"hub_id": conf.subnet_id, "text": text}, timeout=3.0)
+                    alias = os.getenv("ADAOS_SUBNET_ALIAS") or os.getenv("SUBNET_ALIAS") or conf.subnet_id
+                    prefixed_text = f"[{alias}]: {text}" if alias else text
+                    _requests.post(
+                        f"{api_base.rstrip('/')}/io/tg/send",
+                        json={"hub_id": conf.subnet_id, "text": prefixed_text},
+                        timeout=3.0,
+                    )
                 except Exception:
                     pass
                 tg_enabled = True
@@ -182,7 +187,13 @@ async def lifespan(app: FastAPI):
                     text = "subnet.stopped"
                 import requests as _requests
 
-                _requests.post(f"{api_base.rstrip('/')}/io/tg/send", json={"hub_id": conf.subnet_id, "text": text}, timeout=2.5)
+                alias = os.getenv("ADAOS_SUBNET_ALIAS") or os.getenv("SUBNET_ALIAS") or conf.subnet_id
+                prefixed_text = f"[{alias}]: {text}" if alias else text
+                _requests.post(
+                    f"{api_base.rstrip('/')}/io/tg/send",
+                    json={"hub_id": conf.subnet_id, "text": prefixed_text},
+                    timeout=2.5,
+                )
         except Exception:
             pass
         try:
