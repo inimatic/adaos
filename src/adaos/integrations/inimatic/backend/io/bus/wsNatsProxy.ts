@@ -166,7 +166,14 @@ export function installWsNatsProxy(server: HttpsServer) {
                 closeBoth(1008, 'auth_failed')
                 return
               }
-              const u = { ...obj, user: upstream.user, pass: upstream.pass }
+              // Rewrite credentials to backend NATS and remove conflicting auth fields
+              const u: any = { ...obj }
+              try { delete u.auth_token } catch {}
+              try { delete u.jwt } catch {}
+              try { delete u.nkey } catch {}
+              try { delete u.sig } catch {}
+              u.user = upstream.user
+              u.pass = upstream.pass
               const rewritten = Buffer.from('CONNECT ' + JSON.stringify(u) + '\r\n', 'utf8')
               connectUpstream()
               setTimeout(() => {
