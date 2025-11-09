@@ -1,6 +1,6 @@
 # src\adaos\services\bootstrap.py
 from __future__ import annotations
-import asyncio, socket, time, uuid, os, logging
+import asyncio, socket, time, uuid, os, logging, traceback
 from typing import Any, List, Optional, Sequence
 from pathlib import Path
 import json as _json
@@ -289,8 +289,21 @@ class BootstrapService:
                                 nonlocal reported_down
                                 if not reported_down:
                                     et = type(err).__name__ if err else kind
+                                    # Produce a richer one-time diagnostics line to aid debugging WS/TLS/DNS issues
                                     try:
-                                        print(f"[hub-io] nats server unreachable ({et})")
+                                        details = ""
+                                        if err is not None:
+                                            msg = str(err) or repr(err)
+                                            # Extract aiohttp handshake info if present
+                                            status = getattr(err, "status", None)
+                                            url = getattr(err, "url", None) or getattr(getattr(err, "request_info", None), "real_url", None)
+                                            if status:
+                                                details += f" status={status}"
+                                            if url:
+                                                details += f" url={url}"
+                                            # Include a short class:message tail
+                                            details = (details + f" msg={msg}").strip()
+                                        print(f"[hub-io] nats server unreachable ({et}){(': ' + details) if details else ''}")
                                     except Exception:
                                         pass
                                     try:
@@ -316,26 +329,40 @@ class BootstrapService:
                                         pass
                                     reported_down = False
 
-                            def _on_error_cb(e: Exception) -> None:
-                                # Best-effort; keep quiet unless useful
+                            async def _on_error_cb(e: Exception) -> None:
+                                # Best-effort; keep quiet unless explicitly verbose or useful
                                 if os.getenv("SILENCE_NATS_EOF", "0") == "1" and "UnexpectedEOF" in str(e):
                                     return
                                 try:
-                                    print(f"[hub-io] nats error_cb: {e}")
+                                    verbose = os.getenv("HUB_NATS_VERBOSE", "0") == "1"
+                                    if verbose:
+                                        print(f"[hub-io] nats error_cb: {type(e).__name__}: {e!s}")
+                                    else:
+                                        print(f"[hub-io] nats error_cb: {type(e).__name__}")
                                 except Exception:
                                     pass
 
-                            def _on_disconnected() -> None:
+                            async def _on_disconnected() -> None:
                                 _emit_down("disconnected", None)
 
-                            def _on_reconnected() -> None:
+                            async def _on_reconnected() -> None:
                                 _emit_up()
 
+                            # Coerce types to what nats-py expects
+                            hub_id_str = hub_id if isinstance(hub_id, str) else str(hub_id)
+                            user_str = user if (user is None or isinstance(user, str)) else str(user)
+                            pw_str = pw if (pw is None or isinstance(pw, str)) else str(pw)
+                            if os.getenv("HUB_NATS_VERBOSE", "0") == "1":
+                                try:
+                                    print(f"[hub-io] nats connect opts: name=hub-{hub_id_str!s} user={type(user_str).__name__} pass={type(pw_str).__name__} servers={candidates}")
+                                except Exception:
+                                    pass
+
                             nc = await _nats.connect(
-                                servers=candidates,
-                                user=user,
-                                password=pw,
-                                name=f"hub-{hub_id}",
+                                servers=[str(s) for s in candidates],
+                                user=user_str,
+                                password=pw_str,
+                                name=f"hub-{hub_id_str}",
                                 error_cb=_on_error_cb,
                                 disconnected_cb=_on_disconnected,
                                 reconnected_cb=_on_reconnected,
@@ -347,10 +374,19 @@ class BootstrapService:
                             _emit_up()
                             break
                         except Exception as e:
-                            # Suppress per-attempt noise; rely on one-time down message below
+                            # Optionally print per-attempt diagnostics when verbose
                             try:
-                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and "UnexpectedEOF" in str(e):
-                                    pass
+                                if os.getenv("HUB_NATS_VERBOSE", "0") == "1":
+                                    emsg = str(e) or repr(e)
+                                    print(f"[hub-io] NATS connect failed: {type(e).__name__}: {emsg}")
+                                    try:
+                                        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+                                        print(tb.rstrip())
+                                    except Exception:
+                                        pass
+                                elif os.getenv("SILENCE_NATS_EOF", "0") != "1" or "UnexpectedEOF" not in str(e):
+                                    # Minimal single-line failure for non-EOF issues
+                                    print(f"[hub-io] NATS connect failed: {type(e).__name__}")
                             except Exception:
                                 pass
                             # One-time down message and bus event while offline
