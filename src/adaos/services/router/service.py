@@ -16,7 +16,6 @@ from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
 from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
-from adaos.integrations.ovos.tts import OVOSTTSAdapter
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 
 
@@ -84,7 +83,13 @@ class RouterService:
 
                 api_base = getattr(_get_ctx().settings, "api_base", "https://api.inimatic.com")
                 url = f"{api_base.rstrip('/')}/io/tg/send"
-                body = {"hub_id": hub_id, "text": text}
+                # Prefix message with subnet alias (or id) for clarity
+                try:
+                    alias = os.getenv("ADAOS_SUBNET_ALIAS") or os.getenv("SUBNET_ALIAS") or conf.subnet_id
+                except Exception:
+                    alias = conf.subnet_id
+                prefixed_text = f"[{alias}]: {text}" if alias else text
+                body = {"hub_id": hub_id, "text": prefixed_text}
                 try:
                     r = requests.post(url, json=body, headers={"Content-Type": "application/json"}, timeout=3.0)
                     logging.getLogger("adaos.router").info(
@@ -222,7 +227,7 @@ class RouterService:
                         pass
                 try:
                     mode = get_tts_backend()
-                    adapter = NativeTTS() if mode == "native" else (OVOSTTSAdapter() if mode == "ovos" else RhasspyTTSAdapter())
+                    adapter = NativeTTS() if mode == "native" else RhasspyTTSAdapter()
                     adapter.say(text)
                 except Exception:
                     print_text(text, node_id=this_node, origin={"source": ev.source})

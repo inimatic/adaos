@@ -16,11 +16,13 @@ source ./.venv/bin/activate
 # windows (PowerShell):
 # Если  Невозможно загрузить файл ..., так как выполнение сценариев отключено в этой системе.
 Set-ExecutionPolicy RemoteSigned -Scope Process
+# using pip
 ./tools/bootstrap.ps1
 ./.venv/Scripts/Activate.ps1
-
-# install dev core (optional)
-pip install -e ".[dev]"
+# using astrav uv https://github.com/astral-sh/uv
+powershell -ExecutionPolicy Bypass -File tools/bootstrap_uv.ps1
+# При необходимости обновления пакетов uv
+uv lock; uv sync
 
 adaos --help
 ```

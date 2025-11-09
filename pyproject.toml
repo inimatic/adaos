@@ -36,8 +36,6 @@ dependencies = [
   "sounddevice>=0.4.7",
   "requests>=2.31.0",
   "pyttsx3",
-  "ovos_plugin_manager", # TODO move to optional-dependencies = {  }
-  "ovos_config",
   "uvicorn",
   "fastapi",
   "httpx>=0.27.0",
@@ -52,7 +50,7 @@ dependencies = [
 adaos = "adaos.apps.cli.app:app"
 
 [project.urls]
-Homepage = "https://github.com/stipot/adaos"
+Homepage = "https://github.com/stipot-com/adaos"
 
 [tool.setuptools]
 include-package-data = true
