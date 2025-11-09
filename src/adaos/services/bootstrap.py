@@ -215,7 +215,11 @@ class BootstrapService:
             hub_id = (getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)).subnet_id
             if nurl and hub_id:
 
+                # Track connectivity state to log/emit only on transitions
+                reported_down = False
+
                 async def _nats_bridge() -> None:
+                    nonlocal reported_down
                     backoff = 1.0
                     while True:
                         try:
@@ -280,25 +284,78 @@ class BootstrapService:
                                     _dedup_push("wss://nats.inimatic.com")
 
                             print(f"[hub-io] Connecting NATS candidates={candidates} user={user} pass={pw_mask}")
-                            nc = await _nats.connect(servers=candidates, user=user, password=pw, name=f"hub-{hub_id}")
+
+                            def _emit_down(kind: str, err: Exception | None) -> None:
+                                nonlocal reported_down
+                                if not reported_down:
+                                    et = type(err).__name__ if err else kind
+                                    try:
+                                        print(f"[hub-io] nats server unreachable ({et})")
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self.ctx.bus.publish(
+                                            Event(type="subnet.nats.down", payload={"kind": kind, "error": str(err) if err else None, "ts": time.time()}, source="io.nats")
+                                        )
+                                    except Exception:
+                                        pass
+                                    reported_down = True
+
+                            def _emit_up() -> None:
+                                nonlocal reported_down
+                                if reported_down:
+                                    try:
+                                        print("[hub-io] nats connection restored")
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self.ctx.bus.publish(
+                                            Event(type="subnet.nats.up", payload={"ts": time.time()}, source="io.nats")
+                                        )
+                                    except Exception:
+                                        pass
+                                    reported_down = False
+
+                            def _on_error_cb(e: Exception) -> None:
+                                # Best-effort; keep quiet unless useful
+                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and "UnexpectedEOF" in str(e):
+                                    return
+                                try:
+                                    print(f"[hub-io] nats error_cb: {e}")
+                                except Exception:
+                                    pass
+
+                            def _on_disconnected() -> None:
+                                _emit_down("disconnected", None)
+
+                            def _on_reconnected() -> None:
+                                _emit_up()
+
+                            nc = await _nats.connect(
+                                servers=candidates,
+                                user=user,
+                                password=pw,
+                                name=f"hub-{hub_id}",
+                                error_cb=_on_error_cb,
+                                disconnected_cb=_on_disconnected,
+                                reconnected_cb=_on_reconnected,
+                            )
                             subj = f"tg.input.{hub_id}"
                             subj_legacy = f"io.tg.in.{hub_id}.text"
                             print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
+                            # First successful connect after failures
+                            _emit_up()
                             break
                         except Exception as e:
+                            # Suppress per-attempt noise; rely on one-time down message below
                             try:
                                 if os.getenv("SILENCE_NATS_EOF", "0") == "1" and "UnexpectedEOF" in str(e):
-                                    # dev-only: hush idle EOF noise
                                     pass
-                                else:
-                                    msg = str(e)
-                                    if "getaddrinfo" in msg or "gaierror" in msg:
-                                        print(
-                                            f"[hub-io] NATS connect failed: DNS resolve error for {candidates}. "
-                                            "Check network/DNS or set NATS_WS_URL_ALT/NATS_TCP_URL_ALT."
-                                        )
-                                    else:
-                                        print(f"[hub-io] NATS connect failed: {e}")
+                            except Exception:
+                                pass
+                            # One-time down message and bus event while offline
+                            try:
+                                _emit_down("connect_error", e)
                             except Exception:
                                 pass
                             # On failure, keep retrying with backoff; candidates are rebuilt each attempt.
