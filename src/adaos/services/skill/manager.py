@@ -1164,18 +1164,6 @@ class SkillManager:
             f"uv(shared) -> {out3}\n"
             f"uv(target) -> {out4}"
         )
-        else:
-            # this branch now handled earlier; kept for structure
-            if vendor_dir.exists():
-                for child in vendor_dir.iterdir():
-                    if child.is_dir():
-                        shutil.rmtree(child, ignore_errors=True)
-                    else:
-                        try:
-                            child.unlink()
-                        except FileNotFoundError:
-                            pass
-            return []
 
     def _constraints_file(self) -> Path | None:
         candidates: list[Path] = []
