@@ -30,3 +30,9 @@ export async function subscribeOut(handler: (payload: any) => Promise<void>): Pr
     }
   })().catch(() => {})
 }
+
+export async function publishHubAlias(hub_id: string, alias: string): Promise<void> {
+  await natsConnect()
+  const subj = `hub.control.${hub_id}.alias`
+  await _nc.publish(subj, sc.encode(JSON.stringify({ alias })))
+}
