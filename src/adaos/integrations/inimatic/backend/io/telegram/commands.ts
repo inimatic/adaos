@@ -1,4 +1,5 @@
 import { listBindings, getDefaultBinding, setDefault, getByAlias, renameAlias, unlinkAlias, upsertBinding, setSession, bindTopic, unbindTopic } from '../../db/tg.repo.js'
+import { publishHubAlias } from '../../bus/nats.js'
 import pino from 'pino'
 import type { InlineKeyboardButton } from './keyboards.js'
 import { keyboardPicker } from './keyboards.js'
@@ -69,24 +70,13 @@ export async function handleCommand(ctx: CmdCtx): Promise<{ text: string, keyboa
     log.info({ chat_id: ctx.chat_id, cmd, key, next }, 'tg: /alias')
     const ok = await renameAlias(ctx.chat_id, key, next)
     if (ok) {
-      // attempt to notify the hub to persist alias in node.yaml (optional; depends on HUB_ALIAS_URL)
+      // publish control message via NATS so hub (WS) can persist alias and broadcast
       try {
         const b = await getByAlias(ctx.chat_id, next)
         const hub_id = b?.hub_id
-        const url = process.env['HUB_ALIAS_URL'] || ''
-        if (url) {
-          const { request } = await import('undici')
-          const headers: Record<string, string> = { 'content-type': 'application/json' }
-          const token = process.env['ADAOS_TOKEN'] || ''
-          if (token) headers['X-AdaOS-Token'] = token
-          await request(url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ alias: next, hub_id }),
-          })
-        }
+        if (hub_id) await publishHubAlias(hub_id, next)
       } catch (e) {
-        log.warn({ chat_id: ctx.chat_id, err: String(e) }, 'tg: /alias hub notify failed (optional)')
+        log.warn({ chat_id: ctx.chat_id, err: String(e) }, 'tg: /alias hub notify failed (nats)')
       }
     }
     return { text: ok ? `Renamed: ${key} -> ${next}` : 'Not found' }

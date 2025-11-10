@@ -396,6 +396,35 @@ class BootstrapService:
                             print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
                             # First successful connect after failures
                             _emit_up()
+
+                            # Control channel: hub alias updates from backend
+                            try:
+                                ctl_alias = f"hub.control.{hub_id}.alias"
+                                async def _ctl_alias_cb(msg):
+                                    try:
+                                        data = _json.loads(msg.data.decode("utf-8"))
+                                    except Exception:
+                                        data = {}
+                                    alias = (data or {}).get("alias")
+                                    if isinstance(alias, str) and alias:
+                                        try:
+                                            from adaos.services.capacity import _load_node_yaml as _load_node, _save_node_yaml as _save_node
+                                            y = _load_node()
+                                            n = y.get("nats") or {}
+                                            n["alias"] = alias
+                                            y["nats"] = n
+                                            _save_node(y)
+                                            try:
+                                                self.ctx.bus.publish(Event(type="subnet.alias.changed", payload={"alias": alias, "subnet_id": hub_id}, source="io.nats"))
+                                            except Exception:
+                                                pass
+                                            print(f"[hub-io] alias set via NATS: {alias}")
+                                        except Exception:
+                                            pass
+                                await nc.subscribe(ctl_alias, cb=_ctl_alias_cb)
+                                print(f"[hub-io] NATS subscribe control {ctl_alias}")
+                            except Exception:
+                                pass
                             break
                         except Exception as e:
                             # Optionally print per-attempt diagnostics when verbose
