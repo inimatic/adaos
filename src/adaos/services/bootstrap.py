@@ -234,6 +234,23 @@ class BootstrapService:
                 async def _nats_bridge() -> None:
                     nonlocal reported_down
                     backoff = 1.0
+
+                    def _explain_connect_error(err: Exception) -> str:
+                        try:
+                            msg = str(err) or ""
+                            low = msg.lower()
+                            if isinstance(err, TypeError) and "argument of type 'int' is not iterable" in low:
+                                return (
+                                    "root nats authentication error: WS closed after CONNECT; "
+                                    "verify node.yaml nats.user=hub_<subnet_id> and nats.pass=<hub_nats_token>"
+                                )
+                        except Exception:
+                            pass
+                        # fallback – include class and message
+                        try:
+                            return f"{type(err).__name__}: {str(err)}"
+                        except Exception:
+                            return type(err).__name__
                     while True:
                         try:
                             user = nuser or os.getenv("NATS_USER") or None
@@ -443,8 +460,8 @@ class BootstrapService:
                             # Optionally print per-attempt diagnostics when verbose
                             try:
                                 if os.getenv("HUB_NATS_VERBOSE", "0") == "1":
-                                    emsg = str(e) or repr(e)
-                                    print(f"[hub-io] NATS connect failed: {type(e).__name__}: {emsg}")
+                                    emsg = _explain_connect_error(e)
+                                    print(f"[hub-io] NATS connect failed: {emsg}")
                                     try:
                                         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
                                         print(tb.rstrip())
@@ -455,7 +472,7 @@ class BootstrapService:
                                         type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower()
                                     )):
                                         # Minimal single-line failure for non-EOF issues
-                                        print(f"[hub-io] NATS connect failed: {type(e).__name__}")
+                                        print(f"[hub-io] NATS connect failed: {_explain_connect_error(e)}")
                             except Exception:
                                 pass
                             # One-time down message and bus event while offline
