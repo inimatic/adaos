@@ -1088,23 +1088,84 @@ class SkillManager:
 
         shared_cmd = [*base_cmd, *python_args]
         vendor_dir = slot.vendor_dir
-        try:
-            subprocess.check_call(shared_cmd)
-        except subprocess.CalledProcessError:
-            vendor_dir.mkdir(parents=True, exist_ok=True)
-            vendor_cmd = [
-                *base_cmd,
-                "--target",
-                str(vendor_dir),
-                "--no-warn-script-location",
-                *python_args,
-            ]
+        
+        def _run(cmd: list[str]) -> tuple[bool, str]:
             try:
-                subprocess.check_call(vendor_cmd)
-            except subprocess.CalledProcessError as exc:
-                raise RuntimeError(f"failed to install dependencies for skill '{slot.skill_name}'") from exc
+                p = subprocess.run(cmd, capture_output=True, text=True)
+            except FileNotFoundError as e:
+                return False, str(e)
+            ok = (p.returncode == 0)
+            out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+            return ok, out
+
+        # 1) Try pip in current interpreter; bootstrap pip if missing
+        ok, out = _run(shared_cmd)
+        if not ok and ("No module named pip" in out or "No module named pip" in out.replace("\r", "\n")):
+            _run([str(sys.executable), "-m", "ensurepip", "--upgrade"])  # best-effort
+            ok, out = _run(shared_cmd)
+        if ok:
+            # clean vendor if present
+            if vendor_dir.exists():
+                for child in vendor_dir.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        try:
+                            child.unlink()
+                        except FileNotFoundError:
+                            pass
+            return []
+
+        # 2) Fallback: pip --target vendor (after ensurepip)
+        vendor_dir.mkdir(parents=True, exist_ok=True)
+        vendor_cmd = [
+            *base_cmd,
+            "--target",
+            str(vendor_dir),
+            "--no-warn-script-location",
+            *python_args,
+        ]
+        ok2, out2 = _run(vendor_cmd)
+        if not ok2 and ("No module named pip" in out2 or "No module named pip" in out2.replace("\r", "\n")):
+            _run([str(sys.executable), "-m", "ensurepip", "--upgrade"])  # best-effort
+            ok2, out2 = _run(vendor_cmd)
+        if ok2:
             return [str(vendor_dir)]
+
+        # 3) Last resort: try `uv pip install` (if available)
+        uv_base = ["uv", "pip", "install", "--upgrade"]
+        if constraints:
+            uv_base.extend(["-c", str(constraints)])
+        ok3, out3 = _run([*uv_base, *python_args])
+        if ok3:
+            # uv installs into environment; keep vendor clean
+            if vendor_dir.exists():
+                for child in vendor_dir.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        try:
+                            child.unlink()
+                        except FileNotFoundError:
+                            pass
+            return []
+
+        # Try uv with --target vendor
+        uv_vendor = [*uv_base, "--target", str(vendor_dir), "--no-warn-script-location", *python_args]
+        ok4, out4 = _run(uv_vendor)
+        if ok4:
+            return [str(vendor_dir)]
+
+        # Failed all strategies
+        raise RuntimeError(
+            f"failed to install dependencies for skill '{slot.skill_name}':\n"
+            f"pip(shared) -> {out}\n"
+            f"pip(target) -> {out2}\n"
+            f"uv(shared) -> {out3}\n"
+            f"uv(target) -> {out4}"
+        )
         else:
+            # this branch now handled earlier; kept for structure
             if vendor_dir.exists():
                 for child in vendor_dir.iterdir():
                     if child.is_dir():
