@@ -909,8 +909,17 @@ app.post('/io/tg/send', async (req, res) => {
 			if (!explicitBot) bot_id = link.bot_id || bot_id
 		}
 
+		// Resolve human-friendly alias for prefixing in Telegram outbox
+		let alias: string | undefined
+		try {
+			const { listBindings } = await import('./db/tg.repo.js')
+			const binds = await listBindings(Number(chat_id))
+			alias = (binds || []).find(b => String(b.hub_id) === String(hub_id))?.alias as any
+		} catch { /* optional */ }
+
 		if (!ioBus) return res.status(503).json({ ok: false, error: 'io_bus_unavailable' })
 		const payload = {
+			alias,
 			target: { bot_id, hub_id: hub_id || (process.env['DEFAULT_HUB'] || 'hub-a'), chat_id },
 			messages: [{ type: 'text', text }],
 		}

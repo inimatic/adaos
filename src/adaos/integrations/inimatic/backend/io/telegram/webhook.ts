@@ -221,13 +221,21 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 							try { await ensureHubToken(hubId) } catch {}
 							log.info({ hub_id: hubId, bot_id, chat_id: String(evt.chat_id) }, 'telegram pairing linked')
 							// Send welcome message right after successful pairing
-							if (bus) {
-								const subject = `tg.output.${bot_id}.chat.${evt.chat_id}`
-								const welcome = process.env['TG_WELCOME_TEXT'] || 'Successfully paired. You can start messaging.'
-								const out = {
-									target: { bot_id, hub_id: hubId, chat_id: String(evt.chat_id) },
-									messages: [{ type: 'text', text: welcome }],
-								}
+                        if (bus) {
+                            const subject = `tg.output.${bot_id}.chat.${evt.chat_id}`
+                            const welcome = process.env['TG_WELCOME_TEXT'] || 'Successfully paired. You can start messaging.'
+                            // Try to include alias for better UX
+                            let alias: string | undefined
+                            try {
+                                const { listBindings } = await import('../../db/tg.repo.js')
+                                const binds = await listBindings(Number(evt.chat_id))
+                                alias = (binds || []).find(b => String(b.hub_id) === String(hubId))?.alias as any
+                            } catch { }
+                            const out = {
+                                alias,
+                                target: { bot_id, hub_id: hubId, chat_id: String(evt.chat_id) },
+                                messages: [{ type: 'text', text: welcome }],
+                            }
 								try {
 									await bus.publishSubject(subject, out)
 									log.info({ subject, hub_id: hubId, chat_id: String(evt.chat_id) }, 'welcome sent via bus')

@@ -349,6 +349,14 @@ class BootstrapService:
                                 _emit_up()
 
                             # Coerce types to what nats-py expects
+                            # For WS proxy auth, always identify as the canonical hub id regardless of alias recorded in node.yaml
+                            try:
+                                is_ws_candidates = any(isinstance(s, str) and s.startswith("ws") for s in candidates)
+                            except Exception:
+                                is_ws_candidates = False
+                            if is_ws_candidates:
+                                # Always use canonical hub identifier for WS auth: "hub_<hub_id>"
+                                user = f"hub_{hub_id}"
                             hub_id_str = hub_id if isinstance(hub_id, str) else str(hub_id)
                             user_str = user if (user is None or isinstance(user, str)) else str(user)
                             pw_str = pw if (pw is None or isinstance(pw, str)) else str(pw)

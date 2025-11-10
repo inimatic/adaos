@@ -9,7 +9,7 @@ async function tgCall(method: string, payload: any): Promise<void> {
 }
 
 export async function sendToTelegram(params: { chat_id: number, text: string, alias?: string } & SendOpts): Promise<void> {
-  const prefix = params.alias ? `🔹[${params.alias}] ` : ''
+  const prefix = params.alias ? `[${params.alias}]: ` : ''
   const payload: any = { chat_id: params.chat_id, text: prefix + params.text }
   if (params.reply_to_message_id) payload.reply_to_message_id = params.reply_to_message_id
   if (params.keyboard) payload.reply_markup = params.keyboard
