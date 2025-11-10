@@ -85,20 +85,22 @@ class RouterService:
                 url = f"{api_base.rstrip('/')}/io/tg/send"
                 # Prefix message with subnet alias (or id) for clarity
                 try:
-                    alias = os.getenv("ADAOS_SUBNET_ALIAS") or os.getenv("SUBNET_ALIAS") or conf.subnet_id
+                    from adaos.services.capacity import _load_node_yaml as _load_node
+
+                    node_yaml = _load_node()
+                except Exception:
+                    node_yaml = {}
+                try:
+                    alias = ((node_yaml.get("nats") or {}).get("alias")) or os.getenv("DEFAULT_HUB") or conf.subnet_id
                 except Exception:
                     alias = conf.subnet_id
                 prefixed_text = f"[{alias}]: {text}" if alias else text
                 body = {"hub_id": hub_id, "text": prefixed_text}
                 try:
                     r = requests.post(url, json=body, headers={"Content-Type": "application/json"}, timeout=3.0)
-                    logging.getLogger("adaos.router").info(
-                        "router: telegram sent", extra={"hub_id": hub_id, "status": r.status_code}
-                    )
+                    logging.getLogger("adaos.router").info("router: telegram sent", extra={"hub_id": hub_id, "status": r.status_code})
                 except Exception as pe:
-                    logging.getLogger("adaos.router").warning(
-                        "router: telegram request failed", extra={"hub_id": hub_id, "error": str(pe)}
-                    )
+                    logging.getLogger("adaos.router").warning("router: telegram request failed", extra={"hub_id": hub_id, "error": str(pe)})
                     raise
                 did_any = True
             except Exception:

@@ -291,19 +291,24 @@ class BootstrapService:
                                     et = type(err).__name__ if err else kind
                                     # Produce a richer one-time diagnostics line to aid debugging WS/TLS/DNS issues
                                     try:
-                                        details = ""
-                                        if err is not None:
-                                            msg = str(err) or repr(err)
-                                            # Extract aiohttp handshake info if present
-                                            status = getattr(err, "status", None)
-                                            url = getattr(err, "url", None) or getattr(getattr(err, "request_info", None), "real_url", None)
-                                            if status:
-                                                details += f" status={status}"
-                                            if url:
-                                                details += f" url={url}"
-                                            # Include a short class:message tail
-                                            details = (details + f" msg={msg}").strip()
-                                        print(f"[hub-io] nats server unreachable ({et}){(': ' + details) if details else ''}")
+                                        if os.getenv("SILENCE_NATS_EOF", "0") == "1" and kind == "disconnected":
+                                            # Suppress idle disconnect chatter in dev
+                                            pass
+                                        else:
+                                            details = ""
+                                            if err is not None:
+                                                msg = str(err) or repr(err)
+                                                # Extract aiohttp handshake info if present
+                                                status = getattr(err, "status", None)
+                                                url = getattr(err, "url", None) or getattr(getattr(err, "request_info", None), "real_url", None)
+                                                if status:
+                                                    details += f" status={status}"
+                                                if url:
+                                                    details += f" url={url}"
+                                                # Include a short class:message tail
+                                                details = (details + f" msg={msg}").strip()
+                                        if not (os.getenv("SILENCE_NATS_EOF", "0") == "1" and kind == "disconnected"):
+                                            print(f"[hub-io] nats server unreachable ({et}){(': ' + details) if details else ''}")
                                     except Exception:
                                         pass
                                     try:
@@ -331,7 +336,9 @@ class BootstrapService:
 
                             async def _on_error_cb(e: Exception) -> None:
                                 # Best-effort; keep quiet unless explicitly verbose or useful
-                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and "UnexpectedEOF" in str(e):
+                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and (
+                                    type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower()
+                                ):
                                     return
                                 try:
                                     verbose = os.getenv("HUB_NATS_VERBOSE", "0") == "1"
@@ -346,7 +353,16 @@ class BootstrapService:
                                 _emit_down("disconnected", None)
 
                             async def _on_reconnected() -> None:
-                                _emit_up()
+                                # Suppress restored chatter in dev if silenced
+                                if os.getenv("SILENCE_NATS_EOF", "0") == "1":
+                                    try:
+                                        self.ctx.bus.publish(
+                                            Event(type="subnet.nats.up", payload={"ts": time.time()}, source="io.nats")
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    _emit_up()
 
                             # Coerce types to what nats-py expects
                             # For WS proxy auth, always identify as the canonical hub id regardless of alias recorded in node.yaml
@@ -392,9 +408,12 @@ class BootstrapService:
                                         print(tb.rstrip())
                                     except Exception:
                                         pass
-                                elif os.getenv("SILENCE_NATS_EOF", "0") != "1" or "UnexpectedEOF" not in str(e):
-                                    # Minimal single-line failure for non-EOF issues
-                                    print(f"[hub-io] NATS connect failed: {type(e).__name__}")
+                                else:
+                                    if not (os.getenv("SILENCE_NATS_EOF", "0") == "1" and (
+                                        type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower()
+                                    )):
+                                        # Minimal single-line failure for non-EOF issues
+                                        print(f"[hub-io] NATS connect failed: {type(e).__name__}")
                             except Exception:
                                 pass
                             # One-time down message and bus event while offline
