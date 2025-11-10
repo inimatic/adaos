@@ -267,6 +267,10 @@ def dev_login(
             nats_cfg["ws_url"] = nats_ws_url
             nats_cfg["user"] = nats_user
             nats_cfg["pass"] = hub_token
+            # Seed a human-friendly alias in node.yaml for UX (kept in sync by backend commands)
+            # Default to 'hub' for the first binding; can be changed later via /alias in Telegram
+            if not nats_cfg.get("alias"):
+                nats_cfg["alias"] = "hub"
             data_yaml["nats"] = nats_cfg
             _save_node(data_yaml)
             typer.echo("Saved NATS WS credentials to node.yaml")

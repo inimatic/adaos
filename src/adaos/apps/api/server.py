@@ -20,7 +20,7 @@ from adaos.services.router import RouterService
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.agent_context import get_ctx as _get_ctx
 from adaos.services.io_console import print_text
-from adaos.services.capacity import install_io_in_capacity, get_local_capacity
+from adaos.services.capacity import install_io_in_capacity, get_local_capacity, _load_node_yaml as _load_node, _save_node_yaml as _save_node
 
 init_ctx()
 
@@ -112,7 +112,11 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     text = "subnet.started"
                 try:
-                    alias = os.getenv("ADAOS_SUBNET_ALIAS") or os.getenv("SUBNET_ALIAS") or conf.subnet_id
+                    node_yaml = _load_node()
+                except Exception:
+                    node_yaml = {}
+                alias = ((node_yaml.get("nats") or {}).get("alias")) or getattr(get_ctx().settings, "default_hub", None) or conf.subnet_id
+                try:
                     prefixed_text = f"[{alias}]: {text}" if alias else text
                     _requests.post(
                         f"{api_base.rstrip('/')}/io/tg/send",
@@ -187,7 +191,11 @@ async def lifespan(app: FastAPI):
                     text = "subnet.stopped"
                 import requests as _requests
 
-                alias = os.getenv("ADAOS_SUBNET_ALIAS") or os.getenv("SUBNET_ALIAS") or conf.subnet_id
+                try:
+                    node_yaml = _load_node()
+                except Exception:
+                    node_yaml = {}
+                alias = ((node_yaml.get("nats") or {}).get("alias")) or getattr(get_ctx().settings, "default_hub", None) or conf.subnet_id
                 prefixed_text = f"[{alias}]: {text}" if alias else text
                 _requests.post(
                     f"{api_base.rstrip('/')}/io/tg/send",
@@ -236,6 +244,34 @@ def _make_tts():
     if mode == "rhasspy":
         return RhasspyTTSAdapter()
     return NativeTTS()
+
+
+class SetAliasRequest(BaseModel):
+    alias: str = Field(..., min_length=1, max_length=64)
+    hub_id: str | None = Field(default=None, description="Optional hub/subnet id; ignored on hub, for logging only.")
+
+
+@app.post("/api/subnet/alias")
+async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
+    try:
+        conf = get_ctx().config
+        # persist into node.yaml: nats.alias
+        data = _load_node()
+        nats = data.get("nats") or {}
+        nats["alias"] = body.alias
+        data["nats"] = nats
+        _save_node_yaml = _save_node  # alias import name
+        _save_node_yaml(data)
+        # broadcast over local event bus
+        try:
+            from adaos.domain import Event as _Ev
+
+            get_ctx().bus.publish(_Ev(type="subnet.alias.changed", payload={"alias": body.alias, "subnet_id": conf.subnet_id}, source="api"))
+        except Exception:
+            pass
+        return {"ok": True, "alias": body.alias}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/status", dependencies=[Depends(require_token)])
