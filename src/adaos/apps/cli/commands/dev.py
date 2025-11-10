@@ -221,8 +221,9 @@ def dev_login(
         ctx.settings,
     )
     base = ctx.settings.api_base
-    # Prefer explicit CLI option, then configured default_hub, then subnet_id, then owner_id as a last resort
-    hub_id = hub or ctx.settings.default_hub or ctx.settings.subnet_id or ctx.settings.owner_id
+    # Prefer explicit CLI option; otherwise always use canonical subnet_id for pairing,
+    # because backend stores WS tokens keyed by canonical hub id (not alias).
+    hub_id = hub or ctx.settings.subnet_id or ctx.settings.default_hub or ctx.settings.owner_id
     if status:
         data = client.request("GET", f"{base}/io/tg/pair/status", params={"code": status})
         typer.echo(data)
@@ -252,7 +253,9 @@ def dev_login(
     # Save NATS WS credentials into node.yaml so hub can preconfigure WS
     hub_id_resp = data.get("hub_id") or hub_id
     hub_token = data.get("hub_nats_token")
-    nats_user = data.get("nats_user") or (f"hub_{hub_id_resp}" if hub_id_resp else None)
+    # Always use local canonical hub id for WS user to avoid alias-based mismatches
+    local_hub_id = ctx.settings.subnet_id or hub_id_resp
+    nats_user = (f"hub_{local_hub_id}" if local_hub_id else None) or data.get("nats_user") or (f"hub_{hub_id_resp}" if hub_id_resp else None)
     # Pin to dedicated NATS WS domain regardless of API suggestion
     nats_ws_url = "wss://nats.inimatic.com"
     if hub_id_resp and hub_token and nats_user:
