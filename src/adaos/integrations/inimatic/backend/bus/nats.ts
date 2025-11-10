@@ -9,6 +9,7 @@ export async function natsConnect(): Promise<void> {
   const user = process.env['NATS_USER'] || undefined
   const pass = process.env['NATS_PASS'] || undefined
   _nc = await connect({ servers: url, user, pass })
+  try { console.log(`[nats] connected (alias-pub) url=${url}`) } catch {}
 }
 
 export async function publishIn(hub_id: string, payload: any): Promise<void> {
@@ -34,5 +35,12 @@ export async function subscribeOut(handler: (payload: any) => Promise<void>): Pr
 export async function publishHubAlias(hub_id: string, alias: string): Promise<void> {
   await natsConnect()
   const subj = `hub.control.${hub_id}.alias`
-  await _nc.publish(subj, sc.encode(JSON.stringify({ alias })))
+  const payload = { alias }
+  try {
+    await _nc.publish(subj, sc.encode(JSON.stringify(payload)))
+    try { console.log(`[nats] publish ${subj} ${JSON.stringify(payload)}`) } catch {}
+  } catch (e) {
+    try { console.warn(`[nats] publish failed ${subj}: ${String(e)}`) } catch {}
+    throw e
+  }
 }
