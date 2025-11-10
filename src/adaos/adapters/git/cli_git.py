@@ -42,17 +42,46 @@ class CliGitClient(GitClient):
         d.mkdir(parents=True, exist_ok=True)
         git_dir = d / ".git"
         if not git_dir.exists():
-            args = ["clone", url, str(d)]
-            if self._depth > 0:
-                args += [f"--depth={self._depth}"]
-            if branch:
-                args += ["--branch", branch]
-            _run_git(args, cwd=None)
-            # сразу включим sparse cone по умолчанию (можно переинициализировать на no-cone)
+            # Prefer clone into empty directory; if directory is non-empty, fall back to init+fetch
             try:
-                _run_git(["sparse-checkout", "init", "--cone"], cwd=str(d))
-            except Exception as e:
-                pass
+                args = ["clone", url, str(d)]
+                if self._depth > 0:
+                    args += [f"--depth={self._depth}"]
+                if branch:
+                    args += ["--branch", branch]
+                _run_git(args, cwd=None)
+                try:
+                    _run_git(["sparse-checkout", "init", "--cone"], cwd=str(d))
+                except Exception:
+                    pass
+            except GitError:
+                # Non-empty destination — initialize in place and attach remote
+                _run_git(["init"], cwd=str(d))
+                try:
+                    _run_git(["remote", "add", "origin", url], cwd=str(d))
+                except GitError:
+                    # remote may already exist — continue
+                    pass
+                # Fetch and checkout the desired branch (or main)
+                target_branch = branch or "main"
+                try:
+                    fetch_args = ["fetch", "--prune", "origin"]
+                    if self._depth > 0:
+                        fetch_args += [f"--depth={self._depth}"]
+                    fetch_args += [target_branch]
+                    _run_git(fetch_args, cwd=str(d))
+                except GitError:
+                    # try fetching all if branch-specific fetch failed
+                    _run_git(["fetch", "--prune", "origin"], cwd=str(d))
+                try:
+                    _run_git(["checkout", "-B", target_branch, f"origin/{target_branch}"], cwd=str(d))
+                except GitError:
+                    # Last resort: checkout whatever HEAD points to
+                    _run_git(["checkout", target_branch], cwd=str(d))
+                try:
+                    _run_git(["sparse-checkout", "init", "--cone"], cwd=str(d))
+                except Exception:
+                    pass
         _append_exclude(
             dir,
             [

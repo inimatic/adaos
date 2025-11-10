@@ -194,22 +194,35 @@ class BootstrapService:
 
         # Inbound bridge from root NATS -> local event bus (tg.input.<hub_id>)
         try:
-            # prefer env, fallback to node.yaml 'nats.ws_url'
+            # Guard: only enable NATS bridge if node.yaml contains an explicit 'nats' section on hub
+            enable_nats = False
+            node_nats: dict | None = None
+            try:
+                from adaos.services.capacity import _load_node_yaml as _load_node
+                nd = _load_node()
+                node_nats = (nd or {}).get("nats") if isinstance(nd, dict) else None
+                if isinstance(node_nats, dict) and node_nats:
+                    enable_nats = True
+            except Exception:
+                enable_nats = False
+
+            if not enable_nats:
+                # Do not attempt to connect using env defaults when node.yaml lacks 'nats'
+                print("[hub-io] NATS disabled: no 'nats' config in node.yaml")
+                return
+
+            # prefer env, fallback to node.yaml 'nats.ws_url' (but only when 'nats' exists)
             nurl = os.getenv("NATS_WS_URL") or getattr(self.ctx.settings, "nats_url", None)
             nuser = os.getenv("NATS_USER") or None
             npass = os.getenv("NATS_PASS") or None
-            # Always consult node.yaml; prefer WS url from node over TCP env to avoid mixing issues.
+            # Prefer node.yaml values over env to avoid mixing
             try:
-                from adaos.services.capacity import _load_node_yaml as _load_node
-
-                nd = _load_node()
-                nc = (nd or {}).get("nats") or {}
+                nc = node_nats or {}
                 node_ws = nc.get("ws_url")
-                # Always prefer node.yaml WS url
                 if node_ws:
                     nurl = node_ws
-                nuser = nuser or nc.get("user")
-                npass = npass or nc.get("pass")
+                nuser = nc.get("user") or nuser
+                npass = nc.get("pass") or npass
             except Exception:
                 pass
             hub_id = (getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)).subnet_id
