@@ -6,7 +6,10 @@ import { CommonModule } from '@angular/common'
   selector: 'ada-weather-modal',
   standalone: true,
   imports: [IonicModule, CommonModule],
-  templateUrl: './weather-modal.component.html'
+  templateUrl: './weather-modal.component.html',
+  styles: [
+    `:host{display:flex;flex-direction:column;height:100%} ion-content{flex:1 1 auto}`
+  ]
 })
 export class WeatherModalComponent {
   @Input() title = 'Погода'
@@ -14,4 +17,3 @@ export class WeatherModalComponent {
   constructor(private modal: ModalController) {}
   close(){ this.modal.dismiss() }
 }
-

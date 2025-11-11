@@ -1,5 +1,8 @@
 .desktop {
   position: relative; width: 100%; height: 100%;
+  .topbar { position: sticky; top: 0; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; }
+  .topbar .left { display: flex; gap: 8px; }
+  .topbar .right { display: flex; }
   .icons {
     display: grid; grid-template-columns: repeat(auto-fill, 84px);
     gap: 12px; padding: 16px;
@@ -14,4 +17,3 @@
   }
   .widgets { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 12px; flex-wrap: wrap; }
 }
-
