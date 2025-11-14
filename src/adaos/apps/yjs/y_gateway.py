@@ -14,7 +14,7 @@ from ypy_websocket.yroom import YRoom
 from ypy_websocket.ystore import SQLiteYStore
 
 from adaos.apps.workspaces.index import ensure_workspace
-from .y_bootstrap import bootstrap_seed_if_empty
+from .y_bootstrap import ensure_workspace_seeded_from_scenario
 from .y_store import ystore_path_for_workspace
 
 router = APIRouter()
@@ -32,7 +32,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
             workspace_id = name or "default"
             ensure_workspace(workspace_id)
             ystore = SQLiteYStore(str(ystore_path_for_workspace(workspace_id)))
-            await bootstrap_seed_if_empty(ystore)
+            await ensure_workspace_seeded_from_scenario(ystore, workspace_id=workspace_id)
             room = YRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
             try:
                 await ystore.apply_updates(room.ydoc)
