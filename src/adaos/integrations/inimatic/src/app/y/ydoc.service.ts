@@ -102,12 +102,13 @@ export class YDocService {
       ws.addEventListener('error', onError)
     })
 
-    // 2) Connect Yjs via y-websocket to /yws
-    // WebsocketProvider builds URL as `${serverUrl}/${room}`. To hit `/yws`
-    // with query params, we encode them into the "room" segment.
-    const serverUrl = baseWs
-    const room = `yws?ws=${encodeURIComponent(workspaceId)}&dev=${encodeURIComponent(this.deviceId)}`
-    this.provider = new WebsocketProvider(serverUrl, room, this.doc)
+    // 2) Connect Yjs via y-websocket to /yws/<workspace_id>
+    // WebsocketProvider builds URL as `${serverUrl}/${room}`.
+    const serverUrl = `${baseWs}/yws`
+    const room = workspaceId || 'default'
+    this.provider = new WebsocketProvider(serverUrl, room, this.doc, {
+      params: { dev: this.deviceId },
+    })
 
     await new Promise<void>((resolve) => {
       if (!this.provider) { resolve(); return }

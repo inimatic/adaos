@@ -132,12 +132,17 @@ async def _update_device_presence(workspace_id: str, device_id: str) -> None:
         devices.set(txn, device_id, node)
 
 
-async def _yws_impl(websocket: WebSocket) -> None:
+async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     """
     Internal Yjs sync handler used by both /yws and /yws/<room> routes.
+
+    Dev policy:
+      - if a room segment is present in the path, it is treated as workspace_id;
+      - otherwise, fallback to ?ws=<workspace_id> query param;
+      - default is "default".
     """
     params: Dict[str, str] = dict(websocket.query_params)
-    workspace_id = params.get("ws") or "default"
+    workspace_id = (room or params.get("ws")) or "default"
 
     await websocket.accept()
     await start_y_server()
@@ -156,19 +161,18 @@ async def yws(websocket: WebSocket):
     Binary Yjs sync endpoint backed by ypy-websocket.
 
     Frontend connects via y-websocket with:
-      ws://host:port/yws?ws=<workspace_id>&dev=<device_id>
+      ws://host:port/yws/<workspace_id>?dev=<device_id>
     """
-    await _yws_impl(websocket)
+    await _yws_impl(websocket, room=None)
 
 
 @router.websocket("/yws/{room:path}")
 async def yws_room(websocket: WebSocket, room: str):
     """
-    Compatibility route for y-websocket default URL pattern, which appends
-    the room name after the base path, e.g. /yws/desktop?ws=<workspace>&dev=..
+    Route compatible with y-websocket default URL pattern:
+      ws://host:port/yws/<workspace_id>?dev=<device_id>
     """
-    _ = room  # room name is not used; workspace is driven by ?ws=..
-    await _yws_impl(websocket)
+    await _yws_impl(websocket, room=room)
 
 
 @router.websocket("/ws")
