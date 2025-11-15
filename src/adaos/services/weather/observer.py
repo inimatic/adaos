@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 import time
 from typing import Dict
 
@@ -29,7 +31,7 @@ def ensure_weather_observer(workspace_id: str, ydoc: Y.YDoc) -> None:
     if workspace_id in _OBSERVERS:
         return
 
-    def _maybe_emit(event: Y.YDocEvent | None = None) -> None:  # noqa: ARG001 - event unused
+    def _emit_current() -> None:
         city = _current_city(ydoc)
         if not city or _LAST_CITY.get(workspace_id) == city:
             return
@@ -46,6 +48,20 @@ def ensure_weather_observer(workspace_id: str, ydoc: Y.YDoc) -> None:
         except Exception as exc:
             _log.warning("failed to publish weather.city_changed: %s", exc)
 
-    sub_id = ydoc.observe(_maybe_emit)
+    def _maybe_emit(event: Y.YDocEvent | None = None) -> None:  # noqa: ARG001 - event unused
+        def _run_safe() -> None:
+            try:
+                _emit_current()
+            except Exception:
+                pass
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            threading.Thread(target=_run_safe, name="weather-observer", daemon=True).start()
+        else:
+            loop.call_soon(_run_safe)
+
+    sub_id = ydoc.observe_after_transaction(_maybe_emit)
     _OBSERVERS[workspace_id] = sub_id
-    _maybe_emit()
+    _emit_current()

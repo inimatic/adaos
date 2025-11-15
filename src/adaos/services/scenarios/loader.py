@@ -15,7 +15,7 @@ def scenario_root(scenario_id: str) -> Path:
       <base_dir>/.adaos/workspace/scenarios/<scenario_id>/
     """
     ctx = get_ctx()
-    root = ctx.paths.workspace_dir() / "scenarios" / scenario_id
+    root = ctx.paths.scenarios_dir / scenario_id
     return root
 
 
@@ -53,4 +53,3 @@ def read_content(scenario_id: str) -> Dict[str, Any]:
 
 
 __all__ = ["scenario_root", "read_manifest", "read_content"]
-

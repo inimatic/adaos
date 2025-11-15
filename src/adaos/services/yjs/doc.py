@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from contextlib import contextmanager
-from typing import Iterator, Awaitable, TypeVar
+from contextlib import contextmanager, asynccontextmanager
+from typing import Iterator, AsyncIterator, Awaitable, TypeVar
 
 import y_py as Y
 from ypy_websocket.ystore import SQLiteYStore
@@ -22,22 +22,7 @@ def _run_blocking(coro: Awaitable[T]) -> T:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
-
-    result: dict[str, T] = {}
-    error: list[BaseException] = []
-
-    def _target() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # pragma: no cover - best effort guard
-            error.append(exc)
-
-    thread = threading.Thread(target=_target, name="adaos-ystore-op", daemon=True)
-    thread.start()
-    thread.join()
-    if error:
-        raise error[0]
-    return result.get("value")  # type: ignore[return-value]
+    raise RuntimeError("get_ydoc() cannot be used inside an active event loop; use async_get_ydoc().")
 
 
 @contextmanager
@@ -74,4 +59,29 @@ def get_ydoc(workspace_id: str) -> Iterator[Y.YDoc]:
             pass
 
 
-__all__ = ["get_ydoc"]
+@asynccontextmanager
+async def async_get_ydoc(workspace_id: str) -> AsyncIterator[Y.YDoc]:
+    """
+    Async counterpart of :func:`get_ydoc` for use inside running event loops.
+    """
+    ystore = SQLiteYStore(str(ystore_path_for_workspace(workspace_id)))
+    ydoc = Y.YDoc()
+    await ystore.start()
+    try:
+        try:
+            await ystore.apply_updates(ydoc)
+        except Exception:
+            pass
+        yield ydoc
+        try:
+            await ystore.encode_state_as_update(ydoc)
+        except Exception:
+            pass
+    finally:
+        try:
+            await ystore.stop()
+        except Exception:
+            pass
+
+
+__all__ = ["get_ydoc", "async_get_ydoc"]
