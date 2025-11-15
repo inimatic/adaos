@@ -1,8 +1,7 @@
-//src\adaos\integrations\inimatic\src\app\core\adaos\adaos-client.service.ts
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 
-export type AdaosEvent = { type: string;[k: string]: any };
+export type AdaosEvent = { type: string; [k: string]: any };
 export interface AdaosConfig { baseUrl: string; token?: string | null; }
 
 export interface SubnetRegisterRequest {
@@ -37,8 +36,10 @@ function rootAbs(path: string) {
 
 @Injectable({ providedIn: 'root' })
 export class AdaosClient {
-	private ws?: WebSocket;
 	private cfg: AdaosConfig;
+	private eventsWs?: WebSocket;
+	private eventsReady?: Promise<WebSocket>;
+	private pendingCmds = new Map<string, { resolve: (msg: any) => void; reject: (err: any) => void; timeout: any }>();
 
 	constructor(private http: HttpClient) {
 		this.cfg = {
@@ -52,7 +53,7 @@ export class AdaosClient {
 	setBase(url: string) { this.cfg.baseUrl = url.replace(/\/$/, ''); }
 	setToken(token: string | null) { this.cfg.token = token; }
 
-	// аккуратная склейка без new URL — работает и с абсолютной, и с относительной базой
+	// �����⭠� ᪫���� ��� new URL - ࠡ�⠥� � � ��᮫�⭮�, � � �⭮�⥫쭮� �����
 	private abs(path: string) {
 		const base = this.cfg.baseUrl.replace(/\/$/, '');
 		const rel = path.startsWith('/') ? path : `/${path}`;
@@ -65,16 +66,120 @@ export class AdaosClient {
 	get<T>(path: string) { return this.http.get<T>(this.abs(path), { headers: this.h() }); }
 	post<T>(path: string, body?: any) { return this.http.post<T>(this.abs(path), body ?? {}, { headers: this.h() }); }
 
-	// WebSocket напрямую к локальной ноде
-	connect(topics: string[] = []) {
+	private eventsUrl(): string {
 		const wsUrl = this.abs('/ws').replace(/^http/, 'ws');
 		const u = new URL(wsUrl);
 		if (this.cfg.token) u.searchParams.set('token', this.cfg.token);
-		this.ws = new WebSocket(u.toString());
-		this.ws.onopen = () => { if (topics.length) this.subscribe(topics); };
-		return this.ws;
+		return u.toString();
 	}
-	subscribe(topics: string[]) { this.ws?.send(JSON.stringify({ type: 'subscribe', topics })); }
+
+	private resetEventsSocket(reason?: any) {
+		if (this.eventsWs) {
+			try {
+				this.eventsWs.removeEventListener('message', this.onEventsMessage);
+			} catch {}
+		}
+		this.eventsWs = undefined;
+		this.eventsReady = undefined;
+		for (const [, entry] of this.pendingCmds) {
+			clearTimeout(entry.timeout);
+			entry.reject(reason ?? new Error('events websocket closed'));
+		}
+		this.pendingCmds.clear();
+	}
+
+	private onEventsMessage = (ev: MessageEvent) => {
+		try {
+			const msg = JSON.parse(ev.data);
+			if (msg?.ch === 'events' && msg?.t === 'ack' && msg?.id) {
+				const pending = this.pendingCmds.get(String(msg.id));
+				if (pending) {
+					this.pendingCmds.delete(String(msg.id));
+					clearTimeout(pending.timeout);
+					pending.resolve(msg);
+				}
+			}
+		} catch {
+			// ignore malformed payloads
+		}
+	};
+
+	private ensureEventsSocket(): Promise<WebSocket> {
+		if (this.eventsWs && this.eventsWs.readyState === WebSocket.OPEN) {
+			return Promise.resolve(this.eventsWs);
+		}
+		if (this.eventsReady) {
+			return this.eventsReady;
+		}
+		this.eventsReady = new Promise<WebSocket>((resolve, reject) => {
+			const ws = new WebSocket(this.eventsUrl());
+			this.eventsWs = ws;
+			const cleanup = () => {
+				ws.removeEventListener('open', onOpen);
+				ws.removeEventListener('error', onError);
+			};
+			const onOpen = () => {
+				cleanup();
+				ws.addEventListener('message', this.onEventsMessage);
+				ws.addEventListener('close', () => this.resetEventsSocket());
+				resolve(ws);
+			};
+			const onError = (err: Event) => {
+				cleanup();
+				this.resetEventsSocket(err);
+				reject(err);
+			};
+			ws.addEventListener('open', onOpen);
+			ws.addEventListener('error', onError);
+		}).finally(() => {
+			this.eventsReady = undefined;
+		});
+		return this.eventsReady;
+	}
+
+	async connect(topics: string[] = []): Promise<WebSocket> {
+		const ws = await this.ensureEventsSocket();
+		if (topics.length) {
+			this.subscribe(topics);
+		}
+		return ws;
+	}
+
+	getEventsSocket(): WebSocket | undefined {
+		return this.eventsWs;
+	}
+
+	subscribe(topics: string[]) {
+		if (!topics.length) return;
+		this.ensureEventsSocket().then(ws => {
+			ws.send(JSON.stringify({ type: 'subscribe', topics }));
+		}).catch(() => {});
+	}
+
+	async sendEventsCommand(kind: string, payload: Record<string, any>, timeoutMs = 5000): Promise<any> {
+		const ws = await this.ensureEventsSocket();
+		const cmdId = `${kind}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
+		const envelope = {
+			ch: 'events',
+			t: 'cmd',
+			id: cmdId,
+			kind,
+			payload: payload ?? {},
+		};
+		const ack = new Promise<any>((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				this.pendingCmds.delete(cmdId);
+				reject(new Error(`events command timeout: ${kind}`));
+			}, timeoutMs);
+			this.pendingCmds.set(cmdId, {
+				resolve: (msg: any) => resolve(msg),
+				reject: (err: any) => reject(err),
+				timeout,
+			});
+		});
+		ws.send(JSON.stringify(envelope));
+		return ack;
+	}
 
 	say(text: string) { return this.post('/api/say', { text }); }
 	callSkill<T = any>(skill: string, method: string, body?: any) {

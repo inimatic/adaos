@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import logging
 from typing import Dict
 
 import y_py as Y
@@ -16,8 +17,10 @@ from ypy_websocket.ystore import SQLiteYStore
 from adaos.apps.workspaces.index import ensure_workspace
 from .y_bootstrap import ensure_workspace_seeded_from_scenario
 from .y_store import ystore_path_for_workspace
+from adaos.services.weather.observer import ensure_weather_observer
 
 router = APIRouter()
+_log = logging.getLogger("adaos.events_ws")
 
 
 class WorkspaceWebsocketServer(WebsocketServer):
@@ -28,8 +31,8 @@ class WorkspaceWebsocketServer(WebsocketServer):
     """
 
     async def get_room(self, name: str) -> YRoom:  # type: ignore[override]
+        workspace_id = name or "default"
         if name not in self.rooms:
-            workspace_id = name or "default"
             ensure_workspace(workspace_id)
             ystore = SQLiteYStore(str(ystore_path_for_workspace(workspace_id)))
             await ensure_workspace_seeded_from_scenario(ystore, workspace_id=workspace_id)
@@ -41,6 +44,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 pass
             self.rooms[name] = room
         room = self.rooms[name]
+        ensure_weather_observer(workspace_id, room.ydoc)
         await self.start_room(room)
         return room
 
@@ -233,6 +237,7 @@ async def events_ws(websocket: WebSocket):
                             }
                         )
                     )
+                    _log.debug("device.register acknowledged workspace=%s device=%s", workspace_id, device_id)
                 except Exception:
                     # In dev mode we still ack, but without guaranteeing presence.
                     await websocket.send_text(
@@ -266,6 +271,7 @@ async def events_ws(websocket: WebSocket):
                         ts=time.time(),
                     )
                     ctx.bus.publish(ev)
+                    _log.debug("desktop.toggleInstall workspace=%s type=%s id=%s", workspace_id, payload.get("type"), payload.get("id"))
                 except Exception:
                     pass
 

@@ -2,6 +2,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { IonicModule, ModalController } from '@ionic/angular'
 import { YDocService } from '../../y/ydoc.service'
+import { AdaosClient } from '../../core/adaos/adaos-client.service'
 import { observeDeep } from '../../y/y-helpers'
 import { AdaApp } from '../../runtime/dsl-types'
 import { WeatherWidgetComponent } from '../widgets/weather-widget.component'
@@ -20,9 +21,9 @@ import '../../runtime/registry.catalogs'
 export class DesktopRendererComponent implements OnInit, OnDestroy {
   app?: AdaApp
   dispose?: () => void
-  resolvedIcons: Array<{ id:string; title:string; icon:string; action?: any }> = []
-  resolvedWidgets: Array<{ id:string; type:string; title?:string; source?:string }> = []
-  constructor(private y: YDocService, private modal: ModalController) {}
+  resolvedIcons: Array<{ id:string; title:string; icon:string; action?: any; dev?: boolean }> = []
+  resolvedWidgets: Array<{ id:string; type:string; title?:string; source?:string; dev?: boolean }> = []
+  constructor(private y: YDocService, private modal: ModalController, private adaos: AdaosClient) {}
 
   async ngOnInit() {
     await this.y.initFromHub()
@@ -81,6 +82,8 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
           dataMap.set('desktop', nextDesktop)
         })
         installed = next
+        const kind = type === 'catalog-apps' ? 'app' : 'widget'
+        this.syncToggleInstall(kind, it.id)
       }
       const modalRef = await this.modal.create({
         component: ModalHostComponent,
@@ -117,7 +120,13 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
     this.resolvedIcons = installedApps
       .map(id => byId[id])
       .filter(Boolean)
-      .map(it => ({ id: it.id, title: it.title || it.id, icon: it.icon || (this.app as any)?.desktop?.iconTemplate?.icon || 'apps-outline', action: it.launchModal ? { openModal: it.launchModal } : undefined }))
+      .map(it => ({
+        id: it.id,
+        title: it.title || it.id,
+        icon: it.icon || (this.app as any)?.desktop?.iconTemplate?.icon || 'apps-outline',
+        action: it.launchModal ? { openModal: it.launchModal } : undefined,
+        dev: !!it.dev,
+      }))
 
     // resolve widgets from data.desktop.installed.widgets (fallback data.installed.widgets) + data.catalog.widgets
     const catalogWidgets: any[] = this.y.toJSON(this.y.getPath('data/catalog/widgets')) || []
@@ -128,7 +137,15 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
     this.resolvedWidgets = installedWidgets
       .map(id => wById[id])
       .filter(Boolean)
-      .map(it => ({ id: it.id, type: it.type, title: it.title, source: it.source }))
+      .map(it => ({ id: it.id, type: it.type, title: it.title, source: it.source, dev: !!it.dev }))
+  }
+
+  private async syncToggleInstall(type: 'app' | 'widget', id: string) {
+    try {
+      await this.adaos.sendEventsCommand('desktop.toggleInstall', { type, id })
+    } catch (err) {
+      console.warn('desktop.toggleInstall failed', err)
+    }
   }
 
   async resetDb(){

@@ -48,59 +48,12 @@ export class YDocService {
     try { await this.db.whenSynced } catch {}
 
     const baseHttp = this.adaos.getBaseUrl().replace(/\/$/, '')
-
-    // 1) device.register over /ws
     const baseWs = baseHttp.replace(/^http/, 'ws')
 
-    const eventsUrl = `${baseWs}/ws`
-    const ws = new WebSocket(eventsUrl)
-    await new Promise<void>((resolve, reject) => {
-      const onOpen = () => { cleanup(); resolve() }
-      const onError = (ev: Event) => { cleanup(); reject(ev) }
-      const cleanup = () => {
-        ws.removeEventListener('open', onOpen)
-        ws.removeEventListener('error', onError)
-      }
-      ws.addEventListener('open', onOpen)
-      ws.addEventListener('error', onError)
-    })
-
-    const cmdId = `device.register.${Date.now()}`
-    ws.send(JSON.stringify({
-      ch: 'events',
-      t: 'cmd',
-      id: cmdId,
-      kind: 'device.register',
-      payload: { device_id: this.deviceId },
-    }))
-
-    const workspaceId = await new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        ws.close()
-        reject(new Error('device.register timeout'))
-      }, 5000)
-      const onMessage = (ev: MessageEvent) => {
-        try {
-          const msg = JSON.parse(ev.data)
-          if (msg?.ch === 'events' && msg?.t === 'ack' && msg?.id === cmdId && msg?.ok && msg?.data?.workspace_id) {
-            clearTimeout(timeout)
-            cleanup()
-            resolve(String(msg.data.workspace_id))
-          }
-        } catch { /* ignore */ }
-      }
-      const onError = () => {
-        clearTimeout(timeout)
-        cleanup()
-        reject(new Error('events websocket error'))
-      }
-      const cleanup = () => {
-        ws.removeEventListener('message', onMessage)
-        ws.removeEventListener('error', onError)
-      }
-      ws.addEventListener('message', onMessage)
-      ws.addEventListener('error', onError)
-    })
+    // Ensure shared events websocket is connected and register device
+    await this.adaos.connect()
+    const ack = await this.adaos.sendEventsCommand('device.register', { device_id: this.deviceId })
+    const workspaceId = String(ack?.data?.workspace_id || 'default')
 
     // 2) Connect Yjs via y-websocket to /yws/<workspace_id>
     // WebsocketProvider builds URL as `${serverUrl}/${room}`.
