@@ -301,6 +301,14 @@ def cmd_install(
 
     _echo_runtime_install(runtime)
 
+    try:
+        activated_slot = mgr.activate_runtime(skill_name, version=runtime.version, slot=runtime.slot)
+    except Exception as exc:
+        typer.secho(f"activation failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    typer.secho(f"skill {skill_name} now active on slot {activated_slot}", fg=typer.colors.GREEN)
+
     if silent:
         return
 

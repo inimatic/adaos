@@ -196,9 +196,17 @@ class SkillRuntimeEnvironment:
         target = slots_root / slot
         current_link = slots_root / "current"
         if current_link.exists() or current_link.is_symlink():
-            if current_link.is_symlink() or current_link.is_file():
-                current_link.unlink(missing_ok=True)
-            elif current_link.is_dir():
+            removed = False
+            try:
+                if current_link.is_symlink() or current_link.is_file():
+                    current_link.unlink(missing_ok=True)
+                    removed = True
+                else:
+                    current_link.rmdir()
+                    removed = True
+            except OSError:
+                pass
+            if not removed:
                 self._remove_tree(current_link)
         target.mkdir(parents=True, exist_ok=True)
         if os.name == "nt":
