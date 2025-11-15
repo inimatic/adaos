@@ -56,7 +56,7 @@ async def ensure_workspace_seeded_from_scenario(
     # emits scenarios.synced for downstream listeners.
     try:
         mgr = _scenario_manager()
-        await asyncio.to_thread(mgr.sync_to_yjs, default_scenario_id, workspace_id)
+        await mgr.sync_to_yjs_async(default_scenario_id, workspace_id)
         return
     except Exception:
         pass

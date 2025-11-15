@@ -18,7 +18,8 @@ from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.capacity import get_local_capacity
 from adaos.services.node_config import load_config
 from adaos.services.scenarios.loader import read_manifest, read_content
-from adaos.services.yjs.doc import get_ydoc
+import y_py as Y
+from adaos.services.yjs.doc import get_ydoc, async_get_ydoc
 from adaos.services.skill.manager import SkillManager
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
@@ -130,16 +131,10 @@ class ScenarioManager:
             pass
         return meta
 
-    def sync_to_yjs(self, scenario_id: str, workspace_id: str = "default") -> None:
-        """
-        Project the declarative scenario payload into the workspace YDoc so
-        downstream services (Yjs/WS, web_desktop_skill, etc.) can pick it up.
-        """
-        self.caps.require("core", "scenarios.manage")
+    def _ensure_yjs_payload(self, scenario_id: str) -> tuple[dict, dict, dict]:
         content = read_content(scenario_id)
         if not content:
             raise FileNotFoundError(f"scenario '{scenario_id}' has no scenario.json content")
-
         ui_section = ((content.get("ui") or {}).get("application")) or {}
         if not isinstance(ui_section, dict):
             ui_section = {}
@@ -149,37 +144,61 @@ class ScenarioManager:
         catalog_section = content.get("catalog") or {}
         if not isinstance(catalog_section, dict):
             catalog_section = {}
+        return ui_section, registry_section, catalog_section
+
+    def _project_to_doc(self, ydoc: Y.YDoc, scenario_id: str, ui_section: dict, registry_section: dict, catalog_section: dict) -> None:
+        with ydoc.begin_transaction() as txn:
+            ui_map = ydoc.get_map("ui")
+            registry_map = ydoc.get_map("registry")
+            data_map = ydoc.get_map("data")
+
+            scenarios_ui = ui_map.get("scenarios")
+            if not isinstance(scenarios_ui, dict):
+                scenarios_ui = {}
+            updated_ui = dict(scenarios_ui)
+            updated_ui[scenario_id] = {"application": ui_section}
+            ui_map.set(txn, "scenarios", updated_ui)
+            if not ui_map.get("current_scenario"):
+                ui_map.set(txn, "current_scenario", scenario_id)
+
+            reg_scenarios = registry_map.get("scenarios")
+            if not isinstance(reg_scenarios, dict):
+                reg_scenarios = {}
+            reg_updated = dict(reg_scenarios)
+            reg_updated[scenario_id] = registry_section
+            registry_map.set(txn, "scenarios", reg_updated)
+
+            data_scenarios = data_map.get("scenarios")
+            if not isinstance(data_scenarios, dict):
+                data_scenarios = {}
+            data_updated = dict(data_scenarios)
+            entry = dict(data_updated.get(scenario_id) or {})
+            entry["catalog"] = catalog_section
+            data_updated[scenario_id] = entry
+            data_map.set(txn, "scenarios", data_updated)
+
+    def sync_to_yjs(self, scenario_id: str, workspace_id: str = "default") -> None:
+        """
+        Project the declarative scenario payload into the workspace YDoc so
+        downstream services (Yjs/WS, web_desktop_skill, etc.) can pick it up.
+        """
+        self.caps.require("core", "scenarios.manage")
+        ui_section, registry_section, catalog_section = self._ensure_yjs_payload(scenario_id)
 
         with get_ydoc(workspace_id) as ydoc:
-            with ydoc.begin_transaction() as txn:
-                ui_map = ydoc.get_map("ui")
-                registry_map = ydoc.get_map("registry")
-                data_map = ydoc.get_map("data")
+            self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section)
 
-                scenarios_ui = ui_map.get("scenarios")
-                if not isinstance(scenarios_ui, dict):
-                    scenarios_ui = {}
-                updated_ui = dict(scenarios_ui)
-                updated_ui[scenario_id] = {"application": ui_section}
-                ui_map.set(txn, "scenarios", updated_ui)
-                if not ui_map.get("current_scenario"):
-                    ui_map.set(txn, "current_scenario", scenario_id)
+        emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "workspace_id": workspace_id}, "scenario.mgr")
 
-                reg_scenarios = registry_map.get("scenarios")
-                if not isinstance(reg_scenarios, dict):
-                    reg_scenarios = {}
-                reg_updated = dict(reg_scenarios)
-                reg_updated[scenario_id] = registry_section
-                registry_map.set(txn, "scenarios", reg_updated)
+    async def sync_to_yjs_async(self, scenario_id: str, workspace_id: str = "default") -> None:
+        """
+        Async variant of :meth:`sync_to_yjs` for use inside running event loops.
+        """
+        self.caps.require("core", "scenarios.manage")
+        ui_section, registry_section, catalog_section = self._ensure_yjs_payload(scenario_id)
 
-                data_scenarios = data_map.get("scenarios")
-                if not isinstance(data_scenarios, dict):
-                    data_scenarios = {}
-                data_updated = dict(data_scenarios)
-                entry = dict(data_updated.get(scenario_id) or {})
-                entry["catalog"] = catalog_section
-                data_updated[scenario_id] = entry
-                data_map.set(txn, "scenarios", data_updated)
+        async with async_get_ydoc(workspace_id) as ydoc:
+            self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section)
 
         emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "workspace_id": workspace_id}, "scenario.mgr")
 
@@ -210,7 +229,16 @@ class ScenarioManager:
             try:
                 # Ensure installed in monorepo and then activate runtime.
                 skill_mgr.install(dep)
-                skill_mgr.activate_for_space(dep, space="default", workspace_id=workspace_id)
+                version = None
+                slot = None
+                try:
+                    runtime = skill_mgr.prepare_runtime(dep, run_tests=False)
+                except Exception:
+                    runtime = None
+                if runtime:
+                    version = getattr(runtime, "version", None)
+                    slot = getattr(runtime, "slot", None)
+                skill_mgr.activate_for_space(dep, version=version, slot=slot, space="default", workspace_id=workspace_id)
             except Exception:
                 # Do not break scenario install on individual dependency issues.
                 continue
