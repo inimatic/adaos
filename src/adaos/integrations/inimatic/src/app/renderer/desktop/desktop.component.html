@@ -11,6 +11,7 @@
 
     <div class="icons">
       <button class="icon" *ngFor="let ic of resolvedIcons" (click)="onIconClick(ic)">
+        <ion-badge *ngIf="ic.dev" color="warning" class="dev-badge">DEV</ion-badge>
         <ion-icon [name]="ic.icon"></ion-icon>
         <span>{{ ic.title }}</span>
       </button>
@@ -18,7 +19,10 @@
 
     <div class="widgets">
       <ng-container *ngFor="let w of resolvedWidgets">
-        <ada-widget [type]="w.type" [cfg]="{ title: w.title, data: getData(w.source) }"></ada-widget>
+        <div class="widget-wrapper">
+          <ion-badge *ngIf="w.dev" color="warning" class="dev-badge">DEV</ion-badge>
+          <ada-widget [type]="w.type" [cfg]="{ title: w.title, data: getData(w.source) }"></ada-widget>
+        </div>
       </ng-container>
     </div>
   </div>
