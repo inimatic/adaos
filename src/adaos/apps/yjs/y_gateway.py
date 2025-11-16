@@ -5,7 +5,7 @@ import json
 import time
 import logging
 import threading
-from typing import Dict
+from typing import Dict, Any
 
 import y_py as Y
 from fastapi import APIRouter, WebSocket
@@ -19,6 +19,8 @@ from adaos.apps.workspaces.index import ensure_workspace
 from .y_bootstrap import ensure_webspace_seeded_from_scenario
 from .y_store import ystore_path_for_webspace
 from adaos.services.weather.observer import ensure_weather_observer
+from adaos.domain import Event as DomainEvent
+from adaos.services.agent_context import get_ctx as get_agent_ctx
 
 router = APIRouter()
 _log = logging.getLogger("adaos.events_ws")
@@ -72,6 +74,22 @@ async def start_y_server() -> None:
 
     asyncio.create_task(_runner(), name="adaos-yjs-websocket-server")
     await y_server.started.wait()
+
+
+async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None) -> None:
+    ensure_workspace(webspace_id)
+    ystore = SQLiteYStore(str(ystore_path_for_webspace(webspace_id)))
+    try:
+        await ensure_webspace_seeded_from_scenario(
+            ystore,
+            webspace_id=webspace_id,
+            default_scenario_id=scenario_id or "web_desktop",
+        )
+    finally:
+        try:
+            await ystore.stop()
+        except Exception:
+            pass
 
 
 class FastAPIWebsocketAdapter:
@@ -200,6 +218,21 @@ async def events_ws(websocket: WebSocket):
     device_id: str | None = None
     webspace_id = "default"
 
+    def _publish_bus(topic: str, extra: Dict[str, Any] | None = None) -> None:
+        data = dict(extra or {})
+        data.setdefault("webspace_id", webspace_id)
+        meta = dict(data.get("_meta") or {})
+        meta.setdefault("webspace_id", webspace_id)
+        if device_id:
+            meta.setdefault("device_id", device_id)
+        data["_meta"] = meta
+        try:
+            ctx = get_agent_ctx()
+            ev = DomainEvent(type=topic, payload=data, source="events_ws", ts=time.time())
+            ctx.bus.publish(ev)
+        except Exception:
+            _log.warning("failed to publish %s", topic, exc_info=True)
+
     try:
         while True:
             try:
@@ -223,11 +256,11 @@ async def events_ws(websocket: WebSocket):
 
             if kind == "device.register":
                 device_id = payload.get("device_id") or "dev-unknown"
-                # Dev-only policy: single webspace "default" for now
-                webspace_id = "default"
+                requested_webspace = payload.get("webspace_id") or payload.get("id") or "default"
+                webspace_id = str(requested_webspace or "default")
 
                 try:
-                    ensure_workspace(webspace_id)
+                    await ensure_webspace_ready(webspace_id)
                     await start_y_server()
                     await _update_device_presence(webspace_id, device_id)
 
@@ -259,30 +292,69 @@ async def events_ws(websocket: WebSocket):
                 continue
 
             if kind == "desktop.toggleInstall":
-                # Command to toggle app/widget installation in the current webspace.
-                try:
-                    from adaos.domain import Event as _Ev
-                    from adaos.services.agent_context import get_ctx as _get_ctx
-
-                    ctx = _get_ctx()
-                    ev = _Ev(
-                        type="desktop.toggleInstall",
-                        payload={
-                            "webspace_id": webspace_id,
-                            "type": payload.get("type"),
-                            "id": payload.get("id"),
-                        },
-                        source="events_ws",
-                        ts=time.time(),
-                    )
-                    ctx.bus.publish(ev)
-                    _log.debug("desktop.toggleInstall webspace=%s type=%s id=%s", webspace_id, payload.get("type"), payload.get("id"))
-                except Exception:
-                    pass
-
+                _publish_bus(
+                    "desktop.toggleInstall",
+                    {"type": payload.get("type"), "id": payload.get("id")},
+                )
                 await websocket.send_text(
                     json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True})
                 )
+                continue
+
+            if kind == "desktop.webspace.create":
+                _publish_bus(
+                    "desktop.webspace.create",
+                    {"id": payload.get("id"), "title": payload.get("title"), "scenario_id": payload.get("scenario_id")},
+                )
+                await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
+                continue
+
+            if kind == "desktop.webspace.rename":
+                _publish_bus(
+                    "desktop.webspace.rename",
+                    {"id": payload.get("id"), "title": payload.get("title")},
+                )
+                await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
+                continue
+
+            if kind == "desktop.webspace.delete":
+                _publish_bus("desktop.webspace.delete", {"id": payload.get("id")})
+                await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
+                continue
+
+            if kind == "desktop.webspace.refresh":
+                _publish_bus("desktop.webspace.refresh", payload)
+                await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
+                continue
+
+            if kind == "desktop.webspace.use":
+                target = payload.get("id") or payload.get("webspace_id")
+                if not target:
+                    await websocket.send_text(
+                        json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "webspace_id required"})
+                    )
+                    continue
+                new_webspace = str(target)
+                try:
+                    await ensure_webspace_ready(new_webspace, scenario_id=payload.get("scenario_id"))
+                    webspace_id = new_webspace
+                    await _update_device_presence(webspace_id, device_id or "dev-unknown")
+                    _publish_bus("desktop.webspace.refresh", {"webspace_id": webspace_id})
+                    await websocket.send_text(
+                        json.dumps(
+                            {
+                                "ch": "events",
+                                "t": "ack",
+                                "id": cmd_id,
+                                "ok": True,
+                                "data": {"webspace_id": webspace_id},
+                            }
+                        )
+                    )
+                except Exception:
+                    await websocket.send_text(
+                        json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "webspace_unavailable"})
+                    )
                 continue
 
             # Default ack for other commands (no-op for now)

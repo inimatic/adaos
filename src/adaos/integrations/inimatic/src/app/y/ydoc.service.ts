@@ -12,6 +12,8 @@ export class YDocService {
   private initialized = false
   private initPromise?: Promise<void>
   private readonly deviceId: string
+  private currentWebspaceId = 'default'
+  private readonly webspaceKey = 'adaos_webspace_id'
 
   constructor(private adaos: AdaosClient) {
     this.deviceId = this.ensureDeviceId()
@@ -52,8 +54,11 @@ export class YDocService {
 
     // Ensure shared events websocket is connected and register device
     await this.adaos.connect()
-    const ack = await this.adaos.sendEventsCommand('device.register', { device_id: this.deviceId })
-    const webspaceId = String(ack?.data?.webspace_id || 'default')
+    const preferred = this.getPreferredWebspaceId()
+    const ack = await this.adaos.sendEventsCommand('device.register', { device_id: this.deviceId, webspace_id: preferred })
+    const webspaceId = String(ack?.data?.webspace_id || preferred || 'default')
+    this.currentWebspaceId = webspaceId
+    this.setPreferredWebspaceId(webspaceId)
 
     // 2) Connect Yjs via y-websocket to /yws/<webspace_id>
     // WebsocketProvider builds URL as `${serverUrl}/${room}`.
@@ -76,6 +81,32 @@ export class YDocService {
     })
 
     this.initialized = true
+  }
+
+  getWebspaceId(): string {
+    return this.currentWebspaceId
+  }
+
+  private getPreferredWebspaceId(): string {
+    try {
+      return localStorage.getItem(this.webspaceKey) || 'default'
+    } catch {
+      return 'default'
+    }
+  }
+
+  private setPreferredWebspaceId(id: string): void {
+    try {
+      localStorage.setItem(this.webspaceKey, id)
+    } catch {}
+  }
+
+  async switchWebspace(webspaceId: string): Promise<void> {
+    const target = (webspaceId || '').trim()
+    if (!target || target === this.currentWebspaceId) return
+    await this.adaos.sendEventsCommand('desktop.webspace.use', { webspace_id: target })
+    this.setPreferredWebspaceId(target)
+    window.location.reload()
   }
 
   getPath(path: string): any {
