@@ -9,6 +9,7 @@ import typer
 
 from adaos.apps.cli.i18n import _
 from adaos.apps.cli.commands.skill import _mgr
+from adaos.apps.yjs.webspace import default_webspace_id
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import displayable_path
 from adaos.services.root.service import (
@@ -796,7 +797,7 @@ def dev_skill_activate(
     """Activate the DEV skill runtime under .adaos/dev/<subnet>/skills/<name>."""
     mgr = _mgr()
     try:
-        target = mgr.activate_for_space(name, version=version, slot=slot, space="dev", webspace_id="default")
+        target = mgr.activate_for_space(name, version=version, slot=slot, space="dev", webspace_id=default_webspace_id())
     except Exception as exc:
         typer.secho(f"activate failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
@@ -847,7 +848,7 @@ def dev_skill_status(
 def dev_skill_rollback(name: str = typer.Argument(..., help="skill name in DEV space")) -> None:
     mgr = _mgr()
     try:
-        slot = mgr.rollback_for_space(name, space="dev", webspace_id="default")
+        slot = mgr.rollback_for_space(name, space="dev", webspace_id=default_webspace_id())
     except Exception as exc:
         typer.secho(f"rollback failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc

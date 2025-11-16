@@ -2,7 +2,7 @@ name: AdaOS CI
 
 on:
   push:
-    branches: [main, master, rev2026]
+    branches: [rev2026]
   pull_request:
   workflow_dispatch:
 

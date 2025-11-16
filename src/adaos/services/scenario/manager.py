@@ -20,6 +20,7 @@ from adaos.services.node_config import load_config
 from adaos.services.scenarios.loader import read_manifest, read_content
 import y_py as Y
 from adaos.services.yjs.doc import get_ydoc, async_get_ydoc
+from adaos.apps.yjs.webspace import default_webspace_id
 from adaos.services.skill.manager import SkillManager
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
@@ -110,7 +111,7 @@ class ScenarioManager:
 
     # --- Stage A2 helpers -------------------------------------------------
 
-    def install_with_deps(self, name: str, *, pin: Optional[str] = None, webspace_id: str = "default") -> SkillMeta:
+    def install_with_deps(self, name: str, *, pin: Optional[str] = None, webspace_id: str | None = None) -> SkillMeta:
         """
         Install a scenario (as with :meth:`install`) and then apply its
         manifest-defined dependencies inside the local workspace:
@@ -119,14 +120,15 @@ class ScenarioManager:
             and activated via :class:`SkillManager`;
           - keep Yjs/bootstrap concerns in y_bootstrap (Stage A2).
         """
+        target_webspace = webspace_id or default_webspace_id()
         meta = self.install(name, pin=pin)
         try:
-            self._post_install_bootstrap(meta.id.value, webspace_id=webspace_id)
+            self._post_install_bootstrap(meta.id.value, webspace_id=target_webspace)
         except Exception:
             # Best-effort; do not fail install on bootstrap errors.
             pass
         try:
-            self.sync_to_yjs(meta.id.value, webspace_id=webspace_id)
+            self.sync_to_yjs(meta.id.value, webspace_id=target_webspace)
         except Exception:
             pass
         return meta
@@ -177,32 +179,34 @@ class ScenarioManager:
             data_updated[scenario_id] = entry
             data_map.set(txn, "scenarios", data_updated)
 
-    def sync_to_yjs(self, scenario_id: str, webspace_id: str = "default") -> None:
+    def sync_to_yjs(self, scenario_id: str, webspace_id: str | None = None) -> None:
         """
         Project the declarative scenario payload into the webspace YDoc so
         downstream services (Yjs/WS, web_desktop_skill, etc.) can pick it up.
         """
+        target_webspace = webspace_id or default_webspace_id()
         self.caps.require("core", "scenarios.manage")
         ui_section, registry_section, catalog_section = self._ensure_yjs_payload(scenario_id)
 
-        with get_ydoc(webspace_id) as ydoc:
+        with get_ydoc(target_webspace) as ydoc:
             self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section)
 
-        emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "webspace_id": webspace_id}, "scenario.mgr")
+        emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "webspace_id": target_webspace}, "scenario.mgr")
 
-    async def sync_to_yjs_async(self, scenario_id: str, webspace_id: str = "default") -> None:
+    async def sync_to_yjs_async(self, scenario_id: str, webspace_id: str | None = None) -> None:
         """
         Async variant of :meth:`sync_to_yjs` for use inside running event loops.
         """
+        target_webspace = webspace_id or default_webspace_id()
         self.caps.require("core", "scenarios.manage")
         ui_section, registry_section, catalog_section = self._ensure_yjs_payload(scenario_id)
 
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(target_webspace) as ydoc:
             self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section)
 
-        emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "webspace_id": webspace_id}, "scenario.mgr")
+        emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "webspace_id": target_webspace}, "scenario.mgr")
 
-    def _post_install_bootstrap(self, scenario_id: str, webspace_id: str = "default") -> None:
+    def _post_install_bootstrap(self, scenario_id: str, webspace_id: str | None = None) -> None:
         """
         Stage A2: after a scenario is installed into the workspace repo,
         apply its manifest-defined dependencies by installing/activating
@@ -214,6 +218,7 @@ class ScenarioManager:
             return
 
         # Use the same construction pattern as CLI SkillManager.
+        target_webspace = webspace_id or default_webspace_id()
         skill_reg = SqliteSkillRegistry(self.ctx.sql)
         skill_mgr = SkillManager(
             repo=self.ctx.skills_repo,
@@ -238,7 +243,7 @@ class ScenarioManager:
                 if runtime:
                     version = getattr(runtime, "version", None)
                     slot = getattr(runtime, "slot", None)
-                skill_mgr.activate_for_space(dep, version=version, slot=slot, space="default", webspace_id=webspace_id)
+                skill_mgr.activate_for_space(dep, version=version, slot=slot, space="default", webspace_id=target_webspace)
             except Exception:
                 # Do not break scenario install on individual dependency issues.
                 continue

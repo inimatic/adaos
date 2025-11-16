@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import logging
+import threading
 from typing import Dict
 
 import y_py as Y
@@ -37,6 +38,8 @@ class WorkspaceWebsocketServer(WebsocketServer):
             ystore = SQLiteYStore(str(ystore_path_for_webspace(webspace_id)))
             await ensure_webspace_seeded_from_scenario(ystore, webspace_id=webspace_id)
             room = YRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
+            room._thread_id = threading.get_ident()
+            room._loop = asyncio.get_running_loop()
             try:
                 await ystore.apply_updates(room.ydoc)
             except Exception:
@@ -44,6 +47,8 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 pass
             self.rooms[name] = room
         room = self.rooms[name]
+        room._thread_id = getattr(room, "_thread_id", threading.get_ident())
+        room._loop = getattr(room, "_loop", asyncio.get_running_loop())
         ensure_weather_observer(webspace_id, room.ydoc)
         await self.start_room(room)
         return room
@@ -94,9 +99,9 @@ class FastAPIWebsocketAdapter:
     async def send(self, message: bytes) -> None:
         try:
             await self._ws.send_bytes(message)
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RuntimeError):
             # клиент уже ушёл – тихо выходим
-            pass
+            return
 
     async def recv(self) -> bytes:
         msg = await self._ws.receive()
