@@ -33,6 +33,7 @@ from adaos.services.crypto.secrets_service import SecretsService
 from adaos.services.skill.secrets_backend import SkillSecretsBackend
 from adaos.services.skill.resolver import SkillPathResolver
 from adaos.services.capacity import install_skill_in_capacity, uninstall_skill_from_capacity
+from adaos.apps.yjs.webspace import default_webspace_id
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 
@@ -555,10 +556,9 @@ class SkillManager:
             target = self.activate_dev_runtime(name, version=version, slot=slot)
         else:
             target = self.activate_runtime(name, version=version, slot=slot)
+        bus_webspace = webspace_id or default_webspace_id()
         if self.bus:
-            payload: Dict[str, Any] = {"skill_name": name, "space": space}
-            if webspace_id:
-                payload["webspace_id"] = webspace_id
+            payload: Dict[str, Any] = {"skill_name": name, "space": space, "webspace_id": bus_webspace}
             emit(self.bus, "skills.activated", payload, "skill.mgr")
         return target
 
@@ -571,10 +571,9 @@ class SkillManager:
             target = self.dev_rollback_runtime(name)
         else:
             target = self.rollback_runtime(name)
+        bus_webspace = webspace_id or default_webspace_id()
         if self.bus:
-            payload: Dict[str, Any] = {"skill_name": name, "space": space}
-            if webspace_id:
-                payload["webspace_id"] = webspace_id
+            payload: Dict[str, Any] = {"skill_name": name, "space": space, "webspace_id": bus_webspace}
             emit(self.bus, "skills.rolledback", payload, "skill.mgr")
         return target
 
