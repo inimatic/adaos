@@ -23,6 +23,8 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
   dispose?: () => void
   resolvedIcons: Array<{ id:string; title:string; icon:string; action?: any; dev?: boolean }> = []
   resolvedWidgets: Array<{ id:string; type:string; title?:string; source?:string; dev?: boolean }> = []
+  webspaces: Array<{ id: string; title: string; created_at: number }> = []
+  activeWebspace = 'default'
   constructor(private y: YDocService, private modal: ModalController, private adaos: AdaosClient) {}
 
   async ngOnInit() {
@@ -32,6 +34,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
     const recompute = () => {
       this.app = this.y.toJSON(appNode)
       this.rebuildFromInstalled()
+      this.readWebspaces()
     }
     recompute()
     const un1 = observeDeep(appNode, recompute)
@@ -110,6 +113,18 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
     return this.y.toJSON(this.y.getPath(path))
   }
 
+  get webspaceLabel(): string {
+    const entry = this.webspaces.find(ws => ws.id === this.activeWebspace)
+    return entry?.title || this.activeWebspace
+  }
+
+  private readWebspaces(){
+    const raw = this.y.toJSON(this.y.getPath('data/webspaces'))
+    const items = Array.isArray(raw?.items) ? raw.items : []
+    this.webspaces = items
+    this.activeWebspace = this.y.getWebspaceId()
+  }
+
   private rebuildFromInstalled(){
     // resolve icons from data.desktop.installed.apps (fallback data.installed.apps) + data.catalog.apps
     const catalogApps: any[] = this.y.toJSON(this.y.getPath('data/catalog/apps')) || []
@@ -145,6 +160,60 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
       await this.adaos.sendEventsCommand('desktop.toggleInstall', { type, id })
     } catch (err) {
       console.warn('desktop.toggleInstall failed', err)
+    }
+  }
+
+  async onWebspaceChanged(ev: CustomEvent) {
+    const target = ev.detail?.value
+    if (!target || target === this.activeWebspace) return
+    try {
+      await this.y.switchWebspace(target)
+    } catch (err) {
+      console.warn('webspace switch failed', err)
+    }
+  }
+
+  async createWebspace() {
+    const suggested = `space-${Date.now().toString(16)}`
+    const rawId = prompt('ID нового webspace', suggested)
+    if (!rawId) return
+    const title = prompt('Название webspace', rawId) ?? rawId
+    try {
+      await this.adaos.sendEventsCommand('desktop.webspace.create', { id: rawId, title })
+    } catch (err) {
+      console.warn('webspace create failed', err)
+    }
+  }
+
+  async renameWebspace() {
+    if (!this.activeWebspace) return
+    const entry = this.webspaces.find(ws => ws.id === this.activeWebspace)
+    const nextTitle = prompt('Новое имя webspace', entry?.title || this.activeWebspace)
+    if (!nextTitle) return
+    try {
+      await this.adaos.sendEventsCommand('desktop.webspace.rename', { id: this.activeWebspace, title: nextTitle })
+    } catch (err) {
+      console.warn('webspace rename failed', err)
+    }
+  }
+
+  async deleteWebspace() {
+    if (!this.activeWebspace || this.activeWebspace === 'default') return
+    const entry = this.webspaces.find(ws => ws.id === this.activeWebspace)
+    const ok = confirm(`Удалить webspace "${entry?.title || this.activeWebspace}"?`)
+    if (!ok) return
+    try {
+      await this.adaos.sendEventsCommand('desktop.webspace.delete', { id: this.activeWebspace })
+    } catch (err) {
+      console.warn('webspace delete failed', err)
+    }
+  }
+
+  async refreshWebspaces() {
+    try {
+      await this.adaos.sendEventsCommand('desktop.webspace.refresh', {})
+    } catch (err) {
+      console.warn('webspace refresh failed', err)
     }
   }
 
