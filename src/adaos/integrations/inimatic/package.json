@@ -33,7 +33,7 @@
 		"start:api-dev": "cross-env DOTENV_CONFIG_PATH=./backend/.env nodemon --exec node --no-warnings=ExperimentalWarning -r dotenv/config --loader ts-node/esm ./backend/app.ts",
 		"build:api": "tsc -p ./backend/tsconfig.backend.json",
 		"serve:api": "PRODUCTION=true node ./dist/out-tsc/app.js",
-		"serve:api-dev": "tsc -p ./backend/tsconfig.backend.json && PORT=3030 node ./dist/out-tsc/app.js",
+		"serve:api-dev": "tsc -p ./backend/tsconfig.backend.json && PORT=3030 node ./backend/dist/app.js",
 		"watch": "ng build --watch --configuration development",
 		"test": "ng test",
 		"lint": "ng lint",
