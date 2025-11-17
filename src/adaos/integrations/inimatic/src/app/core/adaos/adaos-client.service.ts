@@ -239,11 +239,11 @@ export class RootClient {
 	constructor(private http: HttpClient) {}
 
 	get<T>(path: string) {
-		return this.http.get<T>(`https://api.inimatic.com/${path}`)
+		return this.http.get<T>(`https://api.inimatic.com${path}`)
 	}
 
 	post<T>(path: string, body?: any) {
-		return this.http.post<T>(`https://api.inimatic.com/${path}`, body ?? {})
+		return this.http.post<T>(`https://api.inimatic.com${path}`, body ?? {})
 	}
 }
 
