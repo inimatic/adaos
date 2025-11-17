@@ -34,6 +34,10 @@ function rootAbs(path: string) {
         return `${ROOT_BASE}${rel}`;
 }
 
+/**
+ * HTTP-клиент для локального AdaOS hub (по умолчанию http://127.0.0.1:8777).
+ * Используется для вызова API хаба и websocket-событий.
+ */
 @Injectable({ providedIn: 'root' })
 export class AdaosClient {
 	private cfg: AdaosConfig;
@@ -184,6 +188,23 @@ export class AdaosClient {
 	say(text: string) { return this.post('/api/say', { text }); }
 	callSkill<T = any>(skill: string, method: string, body?: any) {
 		return this.post<T>(`/api/skills/${skill}/${method}`, body ?? {});
+	}
+}
+
+/**
+ * Минимальный HTTP-клиент для root-сервера (по умолчанию http://127.0.0.1:3030).
+ * Используется для вызовов owner/WebAuthn и регистрационных эндпоинтов.
+ */
+@Injectable({ providedIn: 'root' })
+export class RootClient {
+	constructor(private http: HttpClient) {}
+
+	get<T>(path: string) {
+		return this.http.get<T>(rootAbs(path))
+	}
+
+	post<T>(path: string, body?: any) {
+		return this.http.post<T>(rootAbs(path), body ?? {})
 	}
 }
 
