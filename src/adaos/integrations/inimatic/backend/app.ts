@@ -240,6 +240,9 @@ const MAX_ARCHIVE_BYTES = policy.max_archive_mb * 1024 * 1024
 const app = express()
 
 const corsOptions = {
+	origin: ['https://app.inimatic.com'],
+	methods: '*',
+	allowedHeaders: '*',
 	credentials: true,
 	optionsSuccessStatus: 200,
 }
