@@ -59,7 +59,7 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     logger.addHandler(stream_h)
     logger.addHandler(file_h)
     logger.propagate = False
-    logger.info("logging.initialized", extra={"extra": {"logfile": str(logfile)}})
+    # logger.info("logging.initialized", extra={"extra": {"logfile": str(logfile)}})
     return logger
 
 
