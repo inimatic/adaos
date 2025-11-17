@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from contextlib import contextmanager, asynccontextmanager
-from typing import Iterator, AsyncIterator, Awaitable, Optional, TypeVar
+from typing import Iterator, AsyncIterator, Awaitable, Optional, TypeVar, Callable, Any
 
 import y_py as Y
 from ypy_websocket.ystore import SQLiteYStore
@@ -54,24 +54,30 @@ def _schedule_room_update(webspace_id: str, update: Optional[bytes]) -> None:
         except Exception:
             pass
 
+    _run_on_room_thread(room, _apply)
+
+
+def _run_on_room_thread(room, fn: Callable[[], None]) -> bool:
     owner_thread = getattr(room, "_thread_id", None)
     loop = getattr(room, "_loop", None)
     current = threading.get_ident()
 
     if owner_thread is not None and owner_thread == current:
-        _apply()
-        return
+        fn()
+        return True
 
     if loop and loop.is_running():
         try:
-            loop.call_soon_threadsafe(_apply)
+            loop.call_soon_threadsafe(fn)
+            return True
         except RuntimeError:
-            pass
-        return
+            return False
 
-    # Last resort: best-effort apply synchronously (same-thread requirement may still fail)
     if owner_thread is None:
-        _apply()
+        fn()
+        return True
+
+    return False
 
 
 def _encode_diff(ydoc: Y.YDoc, before: bytes | None) -> bytes | None:
@@ -157,4 +163,23 @@ async def async_get_ydoc(webspace_id: str) -> AsyncIterator[Y.YDoc]:
             pass
 
 
-__all__ = ["get_ydoc", "async_get_ydoc"]
+def mutate_live_room(webspace_id: str, mutator: Callable[[Y.YDoc, Any], None]) -> bool:
+    """
+    Attempt to mutate the active YDoc directly so connected clients receive the change.
+    Returns False if the webspace is not currently hosted in-process.
+    """
+    room = _resolve_live_room(webspace_id)
+    if not room:
+        return False
+
+    def _apply() -> None:
+        try:
+            with room.ydoc.begin_transaction() as txn:
+                mutator(room.ydoc, txn)
+        except Exception:
+            pass
+
+    return _run_on_room_thread(room, _apply)
+
+
+__all__ = ["get_ydoc", "async_get_ydoc", "mutate_live_room"]
