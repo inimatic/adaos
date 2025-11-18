@@ -1,8 +1,9 @@
-import { Component, Input } from '@angular/core'
+import { Component, Input, OnDestroy, OnInit } from '@angular/core'
 import { IonicModule, ModalController } from '@ionic/angular'
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { YDocService } from '../../y/ydoc.service'
+import { observeDeep } from '../../y/y-helpers'
 
 @Component({
   selector: 'ada-weather-modal',
@@ -13,14 +14,38 @@ import { YDocService } from '../../y/ydoc.service'
     `:host{display:flex;flex-direction:column;height:100%} ion-content{flex:1 1 auto}`
   ]
 })
-export class WeatherModalComponent {
-  @Input() title = '������'
-  @Input() weather?: { city:string; temp_c:number; condition:string; wind_ms:number; updated_at:string }
+export class WeatherModalComponent implements OnInit, OnDestroy {
+  @Input() title = '??????'
+  @Input() weather?: {
+    city: string
+    temp_c: number
+    condition: string
+    wind_ms: number
+    updated_at: string
+  }
   cities: string[] = ['Berlin', 'Moscow', 'New York', 'Tokyo', 'Paris']
-  constructor(private modal: ModalController, private y: YDocService) {}
-  close(){ this.modal.dismiss() }
+  private dispose?: () => void
 
-  onCityChange(city: string){
+  constructor(private modal: ModalController, private y: YDocService) {}
+
+  ngOnInit(): void {
+    const node: any = this.y.getPath('data/weather/current')
+    const recompute = () => {
+      this.weather = this.y.toJSON(node) || this.weather
+    }
+    this.dispose = observeDeep(node, recompute)
+    recompute()
+  }
+
+  ngOnDestroy(): void {
+    this.dispose?.()
+  }
+
+  close() {
+    this.modal.dismiss()
+  }
+
+  onCityChange(city: string) {
     if (!city) return
     const doc = this.y.doc
     doc.transact(() => {
@@ -28,9 +53,13 @@ export class WeatherModalComponent {
       const currentWeather = this.y.toJSON(dataMap.get('weather')) || {}
       const nextWeather = {
         ...currentWeather,
-        current: { ...(currentWeather.current || {}), city }
+        current: { ...(currentWeather.current || {}), city },
       }
       dataMap.set('weather', nextWeather)
     })
+    if (this.weather) {
+      this.weather = { ...this.weather, city }
+    }
   }
 }
+
