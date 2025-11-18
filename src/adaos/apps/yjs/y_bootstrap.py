@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 
 import y_py as Y
-from ypy_websocket.ystore import SQLiteYStore
 
 from .seed import SEED
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.services.agent_context import get_ctx
 from adaos.services.scenario.manager import ScenarioManager
+from .y_store import AdaosSQLiteYStore
 
 
 def _scenario_manager() -> ScenarioManager:
@@ -18,7 +18,7 @@ def _scenario_manager() -> ScenarioManager:
 
 
 async def ensure_webspace_seeded_from_scenario(
-    ystore: SQLiteYStore, webspace_id: str, default_scenario_id: str = "web_desktop"
+    ystore: AdaosSQLiteYStore, webspace_id: str, default_scenario_id: str = "web_desktop"
 ) -> None:
     """
     If the YDoc has no ui.application yet, try to seed it from a scenario
@@ -77,7 +77,7 @@ async def ensure_webspace_seeded_from_scenario(
         pass
 
 
-async def bootstrap_seed_if_empty(ystore: SQLiteYStore) -> None:
+async def bootstrap_seed_if_empty(ystore: AdaosSQLiteYStore) -> None:
     """
     Backwards-compatible wrapper: seed the default webspace using the default scenario
     (web_desktop) or SEED if scenario content is not available.

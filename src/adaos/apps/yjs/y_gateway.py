@@ -13,11 +13,10 @@ from fastapi.websockets import WebSocketDisconnect
 from ypy_websocket.websocket import Websocket as YWebsocket
 from ypy_websocket.websocket_server import WebsocketServer
 from ypy_websocket.yroom import YRoom
-from ypy_websocket.ystore import SQLiteYStore
 
 from adaos.apps.workspaces.index import ensure_workspace
 from .y_bootstrap import ensure_webspace_seeded_from_scenario
-from .y_store import ystore_path_for_webspace
+from .y_store import AdaosSQLiteYStore
 from adaos.services.weather.observer import ensure_weather_observer
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx as get_agent_ctx
@@ -37,7 +36,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
         webspace_id = name or "default"
         if name not in self.rooms:
             ensure_workspace(webspace_id)
-            ystore = SQLiteYStore(str(ystore_path_for_webspace(webspace_id)))
+            ystore = AdaosSQLiteYStore(webspace_id)
             await ensure_webspace_seeded_from_scenario(ystore, webspace_id=webspace_id)
             room = YRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
             room._thread_id = threading.get_ident()
@@ -78,7 +77,7 @@ async def start_y_server() -> None:
 
 async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None) -> None:
     ensure_workspace(webspace_id)
-    ystore = SQLiteYStore(str(ystore_path_for_webspace(webspace_id)))
+    ystore = AdaosSQLiteYStore(webspace_id)
     try:
         await ensure_webspace_seeded_from_scenario(
             ystore,
