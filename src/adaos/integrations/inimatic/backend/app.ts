@@ -239,8 +239,65 @@ const MAX_ARCHIVE_BYTES = policy.max_archive_mb * 1024 * 1024
 
 const app = express()
 
+const allowedCorsOrigins = new Set<string>()
+const allowedCorsHosts = new Set<string>(['localhost', '127.0.0.1', '[::1]'])
+
+function addAllowedCorsOrigin(candidate?: string | null) {
+	if (!candidate) {
+		return
+	}
+	const trimmed = candidate.trim()
+	if (!trimmed) {
+		return
+	}
+	try {
+		const parsed = new URL(trimmed)
+		const normalizedOrigin = parsed.origin
+		if (normalizedOrigin) {
+			allowedCorsOrigins.add(normalizedOrigin)
+		}
+		if (parsed.hostname) {
+			allowedCorsHosts.add(parsed.hostname)
+		}
+	} catch {
+		allowedCorsHosts.add(trimmed)
+	}
+}
+
+addAllowedCorsOrigin(WEB_ORIGIN)
+addAllowedCorsOrigin('https://app.inimatic.com')
+
+const extraCorsOrigins =
+	process.env['CORS_EXTRA_ORIGINS'] ?? process.env['CORS_ALLOWED_ORIGINS']
+if (extraCorsOrigins) {
+	for (const candidate of extraCorsOrigins.split(',')) {
+		addAllowedCorsOrigin(candidate)
+	}
+}
+
+function isCorsOriginAllowed(origin: string): boolean {
+	if (allowedCorsOrigins.has(origin)) {
+		return true
+	}
+	try {
+		const parsed = new URL(origin)
+		return (
+			allowedCorsOrigins.has(parsed.origin) ||
+			(parsed.hostname ? allowedCorsHosts.has(parsed.hostname) : false)
+		)
+	} catch {
+		return allowedCorsHosts.has(origin)
+	}
+}
+
 const corsOptions = {
-	origin: ['https://app.inimatic.com'],
+	origin(origin, callback) {
+		if (!origin || isCorsOriginAllowed(origin)) {
+			callback(null, true)
+			return
+		}
+		callback(new Error(`Origin ${origin} not allowed by CORS`))
+	},
 	methods: '*',
 	allowedHeaders: '*',
 	credentials: true,
