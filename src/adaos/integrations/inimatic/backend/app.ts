@@ -1,7 +1,7 @@
 // src\adaos\integrations\inimatic\backend\app.ts
 import 'dotenv/config'
 import express from 'express'
-import cors from 'cors'
+import cors, { type CorsOptions } from 'cors'
 import https from 'https'
 import path from 'path'
 import type { IncomingMessage } from 'http'
@@ -290,8 +290,11 @@ function isCorsOriginAllowed(origin: string): boolean {
 	}
 }
 
-const corsOptions = {
-	origin(origin, callback) {
+const corsOptions: CorsOptions = {
+	origin(
+		origin: string | undefined,
+		callback: (err: Error | null, allow?: boolean) => void
+	) {
 		if (!origin || isCorsOriginAllowed(origin)) {
 			callback(null, true)
 			return
