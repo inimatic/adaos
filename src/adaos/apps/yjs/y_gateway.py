@@ -16,13 +16,15 @@ from ypy_websocket.yroom import YRoom
 
 from adaos.apps.workspaces.index import ensure_workspace
 from .y_bootstrap import ensure_webspace_seeded_from_scenario
-from .y_store import AdaosSQLiteYStore
+from .y_store import get_ystore_for_webspace
+from adaos.services.scheduler import get_scheduler
 from adaos.services.weather.observer import ensure_weather_observer
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx as get_agent_ctx
 
 router = APIRouter()
 _log = logging.getLogger("adaos.events_ws")
+_ylog = logging.getLogger("adaos.yjs.gateway")
 
 
 class WorkspaceWebsocketServer(WebsocketServer):
@@ -35,23 +37,49 @@ class WorkspaceWebsocketServer(WebsocketServer):
     async def get_room(self, name: str) -> YRoom:  # type: ignore[override]
         webspace_id = name or "default"
         if name not in self.rooms:
+            _ylog.info("creating YRoom for webspace=%s", webspace_id)
             ensure_workspace(webspace_id)
-            ystore = AdaosSQLiteYStore(webspace_id)
+            ystore = get_ystore_for_webspace(webspace_id)
             await ensure_webspace_seeded_from_scenario(ystore, webspace_id=webspace_id)
+            # Ensure periodic in-memory snapshotting for this webspace.
+            try:
+                sched = get_scheduler()
+                await sched.ensure_every(
+                    name=f"ystores.backup.{webspace_id}",
+                    interval=20.0,
+                    topic="sys.ystore.backup",
+                    payload={"webspace_id": webspace_id},
+                )
+            except Exception:
+                _ylog.warning("failed to register YStore backup job for webspace=%s", webspace_id, exc_info=True)
             room = YRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
             room._thread_id = threading.get_ident()
             room._loop = asyncio.get_running_loop()
             try:
                 await ystore.apply_updates(room.ydoc)
             except Exception:
-                # If there is nothing yet, the bootstrap already handled it
+                _ylog.warning("apply_updates failed for webspace=%s", webspace_id, exc_info=True)
                 pass
             self.rooms[name] = room
         room = self.rooms[name]
         room._thread_id = getattr(room, "_thread_id", threading.get_ident())
         room._loop = getattr(room, "_loop", asyncio.get_running_loop())
-        ensure_weather_observer(webspace_id, room.ydoc)
+        try:
+            ensure_weather_observer(webspace_id, room.ydoc)
+        except Exception:
+            _ylog.warning("ensure_weather_observer failed for webspace=%s", webspace_id, exc_info=True)
         await self.start_room(room)
+        try:
+            ui_map = room.ydoc.get_map("ui")
+            data_map = room.ydoc.get_map("data")
+            _ylog.debug(
+                "YRoom ready webspace=%s ui keys=%s data keys=%s",
+                webspace_id,
+                list(ui_map.keys()),
+                list(data_map.keys()),
+            )
+        except Exception:
+            _ylog.warning("failed to inspect YDoc for webspace=%s", webspace_id, exc_info=True)
         return room
 
 
@@ -77,7 +105,7 @@ async def start_y_server() -> None:
 
 async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None) -> None:
     ensure_workspace(webspace_id)
-    ystore = AdaosSQLiteYStore(webspace_id)
+    ystore = get_ystore_for_webspace(webspace_id)
     try:
         await ensure_webspace_seeded_from_scenario(
             ystore,
@@ -173,7 +201,9 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     """
     params: Dict[str, str] = dict(websocket.query_params)
     webspace_id = (room or params.get("ws")) or "default"
+    dev_id = params.get("dev") or "unknown"
 
+    _ylog.info("yws connection open webspace=%s dev=%s", webspace_id, dev_id)
     await websocket.accept()
     await start_y_server()
 
@@ -181,8 +211,9 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     try:
         await y_server.serve(adapter)
     except RuntimeError:
-        # Normal disconnect / shutdown
         return
+    finally:
+        _ylog.info("yws connection closed webspace=%s dev=%s", webspace_id, dev_id)
 
 
 @router.websocket("/yws")
@@ -258,36 +289,41 @@ async def events_ws(websocket: WebSocket):
                 requested_webspace = payload.get("webspace_id") or payload.get("id") or "default"
                 webspace_id = str(requested_webspace or "default")
 
-                try:
-                    await ensure_webspace_ready(webspace_id)
-                    await start_y_server()
-                    await _update_device_presence(webspace_id, device_id)
+                async def _post_register() -> None:
+                    try:
+                        await ensure_webspace_ready(webspace_id)
+                        await start_y_server()
+                        await _update_device_presence(webspace_id, device_id or "dev-unknown")
+                        _log.debug(
+                            "device.register post steps ok webspace=%s device=%s",
+                            webspace_id,
+                            device_id,
+                        )
+                    except Exception:
+                        _log.warning(
+                            "device.register post steps failed webspace=%s device=%s",
+                            webspace_id,
+                            device_id,
+                            exc_info=True,
+                        )
 
-                    await websocket.send_text(
-                        json.dumps(
-                            {
-                                "ch": "events",
-                                "t": "ack",
-                                "id": cmd_id,
-                                "ok": True,
-                                "data": {"webspace_id": webspace_id},
-                            }
-                        )
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "ch": "events",
+                            "t": "ack",
+                            "id": cmd_id,
+                            "ok": True,
+                            "data": {"webspace_id": webspace_id},
+                        }
                     )
-                    _log.debug("device.register acknowledged webspace=%s device=%s", webspace_id, device_id)
+                )
+
+                try:
+                    asyncio.create_task(_post_register(), name=f"device-register-{webspace_id}-{device_id}")
                 except Exception:
-                    # In dev mode we still ack, but without guaranteeing presence.
-                    await websocket.send_text(
-                        json.dumps(
-                            {
-                                "ch": "events",
-                                "t": "ack",
-                                "id": cmd_id,
-                                "ok": True,
-                                "data": {"webspace_id": webspace_id},
-                            }
-                        )
-                    )
+                    # Best-effort; failures are already logged inside _post_register.
+                    pass
                 continue
 
             if kind == "desktop.toggleInstall":
@@ -295,9 +331,7 @@ async def events_ws(websocket: WebSocket):
                     "desktop.toggleInstall",
                     {"type": payload.get("type"), "id": payload.get("id")},
                 )
-                await websocket.send_text(
-                    json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True})
-                )
+                await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
                 continue
 
             if kind == "desktop.webspace.create":
@@ -329,9 +363,7 @@ async def events_ws(websocket: WebSocket):
             if kind == "desktop.webspace.use":
                 target = payload.get("id") or payload.get("webspace_id")
                 if not target:
-                    await websocket.send_text(
-                        json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "webspace_id required"})
-                    )
+                    await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "webspace_id required"}))
                     continue
                 new_webspace = str(target)
                 try:
@@ -351,9 +383,7 @@ async def events_ws(websocket: WebSocket):
                         )
                     )
                 except Exception:
-                    await websocket.send_text(
-                        json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "webspace_unavailable"})
-                    )
+                    await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "webspace_unavailable"}))
                 continue
 
             # Default ack for other commands (no-op for now)

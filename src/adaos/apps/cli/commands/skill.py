@@ -279,7 +279,21 @@ def cmd_install(
     try:
         result = mgr.install(name, validate=False)
     except Exception as exc:
-        typer.secho(f"install failed: {exc}", fg=typer.colors.RED)
+        message = str(exc)
+        typer.secho(f"install failed: {message}", fg=typer.colors.RED)
+        # Provide an explicit hint when Git reports unresolved merges.
+        if "git pull" in message and "unmerged files" in message.lower():
+            try:
+                ctx = get_ctx()
+                workspace_root = ctx.paths.workspace_dir()
+                typer.echo(f"Skills workspace Git repo: {workspace_root}")
+                typer.echo(
+                    f"Run 'git -C \"{workspace_root}\" status' to inspect conflicted files, "
+                    f"resolve them, then re-run 'adaos skill install {name}'."
+                )
+            except Exception:
+                # Best-effort hint; ignore failures in helper diagnostics.
+                pass
         raise typer.Exit(1) from exc
 
     if isinstance(result, tuple):
