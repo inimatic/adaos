@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from contextlib import contextmanager, asynccontextmanager
 from typing import Iterator, AsyncIterator, Awaitable, Optional, TypeVar, Callable, Any
 
 import y_py as Y
 
-from adaos.apps.yjs.y_store import AdaosSQLiteYStore
+from adaos.apps.yjs.y_store import get_ystore_for_webspace
 
 T = TypeVar("T")
+_log = logging.getLogger("adaos.yjs.doc")
 
 
 def _run_blocking(coro: Awaitable[T]) -> T:
@@ -94,7 +96,8 @@ def get_ydoc(webspace_id: str) -> Iterator[Y.YDoc]:
     Synchronously load a webspace-backed YDoc, applying persisted updates on
     entry and writing the resulting state back on exit.
     """
-    ystore = AdaosSQLiteYStore(webspace_id)
+    _log.debug("get_ydoc enter webspace=%s", webspace_id)
+    ystore = get_ystore_for_webspace(webspace_id)
     ydoc = Y.YDoc()
 
     async def _load() -> bytes | None:
@@ -126,7 +129,8 @@ def get_ydoc(webspace_id: str) -> Iterator[Y.YDoc]:
 
         try:
             update = _run_blocking(_flush())
-        except Exception:
+        except Exception as exc:
+            _log.warning("get_ydoc flush failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
             update = None
         _schedule_room_update(webspace_id, update)
 
@@ -136,7 +140,8 @@ async def async_get_ydoc(webspace_id: str) -> AsyncIterator[Y.YDoc]:
     """
     Async counterpart of :func:`get_ydoc` for use inside running event loops.
     """
-    ystore = AdaosSQLiteYStore(webspace_id)
+    _log.debug("async_get_ydoc enter webspace=%s", webspace_id)
+    ystore = get_ystore_for_webspace(webspace_id)
     ydoc = Y.YDoc()
     await ystore.start()
     try:
@@ -151,8 +156,8 @@ async def async_get_ydoc(webspace_id: str) -> AsyncIterator[Y.YDoc]:
         yield ydoc
         try:
             await ystore.encode_state_as_update(ydoc)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("async_get_ydoc encode_state_as_update failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
         update = _encode_diff(ydoc, before)
         _schedule_room_update(webspace_id, update)
     finally:

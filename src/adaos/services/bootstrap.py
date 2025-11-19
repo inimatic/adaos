@@ -18,6 +18,8 @@ from adaos.adapters.db.sqlite_schema import ensure_schema
 from adaos.adapters.skills.git_repo import GitSkillRepository
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
 from adaos.sdk.core.decorators import register_subscriptions
+from adaos.services.scheduler import start_scheduler
+from adaos.apps.yjs import y_store as _y_store  # ensure YStore subscriptions are registered
 from adaos.integrations.telegram.sender import TelegramSender
 from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
 from adaos.services.chat_io import telemetry as tm
@@ -142,6 +144,11 @@ class BootstrapService:
         await self.skills_loader.import_all_handlers(self.ctx.paths.skills_dir())
         await register_subscriptions()
         await bus.emit("sys.bus.ready", {}, source="lifecycle", actor="system")
+        # Start in-process scheduler after the bus is ready.
+        try:
+            await start_scheduler()
+        except Exception:
+            self._log.warning("failed to start scheduler", exc_info=True)
         if conf.role == "hub":
             await bus.emit("net.subnet.hub.ready", {"subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 from typing import Callable, Dict, List, Tuple, Optional
 import inspect
-from adaos.sdk.data.bus import on
+import logging
+from adaos.sdk.data.bus import on, emit
 
 # публичные реестры (стабильные имена)
 subscriptions: List[Tuple[str, Callable]] = []
@@ -12,6 +13,7 @@ emits_map: Dict[str, set[str]] = {}  # qualname -> {topics}
 _registered: bool = False  # внутренняя защита от двойной регистрации
 _SUBSCRIPTIONS = subscriptions
 _TOOLS = tools_registry
+_LOG = logging.getLogger("adaos.sdk.subscriptions")
 
 
 def subscribe(topic: str):
@@ -40,7 +42,17 @@ async def register_subscriptions():
             async def _wrap(evt, _fn=fn):
                 _fn(evt)
 
+        handler_name = f"{fn.__module__}.{fn.__name__}"
         await on(topic, _wrap)
+        _LOG.info("registered handler=%s topic=%s", handler_name, topic)
+        try:
+            await emit(
+                "skill.subscription.registered",
+                {"topic": topic, "handler": handler_name},
+                source="sdk.core.decorators",
+            )
+        except Exception:
+            _LOG.warning("failed to emit subscription event handler=%s topic=%s", handler_name, topic, exc_info=True)
     _registered = True
 
 

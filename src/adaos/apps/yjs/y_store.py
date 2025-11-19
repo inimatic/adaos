@@ -1,24 +1,28 @@
 from __future__ import annotations
 
-from pathlib import Path
 import logging
-import sqlite3
 import time
-from typing import Any
+from pathlib import Path
+from typing import AsyncIterator, Dict, List, Tuple
 
 import anyio
-import aiosqlite
 import y_py as Y
-from ypy_websocket.ystore import SQLiteYStore, get_new_path
+from anyio import Event, Lock, TASK_STATUS_IGNORED
+from anyio.abc import TaskStatus
+from ypy_websocket.ystore import BaseYStore, YDocNotFound
 
 from adaos.services.agent_context import get_ctx
+from adaos.sdk.core.decorators import subscribe
 
 _log = logging.getLogger("adaos.yjs.ystore")
 
 
 def ystores_root() -> Path:
     """
-    Return the root directory for Yjs stores, ensuring it exists.
+    Root directory for Yjs store snapshots, ensuring it exists.
+
+    Even though the live store is in-memory, we keep periodic snapshots here
+    so that webspaces can be restored across restarts.
     """
     ctx = get_ctx()
     root = ctx.paths.state_dir() / "ystores"
@@ -28,132 +32,174 @@ def ystores_root() -> Path:
 
 def ystore_path_for_webspace(webspace_id: str) -> Path:
     """
-    Map a webspace id to a filesystem path for its SQLite-backed Yjs store.
+    Map a webspace id to a filesystem path for its snapshot.
     """
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in webspace_id)
+    # We keep the historical .sqlite3 suffix even though the file now contains
+    # a single encoded YDoc snapshot, to avoid surprising existing tooling.
     return ystores_root() / f"{safe}.sqlite3"
 
 
-class AdaosSQLiteYStore(SQLiteYStore):
+class AdaosMemoryYStore(BaseYStore):
     """
-    SQLiteYStore variant that:
-      * uses a dedicated DB file per webspace;
-      * applies basic self-healing on persistent \"database is locked\" errors.
+    In-memory YStore with optional periodic snapshots to disk.
 
-    We intentionally trade history durability for robustness in dev/edge cases:
-    if the store is hopelessly locked, we rotate the DB file and recreate it
-    from scratch so the hub can recover without manual intervention.
+    - All Y updates are kept in-memory in the current process.
+    - `read()` replays the in-memory log or, on first access, a persisted
+      snapshot from disk (if present).
+    - `backup_to_disk()` compresses the current log into a single
+      `Y.encode_state_as_update(ydoc)` blob and writes it atomically.
     """
 
-    def __init__(self, webspace_id: str, *args: Any, **kwargs: Any) -> None:
-        # In the upstream class, "path" is the document key, while db_path
-        # points to the shared SQLite file. We want a per-webspace DB file,
-        # so we treat webspace_id as the logical path and derive db_path here.
-        super().__init__(path=webspace_id, *args, **kwargs)
-        self.db_path = str(ystore_path_for_webspace(webspace_id))
+    def __init__(self, path: str, *, document_ttl: float | None = None):
+        # BaseYStore expects these attributes; its __init__ is abstract/no-op.
+        self.path = path
+        self.metadata_callback = None
+        self.document_ttl = document_ttl
+        self._lock: Lock = Lock()
+        self._updates: List[Tuple[bytes, bytes, float]] = []
+        self._loaded_from_disk = False
+        self._started: Event | None = None
+        self._starting: bool = False
+        self._task_group = None
+        self._running: bool = False
 
-    async def _init_db(self) -> None:  # type: ignore[override]
-        create_db = False
-        move_db = False
+    async def start(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED):
+        """
+        For the in-memory store, start/stop are lightweight and idempotent.
+        """
+        if self._running:
+            task_status.started()
+            return
+        self._running = True
+        self.started.set()
+        task_status.started()
 
-        try:
-            if not await anyio.Path(self.db_path).exists():
-                create_db = True
-            else:
-                async with self.lock:
-                    async with aiosqlite.connect(self.db_path) as db:
-                        cursor = await db.execute(
-                            "SELECT count(name) FROM sqlite_master WHERE type='table' and name='yupdates'"
-                        )
-                        table_exists = (await cursor.fetchone())[0]
-                        if table_exists:
-                            cursor = await db.execute("pragma user_version")
-                            version = (await cursor.fetchone())[0]
-                            if version != self.version:
-                                move_db = True
-                                create_db = True
-                        else:
-                            create_db = True
-        except sqlite3.OperationalError as exc:
-            # If the DB is locked during init (e.g. after an unclean shutdown),
-            # rotate it out of the way and recreate from scratch.
-            _log.warning("YStore init failed for %s: %s", self.db_path, exc)
-            move_db = True
-            create_db = True
-
-        if move_db:
-            new_path = await get_new_path(self.db_path)
-            _log.warning("YStore moving locked/corrupt DB %s to %s", self.db_path, new_path)
-            await anyio.Path(self.db_path).rename(new_path)
-
-        if create_db:
-            async with self.lock:
-                async with aiosqlite.connect(self.db_path) as db:
-                    await db.execute(
-                        "CREATE TABLE IF NOT EXISTS yupdates (path TEXT NOT NULL, yupdate BLOB, metadata BLOB, timestamp REAL NOT NULL)"
-                    )
-                    await db.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_yupdates_path_timestamp ON yupdates (path, timestamp)"
-                    )
-                    await db.execute(f"PRAGMA user_version = {self.version}")
-                    await db.commit()
-
-        self.db_initialized.set()
+    def stop(self) -> None:
+        self._running = False
 
     async def write(self, data: bytes) -> None:  # type: ignore[override]
         """
-        Store an update, with a defensive fallback for locked DBs.
+        Append an update to the in-memory log, with optional TTL-based squashing.
         """
-        await self.db_initialized.wait()
+        metadata = await self.get_metadata()
+        now = time.time()
+        async with self._lock:
+            if self.document_ttl is not None and self._updates:
+                last_ts = self._updates[-1][2]
+                if now - last_ts > self.document_ttl:
+                    # Squash history into a single snapshot.
+                    ydoc = Y.YDoc()
+                    for update, _meta, _ts in self._updates:
+                        Y.apply_update(ydoc, update)  # type: ignore[arg-type]
+                    self._updates.clear()
+                    squashed = Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
+                    self._updates.append((squashed, metadata, now))
+                    return
 
-        async def _write_once() -> None:
-            async with self.lock:
-                async with aiosqlite.connect(self.db_path) as db:
-                    cursor = await db.execute(
-                        "SELECT timestamp FROM yupdates WHERE path = ? ORDER BY timestamp DESC LIMIT 1",
-                        (self.path,),
-                    )
-                    row = await cursor.fetchone()
-                    diff = (time.time() - row[0]) if row else 0
+            self._updates.append((data, metadata, now))
 
-                    if self.document_ttl is not None and diff > self.document_ttl:
-                        # Squash updates into a single snapshot.
-                        ydoc = Y.YDoc()
-                        async with db.execute(
-                            "SELECT yupdate FROM yupdates WHERE path = ?", (self.path,)
-                        ) as cursor:
-                            async for (update,) in cursor:
-                                Y.apply_update(ydoc, update)
-                        await db.execute("DELETE FROM yupdates WHERE path = ?", (self.path,))
-                        squashed_update = Y.encode_state_as_update(ydoc)
-                        metadata = await self.get_metadata()
-                        await db.execute(
-                            "INSERT INTO yupdates VALUES (?, ?, ?, ?)",
-                            (self.path, squashed_update, metadata, time.time()),
-                        )
-
-                    metadata = await self.get_metadata()
-                    await db.execute(
-                        "INSERT INTO yupdates VALUES (?, ?, ?, ?)",
-                        (self.path, data, metadata, time.time()),
-                    )
-                    await db.commit()
+    async def _load_from_disk_if_needed(self) -> None:
+        if self._loaded_from_disk:
+            return
+        path = ystore_path_for_webspace(self.path)
+        if not path.exists():
+            self._loaded_from_disk = True
+            return
 
         try:
-            await _write_once()
-        except sqlite3.OperationalError as exc:
-            # Best-effort self-healing: if the DB is locked, rotate and retry once.
-            if "database is locked" not in str(exc).lower():
-                raise
-            _log.warning("YStore write hit locked DB %s: %s; rotating", self.db_path, exc)
-            new_path = await get_new_path(self.db_path)
+            data = path.read_bytes()
+        except Exception as exc:  # pragma: no cover - IO errors are logged only
+            _log.warning("failed to read YStore snapshot %s: %s", path, exc, exc_info=True)
+            self._loaded_from_disk = True
+            return
+
+        metadata = await self.get_metadata()
+        now = time.time()
+        async with self._lock:
+            if not self._updates:
+                self._updates.append((data, metadata, now))
+        self._loaded_from_disk = True
+
+    async def read(self) -> AsyncIterator[tuple[bytes, bytes]]:  # type: ignore[override]
+        """
+        Async iterator over stored updates (update, metadata).
+        """
+        await self._load_from_disk_if_needed()
+        async with self._lock:
+            if not self._updates:
+                raise YDocNotFound
+            snapshot = list(self._updates)
+
+        for update, metadata, _ts in snapshot:
+            yield update, metadata
+
+    async def backup_to_disk(self) -> None:
+        """
+        Persist the current YDoc state as a single update snapshot.
+        """
+        # Быстро копируем актуальные обновления под локом и освобождаем его,
+        # чтобы не блокировать live-запись из YRoom.
+        async with self._lock:
+            updates = list(self._updates)
+
+        path = ystore_path_for_webspace(self.path)
+        if not updates:
+            # No state yet; remove any stale snapshot.
             try:
-                await anyio.Path(self.db_path).rename(new_path)
-            except Exception:
-                # If we cannot rotate, propagate the original error.
-                raise
-            # Recreate fresh DB and retry write once.
-            self.db_initialized = anyio.Event()  # type: ignore[attr-defined]
-            await self._init_db()
-            await _write_once()
+                await anyio.Path(path).unlink()
+            except FileNotFoundError:
+                return
+            except Exception as exc:  # pragma: no cover - best-effort cleanup
+                _log.warning("failed to remove stale YStore snapshot %s: %s", path, exc, exc_info=True)
+            return
+
+        ydoc = Y.YDoc()
+        for update, _meta, _ts in updates:
+            Y.apply_update(ydoc, update)  # type: ignore[arg-type]
+
+        snapshot = Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
+        apath = anyio.Path(path)
+        tmp = anyio.Path(str(path) + ".tmp")
+        try:
+            await apath.parent.mkdir(parents=True, exist_ok=True)
+            await tmp.write_bytes(snapshot)
+            await tmp.replace(apath)
+            _log.debug("YStore snapshot written for webspace=%s path=%s", self.path, path)
+        except Exception as exc:  # pragma: no cover - IO errors are logged only
+            _log.warning("failed to write YStore snapshot %s: %s", path, exc, exc_info=True)
+
+
+_YSTORE_CACHE: Dict[str, AdaosMemoryYStore] = {}
+
+
+def get_ystore_for_webspace(webspace_id: str) -> AdaosMemoryYStore:
+    """
+    Return a cached in-memory YStore for the given webspace.
+
+    All callers (web_desktop_skill, async_get_ydoc, y_gateway) share the same
+    instance to avoid \"YStore already running\" races.
+    """
+    store = _YSTORE_CACHE.get(webspace_id)
+    if store is None:
+        store = AdaosMemoryYStore(webspace_id)
+        _YSTORE_CACHE[webspace_id] = store
+    return store
+
+
+@subscribe("sys.ystore.backup")
+async def _on_ystore_backup(payload: dict) -> None:
+    """
+    System handler: persist in-memory YStore snapshot for a webspace.
+
+    This is triggered by the scheduler via `sys.ystore.backup` events.
+    """
+    if not isinstance(payload, dict):
+        return
+    webspace_id = str(payload.get("webspace_id") or payload.get("workspace_id") or "default")
+    try:
+        store = get_ystore_for_webspace(webspace_id)
+        await store.backup_to_disk()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        _log.warning("YStore backup failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
 
