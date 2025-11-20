@@ -32,30 +32,6 @@ class JsonFormatter(logging.Formatter):
         return _json_formatter(record)
 
 
-def _maybe_debug_gateway(root_logger: logging.Logger) -> None:
-    """
-    Optionally push adaos.yjs.gateway to DEBUG with shared handlers to inspect
-    websocket traffic frequency.
-    """
-    flag = (os.getenv("ADAOS_YJS_GATEWAY_DEBUG") or "1").lower()  # default ON for debugging
-    if flag not in ("1", "true", "yes", "y", "on", "debug"):
-        return
-
-    gw_logger = logging.getLogger("adaos.yjs.gateway")
-    gw_logger.setLevel(logging.DEBUG)
-    gw_logger.handlers.clear()
-    for h in root_logger.handlers:
-        gw_logger.addHandler(h)
-    gw_logger.propagate = False
-    try:
-        root_logger.info(
-            "logging.debug.enabled",
-            extra={"extra": {"logger": "adaos.yjs.gateway", "level": "DEBUG", "via": "ADAOS_YJS_GATEWAY_DEBUG"}},
-        )
-    except Exception:
-        pass
-
-
 def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     """
     Настройка логов:
@@ -83,7 +59,6 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     logger.addHandler(stream_h)
     logger.addHandler(file_h)
     logger.propagate = False
-    _maybe_debug_gateway(logger)
     # logger.info("logging.initialized", extra={"extra": {"logfile": str(logfile)}})
     return logger
 
