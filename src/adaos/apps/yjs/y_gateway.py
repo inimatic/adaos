@@ -19,6 +19,7 @@ from .y_bootstrap import ensure_webspace_seeded_from_scenario
 from .y_store import get_ystore_for_webspace
 from adaos.services.scheduler import get_scheduler
 from adaos.services.weather.observer import ensure_weather_observer
+from adaos.services.yjs.doc import async_get_ydoc, mutate_live_room
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx as get_agent_ctx
 
@@ -190,6 +191,49 @@ async def _update_device_presence(webspace_id: str, device_id: str) -> None:
         devices.set(txn, device_id, node)
 
 
+def _coerce_list(val) -> list[str]:
+    if isinstance(val, list):
+        return [str(x) for x in val]
+    try:
+        return [str(x) for x in list(val)]
+    except Exception:
+        return []
+
+
+async def _apply_toggle_install(webspace_id: str, kind: str, item_id: str) -> None:
+    """
+    Apply desktop.toggleInstall to the shared YDoc so all devices stay in sync.
+    """
+    if not item_id or kind not in ("app", "widget"):
+        return
+
+    def _mutate(doc: Y.YDoc, txn) -> None:
+        data_map = doc.get_map("data")
+        installed = data_map.get("installed")
+        cur = installed if isinstance(installed, dict) else {}
+        apps = _coerce_list(cur.get("apps"))
+        widgets = _coerce_list(cur.get("widgets"))
+        target = apps if kind == "app" else widgets
+        if item_id in target:
+            target = [x for x in target if x != item_id]
+        else:
+            target = target + [item_id]
+        next_installed = {
+            "apps": target if kind == "app" else apps,
+            "widgets": target if kind == "widget" else widgets,
+        }
+        data_map.set(txn, "installed", next_installed)
+
+    applied_live = mutate_live_room(webspace_id, _mutate)
+    if applied_live:
+        _ylog.info("desktop.toggleInstall applied live webspace=%s kind=%s id=%s", webspace_id, kind, item_id)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            _mutate(ydoc, txn)
+    _ylog.info("desktop.toggleInstall persisted webspace=%s kind=%s id=%s", webspace_id, kind, item_id)
+
+
 async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     """
     Internal Yjs sync handler used by both /yws and /yws/<room> routes.
@@ -331,6 +375,11 @@ async def events_ws(websocket: WebSocket):
                     "desktop.toggleInstall",
                     {"type": payload.get("type"), "id": payload.get("id")},
                 )
+                try:
+                    await ensure_webspace_ready(webspace_id)
+                    await _apply_toggle_install(webspace_id, str(payload.get("type") or ""), str(payload.get("id") or ""))
+                except Exception:
+                    _ylog.warning("desktop.toggleInstall apply failed webspace=%s payload=%s", webspace_id, payload, exc_info=True)
                 await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
                 continue
 
