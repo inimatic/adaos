@@ -147,7 +147,7 @@ export class LoginService {
 	): Promise<void> {
 		await firstValueFrom(
 			this.root.post<VerifyDeviceCodeResponse>(
-				'/v1/owner/login/verify',
+				'/v1/owner1/login/verify',
 				{
 					sid,
 					device_code: deviceCode,
@@ -162,7 +162,7 @@ export class LoginService {
 		// 1) запрос challenge
 		const { publicKeyCredentialCreationOptions } = await firstValueFrom(
 			this.root.post<RegistrationChallengeResponse>(
-				'/v1/owner/webauthn/registration/challenge',
+				'/v1/owner1/webauthn/registration/challenge',
 				{ sid }
 			)
 		)
@@ -175,7 +175,7 @@ export class LoginService {
 		// 3) отправка результата на backend
 		await firstValueFrom(
 			this.root.post<RegistrationFinishResponse>(
-				'/v1/owner/webauthn/registration/finish',
+				'/v1/owner1/webauthn/registration/finish',
 				{
 					sid,
 					credential,
@@ -190,7 +190,7 @@ export class LoginService {
 		// 1) запрос challenge для логина
 		const { publicKeyCredentialRequestOptions } = await firstValueFrom(
 			this.root.post<LoginChallengeResponse>(
-				'/v1/owner/webauthn/login/challenge',
+				'/v1/owner1/webauthn/login/challenge',
 				{ sid }
 			)
 		)
@@ -203,7 +203,7 @@ export class LoginService {
 		// 3) отправка assertion на backend
 		const finish = await firstValueFrom(
 			this.root.post<LoginFinishResponse>(
-				'/v1/owner/webauthn/login/finish',
+				'/v1/owner1/webauthn/login/finish',
 				{
 					sid,
 					credential: assertion,
