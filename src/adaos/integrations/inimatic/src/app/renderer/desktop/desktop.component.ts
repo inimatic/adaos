@@ -69,7 +69,16 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
           set.add(it.id)
         }
         const next = Array.from(set)
-        // Optimistic local flag while waiting for shared Y update
+        const doc = this.y.doc
+        doc.transact(() => {
+          const dataMap: any = this.y.doc.getMap('data')
+          const installedCur = this.y.toJSON(dataMap.get('installed')) || {}
+          const nextInstalled = {
+            apps: (type === 'catalog-apps') ? next : (installedCur.apps || installed),
+            widgets: (type === 'catalog-widgets') ? next : (installedCur.widgets || installed)
+          }
+          dataMap.set('installed', nextInstalled)
+        })
         installed = next
         const kind = type === 'catalog-apps' ? 'app' : 'widget'
         this.syncToggleInstall(kind, it.id)
