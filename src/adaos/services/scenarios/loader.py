@@ -15,7 +15,7 @@ def scenario_root(scenario_id: str) -> Path:
       <base_dir>/.adaos/workspace/scenarios/<scenario_id>/
     """
     ctx = get_ctx()
-    root = ctx.paths.scenarios_dir / scenario_id
+    root = ctx.paths.scenarios_dir() / scenario_id
     return root
 
 

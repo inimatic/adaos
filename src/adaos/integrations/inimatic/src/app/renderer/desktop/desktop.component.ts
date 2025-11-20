@@ -55,13 +55,10 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
     // catalogs need callbacks
     if (type === 'catalog-apps' || type === 'catalog-widgets') {
       const doc = this.y.doc
-      const installedPathPrimary = type === 'catalog-apps' ? 'data/desktop/installed/apps' : 'data/desktop/installed/widgets'
-      const installedPathFallback = type === 'catalog-apps' ? 'data/installed/apps' : 'data/installed/widgets'
+      const installedPath = type === 'catalog-apps' ? 'data/installed/apps' : 'data/installed/widgets'
       const itemsPath = type === 'catalog-apps' ? 'data/catalog/apps' : 'data/catalog/widgets'
       const items = this.y.toJSON(this.y.getPath(itemsPath)) || []
-      let installed: string[] = (this.y.toJSON(this.y.getPath(installedPathPrimary))
-        || this.y.toJSON(this.y.getPath(installedPathFallback))
-        || []) as string[]
+      let installed: string[] = (this.y.toJSON(this.y.getPath(installedPath)) || []) as string[]
 
       const isInstalled = (it: any) => installed.includes(it.id)
       const toggle = (it: any) => {
@@ -74,15 +71,12 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
         const next = Array.from(set)
         doc.transact(() => {
           const dataMap: any = this.y.doc.getMap('data')
-          const desktopCur = this.y.toJSON(dataMap.get('desktop')) || {}
-          const nextDesktop = {
-            ...desktopCur,
-            installed: {
-              apps: (type === 'catalog-apps') ? next : (desktopCur.installed?.apps || installed),
-              widgets: (type === 'catalog-widgets') ? next : (desktopCur.installed?.widgets || installed)
-            }
+          const installedCur = this.y.toJSON(dataMap.get('installed')) || {}
+          const nextInstalled = {
+            apps: (type === 'catalog-apps') ? next : (installedCur.apps || installed),
+            widgets: (type === 'catalog-widgets') ? next : (installedCur.widgets || installed)
           }
-          dataMap.set('desktop', nextDesktop)
+          dataMap.set('installed', nextInstalled)
         })
         installed = next
         const kind = type === 'catalog-apps' ? 'app' : 'widget'
@@ -128,8 +122,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
   private rebuildFromInstalled(){
     // resolve icons from data.desktop.installed.apps (fallback data.installed.apps) + data.catalog.apps
     const catalogApps: any[] = this.y.toJSON(this.y.getPath('data/catalog/apps')) || []
-    const installedApps: string[] = this.y.toJSON(this.y.getPath('data/desktop/installed/apps'))
-      || this.y.toJSON(this.y.getPath('data/installed/apps')) || []
+    const installedApps: string[] = this.y.toJSON(this.y.getPath('data/installed/apps')) || []
     const byId: Record<string, any> = {}
     for (const it of catalogApps) byId[it.id] = it
     this.resolvedIcons = installedApps
@@ -145,8 +138,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 
     // resolve widgets from data.desktop.installed.widgets (fallback data.installed.widgets) + data.catalog.widgets
     const catalogWidgets: any[] = this.y.toJSON(this.y.getPath('data/catalog/widgets')) || []
-    const installedWidgets: string[] = this.y.toJSON(this.y.getPath('data/desktop/installed/widgets'))
-      || this.y.toJSON(this.y.getPath('data/installed/widgets')) || []
+    const installedWidgets: string[] = this.y.toJSON(this.y.getPath('data/installed/widgets')) || []
     const wById: Record<string, any> = {}
     for (const it of catalogWidgets) wById[it.id] = it
     this.resolvedWidgets = installedWidgets
