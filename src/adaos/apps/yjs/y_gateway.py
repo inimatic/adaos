@@ -46,7 +46,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 sched = get_scheduler()
                 await sched.ensure_every(
                     name=f"ystores.backup.{webspace_id}",
-                    interval=20.0,
+                    interval=6000.0,
                     topic="sys.ystore.backup",
                     payload={"webspace_id": webspace_id},
                 )

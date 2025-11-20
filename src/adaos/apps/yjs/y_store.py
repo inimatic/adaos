@@ -17,6 +17,34 @@ from adaos.sdk.core.decorators import subscribe
 _log = logging.getLogger("adaos.yjs.ystore")
 
 
+def _persist_snapshot(path: Path, updates: List[Tuple[bytes, bytes, float]]) -> None:
+    """
+    Heavy snapshot encoding/writing performed in a worker thread.
+    """
+    if not updates:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            _log.warning("failed to remove stale YStore snapshot %s: %s", path, exc, exc_info=True)
+        return
+
+    ydoc = Y.YDoc()
+    for update, _meta, _ts in updates:
+        Y.apply_update(ydoc, update)  # type: ignore[arg-type]
+    snapshot = Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
+
+    tmp = Path(str(path) + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(snapshot)
+        tmp.replace(path)
+        _log.debug("YStore snapshot written for webspace=%s path=%s", path.name.removesuffix(".sqlite3"), path)
+    except Exception as exc:
+        _log.warning("failed to write YStore snapshot %s: %s", path, exc, exc_info=True)
+
+
 def ystores_root() -> Path:
     """
     Root directory for Yjs store snapshots, ensuring it exists.
@@ -144,30 +172,7 @@ class AdaosMemoryYStore(BaseYStore):
             updates = list(self._updates)
 
         path = ystore_path_for_webspace(self.path)
-        if not updates:
-            # No state yet; remove any stale snapshot.
-            try:
-                await anyio.Path(path).unlink()
-            except FileNotFoundError:
-                return
-            except Exception as exc:  # pragma: no cover - best-effort cleanup
-                _log.warning("failed to remove stale YStore snapshot %s: %s", path, exc, exc_info=True)
-            return
-
-        ydoc = Y.YDoc()
-        for update, _meta, _ts in updates:
-            Y.apply_update(ydoc, update)  # type: ignore[arg-type]
-
-        snapshot = Y.encode_state_as_update(ydoc)  # type: ignore[arg-type]
-        apath = anyio.Path(path)
-        tmp = anyio.Path(str(path) + ".tmp")
-        try:
-            await apath.parent.mkdir(parents=True, exist_ok=True)
-            await tmp.write_bytes(snapshot)
-            await tmp.replace(apath)
-            _log.debug("YStore snapshot written for webspace=%s path=%s", self.path, path)
-        except Exception as exc:  # pragma: no cover - IO errors are logged only
-            _log.warning("failed to write YStore snapshot %s: %s", path, exc, exc_info=True)
+        await anyio.to_thread.run_sync(_persist_snapshot, path, updates)
 
 
 _YSTORE_CACHE: Dict[str, AdaosMemoryYStore] = {}
