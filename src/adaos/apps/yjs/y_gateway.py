@@ -18,7 +18,7 @@ from adaos.apps.workspaces.index import ensure_workspace
 from .y_bootstrap import ensure_webspace_seeded_from_scenario
 from .y_store import get_ystore_for_webspace
 from adaos.services.scheduler import get_scheduler
-from adaos.services.weather.observer import ensure_weather_observer
+from adaos.services.yjs.observers import attach_room_observers
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx as get_agent_ctx
 
@@ -65,9 +65,9 @@ class WorkspaceWebsocketServer(WebsocketServer):
         room._thread_id = getattr(room, "_thread_id", threading.get_ident())
         room._loop = getattr(room, "_loop", asyncio.get_running_loop())
         try:
-            ensure_weather_observer(webspace_id, room.ydoc)
+            attach_room_observers(webspace_id, room.ydoc)
         except Exception:
-            _ylog.warning("ensure_weather_observer failed for webspace=%s", webspace_id, exc_info=True)
+            _ylog.warning("attach_room_observers failed for webspace=%s", webspace_id, exc_info=True)
         await self.start_room(room)
         try:
             ui_map = room.ydoc.get_map("ui")
