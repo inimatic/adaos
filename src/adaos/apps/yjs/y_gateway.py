@@ -59,8 +59,13 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 await ystore.apply_updates(room.ydoc)
             except Exception:
                 _ylog.warning("apply_updates failed for webspace=%s", webspace_id, exc_info=True)
-                pass
             self.rooms[name] = room
+            # Start the room background task only once, on initial creation.
+            try:
+                await self.start_room(room)
+            except RuntimeError:
+                # YRoom may already be running; treat as best-effort.
+                _ylog.debug("YRoom already running for webspace=%s", webspace_id)
         room = self.rooms[name]
         room._thread_id = getattr(room, "_thread_id", threading.get_ident())
         room._loop = getattr(room, "_loop", asyncio.get_running_loop())
@@ -68,7 +73,6 @@ class WorkspaceWebsocketServer(WebsocketServer):
             attach_room_observers(webspace_id, room.ydoc)
         except Exception:
             _ylog.warning("attach_room_observers failed for webspace=%s", webspace_id, exc_info=True)
-        await self.start_room(room)
         try:
             ui_map = room.ydoc.get_map("ui")
             data_map = room.ydoc.get_map("data")
