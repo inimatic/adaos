@@ -1,10 +1,15 @@
 .error_message {
 	color: var(--ion-color-danger);
-	margin-top: 12px;
+	margin-bottom: 16px;
 	text-align: center;
 	font-size: 14px;
-	position: absolute;
-	top: -30px;
+}
+
+.info_message {
+	color: var(--ion-color-medium);
+	margin-bottom: 16px;
+	text-align: center;
+	font-size: 14px;
 }
 
 .login_wrapper {
@@ -16,7 +21,7 @@
 }
 
 .login_form {
-	max-width: 195px;
+	max-width: 300px;
 	margin: 0 auto;
 	text-align: center;
 	display: flex;
@@ -24,6 +29,29 @@
 	align-items: flex-end;
 	gap: 20px;
 	position: relative;
+}
+
+.mode_selection,
+.registration_mode,
+.login_mode {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+
+	h2 {
+		margin: 0 0 12px 0;
+		font-size: 18px;
+		font-weight: 600;
+	}
+
+	p {
+		margin: 0;
+		font-size: 14px;
+	}
+}
+
+ion-input {
+	margin-bottom: 8px;
 }
 
 ion-button {
