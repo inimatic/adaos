@@ -279,13 +279,15 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 				challenge: challenge,
 				pubKeyCredParams: [
 					{ type: 'public-key', alg: -7 }, // ES256
-					{ type: 'public-key', alg: -8 }, // EdDSA (на будущее)
+					{ type: 'public-key', alg: -257 }, // RS256
+					{ type: 'public-key', alg: -8 }, // EdDSA
 				],
 				timeout: 60_000,
 				attestation: 'none',
+				excludeCredentials: [],
 				authenticatorSelection: {
-					authenticatorAttachment: 'platform',
-					userVerification: 'required',
+					residentKey: 'preferred',
+					userVerification: 'preferred',
 				},
 			}
 
@@ -373,11 +375,11 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 				challenge: challenge,
 				rpId: rpID,
 				allowCredentials: [
-					{
-						id: credentialIdBase64url,
-						type: 'public-key',
-						transports: ['internal'],
-					},
+					// {
+					// 	id: credentialIdBase64url,
+					// 	type: 'public-key',
+					// 	transports: ['internal'],
+					// },
 				],
 				userVerification: 'required',
 				timeout: 60_000,
