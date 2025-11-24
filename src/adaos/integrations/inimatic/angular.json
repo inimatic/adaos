@@ -37,6 +37,10 @@
 							"src/theme/variables.scss"
 						],
 						"scripts": [],
+						"allowedCommonJsDependencies": [
+							"streamsaver",
+							"long"
+						],
 						"serviceWorker": true,
 						"ngswConfigPath": "ngsw-config.json"
 					},

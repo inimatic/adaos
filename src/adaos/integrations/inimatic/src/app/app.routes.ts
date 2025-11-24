@@ -4,6 +4,13 @@ import { MemberComponent } from './features/member/member.component'
 
 export const routes: Routes = [
 	{
+		path: 'desktop2',
+		loadComponent: () =>
+			import('./renderer/desktop/dynamic-desktop-page.component').then(
+				(m) => m.DynamicDesktopPageComponent
+			),
+	},
+	{
 		path: 'private',
 		loadComponent: () =>
 			import('./private-point/private-point.page').then(
@@ -27,8 +34,8 @@ export const routes: Routes = [
 		loadComponent: () =>
 			import('./features/hub/hub.component').then((m) => m.HubComponent),
 	},
-  // mount Yjs-driven desktop on member tab (renderer)
-  { path: 'member', loadComponent: () => import('./renderer/desktop/desktop.component').then(m => m.DesktopRendererComponent) },
+	// temporarily route member tab to new declarative desktop2
+	{ path: 'member', redirectTo: '/desktop2', pathMatch: 'full' },
 	{
 		path: 'desktop',
 		loadComponent: () =>

@@ -59,13 +59,8 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 await ystore.apply_updates(room.ydoc)
             except Exception:
                 _ylog.warning("apply_updates failed for webspace=%s", webspace_id, exc_info=True)
+                pass
             self.rooms[name] = room
-            # Start the room background task only once, on initial creation.
-            try:
-                await self.start_room(room)
-            except RuntimeError:
-                # YRoom may already be running; treat as best-effort.
-                _ylog.debug("YRoom already running for webspace=%s", webspace_id)
         room = self.rooms[name]
         room._thread_id = getattr(room, "_thread_id", threading.get_ident())
         room._loop = getattr(room, "_loop", asyncio.get_running_loop())
@@ -73,6 +68,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
             attach_room_observers(webspace_id, room.ydoc)
         except Exception:
             _ylog.warning("attach_room_observers failed for webspace=%s", webspace_id, exc_info=True)
+        await self.start_room(room)
         try:
             ui_map = room.ydoc.get_map("ui")
             data_map = room.ydoc.get_map("data")
@@ -388,6 +384,11 @@ async def events_ws(websocket: WebSocket):
                     )
                 except Exception:
                     await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "webspace_unavailable"}))
+                continue
+
+            if kind == "weather.city_changed":
+                _publish_bus("weather.city_changed", {"city": payload.get("city")})
+                await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
                 continue
 
             # Default ack for other commands (no-op for now)
