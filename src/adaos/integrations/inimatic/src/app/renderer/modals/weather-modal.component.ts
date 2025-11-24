@@ -4,6 +4,7 @@ import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { YDocService } from '../../y/ydoc.service'
 import { observeDeep } from '../../y/y-helpers'
+import { AdaosClient } from '../../core/adaos/adaos-client.service'
 
 @Component({
   selector: 'ada-weather-modal',
@@ -26,12 +27,17 @@ export class WeatherModalComponent implements OnInit, OnDestroy {
   cities: string[] = ['Berlin', 'Moscow', 'New York', 'Tokyo', 'Paris']
   private dispose?: () => void
 
-  constructor(private modal: ModalController, private y: YDocService) {}
+  constructor(
+    private modalCtrl: ModalController,
+    private y: YDocService,
+    private adaos: AdaosClient
+  ) {}
 
   ngOnInit(): void {
-    const node: any = this.y.getPath('data/weather/current')
+    const node: any = this.y.getPath('data')
     const recompute = () => {
-      this.weather = this.y.toJSON(node) || this.weather
+      const currentNode: any = this.y.getPath('data/weather/current')
+      this.weather = this.y.toJSON(currentNode) || this.weather
     }
     this.dispose = observeDeep(node, recompute)
     recompute()
@@ -42,11 +48,12 @@ export class WeatherModalComponent implements OnInit, OnDestroy {
   }
 
   close() {
-    this.modal.dismiss()
+    this.modalCtrl.dismiss()
   }
 
-  onCityChange(city: string) {
+  async onCityChange(city: string): Promise<void> {
     if (!city) return
+    // 1) Обновляем YDoc локально, чтобы модалка и другие клиенты сразу увидели город.
     const doc = this.y.doc
     doc.transact(() => {
       const dataMap: any = this.y.doc.getMap('data')
@@ -60,6 +67,11 @@ export class WeatherModalComponent implements OnInit, OnDestroy {
     if (this.weather) {
       this.weather = { ...this.weather, city }
     }
+    // 2) Отправляем доменное событие, чтобы weather_skill пересчитал снапшот и записал его в YDoc.
+    try {
+      await this.adaos.sendEventsCommand('weather.city_changed', { city })
+    } catch {
+      // best-effort; если команда не прошла, останемся на локальном значении
+    }
   }
 }
-

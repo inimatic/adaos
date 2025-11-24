@@ -45,7 +45,12 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             slot_dir = self._resolve_slot(version_dir)
             if not slot_dir:
                 continue
-            for handler in slot_dir.rglob("handlers/main.py"):
+            # Handlers live under slots/<slot>/src; avoid scanning vendor/runtime trees.
+            src_root = slot_dir / "src"
+            if not src_root.exists():
+                continue
+            print("discover_log")
+            for handler in src_root.rglob("handlers/main.py"):
                 handlers.append((handler, skill_name))
         return handlers
 
