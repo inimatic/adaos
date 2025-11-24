@@ -187,10 +187,7 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 
 	return {
 		async verifyDeviceCodeLogin(userCode: string, sid: string) {
-			const rec = await findDeviceCodeByUserOrDevice(
-				redis,
-				userCode
-			)
+			const rec = await findDeviceCodeByUserOrDevice(redis, userCode)
 			if (!rec) {
 				return {
 					ok: false as const,
@@ -212,8 +209,12 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 				exp: nowSeconds() + sessionTtl,
 			}
 
-		await saveSession(redis, session)
-			console.log('[webauthn] Session saved:', { sid, owner_id: rec.owner_id, key: sessionKey(sid) })
+			await saveSession(redis, session)
+			console.log('[webauthn] Session saved:', {
+				sid,
+				owner_id: rec.owner_id,
+				key: sessionKey(sid),
+			})
 
 			// помечаем, что код привязан к sid
 			rec.bind_sid = sid
@@ -231,11 +232,17 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 			}
 		},
 
-	async createRegistrationChallenge(sid: string) {
-			console.log('[webauthn] Loading session for registration:', { sid, key: sessionKey(sid) })
+		async createRegistrationChallenge(sid: string) {
+			console.log('[webauthn] Loading session for registration:', {
+				sid,
+				key: sessionKey(sid),
+			})
 			const session = await loadSession(redis, sid)
 			if (!session) {
-				console.warn('[webauthn] Session not found for registration:', { sid, key: sessionKey(sid) })
+				console.warn('[webauthn] Session not found for registration:', {
+					sid,
+					key: sessionKey(sid),
+				})
 				return {
 					ok: false as const,
 					error: 'session_not_found' as const,
@@ -245,8 +252,11 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 				return { ok: false as const, error: 'invalid_state' as const }
 			}
 
-			const userIdBytes = Buffer.from(session.owner_id, 'utf8')
 			const challenge = randomBytes(32).toString('base64url')
+			const userIdBase64url = Buffer.from(
+				session.owner_id,
+				'utf8'
+			).toString('base64url')
 
 			// сохраняем challenge для последующей верификации (упрощённо — как часть session)
 			const updated: WebSessionState & { webreg_challenge?: string } = {
@@ -262,11 +272,11 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 					name: 'Inimatic AdaOS',
 				},
 				user: {
-					id: userIdBytes,
+					id: userIdBase64url,
 					name: session.owner_id,
 					displayName: session.owner_id,
 				},
-				challenge: Buffer.from(challenge, 'base64url'),
+				challenge: challenge,
 				pubKeyCredParams: [
 					{ type: 'public-key', alg: -7 }, // ES256
 					{ type: 'public-key', alg: -8 }, // EdDSA (на будущее)
@@ -354,12 +364,17 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 			} as any
 			await saveSession(redis, updated)
 
+			const credentialIdBase64url = Buffer.from(
+				session.browser_key_id,
+				'utf8'
+			).toString('base64url')
+
 			const publicKeyCredentialRequestOptions = {
-				challenge: Buffer.from(challenge, 'base64url'),
+				challenge: challenge,
 				rpId: rpID,
 				allowCredentials: [
 					{
-						id: Buffer.from(session.browser_key_id, 'utf8'),
+						id: credentialIdBase64url,
 						type: 'public-key',
 						transports: ['internal'],
 					},
@@ -497,8 +512,7 @@ export function installWebAuthnRoutes(
 			}
 			const result = await service.verifyDeviceCodeLogin(code, sid)
 			if (!result.ok) {
-				const status =
-					result.error === 'invalid_user_code' ? 400 : 400
+				const status = result.error === 'invalid_user_code' ? 400 : 400
 				const errCode = result.error ?? 'invalid_user_code'
 				return respondError(req, res, status, errCode)
 			}
@@ -582,7 +596,7 @@ export function installWebAuthnRoutes(
 					field: 'sid',
 				})
 			}
-		const result = await service.createLoginChallenge(sid)
+			const result = await service.createLoginChallenge(sid)
 			if (!result.ok) {
 				const code =
 					result.error === 'registration_required'
