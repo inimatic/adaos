@@ -12,7 +12,8 @@ import { startRegistration, startAuthentication } from '@simplewebauthn/browser'
 export interface LoginResult {
 	sessionJwt: string
 	browserKeyId: string
-	sid: string
+	sid?: string
+	ownerId?: string
 }
 
 interface VerifyDeviceCodeResponse {
@@ -37,6 +38,7 @@ interface LoginChallengeResponse {
 interface LoginFinishResponse {
 	session_jwt: string
 	browser_key_id: string
+	owner_id?: string
 }
 
 @Injectable({
@@ -54,14 +56,26 @@ export class LoginService {
 	}
 
 	/**
-	 * Выполнить полный цикл логина по user code + WebAuthn.
+	 * Выполнить полный цикл логина по user code + WebAuthn (регистрация).
 	 *
 	 * 1) /v1/owner/login/verify — связываем sid и owner.
-	 * 2) Пытаемся WebAuthn login.
-	 * 3) Если нужна регистрация — выполняем WebAuthn регистрацию и после неё логин.
+	 * 2) Регистрируем WebAuthn credential.
+	 * 3) Автоматически логинимся через зарегистрированный credential.
 	 */
-	login(userCode: string): Observable<LoginResult> {
-		return from(this.loginInternal(userCode)).pipe(
+	register(userCode: string): Observable<LoginResult> {
+		return from(this.registerInternal(userCode)).pipe(
+			catchError((error: HttpErrorResponse) => {
+				return throwError(() => error)
+			})
+		)
+	}
+
+	/**
+	 * Выполнить логин по WebAuthn без каких-либо параметров.
+	 * Браузер автоматически выберет подходящий credential из сохраненных.
+	 */
+	login(): Observable<LoginResult> {
+		return from(this.loginInternal()).pipe(
 			catchError((error: HttpErrorResponse) => {
 				return throwError(() => error)
 			})
@@ -78,22 +92,23 @@ export class LoginService {
 
 	// ----------------- Внутренняя логика -----------------
 
-	private async loginInternal(userCode: string): Promise<LoginResult> {
+	private async registerInternal(userCode: string): Promise<LoginResult> {
 		const sid = this.ensureSid()
 
 		// 1. Связываем sid с owner через введённый код
 		await this.verifyUserCode(userCode, sid)
 
-		// 2. Пытаемся выполнить WebAuthn login; если потребуется регистрация — сделаем её и повторим
-		try {
-			return await this.performWebAuthnLogin(sid)
-		} catch (error: any) {
-			if (this.isRegistrationRequiredError(error)) {
-				await this.performWebAuthnRegistration(sid)
-				return await this.performWebAuthnLogin(sid)
-			}
-			throw error
-		}
+		// 2. Выполняем WebAuthn регистрацию
+		await this.performWebAuthnRegistration(sid)
+
+		// 3. Выполняем WebAuthn логин сразу после регистрации
+		return await this.performWebAuthnLoginWithSid(sid)
+	}
+
+	private async loginInternal(): Promise<LoginResult> {
+		// Запрашиваем challenge без указания owner_id
+		// Backend вернет пустой список allowCredentials, браузер выберет автоматически
+		return await this.performWebAuthnLoginAuto()
 	}
 
 	/**
@@ -141,10 +156,7 @@ export class LoginService {
 			.slice(2)}_${Date.now().toString(16)}`
 	}
 
-	private async verifyUserCode(
-		userCode: string,
-		sid: string
-	): Promise<void> {
+	private async verifyUserCode(userCode: string, sid: string): Promise<void> {
 		await firstValueFrom(
 			this.root.post<VerifyDeviceCodeResponse>(
 				'/v1/owner1/login/verify',
@@ -188,12 +200,13 @@ export class LoginService {
 		this.ensureWebAuthnSupported()
 
 		// 1) запрос challenge для логина
-		const { publicKeyCredentialRequestOptions } = await firstValueFrom(
-			this.root.post<LoginChallengeResponse>(
-				'/v1/owner1/webauthn/login/challenge',
-				{ sid }
+		const { publicKeyCredentialRequestOptions, challenge } =
+			await firstValueFrom(
+				this.root.post<LoginChallengeResponse & { challenge?: string }>(
+					'/v1/owner1/webauthn/login/challenge',
+					{ sid }
+				)
 			)
-		)
 
 		// 2) локальная аутентификация
 		const assertion = await startAuthentication(
@@ -207,6 +220,9 @@ export class LoginService {
 				{
 					sid,
 					credential: assertion,
+					challenge:
+						challenge ||
+						publicKeyCredentialRequestOptions.challenge,
 				}
 			)
 		)
@@ -222,6 +238,99 @@ export class LoginService {
 			sessionJwt: finish.session_jwt,
 			browserKeyId: finish.browser_key_id,
 			sid,
+			ownerId: finish.owner_id,
+		}
+	}
+
+	private async performWebAuthnLoginWithSid(
+		sid: string
+	): Promise<LoginResult> {
+		this.ensureWebAuthnSupported()
+
+		// 1) запрос challenge для логина
+		const challengeResponse = await firstValueFrom(
+			this.root.post<LoginChallengeResponse & { challenge?: string }>(
+				'/v1/owner1/webauthn/login/challenge',
+				{ sid }
+			)
+		)
+
+		// 2) локальная аутентификация
+		const assertion = await startAuthentication(
+			challengeResponse.publicKeyCredentialRequestOptions
+		)
+
+		// 3) отправка assertion на backend
+		const finish = await firstValueFrom(
+			this.root.post<LoginFinishResponse>(
+				'/v1/owner1/webauthn/login/finish',
+				{
+					sid,
+					credential: assertion,
+					challenge:
+						challengeResponse.challenge ||
+						challengeResponse.publicKeyCredentialRequestOptions
+							.challenge,
+				}
+			)
+		)
+
+		this.sessionJwt = finish.session_jwt
+		try {
+			localStorage.setItem(this.sessionKey, finish.session_jwt)
+		} catch {
+			// ignore storage errors
+		}
+
+		return {
+			sessionJwt: finish.session_jwt,
+			browserKeyId: finish.browser_key_id,
+			sid,
+			ownerId: finish.owner_id,
+		}
+	}
+
+	private async performWebAuthnLoginAuto(): Promise<LoginResult> {
+		this.ensureWebAuthnSupported()
+
+		// 1) запрос challenge без owner_id - браузер сам выберет credential
+		const challengeResponse = await firstValueFrom(
+			this.root.post<LoginChallengeResponse & { challenge?: string }>(
+				'/v1/owner1/webauthn/login/challenge-by-owner',
+				{}
+			)
+		)
+
+		// 2) локальная аутентификация - браузер выберет подходящий credential
+		const assertion = await startAuthentication(
+			challengeResponse.publicKeyCredentialRequestOptions
+		)
+
+		// 3) отправка assertion на backend без sid
+		const finish = await firstValueFrom(
+			this.root.post<LoginFinishResponse>(
+				'/v1/owner1/webauthn/login/finish',
+				{
+					credential: assertion,
+					challenge:
+						challengeResponse.challenge ||
+						challengeResponse.publicKeyCredentialRequestOptions
+							.challenge,
+				}
+			)
+		)
+
+		this.sessionJwt = finish.session_jwt
+		try {
+			localStorage.setItem(this.sessionKey, finish.session_jwt)
+		} catch {
+			// ignore storage errors
+		}
+
+		return {
+			sessionJwt: finish.session_jwt,
+			browserKeyId: finish.browser_key_id,
+			ownerId: finish.owner_id,
 		}
 	}
 
@@ -232,21 +341,5 @@ export class LoginService {
 		if (!('PublicKeyCredential' in window)) {
 			throw new Error('This browser does not support WebAuthn')
 		}
-	}
-
-	/**
-	 * Проверка: ошибка от /webauthn/login/challenge, означающая, что браузеру нужно сначала зарегистрировать ключ.
-	 */
-	private isRegistrationRequiredError(error: unknown): boolean {
-		if (!(error instanceof HttpErrorResponse)) return false
-		if (error.status !== 400) return false
-		const payload = error.error as any
-		const code =
-			typeof payload?.code === 'string'
-				? payload.code
-				: typeof payload?.error === 'string'
-				? payload.error
-				: ''
-		return code === 'registration_required'
 	}
 }
