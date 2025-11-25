@@ -1,22 +1,78 @@
 <div class="login_wrapper">
 	<div class="login_form">
-		<div>
-			<p *ngIf="errorMessage" class="error_message">
-				{{ errorMessage }}
+		<!-- Selection Mode: Choose between Registration and Login -->
+		<div *ngIf="mode === 'selection'" class="mode_selection">
+			<h2>Choose an option:</h2>
+			<ion-button expand="block" (click)="switchToRegistration()">
+				Registration
+			</ion-button>
+			<ion-button expand="block" (click)="switchToLogin()">
+				Log in
+			</ion-button>
+		</div>
+
+		<!-- Registration Mode: Enter user code -->
+		<div *ngIf="mode === 'registration'" class="registration_mode">
+			<h2>Register with Code</h2>
+			<p *ngIf="registrationError" class="error_message">
+				{{ registrationError }}
 			</p>
 
 			<ion-input
 				class="ion-primary-input"
-				label="User code"
+				label="Registration Code"
 				labelPlacement="floating"
 				[(ngModel)]="userCode"
 				maxlength="9"
 				[counter]="true"
+				placeholder="XXXX-XXXX"
 			/>
+
+			<ion-button
+				expand="block"
+				(click)="onRegister()"
+				[disabled]="registrationLoading"
+			>
+				<span *ngIf="!registrationLoading">Register</span>
+				<span *ngIf="registrationLoading">Processing...</span>
+			</ion-button>
+
+			<ion-button
+				expand="block"
+				fill="outline"
+				(click)="backToSelection()"
+			>
+				Back
+			</ion-button>
 		</div>
 
-		<ion-button expand="block" (click)="onLogin()" [disabled]="loading">
-			Log in
-		</ion-button>
+		<!-- Login Mode: Just click to authenticate -->
+		<div *ngIf="mode === 'login'" class="login_mode">
+			<h2>Log in with WebAuthn</h2>
+			<p *ngIf="loginError" class="error_message">
+				{{ loginError }}
+			</p>
+			<p class="info_message">
+				Click the button below to authenticate with your WebAuthn
+				credential.
+			</p>
+
+			<ion-button
+				expand="block"
+				(click)="onLogin()"
+				[disabled]="loginLoading"
+			>
+				<span *ngIf="!loginLoading">Log in</span>
+				<span *ngIf="loginLoading">Authenticating...</span>
+			</ion-button>
+
+			<ion-button
+				expand="block"
+				fill="outline"
+				(click)="backToSelection()"
+			>
+				Back
+			</ion-button>
+		</div>
 	</div>
 </div>

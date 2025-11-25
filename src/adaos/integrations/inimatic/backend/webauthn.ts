@@ -39,6 +39,7 @@ export interface WebAuthnCredentialRecord {
 	owner_id: string
 	browser_pubkey?: unknown
 	sign_count: number
+	created_at?: number // timestamp в миллисекундах
 }
 
 export interface WebAuthnDeps {
@@ -78,14 +79,27 @@ export interface WebAuthnService {
 		publicKeyCredentialRequestOptions?: any
 		error?: 'session_not_found' | 'registration_required'
 	}>
+	createLoginChallengeByOwnerId(owner_id: string): Promise<{
+		ok: boolean
+		publicKeyCredentialRequestOptions?: any
+		allowCredentials?: Array<{ id: string; type: string }>
+		error?: 'owner_not_found' | 'no_credentials_registered'
+	}>
+	createLoginChallengeAuto(): Promise<{
+		ok: boolean
+		publicKeyCredentialRequestOptions?: any
+		error?: never
+	}>
 	finishLogin(
-		sid: string,
-		credential: any
+		sid: string | undefined,
+		credential: any,
+		challenge: string
 	): Promise<{
 		ok: boolean
 		session_jwt?: string
 		browser_key_id?: string
-		error?: 'session_not_found' | 'assertion_failed'
+		owner_id?: string
+		error?: 'session_not_found' | 'assertion_failed' | 'challenge_invalid'
 	}>
 }
 
@@ -103,6 +117,10 @@ function deviceCodeKey(code: string): string {
 
 function webAuthnCredKey(credId: string): string {
 	return `webauthn:cred:${credId}`
+}
+
+function ownerCredentialsKey(ownerId: string): string {
+	return `webauthn:owner:${ownerId}:creds`
 }
 
 function randomToken(prefix: string): string {
@@ -131,6 +149,31 @@ async function saveSession(
 	const key = sessionKey(session.sid)
 	const ttl = Math.max(60, session.exp - nowSeconds())
 	await redis.setEx(key, ttl, JSON.stringify(session))
+}
+
+async function getCredentialsForOwner(
+	redis: RedisClientType<any, any, any>,
+	owner_id: string
+): Promise<WebAuthnCredentialRecord[]> {
+	const key = ownerCredentialsKey(owner_id)
+	const raw = await redis.get(key)
+	if (!raw) return []
+	try {
+		return JSON.parse(raw) as WebAuthnCredentialRecord[]
+	} catch {
+		return []
+	}
+}
+
+async function addCredentialForOwner(
+	redis: RedisClientType<any, any, any>,
+	owner_id: string,
+	credential: WebAuthnCredentialRecord
+): Promise<void> {
+	const credentials = await getCredentialsForOwner(redis, owner_id)
+	credentials.push(credential)
+	const key = ownerCredentialsKey(owner_id)
+	await redis.set(key, JSON.stringify(credentials))
 }
 
 async function findDeviceCodeByUserOrDevice(
@@ -324,8 +367,11 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 					owner_id: session.owner_id,
 					browser_pubkey: undefined,
 					sign_count: 0,
+					created_at: Date.now(),
 				}
 				await redis.set(webAuthnCredKey(credId), JSON.stringify(record))
+				// Сохраняем credential в списке для owner_id
+				await addCredentialForOwner(redis, session.owner_id, record)
 
 				const updated: WebSessionState = {
 					...session,
@@ -388,27 +434,175 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 			return { ok: true as const, publicKeyCredentialRequestOptions }
 		},
 
-		async finishLogin(sid: string, credential: any) {
-			const session = (await loadSession(redis, sid)) as
-				| (WebSessionState & { weblogin_challenge?: string })
-				| null
-			if (!session) {
+		async createLoginChallengeByOwnerId(owner_id: string) {
+			const credentials = await getCredentialsForOwner(redis, owner_id)
+			if (!credentials || credentials.length === 0) {
 				return {
 					ok: false as const,
-					error: 'session_not_found' as const,
+					error: 'no_credentials_registered' as const,
 				}
 			}
-			if (!session.browser_key_id) {
-				return {
-					ok: false as const,
-					error: 'assertion_failed' as const,
+
+			const challenge = randomBytes(32).toString('base64url')
+
+			// Сохраняем challenge в Redis для последующей верификации
+			const challengeKey = `webauthn:challenge:${challenge}`
+			await redis.setEx(
+				challengeKey,
+				300, // 5 минут TTL
+				JSON.stringify({ owner_id })
+			)
+
+			// Преобразуем credentialId в base64url для WebAuthn
+			const allowCredentials = credentials.map((cred) =>
+				Buffer.from(cred.cred_id, 'utf8').toString('base64url')
+			)
+
+			const publicKeyCredentialRequestOptions = {
+				challenge: challenge,
+				rpId: rpID,
+				allowCredentials: allowCredentials.map((id) => ({
+					id,
+					type: 'public-key',
+				})),
+				userVerification: 'required',
+				timeout: 60_000,
+			}
+
+			return {
+				ok: true as const,
+				publicKeyCredentialRequestOptions,
+				allowCredentials: allowCredentials.map((id) => ({
+					id,
+					type: 'public-key',
+				})),
+			}
+		},
+
+		async createLoginChallengeAuto() {
+			// В режиме автоматического выбора браузер сам выберет credential
+			const challenge = randomBytes(32).toString('base64url')
+
+			// Сохраняем challenge без owner_id - режим автоматического выбора
+			const challengeKey = `webauthn:challenge:${challenge}`
+			await redis.setEx(
+				challengeKey,
+				300, // 5 минут TTL
+				JSON.stringify({ auto_mode: true })
+			)
+
+			const publicKeyCredentialRequestOptions = {
+				challenge: challenge,
+				rpId: rpID,
+				allowCredentials: [], // Пустой список - браузер выберет сам
+				userVerification: 'required',
+				timeout: 60_000,
+			}
+
+			return {
+				ok: true as const,
+				publicKeyCredentialRequestOptions,
+			}
+		},
+
+		async finishLogin(
+			sid: string | undefined,
+			credential: any,
+			challenge: string
+		) {
+			let session:
+				| (WebSessionState & { weblogin_challenge?: string })
+				| null = null
+			let owner_id: string | undefined
+
+			// Вариант 1: логин по sid (после регистрации)
+			if (sid) {
+				session = (await loadSession(redis, sid)) as any
+				if (!session) {
+					return {
+						ok: false as const,
+						error: 'session_not_found' as const,
+					}
+				}
+				if (!session.browser_key_id) {
+					return {
+						ok: false as const,
+						error: 'assertion_failed' as const,
+					}
+				}
+				owner_id = session.owner_id
+			} else {
+				// Вариант 2: логин по challenge (без sid)
+				const challengeKey = `webauthn:challenge:${challenge}`
+				const challengeData = await redis.get(challengeKey)
+				if (!challengeData) {
+					return {
+						ok: false as const,
+						error: 'challenge_invalid' as const,
+					}
+				}
+				try {
+					const parsed = JSON.parse(challengeData) as {
+						owner_id?: string
+						auto_mode?: boolean
+					}
+					if (parsed.auto_mode) {
+						// Режим автоматического выбора - достаём owner_id из credential'а
+						const credId: string | undefined = credential?.id
+						if (!credId) {
+							return {
+								ok: false as const,
+								error: 'assertion_failed' as const,
+							}
+						}
+						const recordRaw = await redis.get(
+							webAuthnCredKey(credId)
+						)
+						if (!recordRaw) {
+							return {
+								ok: false as const,
+								error: 'assertion_failed' as const,
+							}
+						}
+						try {
+							const rec = JSON.parse(
+								recordRaw
+							) as WebAuthnCredentialRecord
+							owner_id = rec.owner_id
+						} catch {
+							return {
+								ok: false as const,
+								error: 'assertion_failed' as const,
+							}
+						}
+					} else {
+						owner_id = parsed.owner_id
+					}
+					await redis.del(challengeKey) // delete one-time challenge
+				} catch {
+					return {
+						ok: false as const,
+						error: 'challenge_invalid' as const,
+					}
 				}
 			}
 
 			// TODO: реальная проверка assertion через @simplewebauthn/server.
 			try {
 				const credId: string | undefined = credential?.id
-				if (!credId || credId !== session.browser_key_id) {
+				if (!credId) {
+					return {
+						ok: false as const,
+						error: 'assertion_failed' as const,
+					}
+				}
+
+				// Если у нас есть session и привязанный ключ, проверяем, что это тот же ключ
+				if (
+					session &&
+					session.browser_key_id &&
+					credId !== session.browser_key_id
+				) {
 					return {
 						ok: false as const,
 						error: 'assertion_failed' as const,
@@ -433,29 +627,34 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 
 				// Упрощённый session_jwt: для dev — случайный токен, который фронт будет использовать как bearer
 				const session_jwt = randomToken('sess')
-				const loginSession: WebSessionState = {
-					...session,
-					stage: 'AUTH',
-					exp: nowSeconds() + defaultSessionTtlSeconds,
-				}
-				delete (loginSession as any).weblogin_challenge
-				await saveSession(redis, loginSession)
 
-				// В реальной реализации session_jwt нужно положить в Redis
+				// Если есть session, обновляем её
+				if (session) {
+					const loginSession: WebSessionState = {
+						...session,
+						stage: 'AUTH',
+						exp: nowSeconds() + defaultSessionTtlSeconds,
+					}
+					delete (loginSession as any).weblogin_challenge
+					await saveSession(redis, loginSession)
+				}
+
+				// Сохраняем session_jwt в Redis
 				await redis.setEx(
 					`session:jwt:${session_jwt}`,
 					defaultSessionTtlSeconds,
 					JSON.stringify({
 						sid,
-						owner_id: session.owner_id,
-						browser_key_id: session.browser_key_id,
+						owner_id,
+						browser_key_id: credId,
 					})
 				)
 
 				return {
 					ok: true as const,
 					session_jwt,
-					browser_key_id: session.browser_key_id,
+					browser_key_id: credId,
+					owner_id,
 				}
 			} catch {
 				return {
@@ -616,28 +815,56 @@ export function installWebAuthnRoutes(
 		}
 	})
 
-	// POST /v1/owner/webauthn/login/finish { sid, credential }
+	// POST /v1/owner/webauthn/login/challenge-by-owner { }
+	app.post(
+		'/v1/owner1/webauthn/login/challenge-by-owner',
+		async (req, res) => {
+			try {
+				// Без параметров - режим автоматического выбора
+				const result = await service.createLoginChallengeAuto()
+				if (!result.ok) {
+					return respondError(req, res, 400, 'invalid_request')
+				}
+				res.json({
+					publicKeyCredentialRequestOptions:
+						result.publicKeyCredentialRequestOptions,
+				})
+			} catch (error) {
+				console.error('webauthn.login.challenge-by-owner error', error)
+				respondError(req, res, 500, 'internal_error')
+			}
+		}
+	)
+
+	// POST /v1/owner/webauthn/login/finish { sid, credential, challenge }
 	app.post('/v1/owner1/webauthn/login/finish', async (req, res) => {
 		try {
 			const sid = extractSid(req.body)
 			const credential = (req.body as any)?.credential
-			if (!sid) {
-				return respondError(req, res, 400, 'missing_field', {
-					field: 'sid',
-				})
-			}
+			const challenge = (req.body as any)?.challenge
 			if (!credential) {
 				return respondError(req, res, 400, 'missing_field', {
 					field: 'credential',
 				})
 			}
-			const result = await service.finishLogin(sid, credential)
+			if (!challenge) {
+				return respondError(req, res, 400, 'missing_field', {
+					field: 'challenge',
+				})
+			}
+			// sid может быть undefined для логина без user_code
+			const result = await service.finishLogin(
+				sid || undefined,
+				credential,
+				challenge
+			)
 			if (!result.ok) {
 				return respondError(req, res, 400, 'invalid_request')
 			}
 			res.json({
 				session_jwt: result.session_jwt,
 				browser_key_id: result.browser_key_id,
+				owner_id: result.owner_id,
 			})
 		} catch (error) {
 			console.error('webauthn.login.finish error', error)
