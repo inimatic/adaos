@@ -1,6 +1,5 @@
 import { Routes } from '@angular/router'
 import { HubComponent } from './features/hub/hub.component'
-import { MemberComponent } from './features/member/member.component'
 
 export const routes: Routes = [
 	{
@@ -34,7 +33,7 @@ export const routes: Routes = [
 		loadComponent: () =>
 			import('./features/hub/hub.component').then((m) => m.HubComponent),
 	},
-	// temporarily route member tab to new declarative desktop2
+	// legacy /member route: keep as redirect to declarative desktop2
 	{ path: 'member', redirectTo: '/desktop2', pathMatch: 'full' },
 	{
 		path: 'desktop',
