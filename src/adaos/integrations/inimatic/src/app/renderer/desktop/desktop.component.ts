@@ -6,9 +6,9 @@ import { YDocService } from '../../y/ydoc.service'
 import { AdaosClient } from '../../core/adaos/adaos-client.service'
 import { observeDeep } from '../../y/y-helpers'
 import { AdaApp } from '../../runtime/dsl-types'
-import { PageSchema, WidgetConfig, LayoutConfig, ActionConfig } from '../../runtime/page-schema.model'
-import { WeatherWidgetComponent } from '../widgets/weather-widget.component'
-import { WidgetComponent } from '../widgets/widget.component'
+import { PageSchema, WidgetConfig } from '../../runtime/page-schema.model'
+import { PageWidgetHostComponent } from '../widgets/page-widget-host.component'
+import { DesktopSchemaService } from '../../runtime/desktop-schema.service'
 import { ModalHostComponent } from '../modals/modal.component'
 import '../../runtime/registry.weather'
 import '../../runtime/registry.catalogs'
@@ -16,19 +16,22 @@ import '../../runtime/registry.catalogs'
 @Component({
 	selector: 'ada-desktop',
 	standalone: true,
-	imports: [CommonModule, IonicModule, WeatherWidgetComponent, WidgetComponent],
+	imports: [CommonModule, IonicModule, PageWidgetHostComponent],
 	templateUrl: './desktop.component.html',
 	styleUrls: ['./desktop.component.scss']
 })
 export class DesktopRendererComponent implements OnInit, OnDestroy {
 	app?: AdaApp
 	dispose?: () => void
-	resolvedIcons: Array<{ id: string; title: string; icon: string; action?: any; dev?: boolean }> = []
-	resolvedWidgets: Array<{ id: string; type: string; title?: string; source?: string; dev?: boolean }> = []
 	webspaces: Array<{ id: string; title: string; created_at: number }> = []
 	activeWebspace = 'default'
 	pageSchema?: PageSchema
-	constructor(private y: YDocService, private modal: ModalController, private adaos: AdaosClient) { }
+	constructor(
+		private y: YDocService,
+		private modal: ModalController,
+		private adaos: AdaosClient,
+		private desktopSchema: DesktopSchemaService,
+	) { }
 
 	async ngOnInit() {
 		await this.y.initFromHub()
@@ -36,9 +39,8 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		const dataNode = this.y.getPath('data')
 		const recompute = () => {
 			this.app = this.y.toJSON(appNode)
-			this.rebuildFromInstalled()
 			this.readWebspaces()
-			this.buildPageSchema()
+			this.pageSchema = this.desktopSchema.loadSchema()
 		}
 		recompute()
 		const un1 = observeDeep(appNode, recompute)
@@ -82,11 +84,6 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		const m = await this.modal.create({ component: ModalHostComponent, componentProps: { type, cfg } })
 		await m.present()
 	}
-	getData(source?: string) {
-		if (!source) return undefined
-		const path = source.startsWith('y:') ? source.slice(2) : source
-		return this.y.toJSON(this.y.getPath(path))
-	}
 
 	get webspaceLabel(): string {
 		const entry = this.webspaces.find(ws => ws.id === this.activeWebspace)
@@ -98,149 +95,6 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		const items = Array.isArray(raw?.items) ? raw.items : []
 		this.webspaces = items
 		this.activeWebspace = this.y.getWebspaceId()
-	}
-
-	private rebuildFromInstalled() {
-		// resolve icons from data.desktop.installed.apps (fallback data.installed.apps) + data.catalog.apps
-		const catalogApps: any[] = this.y.toJSON(this.y.getPath('data/catalog/apps')) || []
-		const installedApps: string[] = this.y.toJSON(this.y.getPath('data/installed/apps')) || []
-		const byId: Record<string, any> = {}
-		for (const it of catalogApps) byId[it.id] = it
-		this.resolvedIcons = installedApps
-			.map(id => byId[id])
-			.filter(Boolean)
-			.map(it => ({
-				id: it.id,
-				title: it.title || it.id,
-				icon: it.icon || (this.app as any)?.desktop?.iconTemplate?.icon || 'apps-outline',
-				action: it.launchModal ? { openModal: it.launchModal } : undefined,
-				dev: !!it.dev,
-			}))
-
-		// resolve widgets from data.desktop.installed.widgets (fallback data.installed.widgets) + data.catalog.widgets
-		const catalogWidgets: any[] = this.y.toJSON(this.y.getPath('data/catalog/widgets')) || []
-		const installedWidgets: string[] = this.y.toJSON(this.y.getPath('data/installed/widgets')) || []
-		const wById: Record<string, any> = {}
-		for (const it of catalogWidgets) wById[it.id] = it
-		this.resolvedWidgets = installedWidgets
-			.map(id => wById[id])
-			.filter(Boolean)
-			.map(it => ({ id: it.id, type: it.type, title: it.title, source: it.source, dev: !!it.dev }))
-	}
-
-	private buildPageSchema() {
-		const desktop: any = this.app?.desktop
-		const baseSchema: PageSchema | undefined = desktop?.pageSchema
-
-		if (!baseSchema) {
-			this.buildLegacyPageSchema()
-			return
-		}
-
-		// Deep copy so we never mutate YDoc-backed state directly.
-		const schema: PageSchema = JSON.parse(JSON.stringify(baseSchema))
-		this.enrichPageSchemaFromY(schema)
-		this.pageSchema = schema
-	}
-
-	private buildLegacyPageSchema() {
-		const desktop = this.app?.desktop
-		const layout: LayoutConfig = {
-			type: 'single',
-			areas: [
-				{ id: 'topbar', role: 'header', label: 'Topbar' },
-				{ id: 'icons', role: 'main', label: 'Icons' },
-				{ id: 'widgets', role: 'main', label: 'Widgets' },
-			],
-		}
-
-		const widgets: WidgetConfig[] = []
-
-		if (desktop?.topbar?.length) {
-			widgets.push({
-				id: 'topbar',
-				area: 'topbar',
-				type: 'desktop.widgets',
-				title: 'Topbar',
-				inputs: {
-					buttons: desktop.topbar,
-				},
-			})
-		}
-
-		if (this.resolvedIcons.length) {
-			widgets.push({
-				id: 'desktop-icons',
-				area: 'icons',
-				type: 'desktop.widgets',
-				title: 'Applications',
-				inputs: {
-					items: this.resolvedIcons,
-				},
-			})
-		}
-
-		if (this.resolvedWidgets.length) {
-			widgets.push({
-				id: 'desktop-widgets',
-				area: 'widgets',
-				type: 'desktop.widgets',
-				title: 'Widgets',
-				inputs: {
-					items: this.resolvedWidgets,
-				},
-			})
-		}
-
-		this.pageSchema = {
-			id: 'desktop',
-			title: 'Desktop',
-			layout,
-			widgets,
-		}
-	}
-
-	private enrichPageSchemaFromY(schema: PageSchema) {
-		if (!schema?.widgets?.length) return
-
-		for (const w of schema.widgets) {
-			const ds: any = w.dataSource as any
-			if (!ds || ds.kind !== 'y') continue
-
-			if (ds.path) {
-				const data = this.y.toJSON(this.y.getPath(ds.path))
-				if (w.id === 'topbar') {
-					w.inputs = w.inputs || {}
-					w.inputs['buttons'] = Array.isArray(data) ? data : []
-				} else {
-					w.inputs = w.inputs || {}
-					w.inputs['data'] = data
-				}
-			}
-
-			if (ds.transform === 'desktop.icons') {
-				w.inputs = w.inputs || {}
-				w.inputs['items'] = this.resolvedIcons
-			}
-			if (ds.transform === 'desktop.widgets') {
-				w.inputs = w.inputs || {}
-				w.inputs['items'] = this.resolvedWidgets
-			}
-		}
-
-		// Fallback: if topbar buttons were not populated from YDoc for some reason,
-		// ensure they are taken from app.desktop.topbar so Apps/Widgets remain visible.
-		const desktop: any = this.app?.desktop
-		if (desktop?.topbar?.length) {
-			const topbarWidget = schema.widgets.find(w => w.id === 'topbar')
-			if (topbarWidget) {
-				topbarWidget.inputs = topbarWidget.inputs || {}
-				const existing = topbarWidget.inputs['buttons']
-				if (!Array.isArray(existing) || !existing.length) {
-					topbarWidget.inputs['buttons'] = desktop.topbar
-				}
-			}
-		}
 	}
 
 	private async syncToggleInstall(type: 'app' | 'widget', id: string) {
@@ -312,85 +166,6 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	async resetDb() {
 		await this.y.clearStorage()
 		location.reload()
-	}
-
-	onWidgetEvent(widgetId: string, eventType: string, payload: any) {
-		const widget = this.getWidgetById(widgetId)
-		if (!widget?.actions?.length) return
-
-		for (const act of widget.actions) {
-			if (!this.matchesEvent(act.on, eventType)) continue
-			this.executeAction(act, payload)
-		}
-	}
-
-	private matchesEvent(on: string, eventType: string): boolean {
-		return on === eventType
-	}
-
-	private executeAction(action: ActionConfig, payload: any) {
-		switch (action.type) {
-			case 'openModal':
-				this.handleOpenModal(action, payload)
-				break
-			case 'callHost':
-				this.handleCallHost(action, payload)
-				break
-			default:
-				break
-		}
-	}
-
-	private handleOpenModal(action: ActionConfig, payload: any) {
-		const raw = action.params?.['modalId']
-		if (!raw) return
-
-		let modalId: string | undefined
-
-		if (typeof raw === 'string' && raw.startsWith('$event.')) {
-			modalId = this.resolveFromEvent(raw, payload)
-		} else if (typeof raw === 'string') {
-			modalId = raw
-		}
-
-		if (!modalId) return
-		this.openModal(modalId)
-	}
-
-	private handleCallHost(action: ActionConfig, _payload: any) {
-		const target = action.target
-		switch (target) {
-			case 'desktop.webspace.create':
-				this.createWebspace()
-				break
-			case 'desktop.webspace.rename':
-				this.renameWebspace()
-				break
-			case 'desktop.webspace.delete':
-				this.deleteWebspace()
-				break
-			case 'desktop.webspace.refresh':
-				this.refreshWebspaces()
-				break
-			case 'desktop.resetDb':
-				this.resetDb()
-				break
-			default:
-				break
-		}
-	}
-
-	private resolveFromEvent(expr: string, payload: any): string | undefined {
-		if (!expr.startsWith('$event.')) return undefined
-		const path = expr.slice('$event.'.length).split('.')
-
-		let cur: any = payload
-		for (const key of path) {
-			if (cur == null) return undefined
-			cur = cur[key]
-		}
-
-		return typeof cur === 'string' ? cur : undefined
 	}
 
 	getWidgetById(id: string): WidgetConfig | undefined {
