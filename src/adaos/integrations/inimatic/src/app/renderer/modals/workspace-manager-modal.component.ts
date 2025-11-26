@@ -53,7 +53,7 @@ import { observeDeep } from '../../y/y-helpers'
               fill="clear"
               color="danger"
               (click)="deleteSelected()"
-              [disabled]="selectedWorkspaceId === 'default'"
+              [disabled]="selectedWorkspaceId === 'default' || selectedWorkspaceId === 'desktop'"
             >
               Delete
             </ion-button>
@@ -179,7 +179,7 @@ export class WorkspaceManagerModalComponent implements OnInit, OnDestroy {
 
   async deleteSelected(): Promise<void> {
     const id = (this.selectedWorkspaceId || '').trim()
-    if (!id || id === 'default') return
+    if (!id || id === 'default' || id === 'desktop') return
     try {
       await this.adaos.sendEventsCommand('desktop.webspace.delete', { id })
       if (id === this.activeWebspace) {

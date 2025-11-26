@@ -177,7 +177,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
   }
 
   async deleteWebspace() {
-    if (!this.activeWebspace || this.activeWebspace === 'default') return
+    if (!this.activeWebspace || this.activeWebspace === 'default' || this.activeWebspace === 'desktop') return
     const entry = this.webspaces.find(ws => ws.id === this.activeWebspace)
     const ok = confirm(`Удалить webspace "${entry?.title || this.activeWebspace}"?`)
     if (!ok) return
