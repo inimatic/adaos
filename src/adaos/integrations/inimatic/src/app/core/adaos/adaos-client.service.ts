@@ -1,5 +1,6 @@
 import { HttpClient, HttpHeaders } from '@angular/common/http'
 import { Injectable } from '@angular/core'
+import { map } from 'rxjs/operators'
 
 export type AdaosEvent = { type: string; [k: string]: any }
 export interface AdaosConfig {
@@ -226,7 +227,11 @@ export class AdaosClient {
 		return this.post('/api/say', { text })
 	}
 	callSkill<T = any>(skill: string, method: string, body?: any) {
-		return this.post<T>(`/api/skills/${skill}/${method}`, body ?? {})
+		const tool = `${skill}:${method}`
+		return this.post<{ ok: boolean; result: T }>(`/api/tools/call`, {
+			tool,
+			arguments: body ?? {},
+		}).pipe(map((res) => res.result))
 	}
 }
 
