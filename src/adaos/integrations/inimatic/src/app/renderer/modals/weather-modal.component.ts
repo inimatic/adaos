@@ -26,6 +26,7 @@ export class WeatherModalComponent implements OnInit, OnDestroy {
   }
   cities: string[] = ['Berlin', 'Moscow', 'New York', 'Tokyo', 'Paris']
   private dispose?: () => void
+  private skillSub?: any
 
   constructor(
     private modalCtrl: ModalController,
@@ -41,10 +42,37 @@ export class WeatherModalComponent implements OnInit, OnDestroy {
     }
     this.dispose = observeDeep(node, recompute)
     recompute()
+
+    // Fallback: if YDoc doesn't have a snapshot yet, call weather_skill.get_weather directly.
+    if (!this.weather) {
+      try {
+        const city = this.cities[1] || 'Moscow'
+        this.skillSub = this.adaos
+          .callSkill<any>('weather_skill', 'get_weather', { city })
+          .subscribe({
+            next: (res: any) => {
+              if (!res || res.ok === false) return
+              this.weather = {
+                city: String(res.city || city),
+                temp_c: Number(res.temp_c ?? res.temp ?? 0),
+                condition: String(res.description || ''),
+                wind_ms: Number(res.wind_ms ?? 0),
+                updated_at: String(res.updated_at || new Date().toISOString()),
+              }
+            },
+            error: () => {},
+          })
+      } catch {
+        // ignore fallback errors
+      }
+    }
   }
 
   ngOnDestroy(): void {
     this.dispose?.()
+    try {
+      this.skillSub?.unsubscribe?.()
+    } catch {}
   }
 
   close() {
