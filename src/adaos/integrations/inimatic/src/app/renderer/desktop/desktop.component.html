@@ -1,64 +1,96 @@
 <!--src\adaos\integrations\inimatic\src\app\renderer\desktop\desktop.component.html-->
 <ion-content [style.--background]="app?.desktop?.background || '#0b0f14'">
-	<div class="desktop">
-		<div class="topbar">
-			<div class="left" *ngIf="getWidgetById('topbar') as topbar">
-				<ion-button
-					size="small"
-					*ngFor="let b of topbar.inputs?.['buttons']"
-					(click)="onWidgetEvent('topbar', 'click', b)"
-				>
-					{{ b.label }}
-				</ion-button>
-			</div>
-			<div class="workspace-tools" *ngIf="getWidgetById('workspace-tools') as wsWidget">
-				<ion-button
-					size="small"
-					*ngFor="let b of wsWidget.inputs?.['buttons']"
-					(click)="onWidgetEvent('workspace-tools', 'click:' + b.id, b)"
-				>
-					{{ b.label }}
-				</ion-button>
-			</div>
-			<div class="webspace-controls">
-				<div class="label">Webspace: <strong>{{ webspaceLabel }}</strong></div>
-				<ion-select interface="popover" size="small" [value]="activeWebspace"
-					(ionChange)="onWebspaceChanged($event)">
-					<ion-select-option *ngFor="let ws of webspaces" [value]="ws.id">{{ ws.title }} ({{ ws.id
-						}})</ion-select-option>
-				</ion-select>
-				<div class="actions">
-					<ion-button size="small" fill="clear" (click)="createWebspace()">Создать</ion-button>
-					<ion-button size="small" fill="clear" (click)="renameWebspace()">Переименовать</ion-button>
-					<ion-button size="small" fill="clear" [disabled]="activeWebspace === 'default'"
-						(click)="deleteWebspace()">Удалить</ion-button>
-					<ion-button size="small" fill="clear" (click)="refreshWebspaces()">Обновить</ion-button>
-				</div>
-			</div>
-			<div class="right">
-				<ion-button size="small" color="medium" (click)="resetDb()">Reset DB</ion-button>
-			</div>
-		</div>
-
-		<div class="icons" *ngIf="getWidgetById('desktop-icons') as iconsWidget">
-			<button
-				class="icon"
-				*ngFor="let ic of iconsWidget.inputs?.['items']"
-				(click)="onWidgetEvent('desktop-icons', 'select', ic)"
+	<div class="desktop" *ngIf="pageSchema as page">
+		<ng-container *ngFor="let area of page.layout.areas">
+			<div
+				class="area"
+				[ngClass]="['area-' + area.id, area.role ? 'area-role-' + area.role : '']"
 			>
-				<ion-badge *ngIf="ic.dev" color="warning" class="dev-badge">DEV</ion-badge>
-				<ion-icon [name]="ic.icon"></ion-icon>
-				<span>{{ ic.title }}</span>
-			</button>
-		</div>
+				<ng-container *ngFor="let w of getWidgetsInArea(area.id)">
+					<ng-container [ngSwitch]="w.type">
+						<!-- Command bar widgets (topbar, workspace-tools, reset-db, etc.) -->
+						<ng-container *ngSwitchCase="'input.commandBar'">
+							<ion-button
+								size="small"
+								*ngFor="let b of w.inputs?.['buttons']"
+								(click)="onWidgetEvent(w.id, 'click' + (b.id ? ':' + b.id : ''), b)"
+							>
+								{{ b.label }}
+							</ion-button>
+						</ng-container>
 
-		<div class="widgets" *ngIf="getWidgetById('desktop-widgets') as widgetsWidget">
-			<ng-container *ngFor="let w of widgetsWidget.inputs?.['items']">
-				<div class="widget-wrapper">
-					<ion-badge *ngIf="w.dev" color="warning" class="dev-badge">DEV</ion-badge>
-					<ada-widget [type]="w.type" [cfg]="{ title: w.title, data: getData(w.source) }"></ada-widget>
-				</div>
-			</ng-container>
-		</div>
+						<!-- Icons grid (desktop-icons) and generic grids -->
+						<ng-container *ngSwitchCase="'collection.grid'">
+							<div class="icons" *ngIf="w.id === 'desktop-icons'; else genericGrid">
+								<button
+									class="icon"
+									*ngFor="let ic of w.inputs?.['items']"
+									(click)="onWidgetEvent(w.id, 'select', ic)"
+								>
+									<ion-badge *ngIf="ic.dev" color="warning" class="dev-badge">DEV</ion-badge>
+									<ion-icon [name]="ic.icon"></ion-icon>
+									<span>{{ ic.title }}</span>
+								</button>
+							</div>
+							<ng-template #genericGrid>
+								<div class="grid">
+									<button
+										class="grid-item"
+										*ngFor="let item of w.inputs?.['items']"
+										(click)="onWidgetEvent(w.id, 'select', item)"
+									>
+										<span>{{ item.title || item.id }}</span>
+									</button>
+								</div>
+							</ng-template>
+						</ng-container>
+
+						<!-- Desktop widgets container (weather and others) -->
+						<ng-container *ngSwitchCase="'desktop.widgets'">
+							<div class="widgets">
+								<ng-container *ngFor="let wi of w.inputs?.['items']">
+									<div class="widget-wrapper">
+										<ion-badge *ngIf="wi.dev" color="warning" class="dev-badge">DEV</ion-badge>
+										<ada-widget
+											[type]="wi.type"
+											[cfg]="{ title: wi.title, data: getData(wi.source) }"
+										></ada-widget>
+									</div>
+								</ng-container>
+							</div>
+						</ng-container>
+
+						<!-- Host-provided webspace controls -->
+						<ng-container *ngSwitchCase="'host.webspaceControls'">
+							<div class="webspace-controls">
+								<div class="label">Webspace: <strong>{{ webspaceLabel }}</strong></div>
+								<ion-select
+									interface="popover"
+									size="small"
+									[value]="activeWebspace"
+									(ionChange)="onWebspaceChanged($event)"
+								>
+									<ion-select-option *ngFor="let ws of webspaces" [value]="ws.id">
+										{{ ws.title }} ({{ ws.id }})
+									</ion-select-option>
+								</ion-select>
+								<div class="actions">
+									<ion-button
+										size="small"
+										fill="clear"
+										*ngFor="let b of w.inputs?.['buttons']"
+										(click)="onWidgetEvent(w.id, 'click:' + b.id, b)"
+										[disabled]="b.id === 'delete' && activeWebspace === 'default'"
+									>
+										{{ b.label }}
+									</ion-button>
+								</div>
+							</div>
+						</ng-container>
+
+					</ng-container>
+				</ng-container>
+			</div>
+		</ng-container>
 	</div>
 </ion-content>

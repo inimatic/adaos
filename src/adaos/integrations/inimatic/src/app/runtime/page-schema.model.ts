@@ -6,6 +6,7 @@ export type WidgetType =
   | 'overlay.modal'
   | 'input.commandBar'
   | 'desktop.widgets'
+  | 'host.webspaceControls'
 
 export interface LayoutArea {
   id: string
@@ -66,7 +67,7 @@ export interface YDocDataSource {
 
 export interface ActionConfig {
   on: string
-  type: 'callSkill' | 'updateState' | 'openOverlay' | 'openModal'
+  type: 'callSkill' | 'updateState' | 'openOverlay' | 'openModal' | 'callHost'
   target?: string
   params?: Record<string, any>
 }

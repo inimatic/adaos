@@ -28,6 +28,7 @@ export const PAGE_WIDGET_REGISTRY: Record<WidgetType, Type<any>> = {
   'visual.metricTile': MetricTileWidgetComponent,
   'feedback.log': MetricTileWidgetComponent,
   'desktop.widgets': DesktopWidgetsWidgetComponent,
+  'host.webspaceControls': CommandBarWidgetComponent,
 }
 
 @Component({
