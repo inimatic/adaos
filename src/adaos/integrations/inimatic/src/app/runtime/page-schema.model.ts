@@ -1,3 +1,4 @@
+// src\adaos\integrations\inimatic\src\app\runtime\page-schema.model.ts
 export type WidgetType =
   | 'collection.grid'
   | 'visual.metricTile'
@@ -6,17 +7,21 @@ export type WidgetType =
   | 'input.commandBar'
   | 'desktop.widgets'
 
+export interface LayoutArea {
+  id: string
+  role?: string
+  label?: string
+}
+
+export interface LayoutConfig {
+  type: 'single' | 'split' | 'custom'
+  areas: LayoutArea[]
+}
+
 export interface PageSchema {
   id: string
   title?: string
-  layout: {
-    type: 'single' | 'split' | 'custom'
-    areas: Array<{
-      id: string
-      role?: string
-      label?: string
-    }>
-  }
+  layout: LayoutConfig
   widgets: WidgetConfig[]
 }
 

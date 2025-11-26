@@ -1,3 +1,4 @@
+// src\adaos\integrations\inimatic\src\app\runtime\registry.catalogs.ts
 import { ModalRegistry } from './registry'
 import { CatalogModalComponent } from '../renderer/modals/catalog-modal.component'
 
