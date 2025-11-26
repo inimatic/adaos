@@ -333,6 +333,9 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 			case 'openModal':
 				this.handleOpenModal(action, payload)
 				break
+			case 'callHost':
+				this.handleCallHost(action, payload)
+				break
 			default:
 				break
 		}
@@ -352,6 +355,29 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 
 		if (!modalId) return
 		this.openModal(modalId)
+	}
+
+	private handleCallHost(action: ActionConfig, _payload: any) {
+		const target = action.target
+		switch (target) {
+			case 'desktop.webspace.create':
+				this.createWebspace()
+				break
+			case 'desktop.webspace.rename':
+				this.renameWebspace()
+				break
+			case 'desktop.webspace.delete':
+				this.deleteWebspace()
+				break
+			case 'desktop.webspace.refresh':
+				this.refreshWebspaces()
+				break
+			case 'desktop.resetDb':
+				this.resetDb()
+				break
+			default:
+				break
+		}
 	}
 
 	private resolveFromEvent(expr: string, payload: any): string | undefined {
