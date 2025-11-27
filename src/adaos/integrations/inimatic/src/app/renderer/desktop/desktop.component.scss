@@ -1,29 +1,154 @@
+:host {
+  --desktop-panel-bg: rgba(255, 255, 255, 0.85);
+  --desktop-icon-bg: rgba(255, 255, 255, 0.9);
+  --desktop-border-color: rgba(0, 0, 0, 0.08);
+  --desktop-text-color: #1c1f2b;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :host {
+    --desktop-panel-bg: rgba(8, 13, 20, 0.72);
+    --desktop-icon-bg: rgba(255, 255, 255, 0.06);
+    --desktop-border-color: rgba(255, 255, 255, 0.14);
+    --desktop-text-color: #e6eefb;
+  }
+}
+
 .desktop {
-  position: relative; width: 100%; height: 100%;
-  .topbar { position: sticky; top: 0; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(0,0,0,0.25); }
-  .topbar .left { display: flex; gap: 8px; flex-wrap: wrap; }
-  .topbar .webspace-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: #d7e2f5; }
-  .topbar .webspace-controls .label { font-size: 13px; }
-  .topbar .webspace-controls .actions { display: flex; gap: 4px; flex-wrap: wrap; }
-  .topbar .webspace-controls ion-select { min-width: 180px; }
-  .topbar .right { display: flex; }
+  position: relative;
+  width: 100%;
+  height: 100%;
+  color: var(--desktop-text-color);
+
+  ion-button,
+  ion-segment-button {
+    --color: var(--desktop-text-color);
+    --color-checked: var(--desktop-text-color);
+    --indicator-color: var(--desktop-text-color);
+  }
+
+  ion-toolbar,
+  ion-tab-bar {
+    --background: var(--desktop-panel-bg);
+    color: var(--desktop-text-color);
+  }
+
+  ion-segment {
+    --background: var(--desktop-panel-bg);
+    border-radius: 12px;
+    border: 1px solid var(--desktop-border-color);
+    padding: 2px;
+  }
+
+  .topbar {
+    position: sticky;
+    top: 0;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--desktop-panel-bg);
+    border-bottom: 1px solid var(--desktop-border-color);
+    backdrop-filter: blur(9px);
+  }
+  .topbar .left,
+  .topbar .workspace-tools {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .topbar .webspace-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    color: var(--desktop-text-color);
+  }
+  .topbar .webspace-controls .label {
+    font-size: 13px;
+  }
+  .topbar .webspace-controls .actions {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .topbar .webspace-controls ion-select {
+    min-width: 180px;
+    --background: var(--desktop-panel-bg);
+    color: var(--desktop-text-color);
+    border: 1px solid var(--desktop-border-color);
+    border-radius: 8px;
+  }
+  .topbar .right {
+    display: flex;
+  }
+
   .icons {
-    display: grid; grid-template-columns: repeat(auto-fill, 84px);
-    gap: 12px; padding: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 84px);
+    gap: 12px;
+    padding: 16px;
+
     .icon {
       position: relative;
-      width: 84px; height: 84px; border-radius: 14px;
-      background: rgba(255,255,255,0.06); backdrop-filter: blur(6px);
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      color: #e6eefb; border: 1px solid rgba(255,255,255,0.08);
-      ion-icon { font-size: 28px; margin-bottom: 6px; }
-      span { font-size: 12px; }
-      .dev-badge { position: absolute; top: 4px; right: 4px; }
+      width: 84px;
+      height: 84px;
+      border-radius: 14px;
+      background: var(--desktop-icon-bg);
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--desktop-text-color);
+      border: 1px solid var(--desktop-border-color);
+      transition: transform 0.15s ease, background 0.2s ease;
+
+      &:hover {
+        transform: translateY(-2px);
+        border-color: var(--desktop-text-color);
+      }
+
+      ion-icon {
+        font-size: 28px;
+        margin-bottom: 6px;
+      }
+      span {
+        font-size: 12px;
+      }
+      .dev-badge {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+      }
     }
   }
-  .widgets { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 12px; flex-wrap: wrap;
-    .widget-wrapper { position: relative;
-      .dev-badge { position: absolute; top: 4px; right: 4px; z-index: 2; }
+
+  .widgets {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+
+    .widget-wrapper {
+      position: relative;
+      background: var(--desktop-panel-bg);
+      border-radius: 18px;
+      padding: 6px;
+      border: 1px solid var(--desktop-border-color);
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
+
+      .dev-badge {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        z-index: 2;
+      }
     }
   }
 }

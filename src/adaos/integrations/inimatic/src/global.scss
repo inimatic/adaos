@@ -33,8 +33,37 @@
  */
 
 /* @import "@ionic/angular/css/palettes/dark.always.css"; */
-/* @import "@ionic/angular/css/palettes/dark.class.css"; */
-// @import '@ionic/angular/css/palettes/dark.system.css';
+@import '@ionic/angular/css/palettes/dark.class.css';
+
+:root {
+	color-scheme: light dark;
+}
+
+body {
+	--ion-background-color: #ffffff;
+	--ion-background-color-rgb: 255, 255, 255;
+	--ion-text-color: #000000;
+	--ion-text-color-rgb: 0, 0, 0;
+}
+
+body.dark {
+	--ion-background-color: #020617;
+	--ion-background-color-rgb: 2, 6, 23;
+	--ion-text-color: #e5e7eb;
+	--ion-text-color-rgb: 229, 231, 235;
+}
+
+body ion-toolbar,
+body ion-tab-bar {
+	--background: var(--ion-background-color);
+	color: var(--ion-text-color);
+}
+
+body.dark ion-toolbar,
+body.dark ion-tab-bar {
+	--background: #020617;
+	color: #e5e7eb;
+}
 
 .ion-primary-input {
 	--highlight-color: var(--ion-color-primary) !important;
