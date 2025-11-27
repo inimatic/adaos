@@ -1,4 +1,4 @@
-import { Component } from '@angular/core'
+import { Component, OnDestroy, OnInit } from '@angular/core'
 import { HubComponent } from './features/hub/hub.component'
 import {
 	IonApp,
@@ -39,8 +39,11 @@ import { Platform } from '@ionic/angular'
 		IonApp,
 	],
 })
-export class AppComponent {
+export class AppComponent implements OnInit, OnDestroy {
 	isAndroid: boolean
+	private colorSchemeMedia?: MediaQueryList
+	private colorSchemeListener = (e: MediaQueryListEvent) => this.applyTheme(e.matches)
+
 	constructor(private plt: Platform) {
 		addIcons({
 			lockClosedOutline,
@@ -54,5 +57,19 @@ export class AppComponent {
 		this.isAndroid =
 			this.plt.platforms().includes('mobile') &&
 			!this.plt.platforms().includes('mobileweb')
+	}
+
+	ngOnInit(): void {
+		this.colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)')
+		this.applyTheme(this.colorSchemeMedia.matches)
+		this.colorSchemeMedia.addEventListener('change', this.colorSchemeListener)
+	}
+
+	ngOnDestroy(): void {
+		this.colorSchemeMedia?.removeEventListener('change', this.colorSchemeListener)
+	}
+
+	private applyTheme(isDark: boolean): void {
+		document.body.classList.toggle('dark', isDark)
 	}
 }

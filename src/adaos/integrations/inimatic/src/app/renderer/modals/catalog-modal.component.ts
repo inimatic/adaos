@@ -1,3 +1,4 @@
+// src\adaos\integrations\inimatic\src\app\renderer\modals\catalog-modal.component.ts
 import { Component, Input } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { IonicModule } from '@ionic/angular'

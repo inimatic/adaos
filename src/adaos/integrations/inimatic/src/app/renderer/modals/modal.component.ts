@@ -1,3 +1,4 @@
+// src\adaos\integrations\inimatic\src\app\renderer\modals\modal.component.ts
 import { Component, Input, OnChanges, OnInit, ViewChild, ViewContainerRef, ComponentRef } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { IonicModule } from '@ionic/angular'

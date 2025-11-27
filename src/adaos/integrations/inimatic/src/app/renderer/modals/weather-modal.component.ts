@@ -1,3 +1,4 @@
+// src\adaos\integrations\inimatic\src\app\renderer\modals\weather-modal.component.ts
 import { Component, Input, OnDestroy, OnInit } from '@angular/core'
 import { IonicModule, ModalController } from '@ionic/angular'
 import { CommonModule } from '@angular/common'
