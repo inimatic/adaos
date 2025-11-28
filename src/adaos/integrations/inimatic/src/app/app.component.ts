@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core'
+import { Component, HostListener, OnDestroy, OnInit } from '@angular/core'
 import { HubComponent } from './features/hub/hub.component'
 import {
 	IonApp,
@@ -22,6 +22,7 @@ import {
 	desktop,
 } from 'ionicons/icons'
 import { Platform } from '@ionic/angular'
+import { YDocService } from './y/ydoc.service'
 
 @Component({
 	selector: 'app-root',
@@ -44,7 +45,7 @@ export class AppComponent implements OnInit, OnDestroy {
 	private colorSchemeMedia?: MediaQueryList
 	private colorSchemeListener = (e: MediaQueryListEvent) => this.applyTheme(e.matches)
 
-	constructor(private plt: Platform) {
+	constructor(private plt: Platform, private ydoc: YDocService) {
 		addIcons({
 			lockClosedOutline,
 			people,
@@ -67,6 +68,17 @@ export class AppComponent implements OnInit, OnDestroy {
 
 	ngOnDestroy(): void {
 		this.colorSchemeMedia?.removeEventListener('change', this.colorSchemeListener)
+	}
+
+	@HostListener('window:keydown', ['$event'])
+	onKeyDown(ev: KeyboardEvent): void {
+		if (ev.altKey && (ev.key === 'w' || ev.key === 'W')) {
+			try {
+				this.ydoc.dumpSnapshot()
+			} catch {
+				// ignore debug errors
+			}
+		}
 	}
 
 	private applyTheme(isDark: boolean): void {

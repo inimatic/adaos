@@ -170,6 +170,14 @@ export class PageDataService {
       case 'desktop.widgets':
         return this.resolveDesktopWidgets()
       default:
+        if (cfg.path === 'data/weather/current') {
+          // Weather snapshot is sometimes seeded as a plain dict under
+          // data.weather, so YDoc.getPath('data/weather/current') may
+          // not work reliably. Read the whole data map as JSON and
+          // project weather.current from it.
+          const root = this.ydoc.toJSON(this.ydoc.getPath('data')) || {}
+          return root?.weather?.current
+        }
         if (cfg.path) {
           return this.ydoc.toJSON(this.ydoc.getPath(cfg.path))
         }

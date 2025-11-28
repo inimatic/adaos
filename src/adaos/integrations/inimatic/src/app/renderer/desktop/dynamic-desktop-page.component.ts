@@ -6,8 +6,6 @@ import { PageWidgetHostComponent } from '../widgets/page-widget-host.component'
 import { YDocService } from '../../y/ydoc.service'
 import { DesktopSchemaService } from '../../runtime/desktop-schema.service'
 import { AdaApp } from '../../runtime/dsl-types'
-import '../../runtime/registry.weather'
-import '../../runtime/registry.catalogs'
 import '../../runtime/registry.workspaces'
 
 @Component({

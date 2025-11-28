@@ -9,6 +9,7 @@ from .seed import SEED
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.services.agent_context import get_ctx
 from adaos.services.scenario.manager import ScenarioManager
+from adaos.apps.yjs.webspace import default_webspace_id
 from .y_store import AdaosMemoryYStore, get_ystore_for_webspace
 
 _log = logging.getLogger("adaos.yjs.bootstrap")
@@ -40,7 +41,18 @@ async def ensure_webspace_seeded_from_scenario(
     try:
         await ystore.apply_updates(ydoc)
     except BaseException as exc:  # catch PanicException and similar
-        _log.warning("apply_updates failed for webspace=%s (treating as empty): %s", webspace_id, exc, exc_info=True)
+        # When y_store contains updates produced by an older or buggy
+        # version of the runtime, yrs/y_py may raise a PanicException
+        # (or other low‑level errors). For now we treat this as "no
+        # state" and re‑seed from the scenario, but log enough detail
+        # to debug root causes.
+        _log.warning(
+            "apply_updates failed for webspace=%s (treating as empty, exc=%r, type=%s)",
+            webspace_id,
+            exc,
+            type(exc).__name__,
+            exc_info=True,
+        )
 
     ui_map = ydoc.get_map("ui")
     data_map = ydoc.get_map("data")
@@ -61,12 +73,18 @@ async def ensure_webspace_seeded_from_scenario(
         return
     except Exception as exc:
         _log.warning(
-            "scenario-based seed failed for webspace=%s scenario=%s, falling back to SEED: %s",
+            "scenario-based seed failed for webspace=%s scenario=%s: %s",
             webspace_id,
             default_scenario_id,
             exc,
             exc_info=True,
         )
+
+    # Fallback to static SEED only for the default webspace; all other
+    # webspaces must be projected from the declarative scenario so that
+    # UI stays in sync with scenario.json changes.
+    if webspace_id != default_webspace_id():
+        return
 
     with ydoc.begin_transaction() as txn:
         ui = ydoc.get_map("ui")

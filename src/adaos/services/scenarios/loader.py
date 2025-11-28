@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
 
 from adaos.services.agent_context import get_ctx
+
+_log = logging.getLogger("adaos.scenarios.loader")
 
 
 def scenario_root(scenario_id: str) -> Path:
@@ -41,7 +44,9 @@ def read_content(scenario_id: str) -> Dict[str, Any]:
     root = scenario_root(scenario_id)
     path = root / "scenario.json"
     if not path.exists():
+        _log.debug("scenario '%s' has no scenario.json at %s", scenario_id, path)
         return {}
+    _log.info("reading scenario '%s' content from %s", scenario_id, path)
     try:
         raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
