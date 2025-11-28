@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-import re, os
+import re, os, json
 from pathlib import Path
 from typing import Optional, Literal
 
@@ -133,7 +133,7 @@ class ScenarioManager:
             pass
         return meta
 
-    def _ensure_yjs_payload(self, scenario_id: str) -> tuple[dict, dict, dict]:
+    def _ensure_yjs_payload(self, scenario_id: str) -> tuple[dict, dict, dict, dict]:
         content = read_content(scenario_id)
         if not content:
             raise FileNotFoundError(f"scenario '{scenario_id}' has no scenario.json content")
@@ -146,9 +146,29 @@ class ScenarioManager:
         catalog_section = content.get("catalog") or {}
         if not isinstance(catalog_section, dict):
             catalog_section = {}
-        return ui_section, registry_section, catalog_section
+        data_section = content.get("data") or {}
+        if not isinstance(data_section, dict):
+            data_section = {}
 
-    def _project_to_doc(self, ydoc: Y.YDoc, scenario_id: str, ui_section: dict, registry_section: dict, catalog_section: dict) -> None:
+        # Debug trace to help diagnose scenario→YDoc projection issues
+        try:
+            desktop = (ui_section.get("desktop") or {}) if isinstance(ui_section, dict) else {}
+            topbar = desktop.get("topbar")
+            _log.debug("scenario '%s' ui.desktop.topbar=%s", scenario_id, topbar)
+        except Exception:
+            pass
+
+        return ui_section, registry_section, catalog_section, data_section
+
+    def _project_to_doc(
+        self,
+        ydoc: Y.YDoc,
+        scenario_id: str,
+        ui_section: dict,
+        registry_section: dict,
+        catalog_section: dict,
+        data_section: dict,
+    ) -> None:
         with ydoc.begin_transaction() as txn:
             ui_map = ydoc.get_map("ui")
             registry_map = ydoc.get_map("registry")
@@ -179,6 +199,22 @@ class ScenarioManager:
             data_updated[scenario_id] = entry
             data_map.set(txn, "scenarios", data_updated)
 
+            # Optional root data overrides from scenario.json:
+            # if "data" section is present in the scenario payload, its
+            # top-level keys are projected into the webspace data map.
+            # This is used for initial data seeding (e.g. data.weather)
+            # and for YJS reload; only explicitly defined keys are
+            # overwritten.
+            if isinstance(data_section, dict):
+                for key, value in data_section.items():
+                    if not isinstance(key, str):
+                        continue
+                    try:
+                        payload = json.loads(json.dumps(value))
+                    except Exception:
+                        payload = value
+                    data_map.set(txn, key, payload)
+
     def sync_to_yjs(self, scenario_id: str, webspace_id: str | None = None) -> None:
         """
         Project the declarative scenario payload into the webspace YDoc so
@@ -186,10 +222,10 @@ class ScenarioManager:
         """
         target_webspace = webspace_id or default_webspace_id()
         self.caps.require("core", "scenarios.manage")
-        ui_section, registry_section, catalog_section = self._ensure_yjs_payload(scenario_id)
+        ui_section, registry_section, catalog_section, data_section = self._ensure_yjs_payload(scenario_id)
 
         with get_ydoc(target_webspace) as ydoc:
-            self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section)
+            self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section, data_section)
 
         emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "webspace_id": target_webspace}, "scenario.mgr")
 
@@ -199,10 +235,10 @@ class ScenarioManager:
         """
         target_webspace = webspace_id or default_webspace_id()
         self.caps.require("core", "scenarios.manage")
-        ui_section, registry_section, catalog_section = self._ensure_yjs_payload(scenario_id)
+        ui_section, registry_section, catalog_section, data_section = self._ensure_yjs_payload(scenario_id)
 
         async with async_get_ydoc(target_webspace) as ydoc:
-            self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section)
+            self._project_to_doc(ydoc, scenario_id, ui_section, registry_section, catalog_section, data_section)
 
         emit(self.bus, "scenarios.synced", {"scenario_id": scenario_id, "webspace_id": target_webspace}, "scenario.mgr")
 

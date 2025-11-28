@@ -15,8 +15,8 @@ import { IonicModule } from '@ionic/angular'
 import { WidgetConfig, WidgetType } from '../../runtime/page-schema.model'
 import { CollectionGridWidgetComponent } from './collection-grid.widget.component'
 import { CommandBarWidgetComponent } from './command-bar.widget.component'
-import { ModalOverlayWidgetComponent } from './modal-overlay.widget.component'
 import { MetricTileWidgetComponent } from './metric-tile.widget.component'
+import { SelectorWidgetComponent } from './selector.widget.component'
 import { PageStateService, PageState } from '../../runtime/page-state.service'
 import { Subscription } from 'rxjs'
 import { DesktopWidgetsWidgetComponent } from './desktop-widgets.widget.component'
@@ -24,7 +24,7 @@ import { DesktopWidgetsWidgetComponent } from './desktop-widgets.widget.componen
 export const PAGE_WIDGET_REGISTRY: Record<WidgetType, Type<any>> = {
   'collection.grid': CollectionGridWidgetComponent,
   'input.commandBar': CommandBarWidgetComponent,
-  'overlay.modal': ModalOverlayWidgetComponent,
+  'input.selector': SelectorWidgetComponent,
   'visual.metricTile': MetricTileWidgetComponent,
   'feedback.log': MetricTileWidgetComponent,
   'desktop.widgets': DesktopWidgetsWidgetComponent,

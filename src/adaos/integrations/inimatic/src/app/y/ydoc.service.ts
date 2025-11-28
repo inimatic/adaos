@@ -7,7 +7,7 @@ import { AdaosClient } from '../core/adaos/adaos-client.service'
 @Injectable({ providedIn: 'root' })
 export class YDocService {
   public readonly doc = new Y.Doc()
-  private readonly db = new IndexeddbPersistence('adaos-mobile', this.doc)
+  private db?: IndexeddbPersistence
   private provider?: WebsocketProvider
   private initialized = false
   private initPromise?: Promise<void>
@@ -46,9 +46,6 @@ export class YDocService {
   }
 
   private async doInitFromHub(): Promise<void> {
-    // Keep local IndexedDB sync for offline/dev convenience
-    try { await this.db.whenSynced } catch {}
-
     const baseHttp = this.adaos.getBaseUrl().replace(/\/$/, '')
     const baseWs = baseHttp.replace(/^http/, 'ws')
 
@@ -59,6 +56,16 @@ export class YDocService {
     const webspaceId = String(ack?.data?.webspace_id || preferred || 'default')
     this.currentWebspaceId = webspaceId
     this.setPreferredWebspaceId(webspaceId)
+
+    // Initialise per-webspace IndexedDB persistence *after* webspace is known,
+    // so that local snapshots do not leak state (such as ui/application/desktop)
+    // across different webspaces.
+    try {
+      this.db = new IndexeddbPersistence(`adaos-mobile-${webspaceId}`, this.doc)
+      await this.db.whenSynced
+    } catch {
+      // offline persistence is best-effort
+    }
 
     // 2) Connect Yjs via y-websocket to /yws/<webspace_id>
     // WebsocketProvider builds URL as `${serverUrl}/${room}`.

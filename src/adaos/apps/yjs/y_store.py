@@ -204,6 +204,15 @@ def reset_ystore_for_webspace(webspace_id: str) -> None:
             store._updates.clear()  # type: ignore[attr-defined]
         except Exception:
             pass
+    # Also remove any persisted snapshot on disk so that the next YStore
+    # access starts from an empty document and can be re-seeded from the
+    # current scenario/SEED instead of an outdated snapshot.
+    try:
+        path = ystore_path_for_webspace(webspace_id)
+        if path.exists():
+            path.unlink()
+    except Exception:
+        _log.warning("failed to remove YStore snapshot for webspace=%s", webspace_id, exc_info=True)
 
 
 @subscribe("sys.ystore.backup")

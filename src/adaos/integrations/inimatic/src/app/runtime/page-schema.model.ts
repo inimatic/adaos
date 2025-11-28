@@ -3,8 +3,8 @@ export type WidgetType =
   | 'collection.grid'
   | 'visual.metricTile'
   | 'feedback.log'
-  | 'overlay.modal'
   | 'input.commandBar'
+  | 'input.selector'
   | 'desktop.widgets'
   | 'host.webspaceControls'
 

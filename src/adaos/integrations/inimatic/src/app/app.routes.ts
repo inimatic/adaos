@@ -1,13 +1,11 @@
 import { Routes } from '@angular/router'
 import { HubComponent } from './features/hub/hub.component'
+import { DesktopRendererComponent } from './renderer/desktop/desktop.component'
 
 export const routes: Routes = [
 	{
 		path: 'desktop2',
-		loadComponent: () =>
-			import('./renderer/desktop/dynamic-desktop-page.component').then(
-				(m) => m.DynamicDesktopPageComponent
-			),
+		component: DesktopRendererComponent,
 	},
 	{
 		path: 'private',

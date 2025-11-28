@@ -3,6 +3,7 @@ import { ToastController } from '@ionic/angular'
 import { ActionConfig } from './page-schema.model'
 import { PageStateService } from './page-state.service'
 import { AdaosClient } from '../core/adaos/adaos-client.service'
+import { YDocService } from '../y/ydoc.service'
 
 export interface ActionContext {
   event?: any
@@ -14,7 +15,8 @@ export class PageActionService {
   constructor(
     private state: PageStateService,
     private adaos: AdaosClient,
-    private toast: ToastController
+    private toast: ToastController,
+    private ydoc: YDocService
   ) {}
 
   async handle(action: ActionConfig, ctx: ActionContext = {}): Promise<void> {
@@ -30,6 +32,10 @@ export class PageActionService {
     }
     if (action.type === 'openOverlay') {
       await this.openOverlay(action, ctx)
+      return
+    }
+    if (action.type === 'callHost') {
+      await this.callHost(action, ctx)
       return
     }
   }
@@ -64,6 +70,60 @@ export class PageActionService {
     // For desktop pilot we model overlays through state flags and dedicated widgets.
     // This hook is kept for future extension where overlays are opened imperatively.
     return
+  }
+
+  private async callHost(
+    action: ActionConfig,
+    ctx: ActionContext
+  ): Promise<void> {
+    const target = action.target || ''
+    if (!target) return
+    const body = this.resolveParams(action.params ?? {}, ctx)
+    // Ensure webspace_id is always present so that hub
+    // can apply the command to the correct webspace even
+    // if the events websocket was registered from another
+    // workspace earlier in the session.
+    try {
+      const anyAdaos: any = this.adaos as any
+      const webspaceId =
+        typeof anyAdaos.getCurrentWebspaceId === 'function'
+          ? anyAdaos.getCurrentWebspaceId()
+          : undefined
+      if (webspaceId && !body.webspace_id && !body.workspace_id) {
+        body.webspace_id = webspaceId
+      }
+    } catch {
+      // best-effort only
+    }
+    try {
+      const ack = await this.adaos.sendEventsCommand(target, body)
+      // If we just triggered a webspace reload/reset for the current
+      // webspace, drop local IndexedDB snapshot so the next Yjs sync
+      // does not re-apply stale ui/application state.
+      if (
+        (target === 'desktop.webspace.reload' || target === 'desktop.webspace.reset') &&
+        (!body.webspace_id || body.webspace_id === this.ydoc.getWebspaceId())
+      ) {
+        try {
+          await this.ydoc.clearStorage()
+          // full page reload to re-init YDoc with fresh state
+          location.reload()
+        } catch {
+          // best-effort
+        }
+      }
+      return ack
+    } catch (err) {
+      try {
+        const t = await this.toast.create({
+          message: 'Host action failed',
+          duration: 1500,
+        })
+        await t.present()
+      } catch {
+        console.warn('callHost failed', err)
+      }
+    }
   }
 
   private resolveParams(input: any, ctx: ActionContext): any {

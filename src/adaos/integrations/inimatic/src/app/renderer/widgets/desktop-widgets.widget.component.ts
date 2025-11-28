@@ -1,27 +1,31 @@
 import { Component, Input, OnDestroy, OnInit } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { IonicModule } from '@ionic/angular'
-import { WidgetConfig } from '../../runtime/page-schema.model'
+import { WidgetConfig, WidgetType } from '../../runtime/page-schema.model'
 import { PageDataService } from '../../runtime/page-data.service'
-import { YDocService } from '../../y/ydoc.service'
-import { Observable, Subscription, of } from 'rxjs'
-import { switchMap } from 'rxjs/operators'
-import { WeatherWidgetComponent } from './weather-widget.component'
+import { Subscription } from 'rxjs'
+import { MetricTileWidgetComponent } from './metric-tile.widget.component'
 
 @Component({
   selector: 'ada-desktop-widgets',
   standalone: true,
-  imports: [CommonModule, IonicModule, WeatherWidgetComponent],
+  imports: [CommonModule, IonicModule, MetricTileWidgetComponent],
   template: `
     <div class="widgets-section">
       <h2 *ngIf="widget?.title">{{ widget.title }}</h2>
-      <ng-container *ngIf="weatherMeta; else emptyState">
-        <div class="widget-wrapper">
-          <ion-badge *ngIf="weatherMeta?.dev" color="warning" class="dev-badge">DEV</ion-badge>
-          <ada-weather-widget
-            [title]="weatherMeta!.title || weatherMeta!.id || ''"
-            [data]="weatherData$ | async"
-          ></ada-weather-widget>
+      <ng-container *ngIf="widgets.length; else emptyState">
+        <div class="widget-wrapper" *ngFor="let w of widgets">
+          <ion-badge *ngIf="w.inputs?.['dev']" color="warning" class="dev-badge">DEV</ion-badge>
+          <ng-container [ngSwitch]="w.type">
+            <ada-metric-tile-widget
+              *ngSwitchCase="'visual.metricTile'"
+              [widget]="w"
+            ></ada-metric-tile-widget>
+            <ada-metric-tile-widget
+              *ngSwitchDefault
+              [widget]="w"
+            ></ada-metric-tile-widget>
+          </ng-container>
         </div>
       </ng-container>
       <ng-template #emptyState>
@@ -60,53 +64,39 @@ import { WeatherWidgetComponent } from './weather-widget.component'
 export class DesktopWidgetsWidgetComponent implements OnInit, OnDestroy {
   @Input() widget!: WidgetConfig
 
-  widgets: Array<{ id: string; type: string; title?: string; source?: string; dev?: boolean }> = []
-  weatherMeta?: { id: string; type: string; title?: string; source?: string; dev?: boolean }
-  weatherData$?: Observable<any | undefined>
+  widgets: Array<WidgetConfig> = []
 
   private dataSub?: Subscription
 
-  constructor(private data: PageDataService, private ydoc: YDocService) {}
+  constructor(private data: PageDataService) {}
 
   ngOnInit(): void {
     const stream = this.data.load<any[]>(this.widget?.dataSource)
     if (stream) {
       this.dataSub = stream.subscribe((items) => {
-        this.widgets = Array.isArray(items) ? items : []
-        this.weatherMeta =
-          this.widgets.find((w) => w.id === 'weather' || w.type === 'weather') ||
-          undefined
-        if (this.weatherMeta) {
-          // Для web_desktop источник погоды фиксирован: data/weather/current.
-          // Если в YDoc временно нет снапшота, подстрахуемся прямым вызовом навыка.
-          this.weatherData$ = this.data
-            .load<any>({
-              kind: 'y',
-              path: 'data/weather/current',
-            } as any)
-            .pipe(
-              switchMap((value) => {
-                if (value && typeof value === 'object') {
-                  return of(value)
-                }
-                return this.data.load<any>({
-                  kind: 'skill',
-                  name: 'weather_skill.get_weather',
+        const raw = Array.isArray(items) ? items : []
+        this.widgets = raw.map((it) =>
+          ({
+            id: String(it.id),
+            type: String(it.type || 'visual.metricTile') as WidgetType,
+            area: this.widget.area,
+            title: it.title,
+            dataSource: it.source
+              ? ({
+                  kind: 'y',
+                  path: String(it.source).startsWith('y:')
+                    ? String(it.source).slice(2)
+                    : String(it.source),
                 } as any)
-              })
-            )
-        } else {
-          this.weatherData$ = undefined
-        }
+              : undefined,
+            inputs: { dev: !!it.dev },
+          } as WidgetConfig)
+        )
       })
     }
   }
 
   ngOnDestroy(): void {
     this.dataSub?.unsubscribe()
-  }
-
-  get weatherData(): any {
-    return this.weatherData$
   }
 }

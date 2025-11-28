@@ -7,11 +7,9 @@ import { AdaosClient } from '../../core/adaos/adaos-client.service'
 import { observeDeep } from '../../y/y-helpers'
 import { AdaApp } from '../../runtime/dsl-types'
 import { PageSchema, WidgetConfig } from '../../runtime/page-schema.model'
-import { PageWidgetHostComponent } from '../widgets/page-widget-host.component'
 import { DesktopSchemaService } from '../../runtime/desktop-schema.service'
 import { ModalHostComponent } from '../modals/modal.component'
-import '../../runtime/registry.weather'
-import '../../runtime/registry.catalogs'
+import { PageWidgetHostComponent } from '../widgets/page-widget-host.component'
 
 @Component({
 	selector: 'ada-desktop',
@@ -35,15 +33,15 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 
 	async ngOnInit() {
 		await this.y.initFromHub()
-		const appNode = this.y.getPath('ui/application')
+		const uiNode = this.y.getPath('ui')
 		const dataNode = this.y.getPath('data')
 		const recompute = () => {
-			this.app = this.y.toJSON(appNode)
+			this.app = this.y.toJSON(this.y.getPath('ui/application'))
 			this.readWebspaces()
 			this.pageSchema = this.desktopSchema.loadSchema()
 		}
 		recompute()
-		const un1 = observeDeep(appNode, recompute)
+		const un1 = observeDeep(uiNode, recompute)
 		const un2 = observeDeep(dataNode, recompute)
 		this.dispose = () => { un1?.(); un2?.() }
 	}

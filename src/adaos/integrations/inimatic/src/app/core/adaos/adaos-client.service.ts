@@ -226,6 +226,21 @@ export class AdaosClient {
 	say(text: string) {
 		return this.post('/api/say', { text })
 	}
+
+	/**
+	 * Expose current webspace id to higher-level services so that
+	 * callHost/actions can stamp events with an explicit webspace_id.
+	 */
+	getCurrentWebspaceId(): string | undefined {
+		try {
+			// YDocService persists preferred webspace under this key.
+			const key = 'adaos_webspace_id'
+			const value = localStorage.getItem(key)
+			return value || undefined
+		} catch {
+			return undefined
+		}
+	}
 	callSkill<T = any>(skill: string, method: string, body?: any) {
 		const tool = `${skill}:${method}`
 		return this.post<{ ok: boolean; result: T }>(`/api/tools/call`, {

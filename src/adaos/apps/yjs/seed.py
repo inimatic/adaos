@@ -11,27 +11,218 @@ SEED: dict = {
                 ],
                 "iconTemplate": {"icon": "apps-outline"},
                 "widgetTemplate": {"style": {"minWidth": 240}},
+                "pageSchema": {
+                    "id": "desktop",
+                    "title": "Desktop",
+                    "layout": {
+                        "type": "single",
+                        "areas": [{"id": "main", "role": "main"}],
+                    },
+                    "widgets": [
+                        {
+                            "id": "topbar",
+                            "type": "input.commandBar",
+                            "area": "main",
+                            "dataSource": {
+                                "kind": "y",
+                                "path": "ui/application/desktop/topbar",
+                            },
+                            "actions": [
+                                {
+                                    "on": "click",
+                                    "type": "openModal",
+                                    "params": {"modalId": "$event.action.openModal"},
+                                }
+                            ],
+                        },
+                        {
+                            "id": "workspace-tools",
+                            "type": "input.commandBar",
+                            "area": "main",
+                            "inputs": {
+                                "buttons": [
+                                    {"id": "apps", "label": "Apps"},
+                                    {"id": "widgets", "label": "Widgets"},
+                                    {"id": "workspace-manager", "label": "Workspaces"},
+                                    {"id": "yjs-reload", "label": "YJS reload"},
+                                    {"id": "yjs-reset", "label": "YJS reset"},
+                                ]
+                            },
+                            "actions": [
+                                {
+                                    "on": "click:apps",
+                                    "type": "openModal",
+                                    "params": {"modalId": "apps_catalog"},
+                                },
+                                {
+                                    "on": "click:widgets",
+                                    "type": "openModal",
+                                    "params": {"modalId": "widgets_catalog"},
+                                },
+                                {
+                                    "on": "click:workspace-manager",
+                                    "type": "openModal",
+                                    "params": {"modalId": "workspace_manager"},
+                                },
+                                {
+                                    "on": "click:yjs-reload",
+                                    "type": "callHost",
+                                    "target": "desktop.webspace.reload",
+                                },
+                                {
+                                    "on": "click:yjs-reset",
+                                    "type": "callHost",
+                                    "target": "desktop.webspace.reset",
+                                },
+                            ],
+                        },
+                        {
+                            "id": "desktop-icons",
+                            "type": "collection.grid",
+                            "area": "main",
+                            "title": "Icons",
+                            "inputs": {"columns": 6},
+                            "dataSource": {
+                                "kind": "y",
+                                "transform": "desktop.icons",
+                            },
+                            "actions": [
+                                {
+                                    "on": "select",
+                                    "type": "openModal",
+                                    "params": {"modalId": "$event.action.openModal"},
+                                }
+                            ],
+                        },
+                        {
+                            "id": "desktop-widgets",
+                            "type": "desktop.widgets",
+                            "area": "main",
+                            "title": "Widgets",
+                            "dataSource": {
+                                "kind": "y",
+                                "transform": "desktop.widgets",
+                            },
+                        },
+                    ],
+                },
             },
             "modals": {
                 "apps_catalog": {
                     "title": "Available Apps",
-                    "type": "catalog-apps",
-                    "source": "y:data/catalog/apps",
+                    "schema": {
+                        "id": "apps_catalog",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [
+                            {
+                                "id": "apps-list",
+                                "type": "collection.grid",
+                                "area": "main",
+                                "title": "Apps",
+                                "dataSource": {
+                                    "kind": "y",
+                                    "path": "data/catalog/apps",
+                                },
+                                "actions": [
+                                    {
+                                        "on": "select",
+                                        "type": "callHost",
+                                        "target": "desktop.toggleInstall",
+                                        "params": {
+                                            "type": "app",
+                                            "id": "$event.id",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    },
                 },
                 "widgets_catalog": {
                     "title": "Available Widgets",
-                    "type": "catalog-widgets",
-                    "source": "y:data/catalog/widgets",
+                    "schema": {
+                        "id": "widgets_catalog",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [
+                            {
+                                "id": "widgets-list",
+                                "type": "collection.grid",
+                                "area": "main",
+                                "title": "Widgets",
+                                "dataSource": {
+                                    "kind": "y",
+                                    "path": "data/catalog/widgets",
+                                },
+                                "actions": [
+                                    {
+                                        "on": "select",
+                                        "type": "callHost",
+                                        "target": "desktop.toggleInstall",
+                                        "params": {
+                                            "type": "widget",
+                                            "id": "$event.id",
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    },
                 },
                 "weather_modal": {
                     "title": "Погода",
-                    "type": "weather",
-                    "source": "y:data/weather/current",
+                    "schema": {
+                        "id": "weather_modal",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [
+                            {
+                                "id": "weather-summary",
+                                "type": "visual.metricTile",
+                                "area": "main",
+                                "title": "Погода",
+                                "dataSource": {
+                                    "kind": "y",
+                                    "path": "data/weather/current",
+                                },
+                            },
+                            {
+                                "id": "weather-city-selector",
+                                "type": "input.selector",
+                                "area": "main",
+                                "title": "Город",
+                                "inputs": {
+                                    "options": ["Berlin", "Moscow", "New York"]
+                                },
+                                "dataSource": {
+                                    "kind": "y",
+                                    "path": "data/weather/current",
+                                },
+                                "actions": [
+                                    {
+                                        "on": "change",
+                                        "type": "callHost",
+                                        "target": "weather.city_changed",
+                                        "params": {
+                                            "city": "$event.value"
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
                 },
             },
             "registry": {
-                "widgets": ["weather"],
-                "modals": ["weather", "catalog-apps", "catalog-widgets"],
+                "widgets": [],
+                "modals": [],
             },
         }
     },
@@ -49,7 +240,7 @@ SEED: dict = {
                 {
                     "id": "weather",
                     "title": "Погода",
-                    "type": "weather",
+                    "type": "visual.metricTile",
                     "source": "y:data/weather/current",
                 }
             ],
