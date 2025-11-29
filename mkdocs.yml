@@ -130,6 +130,7 @@ nav:
       - "Кодовая база": concepts/codeflow.md
       - "Веб клиент": concepts/web-client.md
       - "Интерфейс пользователя": concepts/ui.md
+      - "Профиль пользователя": concepts/personalization.md
       - "Этапы LLM DevOps": concepts/dev_stages.md
       - "Этапы LLM DevOps - подготовка": concepts/dev_stage_prepare.md
       - "Разработка сценариев": concepts/dev-scenarios.md
