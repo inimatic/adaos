@@ -72,7 +72,8 @@ SEED: dict = {
                                 {
                                     "on": "click:yjs-reset",
                                     "type": "callHost",
-                                    "target": "desktop.webspace.reset"},
+                                    "target": "desktop.webspace.reset",
+                                },
                             ],
                         },
                         {
@@ -100,7 +101,8 @@ SEED: dict = {
                             "title": "Widgets",
                             "dataSource": {
                                 "kind": "y",
-                                "transform": "desktop.widgets"},
+                                "transform": "desktop.widgets",
+                            },
                         },
                     ],
                 },
@@ -172,6 +174,51 @@ SEED: dict = {
                         ],
                     },
                 },
+                "weather_modal": {
+                    "title": "Погода",
+                    "schema": {
+                        "id": "weather_modal",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main", "role": "main"}],
+                        },
+                        "widgets": [
+                            {
+                                "id": "weather-summary",
+                                "type": "visual.metricTile",
+                                "area": "main",
+                                "title": "Погода",
+                                "dataSource": {
+                                    "kind": "y",
+                                    "path": "data/weather/current",
+                                },
+                            },
+                            {
+                                "id": "weather-city-selector",
+                                "type": "input.selector",
+                                "area": "main",
+                                "title": "Город",
+                                "inputs": {
+                                    "options": ["Berlin", "Moscow", "New York"]
+                                },
+                                "dataSource": {
+                                    "kind": "y",
+                                    "path": "data/weather/current",
+                                },
+                                "actions": [
+                                    {
+                                        "on": "change",
+                                        "type": "callHost",
+                                        "target": "weather.city_changed",
+                                        "params": {
+                                            "city": "$event.value"
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                },
             },
             "registry": {
                 "widgets": [],
@@ -181,9 +228,32 @@ SEED: dict = {
     },
     "data": {
         "catalog": {
-            "apps": [],
-            "widgets": [],
+            "apps": [
+                {
+                    "id": "weather_app",
+                    "title": "Погода",
+                    "icon": "cloud-outline",
+                    "launchModal": "weather_modal",
+                }
+            ],
+            "widgets": [
+                {
+                    "id": "weather",
+                    "title": "Погода",
+                    "type": "visual.metricTile",
+                    "source": "y:data/weather/current",
+                }
+            ],
         },
-        "installed": {"apps": [], "widgets": []},
+        "installed": {"apps": ["weather_app"], "widgets": ["weather"]},
+        "weather": {
+            "current": {
+                "city": "Berlin",
+                "temp_c": 7.5,
+                "condition": "light rain",
+                "wind_ms": 3.1,
+                "updated_at": "2025-11-11T16:00:00Z",
+            }
+        },
     },
 }

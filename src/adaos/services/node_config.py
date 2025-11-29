@@ -73,7 +73,9 @@ class DevSettings:
 
 @dataclass
 class NodeConfig:
+    # TODO refactor to node.id
     node_id: str
+    # TODO refactor to subnet.id
     subnet_id: str
     role: str
     hub_url: str | None = None
