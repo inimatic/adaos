@@ -161,9 +161,16 @@ This method becomes a **generic projection entry point** used by Webspace Scenar
 `ScenarioControlService` provides control operations:
 
 - enable/disable scenario:
-  - `scenarios/<id>/enabled` in kv,
+  - `scenarios/<id>/enabled` in kv  
+    (missing key is treated as "enabled" so new scenarios are usable by default),
 - set scenario bindings:
   - `scenarios/<id>/bindings/<key>` → value in kv.
+
+In addition to simple writes, the service exposes helpers to:
+
+- check if a scenario is enabled (with sensible defaults),
+- read a single binding,
+- list all bindings for a scenario (for inspection and tooling).
 
 In target state bindings are used to:
 
@@ -238,6 +245,19 @@ All logic that is currently implemented inside `web_desktop_skill` around:
 - `scenarios.synced`, `skills.activated`, `skills.rolledback`,
 
 moves into this core runtime.
+
+In the current codebase an initial skeleton is provided by
+`WebspaceScenarioRuntime` and `WebUIRegistryEntry`
+(`src/adaos/services/scenario/webspace_runtime.py`). At this stage it
+focuses on computing scenario-only registry snapshots from:
+
+- `ui.current_scenario`,
+- `data.scenarios[scenario_id].catalog`,
+- `registry.scenarios[scenario_id]`,
+- `data.installed`.
+
+Skill contributions are still merged by `web_desktop_skill`; future
+iterations will move that responsibility into `WebspaceScenarioRuntime`.
 
 ---
 
