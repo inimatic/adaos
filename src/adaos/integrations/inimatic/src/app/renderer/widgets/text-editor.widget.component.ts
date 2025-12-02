@@ -4,24 +4,28 @@ import { IonicModule } from '@ionic/angular'
 import { Observable } from 'rxjs'
 import { WidgetConfig } from '../../runtime/page-schema.model'
 import { PageDataService } from '../../runtime/page-data.service'
+import { PageActionService } from '../../runtime/page-action.service'
+import { FormsModule } from '@angular/forms'
 
 @Component({
   selector: 'ada-text-editor-widget',
   standalone: true,
-  imports: [CommonModule, IonicModule],
+  imports: [CommonModule, IonicModule, FormsModule],
   template: `
     <ion-card>
       <ion-card-header *ngIf="widget?.title">
         <ion-card-title>{{ widget.title }}</ion-card-title>
       </ion-card-header>
       <ion-card-content>
-        <ng-container *ngIf="content$ | async as value">
-          <ion-textarea
-            [autoGrow]="true"
-            [value]="value"
-            readonly="true"
-          ></ion-textarea>
-        </ng-container>
+        <ion-textarea
+          [autoGrow]="true"
+          [(ngModel)]="current"
+        ></ion-textarea>
+        <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+          <ion-button size="small" (click)="onSave()" [disabled]="!isDirty()">
+            Save
+          </ion-button>
+        </div>
       </ion-card-content>
     </ion-card>
   `,
@@ -29,9 +33,13 @@ import { PageDataService } from '../../runtime/page-data.service'
 export class TextEditorWidgetComponent implements OnInit, OnChanges {
   @Input() widget!: WidgetConfig
 
-  content$?: Observable<string | undefined>
+  current = ''
+  private baseline = ''
 
-  constructor(private data: PageDataService) {}
+  constructor(
+    private data: PageDataService,
+    private actions: PageActionService
+  ) {}
 
   ngOnInit(): void {
     this.updateStream()
@@ -44,32 +52,43 @@ export class TextEditorWidgetComponent implements OnInit, OnChanges {
   private updateStream(): void {
     const ds = this.widget?.dataSource
     if (!ds) {
-      this.content$ = undefined
       return
     }
     const bindField: string =
       (this.widget.inputs && this.widget.inputs['bindField']) || 'content'
-    this.content$ = this.data.load<any>(ds).pipe(
-      // map inline to avoid importing operators; small helper
-      // eslint-disable-next-line rxjs/finnish
-      (source) =>
-        new Observable<string | undefined>((subscriber) => {
-          const sub = source.subscribe({
-            next: (value) => {
-              try {
-                const next =
-                  value && typeof value === 'object' ? (value as any)[bindField] : undefined
-                subscriber.next(typeof next === 'string' ? next : undefined)
-              } catch {
-                subscriber.next(undefined)
-              }
-            },
-            error: (err) => subscriber.error(err),
-            complete: () => subscriber.complete(),
-          })
-          return () => sub.unsubscribe()
-        }),
-    )
+    // Subscribe once to initialise baseline + current value.
+    this.data.load<any>(ds).subscribe({
+      next: (value) => {
+        try {
+          const next =
+            value && typeof value === 'object' ? (value as any)[bindField] : undefined
+          const text = typeof next === 'string' ? next : ''
+          this.baseline = text
+          this.current = text
+        } catch {
+          this.baseline = ''
+          this.current = ''
+        }
+      },
+      error: () => {
+        this.baseline = ''
+        this.current = ''
+      },
+    })
+  }
+
+  isDirty(): boolean {
+    return (this.current || '') !== (this.baseline || '')
+  }
+
+  async onSave(): Promise<void> {
+    const cfg = this.widget
+    if (!cfg?.actions || !cfg.actions.length) return
+    const event = { content: this.current }
+    for (const act of cfg.actions) {
+      if (act.on === 'save') {
+        await this.actions.handle(act, { event, widget: cfg })
+      }
+    }
   }
 }
-

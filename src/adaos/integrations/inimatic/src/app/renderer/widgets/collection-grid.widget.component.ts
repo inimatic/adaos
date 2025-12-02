@@ -4,6 +4,7 @@ import { IonicModule } from '@ionic/angular'
 import { Observable, Subscription } from 'rxjs'
 import { PageDataService } from '../../runtime/page-data.service'
 import { PageActionService } from '../../runtime/page-action.service'
+import { PageStateService } from '../../runtime/page-state.service'
 import { WidgetConfig, ActionConfig } from '../../runtime/page-schema.model'
 import { PageModalService } from '../../runtime/page-modal.service'
 
@@ -94,21 +95,30 @@ export class CollectionGridWidgetComponent implements OnInit, OnChanges {
   @Output() itemClick = new EventEmitter<any>()
 
   items$?: Observable<any[] | undefined>
+  private stateSub?: Subscription
 
   constructor(
     private data: PageDataService,
     private actions: PageActionService,
-    private modals: PageModalService
+    private modals: PageModalService,
+    private state: PageStateService
   ) {}
 
   ngOnInit(): void {
     this.updateItemsStream()
+    this.stateSub = this.state.selectAll().subscribe(() => {
+      this.updateItemsStream()
+    })
   }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['widget']) {
       this.updateItemsStream()
     }
+  }
+
+  ngOnDestroy(): void {
+    this.stateSub?.unsubscribe()
   }
 
   get columnSize(): string {
