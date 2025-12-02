@@ -37,7 +37,34 @@ export class DetailsWidgetComponent implements OnInit, OnChanges {
 
   private updateStream(): void {
     const ds = this.widget?.dataSource
-    this.data$ = ds ? this.data.load<any>(ds) : undefined
+    const bindField: string =
+      (this.widget.inputs && this.widget.inputs['bindField']) || ''
+    if (!ds) {
+      this.data$ = undefined
+      return
+    }
+    if (!bindField) {
+      this.data$ = this.data.load<any>(ds)
+      return
+    }
+    this.data$ = this.data.load<any>(ds).pipe(
+      (source) =>
+        new Observable<any>((subscriber) => {
+          const sub = source.subscribe({
+            next: (value) => {
+              try {
+                const next =
+                  value && typeof value === 'object' ? (value as any)[bindField] : undefined
+                subscriber.next(next)
+              } catch {
+                subscriber.next(undefined)
+              }
+            },
+            error: (err) => subscriber.error(err),
+            complete: () => subscriber.complete(),
+          })
+          return () => sub.unsubscribe()
+        }),
+    )
   }
 }
-

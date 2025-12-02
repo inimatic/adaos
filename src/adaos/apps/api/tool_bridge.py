@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from pydantic import BaseModel, Field
 from typing import Any, Dict
-import requests
+import requests, os
 
 from adaos.apps.api.auth import require_token
 from adaos.services.observe import attach_http_trace_headers
@@ -12,6 +12,7 @@ from adaos.services.skill.manager import SkillManager
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.agent_context import get_ctx
+from adaos.skills.runtime_runner import execute_tool
 
 
 router = APIRouter()
@@ -78,6 +79,34 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         # Сначала активные, затем по last_seen убыв.
         candidates.sort(key=lambda n: (not bool(n.get("active"))), reverse=False)
         if not candidates:
+            # DEBUG fallback: выполнять workspace-only skill напрямую на hub,
+            # когда в подсети нет online-узла. Это удобно для локальной Prompt IDE.
+            try:
+                if (os.getenv("ADAOS_LOG_LEVEL") or "").upper() == "DEBUG":
+                    skills_root = getattr(ctx.paths, "skills_dir", None) or getattr(ctx.paths, "skills_workspace_dir", None)
+                    if callable(skills_root):
+                        skills_root = skills_root()
+                    if skills_root:
+                        from pathlib import Path
+
+                        skill_dir = Path(skills_root) / skill_name
+                        if skill_dir.exists():
+                            try:
+                                result = execute_tool(
+                                    skill_dir,
+                                    module=None,
+                                    attr=public_tool,
+                                    payload=payload,
+                                    extra_paths=[],
+                                )
+                            except Exception as exc2:
+                                raise HTTPException(status_code=500, detail=f"workspace tool failed: {exc2}") from exc2
+                            return {"ok": True, "result": result}
+            except HTTPException:
+                raise
+            except Exception:
+                # если fallback не сработал — возвращаем обычный 503
+                pass
             raise HTTPException(status_code=503, detail=f"skill '{skill_name}' is not available online in the subnet")
         target = candidates[0]
         base_url = target.get("base_url") or directory.get_node_base_url(target.get("node_id", ""))

@@ -100,9 +100,11 @@ export class AppComponent implements OnInit, OnDestroy {
 
 	async onClickHome(): Promise<void> {
 		try {
+			const ws = this.ydoc.getWebspaceId()
 			// Switch current scenario back to web_desktop for the active webspace.
 			await this.adaos.sendEventsCommand('desktop.scenario.set', {
 				scenario_id: 'web_desktop',
+				webspace_id: ws || undefined,
 			})
 		} catch (err) {
 			// best-effort only; errors can be inspected in console
