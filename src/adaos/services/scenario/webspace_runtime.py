@@ -20,6 +20,7 @@ from adaos.apps.workspaces import index as workspace_index
 from adaos.apps.yjs.y_store import get_ystore_for_webspace
 from adaos.apps.yjs.y_bootstrap import ensure_webspace_seeded_from_scenario
 from adaos.sdk.core.decorators import subscribe
+from .workflow_runtime import ScenarioWorkflowRuntime
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
 _WS_ID_RE = re.compile(r"[^a-z0-9-_]+")
@@ -868,5 +869,17 @@ async def _on_desktop_scenario_set(evt: Dict[str, Any]) -> None:
     ctx = get_ctx()
     runtime = WebspaceScenarioRuntime(ctx)
     await runtime.rebuild_webspace_async(webspace_id)
+
+    # Initialise workflow state/next_actions for the selected scenario.
+    try:
+        wf = ScenarioWorkflowRuntime(ctx)
+        await wf.sync_workflow_for_webspace(scenario_id, webspace_id)
+    except Exception:
+        _log.warning(
+            "failed to sync workflow for webspace=%s scenario=%s",
+            webspace_id,
+            scenario_id,
+            exc_info=True,
+        )
 
 __all__ = ["WebUIRegistryEntry", "WebspaceScenarioRuntime"]
