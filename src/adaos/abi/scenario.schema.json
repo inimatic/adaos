@@ -41,6 +41,19 @@
 			"additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
 		},
 
+		"workflow": {
+			"description": "Опциональная high-level модель workflow для многоуровневого IO (web, chat, voice).",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"initial_state": { "type": "string" },
+				"states": {
+					"type": "object",
+					"additionalProperties": { "$ref": "#/$defs/workflowState" }
+				}
+			}
+		},
+
 		"steps": {
 			"type": "array",
 			"minItems": 1,
@@ -104,6 +117,67 @@
 			"type": "object",
 			"minProperties": 1,
 			"additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
+		},
+
+		"workflowAction": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"id": {
+					"description": "Стабильный идентификатор действия (общий для web/voice/telegram).",
+					"type": "string",
+					"minLength": 1
+				},
+				"label": { "type": "string" },
+				"trigger": {
+					"description": "Предпочитаемый тип триггера: button | voice | nlu | timer | skill.",
+					"type": "string"
+				},
+				"tool": {
+					"description": "Полное имя инструмента навыка (например, prompt_engineer_skill.tz_execute).",
+					"type": "string"
+				},
+				"params": {
+					"type": "object",
+					"additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
+				},
+				"next_state": {
+					"description": "Имя следующего состояния workflow после успешного выполнения.",
+					"type": "string"
+				},
+				"emit_event": {
+					"description": "Опциональное событие на шине, излучаемое после успешного выполнения.",
+					"type": "string"
+				}
+			},
+			"required": ["id"]
+		},
+
+		"workflowState": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"label": { "type": "string" },
+				"context": {
+					"description": "Подсказки по редактируемым/только чтение полям.",
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"edit": {
+							"type": "array",
+							"items": { "type": "string" }
+						},
+						"readonly": {
+							"type": "array",
+							"items": { "type": "string" }
+						}
+					}
+				},
+				"actions": {
+					"type": "array",
+					"items": { "$ref": "#/$defs/workflowAction" }
+				}
+			}
 		},
 
 		"step": {

@@ -143,6 +143,15 @@ export class PageDataService {
       return [unsubscribe]
     }
 
+    // Prompt IDE workflow: observe whole data tree, because the server
+    // stores workflow state as plain JSON under data.prompt.workflow.
+    if (cfg.path && cfg.path.startsWith('data/prompt/workflow')) {
+      const node = this.ydoc.getPath('data')
+      if (!node) return [() => {}]
+      const unsubscribe = observeDeep(node, emit)
+      return [unsubscribe]
+    }
+
     const paths = this.pathsForYDoc(cfg)
     if (!paths.length) return [() => {}]
     return paths.map((path) => {
