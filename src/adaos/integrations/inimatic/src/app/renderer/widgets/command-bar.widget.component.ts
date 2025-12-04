@@ -6,6 +6,7 @@ import { WidgetConfig, ActionConfig } from '../../runtime/page-schema.model'
 import { PageDataService } from '../../runtime/page-data.service'
 import { Subscription } from 'rxjs'
 import { PageModalService } from '../../runtime/page-modal.service'
+import { PageStateService } from '../../runtime/page-state.service'
 
 @Component({
   selector: 'ada-command-bar-widget',
@@ -37,21 +38,28 @@ export class CommandBarWidgetComponent implements OnInit, OnDestroy, OnChanges {
 
   buttons: Array<{ id: string; label: string; [k: string]: any }> = []
   private dataSub?: Subscription
+  private stateSub?: Subscription
+  private rawButtons: Array<{ id: string; label: string; [k: string]: any }> = []
   segmentClass = ''
 
   constructor(
     private data: PageDataService,
     private actions: PageActionService,
     private modals: PageModalService,
+    private state: PageStateService,
   ) {}
 
   ngOnInit(): void {
     this.segmentClass = this.resolveSegmentClass()
     this.loadButtons()
+    this.stateSub = this.state.selectAll().subscribe(() => {
+      this.recomputeLabelsFromState()
+    })
   }
 
   ngOnDestroy(): void {
     this.dataSub?.unsubscribe()
+    this.stateSub?.unsubscribe()
   }
 
   ngOnChanges(_changes: SimpleChanges): void {
@@ -65,19 +73,39 @@ export class CommandBarWidgetComponent implements OnInit, OnDestroy, OnChanges {
       const stream = this.data.load<any[]>(this.widget.dataSource)
       if (stream) {
         this.dataSub = stream.subscribe((items) => {
-          this.buttons = Array.isArray(items)
+          this.rawButtons = Array.isArray(items)
             ? items.map((item, idx) => ({
                 id: item.id || `btn-${idx}`,
                 label: item.label || item.title || item.id || `Button ${idx + 1}`,
                 ...item,
               }))
             : []
+          this.recomputeLabelsFromState()
         })
       }
     } else {
       const raw = this.widget?.inputs?.['buttons']
-      this.buttons = Array.isArray(raw) ? raw : []
+      this.rawButtons = Array.isArray(raw) ? raw : []
+      this.recomputeLabelsFromState()
     }
+  }
+
+  private recomputeLabelsFromState(): void {
+    const snapshot = this.state.getSnapshot()
+    this.buttons = this.rawButtons.map((btn, idx) => {
+      const anyBtn: any = btn
+      let label = btn.label || anyBtn['title'] || btn.id || `Button ${idx + 1}`
+      if (typeof label === 'string' && label.startsWith('$state.')) {
+        const key = label.slice('$state.'.length)
+        const value = (snapshot as any)[key]
+        if (value != null && value !== '') {
+          label = String(value)
+        } else {
+          label = ''
+        }
+      }
+      return { ...btn, label }
+    })
   }
 
   async onClick(btn: { id: string }): Promise<void> {

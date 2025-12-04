@@ -12,6 +12,7 @@ import { MetricTileWidgetComponent } from '../widgets/metric-tile.widget.compone
 import { SelectorWidgetComponent } from '../widgets/selector.widget.component'
 import { TextInputWidgetComponent } from '../widgets/text-input.widget.component'
 import { CommandBarWidgetComponent } from '../widgets/command-bar.widget.component'
+import { TextEditorWidgetComponent } from '../widgets/text-editor.widget.component'
 
 @Component({
   selector: 'ada-schema-collection-grid',
@@ -27,19 +28,47 @@ import { CommandBarWidgetComponent } from '../widgets/command-bar.widget.compone
             size="12"
             class="collection-grid-item"
           >
-            <ion-item lines="none">
-              <ion-toggle
-                slot="start"
-                [checked]="isInstalled(item)"
-                (ionChange)="onToggleChange($event, item)"
-              ></ion-toggle>
-              <div class="icon-wrapper" *ngIf="item.icon">
-                <ion-icon [name]="item.icon"></ion-icon>
+            <!-- Project cards only for dev project selector -->
+            <button
+              *ngIf="isProjectSelector; else standardItem"
+              class="project-card"
+              (click)="onItemClick(item)"
+            >
+              <div class="project-header">
+                <div class="project-name">
+                  {{ item.name || item.object_id || item.id }}
+                </div>
+                <div class="project-type">
+                  {{ item.object_type || item.type }}
+                  <span *ngIf="item.version">· v{{ item.version }}</span>
+                </div>
               </div>
-              <ion-label>
-                <div class="label">{{ item.title || item.id }}</div>
-              </ion-label>
-            </ion-item>
+              <div class="project-title" *ngIf="item.title">
+                {{ item.title }}
+              </div>
+              <div class="project-description" *ngIf="item.description">
+                {{ item.description }}
+              </div>
+              <div class="project-updated" *ngIf="item.updated_at">
+                Updated: {{ item.updated_at }}
+              </div>
+            </button>
+            <!-- Default layout for apps/widgets catalogs -->
+            <ng-template #standardItem>
+              <ion-item lines="none">
+                <ion-toggle
+                  slot="start"
+                  [checked]="isInstalled(item)"
+                  (ionChange)="onToggleChange($event, item)"
+                ></ion-toggle>
+                <div class="icon-wrapper" *ngIf="item.icon">
+                  <ion-icon [name]="item.icon"></ion-icon>
+                </div>
+                <ion-label>
+                  <div class="label">{{ item.title || item.id }}</div>
+                </ion-label>
+              </ion-item>
+            </ng-template>
           </ion-col>
         </ion-row>
       </ion-grid>
@@ -59,6 +88,7 @@ import { CommandBarWidgetComponent } from '../widgets/command-bar.widget.compone
       .collection-grid-item {
         padding: 4px 0;
       }
+      /* Default apps/widgets layout */
       .icon-wrapper {
         font-size: 24px;
       }
@@ -68,6 +98,47 @@ import { CommandBarWidgetComponent } from '../widgets/command-bar.widget.compone
       }
       .label {
         font-size: 14px;
+      }
+      .project-card {
+        width: 100%;
+        text-align: left;
+        border: none;
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.02);
+        color: inherit;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .project-card:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .project-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .project-name {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .project-type {
+        font-size: 12px;
+        opacity: 0.8;
+      }
+      .project-title {
+        font-size: 13px;
+        opacity: 0.9;
+      }
+      .project-description {
+        font-size: 12px;
+        opacity: 0.8;
+      }
+      .project-updated {
+        font-size: 11px;
+        opacity: 0.7;
       }
     `,
   ],
@@ -131,6 +202,10 @@ export class SchemaCollectionGridComponent implements OnInit, OnDestroy {
     return undefined
   }
 
+  get isProjectSelector(): boolean {
+    return this.widget?.id === 'project-select-list'
+  }
+
   private observeInstalled(): void {
     this.installedUnsub?.()
     if (!this.kind) return
@@ -172,6 +247,7 @@ export class SchemaCollectionGridComponent implements OnInit, OnDestroy {
     SelectorWidgetComponent,
     TextInputWidgetComponent,
     CommandBarWidgetComponent,
+    TextEditorWidgetComponent,
   ],
   template: `
     <ion-header *ngIf="title">
@@ -211,6 +287,11 @@ export class SchemaCollectionGridComponent implements OnInit, OnDestroy {
               *ngIf="widget.type === 'input.commandBar'"
               [widget]="widget"
             ></ada-command-bar-widget>
+            <!-- text editor widgets (e.g. addendum body) -->
+            <ada-text-editor-widget
+              *ngIf="widget.type === 'item.textEditor'"
+              [widget]="widget"
+            ></ada-text-editor-widget>
           </ng-container>
         </ng-container>
       </div>

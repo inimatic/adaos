@@ -1,11 +1,12 @@
-import { Component, Input, OnChanges, OnInit, SimpleChanges } from '@angular/core'
+import { Component, Input, OnChanges, OnDestroy, OnInit, SimpleChanges } from '@angular/core'
 import { CommonModule } from '@angular/common'
 import { IonicModule } from '@ionic/angular'
-import { Observable } from 'rxjs'
+import { Observable, Subscription } from 'rxjs'
 import { WidgetConfig } from '../../runtime/page-schema.model'
 import { PageDataService } from '../../runtime/page-data.service'
 import { PageActionService } from '../../runtime/page-action.service'
 import { FormsModule } from '@angular/forms'
+import { PageStateService } from '../../runtime/page-state.service'
 
 @Component({
   selector: 'ada-text-editor-widget',
@@ -30,23 +31,36 @@ import { FormsModule } from '@angular/forms'
     </ion-card>
   `,
 })
-export class TextEditorWidgetComponent implements OnInit, OnChanges {
+export class TextEditorWidgetComponent implements OnInit, OnChanges, OnDestroy {
   @Input() widget!: WidgetConfig
 
   current = ''
   private baseline = ''
+  private stateSub?: Subscription
+  private stateDeps: string[] = []
+  private lastState: Record<string, any> = {}
 
   constructor(
     private data: PageDataService,
-    private actions: PageActionService
+    private actions: PageActionService,
+    private state: PageStateService
   ) {}
 
   ngOnInit(): void {
+    this.recomputeStateDeps()
     this.updateStream()
+    this.stateSub = this.state.selectAll().subscribe(() => {
+      this.onStateChanged()
+    })
   }
 
   ngOnChanges(_changes: SimpleChanges): void {
+    this.recomputeStateDeps()
     this.updateStream()
+  }
+
+  ngOnDestroy(): void {
+    this.stateSub?.unsubscribe()
   }
 
   private updateStream(): void {
@@ -77,6 +91,34 @@ export class TextEditorWidgetComponent implements OnInit, OnChanges {
     })
   }
 
+  private recomputeStateDeps(): void {
+    this.stateDeps = []
+    const params = this.widget?.dataSource && (this.widget.dataSource as any).params
+    if (!params || typeof params !== 'object') return
+    for (const value of Object.values(params)) {
+      if (typeof value === 'string' && value.startsWith('$state.')) {
+        const key = value.slice('$state.'.length)
+        if (key && !this.stateDeps.includes(key)) {
+          this.stateDeps.push(key)
+        }
+      }
+    }
+    this.lastState = this.state.getSnapshot()
+  }
+
+  private onStateChanged(): void {
+    if (!this.stateDeps.length) return
+    const next = this.state.getSnapshot()
+    const prev = this.lastState
+    this.lastState = next
+    for (const key of this.stateDeps) {
+      if (prev[key] !== next[key]) {
+        this.updateStream()
+        break
+      }
+    }
+  }
+
   isDirty(): boolean {
     return (this.current || '') !== (this.baseline || '')
   }
@@ -84,7 +126,10 @@ export class TextEditorWidgetComponent implements OnInit, OnChanges {
   async onSave(): Promise<void> {
     const cfg = this.widget
     if (!cfg?.actions || !cfg.actions.length) return
-    const event = { content: this.current }
+    const event = {
+      content: this.current,
+      ts: Date.now(),
+    }
     for (const act of cfg.actions) {
       if (act.on === 'save') {
         await this.actions.handle(act, { event, widget: cfg })

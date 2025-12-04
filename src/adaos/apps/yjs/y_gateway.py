@@ -437,6 +437,20 @@ async def events_ws(websocket: WebSocket):
                 )
                 continue
 
+            if kind == "scenario.workflow.set_state":
+                _publish_bus("scenario.workflow.set_state", payload)
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "ch": "events",
+                            "t": "ack",
+                            "id": cmd_id,
+                            "ok": True,
+                        }
+                    )
+                )
+                continue
+
             # Default ack for other commands (no-op for now)
             await websocket.send_text(
                 json.dumps(
