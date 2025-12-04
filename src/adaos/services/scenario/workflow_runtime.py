@@ -158,6 +158,40 @@ class ScenarioWorkflowRuntime:
         return value
     return None
 
+  async def set_state(self, scenario_id: str, webspace_id: str, state_id: str) -> None:
+    """
+    Force workflow into a specific state without executing any action.
+
+    Used when switching projects in Prompt IDE so that the global
+    workflow projection matches per-project saved state.
+    """
+    state_id = (state_id or "").strip()
+    if not state_id:
+      return
+    content = scenarios_loader.read_content(scenario_id)
+    wf = (content.get("workflow") or {}) if isinstance(content, dict) else {}
+    states = wf.get("states") or {}
+    if not isinstance(states, dict) or not states:
+      return
+    if state_id not in states:
+      # Fallback: ignore unknown state ids.
+      return
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+      data_map = ydoc.get_map("data")
+      with ydoc.begin_transaction() as txn:
+        prompt_section = data_map.get("prompt")
+        if not isinstance(prompt_section, dict):
+          prompt_section = {}
+        wf_obj = dict(prompt_section.get("workflow") or {})
+        wf_obj["state"] = state_id
+        wf_obj["next_actions"] = json.loads(
+          json.dumps(self._actions_for_state(states, state_id))
+        )
+        prompt_section["workflow"] = wf_obj
+        payload = json.loads(json.dumps(prompt_section))
+        data_map.set(txn, "prompt", payload)
+
   def _resolve_next_state(self, states: Dict[str, Any], current_state: str, action_id: str) -> Optional[str]:
     state = states.get(current_state) or {}
     if not isinstance(state, dict):
@@ -203,6 +237,38 @@ async def _on_workflow_action(evt: Dict[str, Any]) -> None:
       scenario_id,
       webspace_id,
       action_id,
+      exc,
+      exc_info=True,
+    )
+
+
+@subscribe("scenario.workflow.set_state")
+async def _on_workflow_set_state(evt: Dict[str, Any]) -> None:
+  """
+  Force workflow state (without executing tools).
+
+  Payload:
+    - scenario_id: scenario identifier (required)
+    - state: workflow state id (required)
+    - webspace_id / workspace_id: optional, defaults to default webspace.
+  """
+  payload = _payload(evt)
+  scenario_id = str(payload.get("scenario_id") or "").strip()
+  state_id = str(payload.get("state") or "").strip()
+  if not scenario_id or not state_id:
+    return
+  webspace_id = _resolve_webspace_id(payload)
+  ctx = get_ctx()
+  runtime = ScenarioWorkflowRuntime(ctx)
+  _log.info("workflow.set_state scenario=%s webspace=%s state=%s", scenario_id, webspace_id, state_id)
+  try:
+    await runtime.set_state(scenario_id, webspace_id, state_id)
+  except Exception as exc:  # pragma: no cover - defensive
+    _log.warning(
+      "workflow.set_state failed scenario=%s webspace=%s state=%s error=%s",
+      scenario_id,
+      webspace_id,
+      state_id,
       exc,
       exc_info=True,
     )
