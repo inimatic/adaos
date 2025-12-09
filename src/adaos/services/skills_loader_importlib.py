@@ -92,14 +92,23 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
     # ------------------------------------------------------------------
     def _sync_runtime_from_workspace_if_debug(self, runtime_root: Path) -> None:
         """
-        In DEBUG mode keep runtime slots in sync with workspace sources
-        for owner skills by calling SkillManager.runtime_update(...).
+        In DEBUG-like modes keep runtime slots in sync with workspace
+        sources for owner skills by calling SkillManager.runtime_update(...).
+
         This is called on every skills loader refresh (e.g. api --reload)
         so edits in workspace are reflected in the active runtime slot
         without manual reinstall.
+
+        The guard is intentionally loose for local/dev runs:
+          - if ADAOS_LOG_LEVEL is unset -> treat as DEBUG (sync enabled),
+          - if ADAOS_LOG_LEVEL is set and not DEBUG -> skip sync.
         """
-        if (os.getenv("ADAOS_LOG_LEVEL") or "").upper() != "DEBUG":
+        level = (os.getenv("ADAOS_LOG_LEVEL") or "").upper()
+        # In local/dev setups ADAOS_LOG_LEVEL is often unset; enable sync
+        # by default there, but honour explicit non-DEBUG settings.
+        if level and level != "DEBUG":
             return
+
         try:
             ctx = get_ctx()
             ws_root = ctx.paths.skills_workspace_dir()

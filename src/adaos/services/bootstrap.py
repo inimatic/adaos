@@ -209,6 +209,7 @@ class BootstrapService:
             node_nats: dict | None = None
             try:
                 from adaos.services.capacity import _load_node_yaml as _load_node
+
                 nd = _load_node()
                 node_nats = (nd or {}).get("nats") if isinstance(nd, dict) else None
                 if isinstance(node_nats, dict) and node_nats:
@@ -250,10 +251,7 @@ class BootstrapService:
                             msg = str(err) or ""
                             low = msg.lower()
                             if isinstance(err, TypeError) and "argument of type 'int' is not iterable" in low:
-                                return (
-                                    "root nats authentication error: WS closed after CONNECT; "
-                                    "verify node.yaml nats.user=hub_<subnet_id> and nats.pass=<hub_nats_token>"
-                                )
+                                return "root nats authentication error: WS closed after CONNECT; " "verify node.yaml nats.user=hub_<subnet_id> and nats.pass=<hub_nats_token>"
                         except Exception:
                             pass
                         # fallback – include class and message
@@ -261,6 +259,7 @@ class BootstrapService:
                             return f"{type(err).__name__}: {str(err)}"
                         except Exception:
                             return type(err).__name__
+
                     while True:
                         try:
                             user = nuser or os.getenv("NATS_USER") or None
@@ -367,18 +366,14 @@ class BootstrapService:
                                     except Exception:
                                         pass
                                     try:
-                                        self.ctx.bus.publish(
-                                            Event(type="subnet.nats.up", payload={"ts": time.time()}, source="io.nats")
-                                        )
+                                        self.ctx.bus.publish(Event(type="subnet.nats.up", payload={"ts": time.time()}, source="io.nats"))
                                     except Exception:
                                         pass
                                     reported_down = False
 
                             async def _on_error_cb(e: Exception) -> None:
                                 # Best-effort; keep quiet unless explicitly verbose or useful
-                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and (
-                                    type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower()
-                                ):
+                                if os.getenv("SILENCE_NATS_EOF", "0") == "1" and (type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower()):
                                     return
                                 try:
                                     verbose = os.getenv("HUB_NATS_VERBOSE", "0") == "1"
@@ -396,9 +391,7 @@ class BootstrapService:
                                 # Suppress restored chatter in dev if silenced
                                 if os.getenv("SILENCE_NATS_EOF", "0") == "1":
                                     try:
-                                        self.ctx.bus.publish(
-                                            Event(type="subnet.nats.up", payload={"ts": time.time()}, source="io.nats")
-                                        )
+                                        self.ctx.bus.publish(Event(type="subnet.nats.up", payload={"ts": time.time()}, source="io.nats"))
                                     except Exception:
                                         pass
                                 else:
@@ -440,6 +433,7 @@ class BootstrapService:
                             # Control channel: hub alias updates from backend
                             try:
                                 ctl_alias = f"hub.control.{hub_id}.alias"
+
                                 async def _ctl_alias_cb(msg):
                                     try:
                                         data = _json.loads(msg.data.decode("utf-8"))
@@ -449,6 +443,7 @@ class BootstrapService:
                                     if isinstance(alias, str) and alias:
                                         try:
                                             from adaos.services.capacity import _load_node_yaml as _load_node, _save_node_yaml as _save_node
+
                                             y = _load_node()
                                             n = y.get("nats") or {}
                                             n["alias"] = alias
@@ -461,6 +456,7 @@ class BootstrapService:
                                             print(f"[hub-io] alias set via NATS: {alias}")
                                         except Exception:
                                             pass
+
                                 await nc.subscribe(ctl_alias, cb=_ctl_alias_cb)
                                 print(f"[hub-io] NATS subscribe control {ctl_alias}")
                             except Exception:
@@ -478,9 +474,7 @@ class BootstrapService:
                                     except Exception:
                                         pass
                                 else:
-                                    if not (os.getenv("SILENCE_NATS_EOF", "0") == "1" and (
-                                        type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower()
-                                    )):
+                                    if not (os.getenv("SILENCE_NATS_EOF", "0") == "1" and (type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower())):
                                         # Minimal single-line failure for non-EOF issues
                                         print(f"[hub-io] NATS connect failed: {_explain_connect_error(e)}")
                             except Exception:

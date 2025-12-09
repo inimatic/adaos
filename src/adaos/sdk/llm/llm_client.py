@@ -5,22 +5,33 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 import os
 
 import requests
-
-
-def _base_url() -> str:
-    env_base = (
-        os.getenv("ADAOS_LLM_BASE")
-        or os.getenv("ADAOS_ROOT_BASE")
-        or "http://127.0.0.1:8777"
-    )
-    return env_base.rstrip("/")
+from adaos.services.agent_context import get_ctx
 
 
 def _llm_endpoint() -> str:
     override = os.getenv("ADAOS_LLM_ENDPOINT")
     if override:
         return override
-    return f"{_base_url()}/v1/llm/response"
+    return f"{get_ctx().settings.api_base}/v1/llm/response"
+
+
+def _llm_models_endpoint() -> str:
+    """
+    Use the same base as _llm_endpoint (Root LLM proxy), but with /models.
+
+    This ensures we go through the same mtls / token path as /v1/llm/response
+    instead of calling upstream APIs directly from the hub.
+    """
+    override = os.getenv("ADAOS_LLM_MODELS_ENDPOINT")
+    if override:
+        return override
+    base_response = _llm_endpoint()
+    # Strip trailing '/response' if present.
+    if base_response.endswith("/response"):
+        base = base_response.rsplit("/", 1)[0]
+    else:
+        base = base_response.rstrip("/")
+    return f"{base}/models"
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -29,6 +40,16 @@ def _auth_headers() -> Dict[str, str]:
         "X-AdaOS-Token": token,
         "Content-Type": "application/json",
     }
+
+
+def list_llm_models(*, timeout: float | None = None) -> Dict[str, Any]:
+    """
+    Fetch available LLM models from the Root LLM proxy.
+    """
+    resp = requests.get(_llm_models_endpoint(), headers=_auth_headers(), timeout=timeout or 30)
+    resp.raise_for_status()
+    data: Dict[str, Any] = resp.json() if resp.text else {}
+    return data
 
 
 def _extract_output_text(payload: Mapping[str, Any]) -> Optional[str]:
@@ -75,9 +96,7 @@ def send_response(
     """
     payload: Dict[str, Any] = {
         "model": model or os.getenv("ADAOS_LLM_MODEL") or "gpt-4o-mini",
-        "messages": [
-            {"role": msg.get("role", "user"), "content": msg.get("content", "")} for msg in messages
-        ],
+        "messages": [{"role": msg.get("role", "user"), "content": msg.get("content", "")} for msg in messages],
     }
     if temperature is not None:
         payload["temperature"] = float(temperature)
@@ -113,7 +132,8 @@ def request_ts_draft(
 
     - injects the Technical Specification into the ts_detailed_request template
     - inlines artifacts/code_map.yaml content
-    - writes the LLM output to output_path when provided (default LLM Artifacts draft)
+    - when output_path is provided, writes the LLM output to that file
+      (callers may omit it to keep artifacts in Yjs / memory only)
     """
     code_map_text = Path(code_map_path).read_text(encoding="utf-8") if code_map_path else ""
     prompt_path = Path(__file__).parent / "prompts" / "ts_detailed_request.md"
@@ -131,8 +151,6 @@ def request_ts_draft(
     )
     output_text = response.get("output_text") or ""
     final_output_path: str | Path | None = output_path
-    if final_output_path is None:
-        final_output_path = Path("artifacts") / "llm_artifacts" / "ts_draft.md"
     if final_output_path:
         out_path = Path(final_output_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,5 +158,6 @@ def request_ts_draft(
     return {
         "request_prompt": prompt,
         "response": response,
+        "output_text": output_text,
         "output_path": str(final_output_path) if final_output_path else None,
     }
