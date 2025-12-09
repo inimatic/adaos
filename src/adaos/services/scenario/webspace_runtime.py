@@ -767,6 +767,21 @@ async def _on_webspace_reload(evt: Dict[str, Any]) -> None:
     await _seed_webspace_from_scenario(webspace_id, scenario_id)
     await _sync_webspace_listing()
 
+    # After reseeding the webspace from scenario sources, rebuild the
+    # effective UI (application + catalog + installed) so that the
+    # desktop reflects the current scenario and skill contributions.
+    try:
+        ctx = get_ctx()
+        runtime = WebspaceScenarioRuntime(ctx)
+        await runtime.rebuild_webspace_async(webspace_id)
+    except Exception:
+        _log.warning(
+            "failed to rebuild webspace after reload webspace=%s scenario=%s",
+            webspace_id,
+            scenario_id,
+            exc_info=True,
+        )
+
 
 @subscribe("desktop.webspace.reset")
 async def _on_webspace_reset(evt: Dict[str, Any]) -> None:
