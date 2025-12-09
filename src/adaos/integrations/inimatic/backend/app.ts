@@ -779,7 +779,7 @@ app.post('/v1/llm/response', async (req, res) => {
 			role: typeof m?.role === 'string' ? m.role : 'user',
 			content: [
 				{
-					type: 'text',
+					type: 'input_text',
 					text: typeof m?.content === 'string' ? m.content : '',
 				},
 			],
