@@ -689,6 +689,9 @@ class ScenarioWorkflowRuntime:
           "id": rel,
           "label": rel,
           "path": rel,
+          "kind": "file",
+          "object_type": object_type,
+          "object_id": object_id,
         }
       )
     return items
