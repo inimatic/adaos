@@ -85,7 +85,7 @@ class ScenarioWorkflowRuntime:
 
         # Initialise Prompt IDE-specific sections for the prompt_engineer_scenario.
         if scenario_id == "prompt_engineer_scenario":
-          # Status bar buttons (dev webspace, LLM, git, etc.).
+          # Status bar buttons (project, workflow stage, LLM, etc.).
           status_section = dict(prompt_section.get("status") or {})
           status_section["buttons"] = self._build_status_buttons(webspace_id, states, initial)
           prompt_section["status"] = status_section
@@ -193,7 +193,12 @@ class ScenarioWorkflowRuntime:
         # Keep status bar buttons in sync for Prompt IDE scenario.
         if scenario_id == "prompt_engineer_scenario":
           status_section = dict(prompt_section.get("status") or {})
-          status_section["buttons"] = self._build_status_buttons(webspace_id, states, next_state)
+          status_section["buttons"] = self._build_status_buttons(
+            webspace_id,
+            states,
+            next_state,
+            wf_obj.get("object_id"),
+          )
           prompt_section["status"] = status_section
 
         payload = json.loads(json.dumps(prompt_section))
@@ -260,31 +265,36 @@ class ScenarioWorkflowRuntime:
         wf_obj["state"] = state_id
         if object_type:
           wf_obj["object_type"] = object_type
-        if object_id:
-          wf_obj["object_id"] = object_id
-        wf_obj["next_actions"] = json.loads(
-          json.dumps(self._actions_for_state(states, state_id))
-        )
-        prompt_section["workflow"] = wf_obj
+          if object_id:
+            wf_obj["object_id"] = object_id
+          wf_obj["next_actions"] = json.loads(
+            json.dumps(self._actions_for_state(states, state_id))
+          )
+          prompt_section["workflow"] = wf_obj
 
-        if scenario_id == "prompt_engineer_scenario":
-          # Keep files list in Yjs for Prompt IDE so that file panel can be
-          # driven by YDoc and hub-side actions can update it.
-          if object_type and object_id:
-            files_obj = dict(prompt_section.get("files") or {})
-            files_obj.update(
-              {
-                "object_type": object_type,
-                "object_id": object_id,
-                "list": self._build_files_list(object_type, object_id),
-              }
+          if scenario_id == "prompt_engineer_scenario":
+            # Keep files list in Yjs for Prompt IDE so that file panel can be
+            # driven by YDoc and hub-side actions can update it.
+            if object_type and object_id:
+              files_obj = dict(prompt_section.get("files") or {})
+              files_obj.update(
+                {
+                  "object_type": object_type,
+                  "object_id": object_id,
+                  "list": self._build_files_list(object_type, object_id),
+                }
+              )
+              prompt_section["files"] = json.loads(json.dumps(files_obj))
+
+            # Also refresh status bar buttons when state is forced.
+            status_section = dict(prompt_section.get("status") or {})
+            status_section["buttons"] = self._build_status_buttons(
+              webspace_id,
+              states,
+              state_id,
+              wf_obj.get("object_id"),
             )
-            prompt_section["files"] = json.loads(json.dumps(files_obj))
-
-          # Also refresh status bar buttons when state is forced.
-          status_section = dict(prompt_section.get("status") or {})
-          status_section["buttons"] = self._build_status_buttons(webspace_id, states, state_id)
-          prompt_section["status"] = status_section
+            prompt_section["status"] = status_section
         payload = json.loads(json.dumps(prompt_section))
         data_map.set(txn, "prompt", payload)
 
@@ -577,25 +587,19 @@ class ScenarioWorkflowRuntime:
   def _build_files_list(self, object_type: str, object_id: str) -> List[Dict[str, Any]]:
     """
     Build a flat file listing for the prompt project rooted at dev skills/scenarios.
-    Directories are listed first (alphabetically), followed by files.
     """
     root = self._project_root(object_type, object_id)
     if root is None or not root.exists():
       return []
 
     exts = {".py", ".json", ".yml", ".yaml", ".md"}
-    file_names: List[str] = []
-
+    items: List[Dict[str, Any]] = []
     for path in sorted(root.rglob("*")):
       if not path.is_file():
         continue
       if path.suffix.lower() not in exts:
         continue
       rel = path.relative_to(root).as_posix()
-      file_names.append(rel)
-
-    items: List[Dict[str, Any]] = []
-    for rel in sorted(file_names):
       items.append(
         {
           "id": rel,
@@ -613,24 +617,37 @@ class ScenarioWorkflowRuntime:
     webspace_id: str,
     states: Dict[str, Any],
     state_id: str,
+    object_id: Optional[str] = None,
   ) -> List[Dict[str, Any]]:
     """
     Construct status bar buttons for Prompt IDE.
+
+    Order (left-to-right):
+      - Project name (opens project details),
+      - Workflow stage (human-readable label from scenario.workflow.states),
+      - LLM status (opens last request/response),
+      - LLM profile (model selection),
+      - Dev webspace id.
     """
-    current_state = (state_id or "").strip()
+    state_key = (state_id or "").strip()
+    state_meta = states.get(state_key) or {}
+    if not isinstance(state_meta, dict):
+      state_meta = {}
+    stage_label = state_meta.get("label")
+    if not isinstance(stage_label, str) or not stage_label.strip():
+      stage_label = state_key or "workflow"
+
+    project_label = str(object_id) if object_id else "project: none"
+
     return [
       {
-        "id": "dev-webspace",
-        "label": f"dev webspace: {webspace_id}",
+        "id": "current-object",
+        "label": project_label,
+        "action": {"openModal": "project_meta_modal"},
       },
       {
-        "id": "target-node",
-        "label": "target: local",
-      },
-      {
-        "id": "llm-profile",
-        "label": "LLM profile",
-        "action": {"openModal": "llm_profile_modal"},
+        "id": "workflow-stage",
+        "label": stage_label,
       },
       {
         "id": "llm-status",
@@ -638,63 +655,15 @@ class ScenarioWorkflowRuntime:
         "action": {"openModal": "llm_status_modal"},
       },
       {
-        "id": "git-status",
-        "label": "git: clean",
-        "action": {"openModal": "project_git_modal"},
+        "id": "llm-profile",
+        "label": "LLM profile",
+        "action": {"openModal": "llm_profile_modal"},
       },
       {
-        "id": "current-object",
-        "label": "$state.currentObjectId",
-        "action": {"openModal": "project_meta_modal"},
-      },
-      {
-        "id": "workflow-stage",
-        "label": "$state.currentStage",
+        "id": "dev-webspace",
+        "label": f"dev webspace: {webspace_id}",
       },
     ]
-
-  def _project_root(self, object_type: Optional[str], object_id: Optional[str]) -> Optional[Path]:
-    kind = (object_type or "").strip().lower()
-    if not object_id or not kind:
-      return None
-    ctx = self.ctx
-    if kind == "skill":
-      base = ctx.paths.dev_skills_dir()
-    elif kind == "scenario":
-      base = ctx.paths.dev_scenarios_dir()
-    else:
-      return None
-    base = base() if callable(base) else base
-    root = (Path(base) / str(object_id)).resolve()
-    return root
-
-  def _build_files_list(self, object_type: str, object_id: str) -> List[Dict[str, Any]]:
-    """
-    Build a flat file listing for the prompt project rooted at dev skills/scenarios.
-    """
-    root = self._project_root(object_type, object_id)
-    if root is None or not root.exists():
-      return []
-
-    exts = {".py", ".json", ".yml", ".yaml", ".md"}
-    items: List[Dict[str, Any]] = []
-    for path in sorted(root.rglob("*")):
-      if not path.is_file():
-        continue
-      if path.suffix.lower() not in exts:
-        continue
-      rel = path.relative_to(root).as_posix()
-      items.append(
-        {
-          "id": rel,
-          "label": rel,
-          "path": rel,
-          "kind": "file",
-          "object_type": object_type,
-          "object_id": object_id,
-        }
-      )
-    return items
 
 
 @subscribe("scenario.workflow.action")
