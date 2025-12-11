@@ -866,9 +866,14 @@ async def _on_desktop_scenario_set(evt: Dict[str, Any]) -> None:
                 data_map.set(txn, "scenarios", data_updated)
 
                 # Optional root data overrides from scenario.json["data"].
+                # Do not overwrite runtime-managed keys such as ``installed``,
+                # otherwise switching scenarios would reset desktop icons/apps
+                # to their initial defaults and discard user choices.
                 if isinstance(data_section, dict):
                     for key, value in data_section.items():
                         if not isinstance(key, str):
+                            continue
+                        if key == "installed":
                             continue
                         try:
                             payload_value = json.loads(json.dumps(value))
