@@ -135,20 +135,17 @@ class WebspaceScenarioRuntime:
 
     # --- scenario helpers -------------------------------------------------
 
-    def _list_desktop_scenarios(self) -> List[Tuple[str, str]]:
+    def _list_desktop_scenarios(self, space: str) -> List[Tuple[str, str]]:
         """
         Discover scenarios with ``type: desktop`` under the workspace
         scenarios directory. Returns a list of ``(scenario_id, title)``
         tuples. The ``web_desktop`` scenario itself is excluded so that it
         does not create a recursive launcher icon.
 
-        For now this performs a lightweight filesystem scan and caches the
-        results in-process; it is refreshed only when this runtime instance
-        is recreated.
+        ``space`` controls which manifest metadata is preferred:
+          - ``workspace`` ¢?" use workspace manifests only,
+          - ``dev``       ¢?" prefer dev manifests, fallback to workspace.
         """
-        if self._desktop_scenarios is not None:
-            return self._desktop_scenarios
-
         entries: List[Tuple[str, str]] = []
         try:
             root = self.ctx.paths.scenarios_dir()
@@ -158,11 +155,11 @@ class WebspaceScenarioRuntime:
                 scenario_id = child.name
                 if scenario_id == "web_desktop":
                     continue
-                # Prefer dev manifest metadata when present so that
-                # dev edits (e.g. title) are reflected in launcher
-                # icons, falling back to workspace manifest.
-                manifest = scenarios_loader.read_manifest(scenario_id, space="dev")
-                if not isinstance(manifest, dict) or not manifest:
+                if space == "dev":
+                    manifest = scenarios_loader.read_manifest(scenario_id, space="dev")
+                    if not isinstance(manifest, dict) or not manifest:
+                        manifest = scenarios_loader.read_manifest(scenario_id, space="workspace")
+                else:
                     manifest = scenarios_loader.read_manifest(scenario_id, space="workspace")
                 if not isinstance(manifest, dict) or not manifest:
                     continue
@@ -172,8 +169,6 @@ class WebspaceScenarioRuntime:
                 entries.append((scenario_id, title))
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)
-
-        self._desktop_scenarios = entries
         return entries
 
     # --- helpers ---------------------------------------------------------
@@ -207,15 +202,9 @@ class WebspaceScenarioRuntime:
             "apps": [it for it in apps if isinstance(it, dict)],
             "widgets": [it for it in widgets if isinstance(it, dict)],
             "registry": {
-                "modals": (
-                    {str(k): v for k, v in reg_modals_raw.items()}
-                    if isinstance(reg_modals_raw, dict)
-                    else [str(x) for x in reg_modals_raw if isinstance(x, (str, int))]
-                ),
+                "modals": ({str(k): v for k, v in reg_modals_raw.items()} if isinstance(reg_modals_raw, dict) else [str(x) for x in reg_modals_raw if isinstance(x, (str, int))]),
                 "widgets": (
-                    {str(k): v for k, v in reg_widgets_raw.items()}
-                    if isinstance(reg_widgets_raw, dict)
-                    else [str(x) for x in reg_widgets_raw if isinstance(x, (str, int))]
+                    {str(k): v for k, v in reg_widgets_raw.items()} if isinstance(reg_widgets_raw, dict) else [str(x) for x in reg_widgets_raw if isinstance(x, (str, int))]
                 ),
             },
             "ydoc_defaults": ydoc_defaults if isinstance(ydoc_defaults, dict) else {},
@@ -235,18 +224,45 @@ class WebspaceScenarioRuntime:
         for rec in skills:
             if not isinstance(rec, dict) or not rec.get("active", True):
                 continue
-            is_dev = bool(rec.get("dev"))
-            if mode == "workspace" and is_dev:
-                continue
-            if mode == "dev" and not is_dev:
-                continue
             name = rec.get("name") or rec.get("id")
             if not name:
                 continue
-            space = "dev" if is_dev else "default"
-            decl = self._load_webui(str(name), space)
+            skill_name = str(name)
+
+            if mode == "workspace":
+                # Workspace mode: always use default webui.json regardless of
+                # dev flag so that skills remain visible even when a dev
+                # variant exists.
+                decl = self._load_webui(skill_name, "default")
+                if decl:
+                    decls.append(decl)
+                continue
+
+            if mode == "dev":
+                # Dev mode: include all active skills but prefer dev webui.json
+                # when present, falling back to workspace webui.json.
+                decl = self._load_webui(skill_name, "dev")
+                if not decl:
+                    decl = self._load_webui(skill_name, "default")
+                if decl:
+                    decls.append(decl)
+                continue
+
+            # Mixed mode: include both dev and default variants as-is.
+            space = "dev" if rec.get("dev") else "default"
+            decl = self._load_webui(skill_name, space)
             if decl:
                 decls.append(decl)
+
+        # Ensure base weather skill webui remains available even if capacity
+        # metadata is out of sync or the skill is not explicitly listed.
+        try:
+            weather_decl = self._load_webui("weather_skill", "default")
+        except Exception:
+            weather_decl = {}
+        if isinstance(weather_decl, dict) and weather_decl:
+            if not any(d.get("skill") == "weather_skill" for d in decls):
+                decls.append(weather_decl)
 
         # Always ensure desktop skill's own webui.json is loaded so that
         # base desktop modals remain available even if not listed in capacity.
@@ -293,9 +309,7 @@ class WebspaceScenarioRuntime:
         scenario_id = ui_map.get("current_scenario") or "web_desktop"
         scenarios_ui = ui_map.get("scenarios") or {}
         scenario_ui_entry = scenarios_ui.get(scenario_id) if isinstance(scenarios_ui, dict) else {}
-        scenario_app_ui = (
-            scenario_ui_entry.get("application") if isinstance(scenario_ui_entry, dict) else {}
-        )
+        scenario_app_ui = scenario_ui_entry.get("application") if isinstance(scenario_ui_entry, dict) else {}
         if not isinstance(scenario_app_ui, dict):
             scenario_app_ui = {}
 
@@ -314,9 +328,7 @@ class WebspaceScenarioRuntime:
         scenario_widgets = [it for it in (base_catalog.get("widgets") or []) if isinstance(it, Mapping)]
 
         scenario_registry = registry_map.get("scenarios") or {}
-        raw_registry_entry = (
-            scenario_registry.get(scenario_id) if isinstance(scenario_registry, dict) else {}
-        )
+        raw_registry_entry = scenario_registry.get(scenario_id) if isinstance(scenario_registry, dict) else {}
         registry_entry = raw_registry_entry if isinstance(raw_registry_entry, dict) else {}
         registry_entry = registry_entry or {}
         base_registry_modals = [str(x) for x in (registry_entry.get("modals") or [])]
@@ -388,7 +400,7 @@ class WebspaceScenarioRuntime:
         # are not auto-installed; users can pin them to the desktop using
         # the standard desktop.toggleInstall flow.
         extra_apps: List[Dict[str, Any]] = []
-        for sid, title in self._list_desktop_scenarios():
+        for sid, title in self._list_desktop_scenarios(space=mode):
             # Avoid creating a launcher for the currently active scenario and
             # only add one entry per logical id.
             if sid == scenario_id:
@@ -398,11 +410,14 @@ class WebspaceScenarioRuntime:
                 {
                     "id": app_id,
                     "title": title,
-                    "icon": "desktop-outline",
+                    "icon": "terminal-outline",
                     "launchModal": "scenario_switcher",
                     "scenario_id": sid,
                 }
             )
+            # Keep launchers visible after reloads by auto-installing them when
+            # rebuilding the effective catalog.
+            auto_app_ids.add(app_id)
 
         merged_apps = _merge_by_id(merged_apps + extra_apps + skill_apps)
 
@@ -1071,5 +1086,6 @@ async def _on_desktop_scenario_set(evt: Dict[str, Any]) -> None:
             scenario_id,
             exc_info=True,
         )
+
 
 __all__ = ["WebUIRegistryEntry", "WebspaceScenarioRuntime"]

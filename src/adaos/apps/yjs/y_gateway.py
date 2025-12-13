@@ -10,11 +10,17 @@ from typing import Dict, Any
 import y_py as Y
 from fastapi import APIRouter, WebSocket
 from fastapi.websockets import WebSocketDisconnect
-from ypy_websocket.websocket import Websocket as YWebsocket
-from ypy_websocket.websocket_server import WebsocketServer
-from ypy_websocket.yroom import YRoom
+try:
+    from ypy_websocket.websocket import Websocket as YWebsocket
+    from ypy_websocket.websocket_server import WebsocketServer
+    from ypy_websocket.yroom import YRoom
+except ImportError as exc:  # pragma: no cover - import guard for dev envs
+    raise RuntimeError(
+        "ypy_websocket is required for AdaOS realtime collaboration. "
+        "Install dependencies via `pip install -e .[dev]` or `pip install ypy-websocket`."
+    ) from exc
 
-from adaos.apps.workspaces.index import ensure_workspace
+from adaos.apps.workspaces.index import ensure_workspace, get_workspace
 from .y_bootstrap import ensure_webspace_seeded_from_scenario
 from .y_store import get_ystore_for_webspace
 from adaos.services.scheduler import get_scheduler
@@ -36,11 +42,23 @@ class WorkspaceWebsocketServer(WebsocketServer):
 
     async def get_room(self, name: str) -> YRoom:  # type: ignore[override]
         webspace_id = name or "default"
+
+        def _is_dev_space(ws_id: str) -> bool:
+            try:
+                row = get_workspace(ws_id)
+                if not row or not row.display_name:
+                    return False
+                title = row.display_name.strip()
+                return title.upper().startswith("DEV:")
+            except Exception:
+                return False
+
         if name not in self.rooms:
             _ylog.info("creating YRoom for webspace=%s", webspace_id)
             ensure_workspace(webspace_id)
             ystore = get_ystore_for_webspace(webspace_id)
-            await ensure_webspace_seeded_from_scenario(ystore, webspace_id=webspace_id)
+            space = "dev" if _is_dev_space(webspace_id) else "workspace"
+            await ensure_webspace_seeded_from_scenario(ystore, webspace_id=webspace_id, space=space)
             # Ensure periodic in-memory snapshotting for this webspace.
             try:
                 sched = get_scheduler()
@@ -105,11 +123,23 @@ async def start_y_server() -> None:
 async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None) -> None:
     ensure_workspace(webspace_id)
     ystore = get_ystore_for_webspace(webspace_id)
+
+    def _is_dev_space(ws_id: str) -> bool:
+        try:
+            row = get_workspace(ws_id)
+            if not row or not row.display_name:
+                return False
+            title = row.display_name.strip()
+            return title.upper().startswith("DEV:")
+        except Exception:
+            return False
+
     try:
         await ensure_webspace_seeded_from_scenario(
             ystore,
             webspace_id=webspace_id,
             default_scenario_id=scenario_id or "web_desktop",
+            space="dev" if _is_dev_space(webspace_id) else "workspace",
         )
     finally:
         try:
