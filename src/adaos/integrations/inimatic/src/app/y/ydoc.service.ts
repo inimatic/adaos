@@ -51,7 +51,8 @@ export class YDocService {
 
     // Ensure shared events websocket is connected and register device
     await this.adaos.connect()
-    const preferred = this.getPreferredWebspaceId()
+    const fromUrl = this.getWebspaceFromUrl()
+    const preferred = fromUrl || this.getPreferredWebspaceId()
     const ack = await this.adaos.sendEventsCommand('device.register', { device_id: this.deviceId, webspace_id: preferred })
     const webspaceId = String(ack?.data?.webspace_id || preferred || 'default')
     this.currentWebspaceId = webspaceId
@@ -94,6 +95,19 @@ export class YDocService {
     return this.currentWebspaceId
   }
 
+  private getWebspaceFromUrl(): string | undefined {
+    try {
+      const url = new URL(window.location.href)
+      return (
+        url.searchParams.get('webspace_id') ||
+        url.searchParams.get('webspace') ||
+        undefined
+      )
+    } catch {
+      return undefined
+    }
+  }
+
   private getPreferredWebspaceId(): string {
     try {
       return localStorage.getItem(this.webspaceKey) || 'default'
@@ -113,7 +127,13 @@ export class YDocService {
     if (!target || target === this.currentWebspaceId) return
     await this.adaos.sendEventsCommand('desktop.webspace.use', { webspace_id: target })
     this.setPreferredWebspaceId(target)
-    window.location.reload()
+    try {
+      const url = new URL(window.location.href)
+      url.searchParams.set('webspace_id', target)
+      window.location.href = url.toString()
+    } catch {
+      window.location.reload()
+    }
   }
 
   getPath(path: string): any {
