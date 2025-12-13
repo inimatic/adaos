@@ -1,289 +1,342 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "AdaOS Scenario",
-	"type": "object",
-	"additionalProperties": false,
-	"properties": {
-		"id": { "type": "string", "pattern": "^[a-z0-9_.-]+$" },
-		"name": { "type": "string" },
-		"title": { "type": "string" },
-		"type": { "type": "string" },
-		"version": {
-			"type": "string",
-			"pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$"
-		},
-		"description": { "type": "string" },
-		"depends": {
-			"type": "array",
-			"items": { "type": "string" }
-		},
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AdaOS Scenario Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.-]+$",
+      "description": "Stable scenario identifier (matches directory name and is used in SDK/manage APIs)."
+    },
+    "name": {
+      "type": "string",
+      "description": "Optional internal name; when omitted, `id` is used."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable scenario title for UIs and LLM programmers."
+    },
+    "type": {
+      "type": "string",
+      "description": "Scenario type, e.g. `desktop` for web desktop scenarios."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Short English description of what the scenario does."
+    },
+    "depends": {
+      "type": "array",
+      "description": "List of skills this scenario depends on (skill ids).",
+      "items": { "type": "string" }
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "Optional ISO-8601 timestamp of the last manifest update."
+    },
 
-		"trigger": {
-			"description": "как запускается сценарий",
-			"oneOf": [
-				{ "type": "string", "enum": ["manual", "boot", "timer", "event"] },
-				{
-					"type": "object",
-					"additionalProperties": false,
-					"properties": {
-						"type": {
-							"type": "string",
-							"enum": ["manual", "boot", "timer", "event"]
-						},
-						"cron": { "type": "string" },
-						"at": { "type": "string", "pattern": "^\\d{2}:\\d{2}(:\\d{2})?$" },
-						"interval": { "$ref": "#/$defs/duration" },
-						"event": { "$ref": "#/$defs/topic" },
-						"filters": { "type": "object" }
-					},
-					"required": ["type"]
-				}
-			]
-		},
+    "data_projections": {
+      "description": "Optional data projection rules that map (scope, slot) pairs to storage backends (see adaos.services.scenario.projection_registry).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scope": { "type": "string" },
+          "slot": { "type": "string" },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "backend": {
+                  "type": "string",
+                  "enum": ["yjs", "kv", "sql"]
+                },
+                "webspace_id": { "type": "string" },
+                "path": { "type": "string" },
+                "table": { "type": "string" },
+                "column": { "type": "string" }
+              },
+              "required": ["backend"]
+            }
+          }
+        },
+        "required": ["scope", "slot"]
+      }
+    },
 
-		"vars": {
-			"type": "object",
-			"description": "глобальные переменные/шаблоны",
-			"additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
-		},
+    "trigger": {
+      "description": "Optional scenario trigger configuration (manual, boot, timer, event).",
+      "oneOf": [
+        { "type": "string", "enum": ["manual", "boot", "timer", "event"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["manual", "boot", "timer", "event"]
+            },
+            "cron": { "type": "string" },
+            "at": { "type": "string", "pattern": "^\\d{2}:\\d{2}(:\\d{2})?$" },
+            "interval": { "$ref": "#/$defs/duration" },
+            "event": { "$ref": "#/$defs/topic" },
+            "filters": { "type": "object" }
+          },
+          "required": ["type"]
+        }
+      ]
+    },
 
-		"workflow": {
-			"description": "Опциональная high-level модель workflow для многоуровневого IO (web, chat, voice).",
-			"type": "object",
-			"additionalProperties": false,
-			"properties": {
-				"initial_state": { "type": "string" },
-				"states": {
-					"type": "object",
-					"additionalProperties": { "$ref": "#/$defs/workflowState" }
-				}
-			}
-		},
+    "vars": {
+      "type": "object",
+      "description": "Initial variables/bag values available to scenario steps (resolved templates are supported).",
+      "additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
+    },
 
-		"steps": {
-			"type": "array",
-			"minItems": 1,
-			"items": { "$ref": "#/$defs/step" }
-		},
+    "workflow": {
+      "description": "Optional high-level workflow definition for the scenario (used by Prompt IDE and ScenarioWorkflowRuntime).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initial_state": { "type": "string" },
+        "states": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/workflowState" }
+        }
+      }
+    },
 
-		"ui": {
-			"description": "UI definition for desktop/webspaces. For MVP this is a loosely-typed object that mirrors scenario.json['ui'] structure.",
-			"type": "object",
-			"additionalProperties": true,
-			"properties": {
-				"application": {
-					"description": "Top-level application layout (e.g. desktop.pageSchema/modals).",
-					"type": "object"
-				},
-				"catalog": {
-					"description": "Optional catalog section (apps/widgets) for this scenario.",
-					"type": "object"
-				},
-				"registry": {
-					"description": "Optional registry section (modals/widgets).",
-					"type": "object"
-				},
-				"data": {
-					"description": "Scenario-level data seeds projected into YDoc.",
-					"type": "object"
-				}
-			}
-		}
-	},
-	"required": ["id", "version"],
+    "steps": {
+      "description": "Optional low-level execution steps for ScenarioRuntime (CLI/SDK runner).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/step" }
+    },
 
-	"$defs": {
-		"identifier": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
-		"callPath": {
-			"type": "string",
-			"pattern": "^[A-Za-z_][\\w]*(\\.[A-Za-z_][\\w]*)*$"
-		},
-		"topic": {
-			"type": "string",
-			"pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$"
-		},
-		"duration": {
-			"type": "string",
-			"pattern": "^(\\d+)(ms|s|m|h|d)$",
-			"examples": ["250ms", "3s", "20s", "5m", "2h", "1d"]
-		},
+    "ui": {
+      "description": "UI definition for desktop/webspaces. For MVP this is a loosely-typed object that mirrors scenario.json['ui'] structure.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "application": {
+          "description": "Top-level application layout (e.g. desktop.pageSchema/modals).",
+          "type": "object"
+        },
+        "catalog": {
+          "description": "Optional catalog section (apps/widgets) for this scenario.",
+          "type": "object"
+        },
+        "registry": {
+          "description": "Optional registry section (modals/widgets).",
+          "type": "object"
+        },
+        "data": {
+          "description": "Scenario-level data seeds projected into YDoc.",
+          "type": "object"
+        }
+      }
+    }
+  },
+  "required": ["id", "version"],
 
-		"value": {
-			"description": "произвольное YAML-значение",
-			"oneOf": [
-				{ "type": "string" },
-				{ "type": "number" },
-				{ "type": "integer" },
-				{ "type": "boolean" },
-				{ "type": "null" },
-				{ "type": "array", "items": { "$ref": "#/$defs/value" } },
-				{
-					"type": "object",
-					"additionalProperties": { "$ref": "#/$defs/value" }
-				}
-			]
-		},
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "callPath": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][\\w]*(\\.[A-Za-z_][\\w]*)*$"
+    },
+    "topic": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$"
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^(\\d+)(ms|s|m|h|d)$",
+      "examples": ["250ms", "3s", "20s", "5m", "2h", "1d"]
+    },
 
-		"valueOrTemplate": {
-			"description": "обычное значение или строка с плейсхолдерами ${...}",
-			"oneOf": [
-				{ "$ref": "#/$defs/value" },
-				{ "type": "string", "pattern": ".*\\$\\{[^}]+\\}.*" }
-			]
-		},
+    "value": {
+      "description": "Plain YAML value (string, number, boolean, null, array or object).",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "integer" },
+        { "type": "boolean" },
+        { "type": "null" },
+        { "type": "array", "items": { "$ref": "#/$defs/value" } },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        }
+      ]
+    },
 
-		"expr": {
-			"description": "булево выражение в DSL сценариев",
-			"type": "string",
-			"minLength": 1
-		},
+    "valueOrTemplate": {
+      "description": "Literal value or template string using ${...} placeholders resolved against the scenario bag.",
+      "oneOf": [
+        { "$ref": "#/$defs/value" },
+        { "type": "string", "pattern": ".*\\$\\{[^}]+\\}.*" }
+      ]
+    },
 
-		"argObject": {
-			"type": "object",
-			"additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
-		},
+    "expr": {
+      "description": "Expression string evaluated against the scenario bag (simple DSL used by ScenarioRuntime).",
+      "type": "string",
+      "minLength": 1
+    },
 
-		"setObject": {
-			"type": "object",
-			"minProperties": 1,
-			"additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
-		},
+    "argObject": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
+    },
 
-		"workflowAction": {
-			"type": "object",
-			"additionalProperties": false,
-			"properties": {
-				"id": {
-					"description": "Стабильный идентификатор действия (общий для web/voice/telegram).",
-					"type": "string",
-					"minLength": 1
-				},
-				"label": { "type": "string" },
-				"trigger": {
-					"description": "Предпочитаемый тип триггера: button | voice | nlu | timer | skill.",
-					"type": "string"
-				},
-				"tool": {
-					"description": "Полное имя инструмента навыка (например, prompt_engineer_skill.tz_execute).",
-					"type": "string"
-				},
-				"params": {
-					"type": "object",
-					"additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
-				},
-				"next_state": {
-					"description": "Имя следующего состояния workflow после успешного выполнения.",
-					"type": "string"
-				},
-				"emit_event": {
-					"description": "Опциональное событие на шине, излучаемое после успешного выполнения.",
-					"type": "string"
-				}
-			},
-			"required": ["id"]
-		},
+    "setObject": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
+    },
 
-		"workflowState": {
-			"type": "object",
-			"additionalProperties": false,
-			"properties": {
-				"label": { "type": "string" },
-				"context": {
-					"description": "Подсказки по редактируемым/только чтение полям.",
-					"type": "object",
-					"additionalProperties": false,
-					"properties": {
-						"edit": {
-							"type": "array",
-							"items": { "type": "string" }
-						},
-						"readonly": {
-							"type": "array",
-							"items": { "type": "string" }
-						}
-					}
-				},
-				"actions": {
-					"type": "array",
-					"items": { "$ref": "#/$defs/workflowAction" }
-				}
-			}
-		},
+    "workflowAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Workflow action identifier, used by IO layers when emitting scenario.workflow.action events.",
+          "type": "string",
+          "minLength": 1
+        },
+        "label": { "type": "string" },
+        "trigger": {
+          "description": "Preferred trigger kind for the action: button | voice | nlu | timer | skill.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "Skill tool identifier to call in response to this action (e.g. prompt_engineer_skill.tz_execute).",
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/valueOrTemplate" }
+        },
+        "next_state": {
+          "description": "Workflow state id to transition to after this action completes; falls back to current state when omitted.",
+          "type": "string"
+        },
+        "emit_event": {
+          "description": "Optional event topic to emit when the action is taken (for external integrations).",
+          "type": "string"
+        }
+      },
+      "required": ["id"]
+    },
 
-		"step": {
-			"type": "object",
-			"additionalProperties": false,
-			"properties": {
-				"name": { "$ref": "#/$defs/identifier" },
+    "workflowState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": { "type": "string" },
+        "context": {
+          "description": "Optional UI context hints for this workflow state (which fields are editable/readonly).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "edit": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "readonly": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflowAction" }
+        }
+      }
+    },
 
-				"when": { "$ref": "#/$defs/expr" },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
 
-				"call": { "$ref": "#/$defs/callPath" },
-				"args": { "$ref": "#/$defs/argObject" },
-				"timeout": { "$ref": "#/$defs/duration" },
-				"retries": { "type": "integer", "minimum": 0 },
-				"save_as": { "$ref": "#/$defs/identifier" },
+        "when": { "$ref": "#/$defs/expr" },
 
-				"set": { "$ref": "#/$defs/setObject" },
+        "call": { "$ref": "#/$defs/callPath" },
+        "args": { "$ref": "#/$defs/argObject" },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "retries": { "type": "integer", "minimum": 0 },
+        "save_as": { "$ref": "#/$defs/identifier" },
 
-				"do": {
-					"description": "вложенные шаги (саб-пайплайн)",
-					"type": "array",
-					"items": { "$ref": "#/$defs/step" }
-				},
+        "set": { "$ref": "#/$defs/setObject" },
 
-				"foreach": {
-					"description": "итерация по коллекции",
-					"oneOf": [
-						{ "$ref": "#/$defs/expr" },
-						{ "$ref": "#/$defs/valueOrTemplate" }
-					]
-				},
-				"as": { "$ref": "#/$defs/identifier" },
+        "do": {
+          "description": "Nested steps to execute in order (used for grouping and foreach loops).",
+          "type": "array",
+          "items": { "$ref": "#/$defs/step" }
+        },
 
-				"on_error": {
-					"description": "политика обработки ошибок",
-					"oneOf": [
-						{ "type": "string", "enum": ["fail", "continue", "skip"] },
-						{
-							"type": "object",
-							"additionalProperties": false,
-							"properties": {
-								"mode": {
-									"type": "string",
-									"enum": ["fail", "continue", "skip"]
-								},
-								"do": { "type": "array", "items": { "$ref": "#/$defs/step" } }
-							},
-							"required": ["mode"]
-						}
-					]
-				}
-			},
+        "foreach": {
+          "description": "Array expression or value to iterate over when executing the nested `do` steps.",
+          "oneOf": [
+            { "$ref": "#/$defs/expr" },
+            { "$ref": "#/$defs/valueOrTemplate" }
+          ]
+        },
+        "as": { "$ref": "#/$defs/identifier" },
 
-			"allOf": [
-				{
-					"if": { "required": ["foreach"] },
-					"then": {
-						"required": ["do"],
-						"properties": { "do": { "minItems": 1 } }
-					}
-				},
-				{
-					"if": { "required": ["set"] },
-					"then": { "not": { "required": ["call"] } }
-				},
-				{
-					"if": { "required": ["call"] },
-					"then": { "not": { "required": ["set"] } }
-				}
-			],
+        "on_error": {
+          "description": "Error handling strategy for this step: fail/continue/skip or nested recovery steps.",
+          "oneOf": [
+            { "type": "string", "enum": ["fail", "continue", "skip"] },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["fail", "continue", "skip"]
+                },
+                "do": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+              },
+              "required": ["mode"]
+            }
+          ]
+        }
+      },
 
-			"anyOf": [
-				{ "required": ["call"] },
-				{ "required": ["set"] },
-				{ "required": ["do"] }
-			]
-		}
-	}
+      "allOf": [
+        {
+          "if": { "required": ["foreach"] },
+          "then": {
+            "required": ["do"],
+            "properties": { "do": { "minItems": 1 } }
+          }
+        },
+        {
+          "if": { "required": ["set"] },
+          "then": { "not": { "required": ["call"] } }
+        },
+        {
+          "if": { "required": ["call"] },
+          "then": { "not": { "required": ["set"] } }
+        }
+      ],
+
+      "anyOf": [
+        { "required": ["call"] },
+        { "required": ["set"] },
+        { "required": ["do"] }
+      ]
+    }
+  }
 }
