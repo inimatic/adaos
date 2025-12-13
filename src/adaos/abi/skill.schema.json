@@ -1,124 +1,208 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "AdaOS Skill",
-	"type": "object",
-	"additionalProperties": false,
-	"properties": {
-		"name": { "type": "string", "pattern": "^[a-z0-9_.-]+$" },
-		"version": {
-			"type": "string",
-			"pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$"
-		},
-		"description": { "type": "string" },
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AdaOS Skill Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_.-]+$",
+      "description": "Stable skill identifier used across the runtime and SDK (see adaos.sdk.manage.skills.*)."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$",
+      "description": "Semantic version of the skill package, kept in sync with runtime slots by SkillManager."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human‑readable summary of the skill purpose for developers and LLM programmers."
+    },
 
-		"author": { "type": "string" },
-		"license": { "type": "string" },
-		"homepage": { "type": "string", "format": "uri" },
-		"repository": { "type": "string" },
+    "author": {
+      "type": "string",
+      "description": "Optional author or team name."
+    },
+    "license": {
+      "type": "string",
+      "description": "License identifier or short text."
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional homepage URL for the skill."
+    },
+    "repository": {
+      "type": "string",
+      "description": "Optional VCS URL (for example, a Git repository)."
+    },
 
-		"runtime": {
-			"description": "требуемые рантаймы/их версии",
-			"type": "object",
-			"minProperties": 1,
-			"additionalProperties": false,
-			"properties": {
-				"python": { "type": "string" },
-				"node": { "type": "string" },
-				"deno": { "type": "string" },
-				"bash": { "type": "string" }
-			}
-		},
+    "runtime": {
+      "description": "Runtime requirements for the skill handlers (mapped to adaos.services.skill.runtime).",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "python": {
+          "type": "string",
+          "description": "Required Python version (for example \"3.11\")."
+        },
+        "node": {
+          "type": "string",
+          "description": "Required Node.js version if the skill uses a Node runtime."
+        },
+        "deno": {
+          "type": "string",
+          "description": "Required Deno version if the skill uses a Deno runtime."
+        },
+        "bash": {
+          "type": "string",
+          "description": "Shell interpreter for Bash‑style skills."
+        }
+      }
+    },
 
-		"entry": {
-			"description": "как исполнить навык (опционально, если есть договорённости по умолчанию)",
-			"type": "object",
-			"additionalProperties": false,
-			"properties": {
-				"module": { "type": "string" },
-				"callable": { "type": "string" },
-				"script": { "type": "string" },
-				"args": {
-					"type": "array",
-					"items": { "type": "string" }
-				}
-			}
-		},
+    "entry": {
+      "description": "Legacy entry‑point for non‑Python runtimes; Python skills usually rely on @tool decorators instead.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "module": {
+          "type": "string",
+          "description": "Fully qualified module to import for the entrypoint."
+        },
+        "callable": {
+          "type": "string",
+          "description": "Function or callable name inside the entry module."
+        },
+        "script": {
+          "type": "string",
+          "description": "Path to a standalone script to execute."
+        },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
 
-		"dependencies": {
-			"description": "список зависимостей (строки, как в менеджере пакетов)",
-			"type": "array",
-			"items": { "type": "string", "minLength": 1 }
-		},
+    "default_tool": {
+      "type": "string",
+      "description": "Optional name of the default tool to execute for this skill (used by SkillManager and manage.skills.* tools)."
+    },
 
-		"env": {
-			"description": "переменные окружения по умолчанию",
-			"type": "object",
-			"additionalProperties": { "type": "string" }
-		},
+    "dependencies": {
+      "description": "Runtime package dependencies (usually pip requirement strings).",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
 
-		"permissions": {
-			"description": "запрашиваемые разрешения песочницы",
-			"type": "array",
-			"uniqueItems": true,
-			"items": {
-				"type": "string",
-				"enum": [
-					"network",
-					"filesystem",
-					"microphone",
-					"speaker",
-					"camera",
-					"process",
-					"gpu"
-				]
-			}
-		},
+    "env": {
+      "description": "Optional environment variables for the skill runtime (resolved by adaos.services.settings).",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
 
-		"events": {
-			"type": "object",
-			"additionalProperties": false,
-			"properties": {
-				"subscribe": {
-					"type": "array",
-					"items": { "$ref": "#/$defs/topic" }
-				},
-				"publish": {
-					"type": "array",
-					"items": { "$ref": "#/$defs/topic" }
-				}
-			}
-		},
+    "permissions": {
+      "description": "Coarse‑grained permission flags that may be enforced by the runtime sandbox.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "network",
+          "filesystem",
+          "microphone",
+          "speaker",
+          "camera",
+          "process",
+          "gpu"
+        ]
+      }
+    },
 
-		"tools": {
-			"description": "инструменты (callables), доступные сценарию / другим навыкам",
-			"type": "array",
-			"minItems": 1,
-			"items": { "$ref": "#/$defs/tool" }
-		}
-	},
-	"required": ["name", "version"],
+    "events": {
+      "description": "Static event wiring hints for the skill (topics it subscribes to or publishes).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscribe": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/topic" }
+        },
+        "publish": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/topic" }
+        }
+      }
+    },
 
-	"$defs": {
-		"topic": {
-			"type": "string",
-			"pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$"
-		},
+    "exports": {
+      "description": "Optional explicit export lists for tools and other public surfaces.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Subset of tools that should be exposed to external callers and LLM agents."
+        }
+      }
+    },
 
-		"jsonSchema": {
-			"description": "вложенная JSON Schema для проверки входов/выходов",
-			"oneOf": [{ "type": "boolean" }, { "type": "object" }]
-		},
+    "tools": {
+      "description": "Skill tools (callables) that are exposed to the platform and LLM programmers. Each entry usually corresponds to an @tool in handlers/main.py.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/tool" }
+    },
 
-		"tool": {
-			"type": "object",
-			"additionalProperties": false,
-			"properties": {
-				"name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
-				"description": { "type": "string" },
-				"input_schema": { "$ref": "#/$defs/jsonSchema" },
-				"output_schema": { "$ref": "#/$defs/jsonSchema" }
-			},
-			"required": ["name"]
-		}
-	}
+    "nlu": {
+      "description": "Optional NLU configuration (intents/slots) used by the interpreter workspace to generate Rasa‑style nlu.yml.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": ["name", "version"],
+
+  "$defs": {
+    "topic": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$"
+    },
+
+    "jsonSchema": {
+      "description": "Inline JSON Schema for tool input/output. When `false`, schema validation is skipped.",
+      "oneOf": [{ "type": "boolean" }, { "type": "object" }]
+    },
+
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Public tool name as seen by callers and LLM programmers (matches @tool public_name)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short English description of what the tool does and when to use it."
+        },
+        "entry": {
+          "type": "string",
+          "description": "Python entrypoint in `module:callable` form (for example `handlers.main:prompt_load_state`)."
+        },
+        "input_schema": {
+          "$ref": "#/$defs/jsonSchema",
+          "description": "JSON Schema describing tool input payload. See adaos.sdk.core.decorators.tool(input_schema=...)."
+        },
+        "output_schema": {
+          "$ref": "#/$defs/jsonSchema",
+          "description": "JSON Schema describing tool result shape."
+        }
+      },
+      "required": ["name"]
+    }
+  }
 }
