@@ -75,7 +75,6 @@ class ProjectionService:
         if len(segments) < 2:
             return
         root_name = segments[0]
-        key = "/".join(segments[1:])
 
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)
@@ -83,7 +82,22 @@ class ProjectionService:
                 payload = json.loads(json.dumps(value))
             except Exception:
                 payload = value
-            root.set(txn, key, payload)
+
+            # For simple two-segment paths like ``data/weather`` keep the
+            # legacy flat ``data["weather"]`` behaviour so existing widgets
+            # continue to work. For longer paths such as ``data/infra/status``
+            # build a nested JSON object under the first key so that
+            # YDocService.getPath can resolve it reliably.
+            if len(segments) == 2:
+                key = segments[1]
+                root.set(txn, key, payload)
+                return
+
+            top_key = segments[1]
+            nested: Any = payload
+            for seg in reversed(segments[2:]):
+                nested = {seg: nested}
+            root.set(txn, top_key, nested)
 
         if not mutate_live_room(ws_id, _mutator):
             try:
