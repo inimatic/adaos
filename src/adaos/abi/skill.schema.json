@@ -16,7 +16,7 @@
     },
     "description": {
       "type": "string",
-      "description": "Human‑readable summary of the skill purpose for developers and LLM programmers."
+      "description": "Human-readable summary of the skill purpose for developers and LLM programmers."
     },
 
     "author": {
@@ -57,13 +57,13 @@
         },
         "bash": {
           "type": "string",
-          "description": "Shell interpreter for Bash‑style skills."
+          "description": "Shell interpreter for Bash-style skills."
         }
       }
     },
 
     "entry": {
-      "description": "Legacy entry‑point for non‑Python runtimes; Python skills usually rely on @tool decorators instead.",
+      "description": "Legacy entry-point for non-Python runtimes; Python skills usually rely on @tool decorators instead.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -104,7 +104,7 @@
     },
 
     "permissions": {
-      "description": "Coarse‑grained permission flags that may be enforced by the runtime sandbox.",
+      "description": "Coarse-grained permission flags that may be enforced by the runtime sandbox.",
       "type": "array",
       "uniqueItems": true,
       "items": {
@@ -157,8 +157,40 @@
       "items": { "$ref": "#/$defs/tool" }
     },
 
+    "data_projections": {
+      "description": "Optional data projection rules that map (scope, slot) pairs to storage backends. Skills may define defaults here; scenarios can override them.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scope": { "type": "string" },
+          "slot": { "type": "string" },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "backend": {
+                  "type": "string",
+                  "enum": ["yjs", "kv", "sql"]
+                },
+                "webspace_id": { "type": "string" },
+                "path": { "type": "string" },
+                "table": { "type": "string" },
+                "column": { "type": "string" }
+              },
+              "required": ["backend"]
+            }
+          }
+        },
+        "required": ["scope", "slot"]
+      }
+    },
+
     "nlu": {
-      "description": "Optional NLU configuration (intents/slots) used by the interpreter workspace to generate Rasa‑style nlu.yml.",
+      "description": "Optional NLU configuration (intents/slots) used by the interpreter workspace to generate Rasa-style nlu.yml.",
       "type": "object",
       "additionalProperties": true
     }
@@ -206,3 +238,4 @@
     }
   }
 }
+

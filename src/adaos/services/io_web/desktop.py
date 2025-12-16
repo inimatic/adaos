@@ -108,6 +108,18 @@ class WebDesktopService:
             data_map = ydoc.get_map("data")
             return self._read_installed(data_map)
 
+    async def get_installed_async(self, webspace_id: Optional[str] = None) -> WebDesktopInstalled:
+        """
+        Async variant of ``get_installed`` for use from async runtimes.
+
+        This avoids calling the synchronous get_ydoc() helper from inside an
+        active event loop and uses async_get_ydoc() instead.
+        """
+        webspace = self._resolve_webspace(webspace_id)
+        async with async_get_ydoc(webspace) as ydoc:
+            data_map = ydoc.get_map("data")
+            return self._read_installed(data_map)
+
     def set_installed(self, installed: WebDesktopInstalled, webspace_id: Optional[str] = None) -> None:
         """
         Replace the installed apps/widgets set for a webspace.
