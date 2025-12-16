@@ -20,8 +20,12 @@ def execute_tool(
     import sys
 
     skill_path = Path(skill_dir).resolve()
-    if str(skill_path) not in sys.path:
-        sys.path.insert(0, str(skill_path))
+    # Ensure both the skill package root and its parent (which usually
+    # contains the ``skills.<name>`` namespace) are visible on sys.path.
+    for p in (skill_path, skill_path.parent):
+        p_str = str(p)
+        if p_str not in sys.path:
+            sys.path.insert(0, p_str)
 
     for extra in extra_paths or ():
         extra_path = Path(extra).resolve()
@@ -30,7 +34,27 @@ def execute_tool(
 
     module_name = module or "handlers.main"
     mod = importlib.import_module(module_name)
-    func = getattr(mod, attr)
+    try:
+        func = getattr(mod, attr)
+    except AttributeError as first_exc:
+        # Fallback for cases where manifest.module is "handlers.main" but
+        # the actual module lives under skills.<name>.handlers.main.
+        if module_name == "handlers.main":
+            skill_pkg = skill_path.name
+            for candidate in (
+                f"skills.{skill_pkg}.handlers.main",
+                f"{skill_pkg}.handlers.main",
+            ):
+                try:
+                    mod = importlib.import_module(candidate)
+                    func = getattr(mod, attr)
+                    break
+                except Exception:
+                    continue
+            else:
+                raise first_exc
+        else:
+            raise
     if not callable(func):
         raise TypeError(f"attribute '{attr}' from module '{module_name}' is not callable")
 
@@ -58,4 +82,3 @@ def _should_expand_keywords(func) -> bool:
         return True
     except Exception:
         return False
-
