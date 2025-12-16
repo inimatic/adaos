@@ -61,7 +61,12 @@ class ProjectionService:
         user_id: Optional[str],
         webspace_id: Optional[str],
     ) -> None:
-        ws_id = webspace_id or target.webspace_id or "default"
+        # For projections we trust the calling context (events_ws, ctx.* helpers)
+        # to pass the actual webspace id used by the Y websocket room. Fall back
+        # to a literal "default" when nothing is provided so that the same id is
+        # used consistently across YDoc, events and projections.
+        token = (webspace_id or target.webspace_id or "default").strip()
+        ws_id = token or "default"
         path = target.path or ""
         if not path:
             return

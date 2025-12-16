@@ -279,9 +279,12 @@ async def events_ws(websocket: WebSocket):
 
     def _publish_bus(topic: str, extra: Dict[str, Any] | None = None) -> None:
         data = dict(extra or {})
-        data.setdefault("webspace_id", webspace_id)
+        # Prefer an explicit webspace_id from the payload (UI commands) when
+        # present, otherwise fall back to the connection-scoped webspace_id.
+        effective_ws = str(data.get("webspace_id") or webspace_id)
+        data.setdefault("webspace_id", effective_ws)
         meta = dict(data.get("_meta") or {})
-        meta.setdefault("webspace_id", webspace_id)
+        meta.setdefault("webspace_id", effective_ws)
         if device_id:
             meta.setdefault("device_id", device_id)
         data["_meta"] = meta
@@ -358,7 +361,11 @@ async def events_ws(websocket: WebSocket):
             if kind == "desktop.toggleInstall":
                 _publish_bus(
                     "desktop.toggleInstall",
-                    {"type": payload.get("type"), "id": payload.get("id")},
+                    {
+                        "type": payload.get("type"),
+                        "id": payload.get("id"),
+                        "webspace_id": payload.get("webspace_id"),
+                    },
                 )
                 await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
                 continue
@@ -423,7 +430,13 @@ async def events_ws(websocket: WebSocket):
                 continue
 
             if kind == "weather.city_changed":
-                _publish_bus("weather.city_changed", {"city": payload.get("city")})
+                _publish_bus(
+                    "weather.city_changed",
+                    {
+                        "city": payload.get("city"),
+                        "webspace_id": payload.get("webspace_id"),
+                    },
+                )
                 await websocket.send_text(json.dumps({"ch": "events", "t": "ack", "id": cmd_id, "ok": True}))
                 continue
 

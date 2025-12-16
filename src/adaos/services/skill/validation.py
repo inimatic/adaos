@@ -57,6 +57,8 @@ def _normalize_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
         s["events"]["subscribe"] = []
     if not isinstance(s["events"].get("publish"), list):
         s["events"]["publish"] = []
+    if not isinstance(s.get("data_projections"), list):
+        s["data_projections"] = []
     return s
 
 
@@ -134,8 +136,9 @@ except Exception:
     except Exception:
         mod_tools, subs = {{}}, []
 
+required_dp = getattr(module, 'REQUIRES_DATA_PROJECTIONS', None)
 exports = list(mod_tools.keys())
-print(json.dumps({{"ok": True, "tools": exports, "subs": subs}}))
+print(json.dumps({{"ok": True, "tools": exports, "subs": subs, "requires_data_projections": required_dp}}))
 """
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     issues: List[Issue] = []
@@ -163,6 +166,21 @@ print(json.dumps({{"ok": True, "tools": exports, "subs": subs}}))
     for topic in declared_subs:
         if topic not in exported_subs:
             issues.append(Issue("error", "events.missing_sub", f"no @subscribe handler for '{topic}'", "events.subscribe[]"))
+
+    # If handlers/main.py explicitly declares that it requires data_projections
+    # but the manifest does not provide them, surface a validation issue so
+    # skill authors/LLM programmers can fix the manifest.
+    required_dp = payload.get("requires_data_projections")
+    manifest_dp = data.get("data_projections") or []
+    if required_dp and not manifest_dp:
+        issues.append(
+            Issue(
+                "warning" if not install_mode else "error",
+                "data_projections.missing",
+                "handlers/main.py declares REQUIRES_DATA_PROJECTIONS but skill.yaml has no data_projections section",
+                "data_projections",
+            )
+        )
 
     # probe_tools оставим на будущее (без исполнения)
     return issues

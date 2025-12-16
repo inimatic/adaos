@@ -64,6 +64,37 @@
 			},
 			"uniqueItems": true
 		},
+		"data_projections": {
+			"description": "Optional data projection rules that map (scope, slot) pairs to storage backends. Skills may define defaults here; scenarios can override them.",
+			"type": "array",
+			"items": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"scope": { "type": "string" },
+					"slot": { "type": "string" },
+					"targets": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"additionalProperties": true,
+							"properties": {
+								"backend": {
+									"type": "string",
+									"enum": ["yjs", "kv", "sql"]
+								},
+								"webspace_id": { "type": "string" },
+								"path": { "type": "string" },
+								"table": { "type": "string" },
+								"column": { "type": "string" }
+							},
+							"required": ["backend"]
+						}
+					}
+				},
+				"required": ["scope", "slot"]
+			}
+		},
 		"nlu": {
 			"type": "object",
 			"additionalProperties": true

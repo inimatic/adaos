@@ -87,6 +87,18 @@ def desktop_get_installed(webspace_id: Optional[str] = None) -> dict:
     return installed.to_dict()
 
 
+async def desktop_get_installed_async(webspace_id: Optional[str] = None) -> dict:
+    """
+    Async helper for reading installed desktop items for a webspace.
+
+    This mirrors :func:`desktop_get_installed` but is safe to call from
+    within an active event loop by delegating to WebDesktopService.
+    """
+    svc = WebDesktopService()
+    installed = await svc.get_installed_async(webspace_id)
+    return installed.to_dict()
+
+
 @tool(
     "web.desktop.set_installed",
     summary="Replace installed desktop apps/widgets for a webspace.",

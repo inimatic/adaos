@@ -46,22 +46,15 @@ class ProjectionRegistry:
     def __init__(self) -> None:
         self._rules: Dict[tuple[str, str], ProjectionRule] = {}
 
-    def load_from_scenario(self, scenario_id: str) -> None:
+    def load_entries(self, entries: list[dict]) -> None:
         """
-        Load projection rules from scenario.yaml for the given scenario id.
+        Load projection rules from a generic ``data_projections``-like list.
 
-        Expected shape (optional) inside scenario.yaml:
-
-        data_projections:
-          - scope: subnet
-            slot: weather.snapshot
-            targets:
-              - backend: yjs
-                webspace_id: desktop
-                path: data/skills/weather/global/snapshot
+        This helper is shared between scenario manifests and skill manifests
+        so that skills can define default projections and scenarios can
+        override them by calling :meth:`load_from_scenario` later.
         """
-        manifest = read_manifest(scenario_id)
-        raw = manifest.get("data_projections") or []
+        raw = entries or []
         if not isinstance(raw, list):
             return
 
@@ -97,6 +90,24 @@ class ProjectionRegistry:
             key = (scope, slot)
             if targets:
                 self._rules[key] = ProjectionRule(scope=scope, slot=slot, targets=targets)
+
+    def load_from_scenario(self, scenario_id: str) -> None:
+        """
+        Load projection rules from scenario.yaml for the given scenario id.
+
+        Expected shape (optional) inside scenario.yaml:
+
+        data_projections:
+          - scope: subnet
+            slot: weather.snapshot
+            targets:
+              - backend: yjs
+                webspace_id: desktop
+                path: data/skills/weather/global/snapshot
+        """
+        manifest = read_manifest(scenario_id)
+        entries = manifest.get("data_projections") or []
+        self.load_entries(entries)
 
     def resolve(self, scope: str, slot: str) -> List[ProjectionTarget]:
         """
