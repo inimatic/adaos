@@ -114,7 +114,7 @@ class NodeConfig:
             self.role = "hub"
             changed = True
         if not self.token:
-            self.token = os.environ.get("ADAOS_TOKEN", "dev-root-token")
+            self.token = os.environ.get("ADAOS_TOKEN", "dev-local-token")
             changed = True
         if not self.node_id:
             self.node_id = str(uuid.uuid4())
