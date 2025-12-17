@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -13,6 +12,12 @@ import typer
 
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.apps.cli.i18n import _
+from adaos.apps.cli.git_status import (
+    compute_path_status,
+    fetch_remote,
+    render_diff,
+    resolve_base_ref,
+)
 from adaos.services.agent_context import get_ctx
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.scenario.scaffold import create as scaffold_create
@@ -85,6 +90,146 @@ def list_cmd(
             typer.echo(_("cli.scenario.fs_missing", items=", ".join(sorted(missing))))
         if extra:
             typer.echo(_("cli.scenario.fs_extra", items=", ".join(sorted(extra))))
+
+
+@_run_safe
+@app.command("status")
+def status(
+    name: Optional[str] = typer.Argument(None, help="scenario name (omit to report for all installed scenarios)"),
+    remote: str = typer.Option("origin", "--remote", help="git remote name for comparison"),
+    ref: Optional[str] = typer.Option(None, "--ref", help="base git ref (default: <remote>/HEAD or @{u})"),
+    fetch: bool = typer.Option(False, "--fetch/--no-fetch", help="git fetch before comparing"),
+    diff: bool = typer.Option(False, "--diff", help="print git diff vs base ref (requires NAME)"),
+    json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
+):
+    ctx = get_ctx()
+    workspace_root = ctx.paths.workspace_dir()
+    scenarios_root = ctx.paths.scenarios_workspace_dir()
+
+    if diff and not name:
+        typer.secho("--diff requires a specific scenario name", fg=typer.colors.RED)
+        raise typer.Exit(2)
+
+    if fetch:
+        err = fetch_remote(workspace_root, remote=remote)
+        if err:
+            typer.secho(f"git fetch failed: {err}", fg=typer.colors.YELLOW)
+
+    base_ref = (ref or "").strip() or resolve_base_ref(workspace_root, remote=remote)
+
+    if name:
+        names = [name]
+    else:
+        try:
+            rows = SqliteScenarioRegistry(ctx.sql).list()
+        except Exception:
+            rows = []
+        names = []
+        for row in rows:
+            n = getattr(row, "name", None) or getattr(row, "id", None)
+            if not n or not bool(getattr(row, "installed", True)):
+                continue
+            names.append(str(n))
+        names = sorted(set(names))
+
+    rows_by_name = {}
+    try:
+        for r in SqliteScenarioRegistry(ctx.sql).list():
+            rows_by_name[str(getattr(r, "name", None) or getattr(r, "id", ""))] = r
+    except Exception:
+        rows_by_name = {}
+
+    results: list[dict] = []
+    for scenario_name in names:
+        row = rows_by_name.get(scenario_name)
+        version = getattr(row, "active_version", None) if row is not None else None
+        path_status = compute_path_status(
+            workdir=workspace_root,
+            path=(Path(scenarios_root) / scenario_name),
+            base_ref=base_ref,
+        )
+        results.append(
+            {
+                "name": scenario_name,
+                "version": version or "unknown",
+                "git": {
+                    "path": path_status.path,
+                    "exists": path_status.exists,
+                    "dirty": path_status.dirty,
+                    "base_ref": path_status.base_ref,
+                    "changed_vs_base": path_status.changed_vs_base,
+                    "local_last_commit": (
+                        {
+                            "sha": path_status.local_last_commit.sha,
+                            "timestamp": path_status.local_last_commit.timestamp,
+                            "iso": path_status.local_last_commit.iso,
+                            "subject": path_status.local_last_commit.subject,
+                        }
+                        if path_status.local_last_commit
+                        else None
+                    ),
+                    "base_last_commit": (
+                        {
+                            "sha": path_status.base_last_commit.sha,
+                            "timestamp": path_status.base_last_commit.timestamp,
+                            "iso": path_status.base_last_commit.iso,
+                            "subject": path_status.base_last_commit.subject,
+                        }
+                        if path_status.base_last_commit
+                        else None
+                    ),
+                    "error": path_status.error,
+                },
+            }
+        )
+
+    if json_output:
+        typer.echo(json.dumps({"scenarios": results}, ensure_ascii=False, indent=2))
+        return
+
+    if name:
+        entry = results[0] if results else {}
+        g = entry.get("git") or {}
+        typer.echo(f"scenario: {entry.get('name')}")
+        typer.echo(f"version: {entry.get('version')}")
+        typer.echo(f"git path: {g.get('path')}")
+        typer.echo(f"git base: {g.get('base_ref') or '(none)'}")
+        if g.get("error"):
+            typer.secho(f"git: {g.get('error')}", fg=typer.colors.YELLOW)
+        else:
+            flags: list[str] = []
+            if g.get("dirty"):
+                flags.append("dirty")
+            if g.get("changed_vs_base"):
+                flags.append("diff")
+            typer.echo("git status: " + (", ".join(flags) if flags else "clean"))
+            if g.get("local_last_commit"):
+                lc = g["local_last_commit"]
+                typer.echo(f"last local: {lc.get('sha')} {lc.get('iso') or lc.get('timestamp')} {lc.get('subject')}")
+            if g.get("base_last_commit"):
+                bc = g["base_last_commit"]
+                typer.echo(f"last base:  {bc.get('sha')} {bc.get('iso') or bc.get('timestamp')} {bc.get('subject')}")
+
+        if diff:
+            if not base_ref:
+                typer.secho("cannot diff: base ref is not available", fg=typer.colors.YELLOW)
+            else:
+                try:
+                    typer.echo(render_diff(workspace_root, base_ref=base_ref, path=str(g.get("path") or "")))
+                except Exception as exc:
+                    typer.secho(f"diff failed: {exc}", fg=typer.colors.RED)
+                    raise typer.Exit(1) from exc
+        return
+
+    for entry in results:
+        g = entry.get("git") or {}
+        flags: list[str] = []
+        if g.get("dirty"):
+            flags.append("dirty")
+        if g.get("changed_vs_base"):
+            flags.append("diff")
+        suffix = f" [{', '.join(flags)}]" if flags else ""
+        typer.echo(f"{entry.get('name')}: v{entry.get('version')}{suffix}")
 
 
 @_run_safe

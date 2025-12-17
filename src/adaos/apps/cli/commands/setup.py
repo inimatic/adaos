@@ -180,6 +180,11 @@ def install(
 def update(
     pull: bool = typer.Option(True, "--pull/--no-pull", help="pull latest scenario/skill sources from git"),
     sync_yjs: bool = typer.Option(True, "--sync-yjs/--no-sync-yjs", help="re-project installed scenarios into Yjs webspace"),
+    migrate_runtime: bool = typer.Option(
+        True,
+        "--migrate-runtime/--no-migrate-runtime",
+        help="ensure missing/broken skill runtimes are prepared+activated after update",
+    ),
     webspace_id: Optional[str] = typer.Option(None, "--webspace", help="target webspace id (default: 'default')"),
     json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
 ) -> None:
@@ -216,9 +221,55 @@ def update(
             continue
         try:
             res = skill_mgr.runtime_update(str(name), space="workspace")
-            out["runtime_updated"].append({"skill": str(name), "ok": True, "result": res})
+            entry = {"skill": str(name), "ok": True, "result": res}
+
+            # If runtime is missing/unprepared, optionally rebuild it using the
+            # full prepare+activate flow (also refreshes node.yaml capacity).
+            if migrate_runtime and isinstance(res, dict) and not bool(res.get("ok", True)):
+                reason = str(res.get("reason") or "")
+                if reason in {"no_active_runtime", "runtime_src_missing"}:
+                    try:
+                        skill_mgr.install(str(name), validate=False)
+                        runtime = skill_mgr.prepare_runtime(str(name), run_tests=False)
+                        version = getattr(runtime, "version", None)
+                        slot = getattr(runtime, "slot", None)
+                        skill_mgr.activate_for_space(
+                            str(name),
+                            version=version,
+                            slot=slot,
+                            space="default",
+                            webspace_id=target_webspace,
+                        )
+                        entry["runtime_migrated"] = True
+                        entry["migrated_version"] = version
+                        entry["migrated_slot"] = slot
+                    except Exception as exc:
+                        entry["runtime_migrated"] = False
+                        entry["migration_error"] = str(exc)
+
+            out["runtime_updated"].append(entry)
         except Exception as exc:
-            out["runtime_updated"].append({"skill": str(name), "ok": False, "error": str(exc)})
+            entry = {"skill": str(name), "ok": False, "error": str(exc)}
+            if migrate_runtime and "no versions installed" in str(exc).lower():
+                try:
+                    skill_mgr.install(str(name), validate=False)
+                    runtime = skill_mgr.prepare_runtime(str(name), run_tests=False)
+                    version = getattr(runtime, "version", None)
+                    slot = getattr(runtime, "slot", None)
+                    skill_mgr.activate_for_space(
+                        str(name),
+                        version=version,
+                        slot=slot,
+                        space="default",
+                        webspace_id=target_webspace,
+                    )
+                    entry["runtime_migrated"] = True
+                    entry["migrated_version"] = version
+                    entry["migrated_slot"] = slot
+                except Exception as mig_exc:
+                    entry["runtime_migrated"] = False
+                    entry["migration_error"] = str(mig_exc)
+            out["runtime_updated"].append(entry)
 
     if sync_yjs:
         try:

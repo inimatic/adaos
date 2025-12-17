@@ -12,6 +12,12 @@ import typer
 import requests
 
 from adaos.sdk.data.i18n import _
+from adaos.apps.cli.git_status import (
+    compute_path_status,
+    fetch_remote,
+    render_diff,
+    resolve_base_ref,
+)
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import RuntimeInstallResult, SkillManager
 from adaos.services.skill.runtime import (
@@ -541,38 +547,172 @@ def rollback(name: str):
 
 @_run_safe
 @app.command("status")
-def status(name: str, json_output: bool = typer.Option(False, "--json", help=_("cli.option.json"))):
+def status(
+    name: Optional[str] = typer.Argument(None, help="skill name (omit to report for all installed skills)"),
+    remote: str = typer.Option("origin", "--remote", help="git remote name for comparison"),
+    ref: Optional[str] = typer.Option(None, "--ref", help="base git ref (default: <remote>/HEAD or @{u})"),
+    fetch: bool = typer.Option(False, "--fetch/--no-fetch", help="git fetch before comparing"),
+    diff: bool = typer.Option(False, "--diff", help="print git diff vs base ref (requires NAME)"),
+    json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
+):
     mgr = _mgr()
-    try:
-        state = mgr.runtime_status(name)
-    except Exception as exc:
-        typer.secho(f"status failed: {exc}", fg=typer.colors.RED)
-        raise typer.Exit(1) from exc
+    ctx = get_ctx()
+    workspace_root = ctx.paths.workspace_dir()
+    skills_root = ctx.paths.skills_workspace_dir()
+
+    if diff and not name:
+        typer.secho("--diff requires a specific skill name", fg=typer.colors.RED)
+        raise typer.Exit(2)
+
+    if fetch:
+        err = fetch_remote(workspace_root, remote=remote)
+        if err:
+            typer.secho(f"git fetch failed: {err}", fg=typer.colors.YELLOW)
+
+    base_ref = (ref or "").strip() or resolve_base_ref(workspace_root, remote=remote)
+
+    if name:
+        names = [name]
+    else:
+        try:
+            rows = SqliteSkillRegistry(ctx.sql).list()
+        except Exception:
+            rows = []
+        names = []
+        for row in rows:
+            n = getattr(row, "name", None) or getattr(row, "id", None)
+            if not n or not bool(getattr(row, "installed", True)):
+                continue
+            names.append(str(n))
+        names = sorted(set(names))
+
+    results: list[dict] = []
+    for skill_name in names:
+        runtime_state = None
+        runtime_error = None
+        try:
+            runtime_state = mgr.runtime_status(skill_name)
+        except Exception as exc:
+            runtime_error = str(exc)
+
+        path_status = compute_path_status(
+            workdir=workspace_root,
+            path=(Path(skills_root) / skill_name),
+            base_ref=base_ref,
+        )
+
+        entry = {
+            "name": skill_name,
+            "runtime": runtime_state,
+            "runtime_error": runtime_error,
+            "git": {
+                "path": path_status.path,
+                "exists": path_status.exists,
+                "dirty": path_status.dirty,
+                "base_ref": path_status.base_ref,
+                "changed_vs_base": path_status.changed_vs_base,
+                "local_last_commit": (
+                    {
+                        "sha": path_status.local_last_commit.sha,
+                        "timestamp": path_status.local_last_commit.timestamp,
+                        "iso": path_status.local_last_commit.iso,
+                        "subject": path_status.local_last_commit.subject,
+                    }
+                    if path_status.local_last_commit
+                    else None
+                ),
+                "base_last_commit": (
+                    {
+                        "sha": path_status.base_last_commit.sha,
+                        "timestamp": path_status.base_last_commit.timestamp,
+                        "iso": path_status.base_last_commit.iso,
+                        "subject": path_status.base_last_commit.subject,
+                    }
+                    if path_status.base_last_commit
+                    else None
+                ),
+                "error": path_status.error,
+            },
+        }
+        results.append(entry)
 
     if json_output:
-        typer.echo(json.dumps(state, ensure_ascii=False, indent=2))
+        payload = {"skills": results}
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
 
-    typer.echo(f"skill: {state['name']}")
-    typer.echo(f"version: {state['version']}")
-    typer.echo(f"active slot: {state['active_slot']}")
-    if state.get("ready", True):
-        typer.echo(f"resolved manifest: {state['resolved_manifest']}")
-    else:
-        typer.echo("resolved manifest: (not activated)")
-        pending_slot = state.get("pending_slot")
-        hint_slot = pending_slot or state.get("active_slot")
-        activation_hint = f" --slot {pending_slot}" if pending_slot else ""
-        typer.secho(
-            f"slot {hint_slot} is prepared but inactive. run 'adaos skill activate {name}{activation_hint}'",
-            fg=typer.colors.YELLOW,
-        )
-    tests = state.get("tests") or {}
-    if tests:
-        typer.echo("tests: " + ", ".join(f"{k}={v}" for k, v in tests.items()))
-    default_tool = state.get("default_tool")
-    if default_tool:
-        typer.echo(f"default tool: {default_tool}")
+    if name:
+        entry = results[0] if results else {}
+        st = entry.get("runtime") or {}
+        g = entry.get("git") or {}
+        typer.echo(f"skill: {entry.get('name')}")
+        if entry.get("runtime_error"):
+            typer.secho(f"runtime: error: {entry.get('runtime_error')}", fg=typer.colors.YELLOW)
+        else:
+            typer.echo(f"version: {st.get('version')}")
+            typer.echo(f"active slot: {st.get('active_slot')}")
+            if st.get("ready", True):
+                typer.echo(f"resolved manifest: {st.get('resolved_manifest')}")
+            else:
+                typer.echo("resolved manifest: (not activated)")
+                pending_slot = st.get("pending_slot")
+                hint_slot = pending_slot or st.get("active_slot")
+                activation_hint = f" --slot {pending_slot}" if pending_slot else ""
+                typer.secho(
+                    f"slot {hint_slot} is prepared but inactive. run 'adaos skill activate {name}{activation_hint}'",
+                    fg=typer.colors.YELLOW,
+                )
+            tests = st.get("tests") or {}
+            if tests:
+                typer.echo("tests: " + ", ".join(f"{k}={v}" for k, v in tests.items()))
+            default_tool = st.get("default_tool")
+            if default_tool:
+                typer.echo(f"default tool: {default_tool}")
+
+        typer.echo(f"git path: {g.get('path')}")
+        typer.echo(f"git base: {g.get('base_ref') or '(none)'}")
+        if g.get("error"):
+            typer.secho(f"git: {g.get('error')}", fg=typer.colors.YELLOW)
+        else:
+            flags: list[str] = []
+            if g.get("dirty"):
+                flags.append("dirty")
+            if g.get("changed_vs_base"):
+                flags.append("diff")
+            typer.echo("git status: " + (", ".join(flags) if flags else "clean"))
+            if g.get("local_last_commit"):
+                lc = g["local_last_commit"]
+                typer.echo(f"last local: {lc.get('sha')} {lc.get('iso') or lc.get('timestamp')} {lc.get('subject')}")
+            if g.get("base_last_commit"):
+                bc = g["base_last_commit"]
+                typer.echo(f"last base:  {bc.get('sha')} {bc.get('iso') or bc.get('timestamp')} {bc.get('subject')}")
+
+        if diff:
+            if not base_ref:
+                typer.secho("cannot diff: base ref is not available", fg=typer.colors.YELLOW)
+            else:
+                try:
+                    typer.echo(render_diff(workspace_root, base_ref=base_ref, path=str(g.get("path") or "")))
+                except Exception as exc:
+                    typer.secho(f"diff failed: {exc}", fg=typer.colors.RED)
+                    raise typer.Exit(1) from exc
+        return
+
+    # Summary for all skills
+    for entry in results:
+        st = entry.get("runtime") or {}
+        g = entry.get("git") or {}
+        flags: list[str] = []
+        if entry.get("runtime_error"):
+            flags.append("runtime-error")
+        if g.get("dirty"):
+            flags.append("dirty")
+        if g.get("changed_vs_base"):
+            flags.append("diff")
+        version = st.get("version") or "unknown"
+        slot = st.get("active_slot") or "n/a"
+        suffix = f" [{', '.join(flags)}]" if flags else ""
+        typer.echo(f"{entry.get('name')}: v{version} slot={slot}{suffix}")
 
 
 @_run_safe
