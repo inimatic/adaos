@@ -228,6 +228,7 @@ def push_command(
         typer.echo("Use --message/-m to push commits or run 'adaos dev skill push <name>'.")
         raise typer.Exit(1)
 
+    _resolve_skill_path(skill_name)
     mgr = _mgr()
     res = mgr.push(skill_name, message, signoff=signoff)
     if res in {"nothing-to-push", "nothing-to-commit"}:
