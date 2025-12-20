@@ -52,6 +52,23 @@ def _mgr() -> ScenarioManager:
     return ScenarioManager(repo=repo, registry=reg, git=ctx.git, paths=ctx.paths, bus=ctx.bus, caps=ctx.caps)
 
 
+def _resolve_scenario_path(target: str) -> Path:
+    candidate = Path(target).expanduser()
+    if candidate.exists():
+        return candidate.resolve()
+    ctx = get_ctx()
+    attr = getattr(ctx.paths, "scenarios_workspace_dir", None)
+    if attr is not None:
+        root = attr() if callable(attr) else attr
+    else:
+        base = getattr(ctx.paths, "scenarios_dir")
+        root = base() if callable(base) else base
+    candidate = (Path(root) / target).resolve()
+    if candidate.exists():
+        return candidate
+    raise typer.BadParameter(_("cli.scenario.push.not_found", name=target))
+
+
 @_run_safe
 @app.command("list")
 def list_cmd(
@@ -425,6 +442,7 @@ def push_command(
         raise typer.Exit(1)
 
     mgr = _mgr()
+    _resolve_scenario_path(scenario_name)
     result = mgr.push(scenario_name, message, signoff=signoff)
     if result in {"nothing-to-push", "nothing-to-commit"}:
         typer.echo(_("cli.scenario.push.nothing"))
