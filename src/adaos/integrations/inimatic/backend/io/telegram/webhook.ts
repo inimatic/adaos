@@ -17,33 +17,33 @@ import { tg_updates_total, enqueue_total, dlq_total } from '../telemetry.js'
 const log = pino({ name: 'tg-webhook' })
 
 export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus | null) {
-    // Internal file proxy: streams Telegram file by file_id (auth via X-AdaOS-Token)
-    app.get('/internal/tg/file', async (req, res) => {
-        try {
-            const tokenHdr = String(req.header('X-AdaOS-Token') || '')
-            const expect = process.env['ADAOS_TOKEN'] || ''
-            if (!expect || tokenHdr !== expect) return res.status(401).json({ error: 'unauthorized' })
-            const bot_id = String(req.query['bot_id'] || '')
-            const file_id = String(req.query['file_id'] || '')
-            const botToken = process.env['TG_BOT_TOKEN'] || ''
-            if (!botToken || !file_id) return res.status(400).json({ error: 'bad_request' })
-            const meta = await getFilePath(botToken, file_id)
-            if (!meta || typeof meta === 'string') return res.status(404).json({ error: 'not_found' })
-            const tmp = await downloadFile(botToken, meta.file_path, bot_id || 'default')
-            const pathMod = await import('node:path')
-            let mimeMod: any
-            try { mimeMod = await (new Function('m', 'return import(m)'))('mime-types') } catch {}
-            const name = pathMod.basename(String(meta.file_path || 'file'))
-            const mime = (mimeMod && mimeMod.lookup ? mimeMod.lookup(name) : '') || 'application/octet-stream'
-            res.setHeader('Content-Type', String(mime))
-            res.setHeader('Content-Disposition', `attachment; filename="${name}"`)
-            res.setHeader('X-File-Name', name)
-            res.sendFile(tmp)
-        } catch (e) {
-            log.error({ err: String(e) }, 'tg file proxy failed')
-            res.status(500).json({ error: 'internal' })
-        }
-    })
+	// Internal file proxy: streams Telegram file by file_id (auth via X-AdaOS-Token)
+	app.get('/internal/tg/file', async (req, res) => {
+		try {
+			const tokenHdr = String(req.header('X-AdaOS-Token') || '')
+			const expect = process.env['ADAOS_TOKEN'] || ''
+			if (!expect || tokenHdr !== expect) return res.status(401).json({ error: 'unauthorized' })
+			const bot_id = String(req.query['bot_id'] || '')
+			const file_id = String(req.query['file_id'] || '')
+			const botToken = process.env['TG_BOT_TOKEN'] || ''
+			if (!botToken || !file_id) return res.status(400).json({ error: 'bad_request' })
+			const meta = await getFilePath(botToken, file_id)
+			if (!meta || typeof meta === 'string') return res.status(404).json({ error: 'not_found' })
+			const tmp = await downloadFile(botToken, meta.file_path, bot_id || 'default')
+			const pathMod = await import('node:path')
+			let mimeMod: any
+			try { mimeMod = await (new Function('m', 'return import(m)'))('mime-types') } catch { }
+			const name = pathMod.basename(String(meta.file_path || 'file'))
+			const mime = (mimeMod && mimeMod.lookup ? mimeMod.lookup(name) : '') || 'application/octet-stream'
+			res.setHeader('Content-Type', String(mime))
+			res.setHeader('Content-Disposition', `attachment; filename="${name}"`)
+			res.setHeader('X-File-Name', name)
+			res.sendFile(tmp)
+		} catch (e) {
+			log.error({ err: String(e) }, 'tg file proxy failed')
+			res.status(500).json({ error: 'internal' })
+		}
+	})
 	app.post('/io/tg/:bot_id/webhook', async (req, res) => {
 		try {
 			try { if (process.env['PG_URL']) await ensureSchema() } catch { }
@@ -53,7 +53,6 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 				log.warn({ have_header: !!header }, 'tg webhook: invalid secret token')
 				return res.status(401).json({ error: 'invalid_secret' })
 			}
-
 			const bot_id = String(req.params['bot_id'])
 			const update: any = req.body
 			log.info({ bot_id, has_bus: !!bus, router_enabled: String(process.env['TG_ROUTER_ENABLED'] || '0') }, 'tg webhook: start')
@@ -77,7 +76,7 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 								if (names.has(alias)) { let i = 2; while (names.has(`hub-${i}`)) i++; alias = `hub-${i}` }
 								const makeDefault = (existing || []).length === 0
 								await upsertBinding(Number(chat_id), hubId, alias, makeDefault)
-								try { await ensureHubToken(hubId) } catch {}
+								try { await ensureHubToken(hubId) } catch { }
 								if (makeDefault) { try { await setSession(Number(chat_id), hubId, 'manual') } catch { } }
 							} catch { }
 							// Send quick ack to user
@@ -218,24 +217,24 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 							await bindingUpsert('telegram', evt.user_id, bot_id, hubId)
 							// store simplified hub. chat link for outbound
 							await tgLinkSet(hubId, String(evt.user_id), bot_id, String(evt.chat_id))
-							try { await ensureHubToken(hubId) } catch {}
+							try { await ensureHubToken(hubId) } catch { }
 							log.info({ hub_id: hubId, bot_id, chat_id: String(evt.chat_id) }, 'telegram pairing linked')
 							// Send welcome message right after successful pairing
-                        if (bus) {
-                            const subject = `tg.output.${bot_id}.chat.${evt.chat_id}`
-                            const welcome = process.env['TG_WELCOME_TEXT'] || 'Successfully paired. You can start messaging.'
-                            // Try to include alias for better UX
-                            let alias: string | undefined
-                            try {
-                                const { listBindings } = await import('../../db/tg.repo.js')
-                                const binds = await listBindings(Number(evt.chat_id))
-                                alias = (binds || []).find(b => String(b.hub_id) === String(hubId))?.alias as any
-                            } catch { }
-                            const out = {
-                                alias,
-                                target: { bot_id, hub_id: hubId, chat_id: String(evt.chat_id) },
-                                messages: [{ type: 'text', text: welcome }],
-                            }
+							if (bus) {
+								const subject = `tg.output.${bot_id}.chat.${evt.chat_id}`
+								const welcome = process.env['TG_WELCOME_TEXT'] || 'Successfully paired. You can start messaging.'
+								// Try to include alias for better UX
+								let alias: string | undefined
+								try {
+									const { listBindings } = await import('../../db/tg.repo.js')
+									const binds = await listBindings(Number(evt.chat_id))
+									alias = (binds || []).find(b => String(b.hub_id) === String(hubId))?.alias as any
+								} catch { }
+								const out = {
+									alias,
+									target: { bot_id, hub_id: hubId, chat_id: String(evt.chat_id) },
+									messages: [{ type: 'text', text: welcome }],
+								}
 								try {
 									await bus.publishSubject(subject, out)
 									log.info({ subject, hub_id: hubId, chat_id: String(evt.chat_id) }, 'welcome sent via bus')
@@ -262,110 +261,110 @@ export function installTelegramWebhookRoutes(app: express.Express, bus: NatsBus 
 
 			// resolve hub (session/default)
 			const locale = (evt.payload as any)?.meta?.lang
-            const defaultHub = process.env['DEFAULT_HUB']
-            let hubResolved = await resolveHubId('telegram', evt.user_id, bot_id, locale)
-            let sessionHub: string | undefined
-            try {
-                const sess = await getSession(Number(evt.chat_id))
-                if (sess?.current_hub_id) sessionHub = String(sess.current_hub_id)
-            } catch {}
-            // Prefer session hub over router fallback that equals DEFAULT_HUB
-            let hub = hubResolved
-            if (!hub || (defaultHub && hub === defaultHub)) {
-                if (sessionHub) hub = sessionHub
-            }
-            if (!hub) hub = defaultHub
-            // Optional address override: leading @<hub_id|alias> text -> route to that hub and strip the address token
-            try {
-                if (evt.type === 'text') {
-                    const txt0: string = (((evt.payload as any)?.text ?? '') as string) + ''
-                    const m = txt0.match(/^\s*@([A-Za-z0-9_\-]+)\s+(.*)$/)
-                    if (m) {
-                        const addr = m[1]
-                        let routedHub = ''
-                        if (addr.startsWith('sn_')) routedHub = addr
-                        else {
-                            try {
-                                const bindings = await listBindings(Number(evt.chat_id))
-                                const hit = (bindings || []).find(b => String(b.alias) === addr)
-                                routedHub = hit ? String(hit.hub_id) : ''
-                            } catch { routedHub = '' }
-                        }
-                        if (routedHub) {
-                            const stripped: string = (m[2] ?? '') as string
-                            ;(evt.payload as any).text = stripped
-                            // Also adjust legacy mirror text via evt later
-                            hub = routedHub
-                            log.info({ hub, addr }, 'tg webhook: address override')
-                            ;(evt as any).__addr_override = true
-                        }
-                    }
-                }
-            } catch {}
-            log.info({ hub, user_id: evt.user_id, bot_id }, 'tg webhook: hub resolved')
-            evt.hub_id = hub || null
+			const defaultHub = process.env['DEFAULT_HUB']
+			let hubResolved = await resolveHubId('telegram', evt.user_id, bot_id, locale)
+			let sessionHub: string | undefined
+			try {
+				const sess = await getSession(Number(evt.chat_id))
+				if (sess?.current_hub_id) sessionHub = String(sess.current_hub_id)
+			} catch { }
+			// Prefer session hub over router fallback that equals DEFAULT_HUB
+			let hub = hubResolved
+			if (!hub || (defaultHub && hub === defaultHub)) {
+				if (sessionHub) hub = sessionHub
+			}
+			if (!hub) hub = defaultHub
+			// Optional address override: leading @<hub_id|alias> text -> route to that hub and strip the address token
+			try {
+				if (evt.type === 'text') {
+					const txt0: string = (((evt.payload as any)?.text ?? '') as string) + ''
+					const m = txt0.match(/^\s*@([A-Za-z0-9_\-]+)\s+(.*)$/)
+					if (m) {
+						const addr = m[1]
+						let routedHub = ''
+						if (addr.startsWith('sn_')) routedHub = addr
+						else {
+							try {
+								const bindings = await listBindings(Number(evt.chat_id))
+								const hit = (bindings || []).find(b => String(b.alias) === addr)
+								routedHub = hit ? String(hit.hub_id) : ''
+							} catch { routedHub = '' }
+						}
+						if (routedHub) {
+							const stripped: string = (m[2] ?? '') as string
+								; (evt.payload as any).text = stripped
+							// Also adjust legacy mirror text via evt later
+							hub = routedHub
+							log.info({ hub, addr }, 'tg webhook: address override')
+								; (evt as any).__addr_override = true
+						}
+					}
+				}
+			} catch { }
+			log.info({ hub, user_id: evt.user_id, bot_id }, 'tg webhook: hub resolved')
+			evt.hub_id = hub || null
 
-            // Filter control commands handled by backend router; do not send to hub
-                if (evt.type === 'text') {
-                    const t = String((evt.payload as any)?.text || '').trim()
-                    const lower = t.toLowerCase()
-                    const isCtrl = lower === '/list' || lower === '/help' || lower.startsWith('/use ') || lower === '/current' || lower === '/default' || lower.startsWith('/alias') || lower === '/bind_here' || lower === '/unbind_here'
-                    if (isCtrl) {
-                    try {
-                        if (lower.startsWith('/use ')) {
-                            const alias = t.slice(5).trim()
-                            if (alias) {
-                                const rec = await getByAlias(Number(evt.chat_id), alias)
-                                if (rec?.hub_id) {
-                                    try { await setSession(Number(evt.chat_id), String(rec.hub_id), 'manual') } catch {}
-                                    try { await setDefault(Number(evt.chat_id), alias) } catch {}
-                                }
-                            }
-                        }
-                    } catch {}
-                    await idemPut(idemKey, { status: 200, body: { ok: true, routed: false, info: 'handled_by_router' } }, 24 * 3600)
-                    return res.status(200).json({ ok: true, routed: false })
-                } else if ((evt as any)?.payload && typeof (evt as any).payload === 'object') {
-                    // Allow addressing in caption for media: reuse @addr parsing by mapping caption to text
-                    const cap = String(((evt as any).payload as any)?.text || '').trim()
-                    if (cap.startsWith('@')) {
-                        const fakeTextEvt: any = { type: 'text', payload: { text: cap }, hub_id: hub, chat_id: evt.chat_id, user_id: evt.user_id, update_id: evt.update_id }
-                        // Re-run minimal address override logic
-                        const m = cap.match(/^\s*@([A-Za-z0-9_\-]+)\s+(.*)$/)
-                        if (m) {
-                            const addr = m[1]
-                            let routedHub = ''
-                            if (addr.startsWith('sn_')) routedHub = addr
-                            else {
-                                try {
-                                    const bindings = await listBindings(Number(evt.chat_id))
-                                    const hit = (bindings || []).find(b => String(b.alias) === addr)
-                                    routedHub = hit ? String(hit.hub_id) : ''
-                                } catch { routedHub = '' }
-                            }
-                            if (routedHub) {
-                                (evt as any).payload.text = (m[2] ?? '') as string
-                                hub = routedHub
-                                ;(evt as any).__addr_override = true
-                                log.info({ hub, addr }, 'tg webhook: address override (caption)')
-                            }
-                        }
-                    }
-                }
-            }
+			// Filter control commands handled by backend router; do not send to hub
+			if (evt.type === 'text') {
+				const t = String((evt.payload as any)?.text || '').trim()
+				const lower = t.toLowerCase()
+				const isCtrl = lower === '/list' || lower === '/help' || lower.startsWith('/use ') || lower === '/current' || lower === '/default' || lower.startsWith('/alias') || lower === '/bind_here' || lower === '/unbind_here'
+				if (isCtrl) {
+					try {
+						if (lower.startsWith('/use ')) {
+							const alias = t.slice(5).trim()
+							if (alias) {
+								const rec = await getByAlias(Number(evt.chat_id), alias)
+								if (rec?.hub_id) {
+									try { await setSession(Number(evt.chat_id), String(rec.hub_id), 'manual') } catch { }
+									try { await setDefault(Number(evt.chat_id), alias) } catch { }
+								}
+							}
+						}
+					} catch { }
+					await idemPut(idemKey, { status: 200, body: { ok: true, routed: false, info: 'handled_by_router' } }, 24 * 3600)
+					return res.status(200).json({ ok: true, routed: false })
+				} else if ((evt as any)?.payload && typeof (evt as any).payload === 'object') {
+					// Allow addressing in caption for media: reuse @addr parsing by mapping caption to text
+					const cap = String(((evt as any).payload as any)?.text || '').trim()
+					if (cap.startsWith('@')) {
+						const fakeTextEvt: any = { type: 'text', payload: { text: cap }, hub_id: hub, chat_id: evt.chat_id, user_id: evt.user_id, update_id: evt.update_id }
+						// Re-run minimal address override logic
+						const m = cap.match(/^\s*@([A-Za-z0-9_\-]+)\s+(.*)$/)
+						if (m) {
+							const addr = m[1]
+							let routedHub = ''
+							if (addr.startsWith('sn_')) routedHub = addr
+							else {
+								try {
+									const bindings = await listBindings(Number(evt.chat_id))
+									const hit = (bindings || []).find(b => String(b.alias) === addr)
+									routedHub = hit ? String(hit.hub_id) : ''
+								} catch { routedHub = '' }
+							}
+							if (routedHub) {
+								(evt as any).payload.text = (m[2] ?? '') as string
+								hub = routedHub
+									; (evt as any).__addr_override = true
+								log.info({ hub, addr }, 'tg webhook: address override (caption)')
+							}
+						}
+					}
+				}
+			}
 
-            // Prevent sending unaddressed text to a hub not bound to this chat
-            try {
-                if (evt.type === 'text' && !(evt as any).__addr_override) {
-                    const bindings = await listBindings(Number(evt.chat_id))
-                    const allowed = (bindings || []).some(b => String(b.hub_id) === String(hub))
-                    if (!allowed) {
-                        log.info({ hub, chat_id: evt.chat_id }, 'tg webhook: drop unaddressed text to foreign hub')
-                        await idemPut(idemKey, { status: 200, body: { ok: true, routed: false, info: 'foreign_hub_ignored' } }, 24 * 3600)
-                        return res.status(200).json({ ok: true, routed: false })
-                    }
-                }
-            } catch {}
+			// Prevent sending unaddressed text to a hub not bound to this chat
+			try {
+				if (evt.type === 'text' && !(evt as any).__addr_override) {
+					const bindings = await listBindings(Number(evt.chat_id))
+					const allowed = (bindings || []).some(b => String(b.hub_id) === String(hub))
+					if (!allowed) {
+						log.info({ hub, chat_id: evt.chat_id }, 'tg webhook: drop unaddressed text to foreign hub')
+						await idemPut(idemKey, { status: 200, body: { ok: true, routed: false, info: 'foreign_hub_ignored' } }, 24 * 3600)
+						return res.status(200).json({ ok: true, routed: false })
+					}
+				}
+			} catch { }
 
 			let status = 202
 			let body: any = { ok: true, routed: false }
