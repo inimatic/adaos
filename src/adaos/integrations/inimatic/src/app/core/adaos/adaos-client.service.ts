@@ -6,6 +6,7 @@ export type AdaosEvent = { type: string; [k: string]: any }
 export interface AdaosConfig {
 	baseUrl: string
 	token?: string | null
+	authKind?: 'adaos-token' | 'bearer'
 }
 
 export interface SubnetRegisterRequest {
@@ -62,6 +63,7 @@ export class AdaosClient {
 		this.cfg = {
 			baseUrl: (window as any).__ADAOS_BASE__ ?? 'http://127.0.0.1:8777',
 			token: (window as any).__ADAOS_TOKEN__ ?? null,
+			authKind: 'adaos-token',
 		}
 	}
 
@@ -75,6 +77,17 @@ export class AdaosClient {
 	setToken(token: string | null) {
 		this.cfg.token = token
 	}
+	setAuthBearer(token: string | null) {
+		this.cfg.token = token
+		this.cfg.authKind = 'bearer'
+	}
+	setAuthAdaosToken(token: string | null) {
+		this.cfg.token = token
+		this.cfg.authKind = 'adaos-token'
+	}
+	getToken(): string | null | undefined {
+		return this.cfg.token
+	}
 
 	// �����⭠� ᪫���� ��� new URL - ࠡ�⠥� � � ��᮫�⭮�, � � �⭮�⥫쭮� �����
 	private abs(path: string) {
@@ -83,9 +96,11 @@ export class AdaosClient {
 		return `${base}${rel}`
 	}
 	private h() {
-		return this.cfg.token
-			? new HttpHeaders({ 'X-AdaOS-Token': this.cfg.token })
-			: undefined
+		if (!this.cfg.token) return undefined
+		if (this.cfg.authKind === 'bearer') {
+			return new HttpHeaders({ Authorization: `Bearer ${this.cfg.token}` })
+		}
+		return new HttpHeaders({ 'X-AdaOS-Token': this.cfg.token })
 	}
 
 	get<T>(path: string) {

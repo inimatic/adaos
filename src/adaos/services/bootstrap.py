@@ -4,6 +4,7 @@ import asyncio, socket, time, uuid, os, logging, traceback
 from typing import Any, List, Optional, Sequence
 from pathlib import Path
 import json as _json
+import base64
 
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.sdk.data import bus
@@ -235,6 +236,7 @@ class BootstrapService:
                     if now - last_token_fetch < 30.0:
                         return False
                     last_token_fetch = now
+                    debug = os.getenv("HUB_NATS_VERBOSE", "0") == "1"
                     try:
                         from adaos.services.root.client import RootHttpClient
                         from adaos.services.capacity import _load_node_yaml as _load_node, _save_node_yaml as _save_node
@@ -261,7 +263,9 @@ class BootstrapService:
                         key = None
 
                     verify: Any = True
-                    if ca is not None:
+                    # By default keep system CA verification (important for public HTTPS like api.inimatic.com).
+                    # If you need to pin CA explicitly, set ADAOS_ROOT_VERIFY_CA=1.
+                    if os.getenv("ADAOS_ROOT_VERIFY_CA", "0") == "1" and ca is not None:
                         try:
                             if ca.exists():
                                 verify = str(ca)
@@ -277,13 +281,51 @@ class BootstrapService:
 
                     client = RootHttpClient(base_url=str(base_url), verify=verify, cert=cert_tuple)
                     if not client.cert:
+                        if debug:
+                            try:
+                                import logging as _logging
+
+                                _logging.getLogger("adaos.hub_io").warning(
+                                    "nats.mtls_missing",
+                                    extra={
+                                        "extra": {
+                                            "base_url": str(base_url),
+                                            "verify": str(verify),
+                                            "ca_path": str(ca) if ca is not None else None,
+                                            "cert_path": str(cert) if cert is not None else None,
+                                            "key_path": str(key) if key is not None else None,
+                                            "have_ca": bool(ca and ca.exists()),
+                                            "have_cert": bool(cert and cert.exists()),
+                                            "have_key": bool(key and key.exists()),
+                                        }
+                                    },
+                                )
+                            except Exception:
+                                pass
                         return False
 
                     def _do_request() -> dict[str, Any] | None:
                         try:
                             data = client.request("POST", "/v1/hub/nats/token")
                             return dict(data) if isinstance(data, dict) else None
-                        except Exception:
+                        except Exception as e:
+                            if debug:
+                                try:
+                                    import logging as _logging
+
+                                    _logging.getLogger("adaos.hub_io").warning(
+                                        "nats.token_request_failed",
+                                        extra={
+                                            "extra": {
+                                                "base_url": str(base_url),
+                                                "verify": str(verify),
+                                                "error": str(e),
+                                                "error_type": type(e).__name__,
+                                            }
+                                        },
+                                    )
+                                except Exception:
+                                    pass
                             return None
 
                     data = await asyncio.to_thread(_do_request)
@@ -293,6 +335,16 @@ class BootstrapService:
                     nats_user = data.get("nats_user")
                     nats_ws_url = data.get("nats_ws_url")
                     if not token or not nats_user or not nats_ws_url:
+                        if debug:
+                            try:
+                                import logging as _logging
+
+                                _logging.getLogger("adaos.hub_io").warning(
+                                    "nats.token_response_incomplete",
+                                    extra={"extra": {"data": data}},
+                                )
+                            except Exception:
+                                pass
                         return False
 
                     try:
@@ -349,20 +401,8 @@ class BootstrapService:
                                     await asyncio.sleep(0.1)
                                     continue
                                 # Wait for `adaos dev telegram` to provision credentials.
-                                if os.getenv("HUB_NATS_VERBOSE", "0") == "1" or os.getenv("HUB_NATS_TRACE_INPUT", "0") == "1":
-                                    try:
-                                        print("[hub-io] NATS disabled: missing nats.ws_url/user/pass in node.yaml")
-                                    except Exception:
-                                        pass
-                                    try:
-                                        import logging as _logging
-
-                                        _logging.getLogger("adaos.hub_io").warning(
-                                            "nats.disabled",
-                                            extra={"extra": {"have_ws_url": bool(nurl), "have_user": bool(nuser), "have_pass": bool(npass)}},
-                                        )
-                                    except Exception:
-                                        pass
+                                if os.getenv("HUB_NATS_VERBOSE", "0") == "1":
+                                    print("[hub-io] NATS disabled: missing nats.ws_url/user/pass in node.yaml")
                                 await asyncio.sleep(2.0)
                                 continue
 
@@ -530,24 +570,6 @@ class BootstrapService:
                             )
                             subj = f"tg.input.{hub_id}"
                             subj_legacy = f"io.tg.in.{hub_id}.text"
-                            try:
-                                import logging as _logging
-
-                                _logging.getLogger("adaos.hub_io").info(
-                                    "nats.connected",
-                                    extra={
-                                        "extra": {
-                                            "hub_id": hub_id_str,
-                                            "servers": [str(s) for s in candidates],
-                                            "user": user_str,
-                                            "connected_url": str(getattr(nc, "connected_url", None) or ""),
-                                            "subj": subj,
-                                            "subj_legacy": subj_legacy,
-                                        }
-                                    },
-                                )
-                            except Exception:
-                                pass
                             print(f"[hub-io] NATS subscribe {subj} and legacy {subj_legacy}")
                             # First successful connect after failures
                             _emit_up()
@@ -618,24 +640,6 @@ class BootstrapService:
                             data = _json.loads(msg.data.decode("utf-8"))
                         except Exception:
                             data = {}
-                        if os.getenv("HUB_NATS_TRACE_INPUT", "0") == "1":
-                            try:
-                                import logging as _logging
-
-                                _logging.getLogger("adaos.hub_io").info(
-                                    "nats.rx",
-                                    extra={
-                                        "extra": {
-                                            "subject": getattr(msg, "subject", None),
-                                            "bytes": len(getattr(msg, "data", b"") or b""),
-                                            "keys": sorted(list(data.keys())) if isinstance(data, dict) else None,
-                                            "kind": (data.get("kind") if isinstance(data, dict) else None),
-                                            "has_payload": isinstance(data, dict) and isinstance(data.get("payload"), dict),
-                                        }
-                                    },
-                                )
-                            except Exception:
-                                pass
                         try:
                             # Media fetch: if event includes telegram media, download to local cache and annotate path
                             p = (data or {}).get("payload") or {}
@@ -697,6 +701,200 @@ class BootstrapService:
 
                     await nc.subscribe(subj, cb=cb)
 
+                    # Browser<->Hub routing over NATS (root proxy fallback).
+                    # Root publishes `route.to_hub.<key>` where key is "<hub_id>--<conn_id|http--req_id>" (no dots).
+                    # Hub responds on `route.to_browser.<same-key>`.
+                    try:
+                        import websockets  # type: ignore
+                        import requests  # type: ignore
+
+                        tunnels: dict[str, dict[str, Any]] = {}
+                        tunnel_tasks: dict[str, asyncio.Task] = {}
+
+                        async def _route_reply(key: str, payload: dict[str, Any]) -> None:
+                            try:
+                                await nc.publish(
+                                    f"route.to_browser.{key}",
+                                    _json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                                )
+                            except Exception:
+                                pass
+
+                        def _hub_key_match(key: str) -> bool:
+                            # key is "<hub_id>--..."
+                            try:
+                                return isinstance(key, str) and key.startswith(f"{hub_id}--")
+                            except Exception:
+                                return False
+
+                        async def _tunnel_reader(key: str, ws) -> None:
+                            try:
+                                async for msg in ws:
+                                    if isinstance(msg, (bytes, bytearray)):
+                                        await _route_reply(
+                                            key,
+                                            {
+                                                "t": "frame",
+                                                "kind": "bin",
+                                                "data_b64": base64.b64encode(bytes(msg)).decode("ascii"),
+                                            },
+                                        )
+                                    else:
+                                        await _route_reply(key, {"t": "frame", "kind": "text", "data": str(msg)})
+                            except Exception:
+                                pass
+                            finally:
+                                try:
+                                    await _route_reply(key, {"t": "close"})
+                                except Exception:
+                                    pass
+                                tunnels.pop(key, None)
+                                t = tunnel_tasks.pop(key, None)
+                                try:
+                                    if t:
+                                        t.cancel()
+                                except Exception:
+                                    pass
+                                try:
+                                    await ws.close()
+                                except Exception:
+                                    pass
+
+                        async def _route_cb(msg) -> None:
+                            try:
+                                subject = str(getattr(msg, "subject", "") or "")
+                                parts = subject.split(".", 2)
+                                # route.to_hub.<key>
+                                if len(parts) < 3:
+                                    return
+                                key = parts[2]
+                                if not _hub_key_match(key):
+                                    return
+
+                                try:
+                                    data = _json.loads(msg.data.decode("utf-8"))
+                                except Exception:
+                                    data = {}
+                                t = (data or {}).get("t")
+
+                                if t == "open":
+                                    # Open a local WS to the hub server and start pumping frames.
+                                    path = str((data or {}).get("path") or "/ws")
+                                    query = str((data or {}).get("query") or "")
+                                    # Local hub server is always reachable inside the hub machine/container.
+                                    url = f"ws://127.0.0.1:8777{path}{query}"
+                                    # Ensure we don't leak multiple opens for same key.
+                                    try:
+                                        old = tunnels.get(key)
+                                        if old and old.get("ws"):
+                                            try:
+                                                await old["ws"].close()
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+                                    try:
+                                        ws = await websockets.connect(url, max_size=2**20)  # 1 MiB frames
+                                    except Exception as e:
+                                        await _route_reply(key, {"t": "close", "err": str(e)})
+                                        return
+                                    tunnels[key] = {"ws": ws, "url": url}
+                                    tunnel_tasks[key] = asyncio.create_task(_tunnel_reader(key, ws), name=f"hub-route-{key}")
+                                    return
+
+                                if t == "close":
+                                    rec = tunnels.pop(key, None)
+                                    task = tunnel_tasks.pop(key, None)
+                                    try:
+                                        if task:
+                                            task.cancel()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if rec and rec.get("ws"):
+                                            await rec["ws"].close()
+                                    except Exception:
+                                        pass
+                                    return
+
+                                if t == "frame":
+                                    rec = tunnels.get(key)
+                                    ws = rec.get("ws") if isinstance(rec, dict) else None
+                                    if not ws:
+                                        return
+                                    kind = (data or {}).get("kind")
+                                    if kind == "bin":
+                                        b64 = (data or {}).get("data_b64")
+                                        if isinstance(b64, str) and b64:
+                                            try:
+                                                await ws.send(base64.b64decode(b64.encode("ascii")))
+                                            except Exception:
+                                                pass
+                                    else:
+                                        txt = (data or {}).get("data")
+                                        if isinstance(txt, str):
+                                            try:
+                                                await ws.send(txt)
+                                            except Exception:
+                                                pass
+                                    return
+
+                                if t == "http":
+                                    method = str((data or {}).get("method") or "GET").upper()
+                                    path = str((data or {}).get("path") or "/api/ping")
+                                    search = str((data or {}).get("search") or "")
+                                    headers = (data or {}).get("headers") or {}
+                                    body_b64 = (data or {}).get("body_b64")
+
+                                    def _do_http() -> dict[str, Any]:
+                                        try:
+                                            url = f"http://127.0.0.1:8777{path}{search}"
+                                            body = None
+                                            if isinstance(body_b64, str) and body_b64:
+                                                try:
+                                                    body = base64.b64decode(body_b64.encode("ascii"))
+                                                except Exception:
+                                                    body = None
+                                            # Minimal header allowlist.
+                                            h2: dict[str, str] = {}
+                                            if isinstance(headers, dict):
+                                                ct = headers.get("content-type") or headers.get("Content-Type")
+                                                if isinstance(ct, str) and ct:
+                                                    h2["Content-Type"] = ct
+                                            resp = requests.request(method, url, data=body, headers=h2, timeout=12)
+                                            raw = resp.content or b""
+                                            limit = 2 * 1024 * 1024
+                                            truncated = len(raw) > limit
+                                            if truncated:
+                                                raw = raw[:limit]
+                                            out_headers: dict[str, str] = {}
+                                            try:
+                                                cth = resp.headers.get("content-type")
+                                                if cth:
+                                                    out_headers["content-type"] = cth
+                                            except Exception:
+                                                pass
+                                            return {
+                                                "t": "http_resp",
+                                                "status": int(resp.status_code),
+                                                "headers": out_headers,
+                                                "body_b64": base64.b64encode(raw).decode("ascii"),
+                                                "truncated": truncated,
+                                            }
+                                        except Exception as e:
+                                            return {"t": "http_resp", "status": 502, "headers": {}, "body_b64": "", "err": str(e)}
+
+                                    resp = await asyncio.to_thread(_do_http)
+                                    await _route_reply(key, resp)
+                                    return
+                            except Exception:
+                                return
+
+                        await nc.subscribe("route.to_hub.*", cb=_route_cb)
+                        print("[hub-io] NATS subscribe route.to_hub.* (hub route proxy)")
+                    except Exception:
+                        pass
+
                     # Optional compatibility: also listen to additional hub aliases if explicitly configured
                     try:
                         aliases_env = os.getenv("HUB_INPUT_ALIASES", "")
@@ -718,22 +916,6 @@ class BootstrapService:
                             data = _json.loads(msg.data.decode("utf-8"))
                         except Exception:
                             data = {}
-                        if os.getenv("HUB_NATS_TRACE_INPUT", "0") == "1":
-                            try:
-                                import logging as _logging
-
-                                _logging.getLogger("adaos.hub_io").info(
-                                    "nats.rx_legacy",
-                                    extra={
-                                        "extra": {
-                                            "subject": getattr(msg, "subject", None),
-                                            "bytes": len(getattr(msg, "data", b"") or b""),
-                                            "keys": sorted(list(data.keys())) if isinstance(data, dict) else None,
-                                        }
-                                    },
-                                )
-                            except Exception:
-                                pass
                         # transform into minimal io.input envelope compatible with downstream
                         try:
                             text = (data or {}).get("text") or ""

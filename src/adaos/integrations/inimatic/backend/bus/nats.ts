@@ -68,13 +68,6 @@ export async function publishIn(hub_id: string, payload: any): Promise<void> {
       }
     }
   } catch { /* best effort */ }
-
-  if (process.env['IO_DEBUG_PUBLISH_IN'] === '1') {
-    try {
-      const route = out && typeof out === 'object' ? (out as any).payload?.route : undefined
-      console.log(`[nats] publishIn subj=${subj} via=${route?.via || ''} alias=${route?.alias || ''}`)
-    } catch { /* ignore */ }
-  }
   await _nc.publish(subj, sc.encode(JSON.stringify(out)))
 }
 

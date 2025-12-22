@@ -1260,6 +1260,23 @@ try {
 	console.error('ws nats proxy init failed', e)
 }
 
+// Install Browser->Hub routing proxy (HTTP + WS) over NATS.
+// This is the "root proxy" fallback path; it keeps browsers on api.inimatic.com while hubs stay behind NAT.
+try {
+	if (process.env['NATS_URL']) {
+		const { installHubRouteProxy } = await import('./io/bus/hubRouteProxy.js')
+		installHubRouteProxy(app, server, {
+			redis: redisClient,
+			natsUrl: process.env['NATS_URL']!,
+		})
+		console.log('[route] hub proxy installed')
+	} else {
+		console.warn('[route] NATS_URL missing; hub proxy disabled')
+	}
+} catch (e) {
+	console.error('[route] hub proxy init failed', e)
+}
+
 // Send a message to Telegram resolving hub_id -> chat_id/bot_id via pairing store
 app.post('/io/tg/send', async (req, res) => {
 	try {
