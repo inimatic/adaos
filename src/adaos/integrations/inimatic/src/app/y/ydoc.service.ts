@@ -48,20 +48,48 @@ export class YDocService {
   }
 
   private async doInitFromHub(): Promise<void> {
-    // If a web session exists (remote webapp scenario), switch to root-proxy base:
-    //   https://api.inimatic.com/hubs/<hub_id>
-    // This keeps the browser off the direct hub address and allows routing over NATS.
-    try {
-      const host = String(window.location.hostname || '')
-      const isLocalHost = host === 'localhost' || host === '127.0.0.1'
-      const hubId = localStorage.getItem(this.hubIdKey)
-      const sessionJwt = localStorage.getItem(this.sessionJwtKey)
-      if (!isLocalHost && hubId && sessionJwt) {
-        this.adaos.setBase(`https://api.inimatic.com/hubs/${hubId}`)
-        this.adaos.setAuthBearer(sessionJwt)
+    const readSession = (): { hubId: string | null; sessionJwt: string | null } => {
+      try {
+        return {
+          hubId: localStorage.getItem(this.hubIdKey),
+          sessionJwt: localStorage.getItem(this.sessionJwtKey),
+        }
+      } catch {
+        return { hubId: null, sessionJwt: null }
       }
-    } catch {
-      // ignore storage errors
+    }
+
+    const useRootProxyIfAvailable = (): boolean => {
+      const { hubId, sessionJwt } = readSession()
+      if (!hubId || !sessionJwt) return false
+      this.adaos.setBase(`https://api.inimatic.com/hubs/${hubId}`)
+      this.adaos.setAuthBearer(sessionJwt)
+      return true
+    }
+
+    const probeHttp = async (baseUrl: string, timeoutMs = 800): Promise<boolean> => {
+      try {
+        const abs = baseUrl.replace(/\/$/, '')
+        const url = `${abs}/api/ping`
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+        try {
+          const resp = await fetch(url, { method: 'GET', signal: ctrl.signal })
+          return resp.ok
+        } finally {
+          clearTimeout(timer)
+        }
+      } catch {
+        return false
+      }
+    }
+
+    // Prefer direct hub base, but if it is down (e.g. 127.0.0.1:8777 not responding),
+    // automatically fall back to the root proxy route over NATS.
+    const directBase = this.adaos.getBaseUrl().replace(/\/$/, '')
+    const directOk = await probeHttp(directBase, 650)
+    if (!directOk) {
+      useRootProxyIfAvailable()
     }
 
     const baseHttp = this.adaos.getBaseUrl().replace(/\/$/, '')

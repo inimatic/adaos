@@ -413,8 +413,26 @@ class BootstrapService:
                             candidates: List[str] = []
 
                             def _dedup_push(url: str) -> None:
-                                if url and url not in candidates:
-                                    candidates.append(url)
+                                if not url:
+                                    return
+                                s = str(url).strip()
+                                if not s:
+                                    return
+                                # For NATS WS clients, it's safer to always have an explicit path.
+                                # Some stacks treat "wss://host" differently from "wss://host/".
+                                if s.startswith("ws://") or s.startswith("wss://"):
+                                    try:
+                                        from urllib.parse import urlparse, urlunparse
+
+                                        pr0 = urlparse(s)
+                                        if not pr0.path:
+                                            pr0 = pr0._replace(path="/")
+                                            s = urlunparse(pr0)
+                                    except Exception:
+                                        if s.endswith("://") or s.endswith("://localhost") or s.endswith("://127.0.0.1"):
+                                            s = s.rstrip("/") + "/"
+                                if s not in candidates:
+                                    candidates.append(s)
 
                             base = (nurl or "").rstrip("/")
 
@@ -441,6 +459,37 @@ class BootstrapService:
                                     if base:
                                         _dedup_push(base)
                                         # Avoid generating trailing slash variants which may 400
+                                        # Also try common WS mounts. Different deployments may expose the WS proxy
+                                        # either on "/" (default) or on "/nats" (legacy).
+                                        try:
+                                            pr2 = urlparse(base)
+                                            if (pr2.scheme or "").startswith("ws"):
+                                                # hosts to try: configured host + known public aliases
+                                                host_candidates: List[str] = []
+                                                try:
+                                                    if pr2.hostname:
+                                                        host_candidates.append(pr2.hostname)
+                                                except Exception:
+                                                    pass
+                                                for h in ("nats.inimatic.com", "api.inimatic.com"):
+                                                    if h not in host_candidates:
+                                                        host_candidates.append(h)
+
+                                                # paths to try: keep configured path plus common ones
+                                                path_candidates: List[str] = []
+                                                pth = pr2.path or ""
+                                                if pth and pth != "/":
+                                                    path_candidates.append(pth)
+                                                for p in ("/", "/nats"):
+                                                    if p not in path_candidates:
+                                                        path_candidates.append(p)
+
+                                                for h in host_candidates:
+                                                    for p in path_candidates:
+                                                        prx = pr2._replace(netloc=h, path=p, params="", query="", fragment="")
+                                                        _dedup_push(urlunparse(prx))
+                                        except Exception:
+                                            pass
                                     # Known public endpoint as a fallback
                                     _dedup_push("wss://nats.inimatic.com")
                                     # Allow explicit WS alternates via env (comma-separated)
@@ -521,6 +570,9 @@ class BootstrapService:
                                     return
                                 try:
                                     verbose = os.getenv("HUB_NATS_VERBOSE", "0") == "1"
+                                    if type(e).__name__ == "WSServerHandshakeError" and not verbose:
+                                        print("[hub-io] nats error_cb: WSServerHandshakeError (check nats.ws_url path: '/' vs '/nats')")
+                                        return
                                     if verbose:
                                         print(f"[hub-io] nats error_cb: {type(e).__name__}: {e!s}")
                                     else:
@@ -706,7 +758,6 @@ class BootstrapService:
                     # Hub responds on `route.to_browser.<same-key>`.
                     try:
                         import websockets  # type: ignore
-                        import requests  # type: ignore
 
                         tunnels: dict[str, dict[str, Any]] = {}
                         tunnel_tasks: dict[str, asyncio.Task] = {}
@@ -848,6 +899,8 @@ class BootstrapService:
 
                                     def _do_http() -> dict[str, Any]:
                                         try:
+                                            import requests  # type: ignore
+
                                             url = f"http://127.0.0.1:8777{path}{search}"
                                             body = None
                                             if isinstance(body_b64, str) and body_b64:
@@ -890,7 +943,7 @@ class BootstrapService:
                             except Exception:
                                 return
 
-                        await nc.subscribe("route.to_hub.*", cb=_route_cb)
+                        route_sub = await nc.subscribe("route.to_hub.*", cb=_route_cb)
                         print("[hub-io] NATS subscribe route.to_hub.* (hub route proxy)")
                     except Exception:
                         pass
@@ -964,8 +1017,42 @@ class BootstrapService:
                     except Exception:
                         pass
                     # keep task alive
-                    while True:
-                        await asyncio.sleep(3600)
+                    try:
+                        while True:
+                            await asyncio.sleep(3600)
+                    finally:
+                        # On shutdown/cancel, close any live proxy tunnels and unsubscribe.
+                        try:
+                            for k, rec in list(tunnels.items()):
+                                try:
+                                    ws = rec.get("ws") if isinstance(rec, dict) else None
+                                    if ws:
+                                        await ws.close()
+                                except Exception:
+                                    pass
+                                tunnels.pop(k, None)
+                        except Exception:
+                            pass
+                        try:
+                            for k, tsk in list(tunnel_tasks.items()):
+                                try:
+                                    tsk.cancel()
+                                except Exception:
+                                    pass
+                                tunnel_tasks.pop(k, None)
+                        except Exception:
+                            pass
+                        try:
+                            route_sub.unsubscribe()
+                        except Exception:
+                            pass
+                        try:
+                            await nc.drain()
+                        except Exception:
+                            try:
+                                await nc.close()
+                            except Exception:
+                                pass
 
                 # Supervisor wrapper: never crash on unhandled errors; restart with backoff
                 async def _nats_bridge_supervisor() -> None:
