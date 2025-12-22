@@ -1,4 +1,4 @@
-import { connect, StringCodec, consumerOpts, createInbox } from 'nats'
+import { connect, StringCodec } from 'nats'
 import { randomUUID } from 'crypto'
 
 let _nc: any = null
@@ -80,11 +80,7 @@ export async function publishIn(hub_id: string, payload: any): Promise<void> {
 
 export async function subscribeOut(handler: (payload: any) => Promise<void>): Promise<void> {
   await natsConnect()
-  const js = _nc.jetstream()
-  const opts = consumerOpts()
-  opts.deliverTo(createInbox())
-  opts.ackNone()
-  const sub = await js.subscribe('io.tg.out', opts)
+  const sub = _nc.subscribe('io.tg.out')
   ;(async () => {
     for await (const m of sub) {
       try { await handler(JSON.parse(sc.decode(m.data))) } catch { /* ignore */ }

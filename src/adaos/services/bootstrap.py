@@ -238,10 +238,44 @@ class BootstrapService:
                     try:
                         from adaos.services.root.client import RootHttpClient
                         from adaos.services.capacity import _load_node_yaml as _load_node, _save_node_yaml as _save_node
+                        from adaos.services.node_config import load_config
+                        from adaos.services.node_config import _expand_path as _expand_path
                     except Exception:
                         return False
 
-                    client = RootHttpClient.from_settings(self.ctx.settings)
+                    try:
+                        cfg = getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)
+                    except Exception:
+                        cfg = None
+
+                    # Prefer node.yaml-driven mTLS materials (hub cert/key + CA) rather than Settings,
+                    # because Settings may not include PKI fields.
+                    base_url = getattr(self.ctx.settings, "api_base", None) or getattr(getattr(cfg, "root_settings", None), "base_url", None) or "https://api.inimatic.com"
+                    try:
+                        ca = _expand_path(getattr(getattr(cfg, "root_settings", None), "ca_cert", None), "keys/ca.cert")
+                        cert = _expand_path(getattr(getattr(getattr(cfg, "subnet_settings", None), "hub", None), "cert", None), "keys/hub_cert.pem")
+                        key = _expand_path(getattr(getattr(getattr(cfg, "subnet_settings", None), "hub", None), "key", None), "keys/hub_private.pem")
+                    except Exception:
+                        ca = None
+                        cert = None
+                        key = None
+
+                    verify: Any = True
+                    if ca is not None:
+                        try:
+                            if ca.exists():
+                                verify = str(ca)
+                        except Exception:
+                            pass
+                    cert_tuple = None
+                    if cert is not None and key is not None:
+                        try:
+                            if cert.exists() and key.exists():
+                                cert_tuple = (str(cert), str(key))
+                        except Exception:
+                            cert_tuple = None
+
+                    client = RootHttpClient(base_url=str(base_url), verify=verify, cert=cert_tuple)
                     if not client.cert:
                         return False
 
@@ -270,6 +304,18 @@ class BootstrapService:
                         n["user"] = str(nats_user)
                         n["pass"] = str(token)
                         y["nats"] = n
+                        # If node.yaml is missing/minimal, seed core identity fields so other subsystems
+                        # (Settings, tooling) can discover subnet/node info.
+                        try:
+                            if isinstance(cfg, object):
+                                if "node_id" not in y:
+                                    y["node_id"] = getattr(cfg, "node_id", None) or y.get("node_id")
+                                if "subnet_id" not in y:
+                                    y["subnet_id"] = getattr(cfg, "subnet_id", None) or y.get("subnet_id")
+                                if "role" not in y:
+                                    y["role"] = getattr(cfg, "role", None) or y.get("role")
+                        except Exception:
+                            pass
                         _save_node(y)
                         return True
                     except Exception:
@@ -303,8 +349,20 @@ class BootstrapService:
                                     await asyncio.sleep(0.1)
                                     continue
                                 # Wait for `adaos dev telegram` to provision credentials.
-                                if os.getenv("HUB_NATS_VERBOSE", "0") == "1":
-                                    print("[hub-io] NATS disabled: missing nats.ws_url/user/pass in node.yaml")
+                                if os.getenv("HUB_NATS_VERBOSE", "0") == "1" or os.getenv("HUB_NATS_TRACE_INPUT", "0") == "1":
+                                    try:
+                                        print("[hub-io] NATS disabled: missing nats.ws_url/user/pass in node.yaml")
+                                    except Exception:
+                                        pass
+                                    try:
+                                        import logging as _logging
+
+                                        _logging.getLogger("adaos.hub_io").warning(
+                                            "nats.disabled",
+                                            extra={"extra": {"have_ws_url": bool(nurl), "have_user": bool(nuser), "have_pass": bool(npass)}},
+                                        )
+                                    except Exception:
+                                        pass
                                 await asyncio.sleep(2.0)
                                 continue
 
