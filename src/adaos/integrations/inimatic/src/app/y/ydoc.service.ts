@@ -14,6 +14,8 @@ export class YDocService {
   private readonly deviceId: string
   private currentWebspaceId = 'default'
   private readonly webspaceKey = 'adaos_webspace_id'
+  private readonly hubIdKey = 'adaos_hub_id'
+  private readonly sessionJwtKey = 'adaos_web_session_jwt'
 
   constructor(private adaos: AdaosClient) {
     this.deviceId = this.ensureDeviceId()
@@ -46,6 +48,22 @@ export class YDocService {
   }
 
   private async doInitFromHub(): Promise<void> {
+    // If a web session exists (remote webapp scenario), switch to root-proxy base:
+    //   https://api.inimatic.com/hubs/<hub_id>
+    // This keeps the browser off the direct hub address and allows routing over NATS.
+    try {
+      const host = String(window.location.hostname || '')
+      const isLocalHost = host === 'localhost' || host === '127.0.0.1'
+      const hubId = localStorage.getItem(this.hubIdKey)
+      const sessionJwt = localStorage.getItem(this.sessionJwtKey)
+      if (!isLocalHost && hubId && sessionJwt) {
+        this.adaos.setBase(`https://api.inimatic.com/hubs/${hubId}`)
+        this.adaos.setAuthBearer(sessionJwt)
+      }
+    } catch {
+      // ignore storage errors
+    }
+
     const baseHttp = this.adaos.getBaseUrl().replace(/\/$/, '')
     const baseWs = baseHttp.replace(/^http/, 'ws')
 
@@ -73,7 +91,7 @@ export class YDocService {
     const serverUrl = `${baseWs}/yws`
     const room = webspaceId || 'default'
     this.provider = new WebsocketProvider(serverUrl, room, this.doc, {
-      params: { dev: this.deviceId },
+      params: { dev: this.deviceId, ...(this.adaos.getToken() ? { token: String(this.adaos.getToken()) } : {}) },
     })
 
     await new Promise<void>((resolve) => {

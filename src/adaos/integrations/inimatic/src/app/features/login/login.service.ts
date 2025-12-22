@@ -47,6 +47,7 @@ interface LoginFinishResponse {
 export class LoginService {
 	private readonly sidKey = 'adaos_web_sid'
 	private readonly sessionKey = 'adaos_web_session_jwt'
+	private readonly hubIdKey = 'adaos_hub_id'
 	private sid: string | null = null
 	private sessionJwt: string | null = null
 
@@ -233,6 +234,9 @@ export class LoginService {
 		} catch {
 			// ignore storage errors
 		}
+		try {
+			if (finish.owner_id) localStorage.setItem(this.hubIdKey, finish.owner_id)
+		} catch {}
 
 		return {
 			sessionJwt: finish.session_jwt,
@@ -281,6 +285,9 @@ export class LoginService {
 		} catch {
 			// ignore storage errors
 		}
+		try {
+			if (finish.owner_id) localStorage.setItem(this.hubIdKey, finish.owner_id)
+		} catch {}
 
 		return {
 			sessionJwt: finish.session_jwt,
@@ -326,6 +333,9 @@ export class LoginService {
 		} catch {
 			// ignore storage errors
 		}
+		try {
+			if (finish.owner_id) localStorage.setItem(this.hubIdKey, finish.owner_id)
+		} catch {}
 
 		return {
 			sessionJwt: finish.session_jwt,

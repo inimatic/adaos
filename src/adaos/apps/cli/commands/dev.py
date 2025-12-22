@@ -248,7 +248,10 @@ def dev_login(
         ca = _expand_path(cfg.root_settings.ca_cert, "keys/ca.cert")
         cert = _expand_path(cfg.subnet_settings.hub.cert, "keys/hub_cert.pem")
         key = _expand_path(cfg.subnet_settings.hub.key, "keys/hub_private.pem")
-        verify = str(ca) if ca.exists() else True
+        verify = True
+        # Keep system CA by default; allow pinning via ADAOS_ROOT_VERIFY_CA=1.
+        if os.getenv("ADAOS_ROOT_VERIFY_CA", "0") == "1":
+            verify = str(ca) if ca.exists() else True
         cert_tuple = (str(cert), str(key)) if cert.exists() and key.exists() else None
         base = cfg.root_settings.base_url or ctx.settings.api_base
         client = RootHttpClient(base_url=base, verify=verify, cert=cert_tuple)
