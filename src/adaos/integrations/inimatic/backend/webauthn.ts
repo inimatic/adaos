@@ -2,6 +2,7 @@
 import type express from 'express'
 import type { RedisClientType } from 'redis'
 import { randomBytes } from 'node:crypto'
+import { signWebSessionJwt } from './sessionJwt.js'
 
 // NOTE: для реальной валидации WebAuthn рекомендуется использовать @simplewebauthn/server.
 // Здесь интерфейс спроектирован так, чтобы было легко подключить библиотеку позже.
@@ -48,6 +49,7 @@ export interface WebAuthnDeps {
 	rpID: string
 	origin: string
 	defaultSessionTtlSeconds: number
+	sessionJwtSecret: string
 }
 
 export interface WebAuthnService {
@@ -226,7 +228,7 @@ export async function storeDeviceCode(
 }
 
 export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
-	const { redis, rpID, origin, defaultSessionTtlSeconds } = deps
+	const { redis, rpID, origin, defaultSessionTtlSeconds, sessionJwtSecret } = deps
 
 	return {
 		async verifyDeviceCodeLogin(userCode: string, sid: string) {
@@ -625,15 +627,24 @@ export function createWebAuthnService(deps: WebAuthnDeps): WebAuthnService {
 					}
 				}
 
-				// Упрощённый session_jwt: для dev — случайный токен, который фронт будет использовать как bearer
-				const session_jwt = randomToken('sess')
+				const exp = nowSeconds() + defaultSessionTtlSeconds
+				const session_jwt = await signWebSessionJwt({
+					secret: sessionJwtSecret,
+					exp,
+					claims: {
+						sid,
+						owner_id,
+						browser_key_id: credId,
+						stage: 'AUTH',
+					},
+				})
 
 				// Если есть session, обновляем её
 				if (session) {
 					const loginSession: WebSessionState = {
 						...session,
 						stage: 'AUTH',
-						exp: nowSeconds() + defaultSessionTtlSeconds,
+						exp,
 					}
 					delete (loginSession as any).weblogin_challenge
 					await saveSession(redis, loginSession)

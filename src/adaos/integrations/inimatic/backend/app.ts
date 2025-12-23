@@ -211,6 +211,10 @@ function requireEnv(name: string): string {
 const HOST = process.env['HOST'] ?? '0.0.0.0'
 const PORT = Number.parseInt(process.env['PORT'] ?? '3030', 10)
 const ROOT_TOKEN = process.env['ROOT_TOKEN'] ?? 'dev-root-token'
+const WEB_SESSION_JWT_SECRET =
+	(String(process.env['WEB_SESSION_JWT_SECRET'] ?? '').trim() ||
+		String(process.env['ROOT_TOKEN'] ?? '').trim() ||
+		ROOT_TOKEN)
 const CA_KEY_PEM = readPemFromEnvOrFile('CA_KEY_PEM', 'CA_KEY_PEM_FILE')
 const CA_CERT_PEM = readPemFromEnvOrFile('CA_CERT_PEM', 'CA_CERT_PEM_FILE')
 /* TODO
@@ -500,6 +504,7 @@ installWebAuthnRoutes(
 		defaultSessionTtlSeconds: WEB_SESSION_TTL_SECONDS,
 		rpID: WEB_RP_ID,
 		origin: WEB_ORIGIN,
+		sessionJwtSecret: WEB_SESSION_JWT_SECRET,
 	},
 	respondError
 )
@@ -1281,6 +1286,7 @@ try {
 		installHubRouteProxy(app, server, {
 			redis: redisClient,
 			natsUrl: process.env['NATS_URL']!,
+			sessionJwtSecret: WEB_SESSION_JWT_SECRET,
 		})
 		console.log('[route] hub proxy installed')
 	} else {

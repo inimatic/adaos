@@ -3,6 +3,7 @@ import type express from 'express'
 import pino from 'pino'
 import { randomUUID } from 'crypto'
 import { NatsBus } from './nats.js'
+import { verifyWebSessionJwt } from '../../sessionJwt.js'
 
 type RedisLike = {
 	get(key: string): Promise<string | null>
@@ -28,6 +29,7 @@ function* chunkBuffer(buf: Buffer): Generator<Buffer> {
 type ProxyOpts = {
 	redis: RedisLike
 	natsUrl: string
+	sessionJwtSecret?: string
 	allowCrossHubOwner?: boolean
 }
 
@@ -49,9 +51,14 @@ function extractToken(req: any): string | null {
 
 async function verifySessionJwt(
 	redis: RedisLike,
-	sessionJwt: string
+	sessionJwt: string,
+	sessionJwtSecret?: string
 ): Promise<{ owner_id?: string; browser_key_id?: string; sid?: string } | null> {
 	if (!sessionJwt) return null
+	if (sessionJwtSecret) {
+		const jwt = await verifyWebSessionJwt({ secret: sessionJwtSecret, token: sessionJwt })
+		if (jwt) return jwt
+	}
 	try {
 		const raw = await redis.get(`session:jwt:${sessionJwt}`)
 		if (!raw) return null
@@ -176,7 +183,11 @@ export function installHubRouteProxy(
 
 			const sessionJwt = extractToken(req)
 			if (!sessionJwt) return res.status(401).json({ ok: false, error: 'unauthorized' })
-			const session = await verifySessionJwt(opts.redis, sessionJwt)
+			const session = await verifySessionJwt(
+				opts.redis,
+				sessionJwt,
+				opts.sessionJwtSecret
+			)
 			if (!session) return res.status(401).json({ ok: false, error: 'unauthorized' })
 			const ownerId = String(session.owner_id || '')
 			if (!allowCrossHubOwner && ownerId && ownerId !== hubId) {
@@ -442,7 +453,11 @@ export function installHubRouteProxy(
 				socket.destroy()
 				return
 			}
-			const session = await verifySessionJwt(opts.redis, sessionJwt)
+			const session = await verifySessionJwt(
+				opts.redis,
+				sessionJwt,
+				opts.sessionJwtSecret
+			)
 			if (!session) {
 				if (verbose) {
 					let rawLen: number | null = null
@@ -453,7 +468,15 @@ export function installHubRouteProxy(
 						rawLen = null
 					}
 					log.warn(
-						{ hubId, kind, path: u.pathname, token: maskToken(sessionJwt), redisLen: rawLen },
+						{
+							hubId,
+							kind,
+							path: u.pathname,
+							token: maskToken(sessionJwt),
+							tokenKind: sessionJwt.includes('.') ? 'jwt' : 'opaque',
+							hasSecret: Boolean(opts.sessionJwtSecret),
+							redisLen: rawLen,
+						},
 						'ws upgrade: invalid session'
 					)
 				}
