@@ -45,6 +45,30 @@ location ^~ /io/tg/webhook/ {
 
 location = /healthz { ssl_verify_client off; }
 
+# --- Browser -> Hub proxy over Root (WS + HTTP) ---
+# Routes:
+#   /hubs/<hub_id>/ws   (events websocket)
+#   /hubs/<hub_id>/yws  (yjs websocket)
+#   /hubs/<hub_id>/api  (HTTP passthrough)
+location ^~ /hubs/ {
+  # Browsers do not have client certificates.
+  ssl_verify_client off;
+
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto https;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+  proxy_read_timeout  3600s;
+  proxy_send_timeout  3600s;
+  proxy_connect_timeout 60s;
+
+  proxy_pass https://api.inimatic.com;
+  include /etc/nginx/vhost.d/api.inimatic.com_location;
+}
+
 # --- NATS WebSocket passthrough ---
 location /nats {
   # No client cert required for WS bridge

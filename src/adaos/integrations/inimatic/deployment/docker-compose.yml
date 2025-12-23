@@ -223,6 +223,8 @@ services:
             TG_WEBHOOK_PATH_PREFIX: ${TG_WEBHOOK_PATH_PREFIX}
             PG_URL: ${PG_URL}
             TG_ROUTER_ENABLED: ${TG_ROUTER_ENABLED}
+            # Browser->Hub route proxy (debug)
+            ROUTE_PROXY_VERBOSE: ${ROUTE_PROXY_VERBOSE:-0}
         volumes:
             - /opt/inimatic/secrets:/run/inimatic/secrets:ro
             - /opt/inimatic/runtime/ssh/forge_ssh_key:/run/inimatic/ssh/forge_ssh_key:ro
@@ -301,6 +303,8 @@ services:
             TG_WEBHOOK_PATH_PREFIX: ${TG_WEBHOOK_PATH_PREFIX}
             PG_URL: ${PG_URL}
             TG_ROUTER_ENABLED: ${TG_ROUTER_ENABLED}
+            # Browser->Hub route proxy (debug)
+            ROUTE_PROXY_VERBOSE: ${ROUTE_PROXY_VERBOSE:-0}
         volumes:
             - /opt/inimatic/secrets:/run/inimatic/secrets:ro
             - /opt/inimatic/runtime/ssh/forge_ssh_key:/run/inimatic/ssh/forge_ssh_key:ro
