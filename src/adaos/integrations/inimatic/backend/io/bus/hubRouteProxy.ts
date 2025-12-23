@@ -133,7 +133,9 @@ export function installHubRouteProxy(
 	opts: ProxyOpts
 ) {
 	const allowCrossHubOwner =
-		opts.allowCrossHubOwner ?? (process.env['ALLOW_OWNER_HUB_ANY'] || '0') === '1'
+		opts.allowCrossHubOwner ??
+		(process.env['ALLOW_OWNER_HUB_ANY'] || '1') !== '0'
+	const verbose = (process.env['ROUTE_PROXY_VERBOSE'] || '0') === '1'
 	const bus = new NatsBus(opts.natsUrl)
 	let busReady: Promise<void> | null = null
 
@@ -163,7 +165,10 @@ export function installHubRouteProxy(
 			if (!session) return res.status(401).json({ ok: false, error: 'unauthorized' })
 			const ownerId = String(session.owner_id || '')
 			if (!allowCrossHubOwner && ownerId && ownerId !== hubId) {
+				if (verbose) log.warn({ hubId, ownerId }, 'http proxy: owner/hub mismatch; denying')
 				return res.status(403).json({ ok: false, error: 'forbidden' })
+			} else if (ownerId && ownerId !== hubId && verbose) {
+				log.warn({ hubId, ownerId }, 'http proxy: owner/hub mismatch; allowing (ALLOW_OWNER_HUB_ANY)')
 			}
 
 			await ensureBus()
@@ -322,7 +327,8 @@ export function installHubRouteProxy(
 		})
 	}
 
-	server.on('upgrade', async (req: any, socket: any, head: any) => {
+	// Ensure we get first shot at matching /hubs/:hubId/(ws|yws) before other upgrade handlers (e.g. socket.io).
+	server.prependListener('upgrade', async (req: any, socket: any, head: any) => {
 		try {
 			const u = new URL(req.url, 'https://x')
 			const m = u.pathname.match(/^\/hubs\/([^/]+)\/(ws|yws)(?:\/(.*))?$/)
@@ -332,26 +338,35 @@ export function installHubRouteProxy(
 			const kind = m[2]
 			const room = m[3] ? `/${m[3]}` : ''
 
-			const sessionJwt = extractToken({ headers: req.headers, query: Object.fromEntries(u.searchParams.entries()) })
+			const sessionJwt = extractToken({
+				headers: req.headers,
+				query: Object.fromEntries(u.searchParams.entries()),
+			})
 			if (!sessionJwt) {
+				if (verbose) log.warn({ path: u.pathname }, 'ws upgrade: missing token')
 				socket.destroy()
 				return
 			}
 			const session = await verifySessionJwt(opts.redis, sessionJwt)
 			if (!session) {
+				if (verbose) log.warn({ hubId, kind, path: u.pathname }, 'ws upgrade: invalid session')
 				socket.destroy()
 				return
 			}
 			const ownerId = String(session.owner_id || '')
 			if (!allowCrossHubOwner && ownerId && ownerId !== hubId) {
+				if (verbose) log.warn({ hubId, ownerId, kind }, 'ws upgrade: owner/hub mismatch; denying')
 				socket.destroy()
 				return
+			} else if (ownerId && ownerId !== hubId && verbose) {
+				log.warn({ hubId, ownerId, kind }, 'ws upgrade: owner/hub mismatch; allowing (ALLOW_OWNER_HUB_ANY)')
 			}
 
 			await ensureWs()
 
 			const dstPath = kind === 'ws' ? '/ws' : `/yws${room}`
 			const query = u.search || ''
+			if (verbose) log.info({ hubId, kind, dstPath }, 'ws upgrade: accepted')
 			wss.handleUpgrade(req, socket, head, (ws: any) => {
 				wss.emit('connection', ws, req, { hubId, dstPath, sessionJwt, query })
 			})
