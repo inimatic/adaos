@@ -89,7 +89,10 @@ export class YDocService {
     const directBase = this.adaos.getBaseUrl().replace(/\/$/, '')
     const directOk = await probeHttp(directBase, 650)
     if (!directOk) {
-      useRootProxyIfAvailable()
+      const switched = useRootProxyIfAvailable()
+      if (!switched) {
+        throw new Error('hub_unreachable_no_session')
+      }
     }
 
     const baseHttp = this.adaos.getBaseUrl().replace(/\/$/, '')

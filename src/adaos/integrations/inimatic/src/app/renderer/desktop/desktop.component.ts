@@ -10,11 +10,12 @@ import { PageSchema, WidgetConfig } from '../../runtime/page-schema.model'
 import { DesktopSchemaService } from '../../runtime/desktop-schema.service'
 import { ModalHostComponent } from '../modals/modal.component'
 import { PageWidgetHostComponent } from '../widgets/page-widget-host.component'
+import { LoginComponent } from '../../features/login/login.component'
 
 @Component({
 	selector: 'ada-desktop',
 	standalone: true,
-	imports: [CommonModule, IonicModule, PageWidgetHostComponent],
+	imports: [CommonModule, IonicModule, PageWidgetHostComponent, LoginComponent],
 	templateUrl: './desktop.component.html',
 	styleUrls: ['./desktop.component.scss']
 })
@@ -24,6 +25,8 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	webspaces: Array<{ id: string; title: string; created_at: number }> = []
 	activeWebspace = 'default'
 	pageSchema?: PageSchema
+	needsLogin = false
+	initError = ''
 	constructor(
 		private y: YDocService,
 		private modal: ModalController,
@@ -32,7 +35,17 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	) { }
 
 	async ngOnInit() {
-		await this.y.initFromHub()
+		try {
+			await this.y.initFromHub()
+		} catch (e) {
+			const msg = String((e as any)?.message || e || '')
+			this.initError = msg
+			if (msg.includes('hub_unreachable_no_session')) {
+				this.needsLogin = true
+				return
+			}
+			throw e
+		}
 		const uiNode = this.y.getPath('ui')
 		const dataNode = this.y.getPath('data')
 		const recompute = () => {
@@ -46,6 +59,14 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		this.dispose = () => { un1?.(); un2?.() }
 	}
 	ngOnDestroy() { this.dispose?.() }
+
+	async onLoginSuccess() {
+		// After login, sessionJwt + hubId are persisted to localStorage by LoginService.
+		// Re-run init; it will probe local hub and fall back to root proxy if needed.
+		this.needsLogin = false
+		this.initError = ''
+		await this.ngOnInit()
+	}
 
 	async openModal(id: string) {
 		const modalCfg: any = (this.app as any)?.modals?.[id]
