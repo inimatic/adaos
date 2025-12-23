@@ -462,9 +462,8 @@ engineWithAllowRequest.allowRequest = (req, callback) => {
 
 installAdaosBridge(app, server)
 
-const redisUrl = `redis://${
-	process.env['PRODUCTION'] ? 'redis' : 'localhost'
-}:6379`
+const redisUrl = `redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'
+	}:6379`
 const redisClient = await createClient({ url: redisUrl })
 	.on('error', (err) => console.error('Redis Client Error', err))
 	.connect()
@@ -619,10 +618,10 @@ function parseTtl(ttl: unknown): number | undefined {
 		unit === 's'
 			? value
 			: unit === 'm'
-			? value * 60
-			: unit === 'h'
-			? value * 60 * 60
-			: value * 24 * 60 * 60
+				? value * 60
+				: unit === 'h'
+					? value * 60 * 60
+					: value * 24 * 60 * 60
 	return seconds / (24 * 60 * 60)
 }
 
@@ -1153,7 +1152,7 @@ app.use('/v1', rootRouter)
 // --- IO (Telegram) wiring ---
 try {
 	if (process.env['PG_URL']) await ensureTgSchema()
-} catch {}
+} catch { }
 let ioBus: NatsBus | null = null
 if (
 	(process.env['IO_BUS_KIND'] || 'local').toLowerCase() === 'nats' &&
@@ -1162,7 +1161,7 @@ if (
 	try {
 		ioBus = new NatsBus(process.env['NATS_URL']!)
 		await ioBus.connect()
-		console.log(`[io] NATS connected at ${process.env['NATS_URL']}`)
+		console.log(`[io] NATS connected`)
 		// subscribe to outbound for a single configured bot
 		const botId = process.env['BOT_ID'] || 'main-bot'
 		const { TelegramSender } = await import('./io/telegram/sender.js')
@@ -1177,7 +1176,7 @@ if (
 			} catch (e) {
 				try {
 					await ioBus!.publish_dlq('output', { error: String(e) })
-				} catch {}
+				} catch { }
 			}
 		})
 		// Backward compatibility: legacy hubs may publish to io.tg.out
@@ -1191,7 +1190,7 @@ if (
 			} catch (e) {
 				try {
 					await ioBus!.publish_dlq('output', { error: String(e) })
-				} catch {}
+				} catch { }
 			}
 		})
 		// Optional: debug taps (comma-separated subjects) e.g. IO_TAP_SUBJECTS="tg.input.>,tg.output.>,io.tg.out"
@@ -1249,11 +1248,11 @@ installTelegramWebhookRoutes(app, ioBus)
 installPairingApi(app)
 import('./io/bus/natsAuth.js')
 	.then((m) => m.installNatsAuth(app))
-	.catch(() => {})
+	.catch(() => { })
 if (process.env['DEBUG_ENDPOINTS'] === 'true') {
 	try {
 		installWsNatsProxyDebugRoute(app)
-	} catch {}
+	} catch { }
 }
 
 // Install WS->NATS proxy for hubs (accepts NATS WS handshake, rewrites creds)
@@ -1714,226 +1713,226 @@ mtlsRouter.post('/hub/nats/token', async (req, res) => {
 
 const createDraftHandler =
 	(kind: DraftKind): express.RequestHandler =>
-	async (req, res) => {
-		const identity = req.auth
-		if (!identity)
-			return respondError(req, res, 401, 'client_certificate_required')
+		async (req, res) => {
+			const identity = req.auth
+			if (!identity)
+				return respondError(req, res, 401, 'client_certificate_required')
 
-		// Разрешаем и node, и hub
-		const name = typeof req.body?.name === 'string' ? req.body.name : ''
-		const archiveB64 =
-			typeof req.body?.archive_b64 === 'string'
-				? req.body.archive_b64
-				: ''
-		const sha256 =
-			typeof req.body?.sha256 === 'string' ? req.body.sha256 : undefined
+			// Разрешаем и node, и hub
+			const name = typeof req.body?.name === 'string' ? req.body.name : ''
+			const archiveB64 =
+				typeof req.body?.archive_b64 === 'string'
+					? req.body.archive_b64
+					: ''
+			const sha256 =
+				typeof req.body?.sha256 === 'string' ? req.body.sha256 : undefined
 
-		if (!name || !archiveB64)
-			return respondError(req, res, 400, 'archive_fields_required')
+			if (!name || !archiveB64)
+				return respondError(req, res, 400, 'archive_fields_required')
 
-		// поддержка node_id в payload, если пуш идет "от хаба от имени ноды" (опционально)
-		const payloadNodeId =
-			typeof req.body?.node_id === 'string' ? req.body.node_id : ''
+			// поддержка node_id в payload, если пуш идет "от хаба от имени ноды" (опционально)
+			const payloadNodeId =
+				typeof req.body?.node_id === 'string' ? req.body.node_id : ''
 
-		// Определяем целевой контекст хранения
-		let subnetId: string
-		let nodeId: string
+			// Определяем целевой контекст хранения
+			let subnetId: string
+			let nodeId: string
 
-		if (identity.type === 'node') {
-			subnetId = identity.subnetId
-			nodeId = identity.nodeId
-			if (payloadNodeId && payloadNodeId !== nodeId) {
-				return respondError(req, res, 403, 'node_mismatch')
+			if (identity.type === 'node') {
+				subnetId = identity.subnetId
+				nodeId = identity.nodeId
+				if (payloadNodeId && payloadNodeId !== nodeId) {
+					return respondError(req, res, 403, 'node_mismatch')
+				}
+			} else if (identity.type === 'hub') {
+				subnetId = identity.subnetId
+				// режим «хаб пушит черновик на уровень подсети», без привязки к конкретной ноде:
+				nodeId = payloadNodeId || 'hub'
+			} else {
+				return respondError(req, res, 403, 'invalid_client_certificate')
 			}
-		} else if (identity.type === 'hub') {
-			subnetId = identity.subnetId
-			// режим «хаб пушит черновик на уровень подсети», без привязки к конкретной ноде:
-			nodeId = payloadNodeId || 'hub'
-		} else {
-			return respondError(req, res, 403, 'invalid_client_certificate')
-		}
 
-		// дальше как было: decode, check size, verify SHA, writeDraft
-		let archive: Buffer
-		try {
-			assertSafeName(name)
-			archive = decodeArchive(archiveB64)
-			if (!archive.length) throw new HttpError(400, 'archive_empty')
-			if (archive.length > MAX_ARCHIVE_BYTES)
-				return respondError(req, res, 413, 'archive_too_large')
-			verifySha256(archive, sha256)
-		} catch (error) {
-			return handleError(req, res, error, {
-				status: 400,
-				code: 'invalid_archive',
-			})
-		}
+			// дальше как было: decode, check size, verify SHA, writeDraft
+			let archive: Buffer
+			try {
+				assertSafeName(name)
+				archive = decodeArchive(archiveB64)
+				if (!archive.length) throw new HttpError(400, 'archive_empty')
+				if (archive.length > MAX_ARCHIVE_BYTES)
+					return respondError(req, res, 413, 'archive_too_large')
+				verifySha256(archive, sha256)
+			} catch (error) {
+				return handleError(req, res, error, {
+					status: 400,
+					code: 'invalid_archive',
+				})
+			}
 
-		const started = Date.now()
-		try {
-			const result = await forgeManager.writeDraft({
-				kind,
-				subnetId,
-				nodeId,
-				name,
-				archive,
-			})
-			const keyPrefix =
-				kind === 'skills'
-					? SKILL_FORGE_KEY_PREFIX
-					: SCENARIO_FORGE_KEY_PREFIX
-			await redisClient.set(
-				`${keyPrefix}:${subnetId}:${nodeId}:${name}`,
-				JSON.stringify({
+			const started = Date.now()
+			try {
+				const result = await forgeManager.writeDraft({
+					kind,
+					subnetId,
+					nodeId,
+					name,
+					archive,
+				})
+				const keyPrefix =
+					kind === 'skills'
+						? SKILL_FORGE_KEY_PREFIX
+						: SCENARIO_FORGE_KEY_PREFIX
+				await redisClient.set(
+					`${keyPrefix}:${subnetId}:${nodeId}:${name}`,
+					JSON.stringify({
+						stored_path: result.storedPath,
+						commit: result.commitSha,
+						sha256: sha256 ?? null,
+						ts: Date.now(),
+					})
+				)
+				res.json({
+					ok: true,
 					stored_path: result.storedPath,
 					commit: result.commitSha,
 					sha256: sha256 ?? null,
-					ts: Date.now(),
 				})
-			)
-			res.json({
-				ok: true,
-				stored_path: result.storedPath,
-				commit: result.commitSha,
-				sha256: sha256 ?? null,
-			})
-		} catch (error) {
-			console.error('failed to store draft', error)
-			handleError(req, res, error, {
-				status: 500,
-				code: 'draft_store_failed',
-			})
+			} catch (error) {
+				console.error('failed to store draft', error)
+				handleError(req, res, error, {
+					status: 500,
+					code: 'draft_store_failed',
+				})
+			}
 		}
-	}
 
 const getDraftMetaHandler =
 	(kind: DraftKind): express.RequestHandler =>
-	async (req, res) => {
-		const identity = req.auth
-		if (!identity)
-			return respondError(req, res, 401, 'client_certificate_required')
+		async (req, res) => {
+			const identity = req.auth
+			if (!identity)
+				return respondError(req, res, 401, 'client_certificate_required')
 
-		const name = qstr(req.query, 'name')
-		const payloadNodeId = qstr(req.query, 'node_id')
-		if (!name) return respondError(req, res, 400, 'missing_params')
-		try {
-			assertSafeName(name)
-		} catch {
-			return respondError(req, res, 400, 'invalid_name')
-		}
-
-		let subnetId: string
-		let nodeId: string
-
-		if (identity.type === 'node') {
-			subnetId = identity.subnetId
-			nodeId = identity.nodeId
-			if (payloadNodeId && payloadNodeId !== nodeId) {
-				return respondError(req, res, 403, 'node_mismatch')
-			}
-		} else if (identity.type === 'hub') {
-			subnetId = identity.subnetId
-			nodeId = payloadNodeId || 'hub'
-		} else {
-			return respondError(req, res, 403, 'invalid_client_certificate')
-		}
-
-		const keyPrefix =
-			kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
-		const key = `${keyPrefix}:${subnetId}:${nodeId}:${name}`
-		try {
-			const raw = await redisClient.get(key)
-			if (!raw) return respondError(req, res, 404, 'not_found')
-			let parsed: any = {}
+			const name = qstr(req.query, 'name')
+			const payloadNodeId = qstr(req.query, 'node_id')
+			if (!name) return respondError(req, res, 400, 'missing_params')
 			try {
-				parsed = JSON.parse(raw)
+				assertSafeName(name)
 			} catch {
-				parsed = {}
+				return respondError(req, res, 400, 'invalid_name')
 			}
-			return res.json({
-				ok: true,
-				name,
-				subnet_id: subnetId,
-				node_id: nodeId,
-				stored_path: parsed?.stored_path ?? null,
-				commit: parsed?.commit ?? null,
-				sha256: parsed?.sha256 ?? null,
-				ts: parsed?.ts ?? null,
-			})
-		} catch (error) {
-			return handleError(req, res, error, {
-				status: 500,
-				code: 'draft_meta_failed',
-			})
+
+			let subnetId: string
+			let nodeId: string
+
+			if (identity.type === 'node') {
+				subnetId = identity.subnetId
+				nodeId = identity.nodeId
+				if (payloadNodeId && payloadNodeId !== nodeId) {
+					return respondError(req, res, 403, 'node_mismatch')
+				}
+			} else if (identity.type === 'hub') {
+				subnetId = identity.subnetId
+				nodeId = payloadNodeId || 'hub'
+			} else {
+				return respondError(req, res, 403, 'invalid_client_certificate')
+			}
+
+			const keyPrefix =
+				kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
+			const key = `${keyPrefix}:${subnetId}:${nodeId}:${name}`
+			try {
+				const raw = await redisClient.get(key)
+				if (!raw) return respondError(req, res, 404, 'not_found')
+				let parsed: any = {}
+				try {
+					parsed = JSON.parse(raw)
+				} catch {
+					parsed = {}
+				}
+				return res.json({
+					ok: true,
+					name,
+					subnet_id: subnetId,
+					node_id: nodeId,
+					stored_path: parsed?.stored_path ?? null,
+					commit: parsed?.commit ?? null,
+					sha256: parsed?.sha256 ?? null,
+					ts: parsed?.ts ?? null,
+				})
+			} catch (error) {
+				return handleError(req, res, error, {
+					status: 500,
+					code: 'draft_meta_failed',
+				})
+			}
 		}
-	}
 
 const getDraftArchiveHandler =
 	(kind: DraftKind): express.RequestHandler =>
-	async (req, res) => {
-		const identity = req.auth
-		if (!identity)
-			return respondError(req, res, 401, 'client_certificate_required')
+		async (req, res) => {
+			const identity = req.auth
+			if (!identity)
+				return respondError(req, res, 401, 'client_certificate_required')
 
-		const name = qstr(req.query, 'name')
-		const payloadNodeId = qstr(req.query, 'node_id')
-		if (!name) return respondError(req, res, 400, 'missing_params')
-		try {
-			assertSafeName(name)
-		} catch {
-			return respondError(req, res, 400, 'invalid_name')
-		}
-
-		let subnetId: string
-		let nodeId: string
-
-		if (identity.type === 'node') {
-			subnetId = identity.subnetId
-			nodeId = identity.nodeId
-			if (payloadNodeId && payloadNodeId !== nodeId) {
-				return respondError(req, res, 403, 'node_mismatch')
-			}
-		} else if (identity.type === 'hub') {
-			subnetId = identity.subnetId
-			nodeId = payloadNodeId || 'hub'
-		} else {
-			return respondError(req, res, 403, 'invalid_client_certificate')
-		}
-
-		const keyPrefix =
-			kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
-		const key = `${keyPrefix}:${subnetId}:${nodeId}:${name}`
-		try {
-			const raw = await redisClient.get(key)
-			if (!raw) return respondError(req, res, 404, 'not_found')
-			let parsed: any = {}
+			const name = qstr(req.query, 'name')
+			const payloadNodeId = qstr(req.query, 'node_id')
+			if (!name) return respondError(req, res, 400, 'missing_params')
 			try {
-				parsed = JSON.parse(raw)
+				assertSafeName(name)
 			} catch {
-				parsed = {}
+				return respondError(req, res, 400, 'invalid_name')
 			}
-			const storedPath =
-				typeof parsed?.stored_path === 'string' ? parsed.stored_path : ''
-			if (!storedPath) return respondError(req, res, 404, 'not_found')
-			const abs = path.resolve(forgeManagerWorkdir(), storedPath)
-			if (!fs.existsSync(abs)) return respondError(req, res, 404, 'not_found')
-			const zip = new AdmZip()
-			zip.addLocalFolder(abs)
-			const buffer = zip.toBuffer()
-			const b64 = buffer.toString('base64')
-			return res.json({
-				ok: true,
-				name,
-				archive_b64: b64,
-				sha256: parsed?.sha256 ?? null,
-			})
-		} catch (error) {
-			return handleError(req, res, error, {
-				status: 500,
-				code: 'draft_archive_failed',
-			})
+
+			let subnetId: string
+			let nodeId: string
+
+			if (identity.type === 'node') {
+				subnetId = identity.subnetId
+				nodeId = identity.nodeId
+				if (payloadNodeId && payloadNodeId !== nodeId) {
+					return respondError(req, res, 403, 'node_mismatch')
+				}
+			} else if (identity.type === 'hub') {
+				subnetId = identity.subnetId
+				nodeId = payloadNodeId || 'hub'
+			} else {
+				return respondError(req, res, 403, 'invalid_client_certificate')
+			}
+
+			const keyPrefix =
+				kind === 'skills' ? SKILL_FORGE_KEY_PREFIX : SCENARIO_FORGE_KEY_PREFIX
+			const key = `${keyPrefix}:${subnetId}:${nodeId}:${name}`
+			try {
+				const raw = await redisClient.get(key)
+				if (!raw) return respondError(req, res, 404, 'not_found')
+				let parsed: any = {}
+				try {
+					parsed = JSON.parse(raw)
+				} catch {
+					parsed = {}
+				}
+				const storedPath =
+					typeof parsed?.stored_path === 'string' ? parsed.stored_path : ''
+				if (!storedPath) return respondError(req, res, 404, 'not_found')
+				const abs = path.resolve(forgeManagerWorkdir(), storedPath)
+				if (!fs.existsSync(abs)) return respondError(req, res, 404, 'not_found')
+				const zip = new AdmZip()
+				zip.addLocalFolder(abs)
+				const buffer = zip.toBuffer()
+				const b64 = buffer.toString('base64')
+				return res.json({
+					ok: true,
+					name,
+					archive_b64: b64,
+					sha256: parsed?.sha256 ?? null,
+				})
+			} catch (error) {
+				return handleError(req, res, error, {
+					status: 500,
+					code: 'draft_archive_failed',
+				})
+			}
 		}
-	}
 
 function forgeManagerWorkdir(): string {
 	// Keep in sync with ForgeManager initialization above.
@@ -1949,171 +1948,171 @@ const qbool = (q: any, key: string): boolean => {
 
 const deleteDraftHandler =
 	(kind: DraftKind): express.RequestHandler =>
-	async (req, res) => {
-		const identity = req.auth
-		if (!identity)
-			return respondError(req, res, 401, 'client_certificate_required')
+		async (req, res) => {
+			const identity = req.auth
+			if (!identity)
+				return respondError(req, res, 401, 'client_certificate_required')
 
-		const name = qstr(req.query, 'name')
-		const payloadNodeId = qstr(req.query, 'node_id')
-		const allNodes = qbool(req.query, 'all_nodes')
-		if (!name) return respondError(req, res, 400, 'missing_params')
+			const name = qstr(req.query, 'name')
+			const payloadNodeId = qstr(req.query, 'node_id')
+			const allNodes = qbool(req.query, 'all_nodes')
+			if (!name) return respondError(req, res, 400, 'missing_params')
 
-		try {
-			assertSafeName(name)
-		} catch {
-			return respondError(req, res, 400, 'invalid_name')
-		}
-
-		let subnetId: string
-		let nodeId: string | undefined
-
-		if (identity.type === 'node') {
-			subnetId = identity.subnetId
-			nodeId = identity.nodeId
-			if ((payloadNodeId && payloadNodeId !== nodeId) || allNodes) {
-				return respondError(req, res, 403, 'node_mismatch')
-			}
-		} else if (identity.type === 'hub') {
-			subnetId = identity.subnetId
-			nodeId = payloadNodeId || undefined
-		} else {
-			return respondError(req, res, 403, 'invalid_client_certificate')
-		}
-
-		const started = Date.now()
-		try {
-			const result = await forgeManager.deleteDraft({
-				kind,
-				subnetId,
-				name,
-				nodeId,
-				allNodes,
-			})
-
-			const keyPrefix =
-				kind === 'skills'
-					? SKILL_FORGE_KEY_PREFIX
-					: SCENARIO_FORGE_KEY_PREFIX
-			const keysToDelete = result.redisKeys ?? []
-			if (keysToDelete.length) {
-				await redisClient.del(keysToDelete)
-			}
-
-			console.info('draft deleted', {
-				action: 'delete_draft',
-				kind,
-				subnetId,
-				nodeId,
-				name,
-				allNodes,
-				duration_ms: Date.now() - started,
-				auditId: result.auditId,
-				deleted: result.deleted,
-			})
-
-			if (!result.deleted.length) {
-				return res.status(204).end()
-			}
-
-			return res.json({
-				ok: true,
-				deleted: result.deleted,
-				audit_id: result.auditId,
-			})
-		} catch (error: any) {
-			if (error?.code === 'not_found') {
-				return respondError(req, res, 404, 'not_found')
-			}
-			if (error?.code === 'invalid_name') {
+			try {
+				assertSafeName(name)
+			} catch {
 				return respondError(req, res, 400, 'invalid_name')
 			}
-			console.error('failed to delete draft', error)
-			return handleError(req, res, error, {
-				status: 500,
-				code: 'draft_delete_failed',
-			})
-		}
-	}
 
-const deleteRegistryHandler =
-	(kind: DraftKind): express.RequestHandler =>
-	async (req, res) => {
-		const identity = req.auth
-		if (!identity)
-			return respondError(req, res, 401, 'client_certificate_required')
+			let subnetId: string
+			let nodeId: string | undefined
 
-		const name = qstr(req.query, 'name')
-		const version = qstr(req.query, 'version') || undefined
-		const allVersions = qbool(req.query, 'all_versions')
-		const force = qbool(req.query, 'force')
+			if (identity.type === 'node') {
+				subnetId = identity.subnetId
+				nodeId = identity.nodeId
+				if ((payloadNodeId && payloadNodeId !== nodeId) || allNodes) {
+					return respondError(req, res, 403, 'node_mismatch')
+				}
+			} else if (identity.type === 'hub') {
+				subnetId = identity.subnetId
+				nodeId = payloadNodeId || undefined
+			} else {
+				return respondError(req, res, 403, 'invalid_client_certificate')
+			}
 
-		if (!name) return respondError(req, res, 400, 'missing_params')
-		if (!version && !allVersions)
-			return respondError(req, res, 400, 'missing_params')
+			const started = Date.now()
+			try {
+				const result = await forgeManager.deleteDraft({
+					kind,
+					subnetId,
+					name,
+					nodeId,
+					allNodes,
+				})
 
-		try {
-			assertSafeName(name)
-			if (version) assertSafeName(version)
-		} catch {
-			return respondError(req, res, 400, 'invalid_name')
-		}
+				const keyPrefix =
+					kind === 'skills'
+						? SKILL_FORGE_KEY_PREFIX
+						: SCENARIO_FORGE_KEY_PREFIX
+				const keysToDelete = result.redisKeys ?? []
+				if (keysToDelete.length) {
+					await redisClient.del(keysToDelete)
+				}
 
-		const subnetId = identity.subnetId
+				console.info('draft deleted', {
+					action: 'delete_draft',
+					kind,
+					subnetId,
+					nodeId,
+					name,
+					allNodes,
+					duration_ms: Date.now() - started,
+					auditId: result.auditId,
+					deleted: result.deleted,
+				})
 
-		const started = Date.now()
-		try {
-			const result = await forgeManager.deleteRegistry({
-				kind,
-				subnetId,
-				name,
-				version,
-				allVersions,
-				force,
-			})
+				if (!result.deleted.length) {
+					return res.status(204).end()
+				}
 
-			console.info('registry artifact deleted', {
-				action: 'delete_registry',
-				kind,
-				subnetId,
-				name,
-				version,
-				allVersions,
-				force,
-				duration_ms: Date.now() - started,
-				auditId: result.auditId,
-				deleted: result.deleted,
-				skipped: result.skipped ?? [],
-				tombstoned: !!result.tombstoned,
-			})
-
-			if (result.deleted?.length) {
 				return res.json({
 					ok: true,
 					deleted: result.deleted,
-					skipped: result.skipped ?? [],
 					audit_id: result.auditId,
-					tombstoned: !!result.tombstoned,
 				})
+			} catch (error: any) {
+				if (error?.code === 'not_found') {
+					return respondError(req, res, 404, 'not_found')
+				}
+				if (error?.code === 'invalid_name') {
+					return respondError(req, res, 400, 'invalid_name')
+				}
+				console.error('failed to delete draft', error)
+				return handleError(req, res, error, {
+					status: 500,
+					code: 'draft_delete_failed',
+				})
+			}
+		}
+
+const deleteRegistryHandler =
+	(kind: DraftKind): express.RequestHandler =>
+		async (req, res) => {
+			const identity = req.auth
+			if (!identity)
+				return respondError(req, res, 401, 'client_certificate_required')
+
+			const name = qstr(req.query, 'name')
+			const version = qstr(req.query, 'version') || undefined
+			const allVersions = qbool(req.query, 'all_versions')
+			const force = qbool(req.query, 'force')
+
+			if (!name) return respondError(req, res, 400, 'missing_params')
+			if (!version && !allVersions)
+				return respondError(req, res, 400, 'missing_params')
+
+			try {
+				assertSafeName(name)
+				if (version) assertSafeName(version)
+			} catch {
+				return respondError(req, res, 400, 'invalid_name')
 			}
 
-			return res.status(204).end()
-		} catch (error: any) {
-			if (error?.code === 'not_found') {
-				return respondError(req, res, 404, 'not_found')
-			}
-			if (error?.code === 'in_use') {
-				return respondError(req, res, 409, 'in_use', {
-					refs: error.refs || [],
+			const subnetId = identity.subnetId
+
+			const started = Date.now()
+			try {
+				const result = await forgeManager.deleteRegistry({
+					kind,
+					subnetId,
+					name,
+					version,
+					allVersions,
+					force,
+				})
+
+				console.info('registry artifact deleted', {
+					action: 'delete_registry',
+					kind,
+					subnetId,
+					name,
+					version,
+					allVersions,
+					force,
+					duration_ms: Date.now() - started,
+					auditId: result.auditId,
+					deleted: result.deleted,
+					skipped: result.skipped ?? [],
+					tombstoned: !!result.tombstoned,
+				})
+
+				if (result.deleted?.length) {
+					return res.json({
+						ok: true,
+						deleted: result.deleted,
+						skipped: result.skipped ?? [],
+						audit_id: result.auditId,
+						tombstoned: !!result.tombstoned,
+					})
+				}
+
+				return res.status(204).end()
+			} catch (error: any) {
+				if (error?.code === 'not_found') {
+					return respondError(req, res, 404, 'not_found')
+				}
+				if (error?.code === 'in_use') {
+					return respondError(req, res, 409, 'in_use', {
+						refs: error.refs || [],
+					})
+				}
+				console.error('failed to delete registry artifact', error)
+				return handleError(req, res, error, {
+					status: 500,
+					code: 'registry_delete_failed',
 				})
 			}
-			console.error('failed to delete registry artifact', error)
-			return handleError(req, res, error, {
-				status: 500,
-				code: 'registry_delete_failed',
-			})
 		}
-	}
 
 mtlsRouter.post('/skills/draft', createDraftHandler('skills'))
 mtlsRouter.post('/scenarios/draft', createDraftHandler('scenarios'))
@@ -2212,10 +2211,10 @@ function saveFileChunk(
 			openedStreams[sessionId][safeFile].stream.destroy()
 			fs.unlink(
 				FILESPATH +
-					openedStreams[sessionId][safeFile].timestamp +
-					'_' +
-					safeFile,
-				() => {}
+				openedStreams[sessionId][safeFile].timestamp +
+				'_' +
+				safeFile,
+				() => { }
 			)
 			delete openedStreams[sessionId][safeFile]
 			cleanupSessionBucket(sessionId)
@@ -2234,9 +2233,9 @@ function saveFileChunk(
 		openedStreams[sessionId][safeFile].stream.destroy()
 		fs.unlink(
 			FILESPATH +
-				openedStreams[sessionId][safeFile].timestamp +
-				'_' +
-				safeFile,
+			openedStreams[sessionId][safeFile].timestamp +
+			'_' +
+			safeFile,
 			(error) => {
 				if (error) console.log(error)
 			}
