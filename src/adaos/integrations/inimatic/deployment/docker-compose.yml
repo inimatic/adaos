@@ -224,6 +224,7 @@ services:
             PG_URL: ${PG_URL}
             TG_ROUTER_ENABLED: ${TG_ROUTER_ENABLED}
             REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+            WEB_SESSION_JWT_SECRET: ${WEB_SESSION_JWT_SECRET:-}
             # Browser->Hub route proxy (debug)
             ROUTE_PROXY_VERBOSE: ${ROUTE_PROXY_VERBOSE:-0}
         volumes:
@@ -305,6 +306,7 @@ services:
             PG_URL: ${PG_URL}
             TG_ROUTER_ENABLED: ${TG_ROUTER_ENABLED}
             REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+            WEB_SESSION_JWT_SECRET: ${WEB_SESSION_JWT_SECRET:-}
             # Browser->Hub route proxy (debug)
             ROUTE_PROXY_VERBOSE: ${ROUTE_PROXY_VERBOSE:-0}
         volumes:
