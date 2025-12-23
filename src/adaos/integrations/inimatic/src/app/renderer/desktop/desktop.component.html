@@ -1,5 +1,12 @@
 <!--src\adaos\integrations\inimatic\src\app\renderer\desktop\desktop.component.html-->
 <ion-content [style.--background]="app?.desktop?.background || '#0b0f14'">
+	<div *ngIf="needsLogin" style="padding: 16px; max-width: 520px; margin: 0 auto;">
+		<h2 style="margin: 8px 0;">Hub offline</h2>
+		<p style="opacity: 0.85; margin: 0 0 12px 0;">
+			Local hub is not reachable. Login to route through root.
+		</p>
+		<app-login (loginSuccess)="onLoginSuccess()"></app-login>
+	</div>
 	<div class="desktop" *ngIf="pageSchema as page">
 		<ng-container *ngFor="let area of page.layout.areas">
 			<div
