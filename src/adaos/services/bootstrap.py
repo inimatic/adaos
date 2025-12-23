@@ -761,6 +761,10 @@ class BootstrapService:
 
                         tunnels: dict[str, dict[str, Any]] = {}
                         tunnel_tasks: dict[str, asyncio.Task] = {}
+                        pending_chunks: dict[str, dict[str, Any]] = {}
+                        MAX_CHUNK_RAW = 300_000
+
+                        _route_verbose = os.getenv("HUB_ROUTE_VERBOSE", "0") == "1"
 
                         async def _route_reply(key: str, payload: dict[str, Any]) -> None:
                             try:
@@ -768,8 +772,12 @@ class BootstrapService:
                                     f"route.to_browser.{key}",
                                     _json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                                 )
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                if _route_verbose:
+                                    try:
+                                        print(f"[hub-route] publish to_browser failed key={key}: {type(e).__name__}: {e}")
+                                    except Exception:
+                                        pass
 
                         def _hub_key_match(key: str) -> bool:
                             # key is "<hub_id>--..."
@@ -782,16 +790,44 @@ class BootstrapService:
                             try:
                                 async for msg in ws:
                                     if isinstance(msg, (bytes, bytearray)):
-                                        await _route_reply(
-                                            key,
-                                            {
-                                                "t": "frame",
-                                                "kind": "bin",
-                                                "data_b64": base64.b64encode(bytes(msg)).decode("ascii"),
-                                            },
-                                        )
+                                        raw = bytes(msg)
+                                        if len(raw) > MAX_CHUNK_RAW:
+                                            cid = f"c_{uuid.uuid4().hex}"
+                                            total = (len(raw) + MAX_CHUNK_RAW - 1) // MAX_CHUNK_RAW
+                                            for idx in range(total):
+                                                chunk = raw[idx * MAX_CHUNK_RAW : (idx + 1) * MAX_CHUNK_RAW]
+                                                await _route_reply(
+                                                    key,
+                                                    {
+                                                        "t": "chunk",
+                                                        "id": cid,
+                                                        "kind": "bin",
+                                                        "idx": idx,
+                                                        "total": total,
+                                                        "data_b64": base64.b64encode(chunk).decode("ascii"),
+                                                    },
+                                                )
+                                        else:
+                                            await _route_reply(
+                                                key,
+                                                {
+                                                    "t": "frame",
+                                                    "kind": "bin",
+                                                    "data_b64": base64.b64encode(raw).decode("ascii"),
+                                                },
+                                            )
                                     else:
-                                        await _route_reply(key, {"t": "frame", "kind": "text", "data": str(msg)})
+                                        text = str(msg)
+                                        if len(text) > MAX_CHUNK_RAW:
+                                            cid = f"c_{uuid.uuid4().hex}"
+                                            parts = [text[i : i + MAX_CHUNK_RAW] for i in range(0, len(text), MAX_CHUNK_RAW)]
+                                            for idx, part in enumerate(parts):
+                                                await _route_reply(
+                                                    key,
+                                                    {"t": "chunk", "id": cid, "kind": "text", "idx": idx, "total": len(parts), "data": part},
+                                                )
+                                        else:
+                                            await _route_reply(key, {"t": "frame", "kind": "text", "data": text})
                             except Exception:
                                 pass
                             finally:
@@ -804,6 +840,12 @@ class BootstrapService:
                                 try:
                                     if t:
                                         t.cancel()
+                                except Exception:
+                                    pass
+                                try:
+                                    # clear pending chunks for this connection
+                                    for pid in [pid for pid, st in list(pending_chunks.items()) if st.get("key") == key]:
+                                        pending_chunks.pop(pid, None)
                                 except Exception:
                                     pass
                                 try:
@@ -845,7 +887,8 @@ class BootstrapService:
                                     except Exception:
                                         pass
                                     try:
-                                        ws = await websockets.connect(url, max_size=2**20)  # 1 MiB frames
+                                        # Yjs sync frames can exceed 1 MiB; do not enforce a small client-side cap.
+                                        ws = await websockets.connect(url, max_size=None)
                                     except Exception as e:
                                         await _route_reply(key, {"t": "close", "err": str(e)})
                                         return
@@ -879,13 +922,69 @@ class BootstrapService:
                                         if isinstance(b64, str) and b64:
                                             try:
                                                 await ws.send(base64.b64decode(b64.encode("ascii")))
-                                            except Exception:
-                                                pass
+                                            except Exception as e:
+                                                if _route_verbose:
+                                                    try:
+                                                        print(f"[hub-route] ws.send(bin) failed key={key}: {type(e).__name__}: {e}")
+                                                    except Exception:
+                                                        pass
                                     else:
                                         txt = (data or {}).get("data")
                                         if isinstance(txt, str):
                                             try:
                                                 await ws.send(txt)
+                                            except Exception as e:
+                                                if _route_verbose:
+                                                    try:
+                                                        print(f"[hub-route] ws.send(text) failed key={key}: {type(e).__name__}: {e}")
+                                                    except Exception:
+                                                        pass
+                                    return
+                                
+                                if t == "chunk":
+                                    rec = tunnels.get(key)
+                                    ws = rec.get("ws") if isinstance(rec, dict) else None
+                                    if not ws:
+                                        return
+                                    cid = (data or {}).get("id")
+                                    idx = int((data or {}).get("idx") or 0)
+                                    total = int((data or {}).get("total") or 0)
+                                    kind = "text" if (data or {}).get("kind") == "text" else "bin"
+                                    if not isinstance(cid, str) or not cid or total <= 0 or idx < 0 or idx >= total:
+                                        return
+                                    st = pending_chunks.get(cid)
+                                    if not st:
+                                        st = {"key": key, "kind": kind, "total": total, "parts": [None] * total}
+                                        pending_chunks[cid] = st
+                                    if st.get("key") != key or st.get("kind") != kind or int(st.get("total") or 0) != total:
+                                        return
+                                    parts = st.get("parts")
+                                    if not isinstance(parts, list) or len(parts) != total:
+                                        st["parts"] = [None] * total
+                                        parts = st["parts"]
+                                    if kind == "bin":
+                                        b64 = (data or {}).get("data_b64")
+                                        if not isinstance(b64, str):
+                                            return
+                                        parts[idx] = base64.b64decode(b64.encode("ascii"))
+                                    else:
+                                        txt = (data or {}).get("data")
+                                        if not isinstance(txt, str):
+                                            return
+                                        parts[idx] = txt
+                                    if any(p is None for p in parts):
+                                        return
+                                    pending_chunks.pop(cid, None)
+                                    try:
+                                        if kind == "bin":
+                                            blob = b"".join([p for p in parts if isinstance(p, (bytes, bytearray))])
+                                            await ws.send(blob)
+                                        else:
+                                            await ws.send("".join([p for p in parts if isinstance(p, str)]))
+                                    except Exception as e:
+                                        if _route_verbose:
+                                            try:
+                                                print(f"[hub-route] ws.send(chunked) failed key={key}: {type(e).__name__}: {e}")
                                             except Exception:
                                                 pass
                                     return

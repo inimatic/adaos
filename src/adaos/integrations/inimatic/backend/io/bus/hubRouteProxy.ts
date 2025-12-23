@@ -17,6 +17,14 @@ function maskToken(tok?: string | null): string | null {
 	return `${s.slice(0, 5)}***${s.slice(-3)}`
 }
 
+const MAX_CHUNK_RAW = 300_000
+
+function* chunkBuffer(buf: Buffer): Generator<Buffer> {
+	for (let off = 0; off < buf.length; off += MAX_CHUNK_RAW) {
+		yield buf.subarray(off, Math.min(buf.length, off + MAX_CHUNK_RAW))
+	}
+}
+
 type ProxyOpts = {
 	redis: RedisLike
 	natsUrl: string
@@ -263,12 +271,49 @@ export function installHubRouteProxy(
 			const toBrowser = `route.to_browser.${key}`
 
 			let sub: any = null
+			const pendingChunks = new Map<
+				string,
+				{ kind: 'bin' | 'text'; total: number; parts: Array<Buffer | string> }
+			>()
 			try {
 				await ensureBus()
 				sub = await bus.subscribe(toBrowser, async (_subject: string, data: Uint8Array) => {
 					try {
 						const txt = new TextDecoder().decode(data)
 						const msg = JSON.parse(txt)
+						if (msg?.t === 'chunk' && typeof msg.id === 'string') {
+							const id = String(msg.id)
+							const idx = Number(msg.idx || 0)
+							const total = Number(msg.total || 0)
+							const kind = msg.kind === 'text' ? 'text' : 'bin'
+							if (!total || idx < 0 || idx >= total) return
+							let entry = pendingChunks.get(id)
+							if (!entry) {
+								entry = { kind, total, parts: new Array(total) }
+								pendingChunks.set(id, entry)
+							}
+							if (entry.total !== total || entry.kind !== kind) return
+							if (kind === 'bin') {
+								if (typeof msg.data_b64 !== 'string') return
+								entry.parts[idx] = Buffer.from(msg.data_b64, 'base64')
+							} else {
+								if (typeof msg.data !== 'string') return
+								entry.parts[idx] = msg.data
+							}
+							// Check completion
+							for (let i = 0; i < entry.total; i++) {
+								if (entry.parts[i] == null) return
+							}
+							pendingChunks.delete(id)
+							if (kind === 'bin') {
+								const bufs = entry.parts as Buffer[]
+								ws.send(Buffer.concat(bufs), { binary: true })
+							} else {
+								const segs = entry.parts as string[]
+								ws.send(segs.join(''))
+							}
+							return
+						}
 						if (msg?.t === 'frame') {
 							if (msg.kind === 'bin' && typeof msg.data_b64 === 'string') {
 								ws.send(Buffer.from(msg.data_b64, 'base64'), { binary: true })
@@ -298,24 +343,58 @@ export function installHubRouteProxy(
 					try {
 						if (isBinary) {
 							const buf = Buffer.isBuffer(data) ? data : Buffer.from(data)
-							await bus.publish_subject(toHub, {
-								t: 'frame',
-								kind: 'bin',
-								data_b64: buf.toString('base64'),
-							})
+							if (buf.length > MAX_CHUNK_RAW) {
+								const id = `c_${randomUUID().replace(/-/g, '')}`
+								const chunks = Array.from(chunkBuffer(buf))
+								for (let i = 0; i < chunks.length; i++) {
+									await bus.publish_subject(toHub, {
+										t: 'chunk',
+										id,
+										kind: 'bin',
+										idx: i,
+										total: chunks.length,
+										data_b64: chunks[i].toString('base64'),
+									})
+								}
+							} else {
+								await bus.publish_subject(toHub, {
+									t: 'frame',
+									kind: 'bin',
+									data_b64: buf.toString('base64'),
+								})
+							}
 						} else {
 							const text = typeof data === 'string' ? data : Buffer.from(data).toString('utf8')
-							await bus.publish_subject(toHub, {
-								t: 'frame',
-								kind: 'text',
-								data: text,
-							})
+							if (text.length > MAX_CHUNK_RAW) {
+								const id = `c_${randomUUID().replace(/-/g, '')}`
+								const parts: string[] = []
+								for (let off = 0; off < text.length; off += MAX_CHUNK_RAW) {
+									parts.push(text.slice(off, off + MAX_CHUNK_RAW))
+								}
+								for (let i = 0; i < parts.length; i++) {
+									await bus.publish_subject(toHub, {
+										t: 'chunk',
+										id,
+										kind: 'text',
+										idx: i,
+										total: parts.length,
+										data: parts[i],
+									})
+								}
+							} else {
+								await bus.publish_subject(toHub, {
+									t: 'frame',
+									kind: 'text',
+									data: text,
+								})
+							}
 						}
 					} catch {}
 				})
 
 				ws.on('close', async () => {
 					try {
+						pendingChunks.clear()
 						sub?.unsubscribe?.()
 					} catch {}
 					try {
