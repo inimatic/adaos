@@ -458,15 +458,26 @@ engineWithAllowRequest.allowRequest = (req, callback) => {
 		console.error('socket allowRequest error', error)
 		callback('Unauthorized', false)
 	}
-}
+	}
 
-installAdaosBridge(app, server)
+	installAdaosBridge(app, server)
 
-const redisUrl = `redis://${process.env['PRODUCTION'] ? 'redis' : 'localhost'
-	}:6379`
-const redisClient = await createClient({ url: redisUrl })
-	.on('error', (err) => console.error('Redis Client Error', err))
-	.connect()
+	function resolveRedisUrl(): string {
+		const explicit = (process.env['REDIS_URL'] || '').trim()
+		if (explicit) return explicit
+		const host =
+			(process.env['REDIS_HOST'] || '').trim() ||
+			(process.env['PRODUCTION'] ? 'redis' : 'localhost')
+		const port = Number.parseInt((process.env['REDIS_PORT'] || '').trim() || '6379', 10) || 6379
+		const db = (process.env['REDIS_DB'] || '').trim()
+		return `redis://${host}:${port}${db ? `/${encodeURIComponent(db)}` : ''}`
+	}
+
+	const redisUrl = resolveRedisUrl()
+	console.log(`[redis] connecting url=${redisUrl}`)
+	const redisClient = await createClient({ url: redisUrl })
+		.on('error', (err) => console.error('Redis Client Error', err))
+		.connect()
 
 const certificateAuthority = new CertificateAuthority({
 	certPem: CA_CERT_PEM,

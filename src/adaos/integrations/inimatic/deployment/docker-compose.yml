@@ -223,6 +223,7 @@ services:
             TG_WEBHOOK_PATH_PREFIX: ${TG_WEBHOOK_PATH_PREFIX}
             PG_URL: ${PG_URL}
             TG_ROUTER_ENABLED: ${TG_ROUTER_ENABLED}
+            REDIS_URL: ${REDIS_URL:-redis://redis:6379}
             # Browser->Hub route proxy (debug)
             ROUTE_PROXY_VERBOSE: ${ROUTE_PROXY_VERBOSE:-0}
         volumes:
@@ -303,6 +304,7 @@ services:
             TG_WEBHOOK_PATH_PREFIX: ${TG_WEBHOOK_PATH_PREFIX}
             PG_URL: ${PG_URL}
             TG_ROUTER_ENABLED: ${TG_ROUTER_ENABLED}
+            REDIS_URL: ${REDIS_URL:-redis://redis:6379}
             # Browser->Hub route proxy (debug)
             ROUTE_PROXY_VERBOSE: ${ROUTE_PROXY_VERBOSE:-0}
         volumes:
