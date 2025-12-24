@@ -540,6 +540,41 @@ export function installHubRouteProxy(
 			const kind = m[2]
 			const room = m[3] ? `/${m[3]}` : ''
 
+			if (verbose) {
+				try {
+					log.info(
+						{
+							path: u.pathname,
+							upgrade: String(req?.headers?.upgrade || ''),
+							connection: String(req?.headers?.connection || ''),
+							hasSecKey: Boolean(req?.headers?.['sec-websocket-key']),
+							secVer: String(req?.headers?.['sec-websocket-version'] || ''),
+							secProto: String(req?.headers?.['sec-websocket-protocol'] || ''),
+							headLen: head?.length ?? null,
+						},
+						'ws upgrade: headers'
+					)
+				} catch {}
+			}
+
+			// If proxy/client sent an Upgrade request without WS handshake headers, ws will abort silently.
+			if (!req?.headers?.['sec-websocket-key'] || !req?.headers?.upgrade) {
+				if (verbose) log.warn({ path: u.pathname }, 'ws upgrade: missing ws handshake headers')
+				try {
+					socket.write(
+						'HTTP/1.1 400 Bad Request\r\n' +
+							'Connection: close\r\n' +
+							'Content-Type: text/plain\r\n' +
+							'\r\n' +
+							'missing websocket headers'
+					)
+				} catch {}
+				try {
+					socket.destroy()
+				} catch {}
+				return
+			}
+
 			const sessionJwt = extractToken({
 				headers: req.headers,
 				query: Object.fromEntries(u.searchParams.entries()),
