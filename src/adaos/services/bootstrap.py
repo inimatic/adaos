@@ -877,6 +877,21 @@ class BootstrapService:
                                 except Exception:
                                     data = {}
                                 t = (data or {}).get("t")
+                                if _route_verbose:
+                                    try:
+                                        if t == "http":
+                                            _m = str((data or {}).get("method") or "GET").upper()
+                                            _p = str((data or {}).get("path") or "")
+                                            print(f"[hub-route] rx http key={key} {_m} {_p}")
+                                        elif t == "open":
+                                            _p = str((data or {}).get("path") or "")
+                                            print(f"[hub-route] rx open key={key} path={_p}")
+                                        elif t == "close":
+                                            print(f"[hub-route] rx close key={key}")
+                                        else:
+                                            print(f"[hub-route] rx t={t} key={key}")
+                                    except Exception:
+                                        pass
 
                                 if t == "open":
                                     # Open a local WS to the hub server and start pumping frames.
@@ -915,6 +930,11 @@ class BootstrapService:
                                     except Exception:
                                         pass
                                     url = f"{base_ws}{path}{query}"
+                                    if _route_verbose:
+                                        try:
+                                            print(f"[hub-route] open upstream url={url}")
+                                        except Exception:
+                                            pass
                                     # Ensure we don't leak multiple opens for same key.
                                     try:
                                         old = tunnels.get(key)
@@ -1050,6 +1070,11 @@ class BootstrapService:
                                                 token_local = os.getenv("ADAOS_TOKEN", "") or None
 
                                             url = f"{base_http}{path}{search}"
+                                            if _route_verbose:
+                                                try:
+                                                    print(f"[hub-route] http upstream url={url}")
+                                                except Exception:
+                                                    pass
                                             body = None
                                             if isinstance(body_b64, str) and body_b64:
                                                 try:
@@ -1090,13 +1115,31 @@ class BootstrapService:
                                     resp = await asyncio.to_thread(_do_http)
                                     await _route_reply(key, resp)
                                     return
-                            except Exception:
+                            except Exception as e:
+                                if _route_verbose:
+                                    try:
+                                        print(f"[hub-route] handler failed key={key}: {type(e).__name__}: {e}")
+                                    except Exception:
+                                        pass
                                 return
 
                         route_sub = await nc.subscribe("route.to_hub.*", cb=_route_cb)
                         print("[hub-io] NATS subscribe route.to_hub.* (hub route proxy)")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Do not fail the whole IO stack: this is an optional fallback used only when
+                        # browser connects through Root (api.inimatic.com) and needs a NATS tunnel.
+                        try:
+                            if os.getenv("HUB_ROUTE_VERBOSE", "0") == "1" or os.getenv("HUB_NATS_VERBOSE", "0") == "1":
+                                print(f"[hub-io] NATS route proxy init failed: {type(e).__name__}: {e}")
+                                try:
+                                    tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+                                    print(tb.rstrip())
+                                except Exception:
+                                    pass
+                            else:
+                                print(f"[hub-io] NATS route proxy disabled: {type(e).__name__}: {e}")
+                        except Exception:
+                            pass
 
                     # Optional compatibility: also listen to additional hub aliases if explicitly configured
                     try:

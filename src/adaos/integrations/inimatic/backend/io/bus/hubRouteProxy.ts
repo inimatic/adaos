@@ -115,7 +115,7 @@ async function natsRequest(
 			try {
 				sub?.unsubscribe?.()
 			} catch {}
-			reject(new Error('nats request timeout'))
+			reject(new Error(`nats request timeout (waiting ${subjectToBrowser})`))
 		}, timeoutMs)
 
 		bus
@@ -271,7 +271,7 @@ export function installHubRouteProxy(
 			const buf = body ? Buffer.from(body, 'base64') : Buffer.from('')
 			return res.status(status).send(buf)
 		} catch (e) {
-			log.warn({ err: String(e) }, 'http proxy failed')
+			log.warn({ err: String(e), hubId: String(req?.params?.hubId || '') }, 'http proxy failed')
 			return res.status(502).json({ ok: false, error: 'hub_unreachable' })
 		}
 	})
@@ -303,6 +303,11 @@ export function installHubRouteProxy(
 				{ kind: 'bin' | 'text'; total: number; parts: Array<Buffer | string> }
 			>()
 			try {
+				if (verbose) {
+					ws.on('error', (err: any) => {
+						log.warn({ hubId, dstPath, key, err: String(err) }, 'ws client error')
+					})
+				}
 				await ensureBus()
 				sub = await bus.subscribe(toBrowser, async (_subject: string, data: Uint8Array) => {
 					try {
@@ -348,8 +353,12 @@ export function installHubRouteProxy(
 								ws.send(msg.data)
 							}
 						} else if (msg?.t === 'close') {
+							const errMsg = typeof msg?.err === 'string' ? String(msg.err) : ''
+							if (verbose && errMsg) {
+								log.warn({ hubId, dstPath, key, err: errMsg.slice(0, 500) }, 'ws upstream closed')
+							}
 							try {
-								ws.close(1000, 'upstream_close')
+								ws.close(errMsg ? 1011 : 1000, errMsg ? 'upstream_error' : 'upstream_close')
 							} catch {}
 						}
 					} catch {
@@ -358,13 +367,21 @@ export function installHubRouteProxy(
 				})
 
 				// open
-				await bus.publish_subject(toHub, {
-					t: 'open',
-					proto: 'ws',
-					path: dstPath,
-					query: meta?.query || '',
-					headers: {},
-				})
+				try {
+					await bus.publish_subject(toHub, {
+						t: 'open',
+						proto: 'ws',
+						path: dstPath,
+						query: meta?.query || '',
+						headers: {},
+					})
+				} catch (e) {
+					if (verbose) log.warn({ hubId, dstPath, key, err: String(e) }, 'ws open publish failed')
+					try {
+						ws.close(1011, 'nats_open_failed')
+					} catch {}
+					return
+				}
 
 				ws.on('message', async (data: any, isBinary: boolean) => {
 					try {
@@ -419,7 +436,16 @@ export function installHubRouteProxy(
 					} catch {}
 				})
 
-				ws.on('close', async () => {
+				ws.on('close', async (code: number, reason: Buffer) => {
+					if (verbose) {
+						let r: string | null = null
+						try {
+							r = reason ? reason.toString('utf8') : ''
+						} catch {
+							r = null
+						}
+						log.info({ hubId, dstPath, key, code, reason: r }, 'ws client close')
+					}
 					try {
 						pendingChunks.clear()
 						sub?.unsubscribe?.()
@@ -435,7 +461,7 @@ export function installHubRouteProxy(
 				try {
 					ws.close(1011, 'proxy_error')
 				} catch {}
-				log.warn({ err: String(e), hubId, dstPath }, 'ws proxy setup failed')
+				log.warn({ err: String(e), hubId, dstPath, key }, 'ws proxy setup failed')
 			}
 		})
 	}
