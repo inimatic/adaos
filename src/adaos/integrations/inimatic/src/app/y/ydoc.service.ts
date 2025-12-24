@@ -45,8 +45,38 @@ export class YDocService {
       localStorage.removeItem(this.sessionJwtKey)
     } catch {}
     try {
+      localStorage.removeItem(this.hubIdKey)
+    } catch {}
+    try {
       this.adaos.setAuthAdaosToken(null)
     } catch {}
+  }
+
+  private decodeJwtPayload(token: string): any | null {
+    try {
+      const parts = token.split('.')
+      if (parts.length < 2) return null
+      const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+      const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+      const json = atob(padded)
+      return JSON.parse(json)
+    } catch {
+      return null
+    }
+  }
+
+  private isJwtValid(token: string): boolean {
+    const payload = this.decodeJwtPayload(token)
+    const exp = typeof payload?.exp === 'number' ? payload.exp : undefined
+    if (!exp) return false
+    const now = Math.floor(Date.now() / 1000)
+    return exp > now + 15
+  }
+
+  private pickHubIdFromJwt(token: string): string | null {
+    const payload = this.decodeJwtPayload(token)
+    const hubId = payload?.hub_id || payload?.subnet_id || payload?.owner_id
+    return typeof hubId === 'string' && hubId.trim() ? hubId.trim() : null
   }
 
   async initFromHub(): Promise<void> {
@@ -72,10 +102,16 @@ export class YDocService {
 
     const readSession = (): { hubId: string | null; sessionJwt: string | null } => {
       try {
-        return {
-          hubId: localStorage.getItem(this.hubIdKey),
-          sessionJwt: localStorage.getItem(this.sessionJwtKey),
+        const sessionJwt = localStorage.getItem(this.sessionJwtKey)
+        let hubId = localStorage.getItem(this.hubIdKey)
+        // Heal missing hub id from the JWT itself (best-effort).
+        if (!hubId && sessionJwt && sessionJwt.includes('.')) {
+          hubId = this.pickHubIdFromJwt(sessionJwt)
+          try {
+            if (hubId) localStorage.setItem(this.hubIdKey, hubId)
+          } catch {}
         }
+        return { hubId, sessionJwt }
       } catch {
         return { hubId: null, sessionJwt: null }
       }
@@ -86,6 +122,10 @@ export class YDocService {
       if (!hubId || !sessionJwt) return false
       // We now use signed JWTs for root-proxy auth; legacy opaque `sess_*` cannot be validated statelessly.
       if (!sessionJwt.includes('.')) {
+        this.invalidateWebSession()
+        return false
+      }
+      if (!this.isJwtValid(sessionJwt)) {
         this.invalidateWebSession()
         return false
       }
