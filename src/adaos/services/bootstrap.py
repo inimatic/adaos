@@ -780,6 +780,19 @@ class BootstrapService:
                                     f"route.to_browser.{key}",
                                     _json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                                 )
+                                # Ensure the reply is actually flushed quickly; otherwise Root may time out
+                                # waiting on `route.to_browser.<key>` (especially over websocket-proxied NATS).
+                                try:
+                                    t = (payload or {}).get("t")
+                                    if t in ("http_resp", "close"):
+                                        await nc.flush(timeout=0.8)
+                                        if _route_verbose:
+                                            try:
+                                                print(f"[hub-route] tx {t} key={key}")
+                                            except Exception:
+                                                pass
+                                except Exception:
+                                    pass
                             except Exception as e:
                                 if _route_verbose:
                                     try:
