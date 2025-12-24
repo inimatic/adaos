@@ -67,6 +67,13 @@ export class NatsBus {
 
   async subscribe(subject: string, handler: (subject: string, data: Uint8Array) => Promise<void>) {
     const sub: Subscription = this.nc.subscribe(subject)
+    // Avoid a race where we publish a request immediately after subscribing (request/reply pattern)
+    // and miss a fast response because the server hasn't processed the SUB yet.
+    try {
+      await this.nc.flush()
+    } catch {
+      // ignore
+    }
     ;(async () => { for await (const m of sub) await handler(m.subject, m.data) })().catch(() => {})
     return sub
   }
