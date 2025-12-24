@@ -153,10 +153,54 @@ export class LoginService {
 				} catch {}
 				return null
 			}
+			// Drop expired/invalid JWTs early to avoid noisy WS failures.
+			if (tok) {
+				const payload = this.decodeJwtPayload(tok)
+				const exp = typeof payload?.exp === 'number' ? payload.exp : undefined
+				if (!exp) {
+					try {
+						localStorage.removeItem(this.sessionKey)
+					} catch {}
+					return null
+				}
+				const now = Math.floor(Date.now() / 1000)
+				// small skew/leeway
+				if (exp <= now + 15) {
+					try {
+						localStorage.removeItem(this.sessionKey)
+					} catch {}
+					return null
+				}
+				// Ensure hub id is persisted even if backend response omits it.
+				try {
+					const hubId = this.pickHubIdFromJwtPayload(payload)
+					if (hubId) localStorage.setItem(this.hubIdKey, hubId)
+				} catch {}
+			}
 			return tok
 		} catch {
 			return null
 		}
+	}
+
+	private decodeJwtPayload(token: string): any | null {
+		try {
+			const parts = token.split('.')
+			if (parts.length < 2) return null
+			const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+			// pad
+			const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+			const json = atob(padded)
+			return JSON.parse(json)
+		} catch {
+			return null
+		}
+	}
+
+	private pickHubIdFromJwtPayload(payload: any): string | null {
+		if (!payload || typeof payload !== 'object') return null
+		const hubId = payload.hub_id || payload.subnet_id || payload.owner_id
+		return typeof hubId === 'string' && hubId.trim() ? hubId.trim() : null
 	}
 
 	private randomSidFallback(): string {
@@ -243,7 +287,10 @@ export class LoginService {
 			// ignore storage errors
 		}
 		try {
-			if (finish.owner_id) localStorage.setItem(this.hubIdKey, finish.owner_id)
+			// Prefer hub_id/subnet_id inside JWT (owner_id is not always a hub id).
+			const payload = this.decodeJwtPayload(finish.session_jwt)
+			const hubId = this.pickHubIdFromJwtPayload(payload) || finish.owner_id || null
+			if (hubId) localStorage.setItem(this.hubIdKey, hubId)
 		} catch {}
 
 		return {
