@@ -75,10 +75,13 @@ location ^~ /nats {
   proxy_set_header Upgrade $http_upgrade;
   proxy_set_header Connection "upgrade";
   proxy_set_header Host $host;
+  # Preserve WS subprotocol (NATS uses `Sec-WebSocket-Protocol: nats`)
+  proxy_set_header Sec-WebSocket-Protocol $http_sec_websocket_protocol;
   proxy_read_timeout  60s;
   proxy_send_timeout  60s;
   proxy_connect_timeout 5s;
-  proxy_pass http://nats:8080;
+  # Important: keep trailing slash so `/nats` maps to `/` on upstream (NATS WS listener doesn't know `/nats`).
+  proxy_pass http://nats:8080/;
 }
 
 # --- защищённые пути под mTLS ---
