@@ -418,19 +418,22 @@ class BootstrapService:
                                 s = str(url).strip()
                                 if not s:
                                     return
-                                # For NATS WS clients, it's safer to always have an explicit path.
-                                # Some stacks treat "wss://host" differently from "wss://host/".
+                                # For NATS WS clients, it's safer to always have an explicit WS path.
+                                # In our deployment NATS WS is mounted at `/nats` (not `/`).
                                 if s.startswith("ws://") or s.startswith("wss://"):
+                                    ws_default_path = os.getenv("NATS_WS_DEFAULT_PATH", "/nats") or "/nats"
+                                    if not ws_default_path.startswith("/"):
+                                        ws_default_path = "/" + ws_default_path
                                     try:
                                         from urllib.parse import urlparse, urlunparse
 
                                         pr0 = urlparse(s)
-                                        if not pr0.path:
-                                            pr0 = pr0._replace(path="/")
+                                        if not pr0.path or pr0.path == "/":
+                                            pr0 = pr0._replace(path=ws_default_path)
                                             s = urlunparse(pr0)
                                     except Exception:
                                         if s.endswith("://") or s.endswith("://localhost") or s.endswith("://127.0.0.1"):
-                                            s = s.rstrip("/") + "/"
+                                            s = s.rstrip("/") + ws_default_path
                                 if s not in candidates:
                                     candidates.append(s)
 
