@@ -338,6 +338,25 @@ export function installHubRouteProxy(
 		if (!WebSocketServerCtor) throw new Error('ws package missing WebSocketServer export')
 		wss = new WebSocketServerCtor({ noServer: true, perMessageDeflate: false })
 		if (verbose) log.info('ws proxy server initialized')
+		if (verbose) {
+			try {
+				wss.on('wsClientError', (err: any, _socket: any, req: any) => {
+					try {
+						log.warn(
+							{
+								err: String(err),
+								url: String(req?.url || ''),
+								upgrade: String(req?.headers?.upgrade || ''),
+								connection: String(req?.headers?.connection || ''),
+								secVer: String(req?.headers?.['sec-websocket-version'] || ''),
+								secProto: String(req?.headers?.['sec-websocket-protocol'] || ''),
+							},
+							'ws upgrade: client error'
+						)
+					} catch {}
+				})
+			} catch {}
+		}
 
 		wss.on('connection', async (ws: any, req: any, meta: any) => {
 			const hubId = String(meta?.hubId || '')
