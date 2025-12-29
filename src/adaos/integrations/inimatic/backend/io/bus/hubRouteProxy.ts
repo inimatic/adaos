@@ -412,7 +412,7 @@ export function installHubRouteProxy(
 			const dstPath = String(meta?.dstPath || '/ws')
 			const sessionJwt = String(meta?.sessionJwt || '')
 			const kind = String(meta?.kind || '')
-			const key = `${hubId}--${randomUUID().replace(/-/g, '')}`
+			const key = typeof meta?.key === 'string' && meta.key ? String(meta.key) : `${hubId}--${randomUUID().replace(/-/g, '')}`
 			const toHub = `route.to_hub.${key}`
 			const toBrowser = `route.to_browser.${key}`
 
@@ -422,6 +422,17 @@ export function installHubRouteProxy(
 				{ kind: 'bin' | 'text'; total: number; parts: Array<Buffer | string> }
 			>()
 			try {
+				// Always attach early so we can capture close codes even if the connection dies
+				// before we finish setting up NATS subscriptions.
+				ws.on('close', (code: number, reason: Buffer) => {
+					let r: string | null = null
+					try {
+						r = reason ? reason.toString('utf8') : ''
+					} catch {
+						r = null
+					}
+					log.info({ hubId, kind, dstPath, key, code, reason: r }, 'ws client close')
+				})
 				if (verbose) {
 					ws.on('error', (err: any) => {
 						log.warn({ hubId, dstPath, key, err: String(err) }, 'ws client error')
@@ -499,7 +510,9 @@ export function installHubRouteProxy(
 								log.warn({ hubId, dstPath, key, err: errMsg.slice(0, 500) }, 'ws upstream closed')
 							}
 							try {
-								ws.close(errMsg ? 1011 : 1000, errMsg ? 'upstream_error' : 'upstream_close')
+								// Surface upstream errors to the browser (truncate to keep close reason small).
+								const reason = errMsg ? errMsg.slice(0, 120) : 'upstream_close'
+								ws.close(errMsg ? 1011 : 1000, reason)
 							} catch {}
 						}
 					} catch {
@@ -637,6 +650,8 @@ export function installHubRouteProxy(
 			const hubId = decodeURIComponent(m[1] || '')
 			const kind = m[2]
 			const room = m[3] ? `/${m[3]}` : ''
+			const connId = randomUUID().replace(/-/g, '')
+			const key = `${hubId}--${connId}`
 
 			if (verbose) {
 				try {
@@ -703,7 +718,7 @@ export function installHubRouteProxy(
 
 			const dstPath = kind === 'ws' ? '/ws' : `/yws${room}`
 			const query = u.search || ''
-			if (verbose) log.info({ hubId, kind, dstPath }, 'ws upgrade: accepted')
+			if (verbose) log.info({ hubId, kind, dstPath, key }, 'ws upgrade: accepted')
 			if (verbose) {
 				try {
 					// Capture what we actually write back to the client during the upgrade handshake.
@@ -756,12 +771,12 @@ export function installHubRouteProxy(
 			try {
 				wss!.handleUpgrade(req, socket, head, (ws: any) => {
 					if (verbose) {
-						log.info({ hubId, kind, dstPath }, 'ws upgrade: handleUpgrade ok')
+						log.info({ hubId, kind, dstPath, key }, 'ws upgrade: handleUpgrade ok')
 					}
-					wss!.emit('connection', ws, req, { hubId, kind, dstPath, sessionJwt, query })
+					wss!.emit('connection', ws, req, { hubId, kind, dstPath, sessionJwt, query, key })
 				})
 				if (verbose) {
-					log.info({ hubId, kind, dstPath }, 'ws upgrade: handleUpgrade invoked')
+					log.info({ hubId, kind, dstPath, key }, 'ws upgrade: handleUpgrade invoked')
 				}
 				// Prevent any subsequent 'upgrade' listeners from matching this request by path.
 				try {
