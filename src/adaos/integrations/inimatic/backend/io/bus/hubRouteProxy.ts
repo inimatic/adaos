@@ -130,6 +130,20 @@ function firstLineFromWriteChunk(chunk: unknown): string {
 	}
 }
 
+function maskUrlTokens(rawUrl: string): string {
+	try {
+		const u = new URL(rawUrl, 'https://x')
+		for (const k of ['token', 'session_jwt']) {
+			const v = u.searchParams.get(k)
+			if (v) u.searchParams.set(k, '***')
+		}
+		const s = u.pathname + (u.search ? `?${u.searchParams.toString()}` : '')
+		return s
+	} catch {
+		return rawUrl
+	}
+}
+
 async function natsRequest(
 	bus: NatsBus,
 	opts: {
@@ -372,7 +386,7 @@ export function installHubRouteProxy(
 					try {
 						log.info(
 							{
-								url: String(req?.url || ''),
+								url: maskUrlTokens(String(req?.url || '')),
 								count: Array.isArray(headers) ? headers.length : null,
 								headers: Array.isArray(headers) ? headers.slice(0, 12) : null,
 							},
@@ -436,6 +450,14 @@ export function installHubRouteProxy(
 
 			const forwardClientFrame = (data: any, isBinary: boolean) => {
 				try {
+					if (verbose) {
+						try {
+							const len = isBinary
+								? (Buffer.isBuffer(data) ? data.length : Buffer.from(data).length)
+								: Buffer.byteLength(typeof data === 'string' ? data : Buffer.from(data).toString('utf8'), 'utf8')
+							log.info({ hubId, kind, dstPath, key, isBinary, len }, 'ws client frame')
+						} catch {}
+					}
 					if (isBinary) {
 						const buf = Buffer.isBuffer(data) ? data : Buffer.from(data)
 						if (buf.length > MAX_CHUNK_RAW) {
@@ -604,6 +626,17 @@ export function installHubRouteProxy(
 							return
 						}
 						if (msg?.t === 'frame') {
+							if (verbose) {
+								try {
+									const len =
+										msg.kind === 'bin' && typeof msg.data_b64 === 'string'
+											? Buffer.from(msg.data_b64, 'base64').length
+											: typeof msg.data === 'string'
+												? Buffer.byteLength(msg.data, 'utf8')
+												: 0
+									log.info({ hubId, kind, dstPath, key, fromHubKind: msg.kind, len }, 'ws hub frame')
+								} catch {}
+							}
 							if (msg.kind === 'bin' && typeof msg.data_b64 === 'string') {
 								ws.send(Buffer.from(msg.data_b64, 'base64'), { binary: true })
 							} else if (msg.kind === 'text' && typeof msg.data === 'string') {
@@ -644,7 +677,7 @@ export function installHubRouteProxy(
 								key,
 								toHub,
 								toBrowser,
-								query: String(meta?.query || ''),
+								query: maskUrlTokens(String(meta?.query || '')),
 							},
 							'ws tunnel: open'
 						)
