@@ -413,7 +413,9 @@ export function installHubRouteProxy(
 					try {
 						log.info(
 							{
-								url: maskUrlTokens(String(req?.url || '')),
+								url: maskUrlTokens(
+									String((req as any)?.__adaosHubOriginalUrl || req?.url || '')
+								),
 								count: Array.isArray(headers) ? headers.length : null,
 								headers: Array.isArray(headers) ? headers.slice(0, 12) : null,
 							},
@@ -752,9 +754,18 @@ export function installHubRouteProxy(
 	// Ensure we get first shot at matching /hubs/:hubId/(ws|yws) before other upgrade handlers (e.g. socket.io).
 	server.prependListener('upgrade', (req: any, socket: any, head: any) => {
 		try {
-			const u = new URL(req.url, 'https://x')
+			const rawUrl = String(req?.url || '')
+			const u = new URL(rawUrl, 'https://x')
 			const m = u.pathname.match(/^\/hubs\/([^/]+)\/(ws|yws)(?:\/(.*))?$/)
 			if (!m) return
+
+			// IMPORTANT: prevent any subsequent 'upgrade' listeners from matching this request by URL/path.
+			// We already parsed `rawUrl` above, and ws itself doesn't need `req.url` for the handshake.
+			try {
+				req.__adaosHubOriginalUrl = rawUrl
+				req.url = '/__adaos_hub_upgrade_handled__'
+			} catch {}
+
 			// Mark this socket/request as handled by the hub route proxy so other upgrade handlers
 			// (socket.io, other ws servers, etc.) don't accidentally destroy the same socket.
 			try {
@@ -921,10 +932,6 @@ export function installHubRouteProxy(
 				if (verbose) {
 					log.info({ hubId, kind, dstPath, key }, 'ws upgrade: handleUpgrade invoked')
 				}
-				// Prevent any subsequent 'upgrade' listeners from matching this request by path.
-				try {
-					req.url = '/__adaos_hub_upgrade_handled__'
-				} catch {}
 				return
 			} catch (e) {
 				if (verbose) log.warn({ hubId, kind, dstPath, err: String(e) }, 'ws upgrade: handleUpgrade failed')
