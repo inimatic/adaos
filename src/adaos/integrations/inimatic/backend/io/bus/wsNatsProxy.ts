@@ -63,14 +63,32 @@ export function installWsNatsProxy(server: HttpsServer) {
     ;(Promise.resolve(mod).then((m: any) => {
       WebSocketServerCtor = m.WebSocketServer || m.Server
       if (!WebSocketServerCtor) throw new Error('ws package missing WebSocketServer export')
+      // IMPORTANT: do NOT attach ws directly to `server` here.
+      // Attaching via `{ server }` registers a global `server.on('upgrade')` listener inside `ws`,
+      // and a mis-match/race can cause `ws` to write `HTTP/1.1 400 Bad Request` on unrelated
+      // upgraded sockets (e.g. /hubs/... proxied websockets), yielding "Invalid frame header" in browsers.
       const wss = new WebSocketServerCtor({
-        server,
-        path,
+        noServer: true,
         perMessageDeflate: false,
         handleProtocols: (protocols: string[], _req: any) => {
           // Prefer NATS subprotocol when offered by client
           return protocols.includes('nats') ? 'nats' : (protocols[0] || undefined)
         },
+      })
+
+      server.on('upgrade', (req: any, socket: any, head: any) => {
+        try {
+          const rawUrl = String(req?.url || '')
+          const pathname = new URL(rawUrl, 'https://x').pathname
+          const match = pathname === path || pathname.startsWith(`${path}/`)
+          if (!match) return
+          wss.handleUpgrade(req, socket, head, (ws: any) => {
+            wss.emit('connection', ws, req)
+          })
+        } catch (e) {
+          try { socket.destroy() } catch {}
+          log.warn({ err: String(e) }, 'ws-nats-proxy upgrade failed')
+        }
       })
 
   wss.on('connection', (ws: any, req: any) => {
