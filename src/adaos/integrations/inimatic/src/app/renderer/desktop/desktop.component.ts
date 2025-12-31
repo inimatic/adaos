@@ -11,6 +11,8 @@ import { DesktopSchemaService } from '../../runtime/desktop-schema.service'
 import { ModalHostComponent } from '../modals/modal.component'
 import { PageWidgetHostComponent } from '../widgets/page-widget-host.component'
 import { LoginComponent } from '../../features/login/login.component'
+import { PageStateService, PageState } from '../../runtime/page-state.service'
+import { Subscription } from 'rxjs'
 
 @Component({
 	selector: 'ada-desktop',
@@ -26,6 +28,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	activeWebspace = 'default'
 	pageSchema?: PageSchema
 	private areaWidgetCounts = new Map<string, number>()
+	private stateSub?: Subscription
 	needsLogin = false
 	initError = ''
 	constructor(
@@ -33,6 +36,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		private modal: ModalController,
 		private adaos: AdaosClient,
 		private desktopSchema: DesktopSchemaService,
+		private pageState: PageStateService,
 	) { }
 
 	async ngOnInit() {
@@ -61,7 +65,15 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		recompute()
 		const un1 = observeDeep(uiNode, recompute)
 		const un2 = observeDeep(dataNode, recompute)
-		this.dispose = () => { un1?.(); un2?.() }
+		this.stateSub?.unsubscribe()
+		this.stateSub = this.pageState.selectAll().subscribe(() => {
+			this.rebuildAreaWidgetCounts()
+		})
+		this.dispose = () => {
+			un1?.()
+			un2?.()
+			this.stateSub?.unsubscribe()
+		}
 	}
 	ngOnDestroy() { this.dispose?.() }
 
@@ -219,11 +231,36 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	}
 
 	private rebuildAreaWidgetCounts() {
+		const state = this.pageState.getSnapshot()
 		const map = new Map<string, number>()
 		for (const w of this.pageSchema?.widgets || []) {
 			if (!w.area) continue
+			if (!this.evaluateVisibility(w, state)) continue
 			map.set(w.area, (map.get(w.area) || 0) + 1)
 		}
 		this.areaWidgetCounts = map
+	}
+
+	private evaluateVisibility(widget: WidgetConfig, state: PageState): boolean {
+		const expr = (widget?.visibleIf || '').trim()
+		if (!expr) return true
+		if (expr.startsWith('$state.')) {
+			const parts = expr.split('===')
+			if (parts.length === 2) {
+				const key = parts[0].trim().slice('$state.'.length)
+				const rawValue = parts[1].trim()
+				const expected = this.parseLiteral(rawValue)
+				return state[key] === expected
+			}
+		}
+		return true
+	}
+
+	private parseLiteral(raw: string): any {
+		if (raw === 'true') return true
+		if (raw === 'false') return false
+		const quoted = raw.match(/^['"](.+)['"]$/)
+		if (quoted) return quoted[1]
+		return raw
 	}
 }

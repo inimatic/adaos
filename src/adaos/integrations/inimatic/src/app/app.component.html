@@ -8,7 +8,13 @@
 					</ion-button>
 				</ion-buttons>
 				<ion-title>
-					INIMATIC
+					<div class="app-title">
+						<span class="wordmark">INIMATIC</span>
+						<span class="hub-status" *ngIf="hubStatus$ | async as hub">
+							<span class="dot" [attr.data-status]="hub" aria-hidden="true"></span>
+							<span class="label">{{ hub }}</span>
+						</span>
+					</div>
 				</ion-title>
 				<ion-buttons slot="end">
 					<ion-button (click)="onClickYjsReload()">
