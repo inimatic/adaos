@@ -1,3 +1,35 @@
 .android_header {
 	padding-top: 24px;
 }
+
+.app-title {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.hub-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	letter-spacing: 0.02em;
+	opacity: 0.85;
+	text-transform: uppercase;
+}
+
+.hub-status .dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 999px;
+	background: var(--ion-color-medium);
+	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.04);
+}
+
+.hub-status .dot[data-status='online'] {
+	background: var(--ion-color-success);
+}
+
+.hub-status .dot[data-status='offline'] {
+	background: var(--ion-color-danger);
+}
