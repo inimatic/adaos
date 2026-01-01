@@ -14,18 +14,20 @@ import { MetricTileWidgetComponent } from './metric-tile.widget.component'
     <div class="widgets-section">
       <h2 *ngIf="widget?.title">{{ widget.title }}</h2>
       <ng-container *ngIf="widgets.length; else emptyState">
-        <div class="widget-wrapper" *ngFor="let w of widgets">
-          <ion-badge *ngIf="w.inputs?.['dev']" color="warning" class="dev-badge">DEV</ion-badge>
-          <ng-container [ngSwitch]="w.type">
-            <ada-metric-tile-widget
-              *ngSwitchCase="'visual.metricTile'"
-              [widget]="w"
-            ></ada-metric-tile-widget>
-            <ada-metric-tile-widget
-              *ngSwitchDefault
-              [widget]="w"
-            ></ada-metric-tile-widget>
-          </ng-container>
+        <div class="widgets-grid">
+          <div class="widget-wrapper" *ngFor="let w of widgets">
+            <ion-badge *ngIf="w.inputs?.['dev']" color="warning" class="dev-badge">DEV</ion-badge>
+            <ng-container [ngSwitch]="w.type">
+              <ada-metric-tile-widget
+                *ngSwitchCase="'visual.metricTile'"
+                [widget]="w"
+              ></ada-metric-tile-widget>
+              <ada-metric-tile-widget
+                *ngSwitchDefault
+                [widget]="w"
+              ></ada-metric-tile-widget>
+            </ng-container>
+          </div>
         </div>
       </ng-container>
       <ng-template #emptyState>
@@ -44,9 +46,15 @@ import { MetricTileWidgetComponent } from './metric-tile.widget.component'
         margin: 0 0 8px;
         text-transform: uppercase;
       }
+      .widgets-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 12px;
+        align-items: start;
+      }
       .widget-wrapper {
         position: relative;
-        margin-bottom: 8px;
+        min-width: 0;
       }
       .dev-badge {
         position: absolute;

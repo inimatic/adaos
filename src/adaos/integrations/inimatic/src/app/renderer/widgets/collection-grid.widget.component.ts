@@ -16,28 +16,21 @@ import { PageModalService } from '../../runtime/page-modal.service'
   template: `
     <div class="grid-section">
       <h2 *ngIf="widget?.title">{{ widget.title }}</h2>
-      <ion-grid *ngIf="items$ | async as items">
-        <ion-row>
-          <ion-col
-            *ngFor="let item of items"
-            [size]="sizeXs"
-            [sizeSm]="sizeSm"
-            [sizeMd]="sizeMd"
-            [sizeLg]="sizeLg"
-            (click)="onItemClick(item)"
-            class="collection-grid-item"
-            [class.selected]="isSelected(item)"
-          >
-            <ion-badge *ngIf="item.dev" color="warning" class="dev-badge">DEV</ion-badge>
-            <button class="icon-button">
-              <div class="icon-wrapper" *ngIf="item.icon">
-                <ion-icon [name]="item.icon"></ion-icon>
-              </div>
-              <div class="label">{{ item.title || item.id }}</div>
-            </button>
-          </ion-col>
-        </ion-row>
-      </ion-grid>
+      <div class="tiles" *ngIf="items$ | async as items" [style.--tile-min]="tileMinWidthPx">
+        <button
+          type="button"
+          class="tile"
+          *ngFor="let item of items"
+          (click)="onItemClick(item)"
+          [class.selected]="isSelected(item)"
+        >
+          <ion-badge *ngIf="item.dev" color="warning" class="dev-badge">DEV</ion-badge>
+          <div class="icon-wrapper" *ngIf="item.icon">
+            <ion-icon [name]="item.icon"></ion-icon>
+          </div>
+          <div class="label">{{ item.title || item.id }}</div>
+        </button>
+      </div>
     </div>
   `,
   styles: [
@@ -51,15 +44,14 @@ import { PageModalService } from '../../runtime/page-modal.service'
         margin: 0 0 8px;
         text-transform: uppercase;
       }
-      .collection-grid-item {
-        text-align: center;
-        padding: 8px 0;
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(var(--tile-min), 1fr));
+        gap: 12px;
+        align-items: start;
       }
-      .collection-grid-item.selected .icon-button {
-        background: rgba(255, 255, 255, 0.12);
-      }
-      .icon-button {
-        width: 100%;
+      .tile {
+        position: relative;
         border: none;
         background: transparent;
         color: inherit;
@@ -67,12 +59,17 @@ import { PageModalService } from '../../runtime/page-modal.service'
         flex-direction: column;
         align-items: center;
         gap: 6px;
-        padding: 12px 4px;
-        border-radius: 12px;
-        transition: background 0.2s;
+        padding: 14px 8px;
+        border-radius: 14px;
+        transition: background 0.2s, transform 0.15s ease;
+        min-width: 0;
       }
-      .icon-button:hover {
+      .tile:hover {
         background: rgba(255, 255, 255, 0.06);
+        transform: translateY(-1px);
+      }
+      .tile.selected {
+        background: rgba(255, 255, 255, 0.12);
       }
       .icon-wrapper {
         font-size: 32px;
@@ -87,6 +84,7 @@ import { PageModalService } from '../../runtime/page-modal.service'
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        max-width: 100%;
       }
       .dev-badge {
         position: absolute;
@@ -132,32 +130,10 @@ export class CollectionGridWidgetComponent implements OnInit, OnChanges {
     this.stateSub?.unsubscribe()
   }
 
-  private resolveColumns(): number {
-    const columns = Number(this.widget?.inputs?.['columns'] ?? 4)
-    if (!columns || columns <= 0) return 4
-    return Math.max(1, Math.min(12, Math.floor(columns)))
-  }
-
-  private sizeForColumns(cols: number): string {
-    const clamped = Math.max(1, Math.min(12, Math.floor(cols)))
-    return String(Math.max(1, Math.min(12, Math.floor(12 / clamped))))
-  }
-
-  // Keep tiles readable on phones: fewer columns at smaller breakpoints.
-  get sizeXs(): string {
-    return this.sizeForColumns(Math.min(this.resolveColumns(), 2))
-  }
-
-  get sizeSm(): string {
-    return this.sizeForColumns(Math.min(this.resolveColumns(), 3))
-  }
-
-  get sizeMd(): string {
-    return this.sizeForColumns(Math.min(this.resolveColumns(), 4))
-  }
-
-  get sizeLg(): string {
-    return this.sizeForColumns(this.resolveColumns())
+  get tileMinWidthPx(): string {
+    const raw = Number(this.widget?.inputs?.['tileMinWidth'] ?? 96)
+    const value = !raw || raw < 72 ? 72 : Math.min(180, Math.floor(raw))
+    return `${value}px`
   }
 
   async onItemClick(item: any): Promise<void> {
