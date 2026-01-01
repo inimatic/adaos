@@ -232,11 +232,25 @@ export class PageDataService {
   private resolveDesktopWidgets(): Array<{ id: string; title?: string; type?: string; source?: string; dev?: boolean }> {
     const catalogWidgets: any[] = this.ydoc.toJSON(this.ydoc.getPath('data/catalog/widgets')) || []
     const installedWidgets = this.readInstalled('widgets')
+    const app: any = this.ydoc.toJSON(this.ydoc.getPath('ui/application')) || {}
+    const pinnedRaw = app?.desktop?.pinnedWidgets
+    const pinnedWidgets: any[] = Array.isArray(pinnedRaw) ? pinnedRaw : []
     const byId: Record<string, any> = {}
     for (const it of catalogWidgets) {
       if (it?.id) byId[it.id] = it
     }
-    return installedWidgets
+
+    const pinned = pinnedWidgets
+      .filter((it) => it && typeof it === 'object' && it.id)
+      .map((it) => ({
+        id: String(it.id),
+        title: it.title,
+        type: it.type,
+        source: it.source,
+        dev: !!it.dev,
+      }))
+
+    const installed = installedWidgets
       .map((id) => byId[id])
       .filter(Boolean)
       .map((it) => ({
@@ -246,6 +260,16 @@ export class PageDataService {
         source: it.source,
         dev: !!it.dev,
       }))
+
+    const seen = new Set<string>()
+    const out: Array<{ id: string; title?: string; type?: string; source?: string; dev?: boolean }> = []
+    for (const item of [...pinned, ...installed]) {
+      if (!item?.id) continue
+      if (seen.has(item.id)) continue
+      seen.add(item.id)
+      out.push(item)
+    }
+    return out
   }
 
   private getYNode(path: string): any {

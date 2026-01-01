@@ -8,6 +8,7 @@
   --desktop-max-width: 1400px;
   --desktop-sidebar-width: clamp(220px, 22vw, 280px);
   --desktop-aux-width: clamp(260px, 26vw, 360px);
+  --desktop-main-min: 560px;
   color-scheme: light dark;
 }
 
@@ -26,7 +27,7 @@
   height: 100%;
   color: var(--desktop-text-color);
   display: grid;
-  grid-template-columns: minmax(0, var(--desktop-sidebar-width)) minmax(0, 1fr) minmax(0, var(--desktop-aux-width));
+  grid-template-columns: minmax(0, var(--desktop-sidebar-width)) minmax(var(--desktop-main-min), 1fr) minmax(0, var(--desktop-aux-width));
   grid-template-rows: minmax(0, 1fr) auto;
   grid-template-areas:
     "sidebar main right"
@@ -37,14 +38,14 @@
   margin: 0 auto;
 
   &.no-sidebar {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+    grid-template-columns: minmax(var(--desktop-main-min), 1fr) minmax(0, var(--desktop-aux-width));
     grid-template-areas:
       "main right"
       "bottom bottom";
   }
 
   &.no-aux {
-    grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+    grid-template-columns: minmax(0, var(--desktop-sidebar-width)) minmax(var(--desktop-main-min), 1fr);
     grid-template-areas:
       "sidebar main"
       "bottom bottom";
