@@ -159,9 +159,21 @@ export function installPairingApi(app: express.Express) {
 		}
 		const webspace_id = typeof req.body?.webspace_id === 'string' ? req.body.webspace_id : (typeof req.query['webspace_id'] === 'string' ? (req.query['webspace_id'] as string) : undefined)
 		const rec = await browserPairApprove({ code, hub_id, session_jwt: token, webspace_id: webspace_id ?? null })
-		if (!rec) return res.status(404).json({ ok: false, error: 'not_found' })
-		if (rec.state === 'expired') return res.status(400).json({ ok: false, error: 'expired' })
-		if (rec.state === 'revoked') return res.status(400).json({ ok: false, error: 'revoked' })
+		if (!rec) {
+			log.warn({ tag: 'BPAIR', route: 'approve', code, hub_id, owner_id }, '[BPAIR] approve: not_found')
+			return res.status(404).json({ ok: false, error: 'not_found' })
+		}
+		if (rec.state === 'expired') {
+			log.info({ tag: 'BPAIR', route: 'approve', code, hub_id, owner_id }, '[BPAIR] approve: expired')
+			return res.status(400).json({ ok: false, error: 'expired' })
+		}
+		if (rec.state === 'revoked') {
+			log.info({ tag: 'BPAIR', route: 'approve', code, hub_id, owner_id }, '[BPAIR] approve: revoked')
+			return res.status(400).json({ ok: false, error: 'revoked' })
+		}
+		if (rec.state !== 'approved') {
+			log.info({ tag: 'BPAIR', route: 'approve', code, hub_id, owner_id, state: rec.state }, '[BPAIR] approve: state')
+		}
 		log.info({ tag: 'BPAIR', route: 'approve', code, hub_id, owner_id, webspace_id: webspace_id ?? null }, '[BPAIR] approve')
 		res.json({ ok: true, state: rec.state, expires_at: rec.expires_at })
 	})

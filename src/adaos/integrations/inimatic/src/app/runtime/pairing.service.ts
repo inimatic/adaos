@@ -22,6 +22,16 @@ export class PairingService {
 			const hinted = ((window as any).__ADAOS_ROOT_BASE__ || '').trim()
 			if (hinted) return hinted.replace(/\/+$/, '')
 		} catch {}
+		// Default to current origin for local/dev deployments.
+		// For production UI served from app.inimatic.com, the API lives on api.inimatic.com.
+		try {
+			const origin = String(window.location.origin || '').trim()
+			if (origin) {
+				const host = String(window.location.host || '').toLowerCase()
+				if (host === 'app.inimatic.com') return 'https://api.inimatic.com'
+				return origin.replace(/\/+$/, '')
+			}
+		} catch {}
 		return 'https://api.inimatic.com'
 	}
 
