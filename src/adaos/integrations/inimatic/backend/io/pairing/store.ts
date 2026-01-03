@@ -99,3 +99,90 @@ export async function tgLinkGet(hub_id: string): Promise<TgLink | null> {
   const raw = await redis.get(`tgpair:${hub_id}`)
   return raw ? (JSON.parse(raw) as TgLink) : null
 }
+
+// ------------------------------------------------------------
+// Browser pairing (QR flow)
+// ------------------------------------------------------------
+
+export type BrowserPairState = 'issued' | 'approved' | 'consumed' | 'revoked' | 'expired'
+
+export type BrowserPairRecord = {
+  code: string
+  state: BrowserPairState
+  expires_at: number
+  issued_at: number
+  hub_id?: string | null
+  webspace_id?: string | null
+  session_jwt?: string | null
+}
+
+function browserPairKey(code: string): string {
+  return `browserpair:${code}`
+}
+
+export async function browserPairCreate(ttlSec: number) {
+  const code = genCode()
+  const now = Math.floor(Date.now() / 1000)
+  const rec: BrowserPairRecord = {
+    code,
+    state: 'issued',
+    expires_at: now + ttlSec,
+    issued_at: now,
+  }
+  await redis.set(browserPairKey(code), JSON.stringify(rec), 'EX', ttlSec)
+  return rec
+}
+
+export async function browserPairGet(code: string): Promise<BrowserPairRecord | null> {
+  const raw = await redis.get(browserPairKey(code))
+  return raw ? (JSON.parse(raw) as BrowserPairRecord) : null
+}
+
+export async function browserPairApprove(opts: {
+  code: string
+  hub_id: string
+  session_jwt: string
+  webspace_id?: string | null
+}): Promise<BrowserPairRecord | null> {
+  const key = browserPairKey(opts.code)
+  const raw = await redis.get(key)
+  if (!raw) return null
+  const rec = JSON.parse(raw) as BrowserPairRecord
+  const now = Math.floor(Date.now() / 1000)
+  if (rec.expires_at < now) {
+    rec.state = 'expired'
+  } else if (rec.state === 'issued') {
+    rec.state = 'approved'
+    rec.hub_id = opts.hub_id
+    rec.session_jwt = opts.session_jwt
+    rec.webspace_id = opts.webspace_id ?? null
+  }
+  await redis.set(key, JSON.stringify(rec), 'EX', Math.max(1, rec.expires_at - now))
+  return rec
+}
+
+export async function browserPairConsume(code: string): Promise<BrowserPairRecord | null> {
+  const key = browserPairKey(code)
+  const raw = await redis.get(key)
+  if (!raw) return null
+  const rec = JSON.parse(raw) as BrowserPairRecord
+  const now = Math.floor(Date.now() / 1000)
+  if (rec.expires_at < now) {
+    rec.state = 'expired'
+  } else if (rec.state === 'approved') {
+    rec.state = 'consumed'
+  }
+  await redis.set(key, JSON.stringify(rec), 'EX', Math.max(1, rec.expires_at - now))
+  return rec
+}
+
+export async function browserPairRevoke(code: string): Promise<boolean> {
+  const key = browserPairKey(code)
+  const raw = await redis.get(key)
+  if (!raw) return false
+  const rec = JSON.parse(raw) as BrowserPairRecord
+  rec.state = 'revoked'
+  const now = Math.floor(Date.now() / 1000)
+  await redis.set(key, JSON.stringify(rec), 'EX', Math.max(1, rec.expires_at - now))
+  return true
+}

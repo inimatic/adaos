@@ -9,6 +9,40 @@
 		<p style="opacity: 0.7; margin: 12px 0 0 0; font-size: 12px; overflow-wrap: anywhere;">
 			{{ pairingId }}
 		</p>
+		<p *ngIf="pairStatusText" style="opacity: 0.8; margin: 10px 0 0 0; font-size: 13px;">
+			{{ pairStatusText }}
+		</p>
+		<div style="margin-top: 18px; text-align: left;">
+			<h3 style="margin: 0 0 8px 0;">Owner login (debug)</h3>
+			<app-login (loginSuccess)="onLoginSuccess()"></app-login>
+		</div>
+	</div>
+	<div *ngIf="pendingApproveCode && !needsPairing" style="padding: 16px; max-width: 560px; margin: 0 auto;">
+		<h2 style="margin: 8px 0;">Approve device</h2>
+		<p style="opacity: 0.85; margin: 0 0 12px 0; overflow-wrap: anywhere;">
+			Code: <strong>{{ pendingApproveCode }}</strong>
+		</p>
+		<div *ngIf="!isAuthenticated" style="margin-top: 12px;">
+			<p style="opacity: 0.85; margin: 0 0 12px 0;">Login to approve this device.</p>
+			<app-login (loginSuccess)="onLoginSuccess()"></app-login>
+		</div>
+		<div *ngIf="isAuthenticated">
+			<label style="display:block; font-size: 13px; opacity: 0.8; margin-bottom: 6px;">Webspace</label>
+			<select
+				style="width: 100%; padding: 10px; border-radius: 10px;"
+				[value]="selectedApproveWebspace || activeWebspace"
+				(change)="selectedApproveWebspace = ($any($event.target).value)"
+			>
+				<option *ngFor="let ws of webspaces" [value]="ws.id">{{ ws.title || ws.id }}</option>
+				<option *ngIf="!webspaces.length" [value]="activeWebspace">{{ activeWebspace }}</option>
+			</select>
+			<div style="margin-top: 12px; display: flex; gap: 8px;">
+				<ion-button (click)="approvePairing()">Approve</ion-button>
+			</div>
+		</div>
+		<p *ngIf="pairStatusText" style="opacity: 0.8; margin: 10px 0 0 0; font-size: 13px;">
+			{{ pairStatusText }}
+		</p>
 	</div>
 	<div *ngIf="needsLogin" style="padding: 16px; max-width: 520px; margin: 0 auto;">
 		<h2 style="margin: 8px 0;">Hub offline</h2>

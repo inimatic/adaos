@@ -1,5 +1,4 @@
 import { Routes } from '@angular/router'
-import { HubComponent } from './features/hub/hub.component'
 import { DesktopRendererComponent } from './renderer/desktop/desktop.component'
 
 export const routes: Routes = [
@@ -33,13 +32,6 @@ export const routes: Routes = [
 	},
 	// legacy /member route: keep as redirect to declarative desktop2
 	{ path: 'member', redirectTo: '/desktop2', pathMatch: 'full' },
-	{
-		path: 'desktop',
-		loadComponent: () =>
-			import('./desktop/desktop.component').then(
-				(m) => m.DesktopComponent
-			),
-	},
 	{
 		path: '',
 		redirectTo: '/desktop2',

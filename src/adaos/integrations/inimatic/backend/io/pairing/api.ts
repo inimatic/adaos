@@ -1,11 +1,40 @@
 // src\adaos\integrations\inimatic\backend\io\pairing\api.ts
 import express from 'express'
 import pino from 'pino'
-import { pairConfirm, pairCreate, pairGet, pairRevoke, bindingUpsert, tgLinkGet, tgLinkSet } from './store.js'
+import { verifyWebSessionJwt } from '../../sessionJwt.js'
+import {
+	pairConfirm,
+	pairCreate,
+	pairGet,
+	pairRevoke,
+	bindingUpsert,
+	tgLinkGet,
+	tgLinkSet,
+	browserPairApprove,
+	browserPairConsume,
+	browserPairCreate,
+	browserPairGet,
+	browserPairRevoke,
+} from './store.js'
 
 const log = pino({ name: 'pair-api' })
 
 export function installPairingApi(app: express.Express) {
+	function extractBearer(headerValue: string): string | undefined {
+		const trimmed = String(headerValue || '').trim()
+		const match = trimmed.match(/^Bearer\s+(.+)$/i)
+		return match ? match[1].trim() : undefined
+	}
+
+	async function readWebSessionClaims(req: express.Request): Promise<{ hub_id?: string; owner_id?: string } | null> {
+		const token = extractBearer(req.header('Authorization') ?? '') || String(req.query['session_jwt'] || '').trim()
+		if (!token) return null
+		const secret = String(process.env['WEB_SESSION_JWT_SECRET'] || '').trim()
+		if (!secret) return null
+		const claims = await verifyWebSessionJwt({ secret, token })
+		return claims
+	}
+
 	function buildPublicNatsWsUrl(): string {
 		const baseHttp = (process.env['TG_WEBHOOK_BASE'] || 'https://api.inimatic.com').replace(/\/+$/, '')
 		const baseUrl = new URL(baseHttp)
@@ -63,6 +92,73 @@ export function installPairingApi(app: express.Express) {
 			log.error({ tag: 'PAIR', route: 'create.v1', err: String(e) }, '[PAIR] v1/create: error')
 			res.status(500).json({ ok: false })
 		}
+	})
+
+	// ------------------------------------------------------------
+	// Browser QR pairing (web)
+	// ------------------------------------------------------------
+
+	app.post('/v1/browser/pair/create', async (req, res) => {
+		try {
+			const ttl = Number.parseInt(String((req.query['ttl'] as string) ?? (req.body?.ttl as string) ?? '600'), 10) || 600
+			const rec = await browserPairCreate(ttl)
+			res.json({ ok: true, pair_code: rec.code, expires_at: rec.expires_at })
+		} catch (e) {
+			log.error({ tag: 'BPAIR', route: 'create', err: String(e) }, '[BPAIR] create: error')
+			res.status(500).json({ ok: false })
+		}
+	})
+
+	app.get('/v1/browser/pair/status', async (req, res) => {
+		const code = String(req.query['code'] || req.query['pair_code'] || '')
+		if (!code) return res.status(400).json({ ok: false, error: 'code_required' })
+		const rec = await browserPairGet(code)
+		if (!rec) return res.json({ ok: true, state: 'not_found' })
+		const now = Math.floor(Date.now() / 1000)
+		if (rec.expires_at < now && rec.state !== 'expired') {
+			rec.state = 'expired'
+		}
+		const expires_in = Math.max(0, rec.expires_at - now)
+		const payload: any = { ok: true, state: rec.state, expires_in }
+		if (rec.state === 'approved') {
+			// Warning: for MVP/dev we return the approving web session JWT to bootstrap the device.
+			payload.session_jwt = rec.session_jwt || null
+			payload.hub_id = rec.hub_id || null
+			payload.webspace_id = rec.webspace_id || null
+		}
+		res.json(payload)
+	})
+
+	app.post('/v1/browser/pair/approve', async (req, res) => {
+		const code = String(req.body?.code || req.query['code'] || req.body?.pair_code || req.query['pair_code'] || '')
+		if (!code) return res.status(400).json({ ok: false, error: 'code_required' })
+		const claims = await readWebSessionClaims(req)
+		const hub_id = String(claims?.hub_id || '').trim()
+		const owner_id = String(claims?.owner_id || '').trim()
+		if (!hub_id || !owner_id) return res.status(401).json({ ok: false, error: 'unauthorized' })
+
+		const token = extractBearer(req.header('Authorization') ?? '') || ''
+		const webspace_id = typeof req.body?.webspace_id === 'string' ? req.body.webspace_id : (typeof req.query['webspace_id'] === 'string' ? (req.query['webspace_id'] as string) : undefined)
+		const rec = await browserPairApprove({ code, hub_id, session_jwt: token, webspace_id: webspace_id ?? null })
+		if (!rec) return res.status(404).json({ ok: false, error: 'not_found' })
+		if (rec.state === 'expired') return res.status(400).json({ ok: false, error: 'expired' })
+		if (rec.state === 'revoked') return res.status(400).json({ ok: false, error: 'revoked' })
+		res.json({ ok: true, state: rec.state, expires_at: rec.expires_at })
+	})
+
+	app.post('/v1/browser/pair/consume', async (req, res) => {
+		const code = String(req.body?.code || req.query['code'] || req.body?.pair_code || req.query['pair_code'] || '')
+		if (!code) return res.status(400).json({ ok: false, error: 'code_required' })
+		const rec = await browserPairConsume(code)
+		if (!rec) return res.status(404).json({ ok: false, error: 'not_found' })
+		res.json({ ok: true, state: rec.state })
+	})
+
+	app.post('/v1/browser/pair/revoke', async (req, res) => {
+		const code = String(req.body?.code || req.query['code'] || req.body?.pair_code || req.query['pair_code'] || '')
+		if (!code) return res.status(400).json({ ok: false, error: 'code_required' })
+		const ok = await browserPairRevoke(code)
+		res.json({ ok })
 	})
 
 	app.post('/io/tg/pair/confirm', async (req, res) => {
