@@ -158,7 +158,40 @@ export class YDocService {
     // Prefer a local hub on the same device if it is reachable (owner-device scenario),
     // even when the app is loaded from a public origin and a root-proxy session exists.
     const tryLocalHub = async (): Promise<boolean> => {
-      const candidates = ['http://127.0.0.1:8777', 'http://localhost:8777']
+      const isLoopbackHost = (host: string): boolean => {
+        const h = String(host || '').toLowerCase()
+        return h === 'localhost' || h === '127.0.0.1' || h === '::1'
+      }
+      const isLoopbackUrl = (url: string): boolean => {
+        try {
+          return isLoopbackHost(new URL(url).hostname)
+        } catch {
+          return false
+        }
+      }
+      const allowLoopback = (() => {
+        try {
+          const host = String(window.location.hostname || '')
+          if (isLoopbackHost(host)) return true
+        } catch {}
+        try {
+          const url = new URL(window.location.href)
+          if (url.searchParams.get('try_local_hub') === '1') return true
+        } catch {}
+        try {
+          return (localStorage.getItem('adaos_try_local_hub') || '').trim() === '1'
+        } catch {
+          return false
+        }
+      })()
+
+      const candidates: string[] = []
+      try {
+        const persisted = (localStorage.getItem('adaos_hub_base') || '').trim()
+        if (persisted && !isLoopbackUrl(persisted)) candidates.push(persisted)
+      } catch {}
+      if (allowLoopback) candidates.push('http://127.0.0.1:8777', 'http://localhost:8777')
+      if (!candidates.length) return false
       for (const base of candidates) {
         const st = await probeHttpStatus(base, 650)
         if (st >= 200 && st < 300) {
@@ -175,6 +208,7 @@ export class YDocService {
       return false
     }
 
+    // Avoid noisy loopback probes on SmartTV/mobile where 127.0.0.1 is never the hub.
     await tryLocalHub()
 
     // Prefer direct hub base, but if it is down (e.g. 127.0.0.1:8777 not responding),
@@ -218,8 +252,12 @@ export class YDocService {
     } catch (err) {
       // Best-effort: Yjs room can still be joined without device.register;
       // the hub will lazily create/seed the webspace on first yws join.
-      // eslint-disable-next-line no-console
-      console.warn('[YDocService] device.register failed; continuing', err)
+      try {
+        if ((globalThis as any).__ADAOS_DEBUG__ === true) {
+          // eslint-disable-next-line no-console
+          console.warn('[YDocService] device.register failed; continuing', err)
+        }
+      } catch {}
     }
     this.currentWebspaceId = webspaceId
     this.setPreferredWebspaceId(webspaceId)
@@ -347,7 +385,12 @@ export class YDocService {
       const data = this.toJSON(this.getPath('data'))
       const registry = this.toJSON(this.getPath('registry'))
       // eslint-disable-next-line no-console
-      console.log('[YDoc Snapshot]', { ui, data, registry })
+      try {
+        if ((globalThis as any).__ADAOS_DEBUG__ === true) {
+          // eslint-disable-next-line no-console
+          console.log('[YDoc Snapshot]', { ui, data, registry })
+        }
+      } catch {}
     } catch {
       // ignore dump errors
     }

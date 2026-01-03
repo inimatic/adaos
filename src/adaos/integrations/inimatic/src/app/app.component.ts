@@ -33,6 +33,8 @@ import { CommonModule } from '@angular/common'
 import { Observable, of, timer } from 'rxjs'
 import { catchError, distinctUntilChanged, map, startWith, switchMap, timeout } from 'rxjs/operators'
 import { buildId } from '../environments/build'
+import { HttpClient } from '@angular/common/http'
+import { PairingService } from './runtime/pairing.service'
 
 @Component({
 	selector: 'app-root',
@@ -60,7 +62,13 @@ export class AppComponent implements OnInit, OnDestroy {
 	private colorSchemeMedia?: MediaQueryList
 	private colorSchemeListener = (e: MediaQueryListEvent) => this.applyTheme(e.matches)
 
-	constructor(private plt: Platform, private ydoc: YDocService, private adaos: AdaosClient) {
+	constructor(
+		private plt: Platform,
+		private ydoc: YDocService,
+		private adaos: AdaosClient,
+		private http: HttpClient,
+		private pairing: PairingService,
+	) {
 		addIcons({
 			lockClosedOutline,
 			people,
@@ -84,13 +92,15 @@ export class AppComponent implements OnInit, OnDestroy {
 		this.colorSchemeMedia.addEventListener('change', this.colorSchemeListener)
 
 		this.hubStatus$ = timer(0, 5000).pipe(
-			switchMap(() =>
-				this.adaos.get('/api/node/status').pipe(
+			switchMap(() => {
+				const base = this.pairing.getBaseUrl()
+				// Use root API base for status checks to avoid noisy loopback requests on mobile/SmartTV.
+				return this.http.get(`${base}/api/node/status`).pipe(
 					timeout(2000),
 					map(() => 'online' as const),
 					catchError(() => of('offline' as const)),
 				)
-			),
+			}),
 			startWith('checking' as const),
 			distinctUntilChanged(),
 		)
