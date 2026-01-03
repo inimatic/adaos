@@ -230,6 +230,8 @@ services:
             WEB_SESSION_JWT_SECRET: ${WEB_SESSION_JWT_SECRET:-}
             # Browser->Hub route proxy (debug)
             ROUTE_PROXY_VERBOSE: ${ROUTE_PROXY_VERBOSE:-0}
+            # Reduce log noise from transient NATS WS disconnects (can be enabled with HUB_NATS_VERBOSE=1).
+            HUB_NATS_QUIET: ${HUB_NATS_QUIET:-1}
         volumes:
             - /opt/inimatic/secrets:/run/inimatic/secrets:ro
             - /opt/inimatic/runtime/ssh/forge_ssh_key:/run/inimatic/ssh/forge_ssh_key:ro
