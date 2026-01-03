@@ -102,6 +102,7 @@ export function installPairingApi(app: express.Express) {
 		try {
 			const ttl = Number.parseInt(String((req.query['ttl'] as string) ?? (req.body?.ttl as string) ?? '600'), 10) || 600
 			const rec = await browserPairCreate(ttl)
+			log.info({ tag: 'BPAIR', route: 'create', code: rec.code, expires_at: rec.expires_at }, '[BPAIR] create')
 			res.json({ ok: true, pair_code: rec.code, expires_at: rec.expires_at })
 		} catch (e) {
 			log.error({ tag: 'BPAIR', route: 'create', err: String(e) }, '[BPAIR] create: error')
@@ -132,17 +133,30 @@ export function installPairingApi(app: express.Express) {
 	app.post('/v1/browser/pair/approve', async (req, res) => {
 		const code = String(req.body?.code || req.query['code'] || req.body?.pair_code || req.query['pair_code'] || '')
 		if (!code) return res.status(400).json({ ok: false, error: 'code_required' })
+		const secret = String(process.env['WEB_SESSION_JWT_SECRET'] || '').trim()
+		if (!secret) {
+			log.error({ tag: 'BPAIR', route: 'approve', code }, '[BPAIR] approve: missing WEB_SESSION_JWT_SECRET')
+			return res.status(500).json({ ok: false, error: 'server_misconfig' })
+		}
 		const claims = await readWebSessionClaims(req)
 		const hub_id = String(claims?.hub_id || '').trim()
 		const owner_id = String(claims?.owner_id || '').trim()
-		if (!hub_id || !owner_id) return res.status(401).json({ ok: false, error: 'unauthorized' })
+		if (!hub_id || !owner_id) {
+			log.warn({ tag: 'BPAIR', route: 'approve', code, hasClaims: Boolean(claims) }, '[BPAIR] approve: unauthorized')
+			return res.status(401).json({ ok: false, error: 'unauthorized' })
+		}
 
-		const token = extractBearer(req.header('Authorization') ?? '') || ''
+		const token = extractBearer(req.header('Authorization') ?? '') || String(req.query['session_jwt'] || '').trim()
+		if (!token) {
+			log.warn({ tag: 'BPAIR', route: 'approve', code, hub_id }, '[BPAIR] approve: missing token')
+			return res.status(401).json({ ok: false, error: 'missing_token' })
+		}
 		const webspace_id = typeof req.body?.webspace_id === 'string' ? req.body.webspace_id : (typeof req.query['webspace_id'] === 'string' ? (req.query['webspace_id'] as string) : undefined)
 		const rec = await browserPairApprove({ code, hub_id, session_jwt: token, webspace_id: webspace_id ?? null })
 		if (!rec) return res.status(404).json({ ok: false, error: 'not_found' })
 		if (rec.state === 'expired') return res.status(400).json({ ok: false, error: 'expired' })
 		if (rec.state === 'revoked') return res.status(400).json({ ok: false, error: 'revoked' })
+		log.info({ tag: 'BPAIR', route: 'approve', code, hub_id, owner_id, webspace_id: webspace_id ?? null }, '[BPAIR] approve')
 		res.json({ ok: true, state: rec.state, expires_at: rec.expires_at })
 	})
 

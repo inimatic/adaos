@@ -213,7 +213,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		this.pairStatusText = 'approving…'
 		this.pairing.approveBrowserPair(code, ws).subscribe({
 			next: (res) => {
-				this.pairStatusText = res?.ok ? 'approved' : 'approve failed'
+				this.pairStatusText = res?.ok ? 'approved' : `approve failed: ${res?.error || 'unknown_error'}`
 				if (res?.ok) {
 					try {
 						const u = new URL(window.location.href)
@@ -224,8 +224,10 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 					this.pendingApproveCode = ''
 				}
 			},
-			error: () => {
-				this.pairStatusText = 'approve failed'
+			error: (err: any) => {
+				const status = err?.status ? `HTTP ${err.status}` : 'HTTP error'
+				const code = err?.error?.error || err?.error?.code || err?.message || 'unknown'
+				this.pairStatusText = `approve failed: ${status} ${code}`
 			},
 		})
 	}

@@ -10,13 +10,24 @@ type PairStatusResponse = {
 	session_jwt?: string | null
 	hub_id?: string | null
 	webspace_id?: string | null
+	error?: string
 }
 
 @Injectable({ providedIn: 'root' })
 export class PairingService {
-	private readonly base = 'https://api.inimatic.com'
+	private readonly base: string
 
-	constructor(private http: HttpClient) {}
+	private resolveBase(): string {
+		try {
+			const hinted = ((window as any).__ADAOS_ROOT_BASE__ || '').trim()
+			if (hinted) return hinted.replace(/\/+$/, '')
+		} catch {}
+		return 'https://api.inimatic.com'
+	}
+
+	constructor(private http: HttpClient) {
+		this.base = this.resolveBase()
+	}
 
 	createBrowserPair(ttlSec = 600): Observable<PairCreateResponse> {
 		return this.http.post<PairCreateResponse>(`${this.base}/v1/browser/pair/create`, {
@@ -31,7 +42,10 @@ export class PairingService {
 		})
 	}
 
-	approveBrowserPair(code: string, webspaceId: string): Observable<{ ok: boolean }> {
+	approveBrowserPair(
+		code: string,
+		webspaceId: string,
+	): Observable<{ ok: boolean; error?: string }> {
 		const jwt = (() => {
 			try {
 				return (localStorage.getItem('adaos_web_session_jwt') || '').trim()
@@ -40,11 +54,10 @@ export class PairingService {
 			}
 		})()
 		const headers = jwt ? new HttpHeaders({ Authorization: `Bearer ${jwt}` }) : undefined
-		return this.http.post<{ ok: boolean }>(
+		return this.http.post<{ ok: boolean; error?: string }>(
 			`${this.base}/v1/browser/pair/approve`,
 			{ code, webspace_id: webspaceId },
 			{ headers },
 		)
 	}
 }
-
