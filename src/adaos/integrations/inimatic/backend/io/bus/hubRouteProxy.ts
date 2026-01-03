@@ -12,6 +12,11 @@ type RedisLike = {
 
 const log = pino({ name: 'hub-route-proxy' })
 
+function isNoisyPath(path: string): boolean {
+	// Avoid flooding logs on frequent health probes.
+	return path === '/api/node/status' || path === '/api/ping'
+}
+
 function maskToken(tok?: string | null): string | null {
 	if (!tok) return null
 	const s = String(tok)
@@ -249,7 +254,7 @@ export function installHubRouteProxy(
 			const key = `${hubId}--http--${randomUUID()}`
 			const toHub = `route.to_hub.${key}`
 			const toBrowser = `route.to_browser.${key}`
-			if (verbose) {
+			if (verbose && !isNoisyPath(path)) {
 				log.info(
 					{
 						hubId,
@@ -298,7 +303,7 @@ export function installHubRouteProxy(
 			const body = typeof reply?.body_b64 === 'string' ? reply.body_b64 : ''
 			const isTrunc = reply?.truncated === true
 			const errMsg = typeof reply?.err === 'string' ? reply.err : ''
-			if (verbose) {
+			if (verbose && !isNoisyPath(path)) {
 				log.info(
 					{
 						hubId,

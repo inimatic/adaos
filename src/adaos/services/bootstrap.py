@@ -898,10 +898,12 @@ class BootstrapService:
                                         if t == "http":
                                             _m = str((data or {}).get("method") or "GET").upper()
                                             _p = str((data or {}).get("path") or "")
-                                            print(f"[hub-route] rx http key={key} {_m} {_p}")
+                                            if _p not in ("/api/node/status", "/api/ping"):
+                                                print(f"[hub-route] rx http key={key} {_m} {_p}")
                                         elif t == "open":
                                             _p = str((data or {}).get("path") or "")
-                                            print(f"[hub-route] rx open key={key} path={_p}")
+                                            if _p not in ("/api/node/status", "/api/ping"):
+                                                print(f"[hub-route] rx open key={key} path={_p}")
                                         elif t == "close":
                                             print(f"[hub-route] rx close key={key}")
                                         else:
@@ -1117,7 +1119,7 @@ class BootstrapService:
                                                 pass
 
                                             url = f"{bases[0]}{path}{search}"
-                                            if _route_verbose:
+                                            if _route_verbose and path not in ("/api/node/status", "/api/ping"):
                                                 try:
                                                     print(f"[hub-route] http upstream url={url}")
                                                 except Exception:
