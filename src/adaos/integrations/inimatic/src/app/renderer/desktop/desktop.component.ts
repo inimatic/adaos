@@ -14,6 +14,7 @@ import { LoginComponent } from '../../features/login/login.component'
 import { PageStateService, PageState } from '../../runtime/page-state.service'
 import { Subscription } from 'rxjs'
 import { QRCodeModule } from 'angularx-qrcode'
+import { PairingService } from '../../runtime/pairing.service'
 
 @Component({
 	selector: 'ada-desktop',
@@ -30,23 +31,32 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	pageSchema?: PageSchema
 	private areaWidgetCounts = new Map<string, number>()
 	private stateSub?: Subscription
+	isAuthenticated = false
 	needsLogin = false
 	initError = ''
 	needsPairing = false
 	pairingId = ''
 	pairingUrl = ''
+	pairStatusText = ''
+	pairCode = ''
+	pendingApproveCode = ''
+	selectedApproveWebspace = ''
+	private pairPollTimer?: any
 	constructor(
 		private y: YDocService,
 		private modal: ModalController,
 		private adaos: AdaosClient,
 		private desktopSchema: DesktopSchemaService,
 		private pageState: PageStateService,
+		private pairing: PairingService,
 	) { }
 
 	async ngOnInit() {
-		if (!this.hasOwnerSession()) {
-			this.needsPairing = true
-			this.ensurePairing()
+		this.pendingApproveCode = this.readPairCodeFromUrl()
+		this.isAuthenticated = this.hasOwnerSession()
+		if (!this.isAuthenticated) {
+			this.needsPairing = !this.pendingApproveCode
+			if (this.needsPairing) this.ensurePairing()
 			return
 		}
 		try {
@@ -70,6 +80,8 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 			this.readWebspaces()
 			this.pageSchema = this.desktopSchema.loadSchema()
 			this.rebuildAreaWidgetCounts()
+			this.selectedApproveWebspace =
+				this.selectedApproveWebspace || this.activeWebspace || 'default'
 		}
 		recompute()
 		const un1 = observeDeep(uiNode, recompute)
@@ -82,6 +94,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 			un1?.()
 			un2?.()
 			this.stateSub?.unsubscribe()
+			try { clearInterval(this.pairPollTimer) } catch {}
 		}
 	}
 	ngOnDestroy() { this.dispose?.() }
@@ -90,7 +103,13 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		// After login, sessionJwt + hubId are persisted to localStorage by LoginService.
 		// Re-run init; it will probe local hub and fall back to root proxy if needed.
 		this.needsLogin = false
+		this.needsPairing = false
+		this.isAuthenticated = true
 		this.initError = ''
+		try {
+			localStorage.removeItem('adaos_pair_code')
+		} catch {}
+		try { clearInterval(this.pairPollTimer) } catch {}
 		await this.ngOnInit()
 	}
 
@@ -104,19 +123,40 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	}
 
 	private ensurePairing(): void {
-		try {
-			const existing = localStorage.getItem('adaos_pairing_id')
-			if (existing && existing.trim()) {
-				this.pairingId = existing.trim()
-			} else {
-				const raw = (globalThis.crypto && (crypto as any).randomUUID?.()) || Math.random().toString(36).slice(2)
-				this.pairingId = `pair_${raw}`
-				localStorage.setItem('adaos_pairing_id', this.pairingId)
+		this.pairStatusText = 'creating pairing…'
+		const cached = (() => {
+			try {
+				return (localStorage.getItem('adaos_pair_code') || '').trim()
+			} catch {
+				return ''
 			}
-		} catch {
-			const raw = Math.random().toString(36).slice(2)
-			this.pairingId = `pair_${raw}`
+		})()
+		if (cached) {
+			this.pairCode = cached
+			this.buildPairingUrl()
+			this.startPairingPoll()
+			return
 		}
+		this.pairing.createBrowserPair(600).subscribe({
+			next: (res) => {
+				if (!res?.ok || !res.pair_code) {
+					this.pairStatusText = 'failed to create pairing'
+					return
+				}
+				this.pairCode = res.pair_code
+				try {
+					localStorage.setItem('adaos_pair_code', this.pairCode)
+				} catch {}
+				this.buildPairingUrl()
+				this.startPairingPoll()
+			},
+			error: () => {
+				this.pairStatusText = 'failed to create pairing'
+			},
+		})
+	}
+
+	private buildPairingUrl(): void {
 		const origin = (() => {
 			try {
 				return window.location.origin
@@ -124,7 +164,70 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 				return ''
 			}
 		})()
-		this.pairingUrl = `${origin}/desktop2?pair=${encodeURIComponent(this.pairingId)}`
+		this.pairingId = this.pairCode
+		this.pairingUrl = `${origin}/desktop2?pair_code=${encodeURIComponent(this.pairCode)}`
+	}
+
+	private startPairingPoll(): void {
+		try { clearInterval(this.pairPollTimer) } catch {}
+		this.pairStatusText = 'waiting for approval…'
+		this.pairPollTimer = setInterval(() => {
+			this.pairing.getBrowserPairStatus(this.pairCode).subscribe({
+				next: (res) => {
+					if (!res?.ok) return
+					if (res.state === 'approved' && res.session_jwt && res.hub_id) {
+						this.pairStatusText = 'approved, connecting…'
+						try { localStorage.setItem('adaos_web_session_jwt', res.session_jwt) } catch {}
+						try { localStorage.setItem('adaos_hub_id', res.hub_id) } catch {}
+						if (res.webspace_id) {
+							try { localStorage.setItem('adaos_webspace_id', res.webspace_id) } catch {}
+						}
+						try { localStorage.removeItem('adaos_pair_code') } catch {}
+						try { clearInterval(this.pairPollTimer) } catch {}
+						try { location.reload() } catch {}
+					}
+					if (res.state === 'expired' || res.state === 'revoked') {
+						this.pairStatusText = `pairing ${String(res.state)}`
+					}
+				},
+				error: () => {},
+			})
+		}, 2000)
+	}
+
+	private readPairCodeFromUrl(): string {
+		try {
+			const url = new URL(window.location.href)
+			return (
+				(url.searchParams.get('pair_code') || url.searchParams.get('pair') || '').trim()
+			)
+		} catch {
+			return ''
+		}
+	}
+
+	approvePairing(): void {
+		const code = (this.pendingApproveCode || '').trim()
+		if (!code) return
+		const ws = (this.selectedApproveWebspace || this.activeWebspace || 'default').trim() || 'default'
+		this.pairStatusText = 'approving…'
+		this.pairing.approveBrowserPair(code, ws).subscribe({
+			next: (res) => {
+				this.pairStatusText = res?.ok ? 'approved' : 'approve failed'
+				if (res?.ok) {
+					try {
+						const u = new URL(window.location.href)
+						u.searchParams.delete('pair_code')
+						u.searchParams.delete('pair')
+						window.history.replaceState({}, '', u.toString())
+					} catch {}
+					this.pendingApproveCode = ''
+				}
+			},
+			error: () => {
+				this.pairStatusText = 'approve failed'
+			},
+		})
 	}
 
 	async openModal(id: string) {
