@@ -21,7 +21,7 @@ import { CommonModule } from '@angular/common'
 import { Observable, of, timer } from 'rxjs'
 import { catchError, distinctUntilChanged, map, startWith, switchMap, timeout } from 'rxjs/operators'
 import { buildId } from '../environments/build'
-import { HttpClient } from '@angular/common/http'
+import { HttpClient, HttpHeaders } from '@angular/common/http'
 import { PairingService } from './runtime/pairing.service'
 import { IonRouterOutlet } from '@ionic/angular/standalone'
 
@@ -73,8 +73,8 @@ export class AppComponent implements OnInit, OnDestroy {
 
 		this.hubStatus$ = timer(0, 5000).pipe(
 			switchMap(() => {
-				const url = this.getHubStatusUrl()
-				return this.http.get(url, { responseType: 'text' }).pipe(
+				const { url, headers } = this.getHubStatusRequest()
+				return this.http.get(url, { responseType: 'text', headers }).pipe(
 					timeout(2000),
 					map(() => 'online' as const),
 					catchError(() => of('offline' as const)),
@@ -85,7 +85,7 @@ export class AppComponent implements OnInit, OnDestroy {
 		)
 	}
 
-	private getHubStatusUrl(): string {
+	private getHubStatusRequest(): { url: string; headers?: HttpHeaders } {
 		const base = this.pairing.getBaseUrl().replace(/\/+$/, '')
 		const hubId = (() => {
 			try {
@@ -94,11 +94,23 @@ export class AppComponent implements OnInit, OnDestroy {
 				return ''
 			}
 		})()
-		if (hubId) {
-			return `${base}/hubs/${encodeURIComponent(hubId)}/api/node/status`
+		const jwt = this.readSessionJwt()
+		if (hubId && jwt) {
+			return {
+				url: `${base}/hubs/${encodeURIComponent(hubId)}/api/node/status`,
+				headers: new HttpHeaders({ Authorization: `Bearer ${jwt}` }),
+			}
 		}
 		// Before pairing/login we don't know a hub id; root health is still useful.
-		return `${base}/healthz`
+		return { url: `${base}/healthz` }
+	}
+
+	private readSessionJwt(): string {
+		try {
+			return (localStorage.getItem('adaos_web_session_jwt') || '').trim()
+		} catch {
+			return ''
+		}
 	}
 
 	ngOnDestroy(): void {
