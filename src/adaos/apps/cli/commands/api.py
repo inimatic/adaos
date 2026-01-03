@@ -51,7 +51,13 @@ def serve(
     except Exception:
         pass
     # �窠 �室� FastAPI
-    uvicorn.run("adaos.apps.api.server:app", host=host, port=port, reload=reload)
+    uvicorn.run(
+        "adaos.apps.api.server:app",
+        host=host,
+        port=port,
+        reload=reload,
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":
