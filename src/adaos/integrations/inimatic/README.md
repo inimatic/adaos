@@ -2,7 +2,8 @@
 
 Inimatic - authorization system
 
-## Build version (debug)
+## Build version
+
 The current build id is shown in the top header next to `INIMATIC`.
 
 - CI build id: `ci-<run_number>-<sha>`
@@ -11,15 +12,19 @@ The current build id is shown in the top header next to `INIMATIC`.
 You can override it for local builds by setting `BUILD_VERSION` before running `npm run buildprod`.
 
 # Development Workflow
+
 ## Requirements
+
 Nodejs 18
 
 ## Installation
+
 1. Install Android Studio
 2. Install [JDK](https://www.oracle.com/java/technologies/downloads/)
-3. Set System Path 
+3. Set System Path
 4. $env:NODE_OPTIONS="--openssl-legacy-provider"
 Before proceeding, make sure the latest version of Node.js and npm are installed. See Environment Setup for details. Install the Ionic CLI with npm:
+
 ```
 npm i -g @ionic/cli
 npm i -g cordova
@@ -28,7 +33,9 @@ npm i
 npm add.android
 npm add.plugin
 ```
+
 5. Setup [Redis on Windows](https://github.com/microsoftarchive/redis/releases), Redis on Ubuntu:
+
 ```
 sudo apt update
 sudo apt install redis-server -y
@@ -37,22 +44,25 @@ sudo systemctl enable --now redis-server
 
 ## Setup build Android
 
-1. Path to SDK 
+1. Path to SDK
 Create new file --> Project--> Platform --> android--> local.properties
 and keep this --> sdk.dir=/path/sdk example [sdk.dir=/Users/admin/Library/Android/sdk]
 2. Android Studio/Settings/Android SDK/
-> https://stackoverflow.com/questions/67398608/unable-to-determine-android-sdk
+
+> <https://stackoverflow.com/questions/67398608/unable-to-determine-android-sdk>
 - Android SDK Build-Tools 33.0.2 version 33.0.2
-3. Install
+1. Install
+
 - Sources for Android 32 (sources;android-32)
 
 ## Setup Android build env
-https://forum.ionicframework.com/t/how-to-create-build-apk-file-for-android-from-ionic-project/230258/7
+<https://forum.ionicframework.com/t/how-to-create-build-apk-file-for-android-from-ionic-project/230258/7>
 
+# <https://stackoverflow.com/questions/43480076/ionic-2-error-could-not-find-an-installed-version-of-gradle-either-in-android>
 
-# https://stackoverflow.com/questions/43480076/ionic-2-error-could-not-find-an-installed-version-of-gradle-either-in-android
 * Min SDK 33
-* Used OpenJDK v11.0.0.2, Android SDK 33, Gradle v7.6.2
+- Used OpenJDK v11.0.0.2, Android SDK 33, Gradle v7.6.2
+
 ```
 export GRADLE_PATH="/home/teacher/.gradle/wrapper/dists/gradle-8.0.2-all/25ipb77ce0ypy3f9xdton1ae6/gradle-8.0.2/bin/"
 export ANDROID_HOME=/home/teacher/Android/Sdk
@@ -65,26 +75,30 @@ export PATH="$PATH:$GRADLE_PATH"
 See [`deployment/README.md`](deployment/README.md) for the Traefik-based Docker Compose setup, production rollout guide, and CI/CD pipeline details.
 
 ## Run Android app in development mode
+
 ```
 npm run dev.android [--address <ip address> -p=<port>]
 ```
 
 ## Build Android app  
+
 ```
 npm run build.android
 ```
 
 ## Add Browser Extension  
+
 1. Open ```chrome://extensions``` for Chrome, ```browser://extensions``` for Yandex, ```edge://extensions``` for Edge
 2. Enable Developer Mode by clicking the toggle switch next to Developer mode
 3. Click the "Load unpacked" button and select the ```./browser_extension``` in the project root
 
 ## IONIC documentation
+
 [IONIC documentation](https://test-bc740.web.app/)
 
 ## Support
 
-Drop us a line to logdevel@stipot.com
+Drop us a line to <logdevel@stipot.com>
 
 ## Acknowledgements
 
@@ -130,7 +144,7 @@ The version in our package.json gets copied to the one we publish, and users nee
 
 #### Revert
 
-If the commit reverts a previous commit, it should begin with `revert: `, followed by the header of the reverted commit. In the body it should say: `This reverts commit <hash>.`, where the hash is the SHA of the commit being reverted.
+If the commit reverts a previous commit, it should begin with `revert:`, followed by the header of the reverted commit. In the body it should say: `This reverts commit <hash>.`, where the hash is the SHA of the commit being reverted.
 
 #### Type
 
