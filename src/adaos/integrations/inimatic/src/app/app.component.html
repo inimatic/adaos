@@ -12,21 +12,21 @@
 					<span class="build-id" *ngIf="buildId && buildId !== 'dev'">{{ buildId }}</span>
 					<span class="hub-status" *ngIf="hubStatus$ | async as hub">
 						<span class="dot" [attr.data-status]="hub" aria-hidden="true"></span>
-						<span class="label">{{ hub }}</span>
+						<span class="label">{{ ('status.' + hub) | t }}</span>
 					</span>
 					<ion-button
 						class="logout-btn"
 						fill="clear"
 						size="small"
 						(click)="onClickLogout()"
-						aria-label="Logout (debug)"
+						[attr.aria-label]="'aria.logout_debug' | t"
 					>
 						<ion-icon name="log-out-outline"></ion-icon>
 					</ion-button>
 				</div>
 			</ion-title>
-			<ion-buttons slot="end">
-				<ion-button (click)="onClickYjsReload()">
+				<ion-buttons slot="end">
+				<ion-button (click)="onClickYjsReload()" [attr.aria-label]="'aria.reload' | t">
 					<ion-icon name="refresh-outline"></ion-icon>
 				</ion-button>
 			</ion-buttons>

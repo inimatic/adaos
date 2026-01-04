@@ -24,6 +24,7 @@ import { buildId } from '../environments/build'
 import { HttpClient, HttpHeaders } from '@angular/common/http'
 import { PairingService } from './runtime/pairing.service'
 import { IonRouterOutlet } from '@ionic/angular/standalone'
+import { TPipe } from './runtime/t.pipe'
 
 @Component({
 	selector: 'app-root',
@@ -40,6 +41,7 @@ import { IonRouterOutlet } from '@ionic/angular/standalone'
 		IonHeader,
 		IonApp,
 		IonRouterOutlet,
+		TPipe,
 	],
 })
 export class AppComponent implements OnInit, OnDestroy {

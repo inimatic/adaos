@@ -18,23 +18,19 @@ export class PairingService {
 	private base: string
 
 	private resolveBase(): string {
-		// Explicit override (persisted), useful for QR flows where both devices must hit the same root.
-		try {
-			const persisted = (localStorage.getItem('adaos_pair_api_base') || '').trim()
-			if (persisted) return persisted.replace(/\/+$/, '')
-		} catch {}
 		try {
 			const hinted = ((window as any).__ADAOS_ROOT_BASE__ || '').trim()
 			if (hinted) return hinted.replace(/\/+$/, '')
 		} catch {}
-		// Default to current origin for local/dev deployments.
-		// For production UI served from app.inimatic.com, the API lives on api.inimatic.com.
+		// For production, keep the API base constant to make QR URLs short and stable.
+		// For local/dev, allow using current origin (or __ADAOS_ROOT_BASE__ override above).
 		try {
 			const origin = String(window.location.origin || '').trim()
 			if (origin) {
 				const host = String(window.location.host || '').toLowerCase()
-				if (host === 'app.inimatic.com') return 'https://api.inimatic.com'
-				return origin.replace(/\/+$/, '')
+				if (host === 'app.inimatic.com' || host === 'v1.app.inimatic.com') return 'https://api.inimatic.com'
+				if (host === 'localhost' || host.startsWith('127.') || host === '[::1]') return origin.replace(/\/+$/, '')
+				return 'https://api.inimatic.com'
 			}
 		} catch {}
 		return 'https://api.inimatic.com'
@@ -46,21 +42,6 @@ export class PairingService {
 
 	getBaseUrl(): string {
 		return this.base
-	}
-
-	setBaseUrl(url: string): void {
-		const trimmed = String(url || '').trim().replace(/\/+$/, '')
-		if (!trimmed) return
-		try {
-			const u = new URL(trimmed)
-			if (u.protocol !== 'http:' && u.protocol !== 'https:') return
-		} catch {
-			return
-		}
-		this.base = trimmed
-		try {
-			localStorage.setItem('adaos_pair_api_base', trimmed)
-		} catch {}
 	}
 
 	createBrowserPair(ttlSec = 600): Observable<PairCreateResponse> {
