@@ -1,31 +1,33 @@
 <div class="login_wrapper">
 	<div class="login_form">
+		<ada-language-picker></ada-language-picker>
+
 		<!-- Selection Mode: Choose between Registration and Login -->
 		<div *ngIf="mode === 'selection'" class="mode_selection">
-			<h2>Choose an option:</h2>
+			<h2>{{ 'login.choose_title' | t }}</h2>
 			<ion-button expand="block" (click)="switchToRegistration()">
-				Registration
+				{{ 'login.registration' | t }}
 			</ion-button>
 			<ion-button expand="block" (click)="switchToLogin()">
-				Log in
+				{{ 'login.login' | t }}
 			</ion-button>
 		</div>
 
 		<!-- Registration Mode: Enter user code -->
 		<div *ngIf="mode === 'registration'" class="registration_mode">
-			<h2>Register with Code</h2>
-			<p *ngIf="registrationError" class="error_message">
-				{{ registrationError }}
+			<h2>{{ 'login.register_title' | t }}</h2>
+			<p *ngIf="registrationErrorKey" class="error_message">
+				{{ registrationErrorKey | t:registrationErrorParams }}
 			</p>
 
 			<ion-input
 				class="ion-primary-input"
-				label="Registration Code"
+				[label]="'login.registration_code_label' | t"
 				labelPlacement="floating"
 				[(ngModel)]="userCode"
 				maxlength="9"
 				[counter]="true"
-				placeholder="XXXX-XXXX"
+				[placeholder]="'login.registration_code_placeholder' | t"
 			/>
 
 			<ion-button
@@ -33,8 +35,8 @@
 				(click)="onRegister()"
 				[disabled]="registrationLoading"
 			>
-				<span *ngIf="!registrationLoading">Register</span>
-				<span *ngIf="registrationLoading">Processing...</span>
+				<span *ngIf="!registrationLoading">{{ 'login.register' | t }}</span>
+				<span *ngIf="registrationLoading">{{ 'login.processing' | t }}</span>
 			</ion-button>
 
 			<ion-button
@@ -42,19 +44,18 @@
 				fill="outline"
 				(click)="backToSelection()"
 			>
-				Back
+				{{ 'login.back' | t }}
 			</ion-button>
 		</div>
 
 		<!-- Login Mode: Just click to authenticate -->
 		<div *ngIf="mode === 'login'" class="login_mode">
-			<h2>Log in with WebAuthn</h2>
-			<p *ngIf="loginError" class="error_message">
-				{{ loginError }}
+			<h2>{{ 'login.login_title' | t }}</h2>
+			<p *ngIf="loginErrorKey" class="error_message">
+				{{ loginErrorKey | t:loginErrorParams }}
 			</p>
 			<p class="info_message">
-				Click the button below to authenticate with your WebAuthn
-				credential.
+				{{ 'login.login_info' | t }}
 			</p>
 
 			<ion-button
@@ -62,8 +63,8 @@
 				(click)="onLogin()"
 				[disabled]="loginLoading"
 			>
-				<span *ngIf="!loginLoading">Log in</span>
-				<span *ngIf="loginLoading">Authenticating...</span>
+				<span *ngIf="!loginLoading">{{ 'login.login' | t }}</span>
+				<span *ngIf="loginLoading">{{ 'login.authenticating' | t }}</span>
 			</ion-button>
 
 			<ion-button
@@ -71,7 +72,7 @@
 				fill="outline"
 				(click)="backToSelection()"
 			>
-				Back
+				{{ 'login.back' | t }}
 			</ion-button>
 		</div>
 	</div>

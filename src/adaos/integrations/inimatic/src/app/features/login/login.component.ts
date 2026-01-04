@@ -3,13 +3,16 @@ import { LoginService, type LoginResult } from './login.service'
 import { IonButton, IonInput } from '@ionic/angular/standalone'
 import { FormsModule } from '@angular/forms'
 import { CommonModule } from '@angular/common'
+import { I18nService } from '../../runtime/i18n.service'
+import { TPipe } from '../../runtime/t.pipe'
+import { LanguagePickerComponent } from '../../shared/i18n/language-picker.component'
 
 @Component({
 	selector: 'app-login',
 	standalone: true,
 	templateUrl: './login.component.html',
 	styleUrl: './login.component.scss',
-	imports: [IonInput, IonButton, FormsModule, CommonModule],
+	imports: [IonInput, IonButton, FormsModule, CommonModule, TPipe, LanguagePickerComponent],
 })
 export class LoginComponent {
 	@Output() loginSuccess = new EventEmitter<LoginResult>()
@@ -17,39 +20,46 @@ export class LoginComponent {
 	// Registration mode
 	userCode = ''
 	registrationLoading = false
-	registrationError = ''
+	registrationErrorKey = ''
+	registrationErrorParams: Record<string, any> | undefined
 
 	// Login mode
 	loginLoading = false
-	loginError = ''
+	loginErrorKey = ''
+	loginErrorParams: Record<string, any> | undefined
 
 	// Mode toggle
 	mode: 'selection' | 'registration' | 'login' = 'selection'
 
-	constructor(private loginService: LoginService) {}
+	constructor(private loginService: LoginService, public i18n: I18nService) {}
 
 	switchToRegistration() {
 		this.mode = 'registration'
-		this.registrationError = ''
+		this.registrationErrorKey = ''
+		this.registrationErrorParams = undefined
 		this.userCode = ''
 	}
 
 	switchToLogin() {
 		this.mode = 'login'
-		this.loginError = ''
+		this.loginErrorKey = ''
+		this.loginErrorParams = undefined
 	}
 
 	backToSelection() {
 		this.mode = 'selection'
-		this.registrationError = ''
-		this.loginError = ''
+		this.registrationErrorKey = ''
+		this.registrationErrorParams = undefined
+		this.loginErrorKey = ''
+		this.loginErrorParams = undefined
 	}
 
 	onRegister() {
-		this.registrationError = ''
+		this.registrationErrorKey = ''
+		this.registrationErrorParams = undefined
 
 		if (!this.userCode.trim()) {
-			this.registrationError = 'Enter registration code'
+			this.registrationErrorKey = 'login.error.enter_code'
 			return
 		}
 
@@ -65,25 +75,26 @@ export class LoginComponent {
 
 				if (err instanceof Error && !('status' in err)) {
 					// Локальные ошибки (например, отсутствие поддержки WebAuthn)
-					this.registrationError = err.message || 'WebAuthn error'
+					this.registrationErrorKey = 'login.error.webauthn'
+					this.registrationErrorParams = { msg: err.message || '' }
 					return
 				}
 
 				const status = err.status ?? 0
 				if (status === 400) {
-					this.registrationError =
-						'Invalid code or WebAuthn registration failed'
+					this.registrationErrorKey = 'login.error.invalid_code'
 				} else if (status >= 500) {
-					this.registrationError = 'Server error'
+					this.registrationErrorKey = 'login.error.server'
 				} else {
-					this.registrationError = 'Unexpected error'
+					this.registrationErrorKey = 'login.error.unexpected'
 				}
 			},
 		})
 	}
 
 	onLogin() {
-		this.loginError = ''
+		this.loginErrorKey = ''
+		this.loginErrorParams = undefined
 		this.loginLoading = true
 
 		this.loginService.login().subscribe({
@@ -96,7 +107,8 @@ export class LoginComponent {
 
 				if (err instanceof Error && !('status' in err)) {
 					// Локальные ошибки (например, отсутствие поддержки WebAuthn)
-					this.loginError = err.message || 'WebAuthn error'
+					this.loginErrorKey = 'login.error.webauthn'
+					this.loginErrorParams = { msg: err.message || '' }
 					return
 				}
 
@@ -104,15 +116,14 @@ export class LoginComponent {
 				if (status === 400) {
 					const errorCode = err.error?.code || err.error?.error
 					if (errorCode === 'no_credentials_registered') {
-						this.loginError =
-							'No WebAuthn credentials found. Please register first.'
+						this.loginErrorKey = 'login.error.no_credentials'
 					} else {
-						this.loginError = 'WebAuthn authentication failed'
+						this.loginErrorKey = 'login.error.auth_failed'
 					}
 				} else if (status >= 500) {
-					this.loginError = 'Server error'
+					this.loginErrorKey = 'login.error.server'
 				} else {
-					this.loginError = 'Unexpected error'
+					this.loginErrorKey = 'login.error.unexpected'
 				}
 			},
 		})
