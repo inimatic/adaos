@@ -41,6 +41,18 @@
 	background: var(--ion-color-danger);
 }
 
+@media (max-width: 900px) {
+	.hub-status .label {
+		display: none;
+	}
+	.app-title {
+		gap: 8px;
+	}
+	.build-id {
+		display: none;
+	}
+}
+
 .logout-btn {
 	margin-inline-start: 2px;
 	--padding-start: 6px;

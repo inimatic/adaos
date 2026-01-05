@@ -56,6 +56,9 @@ export class AppComponent implements OnInit, OnDestroy {
 	logoSrc = 'assets/icon/favicon.png'
 	private colorSchemeMedia?: MediaQueryList
 	private colorSchemeListener = (e: MediaQueryListEvent) => this.applyTheme(e.matches)
+	private narrowMedia?: MediaQueryList
+	private narrowListener = () => this.applyNarrow()
+	isNarrow = false
 
 	constructor(
 		private plt: Platform,
@@ -82,9 +85,12 @@ export class AppComponent implements OnInit, OnDestroy {
 	ngOnInit(): void {
 		this.applyLayoutVars()
 		this.maybeHardReloadOnBuildChange()
+		this.ensureNarrowMedia()
 		this.colorSchemeMedia = window.matchMedia('(prefers-color-scheme: dark)')
 		this.applyTheme(this.colorSchemeMedia.matches)
 		this.colorSchemeMedia.addEventListener('change', this.colorSchemeListener)
+		// If we loaded via cache-bust URL, clean it up for nicer sharing/bookmarks.
+		setTimeout(() => this.stripVersionParam(), 0)
 
 		this.hubStatus$ = timer(0, 5000).pipe(
 			switchMap(() => {
@@ -130,12 +136,47 @@ export class AppComponent implements OnInit, OnDestroy {
 
 	ngOnDestroy(): void {
 		this.colorSchemeMedia?.removeEventListener('change', this.colorSchemeListener)
+		try {
+			const any: any = this.narrowMedia as any
+			if (typeof any?.removeEventListener === 'function') {
+				this.narrowMedia?.removeEventListener('change', this.narrowListener as any)
+			} else if (typeof any?.removeListener === 'function') {
+				any.removeListener(this.narrowListener)
+			}
+		} catch {}
 	}
 
 	private applyLayoutVars(): void {
 		try {
 			const h = this.isAndroid ? '80px' : '56px'
 			document.documentElement.style.setProperty('--ada-app-header-height', h)
+		} catch {}
+	}
+
+	private ensureNarrowMedia(): void {
+		try {
+			this.narrowMedia = window.matchMedia('(max-width: 900px)')
+			this.applyNarrow()
+			const any: any = this.narrowMedia as any
+			if (typeof any?.addEventListener === 'function') {
+				this.narrowMedia.addEventListener('change', this.narrowListener as any)
+			} else if (typeof any?.addListener === 'function') {
+				any.addListener(this.narrowListener)
+			}
+		} catch {}
+	}
+
+	private applyNarrow(): void {
+		try {
+			this.isNarrow = !!this.narrowMedia?.matches
+		} catch {
+			this.isNarrow = false
+		}
+	}
+
+	toggleSidebar(): void {
+		try {
+			window.dispatchEvent(new CustomEvent('adaos:toggleSidebar'))
 		} catch {}
 	}
 
@@ -191,6 +232,15 @@ export class AppComponent implements OnInit, OnDestroy {
 				location.reload()
 			} catch {}
 		})()
+	}
+
+	stripVersionParam(): void {
+		try {
+			const url = new URL(location.href)
+			if (!url.searchParams.has('__v')) return
+			url.searchParams.delete('__v')
+			window.history.replaceState({}, '', url.toString())
+		} catch {}
 	}
 
 	@HostListener('window:keydown', ['$event'])
