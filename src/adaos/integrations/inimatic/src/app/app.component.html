@@ -2,9 +2,16 @@
 	<ion-header [translucent]="false" [class]="isAndroid? 'android_header' : ''">
 		<ion-toolbar>
 			<ion-buttons slot="start">
-				<ion-button *ngIf="isAuthenticated; else unauthLogo" (click)="onClickHome()">
-					<ion-icon name="home-outline"></ion-icon>
-				</ion-button>
+				<ng-container *ngIf="isAuthenticated; else unauthLogo">
+					<ion-button *ngIf="isNarrow; else wideHome" (click)="toggleSidebar()">
+						<ion-icon name="menu-outline"></ion-icon>
+					</ion-button>
+					<ng-template #wideHome>
+						<ion-button (click)="onClickHome()">
+							<ion-icon name="home-outline"></ion-icon>
+						</ion-button>
+					</ng-template>
+				</ng-container>
 				<ng-template #unauthLogo>
 					<img class="unauth-logo" [src]="logoSrc" alt="Inimatic" />
 				</ng-template>

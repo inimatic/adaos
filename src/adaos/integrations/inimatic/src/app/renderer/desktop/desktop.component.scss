@@ -297,15 +297,21 @@
 
 .area-role-footer {
   grid-area: bottom;
-  position: sticky;
+  position: fixed;
+  left: 0;
+  right: 0;
   bottom: 0;
-  z-index: 6;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  background: linear-gradient(
-    to top,
-    color-mix(in srgb, var(--ion-background-color) 94%, transparent),
-    transparent
-  );
+  z-index: 15;
+  padding: 0 var(--desktop-padding) calc(env(safe-area-inset-bottom, 0px) + 8px);
+  pointer-events: none;
+}
+
+.area-role-footer > * {
+  pointer-events: auto;
+}
+
+.desktop-grid {
+  padding-bottom: calc(var(--desktop-padding) + 72px + env(safe-area-inset-bottom, 0px));
 }
 
 .widget-collapsible__header {
@@ -387,4 +393,15 @@
   .drawer-backdrop {
     display: block;
   }
+
+  .desktop-fab {
+    display: flex;
+  }
+}
+
+.desktop-fab {
+  display: none;
+  z-index: 20;
+  margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+  margin-right: 10px;
 }

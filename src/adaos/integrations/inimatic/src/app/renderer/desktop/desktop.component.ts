@@ -17,7 +17,7 @@ import { QRCodeModule } from 'angularx-qrcode'
 import { PairingService } from '../../runtime/pairing.service'
 import { TPipe } from '../../runtime/t.pipe'
 import { addIcons } from 'ionicons'
-import { menuOutline, closeOutline } from 'ionicons/icons'
+import { menuOutline, closeOutline, homeOutline, ellipsisHorizontalOutline } from 'ionicons/icons'
 
 @Component({
 	selector: 'ada-desktop',
@@ -35,6 +35,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	isCompact = false
 	sidebarOpen = false
 	private collapsedWidgetIds = new Set<string>()
+	fabActions: Array<{ id: string; icon?: string; label?: string; cmd?: string; payload?: any }> = []
 	webspaces: Array<{ id: string; title: string; created_at: number }> = []
 	activeWebspace = 'default'
 	pageSchema?: PageSchema
@@ -63,8 +64,11 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 	) { }
 
 	async ngOnInit() {
-		addIcons({ menuOutline, closeOutline })
+		addIcons({ menuOutline, closeOutline, homeOutline, ellipsisHorizontalOutline })
 		this.ensureMediaQueries()
+		try {
+			window.addEventListener('adaos:toggleSidebar', this.onToggleSidebar as any)
+		} catch {}
 		this.pendingApproveCode = this.readPairCodeFromUrl()
 		this.isAuthenticated = this.hasOwnerSession()
 		if (!this.isAuthenticated) {
@@ -91,6 +95,7 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		const dataNode = this.y.getPath('data')
 		const recompute = () => {
 			this.app = this.y.toJSON(this.y.getPath('ui/application'))
+			this.readFabActions()
 			this.readWebspaces()
 			this.pageSchema = this.desktopSchema.loadSchema()
 			this.rebuildAreaWidgetCounts()
@@ -111,6 +116,9 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 			this.stateSub?.unsubscribe()
 			try { clearInterval(this.pairPollTimer) } catch {}
 			this.teardownMediaQueries()
+			try {
+				window.removeEventListener('adaos:toggleSidebar', this.onToggleSidebar as any)
+			} catch {}
 		}
 	}
 	ngOnDestroy() {
@@ -147,6 +155,10 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 		} catch {}
 	}
 
+	private onToggleSidebar = () => {
+		this.toggleSidebar()
+	}
+
 	private teardownMediaQueries(): void {
 		if (!this.mediaHandlersBound) return
 		try {
@@ -169,6 +181,38 @@ export class DesktopRendererComponent implements OnInit, OnDestroy {
 
 	closeSidebar(): void {
 		this.sidebarOpen = false
+	}
+
+	private readFabActions(): void {
+		const raw = (this.app as any)?.desktop?.fab?.actions
+		this.fabActions = Array.isArray(raw) ? raw : []
+	}
+
+	async fabHome(): Promise<void> {
+		try {
+			const ws = this.y.getWebspaceId()
+			await this.adaos.sendEventsCommand('desktop.scenario.set', {
+				scenario_id: 'web_desktop',
+				webspace_id: ws || undefined,
+			})
+		} catch {}
+	}
+
+	async onFabAction(a: { id: string; cmd?: string; payload?: any }): Promise<void> {
+		if (!a) return
+		if (a.id === 'menu') {
+			this.toggleSidebar()
+			return
+		}
+		if (a.id === 'home') {
+			await this.fabHome()
+			return
+		}
+		if (a.cmd) {
+			try {
+				await this.adaos.sendEventsCommand(String(a.cmd), a.payload || {})
+			} catch {}
+		}
 	}
 
 	roleHasWidgets(role: string): boolean {

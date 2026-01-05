@@ -72,6 +72,20 @@
 		</div>
 		<div class="drawer-backdrop" *ngIf="sidebarOpen" (click)="closeSidebar()"></div>
 
+		<ion-fab class="desktop-fab" vertical="bottom" horizontal="end">
+			<ion-fab-button (click)="onFabAction({id: 'home'})">
+				<ion-icon name="home-outline"></ion-icon>
+			</ion-fab-button>
+			<ion-fab-list side="top">
+				<ion-fab-button (click)="onFabAction({id: 'menu'})" *ngIf="hasRole('sidebar')">
+					<ion-icon name="menu-outline"></ion-icon>
+				</ion-fab-button>
+				<ion-fab-button *ngFor="let a of fabActions" (click)="onFabAction(a)">
+					<ion-icon [name]="a.icon || 'ellipsis-horizontal-outline'"></ion-icon>
+				</ion-fab-button>
+			</ion-fab-list>
+		</ion-fab>
+
 		<div class="desktop-grid" [ngClass]="desktopLayoutClass(page)"
 			[class.is-compact]="isCompact" [class.sidebar-open]="sidebarOpen">
 			<ng-container *ngFor="let area of page.layout.areas">
