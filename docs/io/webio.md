@@ -58,6 +58,13 @@ The weather observer publishes `weather.city_changed {webspace_id, city}` whenev
 
 RouterService (the text/voice router) follows the same pattern: when emitting runtime events destined for UI-integrated skills, include a `_meta.webspace_id` hint so runtimes can reply into the proper doc.
 
+For chat/TTS in webspaces prefer the dedicated “web IO” topics:
+
+- `io.out.chat.append` -> RouterService appends into `data.voice_chat.messages`.
+- `io.out.say` -> RouterService enqueues into `data.tts.queue`.
+
+These events are routed purely by `_meta.webspace_id`, so different devices/webspaces can receive replies independently.
+
 ## Frontend Experience
 
 * Toolbar displays the current webspace and offers CRUD buttons (create/rename/delete/refresh). Selecting a different entry sends `desktop.webspace.use` and reloads the UI after the hub acknowledges.
