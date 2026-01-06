@@ -83,3 +83,8 @@
 	margin-inline-start: 8px;
 	opacity: 0.95;
 }
+
+/* Global header sits above routed pages; offset page content accordingly. */
+ion-router-outlet ion-content {
+	--offset-top: var(--ada-app-header-height, 56px);
+}
