@@ -181,7 +181,8 @@ class WebspaceScenarioRuntime:
             _log.debug("webui.json missing for %s (%s)", skill_name, space)
             return {}
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            # Accept UTF-8 with BOM produced by some Windows/PowerShell editors.
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception as exc:
             _log.warning("failed to read webui.json for %s: %s", skill_name, exc)
             return {}

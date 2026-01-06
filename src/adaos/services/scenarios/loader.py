@@ -84,7 +84,8 @@ def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any
         return {}
     _log.debug("reading scenario '%s' content from %s", scenario_id, path)
     try:
-        raw = path.read_text(encoding="utf-8")
+        # Accept UTF-8 with BOM produced by some Windows/PowerShell editors.
+        raw = path.read_text(encoding="utf-8-sig")
         data = json.loads(raw)
     except Exception:
         _CONTENT_CACHE[key] = {}
