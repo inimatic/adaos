@@ -11,3 +11,4 @@ SDK предназначен для разработчиков навыков и
 - [decorators](decorators.md) — подписки и инструменты.  
 - [context](context.md) — доступ к AgentContext.  
 - [adapters](adapters.md) — совместимость и вспомогательные реализации.
+- [io](io.md) — IO helpers (chat + TTS).
