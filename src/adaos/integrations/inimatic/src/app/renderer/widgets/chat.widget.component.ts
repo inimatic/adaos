@@ -115,6 +115,7 @@ export class ChatWidgetComponent implements OnInit, OnDestroy {
   private dataSub?: Subscription
   private openCommand?: string
   sendCommand?: string
+  private sendMeta?: Record<string, any>
   private autoSpeakFrom?: string
   private autoSpeakLang?: string
   private spokenIds = new Set<string>()
@@ -134,6 +135,7 @@ export class ChatWidgetComponent implements OnInit, OnDestroy {
     this.alignRightFrom = typeof inputs.alignRightFrom === 'string' ? inputs.alignRightFrom : 'user'
     this.hint = typeof inputs.hint === 'string' ? inputs.hint : ''
     this.placeholder = typeof inputs.placeholder === 'string' ? inputs.placeholder : 'Type a message…'
+    this.sendMeta = inputs && typeof inputs.meta === 'object' && inputs.meta ? { ...(inputs.meta as any) } : undefined
 
     if (inputs.autoSpeak === true || typeof inputs.autoSpeakFrom === 'string') {
       this.autoSpeakFrom = typeof inputs.autoSpeakFrom === 'string' ? inputs.autoSpeakFrom : 'hub'
@@ -185,7 +187,9 @@ export class ChatWidgetComponent implements OnInit, OnDestroy {
     this.draft = ''
     try {
       const ws = this.ydoc.getWebspaceId()
-      await this.adaos.sendEventsCommand(this.sendCommandResolved, { text, webspace_id: ws }, 15000)
+      const payload: any = { text, webspace_id: ws }
+      if (this.sendMeta) payload._meta = { ...this.sendMeta }
+      await this.adaos.sendEventsCommand(this.sendCommandResolved, payload, 15000)
     } catch {
       // ignore transient errors; state will resync on next open
     }

@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import y_py as Y
 
 from adaos.services.eventbus import LocalEventBus
 import logging
@@ -286,7 +287,16 @@ class RouterService:
         # Web voice chat routing (per-webspace)
         # ------------------------------------------------------------
 
-        def _resolve_webspace_ids(payload: dict | None) -> list[str]:
+        def _coerce_y(node: Any) -> Any:
+            if isinstance(node, dict):
+                return {str(k): _coerce_y(v) for k, v in node.items()}
+            if isinstance(node, Y.YMap):
+                return {str(k): _coerce_y(node.get(k)) for k in list(node.keys())}
+            if isinstance(node, Y.YArray):
+                return [_coerce_y(it) for it in node]
+            return node
+
+        def _resolve_webspace_ids_basic(payload: dict | None) -> list[str]:
             if not isinstance(payload, dict):
                 return ["default"]
 
@@ -312,6 +322,59 @@ class RouterService:
             )
             ws = str(raw or "").strip()
             return [ws or "default"]
+
+        _route_cache: dict[tuple[str, str], tuple[float, list[str]]] = {}
+
+        async def _resolve_webspace_ids(payload: dict | None) -> list[str]:
+            base_ids = _resolve_webspace_ids_basic(payload)
+            if not isinstance(payload, dict):
+                return base_ids
+
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            # If explicit targets are provided, keep them authoritative.
+            raw_ids = (meta or {}).get("webspace_ids")
+            if isinstance(raw_ids, list) and raw_ids:
+                return base_ids
+
+            route_id = (meta or {}).get("route_id") or (meta or {}).get("route")
+            if not isinstance(route_id, str) or not route_id.strip():
+                return base_ids
+            route_id = route_id.strip()
+            src_ws = base_ids[0] if base_ids else "default"
+
+            cached = _route_cache.get((src_ws, route_id))
+            now = time.time()
+            if cached and (now - cached[0]) < 1.0:
+                return cached[1]
+
+            try:
+                async with async_get_ydoc(src_ws) as ydoc:
+                    data = ydoc.get_map("data")
+                    routing = _coerce_y(data.get("routing")) or {}
+                    routes = routing.get("routes") if isinstance(routing, dict) else {}
+                    if not isinstance(routes, dict):
+                        routes = {}
+                    entry = routes.get(route_id)
+                    targets: list[str] = []
+                    if isinstance(entry, list):
+                        targets = [str(x).strip() for x in entry if str(x).strip()]
+                    elif isinstance(entry, dict):
+                        raw = entry.get("webspace_ids") or entry.get("targets")
+                        if isinstance(raw, list):
+                            targets = [str(x).strip() for x in raw if str(x).strip()]
+                    if targets:
+                        # De-dup while preserving order.
+                        dedup: list[str] = []
+                        for t in targets:
+                            if t not in dedup:
+                                dedup.append(t)
+                        _route_cache[(src_ws, route_id)] = (now, dedup)
+                        return dedup
+            except Exception:
+                pass
+
+            _route_cache[(src_ws, route_id)] = (now, base_ids)
+            return base_ids
 
         async def _ensure_voice_chat_state(webspace_id: str) -> None:
             async with async_get_ydoc(webspace_id) as ydoc:
@@ -366,7 +429,7 @@ class RouterService:
 
         async def _on_voice_open(ev: Event) -> None:
             payload = ev.payload or {}
-            for ws in _resolve_webspace_ids(payload):
+            for ws in await _resolve_webspace_ids(payload):
                 await _ensure_voice_chat_state(ws)
                 await _ensure_tts_state(ws)
 
@@ -383,7 +446,7 @@ class RouterService:
                 "text": text.strip(),
                 "ts": float(payload.get("ts") or time.time()),
             }
-            for ws in _resolve_webspace_ids(payload):
+            for ws in await _resolve_webspace_ids(payload):
                 await _ensure_voice_chat_state(ws)
                 await _append_voice_chat_message(ws, msg)
 
@@ -405,7 +468,7 @@ class RouterService:
                 item["voice"] = payload.get("voice").strip()
             if isinstance(payload.get("rate"), (int, float)):
                 item["rate"] = float(payload.get("rate"))
-            for ws in _resolve_webspace_ids(payload):
+            for ws in await _resolve_webspace_ids(payload):
                 await _ensure_tts_state(ws)
                 await _append_tts_queue_item(ws, item)
 
@@ -437,7 +500,8 @@ class RouterService:
 
         async def _on_voice_user(ev: Event) -> None:
             payload = ev.payload or {}
-            ws = _resolve_webspace_ids(payload)[0]
+            target_webspaces = await _resolve_webspace_ids(payload)
+            ws = target_webspaces[0] if target_webspaces else "default"
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 return
@@ -447,6 +511,8 @@ class RouterService:
 
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
             meta = {**meta, "webspace_id": ws}
+            if len(target_webspaces) > 1:
+                meta["webspace_ids"] = list(target_webspaces)
             try:
                 self.bus.publish(
                     Event(

@@ -45,6 +45,7 @@ export class VoiceInputWidgetComponent implements OnInit, OnDestroy {
   stopLabel = 'Stop'
   lang = 'ru-RU'
   sendCommand?: string
+  private sendMeta?: Record<string, any>
 
   private recognition?: any
   private lastFinalText = ''
@@ -58,6 +59,7 @@ export class VoiceInputWidgetComponent implements OnInit, OnDestroy {
     this.stopLabel = typeof inputs.stopLabel === 'string' ? inputs.stopLabel : 'Stop'
     this.lang = typeof inputs.lang === 'string' ? inputs.lang : 'ru-RU'
     this.sendCommand = typeof inputs.sendCommand === 'string' ? inputs.sendCommand : undefined
+    this.sendMeta = inputs && typeof inputs.meta === 'object' && inputs.meta ? { ...(inputs.meta as any) } : undefined
   }
 
   ngOnDestroy(): void {
@@ -141,7 +143,9 @@ export class VoiceInputWidgetComponent implements OnInit, OnDestroy {
     if (!this.sendCommand) return
     try {
       const ws = this.ydoc.getWebspaceId()
-      await this.adaos.sendEventsCommand(this.sendCommand, { text, webspace_id: ws }, 15000)
+      const payload: any = { text, webspace_id: ws }
+      if (this.sendMeta) payload._meta = { ...this.sendMeta }
+      await this.adaos.sendEventsCommand(this.sendCommand, payload, 15000)
       // Give router time to append the message into Yjs.
       setTimeout(() => {
         if (this.status === text) this.status = ''
