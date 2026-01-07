@@ -99,6 +99,14 @@ export class AdaosClient {
 		return this.cfg.token
 	}
 
+	getAuthHeaders(): Record<string, string> {
+		if (!this.cfg.token) return {}
+		if (this.cfg.authKind === 'bearer') {
+			return { Authorization: `Bearer ${this.cfg.token}` }
+		}
+		return { 'X-AdaOS-Token': String(this.cfg.token) }
+	}
+
 	// �����⭠� ᪫���� ��� new URL - ࠡ�⠥� � � ��᮫�⭮�, � � �⭮�⥫쭮� �����
 	private abs(path: string) {
 		const base = this.cfg.baseUrl.replace(/\/$/, '')
