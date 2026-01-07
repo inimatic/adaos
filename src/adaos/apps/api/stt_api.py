@@ -53,13 +53,27 @@ def _read_wav_mono16k(data: bytes) -> bytes:
             channels = wf.getnchannels()
             rate = wf.getframerate()
             sampwidth = wf.getsampwidth()
-            if channels != 1 or rate != 16000 or sampwidth != 2:
+            if sampwidth != 2:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"expected wav mono 16kHz 16-bit; got channels={channels} rate={rate} sampwidth={sampwidth}",
+                    detail=f"expected wav PCM16; got channels={channels} rate={rate} sampwidth={sampwidth}",
                 )
             frames = wf.readframes(wf.getnframes())
-            return frames
+            if channels == 1:
+                return frames
+            # Best-effort: downmix multi-channel WAV by taking channel 0.
+            try:
+                import array
+
+                samples = array.array("h")
+                samples.frombytes(frames)
+                mono = samples[0::channels]
+                return mono.tobytes()
+            except Exception:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"failed to downmix wav channels={channels}",
+                )
     except HTTPException:
         raise
     except Exception as exc:
@@ -91,6 +105,8 @@ async def stt_transcribe(
 
     try:
         model = vosk.Model(str(model_path))
+        # Use the model-native rate (16k) regardless of input; the frontend
+        # encodes 16kHz WAV, and we also accept other rates for debugging.
         rec = vosk.KaldiRecognizer(model, 16000)
         rec.SetWords(False)
         rec.AcceptWaveform(pcm)
