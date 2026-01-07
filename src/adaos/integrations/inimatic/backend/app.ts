@@ -16,6 +16,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import type { PeerCertificate, TLSSocket } from 'node:tls'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import YAML from 'yaml'
 
 import { installAdaosBridge } from './adaos-bridge.js'
 import { CertificateAuthority } from './pki.js'
@@ -225,10 +226,49 @@ const FORGE_GIT_URL = requireEnv('FORGE_GIT_URL')
 // Using the apex domain keeps it valid across app subdomains (app., v1.app., etc).
 const WEB_RP_ID = process.env['WEB_RP_ID'] ?? 'inimatic.com'
 const WEB_ORIGIN = process.env['WEB_ORIGIN'] ?? 'https://app.inimatic.com'
-const WEB_SESSION_TTL_SECONDS = Number.parseInt(
-	process.env['WEB_SESSION_TTL_SECONDS'] ?? '3600',
-	10
-)
+
+function resolveNodeYamlPath(): string | null {
+	const explicit = (process.env['ADAOS_NODE_YAML_PATH'] || process.env['ADAOS_NODE_YAML'] || '').trim()
+	if (explicit) return explicit
+	// Try a few common dev layouts (repo root / container root).
+	const candidates = [
+		resolve(process.cwd(), '.adaos', 'node.yaml'),
+		resolve(process.cwd(), '..', '.adaos', 'node.yaml'),
+		resolve(process.cwd(), '..', '..', '.adaos', 'node.yaml'),
+		resolve(process.cwd(), '..', '..', '..', '.adaos', 'node.yaml'),
+		resolve(process.cwd(), '..', '..', '..', '..', '.adaos', 'node.yaml'),
+	]
+	for (const p of candidates) {
+		try {
+			if (fs.existsSync(p)) return p
+		} catch {}
+	}
+	return null
+}
+
+function resolveWebSessionTtlSeconds(): number {
+	// Highest priority: explicit env override
+	const envRaw = (process.env['WEB_SESSION_TTL_SECONDS'] || '').trim()
+	if (envRaw) {
+		const envVal = Number.parseInt(envRaw, 10)
+		if (Number.isFinite(envVal) && envVal > 0) return envVal
+	}
+	// Optional: node.yaml override (dev/self-hosted hubs)
+	const nodePath = resolveNodeYamlPath()
+	if (nodePath) {
+		try {
+			const raw = readFileSync(nodePath, 'utf8')
+			const cfg: any = YAML.parse(raw) || {}
+			const ttl = cfg?.auth?.web_session_ttl_seconds?.owner ?? cfg?.auth?.web_session_ttl_seconds?.default
+			const val = Number.parseInt(String(ttl ?? ''), 10)
+			if (Number.isFinite(val) && val > 0) return val
+		} catch {}
+	}
+	// Default: 1 hour
+	return 3600
+}
+
+const WEB_SESSION_TTL_SECONDS = resolveWebSessionTtlSeconds()
 const FORGE_SSH_KEY = process.env['FORGE_SSH_KEY']
 const FORGE_AUTHOR_NAME = process.env['FORGE_GIT_AUTHOR_NAME'] ?? 'AdaOS Root'
 const FORGE_AUTHOR_EMAIL =

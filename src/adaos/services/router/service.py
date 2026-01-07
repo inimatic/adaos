@@ -437,7 +437,24 @@ class RouterService:
                 await _ensure_tts_state(ws)
             except Exception:
                 pass
-            await asyncio.to_thread(_call_voice_chat_tool, text, meta)
+            try:
+                await asyncio.to_thread(_call_voice_chat_tool, text, meta)
+            except Exception as exc:
+                # Do not crash the router on skill/tool failures; surface the error in chat.
+                try:
+                    msg = {
+                        "id": _make_id("err"),
+                        "from": "hub",
+                        "text": f"Ошибка обработки: {exc}",
+                        "ts": time.time(),
+                    }
+                    await _append_voice_chat_message(ws, msg)
+                except Exception:
+                    pass
+                try:
+                    logging.getLogger("adaos.router").warning("voice.chat.user failed", exc_info=True)
+                except Exception:
+                    pass
 
         self.bus.subscribe("voice.chat.open", _on_voice_open)
         self.bus.subscribe("voice.chat.user", _on_voice_user)
