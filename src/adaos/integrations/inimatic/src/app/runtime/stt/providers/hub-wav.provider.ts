@@ -116,10 +116,20 @@ export class HubWavSttProvider implements SttProvider {
     await this.cleanupCapture()
 
     try {
-      const fd = new FormData()
-      fd.append('audio', wav, 'audio.wav')
-      fd.append('lang', this.lang)
-      const res = await this.adaos.post<any>('/api/stt/transcribe', fd).toPromise()
+      const base = this.adaos.getBaseUrl().replace(/\/$/, '')
+      const url = `${base}/api/stt/transcribe?lang=${encodeURIComponent(this.lang)}`
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'audio/wav',
+          ...this.adaos.getAuthHeaders(),
+        },
+        body: wav,
+      })
+      if (!resp.ok) {
+        throw new Error(`hub stt failed: ${resp.status}`)
+      }
+      const res = await resp.json()
       const text = String(res?.text || '').trim()
       if (text) {
         this.emit({ type: 'final', text })
@@ -177,4 +187,3 @@ function mergeFloat32(chunks: Float32Array[]): Float32Array {
   }
   return out
 }
-

@@ -6,7 +6,7 @@ import wave
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import get_ctx
@@ -45,8 +45,7 @@ def _ensure_model(target: str) -> Path:
     )
 
 
-def _read_wav_mono16k(upload: UploadFile) -> bytes:
-    data = upload.file.read()
+def _read_wav_mono16k(data: bytes) -> bytes:
     if not data:
         raise HTTPException(status_code=400, detail="empty audio")
     try:
@@ -69,13 +68,13 @@ def _read_wav_mono16k(upload: UploadFile) -> bytes:
 
 @router.post("/transcribe", dependencies=[Depends(require_token)])
 async def stt_transcribe(
-    audio: UploadFile = File(...),
-    lang: Optional[str] = Form(None),
+    request: Request,
+    lang: Optional[str] = None,
 ):
     """
     Minimal hub STT API for MVP.
 
-    Accepts a WAV file (mono, 16kHz, 16-bit PCM) and returns `{ ok, text }`.
+    Accepts a raw WAV body (mono, 16kHz, 16-bit PCM) and returns `{ ok, text }`.
     """
     try:
         import vosk  # type: ignore
@@ -84,7 +83,11 @@ async def stt_transcribe(
 
     target = _resolve_lang(lang)
     model_path = _ensure_model(target)
-    pcm = _read_wav_mono16k(audio)
+    try:
+        body = await request.body()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"failed to read body: {exc}")
+    pcm = _read_wav_mono16k(body)
 
     try:
         model = vosk.Model(str(model_path))
@@ -100,4 +103,3 @@ async def stt_transcribe(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-
