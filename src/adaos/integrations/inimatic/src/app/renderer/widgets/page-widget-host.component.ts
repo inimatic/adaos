@@ -27,6 +27,8 @@ import { Subscription } from 'rxjs'
 import { DesktopWidgetsWidgetComponent } from './desktop-widgets.widget.component'
 import { ChatWidgetComponent } from './chat.widget.component'
 import { VoiceInputWidgetComponent } from './voice-input.widget.component'
+import { ListWidgetComponent } from './list.widget.component'
+import { FormWidgetComponent } from './form.widget.component'
 
 export const PAGE_WIDGET_REGISTRY: Record<WidgetType, Type<any>> = {
   'collection.grid': CollectionGridWidgetComponent,
@@ -38,6 +40,9 @@ export const PAGE_WIDGET_REGISTRY: Record<WidgetType, Type<any>> = {
   'feedback.statusBar': StatusBarWidgetComponent,
   'ui.chat': ChatWidgetComponent,
   'ui.voiceInput': VoiceInputWidgetComponent,
+  'ui.list': ListWidgetComponent,
+  'ui.form': FormWidgetComponent,
+  'ui.actions': CommandBarWidgetComponent,
   'item.textEditor': TextEditorWidgetComponent,
   'item.codeViewer': CodeViewerWidgetComponent,
   'item.details': DetailsWidgetComponent,

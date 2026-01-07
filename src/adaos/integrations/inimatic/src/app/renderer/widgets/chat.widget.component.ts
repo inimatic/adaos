@@ -9,13 +9,7 @@ import { WidgetConfig } from '../../runtime/page-schema.model'
 import { PageDataService } from '../../runtime/page-data.service'
 import { AdaosClient } from '../../core/adaos/adaos-client.service'
 import { YDocService } from '../../y/ydoc.service'
-
-type ChatMessage = {
-  id?: string
-  from?: string
-  text?: string
-  ts?: number
-}
+import { coerceChatState, WebIOChatMessage } from '../../runtime/webio-contracts'
 
 @Component({
   selector: 'ada-chat-widget',
@@ -105,7 +99,7 @@ type ChatMessage = {
 export class ChatWidgetComponent implements OnInit, OnDestroy {
   @Input() widget!: WidgetConfig
 
-  messages: Array<{ id: string; from: string; text: string; ts?: number }> = []
+  messages: WebIOChatMessage[] = []
   draft = ''
 
   alignRightFrom = 'user'
@@ -152,15 +146,7 @@ export class ChatWidgetComponent implements OnInit, OnDestroy {
     const stream = this.data.load<any>(this.widget?.dataSource)
     if (stream) {
       this.dataSub = stream.subscribe((value) => {
-        const list = Array.isArray(value?.messages) ? (value.messages as ChatMessage[]) : []
-        this.messages = list
-          .filter((m) => m && typeof m === "object" && typeof (m as any).text === 'string')
-          .map((m) => ({
-            id: String(m.id || ''),
-            from: String(m.from || ''),
-            text: String(m.text || ''),
-            ts: typeof m.ts === 'number' ? m.ts : undefined,
-          }))
+        this.messages = coerceChatState(value).messages
         this.maybeSpeakNew()
         setTimeout(() => {
           try {
