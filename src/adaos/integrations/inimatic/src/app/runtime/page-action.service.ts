@@ -4,7 +4,6 @@ import { ActionConfig } from './page-schema.model'
 import { PageStateService } from './page-state.service'
 import { AdaosClient } from '../core/adaos/adaos-client.service'
 import { YDocService } from '../y/ydoc.service'
-import { PageModalService } from './page-modal.service'
 
 export interface ActionContext {
   event?: any
@@ -17,8 +16,7 @@ export class PageActionService {
     private state: PageStateService,
     private adaos: AdaosClient,
     private toast: ToastController,
-    private ydoc: YDocService,
-    private modals: PageModalService
+    private ydoc: YDocService
   ) {}
 
   async handle(action: ActionConfig, ctx: ActionContext = {}): Promise<void> {
@@ -26,12 +24,6 @@ export class PageActionService {
     if (action.type === 'updateState') {
       const patch = this.resolveParams(action.params ?? {}, ctx)
       this.state.patch(patch)
-      return
-    }
-    if (action.type === 'openModal') {
-      const params = this.resolveParams(action.params ?? {}, ctx)
-      const modalId = params?.['modalId'] || params?.['id'] || action.target
-      await this.modals.openModalById(modalId)
       return
     }
     if (action.type === 'callSkill') {
