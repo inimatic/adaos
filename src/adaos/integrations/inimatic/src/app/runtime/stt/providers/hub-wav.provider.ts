@@ -143,7 +143,8 @@ export class HubWavSttProvider implements SttProvider {
         body: wav,
       })
       if (!resp.ok) {
-        throw new Error(`hub stt failed: ${resp.status}`)
+        const detail = await resp.text().catch(() => '')
+        throw new Error(`hub stt failed: ${resp.status} ${detail}`.trim())
       }
       const res = await resp.json()
       const text = String(res?.text || '').trim()
