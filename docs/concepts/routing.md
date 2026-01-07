@@ -39,6 +39,7 @@ For browser-driven webspaces we use dedicated “web IO” topics that the Route
 - Target selection:
   - default: RouterService resolves the destination from `_meta.webspace_id` (fallback: `payload.webspace_id`, else `default`)
   - broadcast: set `_meta.webspace_ids = [...]` to fan-out into multiple webspaces
+  - route table: set `_meta.route_id = '<id>'` and configure `data.routing.routes[<id>]` in the source webspace
 - Projection:
   - `io.out.chat.append` -> `data.voice_chat.messages`
   - `io.out.say` -> `data.tts.queue`

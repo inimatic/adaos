@@ -22,6 +22,8 @@ This means a skill can stay stateless and "routeless":
 - no explicit `_meta=...` in `chat_append()` / `say()` (unless you want to override)
 
 RouterService also supports broadcasting by setting `_meta.webspace_ids = ['w1', 'w2', ...]`.
+For dynamic runtime routing without changing skills, you can also set `_meta.route_id`
+and configure targets in Yjs: `data.routing.routes[route_id] = { webspace_ids: [...] }`.
 
 ## Voice (local mock)
 
