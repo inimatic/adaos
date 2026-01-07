@@ -64,10 +64,9 @@ def _mark_entry(entry: Dict[str, Any], *, source: str, dev: bool) -> Dict[str, A
     semantic "source" (which may already contain a YDoc path like "y:data/...").
     """
     data = dict(entry)
-    if "source" in data and data["source"]:
-        data["origin"] = source
-    else:
-        data["source"] = source
+    # Always keep provenance separate from semantic `source` paths used by
+    # widget renderers (e.g. metric tiles reading y:data/...).
+    data["origin"] = source
     data["dev"] = dev
     return data
 
