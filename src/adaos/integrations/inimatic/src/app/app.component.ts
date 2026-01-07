@@ -30,6 +30,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http'
 import { PairingService } from './runtime/pairing.service'
 import { IonRouterOutlet } from '@ionic/angular/standalone'
 import { TPipe } from './runtime/t.pipe'
+import { HttpErrorResponse } from '@angular/common/http'
 
 @Component({
 	selector: 'app-root',
@@ -59,6 +60,7 @@ export class AppComponent implements OnInit, OnDestroy {
 	private narrowMedia?: MediaQueryList
 	private narrowListener = () => this.applyNarrow()
 	isNarrow = false
+	private sessionInvalidated = false
 
 	constructor(
 		private plt: Platform,
@@ -98,7 +100,17 @@ export class AppComponent implements OnInit, OnDestroy {
 				return this.http.get(url, { responseType: 'text', headers }).pipe(
 					timeout(2000),
 					map(() => 'online' as const),
-					catchError(() => of('offline' as const)),
+					catchError((err) => {
+						// Root-proxy returns 401/403 when the stored session_jwt is expired/invalid.
+						try {
+							const httpErr = err as HttpErrorResponse
+							if ((httpErr?.status === 401 || httpErr?.status === 403) && !this.sessionInvalidated) {
+								this.sessionInvalidated = true
+								this.invalidateOwnerSessionAndReload()
+							}
+						} catch { }
+						return of('offline' as const)
+					}),
 				)
 			}),
 			startWith('checking' as const),
@@ -132,6 +144,22 @@ export class AppComponent implements OnInit, OnDestroy {
 		} catch {
 			return ''
 		}
+	}
+
+	private invalidateOwnerSessionAndReload(): void {
+		const keys = [
+			'adaos_web_session_jwt',
+			'adaos_web_sid',
+			'adaos_hub_id',
+		]
+		for (const key of keys) {
+			try {
+				localStorage.removeItem(key)
+			} catch { }
+		}
+		try {
+			location.reload()
+		} catch { }
 	}
 
 	ngOnDestroy(): void {
