@@ -95,10 +95,14 @@ export class DesktopWidgetsWidgetComponent implements OnInit, OnDestroy {
           cfg.area = this.widget.area
           if (!cfg.inputs || typeof cfg.inputs !== 'object') cfg.inputs = {}
           cfg.inputs = { ...cfg.inputs, dev: !!cfg.dev }
-          if (!cfg.dataSource && cfg.source) {
+          // Only treat `source` as a Yjs path when it actually looks like one.
+          // `source` can also be provenance (e.g. "skill:voice_chat_skill").
+          const source = typeof cfg.source === 'string' ? String(cfg.source) : ''
+          const looksLikeYPath = source.startsWith('y:') || source.startsWith('data/')
+          if (!cfg.dataSource && looksLikeYPath) {
             cfg.dataSource = {
               kind: 'y',
-              path: String(cfg.source).startsWith('y:') ? String(cfg.source).slice(2) : String(cfg.source),
+              path: source.startsWith('y:') ? source.slice(2) : source,
             }
           }
           return cfg as WidgetConfig
