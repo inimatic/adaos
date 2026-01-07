@@ -548,6 +548,18 @@ class WebspaceScenarioRuntime:
             ui_map.set(txn, "application", app_with_modals)
             data_map.set(txn, "catalog", {"apps": merged_apps, "widgets": merged_widgets})
             data_map.set(txn, "installed", filtered_installed)
+            # Ensure routing config scaffold exists for runtime-configured routing
+            # (RouterService can consult data.routing.routes via _meta.route_id).
+            try:
+                routing_current = data_map.get("routing")
+                routing_dict: Dict[str, Any] = routing_current if isinstance(routing_current, dict) else {}
+                routes = routing_dict.get("routes")
+                if not isinstance(routes, dict):
+                    routes = {}
+                routing_dict = {**routing_dict, "routes": routes}
+                data_map.set(txn, "routing", routing_dict)
+            except Exception:
+                pass
             registry_map.set(txn, "merged", merged_registry)
 
         try:

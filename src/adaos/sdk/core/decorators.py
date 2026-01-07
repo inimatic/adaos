@@ -7,6 +7,7 @@ from adaos.sdk.data.bus import on, emit
 from adaos.sdk.data.context import set_current_skill, clear_current_skill
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkRuntimeNotInitialized
+from adaos.sdk.io.context import io_meta
 
 # публичные реестры (стабильные имена)
 subscriptions: List[Tuple[str, Callable]] = []
@@ -59,6 +60,11 @@ async def register_subscriptions():
             async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic):
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
+                    payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
+                    meta = payload.get("_meta") if isinstance(payload, dict) else None
+                    if isinstance(meta, dict):
+                        with io_meta(meta):
+                            return await _fn(evt)
                     return await _fn(evt)
                 finally:
                     if pushed:
@@ -69,7 +75,13 @@ async def register_subscriptions():
             async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic):
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
-                    _fn(evt)
+                    payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
+                    meta = payload.get("_meta") if isinstance(payload, dict) else None
+                    if isinstance(meta, dict):
+                        with io_meta(meta):
+                            _fn(evt)
+                    else:
+                        _fn(evt)
                 finally:
                     if pushed:
                         clear_current_skill()
