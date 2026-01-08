@@ -330,15 +330,30 @@ export class AppComponent implements OnInit, OnDestroy {
 	}
 
 	async onClickYjsReload(): Promise<void> {
+		if (!this.isAuthenticated) return
+		const ws = this.ydoc.getWebspaceId() || 'default'
+		// Backend currently treats reload/reset identically; keep a single
+		// one-click "refresh" action to save UI space.
+		await this.runWebspaceYjsAction('desktop.webspace.reset', ws)
+	}
+
+	private async runWebspaceYjsAction(
+		command: 'desktop.webspace.reload' | 'desktop.webspace.reset',
+		webspaceId: string,
+	): Promise<void> {
 		try {
-			const ws = this.ydoc.getWebspaceId()
-			await this.adaos.post('/api/yjs/reload', {
-				webspace_id: ws || 'default',
-			}).toPromise()
+			await this.adaos.sendEventsCommand(command, { webspace_id: webspaceId })
 		} catch (err) {
 			// eslint-disable-next-line no-console
-			console.warn('YJS reload failed', err)
+			console.warn(`${command} failed`, err)
+			return
 		}
+		try {
+			await this.ydoc.clearStorage()
+		} catch { }
+		try {
+			location.reload()
+		} catch { }
 	}
 
 	onClickLogout(): void {

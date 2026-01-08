@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.webui.v1",
+  "title": "AdaOS Skill WebUI Manifest (webui.json)",
+  "description": "Declarative UI contributions for a skill. Merged by WebspaceScenarioRuntime into ui.application / data.catalog / registry.merged.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string", "description": "Optional JSON Schema reference for editors/validators." },
+
+    "catalog": { "$ref": "#/$defs/catalog" },
+    "apps": { "$ref": "#/$defs/catalogApps" },
+    "widgets": { "$ref": "#/$defs/catalogWidgets" },
+
+    "registry": { "$ref": "#/$defs/registry" },
+    "ydoc_defaults": {
+      "description": "Default Yjs values applied once per webspace. Keys are 'root/key' paths (e.g. 'data/voice_chat').",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "contributions": {
+      "description": "Declarative contributions to extension points (e.g. auto-install apps/widgets).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/contribution" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier; may include ':' for synthetic ids (e.g. 'scenario:<id>')."
+    },
+
+    "catalog": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "apps": { "$ref": "#/$defs/catalogApps" },
+        "widgets": { "$ref": "#/$defs/catalogWidgets" }
+      }
+    },
+    "catalogApps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/app" }
+    },
+    "catalogWidgets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/widgetCatalogEntry" }
+    },
+
+    "app": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" },
+        "icon": { "type": "string", "description": "Ionicon name (e.g. 'mic-outline')." },
+        "launchModal": { "$ref": "#/$defs/id" },
+        "url": { "type": "string" }
+      }
+    },
+
+    "widgetCatalogEntry": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "type": "string", "minLength": 1, "description": "Widget type (e.g. 'ui.chat', 'ui.voiceInput')." },
+        "title": { "type": "string" },
+        "area": { "type": "string", "description": "Optional default area when pinned as a widget." },
+        "dataSource": { "$ref": "#/$defs/dataSource" },
+        "inputs": { "type": "object", "additionalProperties": true },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } }
+      }
+    },
+
+    "registry": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "modals": {
+          "description": "Modal registry. Can be a map {id: modalDef} or an array of modal ids (legacy).",
+          "oneOf": [
+            { "$ref": "#/$defs/modalMap" },
+            { "type": "array", "items": { "$ref": "#/$defs/id" } }
+          ]
+        },
+        "widgets": {
+          "description": "Widget registry. Can be a map {id: widgetDef} or an array of widget ids (legacy).",
+          "oneOf": [
+            { "$ref": "#/$defs/widgetRegistryMap" },
+            { "type": "array", "items": { "$ref": "#/$defs/id" } }
+          ]
+        }
+      }
+    },
+
+    "modalMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/modalDef" }
+    },
+    "modalDef": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "title": { "type": "string" },
+        "schema": { "$ref": "#/$defs/pageSchema" }
+      }
+    },
+
+    "widgetRegistryMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/widgetCatalogEntry" }
+    },
+
+    "pageSchema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "layout", "widgets"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "layout": { "$ref": "#/$defs/layout" },
+        "widgets": { "type": "array", "items": { "$ref": "#/$defs/widgetConfig" } }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "areas"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "areas": { "type": "array", "items": { "$ref": "#/$defs/area" } }
+      }
+    },
+    "area": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "role": { "type": "string" }
+      }
+    },
+
+    "widgetConfig": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "type", "area"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "type": "string", "minLength": 1 },
+        "area": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" },
+        "dataSource": { "$ref": "#/$defs/dataSource" },
+        "inputs": { "type": "object", "additionalProperties": true },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } }
+      }
+    },
+
+    "dataSource": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["y"] },
+        "path": { "type": "string" },
+        "transform": { "type": "string" }
+      }
+    },
+
+    "action": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "on": { "type": "string", "description": "Trigger name (e.g. 'select')." },
+        "type": { "type": "string", "minLength": 1, "description": "Action type (e.g. 'callHost')." },
+        "target": { "type": "string" },
+        "params": { "type": "object", "additionalProperties": true }
+      }
+    },
+
+    "contribution": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["extensionPoint", "type", "id"],
+      "properties": {
+        "extensionPoint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Known: 'desktop.apps' | 'desktop.widgets'."
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Known: 'app' | 'widget'."
+        },
+        "id": { "$ref": "#/$defs/id" },
+        "autoInstall": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}
+
