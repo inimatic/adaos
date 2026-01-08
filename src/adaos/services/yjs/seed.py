@@ -54,8 +54,6 @@ SEED: dict = {
                                     {"id": "apps", "label": "Apps"},
                                     {"id": "widgets", "label": "Widgets"},
                                     {"id": "workspace-manager", "label": "Workspaces"},
-                                    {"id": "yjs-reload", "label": "YJS reload"},
-                                    {"id": "yjs-reset", "label": "YJS reset"},
                                 ]
                             },
                             "actions": [
@@ -73,16 +71,6 @@ SEED: dict = {
                                     "on": "click:workspace-manager",
                                     "type": "openModal",
                                     "params": {"modalId": "workspace_manager"},
-                                },
-                                {
-                                    "on": "click:yjs-reload",
-                                    "type": "callHost",
-                                    "target": "desktop.webspace.reload",
-                                },
-                                {
-                                    "on": "click:yjs-reset",
-                                    "type": "callHost",
-                                    "target": "desktop.webspace.reset",
                                 },
                             ],
                         },
@@ -207,4 +195,3 @@ SEED: dict = {
         "installed": {"apps": [], "widgets": []},
     },
 }
-

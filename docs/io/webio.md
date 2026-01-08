@@ -71,6 +71,23 @@ These events are routed purely by `_meta.webspace_id`, so different devices/webs
 * The merged catalog already exposes DEV badges, so no additional filtering happens on the client.
 * Weather modal directly edits `data.weather.current.city`; the hub updates the rest of the fields asynchronously.
 
+## `webui.json` schema
+
+AdaOS includes a JSON Schema for `webui.json` so that:
+
+* `adaos ... skill validate` can catch structural mistakes early
+* IDEs and LLM programmers can follow a stable contract when generating UI declaratives
+
+Schema file: `src/adaos/abi/webui.v1.schema.json`
+
+Recommended to add this to the top of every `webui.json`:
+
+```json
+{
+  "$schema": "../../../src/adaos/abi/webui.v1.schema.json"
+}
+```
+
 ## Simplifications & Limitations
 
 * Switching webspaces currently reloads the page to keep the Y.Doc tree simple. In future iterations the YDocService can swap docs without a refresh.

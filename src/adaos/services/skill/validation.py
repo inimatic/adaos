@@ -8,10 +8,12 @@ from typing import Any, Dict, List, Optional
 import copy
 import yaml
 from jsonschema import Draft202012Validator, ValidationError
+import importlib.resources as ir
 
 from adaos.services.agent_context import AgentContext, get_ctx
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
+WEBUI_SCHEMA_RES = ("adaos.abi", "webui.v1.schema.json")
 
 
 @dataclass
@@ -30,6 +32,15 @@ class ValidationReport:
 
 def _load_schema() -> Dict[str, Any]:
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def _load_webui_schema() -> Dict[str, Any]:
+    try:
+        res = ir.files(WEBUI_SCHEMA_RES[0]) / WEBUI_SCHEMA_RES[1]
+        with ir.as_file(res) as fp:
+            return json.loads(Path(fp).read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"failed to load WebUI schema: {exc}")
 
 
 def _read_yaml(path: Path) -> Dict[str, Any]:
@@ -103,6 +114,20 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
         for i, v in enumerate(arr):
             if not isinstance(v, str) or not v.strip():
                 issues.append(Issue("error", f"events.{key}.invalid", f"events.{key}[{i}] must be non-empty string", f"events.{key}[{i}]"))
+
+    # webui.json (optional): validate declarative WebUI contributions.
+    webui = skill_dir / "webui.json"
+    if webui.exists():
+        try:
+            raw = json.loads(webui.read_text(encoding="utf-8-sig") or "{}")
+            if not isinstance(raw, dict):
+                issues.append(Issue("error", "webui.invalid_type", "webui.json must be a JSON object", "webui.json"))
+            else:
+                Draft202012Validator(_load_webui_schema()).validate(raw)
+        except ValidationError as e:
+            issues.append(Issue("error", "webui.schema.invalid", f"webui.json schema violation: {e.message}", "webui.json"))
+        except Exception as e:
+            issues.append(Issue("error", "webui.read.failed", f"failed to read/parse webui.json: {e}", "webui.json"))
     return issues
 
 
