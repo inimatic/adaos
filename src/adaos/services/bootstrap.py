@@ -24,6 +24,7 @@ from adaos.services import yjs as _y_store  # ensure YStore subscriptions are re
 from adaos.services.scenario import webspace_runtime as _scenario_ws_runtime  # ensure core scenario subscriptions
 from adaos.services.scenario import workflow_runtime as _scenario_workflow_runtime  # ensure scenario workflow subscriptions
 from adaos.services import weather as _weather_services  # ensure weather observers
+from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscriptions
 from adaos.integrations.telegram.sender import TelegramSender
 from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
 from adaos.services.chat_io import telemetry as tm
