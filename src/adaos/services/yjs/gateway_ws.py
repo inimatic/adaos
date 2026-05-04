@@ -119,6 +119,8 @@ def _env_flag(name: str, default: bool = False) -> bool:
 _IDLE_ROOM_EVICT_SEC = _env_float("ADAOS_YJS_IDLE_ROOM_EVICT_SEC", 60.0, minimum=0.0)
 _YROOM_DIAG_ENABLED = _env_flag("ADAOS_YJS_ROOM_DIAG_ENABLED", True)
 _YWS_ROOM_READY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_READY_TIMEOUT_S", 12.0, minimum=0.0)
+_YWS_ROOM_READY_MAX_S = _env_float("ADAOS_YWS_ROOM_READY_MAX_S", 45.0, minimum=0.0)
+_YWS_ROOM_READY_POLL_S = _env_float("ADAOS_YWS_ROOM_READY_POLL_S", 1.0, minimum=0.25)
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
 _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC", 5.0, minimum=0.0)
 _YROOM_DIAG_BUFFER_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_BUFFER_WARN", 32, minimum=1)
@@ -126,6 +128,11 @@ _YROOM_DIAG_PENDING_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_PENDING_WARN", 32, mini
 _YROOM_DIAG_UPDATE_WARN_BYTES = _env_int("ADAOS_YJS_ROOM_DIAG_UPDATE_WARN_BYTES", 256 * 1024, minimum=1)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
 _EMPTY_Y_UPDATE = b"\x00\x00"
+
+
+def _shorten_webspace_id(value: str | None) -> str:
+    raw = str(value or "").strip()
+    return raw if raw else "default"
 
 
 def _is_empty_y_update(update: bytes | bytearray | memoryview | None) -> bool:
@@ -2101,6 +2108,78 @@ async def _update_device_presence(webspace_id: str, device_id: str) -> None:
             devices.set(txn, device_id, node)
 
 
+async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
+    """
+    Resolve YJS room with bounded waiting and cache fallback.
+
+    We keep waiting long enough for legitimate warm bootstrap but avoid hard
+    12-second reconnect loops from every connection when startup has stalled.
+    """
+    webspace = _shorten_webspace_id(webspace_id)
+    timeout_s = max(float(_YWS_ROOM_READY_TIMEOUT_S), 0.0)
+    max_wait_s = max(float(_YWS_ROOM_READY_MAX_S), 0.0)
+    poll_s = max(float(_YWS_ROOM_READY_POLL_S), 0.25)
+
+    wait_task: asyncio.Task[YRoom] = asyncio.create_task(y_server.get_room(webspace))
+    started = time.perf_counter()
+    attempts = 0
+
+    if max_wait_s <= 0.0:
+        max_wait_s = timeout_s if timeout_s > 0.0 else 0.0
+
+    try:
+        while True:
+            attempts += 1
+            if timeout_s <= 0.0:
+                return await wait_task
+
+            remaining_for_wait = max(max_wait_s - (time.perf_counter() - started), 0.0)
+            if remaining_for_wait <= 0.0:
+                raise asyncio.TimeoutError("room wait timeout exceeded")
+
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(wait_task),
+                    timeout=min(timeout_s, remaining_for_wait),
+                )
+            except asyncio.TimeoutError:
+                pass
+
+            elapsed = time.perf_counter() - started
+            room = getattr(y_server, "rooms", {}).get(webspace)
+            if room is not None:
+                _ylog.info(
+                    "yws room cache hit after timeout webspace=%s dev=%s attempt=%s waited_s=%.3f",
+                    webspace,
+                    dev_id,
+                    attempts,
+                    elapsed,
+                )
+                if not wait_task.done():
+                    _ylog.debug("yws room cache hit but bootstrap task still running webspace=%s dev=%s", webspace, dev_id)
+                return room
+
+            if remaining_for_wait <= 0.0:
+                raise asyncio.TimeoutError("room wait timeout exceeded")
+
+            _ylog.warning(
+                "yws room ready timeout webspace=%s dev=%s timeout_s=%.3f waited_s=%.3f",
+                webspace,
+                dev_id,
+                timeout_s,
+                elapsed,
+            )
+            await asyncio.sleep(min(poll_s, remaining_for_wait))
+    except asyncio.TimeoutError:
+        if wait_task.done():
+            try:
+                room = wait_task.result()
+            except Exception:
+                raise
+            return room
+        raise
+
+
 async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     """
     Internal Yjs sync handler used by both /yws and /yws/<room> routes.
@@ -2132,33 +2211,15 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     await start_y_server()
 
     adapter: YWebsocket = FastAPIWebsocketAdapter(websocket, path=webspace_id)
-    room_task = None
     try:
-        if _YWS_ROOM_READY_TIMEOUT_S > 0:
-            room_task = asyncio.create_task(y_server.get_room(webspace_id))
-            try:
-                room_ref = await asyncio.wait_for(room_task, timeout=_YWS_ROOM_READY_TIMEOUT_S)
-            except asyncio.TimeoutError:
-                _ylog.warning(
-                    "yws room ready timeout webspace=%s dev=%s timeout_s=%.3f",
-                    webspace_id,
-                    dev_id,
-                    _YWS_ROOM_READY_TIMEOUT_S,
-                )
-                room_ref = await room_task
-                _ylog.info(
-                    "yws room ready after timeout for webspace=%s dev=%s",
-                    webspace_id,
-                    dev_id,
-                )
-        else:
-            room_ref = await y_server.get_room(webspace_id)
+        room_ref = await _acquire_yws_room(webspace_id, dev_id)
     except asyncio.TimeoutError:
         _ylog.warning(
-            "yws room ready timeout webspace=%s dev=%s timeout_s=%.3f",
+            "yws room ready timeout webspace=%s dev=%s timeout_s=%.3f max_wait_s=%.3f",
             webspace_id,
             dev_id,
             _YWS_ROOM_READY_TIMEOUT_S,
+            _YWS_ROOM_READY_MAX_S,
         )
         try:
             await websocket.close(code=1013, reason="room_ready_timeout")

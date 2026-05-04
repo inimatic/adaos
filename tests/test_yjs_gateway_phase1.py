@@ -876,6 +876,7 @@ def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_MAX_S", 0.01)
     events: list[tuple[str, dict[str, object] | None]] = []
 
     class _FakeWebSocket:
@@ -910,6 +911,37 @@ def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     assert gateway_module._TRANSPORT_STATE["yws"]["active_connections"] == 0
     assert gateway_module._ACTIVE_YWS_CONNECTIONS == {}
     assert gateway_module._ACTIVE_YWS_CLIENTS == {}
+
+
+def test_acquire_yws_room_uses_cache_when_bootstrap_lags(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_MAX_S", 0.05)
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_POLL_S", 0.005)
+
+    class _FakeRoom:
+        pass
+
+    room = _FakeRoom()
+    original_rooms = gateway_module.y_server.rooms
+    gateway_module.y_server.rooms = {}
+
+    async def _fake_get_room(_name: str) -> object:
+        await asyncio.sleep(0.2)
+        return room
+
+    async def _exercise() -> object:
+        task = asyncio.create_task(gateway_module._acquire_yws_room("desktop", "dev-cache"))
+        await asyncio.sleep(0.015)
+        gateway_module.y_server.rooms["desktop"] = room
+        return await task
+
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _fake_get_room)
+    try:
+        resolved = asyncio.run(_exercise())
+    finally:
+        gateway_module.y_server.rooms = original_rooms
+
+    assert resolved is room
 
 
 def test_yws_impl_cleans_up_after_first_message_timeout(monkeypatch) -> None:
