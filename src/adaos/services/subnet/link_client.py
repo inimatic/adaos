@@ -74,6 +74,8 @@ class MemberLinkClient:
         self._last_control_requested_at = 0.0
         self._last_control_completed_at = 0.0
         self._last_forced_snapshot_at = 0.0
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._snapshot_task: asyncio.Task | None = None
 
     @staticmethod
     def _pong_stale_after_s() -> float:
@@ -127,7 +129,7 @@ class MemberLinkClient:
             "updated_at": now,
         }
 
-    def _local_node_snapshot(self) -> dict[str, Any]:
+    def _compose_local_node_snapshot(self, *, desktop_catalog: dict[str, Any]) -> dict[str, Any]:
         conf = get_ctx().config
         lifecycle = runtime_lifecycle_snapshot()
         update_status = read_core_update_status() or {}
@@ -137,12 +139,6 @@ class MemberLinkClient:
         node_names = normalize_node_names(getattr(getattr(conf, "node_settings", None), "node_names", []))
         now = time.time()
         node_state = str(lifecycle.get("node_state") or "ready")
-        try:
-            from adaos.services.scenario.webspace_runtime import build_local_desktop_catalog_snapshot
-
-            desktop_catalog = build_local_desktop_catalog_snapshot(mode="workspace")
-        except Exception:
-            desktop_catalog = {"apps": [], "widgets": []}
         return {
             "captured_at": now,
             "node_id": str(getattr(conf, "node_id", "") or ""),
@@ -210,13 +206,65 @@ class MemberLinkClient:
             },
         }
 
-    def _queue_node_snapshot(self) -> None:
+    def _local_node_snapshot(self) -> dict[str, Any]:
         try:
-            self._last_forced_snapshot_at = time.time()
+            from adaos.services.scenario.webspace_runtime import build_local_desktop_catalog_snapshot
+
+            desktop_catalog = build_local_desktop_catalog_snapshot(mode="workspace")
+        except Exception:
+            desktop_catalog = {"apps": [], "widgets": []}
+        return self._compose_local_node_snapshot(desktop_catalog=desktop_catalog)
+
+    async def _local_node_snapshot_async(self) -> dict[str, Any]:
+        try:
+            from adaos.services.scenario.webspace_runtime import build_local_desktop_catalog_snapshot_async
+
+            desktop_catalog = await build_local_desktop_catalog_snapshot_async(mode="workspace")
+        except Exception:
+            desktop_catalog = {"apps": [], "widgets": []}
+        return self._compose_local_node_snapshot(desktop_catalog=desktop_catalog)
+
+    def _queue_node_snapshot(self) -> None:
+        self._last_forced_snapshot_at = time.time()
+        loop = self._loop
+        if loop and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(self._ensure_snapshot_task)
+                return
+            except Exception:
+                pass
+        try:
             self._out_q.put_nowait(
                 {
                     "t": "node.snapshot",
                     "snapshot": self._local_node_snapshot(),
+                    "ts": time.time(),
+                }
+            )
+        except Exception:
+            return
+
+    def _ensure_snapshot_task(self) -> None:
+        if self._snapshot_task is not None and not self._snapshot_task.done():
+            return
+        self._snapshot_task = asyncio.create_task(
+            self._enqueue_node_snapshot_async(),
+            name="subnet-link-node-snapshot",
+        )
+
+    async def _enqueue_node_snapshot_async(self) -> None:
+        try:
+            snapshot = await self._local_node_snapshot_async()
+        except Exception:
+            try:
+                snapshot = self._local_node_snapshot()
+            except Exception:
+                return
+        try:
+            self._out_q.put_nowait(
+                {
+                    "t": "node.snapshot",
+                    "snapshot": snapshot,
                     "ts": time.time(),
                 }
             )
@@ -270,6 +318,16 @@ class MemberLinkClient:
         self._task = None
         self._connected.clear()
         self._connected_at = 0.0
+        self._loop = None
+        if self._snapshot_task and not self._snapshot_task.done():
+            self._snapshot_task.cancel()
+            try:
+                await self._snapshot_task
+            except asyncio.CancelledError:
+                pass
+            except BaseException:
+                pass
+        self._snapshot_task = None
         try:
             if self._remove_ystore_listener:
                 self._remove_ystore_listener()
@@ -364,6 +422,7 @@ class MemberLinkClient:
         if not conf.hub_url:
             _log.warning("subnet link: hub_url is not set for member")
             return
+        self._loop = asyncio.get_running_loop()
 
         self._install_ystore_listener()
         self._ensure_bus_subscription()
@@ -414,11 +473,12 @@ class MemberLinkClient:
                     except Exception:
                         pass
                     try:
+                        snapshot = await self._local_node_snapshot_async()
                         await ws.send(
                             json.dumps(
                                 {
                                     "t": "node.snapshot",
-                                    "snapshot": self._local_node_snapshot(),
+                                    "snapshot": snapshot,
                                     "ts": time.time(),
                                 }
                             )

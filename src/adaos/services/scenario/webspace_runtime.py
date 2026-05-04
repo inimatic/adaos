@@ -35,7 +35,7 @@ from adaos.services.yjs.bootstrap import ensure_webspace_seeded_from_scenario
 from adaos.services.yjs.seed import SEED
 from adaos.services.eventbus import emit
 from adaos.sdk.core.decorators import subscribe
-from .node_data_scope import node_scope_data_path
+from .node_data_scope import local_unscoped_data_path, node_scope_data_path
 from .workflow_runtime import ScenarioWorkflowRuntime
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
@@ -519,6 +519,12 @@ def build_local_desktop_catalog_snapshot(*, mode: str = "workspace") -> dict[str
     return _overlay_current_ydoc_defaults(snapshot, webspace_id=default_webspace_id())
 
 
+async def build_local_desktop_catalog_snapshot_async(*, mode: str = "workspace") -> dict[str, Any]:
+    runtime = WebspaceScenarioRuntime()
+    snapshot = _local_catalog_decl_entries(runtime._collect_skill_decls(mode=mode))
+    return await _overlay_current_ydoc_defaults_async(snapshot, webspace_id=default_webspace_id())
+
+
 _YDOC_PATH_MISSING = object()
 
 
@@ -537,18 +543,92 @@ def _read_current_ydoc_path_value(ydoc: Any, path: str) -> Any:
     return _clone_json_like(current)
 
 
+def _read_current_ydoc_path_value_with_local_node_fallback(ydoc: Any, path: str) -> Any:
+    current = _read_current_ydoc_path_value(ydoc, path)
+    if current is not _YDOC_PATH_MISSING:
+        return current
+    local_path = local_unscoped_data_path(path, _local_node_id())
+    if not local_path or local_path == path:
+        return _YDOC_PATH_MISSING
+    return _read_current_ydoc_path_value(ydoc, local_path)
+
+
+def _resolve_live_room_ydoc(webspace_id: str) -> Any | None:
+    try:
+        from adaos.services.yjs.gateway import y_server  # pylint: disable=import-outside-toplevel
+    except Exception:
+        return None
+    room = getattr(y_server, "rooms", {}).get(str(webspace_id or "").strip())
+    ydoc = getattr(room, "ydoc", None)
+    return ydoc if ydoc is not None else None
+
+
+def _sync_ydoc_read_allowed() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return True
+    return False
+
+
 def _overlay_current_ydoc_defaults(snapshot: dict[str, Any], *, webspace_id: str) -> dict[str, Any]:
     defaults = snapshot.get("ydoc_defaults") if isinstance(snapshot.get("ydoc_defaults"), dict) else {}
     if not defaults:
         return snapshot
+    live_ydoc = _resolve_live_room_ydoc(webspace_id)
+    pending_paths = list(defaults.keys())
+    if live_ydoc is not None:
+        remaining: list[str] = []
+        for path in pending_paths:
+            live_value = _read_current_ydoc_path_value_with_local_node_fallback(live_ydoc, str(path or ""))
+            if live_value is _YDOC_PATH_MISSING:
+                remaining.append(str(path))
+                continue
+            defaults[str(path)] = live_value
+        pending_paths = remaining
+    if not pending_paths or not _sync_ydoc_read_allowed():
+        snapshot["ydoc_defaults"] = defaults
+        return snapshot
     try:
         with get_ydoc(webspace_id) as ydoc:
-            for path in list(defaults.keys()):
-                live_value = _read_current_ydoc_path_value(ydoc, str(path or ""))
+            for path in pending_paths:
+                live_value = _read_current_ydoc_path_value_with_local_node_fallback(ydoc, str(path or ""))
                 if live_value is _YDOC_PATH_MISSING:
                     continue
                 defaults[str(path)] = live_value
     except Exception:
+        return snapshot
+    snapshot["ydoc_defaults"] = defaults
+    return snapshot
+
+
+async def _overlay_current_ydoc_defaults_async(snapshot: dict[str, Any], *, webspace_id: str) -> dict[str, Any]:
+    defaults = snapshot.get("ydoc_defaults") if isinstance(snapshot.get("ydoc_defaults"), dict) else {}
+    if not defaults:
+        return snapshot
+    live_ydoc = _resolve_live_room_ydoc(webspace_id)
+    pending_paths = list(defaults.keys())
+    if live_ydoc is not None:
+        remaining: list[str] = []
+        for path in pending_paths:
+            live_value = _read_current_ydoc_path_value_with_local_node_fallback(live_ydoc, str(path or ""))
+            if live_value is _YDOC_PATH_MISSING:
+                remaining.append(str(path))
+                continue
+            defaults[str(path)] = live_value
+        pending_paths = remaining
+    if not pending_paths:
+        snapshot["ydoc_defaults"] = defaults
+        return snapshot
+    try:
+        async with async_read_ydoc(webspace_id) as ydoc:
+            for path in pending_paths:
+                live_value = _read_current_ydoc_path_value_with_local_node_fallback(ydoc, str(path or ""))
+                if live_value is _YDOC_PATH_MISSING:
+                    continue
+                defaults[str(path)] = live_value
+    except Exception:
+        snapshot["ydoc_defaults"] = defaults
         return snapshot
     snapshot["ydoc_defaults"] = defaults
     return snapshot

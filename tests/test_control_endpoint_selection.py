@@ -413,3 +413,29 @@ async def test_member_link_ping_loop_exits_when_pong_goes_stale(monkeypatch) -> 
     await client._ping_loop(ws)
 
     assert ws.sent == [json.dumps({"t": "ping", "ts": 110.0})]
+
+
+@pytest.mark.asyncio
+async def test_member_link_queue_node_snapshot_prefers_async_snapshot_builder(monkeypatch) -> None:
+    client = MemberLinkClient()
+    client._loop = asyncio.get_running_loop()
+
+    async def _fake_snapshot_async() -> dict[str, object]:
+        await asyncio.sleep(0)
+        return {"mode": "async"}
+
+    monkeypatch.setattr(client, "_local_node_snapshot_async", _fake_snapshot_async)
+    monkeypatch.setattr(
+        client,
+        "_local_node_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("sync snapshot should not run while the event loop is active")),
+    )
+
+    client._queue_node_snapshot()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    msg = await asyncio.wait_for(client._out_q.get(), timeout=1.0)
+
+    assert msg["t"] == "node.snapshot"
+    assert msg["snapshot"] == {"mode": "async"}

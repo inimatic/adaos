@@ -1997,6 +1997,40 @@ def test_runtime_self_heal_decision_restarts_after_listener_loss_timeout(monkeyp
     assert payload["runtime_port"] == 8778
 
 
+def test_runtime_self_heal_decision_respects_listener_startup_grace(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 32123
+        args = ["python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()
+    manager._desired_running = True
+    manager._last_start_at = 100.0
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
+    monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: False)
+    monkeypatch.setattr(supervisor, "_runtime_listener_restart_timeout_sec", lambda: 45.0)
+    monkeypatch.setattr(supervisor, "_runtime_listener_startup_grace_sec", lambda: 90.0)
+
+    assert manager._runtime_self_heal_decision(now=120.0) is None
+    assert manager._runtime_unhealthy_kind == "listener_lost"
+    assert manager._runtime_unhealthy_since == 120.0
+    assert manager._runtime_self_heal_decision(now=160.0) is None
+    assert manager._runtime_self_heal_decision(now=189.0) is None
+
+    payload = manager._runtime_self_heal_decision(now=191.0)
+
+    assert payload is not None
+    assert payload["reason"] == "supervisor.runtime.listener_lost"
+    assert payload["runtime_port"] == 8778
+
+
 def test_runtime_self_heal_decision_restarts_after_api_timeout(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
