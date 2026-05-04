@@ -123,6 +123,18 @@ def test_build_local_desktop_catalog_snapshot_prefers_live_ydoc_values_over_decl
         def items(self):
             return self._data.items()
 
+        def items(self):
+            return self._data.items()
+
+        def items(self):
+            return self._data.items()
+
+        def items(self):
+            return self._data.items()
+
+        def items(self):
+            return self._data.items()
+
     class _YDoc:
         def __init__(self, data):
             self._data = data
@@ -165,6 +177,323 @@ def test_build_local_desktop_catalog_snapshot_prefers_live_ydoc_values_over_decl
         "value": "succeeded",
         "subtitle": "slot B | 2ac1fa3",
         "description": "runtime boot validated on slot B",
+    }
+
+
+def test_build_local_desktop_catalog_snapshot_reads_node_scoped_defaults_from_local_unscoped_skill_projection(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: SimpleNamespace())
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Node 1",
+            "node_compact_label": "N1",
+            "node_index": 1,
+            "node_color": "#F28E2B",
+        },
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="member", node_id="node-1", node_settings=SimpleNamespace(node_names=[])),
+    )
+
+    def _fake_collect(self, mode: str = "mixed") -> list[dict[str, object]]:  # noqa: ARG001
+        return [
+            {
+                "skill": "infrastate_skill",
+                "space": "default",
+                "apps": [],
+                "widgets": [],
+                "ydoc_defaults": {
+                    "data/infrastate": {
+                        "summary": {
+                            "label": "Core update",
+                            "value": "idle",
+                            "subtitle": "slot --",
+                            "description": "No update in progress",
+                        },
+                        "update_actions": [
+                            {
+                                "id": "marketplace",
+                                "title": "Marketplace",
+                            }
+                        ],
+                    }
+                },
+            }
+        ]
+
+    class _Map:
+        def __init__(self, data):
+            self._data = data
+
+        def get(self, key):
+            value = self._data.get(key)
+            if isinstance(value, dict):
+                return _Map(value)
+            return value
+
+        def items(self):
+            return self._data.items()
+
+    class _YDoc:
+        def __init__(self, data):
+            self._data = data
+
+        def get_map(self, key):
+            value = self._data.get(key, {})
+            return _Map(value if isinstance(value, dict) else {})
+
+    class _CtxMgr:
+        def __enter__(self):
+            return _YDoc(
+                {
+                    "data": {
+                        "infrastate": {
+                            "summary": {
+                                "label": "Core update",
+                                "value": "validated",
+                                "subtitle": "slot A | c8d43f5",
+                                "description": "runtime boot validated on slot A; root promotion pending",
+                            },
+                            "update_actions": [
+                                {
+                                    "id": "marketplace",
+                                    "title": "Marketplace",
+                                },
+                                {
+                                    "id": "start_update",
+                                    "title": "Start update",
+                                },
+                            ],
+                        }
+                    }
+                }
+            )
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_collect_skill_decls", _fake_collect)
+    monkeypatch.setattr(webspace_runtime_module, "get_ydoc", lambda _webspace_id: _CtxMgr())
+
+    snapshot = webspace_runtime_module.build_local_desktop_catalog_snapshot()
+
+    assert snapshot["ydoc_defaults"]["data/nodes/node-1/infrastate"] == {
+        "summary": {
+            "label": "Core update",
+            "value": "validated",
+            "subtitle": "slot A | c8d43f5",
+            "description": "runtime boot validated on slot A; root promotion pending",
+        },
+        "update_actions": [
+            {
+                "id": "marketplace",
+                "title": "Marketplace",
+            },
+            {
+                "id": "start_update",
+                "title": "Start update",
+            },
+        ],
+    }
+
+
+def test_build_local_desktop_catalog_snapshot_prefers_live_room_doc_without_sync_get_ydoc(monkeypatch) -> None:
+    monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: SimpleNamespace())
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Node 1",
+            "node_compact_label": "N1",
+            "node_index": 1,
+            "node_color": "#F28E2B",
+        },
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="member", node_id="node-1", node_settings=SimpleNamespace(node_names=[])),
+    )
+
+    def _fake_collect(self, mode: str = "mixed") -> list[dict[str, object]]:  # noqa: ARG001
+        return [
+            {
+                "skill": "infrastate_skill",
+                "space": "default",
+                "apps": [],
+                "widgets": [],
+                "ydoc_defaults": {
+                    "data/infrastate": {
+                        "summary": {
+                            "label": "Core update",
+                            "value": "idle",
+                            "subtitle": "slot --",
+                            "description": "No update in progress",
+                        }
+                    }
+                },
+            }
+        ]
+
+    class _Map:
+        def __init__(self, data):
+            self._data = data
+
+        def get(self, key):
+            value = self._data.get(key)
+            if isinstance(value, dict):
+                return _Map(value)
+            return value
+
+        def items(self):
+            return self._data.items()
+
+    class _YDoc:
+        def __init__(self, data):
+            self._data = data
+
+        def get_map(self, key):
+            value = self._data.get(key, {})
+            return _Map(value if isinstance(value, dict) else {})
+
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_collect_skill_decls", _fake_collect)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_resolve_live_room_ydoc",
+        lambda _webspace_id: _YDoc(
+            {
+                "data": {
+                    "infrastate": {
+                        "summary": {
+                            "label": "Core update",
+                            "value": "succeeded",
+                            "subtitle": "slot A | c8d43f5",
+                            "description": "runtime boot validated on slot A",
+                        }
+                    }
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "get_ydoc",
+        lambda _webspace_id: (_ for _ in ()).throw(AssertionError("sync get_ydoc should not run when live room doc exists")),
+    )
+
+    snapshot = webspace_runtime_module.build_local_desktop_catalog_snapshot()
+
+    assert snapshot["ydoc_defaults"]["data/nodes/node-1/infrastate"] == {
+        "summary": {
+            "label": "Core update",
+            "value": "succeeded",
+            "subtitle": "slot A | c8d43f5",
+            "description": "runtime boot validated on slot A",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_local_desktop_catalog_snapshot_async_reads_local_unscoped_skill_projection(monkeypatch) -> None:
+    monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: SimpleNamespace())
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Node 1",
+            "node_compact_label": "N1",
+            "node_index": 1,
+            "node_color": "#F28E2B",
+        },
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="member", node_id="node-1", node_settings=SimpleNamespace(node_names=[])),
+    )
+
+    def _fake_collect(self, mode: str = "mixed") -> list[dict[str, object]]:  # noqa: ARG001
+        return [
+            {
+                "skill": "infrastate_skill",
+                "space": "default",
+                "apps": [],
+                "widgets": [],
+                "ydoc_defaults": {
+                    "data/infrastate": {
+                        "summary": {
+                            "label": "Core update",
+                            "value": "idle",
+                            "subtitle": "slot --",
+                            "description": "No update in progress",
+                        }
+                    }
+                },
+            }
+        ]
+
+    class _Map:
+        def __init__(self, data):
+            self._data = data
+
+        def get(self, key):
+            value = self._data.get(key)
+            if isinstance(value, dict):
+                return _Map(value)
+            return value
+
+        def items(self):
+            return self._data.items()
+
+    class _YDoc:
+        def __init__(self, data):
+            self._data = data
+
+        def get_map(self, key):
+            value = self._data.get(key, {})
+            return _Map(value if isinstance(value, dict) else {})
+
+    class _AsyncCtxMgr:
+        async def __aenter__(self):
+            return _YDoc(
+                {
+                    "data": {
+                        "infrastate": {
+                            "summary": {
+                                "label": "Core update",
+                                "value": "succeeded",
+                                "subtitle": "slot A | c8d43f5",
+                                "description": "runtime boot validated on slot A",
+                            }
+                        }
+                    }
+                }
+            )
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_collect_skill_decls", _fake_collect)
+    monkeypatch.setattr(webspace_runtime_module, "_resolve_live_room_ydoc", lambda _webspace_id: None)
+    monkeypatch.setattr(webspace_runtime_module, "async_read_ydoc", lambda _webspace_id: _AsyncCtxMgr())
+
+    snapshot = await webspace_runtime_module.build_local_desktop_catalog_snapshot_async()
+
+    assert snapshot["ydoc_defaults"]["data/nodes/node-1/infrastate"] == {
+        "summary": {
+            "label": "Core update",
+            "value": "succeeded",
+            "subtitle": "slot A | c8d43f5",
+            "description": "runtime boot validated on slot A",
+        }
     }
 
 

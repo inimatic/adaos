@@ -337,6 +337,28 @@ def test_infrascope_skill_projects_snapshot_only_when_payload_changes(monkeypatc
     assert "inspectors" in projected
 
 
+def test_infrascope_webspace_event_invalidates_projection_state(monkeypatch):
+    mod = _load_infrascope_module()
+    scheduled: list[dict[str, object]] = []
+
+    mod._last_projected_fingerprints.clear()
+    mod._last_projected_at_mono.clear()
+    mod._last_stream_fingerprints.clear()
+    mod._last_projected_fingerprints["desktop"] = "fp-1"
+    mod._last_projected_at_mono["desktop"] = 123.0
+    mod._last_stream_fingerprints["desktop\0inventory:all"] = "stream-fp"
+
+    monkeypatch.setattr(mod, "_schedule_snapshot_refresh", lambda **kwargs: scheduled.append(dict(kwargs)))
+
+    evt = SimpleNamespace(type="desktop.webspace.reloaded", payload={"webspace_id": "desktop"})
+    mod.on_webspace_event(evt)
+
+    assert "desktop" not in mod._last_projected_fingerprints
+    assert "desktop" not in mod._last_projected_at_mono
+    assert "desktop\0inventory:all" not in mod._last_stream_fingerprints
+    assert scheduled == [{"webspace_id": "desktop", "reason": "desktop.webspace.reloaded"}]
+
+
 def test_infrascope_scenario_declares_inventory_drilldown_and_inspector_flow():
     root = Path(__file__).resolve().parents[1]
     scenario_path = root / ".adaos" / "workspace" / "scenarios" / "infrascope" / "scenario.json"

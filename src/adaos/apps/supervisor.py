@@ -960,6 +960,16 @@ def _runtime_listener_restart_timeout_sec() -> float:
         return 45.0
 
 
+def _runtime_listener_startup_grace_sec() -> float:
+    try:
+        return max(
+            _runtime_listener_restart_timeout_sec(),
+            float(str(os.getenv("ADAOS_SUPERVISOR_RUNTIME_STARTUP_GRACE_SEC") or "90").strip()),
+        )
+    except Exception:
+        return max(_runtime_listener_restart_timeout_sec(), 90.0)
+
+
 def _runtime_api_restart_timeout_sec() -> float:
     try:
         return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_RUNTIME_API_TIMEOUT_SEC") or "60").strip()))
@@ -3509,6 +3519,10 @@ class SupervisorManager:
         unhealthy_since = float(self._runtime_unhealthy_since or current_time)
         if self._last_start_at is not None:
             unhealthy_since = max(unhealthy_since, float(self._last_start_at))
+        if unhealthy_kind == "listener_lost" and self._last_start_at is not None:
+            runtime_age = max(0.0, current_time - float(self._last_start_at))
+            if runtime_age < _runtime_listener_startup_grace_sec():
+                return None
         timeout_sec = (
             _runtime_api_restart_timeout_sec()
             if unhealthy_kind == "api_unready"
