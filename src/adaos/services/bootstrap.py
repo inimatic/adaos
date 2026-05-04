@@ -81,7 +81,12 @@ from adaos.services.realtime_sidecar import (
     resolve_realtime_remote_candidates,
 )
 from adaos.services.node_config import NodeConfig, generate_provisional_subnet_id, load_config, set_role as cfg_set_role
-from adaos.services.node_runtime_state import load_nats_runtime_config, migrate_legacy_nats_runtime_config, save_nats_runtime_config
+from adaos.services.node_runtime_state import (
+    load_member_hub_token,
+    load_nats_runtime_config,
+    migrate_legacy_nats_runtime_config,
+    save_nats_runtime_config,
+)
 from adaos.services.hub_root_outbox_store import load_outbox_items, outbox_store_path, save_outbox_items
 from adaos.services.root.control_lifecycle_sync import report_hub_control_lifecycle_state
 from adaos.services.root.core_update_sync import reconcile_hub_core_update
@@ -1053,10 +1058,11 @@ class BootstrapService:
         if not hub_url:
             await bus.emit("net.subnet.register.error", {"status": "hub_url_missing"}, source="lifecycle", actor="system")
             return None
+        member_hub_token = str(load_member_hub_token() or conf.token or "").strip()
         try:
             ok = await self.heartbeat.register(
                 hub_url,
-                conf.token or "",
+                member_hub_token,
                 node_id=conf.node_id,
                 subnet_id=conf.subnet_id,
                 hostname=socket.gethostname(),
@@ -1074,7 +1080,7 @@ class BootstrapService:
             backoff = 1
             while True:
                 try:
-                    ok_hb = await self.heartbeat.heartbeat(hub_url, conf.token or "", node_id=conf.node_id)
+                    ok_hb = await self.heartbeat.heartbeat(hub_url, member_hub_token, node_id=conf.node_id)
                     if ok_hb:
                         backoff = 1
                     else:

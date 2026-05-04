@@ -421,6 +421,56 @@ def test_load_config_prefers_durable_member_hub_url_over_loopback_runtime_state(
     assert runtime_state.get("hub_url") == "https://ru.api.inimatic.com/hubs/sn_member02"
 
 
+def test_load_config_migrates_member_hub_token_away_from_local_control_token(monkeypatch) -> None:
+    ctx = get_ctx()
+    node_path = Path(ctx.paths.base_dir()) / "node.yaml"
+    node_path.write_text(
+        yaml.safe_dump(
+            {
+                "zone_id": "ru",
+                "node_id": "member-token-migrate",
+                "subnet_id": "sn_member03",
+                "role": "member",
+                "hub_url": "https://ru.api.inimatic.com/hubs/sn_member03",
+                "subnet": {"id": "sn_member03"},
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_TOKEN", "dev-local-token")
+    save_node_runtime_state(
+        role="member",
+        hub_url="https://ru.api.inimatic.com/hubs/sn_member03",
+        token="join-session-token",
+        member_hub_token=None,
+    )
+    node_config_mod._NODE_CONFIG_CACHE.clear()
+
+    fresh = load_config()
+    runtime_state = load_node_runtime_state()
+
+    assert fresh.token == "dev-local-token"
+    assert runtime_state.get("token") == "dev-local-token"
+    assert runtime_state.get("member_hub_token") == "join-session-token"
+
+
+def test_save_config_preserves_member_hub_token_for_member_nodes() -> None:
+    detached = _detached_config()
+    detached.role = "member"
+    detached.hub_url = "https://ru.api.inimatic.com/hubs/sn_member04"
+    detached.token = "dev-local-token"
+    save_node_runtime_state(member_hub_token="join-session-token")
+
+    save_config(detached)
+
+    runtime_state = load_node_runtime_state()
+
+    assert runtime_state.get("token") == "dev-local-token"
+    assert runtime_state.get("member_hub_token") == "join-session-token"
+
+
 def test_save_config_drops_hub_url_from_hub_node_yaml() -> None:
     detached = _detached_config()
     detached.role = "hub"
