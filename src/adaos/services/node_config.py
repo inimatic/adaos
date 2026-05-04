@@ -831,8 +831,10 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
     node_settings.id = node_id
     subnet_id, subnet_changed = _resolve_loaded_subnet_id(data, subnet_settings)
     subnet_settings.id = subnet_id
-    role = (data.get("role") or "hub").strip().lower()
     runtime_state = load_node_runtime_state()
+    configured_role = str(data.get("role") or "").strip().lower()
+    runtime_role = str(runtime_state.get("role") or "").strip().lower()
+    role = configured_role if configured_role in {"hub", "member"} else (runtime_role if runtime_role in {"hub", "member"} else "hub")
     legacy_hub_url = data.get("hub_url")
     legacy_token = data.get("token")
     runtime_hub_url = runtime_state.get("hub_url") if isinstance(runtime_state.get("hub_url"), str) else None
@@ -872,6 +874,10 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
         dev_settings=dev_settings,
     )
     changed = subnet_changed or conf.ensure_defaults()
+    if role != str(data.get("role") or "hub").strip().lower():
+        changed = True
+    if runtime_state.get("role") != role:
+        changed = True
     if legacy_hub_url or legacy_token or raw_root_state is not None or _looks_like_root_state(raw_root_settings) or isinstance(data.get("nats"), dict):
         changed = True
     if persisted_root_state is None and root_state is not None:
@@ -943,6 +949,7 @@ def save_node(conf: NodeConfig, *, ctx: AgentContext | None = None) -> None:
     )
     try:
         save_node_runtime_state(
+            role=role_norm,
             hub_url=(durable_hub_url if role_norm == "member" else conf.hub_url),
             token=conf.token,
         )
