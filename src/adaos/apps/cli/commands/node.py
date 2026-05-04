@@ -10,6 +10,7 @@ import requests
 import typer
 
 from adaos.services.node_config import load_config, save_config, set_role as cfg_set_role
+from adaos.services.node_runtime_state import save_node_runtime_state
 from adaos.apps.cli.active_control import resolve_control_token
 
 app = typer.Typer(help="Node operations (join/status/role).")
@@ -2185,7 +2186,6 @@ def node_join(
         typer.secho("[AdaOS] join failed: invalid response from server (missing token/subnet_id/hub_url)", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    cfg.token = token
     cfg.subnet_id = subnet_id
     cfg.hub_url = rendezvous_url
     try:
@@ -2200,6 +2200,11 @@ def node_join(
     cfg.role = "member"
     _ensure_managed_key_paths(cfg)
     save_config(cfg)
+    save_node_runtime_state(
+        role="member",
+        hub_url=rendezvous_url,
+        member_hub_token=token,
+    )
 
     out = {
         "ok": True,

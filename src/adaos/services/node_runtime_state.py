@@ -49,6 +49,7 @@ def save_node_runtime_state(
     hub_url: str | None | object = _UNSET,
     role: str | None | object = _UNSET,
     token: str | None | object = _UNSET,
+    member_hub_token: str | None | object = _UNSET,
     nats: dict[str, Any] | None | object = _UNSET,
     node_display: dict[str, Any] | None | object = _UNSET,
 ) -> dict[str, Any]:
@@ -65,6 +66,12 @@ def save_node_runtime_state(
             payload["token"] = value
         else:
             payload.pop("token", None)
+    if member_hub_token is not _UNSET:
+        value = str(member_hub_token or "").strip()
+        if value:
+            payload["member_hub_token"] = value
+        else:
+            payload.pop("member_hub_token", None)
     if role is not _UNSET:
         value = str(role or "").strip().lower()
         if value in {"hub", "member"}:
@@ -92,6 +99,15 @@ def load_node_display_runtime_state() -> dict[str, Any]:
     payload = load_node_runtime_state()
     node_display = payload.get("node_display")
     return dict(node_display) if isinstance(node_display, dict) else {}
+
+
+def load_member_hub_token() -> str | None:
+    payload = load_node_runtime_state()
+    token = payload.get("member_hub_token")
+    if not isinstance(token, str):
+        return None
+    value = token.strip()
+    return value or None
 
 
 def load_nats_runtime_config() -> dict[str, Any]:

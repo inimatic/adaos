@@ -15,6 +15,7 @@ from adaos.adapters.db.sqlite import durable_state_delete, durable_state_get, du
 from adaos.services.agent_context import get_ctx, AgentContext  # type: ignore
 from adaos.services.zone_hosts import canonical_zone_id, zone_public_base_url
 from adaos.services.node_runtime_state import (
+    load_member_hub_token,
     load_node_runtime_state,
     load_nats_runtime_config,
     migrate_legacy_nats_runtime_config,
@@ -837,6 +838,13 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
     role = configured_role if configured_role in {"hub", "member"} else (runtime_role if runtime_role in {"hub", "member"} else "hub")
     legacy_hub_url = data.get("hub_url")
     legacy_token = data.get("token")
+    env_token = str(os.environ.get("ADAOS_TOKEN") or "").strip() or None
+    runtime_token = runtime_state.get("token") if isinstance(runtime_state.get("token"), str) else None
+    runtime_member_hub_token = (
+        runtime_state.get("member_hub_token")
+        if isinstance(runtime_state.get("member_hub_token"), str)
+        else None
+    )
     runtime_hub_url = runtime_state.get("hub_url") if isinstance(runtime_state.get("hub_url"), str) else None
     if (
         role == "member"
@@ -851,11 +859,17 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
     else:
         hub_url = runtime_hub_url if isinstance(runtime_hub_url, str) else legacy_hub_url
     local_api_url = data.get("local_api_url") if isinstance(data.get("local_api_url"), str) else None
-    token = (
-        runtime_state.get("token")
-        if isinstance(runtime_state.get("token"), str) and str(runtime_state.get("token") or "").strip()
-        else legacy_token or os.environ.get("ADAOS_TOKEN", "dev-local-token")
-    )
+    runtime_token_value = str(runtime_token or "").strip()
+    local_control_token = env_token or "dev-local-token"
+    if role == "member":
+        token = local_control_token
+    else:
+        token = runtime_token_value or str(legacy_token or local_control_token).strip() or local_control_token
+    migrated_member_hub_token = str(runtime_member_hub_token or "").strip() or None
+    if role == "member" and not migrated_member_hub_token and runtime_token_value and runtime_token_value != token:
+        # Member link auth must survive supervisor restarts without being
+        # overwritten by the local control API token from ADAOS_TOKEN.
+        migrated_member_hub_token = runtime_token_value
     persisted_root_state = _load_persisted_root_state()
     root_state = persisted_root_state or _normalize_root_state(raw_root_state)
 
@@ -884,10 +898,14 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
         changed = True
     if runtime_state.get("hub_url") != hub_url or runtime_state.get("token") != token:
         changed = True
+    if runtime_state.get("member_hub_token") != migrated_member_hub_token:
+        changed = True
     conf.sync_sections()
     changed = _migrate_managed_key_material(conf) or changed
     if changed:
         save_node(conf, ctx=ctx)
+        if role == "member" and migrated_member_hub_token:
+            save_node_runtime_state(member_hub_token=migrated_member_hub_token)
     else:
         _NODE_CONFIG_CACHE[cache_key] = ((mtime_ns, runtime_mtime), deepcopy(conf))
     _sync_ctx_config(conf, ctx)
@@ -937,6 +955,7 @@ def save_node(conf: NodeConfig, *, ctx: AgentContext | None = None) -> None:
         conf.hub_url = durable_hub_url
     else:
         merged.pop("hub_url", None)
+    member_hub_token = load_member_hub_token() if role_norm == "member" else None
     for key in ("token", "root_state", "nats"):
         merged.pop(key, None)
     root_payload = merged.get("root")
@@ -952,6 +971,7 @@ def save_node(conf: NodeConfig, *, ctx: AgentContext | None = None) -> None:
             role=role_norm,
             hub_url=(durable_hub_url if role_norm == "member" else conf.hub_url),
             token=conf.token,
+            member_hub_token=member_hub_token,
         )
     except Exception:
         pass
