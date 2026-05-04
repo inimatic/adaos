@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import uuid
+from urllib.parse import urlparse
 import yaml
 from adaos.adapters.db.sqlite import durable_state_delete, durable_state_get, durable_state_put
 from adaos.services.agent_context import get_ctx, AgentContext  # type: ignore
@@ -617,6 +618,20 @@ def _resolved_subnet_id_changed(selected: str, candidates: list[str]) -> bool:
     return any(str(candidate or "").strip() != token for candidate in candidates)
 
 
+def _looks_like_local_control_hub_url(value: Any) -> bool:
+    token = str(value or "").strip()
+    if not token:
+        return False
+    try:
+        parsed = urlparse(token)
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    if host not in {"127.0.0.1", "localhost"}:
+        return False
+    return parsed.port in {8777, 8778, 8779}
+
+
 def _resolve_loaded_subnet_id(data: dict[str, Any], subnet_settings: SubnetSettings) -> tuple[str, bool]:
     explicit_candidates = [
         str(data.get("subnet_id") or "").strip(),
@@ -795,7 +810,19 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
     runtime_state = load_node_runtime_state()
     legacy_hub_url = data.get("hub_url")
     legacy_token = data.get("token")
-    hub_url = runtime_state.get("hub_url") if isinstance(runtime_state.get("hub_url"), str) else legacy_hub_url
+    runtime_hub_url = runtime_state.get("hub_url") if isinstance(runtime_state.get("hub_url"), str) else None
+    if (
+        role == "member"
+        and isinstance(legacy_hub_url, str)
+        and str(legacy_hub_url).strip()
+        and _looks_like_local_control_hub_url(runtime_hub_url)
+    ):
+        # Reused member machines can carry a stale local runtime URL in node_runtime.json
+        # after role switches or failed local probes. Keep the durable subnet rendezvous
+        # from node.yaml instead of promoting loopback control ports into hub_url.
+        hub_url = legacy_hub_url
+    else:
+        hub_url = runtime_hub_url if isinstance(runtime_hub_url, str) else legacy_hub_url
     local_api_url = data.get("local_api_url") if isinstance(data.get("local_api_url"), str) else None
     token = (
         runtime_state.get("token")
