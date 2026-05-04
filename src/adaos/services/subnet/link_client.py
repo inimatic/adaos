@@ -74,6 +74,7 @@ class MemberLinkClient:
         self._last_control_requested_at = 0.0
         self._last_control_completed_at = 0.0
         self._last_forced_snapshot_at = 0.0
+        self._last_yjs_write_snapshot_at = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._snapshot_task: asyncio.Task | None = None
 
@@ -244,6 +245,20 @@ class MemberLinkClient:
         except Exception:
             return
 
+    def _queue_node_snapshot_from_yjs_write(self, *, webspace_id: str | None) -> None:
+        token = str(webspace_id or "").strip() or "default"
+        # Keep desktop/subnet projections warm without turning every Yjs write
+        # into a snapshot storm. The shared desktop only needs a quick bounded
+        # pulse after the first write in a short burst.
+        if token not in {"default", "desktop"}:
+            return
+        now = time.time()
+        min_interval = 1.5
+        if now - float(self._last_yjs_write_snapshot_at or 0.0) < min_interval:
+            return
+        self._last_yjs_write_snapshot_at = now
+        self._request_local_snapshot_sync(webspace_id=token, reason="yjs.write")
+
     def _ensure_snapshot_task(self) -> None:
         if self._snapshot_task is not None and not self._snapshot_task.done():
             return
@@ -359,6 +374,7 @@ class MemberLinkClient:
                 self._out_q.put_nowait(msg)
             except Exception:
                 return
+            self._queue_node_snapshot_from_yjs_write(webspace_id=webspace_id)
 
         self._remove_ystore_listener = add_ystore_write_listener(_on_write)
 
