@@ -987,7 +987,11 @@ def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch)
         ("infrastate.operations.active", [{"id": "op-1"}], "default"),
         ("infrastate.logs.recent", [{"id": "log-1"}], "default"),
         ("infrastate.events.recent", [{"id": "evt-1"}], "default"),
-        ("infrastate.yjs.load_mark", [{"root": "data"}], "default"),
+        (
+            "infrastate.yjs.load_mark",
+            [{"root": "data", "kind": "root", "id": "data", "display": "data"}],
+            "default",
+        ),
     ]
 
 
