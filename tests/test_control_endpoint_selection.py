@@ -439,3 +439,42 @@ async def test_member_link_queue_node_snapshot_prefers_async_snapshot_builder(mo
 
     assert msg["t"] == "node.snapshot"
     assert msg["snapshot"] == {"mode": "async"}
+
+
+def test_member_link_queues_snapshot_after_desktop_yjs_write(monkeypatch) -> None:
+    client = MemberLinkClient()
+    queued: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        client,
+        "_request_local_snapshot_sync",
+        lambda **kwargs: queued.append(dict(kwargs)),
+    )
+
+    client._queue_node_snapshot_from_yjs_write(webspace_id="desktop")
+
+    assert queued == [{"webspace_id": "desktop", "reason": "yjs.write"}]
+
+
+def test_member_link_throttles_snapshot_after_yjs_write(monkeypatch) -> None:
+    client = MemberLinkClient()
+    queued: list[dict[str, object]] = []
+    now = {"value": 100.0}
+
+    monkeypatch.setattr(
+        client,
+        "_request_local_snapshot_sync",
+        lambda **kwargs: queued.append(dict(kwargs)),
+    )
+    monkeypatch.setattr("adaos.services.subnet.link_client.time.time", lambda: now["value"])
+
+    client._queue_node_snapshot_from_yjs_write(webspace_id="desktop")
+    client._queue_node_snapshot_from_yjs_write(webspace_id="desktop")
+    now["value"] += 2.0
+    client._queue_node_snapshot_from_yjs_write(webspace_id="desktop")
+    client._queue_node_snapshot_from_yjs_write(webspace_id="project-ws")
+
+    assert queued == [
+        {"webspace_id": "desktop", "reason": "yjs.write"},
+        {"webspace_id": "desktop", "reason": "yjs.write"},
+    ]

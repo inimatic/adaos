@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
 from copy import deepcopy
+import logging
 import os
 import shutil
 import sys
@@ -24,6 +25,30 @@ from adaos.services.node_runtime_state import (
 _NODE_CONFIG_CACHE: dict[str, tuple[tuple[int | None, int | None], "NodeConfig"]] = {}
 _ROOT_STATE_NAMESPACE = "node_config"
 _ROOT_STATE_KEY = "root_state"
+_log = logging.getLogger("adaos.node_config")
+
+
+def _load_node_yaml_payload(path: Path) -> dict[str, Any]:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        # Keep a copy of the broken node.yaml so operators can inspect it later,
+        # but recover the runtime by falling back to defaults + runtime-state.
+        try:
+            broken_path = path.with_name(f"{path.name}.invalid")
+            shutil.copy2(path, broken_path)
+        except Exception:
+            broken_path = None
+        _log.warning(
+            "failed to parse node config at %s; using recovered defaults%s",
+            path,
+            f" and saved backup to {broken_path}" if broken_path else "",
+            exc_info=True,
+        )
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
 def is_canonical_subnet_id(value: str | None) -> bool:
@@ -778,7 +803,7 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
             conf = deepcopy(cached_conf)
             _sync_ctx_config(conf, ctx)
             return conf
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = _load_node_yaml_payload(path)
     if isinstance(data.get("nats"), dict):
         try:
             migrate_legacy_nats_runtime_config(base_dir=path.parent)

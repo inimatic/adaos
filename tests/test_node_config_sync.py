@@ -497,3 +497,35 @@ def test_load_config_normalizes_root_base_url_to_zone_effective_host() -> None:
 
     assert fresh.root_settings.base_url == "https://ru.api.inimatic.com"
     assert ((saved.get("root") or {}).get("base_url")) == "https://ru.api.inimatic.com"
+
+
+def test_load_config_recovers_from_malformed_node_yaml(tmp_path: Path) -> None:
+    ctx = get_ctx()
+    base_dir = Path(ctx.paths.base_dir())
+    node_path = base_dir / "node.yaml"
+    node_path.write_text(
+        "\n".join(
+            [
+                "zone_id: null",
+                "node_id: broken-node",
+                "subnet_id: sn_broken01",
+                "role: member",
+                "hub_url: https://ru.api.inimatic.com/hubs/sn_broken01",
+                "dev:",
+                "  workspace: /root/.adaos/state/core_slots/slots/A/repo/dev",
+                "/core_slots/slots/B/repo/dev",
+                "  forge_repo: null",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    save_node_runtime_state(hub_url="https://ru.api.inimatic.com/hubs/sn_broken01", token="tok-broken")
+    node_config_mod._NODE_CONFIG_CACHE.clear()
+
+    fresh = load_config()
+
+    assert fresh.role == "hub"
+    assert fresh.hub_url == "https://ru.api.inimatic.com/hubs/sn_broken01"
+    assert fresh.token == "tok-broken"
+    assert fresh.subnet_id
+    assert node_path.with_name("node.yaml.invalid").exists()
