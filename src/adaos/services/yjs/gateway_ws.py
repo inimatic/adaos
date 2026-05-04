@@ -2132,12 +2132,25 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     await start_y_server()
 
     adapter: YWebsocket = FastAPIWebsocketAdapter(websocket, path=webspace_id)
+    room_task = None
     try:
         if _YWS_ROOM_READY_TIMEOUT_S > 0:
-            room_ref = await asyncio.wait_for(
-                y_server.get_room(webspace_id),
-                timeout=_YWS_ROOM_READY_TIMEOUT_S,
-            )
+            room_task = asyncio.create_task(y_server.get_room(webspace_id))
+            try:
+                room_ref = await asyncio.wait_for(room_task, timeout=_YWS_ROOM_READY_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                _ylog.warning(
+                    "yws room ready timeout webspace=%s dev=%s timeout_s=%.3f",
+                    webspace_id,
+                    dev_id,
+                    _YWS_ROOM_READY_TIMEOUT_S,
+                )
+                room_ref = await room_task
+                _ylog.info(
+                    "yws room ready after timeout for webspace=%s dev=%s",
+                    webspace_id,
+                    dev_id,
+                )
         else:
             room_ref = await y_server.get_room(webspace_id)
     except asyncio.TimeoutError:

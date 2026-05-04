@@ -47,6 +47,7 @@ def _clear_node_config_cache() -> None:
 def save_node_runtime_state(
     *,
     hub_url: str | None | object = _UNSET,
+    role: str | None | object = _UNSET,
     token: str | None | object = _UNSET,
     nats: dict[str, Any] | None | object = _UNSET,
     node_display: dict[str, Any] | None | object = _UNSET,
@@ -64,6 +65,12 @@ def save_node_runtime_state(
             payload["token"] = value
         else:
             payload.pop("token", None)
+    if role is not _UNSET:
+        value = str(role or "").strip().lower()
+        if value in {"hub", "member"}:
+            payload["role"] = value
+        else:
+            payload.pop("role", None)
     if nats is not _UNSET:
         if isinstance(nats, dict) and nats:
             payload["nats"] = dict(nats)

@@ -169,6 +169,55 @@ def test_infrastate_set_node_names_prefers_selected_member_over_injected_local_n
     assert ui_updates[-1]["selected_node_id"] == "member-1"
 
 
+def test_infrastate_set_node_names_uses_sdk_layer_for_local_update(monkeypatch):
+    mod = _load_infrastate_module()
+
+    class _Conf:
+        role = "hub"
+        node_id = "hub-1"
+
+    ui_updates: list[dict[str, object]] = []
+    sdk_calls: list[tuple[Any]] = []
+    node_config_calls: list[str] = []
+
+    def _sdk_set_node_names(value: Any) -> dict[str, object]:
+        names = [item.strip() for item in str(value).split(",") if item.strip()] if isinstance(value, str) else list(value)
+        sdk_calls.append((value, names))
+        return {"node_id": "hub-1", "node_names": names}
+
+    monkeypatch.setattr(mod, "_ui_state", lambda: {})
+    monkeypatch.setattr(mod, "_write_ui_state", lambda **kwargs: ui_updates.append(dict(kwargs)))
+    monkeypatch.setattr(mod._sdk_node, "set_node_names", _sdk_set_node_names)
+    monkeypatch.setattr(
+        mod._node_config,
+        "save_config",
+        lambda *args, **kwargs: node_config_calls.append("save_config"),
+    )
+
+    def _forbid_direct_node_names_set(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("node_config.set_node_names should not be called")
+
+    monkeypatch.setattr(
+        mod._node_config,
+        "set_node_names",
+        _forbid_direct_node_names_set,
+    )
+
+    result = mod._perform_action(
+        "set_node_names",
+        _Conf(),
+        {"node_id": "hub-1", "value": "Hub Node"},
+    )
+
+    assert result["ok"] is True
+    assert result["scope"] == "local"
+    assert result["node_id"] == "hub-1"
+    assert result["node_names"] == ["Hub Node"]
+    assert not node_config_calls
+    assert sdk_calls == [(["Hub Node"], ["Hub Node"])]
+    assert ui_updates[-1]["last_action"] == "set_node_names"
+
+
 def test_infrastate_marketplace_action_is_a_safe_noop(monkeypatch):
     mod = _load_infrastate_module()
     ui_updates: list[dict[str, object]] = []
