@@ -22,6 +22,7 @@ from adaos.services.core_update import read_last_result as read_core_update_last
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.node_config import normalize_node_names, set_node_names as persist_node_names
 from adaos.services.node_runtime_state import save_node_runtime_state
+from adaos.services.node_runtime_state import load_member_hub_token
 from adaos.services.capacity import get_local_capacity
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
 from adaos.services.skill.manager import SkillManager
@@ -29,6 +30,13 @@ from adaos.services.yjs.doc import apply_update_to_live_room
 from adaos.services.yjs.store import add_ystore_write_listener, get_ystore_for_webspace, suppress_ystore_write_notifications
 
 _log = logging.getLogger("adaos.subnet.client")
+
+
+def _resolve_member_hub_token(conf) -> str:
+    token = load_member_hub_token()
+    if token:
+        return token
+    return str(getattr(conf, "token", "") or "dev-local-token").strip() or "dev-local-token"
 
 
 def _to_ws_url(http_base: str, path: str) -> str:
@@ -445,7 +453,7 @@ class MemberLinkClient:
 
         ws_url = _to_ws_url(conf.hub_url, "/ws/subnet")
         self._ws_url = ws_url
-        headers = [("X-AdaOS-Token", conf.token or "dev-local-token")]
+        headers = [("X-AdaOS-Token", _resolve_member_hub_token(conf))]
 
         backoff = 1.0
         while not self._stop.is_set():
