@@ -942,6 +942,32 @@ def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch)
     ]
 
 
+def test_infrastate_webspace_reload_invalidates_projection_and_stream_state(monkeypatch):
+    mod = _load_infrastate_module()
+    scheduled: list[dict[str, object]] = []
+
+    mod._projection_fingerprints.clear()
+    mod._projection_last_applied_at.clear()
+    mod._stream_fingerprints.clear()
+    mod._stream_last_published_at.clear()
+    mod._projection_fingerprints["desktop"] = "fp-1"
+    mod._projection_last_applied_at["desktop"] = 123.0
+    stream_key = mod._stream_cache_key("desktop", "infrastate.logs.recent")
+    mod._stream_fingerprints[stream_key] = "stream-fp"
+    mod._stream_last_published_at[stream_key] = 456.0
+
+    monkeypatch.setattr(mod, "_schedule_snapshot_refresh", lambda **kwargs: scheduled.append(dict(kwargs)))
+
+    evt = SimpleNamespace(type="desktop.webspace.reloaded", payload={"webspace_id": "desktop"})
+    mod.on_webspace_reload(evt)
+
+    assert "desktop" not in mod._projection_fingerprints
+    assert "desktop" not in mod._projection_last_applied_at
+    assert stream_key not in mod._stream_fingerprints
+    assert stream_key not in mod._stream_last_published_at
+    assert scheduled == [{"webspace_id": "desktop", "reason": "desktop.webspace.reloaded"}]
+
+
 def test_infrastate_stream_snapshot_request_publishes_requested_receiver(monkeypatch):
     mod = _load_infrastate_module()
     published: list[tuple[str, object, str | None]] = []

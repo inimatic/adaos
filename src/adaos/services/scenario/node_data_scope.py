@@ -55,4 +55,33 @@ def is_node_scoped_data_path(path: str | None) -> bool:
     return len(parts) >= 3 and parts[0] == "data" and parts[1] == "nodes"
 
 
-__all__ = ["is_node_scoped_data_path", "node_scope_data_path"]
+def local_unscoped_data_path(path: str | None, node_id: str | None) -> str:
+    """
+    Return the local-node view of a shared node-scoped ``data`` path.
+
+    Member nodes often project skill state into their local Yjs doc under
+    ``data/<skill>/...`` while the shared desktop exposes the same state as
+    ``data/nodes/<node_id>/<skill>/...``. This helper converts the shared path
+    back to the local path for the matching node id so snapshot builders can
+    read current local values before publishing them to the hub.
+    """
+
+    raw = str(path or "").strip()
+    node = str(node_id or "").strip()
+    if not raw or not node:
+        return raw
+
+    prefix = ""
+    body = raw
+    if body.startswith("y:"):
+        prefix = "y:"
+        body = body[2:]
+
+    parts = [part for part in body.split("/") if part]
+    if len(parts) < 4 or parts[0] != "data" or parts[1] != "nodes" or parts[2] != node:
+        return raw
+
+    return f"{prefix}data/{'/'.join(parts[3:])}"
+
+
+__all__ = ["is_node_scoped_data_path", "local_unscoped_data_path", "node_scope_data_path"]
