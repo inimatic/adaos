@@ -391,6 +391,36 @@ def test_save_config_keeps_member_hub_url_runtime_state_when_detached_copy_loses
     assert runtime_state.get("hub_url") == "https://ru.api.inimatic.com/hubs/sn_member01"
 
 
+def test_load_config_prefers_durable_member_hub_url_over_loopback_runtime_state() -> None:
+    ctx = get_ctx()
+    node_path = Path(ctx.paths.base_dir()) / "node.yaml"
+    node_path.write_text(
+        yaml.safe_dump(
+            {
+                "zone_id": "ru",
+                "node_id": "member-loopback",
+                "subnet_id": "sn_member02",
+                "role": "member",
+                "hub_url": "https://ru.api.inimatic.com/hubs/sn_member02",
+                "subnet": {"id": "sn_member02"},
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    save_node_runtime_state(hub_url="http://127.0.0.1:8779")
+    node_config_mod._NODE_CONFIG_CACHE.clear()
+
+    fresh = load_config()
+    runtime_state = load_node_runtime_state()
+    saved = yaml.safe_load(node_path.read_text(encoding="utf-8")) or {}
+
+    assert fresh.hub_url == "https://ru.api.inimatic.com/hubs/sn_member02"
+    assert saved.get("hub_url") == "https://ru.api.inimatic.com/hubs/sn_member02"
+    assert runtime_state.get("hub_url") == "https://ru.api.inimatic.com/hubs/sn_member02"
+
+
 def test_save_config_drops_hub_url_from_hub_node_yaml() -> None:
     detached = _detached_config()
     detached.role = "hub"
