@@ -524,6 +524,74 @@ def _list_changed_workspace_skills() -> list[str]:
     return sorted(changed)
 
 
+def _list_migratable_workspace_skills(*, ctx, mgr: SkillManager) -> list[str]:
+    workspace_root = Path(ctx.paths.workspace_dir())
+    workspace_skills_root = Path(ctx.paths.skills_workspace_dir())
+
+    workspace_registry_by_name: dict[str, dict[str, object]] = {}
+    try:
+        registry_items = list_workspace_registry_entries(workspace_root, kind="skills", fallback_to_scan=True)
+    except Exception:
+        registry_items = []
+    for item in registry_items:
+        if not isinstance(item, dict):
+            continue
+        item_name = str(item.get("name") or item.get("id") or "").strip()
+        if item_name:
+            workspace_registry_by_name[item_name] = item
+
+    try:
+        changed = set(_list_changed_workspace_skills())
+    except Exception:
+        changed = set()
+
+    installed_names: set[str] = set()
+    try:
+        rows = SqliteSkillRegistry(ctx.sql).list()
+    except Exception:
+        rows = []
+    for row in rows:
+        if not bool(getattr(row, "installed", True)):
+            continue
+        name = getattr(row, "name", None) or getattr(row, "id", None)
+        if name:
+            installed_names.add(str(name))
+
+    names = sorted(installed_names | set(_collect_runtime_skill_names(workspace_skills_root)) | changed)
+    candidates = set(changed)
+    for skill_name in names:
+        _source_workdir, source_path, _source_kind = _resolve_workspace_skill_source(
+            ctx,
+            skill_name,
+            workspace_root,
+            workspace_skills_root,
+        )
+        if not source_path.exists() and skill_name not in changed:
+            continue
+
+        runtime_state: dict[str, object] | None = None
+        try:
+            runtime_state = mgr.runtime_status(skill_name)
+        except Exception as exc:
+            message = str(exc or "").strip()
+            if message.lower() == "no versions installed":
+                runtime_state = _normalize_runtime_missing_state(skill_name)
+
+        workspace_version, runtime_version, version_drift = _resolve_workspace_skill_versions(
+            runtime_state=runtime_state,
+            registry_meta=workspace_registry_by_name.get(skill_name),
+            source_path=source_path,
+        )
+        runtime_state_name = str((runtime_state or {}).get("state") or "").strip().lower()
+        runtime_missing = runtime_state_name == "runtime-missing" or (
+            bool(workspace_version) and not bool(runtime_version)
+        )
+        if version_drift or runtime_missing:
+            candidates.add(skill_name)
+
+    return sorted(candidates)
+
+
 def _echo_runtime_install(result: RuntimeInstallResult) -> None:
     typer.secho(
         f"installed {result.name} v{result.version} into slot {result.slot}",
@@ -1650,13 +1718,21 @@ def migrate(
         if failed:
             raise typer.Exit(1)
         return
-    service = SkillUpdateService(get_ctx())
+    ctx = get_ctx()
+    service = SkillUpdateService(ctx)
+    mgr = _mgr()
     names: list[str]
     if name:
         names = [name]
     else:
+        if not dry_run:
+            try:
+                mgr.sync(force=force)
+            except Exception as exc:
+                typer.secho(f"failed to sync workspace skills: {exc}", fg=typer.colors.RED)
+                raise typer.Exit(1) from exc
         try:
-            names = _list_changed_workspace_skills()
+            names = _list_migratable_workspace_skills(ctx=ctx, mgr=mgr)
         except Exception as exc:
             typer.secho(f"failed to detect changed skills: {exc}", fg=typer.colors.RED)
             raise typer.Exit(1) from exc
@@ -1666,7 +1742,6 @@ def migrate(
 
     failed = False
     updated_any = False
-    mgr = _mgr()
     for skill_name in names:
         try:
             kwargs = {"dry_run": dry_run}
