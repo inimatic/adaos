@@ -3078,7 +3078,13 @@ def test_phase3_resolver_outputs_are_explicit_and_reusable() -> None:
         "scenario:other_scenario",
         "skill-app",
     ]
+    assert [item["node_label"] for item in resolved.catalog["apps"]] == [
+        "Node 0",
+        "Node 0",
+        "Node 0",
+    ]
     assert [item["id"] for item in resolved.catalog["widgets"]] == ["scenario-widget", "skill-widget"]
+    assert [item["node_label"] for item in resolved.catalog["widgets"]] == ["Node 0", "Node 0"]
     assert resolved.registry["modals"] == [
         "scenario_modal",
         "skill_modal",

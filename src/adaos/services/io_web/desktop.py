@@ -93,6 +93,7 @@ class WebDesktopSnapshot:
     page_schema: Dict[str, Any]
     icon_order: List[str] = field(default_factory=list)
     widget_order: List[str] = field(default_factory=list)
+    hidden_sections: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -102,6 +103,7 @@ class WebDesktopSnapshot:
             "pageSchema": _clone_json_dict(self.page_schema),
             "iconOrder": _clone_text_list(self.icon_order),
             "widgetOrder": _clone_text_list(self.widget_order),
+            "hiddenSections": _clone_text_list(self.hidden_sections),
         }
 
 
@@ -287,6 +289,17 @@ class WebDesktopService:
         workspace_index.set_workspace_widget_order_overlay(webspace_id, _clone_text_list(widget_order))
 
     @staticmethod
+    def _read_overlay_hidden_sections(webspace_id: str) -> tuple[List[str], bool]:
+        row = workspace_index.get_workspace(webspace_id)
+        if row is None or not getattr(row, "has_hidden_sections_overlay", False):
+            return [], False
+        return _clone_text_list(getattr(row, "hidden_sections_overlay", []) or []), True
+
+    @staticmethod
+    def _persist_overlay_hidden_sections(webspace_id: str, hidden_sections: List[str]) -> None:
+        workspace_index.set_workspace_hidden_sections_overlay(webspace_id, _clone_text_list(hidden_sections))
+
+    @staticmethod
     def _apply_pinned_widgets_state(ydoc: Any, txn: Any, pinned_widgets: List[Dict[str, Any]]) -> None:
         next_pinned = _clone_pinned_widgets(pinned_widgets)
         ui_map = ydoc.get_map("ui")
@@ -359,6 +372,15 @@ class WebDesktopService:
         data_map.set(txn, "desktop", desktop_next)
 
     @staticmethod
+    def _apply_hidden_sections_state(ydoc: Any, txn: Any, hidden_sections: List[str]) -> None:
+        next_hidden_sections = _clone_text_list(hidden_sections)
+        data_map = ydoc.get_map("data")
+        desktop_raw = data_map.get("desktop") or {}
+        desktop_next = _coerce_dict(desktop_raw)
+        desktop_next["hiddenSections"] = next_hidden_sections
+        data_map.set(txn, "desktop", desktop_next)
+
+    @staticmethod
     def _apply_snapshot_state(ydoc: Any, txn: Any, snapshot: WebDesktopSnapshot) -> None:
         WebDesktopService._apply_installed_state(ydoc, txn, snapshot.installed)
         WebDesktopService._apply_pinned_widgets_state(ydoc, txn, snapshot.pinned_widgets)
@@ -366,6 +388,7 @@ class WebDesktopService:
         WebDesktopService._apply_page_schema_state(ydoc, txn, snapshot.page_schema)
         WebDesktopService._apply_icon_order_state(ydoc, txn, snapshot.icon_order)
         WebDesktopService._apply_widget_order_state(ydoc, txn, snapshot.widget_order)
+        WebDesktopService._apply_hidden_sections_state(ydoc, txn, snapshot.hidden_sections)
 
     @staticmethod
     def _read_materialized_snapshot_from_doc(
@@ -377,6 +400,7 @@ class WebDesktopService:
         page_schema: Dict[str, Any],
         icon_order: List[str],
         widget_order: List[str],
+        hidden_sections: List[str],
     ) -> WebDesktopSnapshot:
         data_map = ydoc.get_map("data")
         ui_map = ydoc.get_map("ui")
@@ -414,6 +438,10 @@ class WebDesktopService:
         if not widget_order_next:
             widget_order_next = _clone_text_list(widget_order)
 
+        hidden_sections_next = _clone_text_list(desktop_raw.get("hiddenSections"))
+        if not hidden_sections_next:
+            hidden_sections_next = _clone_text_list(hidden_sections)
+
         return WebDesktopSnapshot(
             installed=installed_next,
             pinned_widgets=pinned_next,
@@ -421,6 +449,7 @@ class WebDesktopService:
             page_schema=page_schema_next,
             icon_order=icon_order_next,
             widget_order=widget_order_next,
+            hidden_sections=hidden_sections_next,
         )
 
     def get_installed(self, webspace_id: Optional[str] = None) -> WebDesktopInstalled:
@@ -516,6 +545,20 @@ class WebDesktopService:
             return []
         return items
 
+    def get_hidden_sections(self, webspace_id: Optional[str] = None) -> List[str]:
+        webspace = self._resolve_webspace(webspace_id)
+        items, has_overlay = self._read_overlay_hidden_sections(webspace)
+        if not has_overlay:
+            return []
+        return items
+
+    async def get_hidden_sections_async(self, webspace_id: Optional[str] = None) -> List[str]:
+        webspace = self._resolve_webspace(webspace_id)
+        items, has_overlay = self._read_overlay_hidden_sections(webspace)
+        if not has_overlay:
+            return []
+        return items
+
     def get_snapshot(self, webspace_id: Optional[str] = None) -> WebDesktopSnapshot:
         webspace = self._resolve_webspace(webspace_id)
         installed = self.get_installed(webspace)
@@ -524,6 +567,7 @@ class WebDesktopService:
         page_schema = self.get_page_schema(webspace)
         icon_order = self.get_icon_order(webspace)
         widget_order = self.get_widget_order(webspace)
+        hidden_sections = self.get_hidden_sections(webspace)
         try:
             with get_ydoc(webspace) as ydoc:
                 return self._read_materialized_snapshot_from_doc(
@@ -534,6 +578,7 @@ class WebDesktopService:
                     page_schema=page_schema,
                     icon_order=icon_order,
                     widget_order=widget_order,
+                    hidden_sections=hidden_sections,
                 )
         except Exception:
             return WebDesktopSnapshot(
@@ -543,6 +588,7 @@ class WebDesktopService:
                 page_schema=page_schema,
                 icon_order=icon_order,
                 widget_order=widget_order,
+                hidden_sections=hidden_sections,
             )
 
     async def get_snapshot_async(self, webspace_id: Optional[str] = None) -> WebDesktopSnapshot:
@@ -553,6 +599,7 @@ class WebDesktopService:
         page_schema = await self.get_page_schema_async(webspace)
         icon_order = await self.get_icon_order_async(webspace)
         widget_order = await self.get_widget_order_async(webspace)
+        hidden_sections = await self.get_hidden_sections_async(webspace)
         try:
             async with async_read_ydoc(webspace) as ydoc:
                 return self._read_materialized_snapshot_from_doc(
@@ -563,6 +610,7 @@ class WebDesktopService:
                     page_schema=page_schema,
                     icon_order=icon_order,
                     widget_order=widget_order,
+                    hidden_sections=hidden_sections,
                 )
         except Exception:
             return WebDesktopSnapshot(
@@ -572,6 +620,7 @@ class WebDesktopService:
                 page_schema=page_schema,
                 icon_order=icon_order,
                 widget_order=widget_order,
+                hidden_sections=hidden_sections,
             )
 
     def set_installed(self, installed: WebDesktopInstalled, webspace_id: Optional[str] = None) -> None:
@@ -732,6 +781,26 @@ class WebDesktopService:
                     self._apply_widget_order_state(ydoc, txn, next_widget_order)
         _log.debug("set widget order (async) webspace=%s count=%s", webspace, len(next_widget_order))
 
+    def set_hidden_sections(self, hidden_sections: List[str], webspace_id: Optional[str] = None) -> None:
+        webspace = self._resolve_webspace(webspace_id)
+        next_hidden_sections = _clone_text_list(hidden_sections)
+        self._persist_overlay_hidden_sections(webspace, next_hidden_sections)
+        with _desktop_sync_write_meta():
+            with get_ydoc(webspace) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    self._apply_hidden_sections_state(ydoc, txn, next_hidden_sections)
+        _log.debug("set hidden sections webspace=%s count=%s", webspace, len(next_hidden_sections))
+
+    async def set_hidden_sections_async(self, hidden_sections: List[str], webspace_id: Optional[str] = None) -> None:
+        webspace = self._resolve_webspace(webspace_id)
+        next_hidden_sections = _clone_text_list(hidden_sections)
+        self._persist_overlay_hidden_sections(webspace, next_hidden_sections)
+        async with _desktop_async_write_meta():
+            async with async_get_ydoc(webspace) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    self._apply_hidden_sections_state(ydoc, txn, next_hidden_sections)
+        _log.debug("set hidden sections (async) webspace=%s count=%s", webspace, len(next_hidden_sections))
+
     def set_snapshot(self, snapshot: WebDesktopSnapshot, webspace_id: Optional[str] = None) -> None:
         webspace = self._resolve_webspace(webspace_id)
         self._persist_overlay_installed(webspace, snapshot.installed)
@@ -740,6 +809,7 @@ class WebDesktopService:
         self._persist_overlay_page_schema(webspace, snapshot.page_schema)
         self._persist_overlay_icon_order(webspace, snapshot.icon_order)
         self._persist_overlay_widget_order(webspace, snapshot.widget_order)
+        self._persist_overlay_hidden_sections(webspace, snapshot.hidden_sections)
         with _desktop_sync_write_meta():
             with get_ydoc(webspace) as ydoc:
                 with ydoc.begin_transaction() as txn:
@@ -754,6 +824,7 @@ class WebDesktopService:
         self._persist_overlay_page_schema(webspace, snapshot.page_schema)
         self._persist_overlay_icon_order(webspace, snapshot.icon_order)
         self._persist_overlay_widget_order(webspace, snapshot.widget_order)
+        self._persist_overlay_hidden_sections(webspace, snapshot.hidden_sections)
         async with _desktop_async_write_meta():
             async with async_get_ydoc(webspace) as ydoc:
                 with ydoc.begin_transaction() as txn:
@@ -1048,6 +1119,7 @@ class WebDesktopService:
         self._persist_overlay_page_schema(webspace, snapshot.page_schema)
         self._persist_overlay_icon_order(webspace, snapshot.icon_order)
         self._persist_overlay_widget_order(webspace, snapshot.widget_order)
+        self._persist_overlay_hidden_sections(webspace, snapshot.hidden_sections)
 
         def _mutator(doc: Any, txn: Any) -> None:
             self._apply_snapshot_state(doc, txn, snapshot)

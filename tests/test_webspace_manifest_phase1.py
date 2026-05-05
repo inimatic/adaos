@@ -27,6 +27,7 @@ from adaos.services.workspaces import (
     get_workspace_page_schema_overlay,
     get_workspace_icon_order_overlay,
     get_workspace_widget_order_overlay,
+    get_workspace_hidden_sections_overlay,
     get_workspace_home_scenario_ref_overlay,
     has_workspace_overlay,
     normalize_workspaces,
@@ -36,6 +37,7 @@ from adaos.services.workspaces import (
     set_workspace_topbar_overlay,
     set_workspace_page_schema_overlay,
     set_workspace_widget_order_overlay,
+    set_workspace_hidden_sections_overlay,
     set_workspace_home_scenario_ref_overlay,
     set_workspace_manifest,
 )
@@ -518,6 +520,7 @@ def test_workspace_desktop_overlay_roundtrip() -> None:
     )
     set_workspace_icon_order_overlay(webspace_id, ["scenario:prompt_engineer_scenario"])
     set_workspace_widget_order_overlay(webspace_id, ["weather"])
+    set_workspace_hidden_sections_overlay(webspace_id, ["node:member-01", "node:member-01"])
 
     row = get_workspace(webspace_id)
     assert row is not None
@@ -531,6 +534,7 @@ def test_workspace_desktop_overlay_roundtrip() -> None:
         "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile"}],
         "iconOrder": ["scenario:prompt_engineer_scenario"],
         "widgetOrder": ["weather"],
+        "hiddenSections": ["node:member-01"],
     }
     assert get_workspace_overlay(webspace_id) == {
         "desktop": {
@@ -541,6 +545,7 @@ def test_workspace_desktop_overlay_roundtrip() -> None:
             "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile"}],
             "iconOrder": ["scenario:prompt_engineer_scenario"],
             "widgetOrder": ["weather"],
+            "hiddenSections": ["node:member-01"],
         }
     }
     assert get_workspace_installed_overlay(webspace_id) == {
@@ -606,6 +611,22 @@ def test_web_desktop_service_set_pinned_widgets_updates_overlay_and_live_doc(mon
     assert fake_state["data"]["desktop"]["pinnedWidgets"] == [
         {"id": "infra-status", "type": "visual.metricTile", "title": "Infra"}
     ]
+
+
+def test_web_desktop_service_set_hidden_sections_updates_overlay_and_live_doc(monkeypatch) -> None:
+    webspace_id = "phase5-hidden-sections"
+    ensure_workspace(webspace_id)
+    fake_state = {
+        "ui": _FakeMap({"application": {"desktop": {"topbar": []}}}),
+        "data": _FakeMap({"desktop": {}}),
+    }
+    monkeypatch.setattr(desktop_module, "get_ydoc", lambda _webspace_id: _FakeSyncDoc(fake_state))
+
+    service = desktop_module.WebDesktopService()
+    service.set_hidden_sections(["node:member-01", "node:member-01"], webspace_id)
+
+    assert get_workspace_hidden_sections_overlay(webspace_id) == ["node:member-01"]
+    assert fake_state["data"]["desktop"]["hiddenSections"] == ["node:member-01"]
 
 
 def test_web_desktop_service_get_snapshot_returns_overlay_state(monkeypatch) -> None:
@@ -716,6 +737,7 @@ def test_web_desktop_service_set_snapshot_updates_overlay_and_live_doc(monkeypat
 
     assert get_workspace_topbar_overlay(webspace_id) == []
     assert get_workspace_page_schema_overlay(webspace_id) == {}
+    assert get_workspace_hidden_sections_overlay(webspace_id) == ["node:member-01"]
     assert get_workspace_icon_order_overlay(webspace_id) == ["scenario:web_desktop"]
     assert get_workspace_widget_order_overlay(webspace_id) == ["weather"]
     assert fake_state["ui"]["application"]["desktop"]["topbar"] == [{"id": "home", "label": "Home"}]

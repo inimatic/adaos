@@ -185,6 +185,12 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
     has_widget_order = "widgetOrder" in desktop_raw or "widgetOrder" in value
     icon_order = _clone_overlay_text_list(icon_order_source)
     widget_order = _clone_overlay_text_list(widget_order_source)
+    legacy_hidden_sections_raw = value.get("hiddenSections")
+    hidden_sections_source = (
+        desktop_raw.get("hiddenSections") if "hiddenSections" in desktop_raw else legacy_hidden_sections_raw
+    )
+    has_hidden_sections = "hiddenSections" in desktop_raw or "hiddenSections" in value
+    hidden_sections = _clone_overlay_text_list(hidden_sections_source)
     overlay: dict[str, Any] = {}
     desktop: dict[str, Any] = {}
     workspace_raw = value.get("workspace") if isinstance(value.get("workspace"), dict) else {}
@@ -202,6 +208,8 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
         desktop["iconOrder"] = icon_order
     if has_widget_order or widget_order:
         desktop["widgetOrder"] = widget_order
+    if has_hidden_sections or hidden_sections:
+        desktop["hiddenSections"] = hidden_sections
     if desktop:
         overlay["desktop"] = desktop
     if home_scenario_ref:
@@ -353,6 +361,8 @@ class WebspaceManifest:
             out["iconOrder"] = _clone_overlay_text_list(desktop.get("iconOrder"))
         if "widgetOrder" in desktop:
             out["widgetOrder"] = _clone_overlay_text_list(desktop.get("widgetOrder"))
+        if "hiddenSections" in desktop:
+            out["hiddenSections"] = _clone_overlay_text_list(desktop.get("hiddenSections"))
         return out
 
     @property
@@ -384,6 +394,10 @@ class WebspaceManifest:
         return _clone_overlay_text_list(self.desktop_overlay.get("widgetOrder"))
 
     @property
+    def hidden_sections_overlay(self) -> list[str]:
+        return _clone_overlay_text_list(self.desktop_overlay.get("hiddenSections"))
+
+    @property
     def home_scenario_ref_overlay(self) -> dict[str, Any]:
         return _normalize_home_scenario_ref(self.workspace_overlay.get("homeScenarioRef"))
 
@@ -410,6 +424,10 @@ class WebspaceManifest:
     @property
     def has_widget_order_overlay(self) -> bool:
         return "widgetOrder" in self.desktop_overlay
+
+    @property
+    def has_hidden_sections_overlay(self) -> bool:
+        return "hiddenSections" in self.desktop_overlay
 
     @property
     def has_home_scenario_ref_overlay(self) -> bool:
@@ -825,6 +843,13 @@ def get_workspace_widget_order_overlay(workspace_id: str) -> list[str]:
     return row.widget_order_overlay
 
 
+def get_workspace_hidden_sections_overlay(workspace_id: str) -> list[str]:
+    row = get_workspace(workspace_id)
+    if row is None:
+        return []
+    return row.hidden_sections_overlay
+
+
 def get_workspace_home_scenario_ref_overlay(workspace_id: str) -> dict[str, Any]:
     row = get_workspace(workspace_id)
     if row is None:
@@ -902,4 +927,11 @@ def set_workspace_widget_order_overlay(workspace_id: str, widget_order: Any) -> 
     current = get_workspace_desktop_overlay(workspace_id)
     desktop = dict(current) if isinstance(current, dict) else {}
     desktop["widgetOrder"] = _clone_overlay_text_list(widget_order)
+    return set_workspace_desktop_overlay(workspace_id, desktop)
+
+
+def set_workspace_hidden_sections_overlay(workspace_id: str, hidden_sections: Any) -> WebspaceManifest:
+    current = get_workspace_desktop_overlay(workspace_id)
+    desktop = dict(current) if isinstance(current, dict) else {}
+    desktop["hiddenSections"] = _clone_overlay_text_list(hidden_sections)
     return set_workspace_desktop_overlay(workspace_id, desktop)
