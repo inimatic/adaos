@@ -45,6 +45,7 @@ from adaos.services.core_slots import (
     validate_slot_structure,
 )
 from adaos.services.core_update import clear_plan as clear_core_update_plan
+from adaos.services.core_update import finalize_runtime_boot_status
 from adaos.services.core_update import prepare_pending_update
 from adaos.services.core_update import promote_root_from_slot
 from adaos.services.core_update import read_last_result as read_core_update_last_result
@@ -803,6 +804,18 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
                 reason="root restart completed",
             )
         elif max(status_age, transition_age) >= timeout_sec:
+            # If a new runtime is already serving status, let it finalize a stale
+            # root-promoted marker before declaring the update failed.
+            finalized_status = finalize_runtime_boot_status()
+            if _is_root_restart_completed_status(finalized_status):
+                payload["status"] = finalized_status
+                payload["attempt"] = _complete_update_attempt(
+                    state="completed",
+                    status=finalized_status,
+                    reason="root restart completed",
+                )
+                payload["_served_by"] = "supervisor_timeout_finalize"
+                return payload
             failed_attempt = _fail_root_restart_attempt(
                 status=status,
                 attempt=attempt,
