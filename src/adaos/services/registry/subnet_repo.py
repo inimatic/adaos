@@ -299,12 +299,30 @@ class SubnetRepo:
             )
             con.commit()
 
-    def touch_heartbeat(self, node_id: str, last_seen: float, capacity: Optional[Dict[str, Any]] = None, *, node_state: str | None = None) -> None:
+    def touch_heartbeat(
+        self,
+        node_id: str,
+        last_seen: float,
+        capacity: Optional[Dict[str, Any]] = None,
+        *,
+        node_state: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         with self.sql.connect() as con:
-            if node_state is not None:
+            if node_state is not None and base_url is not None:
+                con.execute(
+                    "UPDATE subnet_nodes SET last_seen=?, node_state=?, base_url=?, updated_at=? WHERE node_id=?",
+                    (float(last_seen), str(node_state or "ready"), str(base_url or "").strip() or None, _now(), node_id),
+                )
+            elif node_state is not None:
                 con.execute(
                     "UPDATE subnet_nodes SET last_seen=?, node_state=?, updated_at=? WHERE node_id=?",
                     (float(last_seen), str(node_state or "ready"), _now(), node_id),
+                )
+            elif base_url is not None:
+                con.execute(
+                    "UPDATE subnet_nodes SET last_seen=?, base_url=?, updated_at=? WHERE node_id=?",
+                    (float(last_seen), str(base_url or "").strip() or None, _now(), node_id),
                 )
             else:
                 con.execute(

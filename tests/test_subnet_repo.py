@@ -80,3 +80,25 @@ def test_touch_heartbeat_rewrites_capacity_when_materially_changed(tmp_path: Pat
     after = repo.skills_for_node("member-1")
     assert after != before
     assert after[0]["version"] == "1.1.0"
+
+
+def test_touch_heartbeat_updates_base_url_when_runtime_port_changes(tmp_path: Path) -> None:
+    sql = SQLite(_FakePaths(tmp_path))
+    repo = SubnetRepo(sql)
+    repo.upsert_node(
+        {
+            "node_id": "member-1",
+            "subnet_id": "alpha",
+            "roles": ["member"],
+            "hostname": "member-1",
+            "base_url": "http://127.0.0.1:8779",
+            "node_state": "ready",
+            "last_seen": 1.0,
+        }
+    )
+
+    repo.touch_heartbeat("member-1", 2.0, None, node_state="ready", base_url="http://127.0.0.1:8778")
+
+    node = repo.get_node("member-1")
+    assert node is not None
+    assert node["base_url"] == "http://127.0.0.1:8778"

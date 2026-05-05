@@ -42,13 +42,18 @@ class RequestsHeartbeat(HeartbeatPort):
             return ("http://" + u.path).rstrip("/")
         return None
 
+    @staticmethod
+    def _self_base_url() -> str | None:
+        value = str(os.environ.get("ADAOS_SELF_BASE_URL") or "").strip()
+        return value or None
+
     async def register(self, hub_url: str, token: str, *, node_id: str, subnet_id: str, hostname: str, roles: Sequence[str]) -> bool:
         base = self._normalize_base(hub_url)
         if not base:
             return False
         url = f"{base}/api/subnet/register"
         headers = {"X-AdaOS-Token": token}
-        base_url = os.environ.get("ADAOS_SELF_BASE_URL") or None
+        base_url = self._self_base_url()
         try:
             capacity = get_local_capacity()
         except Exception:
@@ -68,7 +73,7 @@ class RequestsHeartbeat(HeartbeatPort):
         except Exception:
             return False
 
-    async def heartbeat(self, hub_url: str, token: str, *, node_id: str) -> bool:
+    async def heartbeat(self, hub_url: str, token: str, *, node_id: str, base_url: str | None = None) -> bool:
         base = self._normalize_base(hub_url)
         if not base:
             return False
@@ -82,6 +87,9 @@ class RequestsHeartbeat(HeartbeatPort):
         if capacity is not None:
             payload["capacity"] = capacity
         payload["node_state"] = runtime_node_state()
+        heartbeat_base_url = str(base_url or self._self_base_url() or "").strip()
+        if heartbeat_base_url:
+            payload["base_url"] = heartbeat_base_url
         try:
             r = await asyncio.to_thread(self._session.post, url, json=payload, headers=headers, timeout=self.timeout)
             return r.status_code == 200

@@ -4,6 +4,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import anyio
 import requests
@@ -81,6 +82,18 @@ def _resolve_target_node_id(payload: Dict[str, Any]) -> str:
     ).strip()
 
 
+def _is_loopback_base_url(base_url: str | None) -> bool:
+    text = str(base_url or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = urlparse(text)
+        host = str(parsed.hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 async def _proxy_tool_call_to_node(
     *,
     conf: Any,
@@ -91,6 +104,7 @@ async def _proxy_tool_call_to_node(
 ) -> Dict[str, Any]:
     directory = get_directory()
     link_manager = get_hub_link_manager()
+    rpc_error: Exception | None = None
     if target_node_id and link_manager.is_connected(target_node_id):
         try:
             res = await link_manager.rpc_tools_call(
@@ -101,10 +115,17 @@ async def _proxy_tool_call_to_node(
                 dev=body.dev,
             )
             return {"ok": True, "result": res}
-        except Exception:
+        except Exception as exc:
+            rpc_error = exc
             _log.debug("rpc tool proxy failed target_node_id=%s tool=%s", target_node_id, body.tool, exc_info=True)
     base_url = directory.get_node_base_url(target_node_id)
+    if _is_loopback_base_url(base_url):
+        if rpc_error is not None:
+            raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
+        raise HTTPException(status_code=503, detail="member base_url is loopback-only and the live member link is unavailable")
     if not base_url:
+        if rpc_error is not None:
+            raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
         raise HTTPException(status_code=503, detail="no base_url or p2p link for target node")
     forward = {"tool": body.tool, "arguments": payload}
     if body.timeout is not None:
@@ -282,11 +303,19 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
                     dev=body.dev,
                 )
                 return {"ok": True, "result": res, "trace_id": trace}
-            except Exception:
-                pass
+            except Exception as exc:
+                rpc_error = exc
+        else:
+            rpc_error = None
 
         base_url = target.get("base_url") or directory.get_node_base_url(target_node_id)
+        if _is_loopback_base_url(base_url):
+            if rpc_error is not None:
+                raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
+            raise HTTPException(status_code=503, detail="member base_url is loopback-only and the live member link is unavailable")
         if not base_url:
+            if rpc_error is not None:
+                raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
             raise HTTPException(status_code=503, detail="no base_url or p2p link for target node")
 
         # Проксируем запрос прозрачно

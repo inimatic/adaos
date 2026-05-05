@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -33,28 +34,8 @@ def execute_tool(
             sys.path.insert(0, str(extra_path))
 
     module_name = module or "handlers.main"
-    mod = importlib.import_module(module_name)
-    try:
-        func = getattr(mod, attr)
-    except AttributeError as first_exc:
-        # Fallback for cases where manifest.module is "handlers.main" but
-        # the actual module lives under skills.<name>.handlers.main.
-        if module_name == "handlers.main":
-            skill_pkg = skill_path.name
-            for candidate in (
-                f"skills.{skill_pkg}.handlers.main",
-                f"{skill_pkg}.handlers.main",
-            ):
-                try:
-                    mod = importlib.import_module(candidate)
-                    func = getattr(mod, attr)
-                    break
-                except Exception:
-                    continue
-            else:
-                raise first_exc
-        else:
-            raise
+    mod = _load_skill_module(skill_path, module_name)
+    func = getattr(mod, attr)
     if not callable(func):
         raise TypeError(f"attribute '{attr}' from module '{module_name}' is not callable")
 
@@ -94,3 +75,65 @@ def _should_expand_keywords(func) -> bool:
         return True
     except Exception:
         return False
+
+
+def _is_generic_handlers_module(module_name: str) -> bool:
+    token = str(module_name or "").strip()
+    return token == "handlers" or token == "handlers.main" or token.startswith("handlers.")
+
+
+def _purge_generic_handlers_modules() -> None:
+    import sys
+
+    for key in list(sys.modules.keys()):
+        if key == "handlers" or key.startswith("handlers."):
+            sys.modules.pop(key, None)
+
+
+def _load_skill_module(skill_path: Path, module_name: str):
+    skill_pkg = skill_path.name
+    candidates: list[str] = []
+    if _is_generic_handlers_module(module_name):
+        candidates.extend(
+            [
+                f"skills.{skill_pkg}.{module_name}",
+                f"{skill_pkg}.{module_name}",
+            ]
+        )
+    candidates.append(module_name)
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            if _is_generic_handlers_module(candidate):
+                _purge_generic_handlers_modules()
+            return importlib.import_module(candidate)
+        except Exception as exc:
+            last_error = exc
+
+    if _is_generic_handlers_module(module_name):
+        loaded = _load_module_from_skill_source(skill_path, module_name)
+        if loaded is not None:
+            return loaded
+
+    if last_error is not None:
+        raise last_error
+    return importlib.import_module(module_name)
+
+
+def _load_module_from_skill_source(skill_path: Path, module_name: str):
+    import sys
+
+    relative = Path(*[segment for segment in str(module_name or "").split(".") if segment])
+    # Build the file path without relying on platform-specific anchors.
+    candidate_file = skill_path.joinpath(*relative.parts).with_suffix(".py")
+    if not candidate_file.exists():
+        return None
+    synthetic_name = f"_adaos_runtime.{skill_path.name}.{module_name}"
+    spec = importlib.util.spec_from_file_location(synthetic_name, candidate_file)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[synthetic_name] = module
+    spec.loader.exec_module(module)
+    return module

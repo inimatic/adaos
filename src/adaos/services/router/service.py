@@ -29,6 +29,7 @@ from adaos.services.webspace_id import coerce_webspace_id
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.scenario.node_data_scope import node_scope_data_path
+from adaos.services.scenario.projection_service import _merge_nested_path
 from adaos.skills.runtime_runner import execute_tool
 from adaos.sdk.io.context import io_meta
 
