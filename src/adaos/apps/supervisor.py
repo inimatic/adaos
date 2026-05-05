@@ -2357,6 +2357,38 @@ class SupervisorManager:
         }
 
     @staticmethod
+    def _required_upstream_link_kind_for_role(role: str | None) -> str:
+        role_norm = str(role or "").strip().lower()
+        return "member_hub" if role_norm == "member" else "hub_root"
+
+    def _required_upstream_link_state_payload(self, *, role: str | None = None) -> dict[str, Any]:
+        role_norm = str(role or self._managed_transition_role or self._sidecar_role() or "").strip().lower() or None
+        kind = self._required_upstream_link_kind_for_role(role_norm)
+        payload = (
+            self._member_hub_watchdog_state_payload()
+            if kind == "member_hub"
+            else self._hub_root_watchdog_state_payload()
+        )
+        state = str(payload.get("last_state") or "").strip().lower() or "unknown"
+        paused_states = {"waiting_restart", "restarting", "paused_for_update", "cooldown"}
+        ready = state in {"ready", "not_applicable"} or state in paused_states
+        return {
+            "kind": kind,
+            "role": role_norm,
+            "owner": "supervisor",
+            "state": state,
+            "reason": str(payload.get("last_reason") or "").strip() or None,
+            "ready": ready,
+            "visible": True,
+            "reconnect_total": int(payload.get("reconnect_total") or 0),
+            "cooldown_sec": float(payload.get("cooldown_sec") or 0.0),
+            "verify_timeout_sec": float(payload.get("verify_timeout_sec") or 0.0),
+            "served_by": "supervisor",
+            "watchdog": dict(payload),
+            "blockers": [],
+        }
+
+    @staticmethod
     def _hub_root_channel_state(runtime: dict[str, Any]) -> dict[str, Any]:
         runtime = runtime if isinstance(runtime, dict) else {}
         readiness_tree = runtime.get("readiness_tree") if isinstance(runtime.get("readiness_tree"), dict) else {}
@@ -2796,6 +2828,25 @@ class SupervisorManager:
         )
         self._persist_runtime_state()
 
+    def _required_upstream_link_decision(
+        self,
+        runtime: dict[str, Any],
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        node = runtime.get("node") if isinstance(runtime.get("node"), dict) else {}
+        role = str(node.get("role") or self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        if role == "member":
+            return self._member_hub_watchdog_decision(runtime, now=now)
+        return self._hub_root_watchdog_decision(runtime, now=now)
+
+    async def _maybe_maintain_required_upstream_link(self) -> None:
+        role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        if role == "member":
+            await self._maybe_reconnect_member_hub_from_watchdog()
+        else:
+            await self._maybe_reconnect_hub_root_from_watchdog()
+
     @property
     def active_runtime_port(self) -> int:
         return self.slot_runtime_port(active_slot())
@@ -3165,6 +3216,7 @@ class SupervisorManager:
             "managed_start_reason": self._managed_start_reason,
             "hub_root_watchdog": self._hub_root_watchdog_state_payload(),
             "member_hub_watchdog": self._member_hub_watchdog_state_payload(),
+            "required_upstream_link": self._required_upstream_link_state_payload(),
             "expected_managed_executable": expected_executable,
             "expected_managed_cwd": expected_cwd,
             "managed_matches_active_slot": managed_matches_active_slot,
@@ -4433,13 +4485,9 @@ class SupervisorManager:
                         _LOG.warning("failed to finalize active memory profile session", exc_info=True)
                     continue
                 try:
-                    await self._maybe_reconnect_hub_root_from_watchdog()
+                    await self._maybe_maintain_required_upstream_link()
                 except Exception:
-                    _LOG.warning("hub-root supervisor watchdog failed", exc_info=True)
-                try:
-                    await self._maybe_reconnect_member_hub_from_watchdog()
-                except Exception:
-                    _LOG.warning("member-hub supervisor watchdog failed", exc_info=True)
+                    _LOG.warning("required-upstream-link supervisor watchdog failed", exc_info=True)
                 restart_decision = self._runtime_self_heal_decision()
                 if restart_decision is not None:
                     self._last_error = str(restart_decision.get("message") or "active runtime became unhealthy")

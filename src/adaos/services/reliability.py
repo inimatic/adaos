@@ -4985,6 +4985,13 @@ def _supervisor_browser_safe_surface(*, payload: dict[str, Any] | None) -> dict[
 def _supervisor_required_upstream_link(*, payload: dict[str, Any] | None) -> dict[str, Any]:
     data = payload if isinstance(payload, dict) else {}
     runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
+    embedded = (
+        runtime.get("required_upstream_link")
+        if isinstance(runtime.get("required_upstream_link"), dict)
+        else {}
+    )
+    if embedded:
+        return dict(embedded)
     role = str(runtime.get("transition_role") or "").strip().lower() or None
     hub_root = runtime.get("hub_root_watchdog") if isinstance(runtime.get("hub_root_watchdog"), dict) else {}
     member_hub = runtime.get("member_hub_watchdog") if isinstance(runtime.get("member_hub_watchdog"), dict) else {}

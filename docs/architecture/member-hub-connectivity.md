@@ -60,6 +60,7 @@ As of the current implementation increment:
 - member connectivity status carries semantic transition states for restart/update windows
 - supervisor now has an initial `member-hub` watchdog that can request reconnects for production-style nodes
 - reliability/CLI surfaces now expose the active `required_upstream_link` view for the current node role
+- supervisor status now also publishes a unified `required_upstream_link` contract over role-specific watchdog internals
 
 This closes the biggest developer-experience gap, but it is still not the final
 production model because sidecar-aware ownership and deeper recovery policy are not implemented yet.
