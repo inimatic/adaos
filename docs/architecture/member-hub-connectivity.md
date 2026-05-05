@@ -278,6 +278,8 @@ Success criteria:
 - teach supervisor about `required_upstream_link` for the current role
 - persist member-hub watchdog state and cooldown/recovery data
 - expose member-hub watchdog diagnostics through CLI, reliability, and browser-safe status
+- make watchdog recovery decisions consume the same `required_upstream_link` contract that
+  reliability publishes, so owner/handoff/recovery policy are shared between status and action
 
 Success criteria:
 

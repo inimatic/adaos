@@ -2409,6 +2409,21 @@ class SupervisorManager:
             "blockers": [],
         }
 
+    def _required_upstream_link_snapshot(
+        self,
+        *,
+        runtime: dict[str, Any] | None = None,
+        role: str | None = None,
+    ) -> dict[str, Any]:
+        payload = (
+            runtime.get("required_upstream_link")
+            if isinstance(runtime, dict) and isinstance(runtime.get("required_upstream_link"), dict)
+            else {}
+        )
+        if payload:
+            return dict(payload)
+        return self._required_upstream_link_state_payload(role=role)
+
     @staticmethod
     def _hub_root_channel_state(runtime: dict[str, Any]) -> dict[str, Any]:
         runtime = runtime if isinstance(runtime, dict) else {}
@@ -2547,14 +2562,15 @@ class SupervisorManager:
         hub_root_state = str(channel_state.get("hub_root_state") or "")
         hub_root_browser_status = str(channel_state.get("hub_root_browser_status") or "")
         hub_root_browser_state = str(channel_state.get("hub_root_browser_state") or "")
-        sidecar_enabled = bool(realtime_sidecar_enabled(role=role))
-        transport_owner = "sidecar" if sidecar_enabled else "runtime"
+        required_link = self._required_upstream_link_snapshot(runtime=runtime, role=role)
+        sidecar_enabled = bool(required_link.get("sidecar_enabled"))
+        transport_owner = str(required_link.get("current_owner") or "").strip().lower() or ("sidecar" if sidecar_enabled else "runtime")
         root_down = self._hub_root_channel_down(channel_state)
         route_degraded = self._hub_root_route_degraded(channel_state)
         route_degraded_reset_enabled = _hub_root_watchdog_reset_degraded_route_enabled()
         action = (
             "sidecar_restart"
-            if sidecar_enabled
+            if transport_owner == "sidecar"
             else ("runtime_reconnect" if root_down else "runtime_route_reset")
         )
 
@@ -2605,6 +2621,7 @@ class SupervisorManager:
             "last_event": channel_state.get("last_event"),
             "last_summary": channel_state.get("last_summary"),
             "channel_before": channel_state,
+            "required_upstream_link": required_link,
         }
 
     async def _verify_hub_root_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
@@ -2722,6 +2739,7 @@ class SupervisorManager:
             return None
 
         channel_state = self._member_hub_channel_state(runtime)
+        required_link = self._required_upstream_link_snapshot(runtime=runtime, role=role)
         transition_state = str(channel_state.get("transition_state") or "").strip().lower()
         if transition_state in {"waiting_restart", "restarting", "paused_for_update"}:
             self._member_hub_watchdog_last_state = transition_state
@@ -2746,17 +2764,33 @@ class SupervisorManager:
 
         route_status = str(channel_state.get("route_status") or "").strip().lower() or "-"
         member_state = str(channel_state.get("member_state") or "").strip().lower() or "-"
+        transport_owner = str(required_link.get("current_owner") or "").strip().lower() or "runtime"
+        continuity_mode = str(required_link.get("continuity_mode") or "").strip().lower() or "runtime_bound"
+        handoff_state = str(required_link.get("handoff_state") or "").strip().lower() or "unknown"
+        handoff_ready = bool(required_link.get("handoff_ready"))
+        recovery_policy = (
+            dict(required_link.get("recovery_policy"))
+            if isinstance(required_link.get("recovery_policy"), dict)
+            else {}
+        )
         reason = (
             f"route={route_status} "
             f"member_state={member_state} "
             f"assessment={str(channel_state.get('assessment_state') or '-')} "
-            f"hub_url={str(channel_state.get('hub_url') or '-')}"
+            f"hub_url={str(channel_state.get('hub_url') or '-')} "
+            f"owner={transport_owner} "
+            f"handoff={handoff_state} "
+            f"continuity={continuity_mode}"
         )
         return {
             "reason": "supervisor.member_hub.watchdog_reconnect",
             "message": f"member-hub watchdog requesting runtime_reconnect ({reason})",
             "action": "runtime_reconnect",
-            "transport_owner": "runtime",
+            "transport_owner": transport_owner,
+            "continuity_mode": continuity_mode,
+            "handoff_state": handoff_state,
+            "handoff_ready": handoff_ready,
+            "recovery_policy": recovery_policy,
             "route_status": channel_state.get("route_status"),
             "hub_member_status": channel_state.get("hub_member_status"),
             "member_state": channel_state.get("member_state"),
@@ -2767,6 +2801,7 @@ class SupervisorManager:
             "last_error": channel_state.get("last_error"),
             "last_close_reason": channel_state.get("last_close_reason"),
             "channel_before": channel_state,
+            "required_upstream_link": required_link,
         }
 
     async def _verify_member_hub_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:

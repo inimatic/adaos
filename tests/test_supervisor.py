@@ -563,6 +563,56 @@ def test_member_hub_watchdog_requests_reconnect_when_member_link_is_down(monkeyp
     assert decision["action"] == "runtime_reconnect"
     assert decision["transport_owner"] == "runtime"
     assert decision["member_state"] == "disconnected"
+    assert decision["continuity_mode"] == "runtime_bound"
+    assert decision["handoff_state"] == "unknown"
+
+
+def test_member_hub_watchdog_uses_runtime_required_upstream_link_context(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "member")
+
+    decision = manager._member_hub_watchdog_decision(
+        {
+            "node": {"role": "member"},
+            "required_upstream_link": {
+                "kind": "member_hub",
+                "current_owner": "sidecar",
+                "planned_owner": "sidecar",
+                "continuity_mode": "slot_sticky",
+                "handoff_state": "ready",
+                "handoff_ready": True,
+                "recovery_policy": {
+                    "on_runtime_restart": "preserve_sidecar",
+                    "while_owner_runtime": "runtime_reconnect",
+                    "while_owner_sidecar": "preserve_sidecar",
+                },
+                "sidecar_enabled": True,
+                "blockers": [],
+            },
+            "readiness_tree": {
+                "route": {"status": "down"},
+                "hub_member": {"status": "down"},
+            },
+            "hub_member_connection_state": {
+                "state": "disconnected",
+                "assessment": {"state": "degraded", "reason": "member_link_down"},
+                "hub": {
+                    "connected": False,
+                    "hub_url": "https://ru.api.inimatic.com/hubs/sn_demo",
+                },
+            },
+        },
+        now=100.0,
+    )
+
+    assert isinstance(decision, dict)
+    assert decision["transport_owner"] == "sidecar"
+    assert decision["continuity_mode"] == "slot_sticky"
+    assert decision["handoff_state"] == "ready"
+    assert decision["handoff_ready"] is True
+    assert decision["recovery_policy"]["on_runtime_restart"] == "preserve_sidecar"
+    assert decision["required_upstream_link"]["current_owner"] == "sidecar"
 
 
 def test_member_hub_watchdog_skips_recovery_during_restart_transition(monkeypatch) -> None:
@@ -659,6 +709,25 @@ def test_required_upstream_link_maintenance_dispatches_to_member_watchdog(monkey
     asyncio.run(manager._maybe_maintain_required_upstream_link())
 
     assert calls == ["member"]
+
+
+def test_required_upstream_link_snapshot_prefers_runtime_payload(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    payload = manager._required_upstream_link_snapshot(
+        runtime={
+            "required_upstream_link": {
+                "kind": "member_hub",
+                "current_owner": "sidecar",
+                "handoff_state": "ready",
+            }
+        },
+        role="member",
+    )
+
+    assert payload["kind"] == "member_hub"
+    assert payload["current_owner"] == "sidecar"
+    assert payload["handoff_state"] == "ready"
 
 
 def test_required_upstream_link_maintenance_dispatches_to_hub_watchdog(monkeypatch) -> None:
