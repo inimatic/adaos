@@ -1916,6 +1916,11 @@ def test_runtime_state_payload_surfaces_required_upstream_link_for_member(monkey
     assert payload["required_upstream_link"]["owner"] == "supervisor"
     assert payload["required_upstream_link"]["state"] == "ready"
     assert payload["required_upstream_link"]["ready"] is True
+    assert payload["required_upstream_link"]["desired_state"] == "connected"
+    assert payload["required_upstream_link"]["current_owner"] == "runtime"
+    assert payload["required_upstream_link"]["planned_owner"] == "runtime"
+    assert payload["required_upstream_link"]["future_owner"] == "sidecar"
+    assert payload["required_upstream_link"]["continuity_mode"] == "runtime_bound"
     assert payload["required_upstream_link"]["reconnect_total"] == 3
 
 
