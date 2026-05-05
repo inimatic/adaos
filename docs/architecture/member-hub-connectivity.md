@@ -58,9 +58,10 @@ As of the current implementation increment:
 - `adaos node join` also performs a best-effort local activation request
 - runtime exposes `request_member_hub_reconnect()`
 - member connectivity status carries semantic transition states for restart/update windows
+- supervisor now has an initial `member-hub` watchdog that can request reconnects for production-style nodes
 
 This closes the biggest developer-experience gap, but it is still not the final
-production model because supervisor does not yet own the full member-hub watchdog.
+production model because sidecar-aware ownership and deeper recovery policy are not implemented yet.
 
 ## Target architecture
 
