@@ -180,6 +180,7 @@ def test_reconcile_update_status_completes_awaiting_root_restart_attempt(monkeyp
 def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
+    monkeypatch.setattr(supervisor, "finalize_runtime_boot_status", lambda: None)
     monkeypatch.setattr(supervisor.time, "time", lambda: 120.0)
     write_status(
         {
@@ -213,6 +214,58 @@ def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkey
     assert isinstance(attempt, dict)
     assert attempt["state"] == "failed"
     assert attempt["completion_reason"] == "root restart timeout"
+
+
+def test_reconcile_update_status_self_heals_stale_awaiting_root_restart_when_runtime_can_finalize(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
+    monkeypatch.setattr(supervisor.time, "time", lambda: 120.0)
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "root_promoted",
+            "action": "update",
+            "target_rev": "rev2026",
+            "reason": "test.root_restart",
+            "target_slot": "A",
+            "updated_at": 10.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "awaiting_root_restart",
+            "action": "update",
+            "target_rev": "rev2026",
+            "reason": "test.root_restart",
+            "requested_at": 0.0,
+            "transitioned_at": 10.0,
+            "updated_at": 10.0,
+        }
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "finalize_runtime_boot_status",
+        lambda: {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_slot": "A",
+            "root_restart_completed_at": 119.0,
+            "updated_at": 119.0,
+        },
+    )
+
+    payload = supervisor._reconcile_update_status({"ok": True, "status": read_status(), "_served_by": "supervisor_fallback"})
+
+    assert payload["status"]["state"] == "succeeded"
+    assert payload["status"]["phase"] == "validate"
+    assert payload["status"]["root_restart_completed_at"] == 119.0
+    assert payload["_served_by"] == "supervisor_timeout_finalize"
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "completed"
+    assert attempt["completion_reason"] == "root restart completed"
 
 
 def test_reconcile_update_status_clears_stale_candidate_prewarm_fields_when_root_restart_completes(monkeypatch, tmp_path) -> None:
