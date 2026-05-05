@@ -2369,9 +2369,24 @@ class SupervisorManager:
             if kind == "member_hub"
             else self._hub_root_watchdog_state_payload()
         )
+        sidecar_enabled = bool(realtime_sidecar_enabled(role=role_norm))
         state = str(payload.get("last_state") or "").strip().lower() or "unknown"
         paused_states = {"waiting_restart", "restarting", "paused_for_update", "cooldown"}
         ready = state in {"ready", "not_applicable"} or state in paused_states
+        desired_state = "connected" if self._desired_running and not self._stopping else "paused"
+        current_owner = "runtime"
+        planned_owner = "runtime"
+        future_owner = None
+        continuity_mode = "runtime_bound"
+        if kind == "hub_root":
+            current_owner = "sidecar" if sidecar_enabled else "runtime"
+            planned_owner = current_owner
+            continuity_mode = "slot_sticky" if current_owner == "sidecar" else "runtime_bound"
+        elif kind == "member_hub":
+            current_owner = "runtime"
+            planned_owner = "runtime"
+            future_owner = "sidecar"
+            continuity_mode = "runtime_bound"
         return {
             "kind": kind,
             "role": role_norm,
@@ -2380,6 +2395,12 @@ class SupervisorManager:
             "reason": str(payload.get("last_reason") or "").strip() or None,
             "ready": ready,
             "visible": True,
+            "desired_state": desired_state,
+            "current_owner": current_owner,
+            "planned_owner": planned_owner,
+            "future_owner": future_owner,
+            "continuity_mode": continuity_mode,
+            "sidecar_enabled": sidecar_enabled,
             "reconnect_total": int(payload.get("reconnect_total") or 0),
             "cooldown_sec": float(payload.get("cooldown_sec") or 0.0),
             "verify_timeout_sec": float(payload.get("verify_timeout_sec") or 0.0),
