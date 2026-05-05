@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -83,6 +84,18 @@ def _snapshot_event_payload(node_id: str, *, node_names: list[str], snapshot: di
     }
 
 
+def _snapshot_has_desktop_material(snapshot: dict[str, Any]) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    catalog = snapshot.get("desktop_catalog") if isinstance(snapshot.get("desktop_catalog"), dict) else {}
+    apps = catalog.get("apps") if isinstance(catalog.get("apps"), list) else []
+    widgets = catalog.get("widgets") if isinstance(catalog.get("widgets"), list) else []
+    modals = catalog.get("modals") if isinstance(catalog.get("modals"), list) else []
+    webio = catalog.get("webio") if isinstance(catalog.get("webio"), list) else []
+    ydoc_defaults = catalog.get("ydoc_defaults") if isinstance(catalog.get("ydoc_defaults"), dict) else {}
+    return bool(apps or widgets or modals or webio or ydoc_defaults)
+
+
 def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -150,6 +163,55 @@ class HubLinkManager:
         self._lock = asyncio.Lock()
         self._hub_event_total = 0
         self._hub_core_update_broadcast_total = 0
+        self._snapshot_refresh_tasks: dict[str, asyncio.Task] = {}
+
+    @staticmethod
+    def _member_snapshot_followup_delay_s() -> float:
+        raw = str(os.getenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_FOLLOWUP_DELAY_S") or "").strip()
+        try:
+            value = float(raw or 3.0)
+        except Exception:
+            value = 3.0
+        return max(0.5, min(30.0, value))
+
+    def _cancel_snapshot_refresh_task(self, node_id: str) -> None:
+        task = self._snapshot_refresh_tasks.pop(str(node_id or "").strip(), None)
+        if task and not task.done():
+            task.cancel()
+
+    def _schedule_snapshot_followup_refresh(self, node_id: str) -> None:
+        node_key = str(node_id or "").strip()
+        if not node_key:
+            return
+        self._cancel_snapshot_refresh_task(node_key)
+
+        async def _runner() -> None:
+            try:
+                await asyncio.sleep(self._member_snapshot_followup_delay_s())
+                link = await self._get_link(node_key)
+                if not link:
+                    return
+                if _snapshot_has_desktop_material(link.node_snapshot):
+                    return
+                await self.request_member_snapshot(node_key, reason="member_link_followup")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.debug(
+                    "failed to request follow-up member snapshot node_id=%s",
+                    node_key,
+                    exc_info=True,
+                )
+            finally:
+                current = self._snapshot_refresh_tasks.get(node_key)
+                if current is task:
+                    self._snapshot_refresh_tasks.pop(node_key, None)
+
+        task = asyncio.create_task(
+            _runner(),
+            name=f"member-snapshot-followup:{node_key}",
+        )
+        self._snapshot_refresh_tasks[node_key] = task
 
     async def _push_node_display_assignment(self, node_id: str) -> None:
         link = await self._get_link(node_id)
@@ -245,9 +307,15 @@ class HubLinkManager:
             await self._push_current_core_update_status(node_id)
         except Exception:
             _log.debug("failed to push current core.update.status on register node_id=%s", node_id, exc_info=True)
+        try:
+            await self.request_member_snapshot(node_id, reason="member_link_up")
+        except Exception:
+            _log.debug("failed to request initial member snapshot on register node_id=%s", node_id, exc_info=True)
+        self._schedule_snapshot_followup_refresh(node_id)
         return link
 
     async def unregister(self, node_id: str) -> None:
+        self._cancel_snapshot_refresh_task(node_id)
         async with self._lock:
             link = self._links.pop(node_id, None)
         if not link:
@@ -335,6 +403,8 @@ class HubLinkManager:
             snapshot=snap,
             captured_at=float(snap.get("captured_at") or link.last_snapshot_at or time.time()),
         )
+        if _snapshot_has_desktop_material(snap):
+            self._cancel_snapshot_refresh_task(node_id)
         try:
             from adaos.services.registry.subnet_directory import get_directory
 
