@@ -73,6 +73,10 @@ class _FakeWebSocket:
         return None
 
 
+async def _noop_push(*_args, **_kwargs) -> None:
+    return None
+
+
 def test_update_member_snapshot_publishes_only_material_changes(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
@@ -199,3 +203,94 @@ def test_broadcast_event_sends_node_targeted_payload_only_to_matching_member() -
     assert member_1_ws.messages == []
     assert len(member_2_ws.messages) == 1
     assert member_2_ws.messages[0]["event"]["payload"]["target_node_id"] == "member-2"
+
+
+def test_register_requests_initial_member_snapshot(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
+    monkeypatch.setattr(manager, "_push_current_core_update_status", _noop_push)
+
+    asyncio.run(
+        manager.register(
+            "member-1",
+            ws,
+            hostname="member.local",
+            roles=["member"],
+            node_names=["Node 1"],
+        )
+    )
+
+    snapshot_requests = [msg for msg in ws.messages if msg.get("t") == "node.snapshot.request"]
+    assert len(snapshot_requests) == 1
+    assert snapshot_requests[0]["reason"] == "member_link_up"
+
+
+def test_register_keeps_followup_snapshot_refresh_until_desktop_catalog_arrives(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
+    monkeypatch.setattr(manager, "_push_current_core_update_status", _noop_push)
+    monkeypatch.setenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_FOLLOWUP_DELAY_S", "0.5")
+
+    async def _exercise() -> None:
+        await manager.register(
+            "member-1",
+            ws,
+            hostname="member.local",
+            roles=["member"],
+            node_names=["Node 1"],
+        )
+        await manager.update_member_snapshot(
+            "member-1",
+            snapshot={
+                "node_id": "member-1",
+                "captured_at": 100.0,
+                "desktop_catalog": {"apps": [], "widgets": []},
+            },
+        )
+        await asyncio.sleep(0.7)
+
+    asyncio.run(_exercise())
+
+    snapshot_requests = [msg for msg in ws.messages if msg.get("t") == "node.snapshot.request"]
+    assert [msg.get("reason") for msg in snapshot_requests] == ["member_link_up", "member_link_followup"]
+
+
+def test_snapshot_with_desktop_catalog_material_cancels_followup_refresh(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
+    monkeypatch.setattr(manager, "_push_current_core_update_status", _noop_push)
+    monkeypatch.setenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_FOLLOWUP_DELAY_S", "0.5")
+
+    async def _exercise() -> None:
+        await manager.register(
+            "member-1",
+            ws,
+            hostname="member.local",
+            roles=["member"],
+            node_names=["Node 1"],
+        )
+        await manager.update_member_snapshot(
+            "member-1",
+            snapshot={
+                "node_id": "member-1",
+                "captured_at": 100.0,
+                "desktop_catalog": {"apps": [{"id": "weather"}], "widgets": []},
+            },
+        )
+        await asyncio.sleep(0.7)
+
+    asyncio.run(_exercise())
+
+    snapshot_requests = [msg for msg in ws.messages if msg.get("t") == "node.snapshot.request"]
+    assert [msg.get("reason") for msg in snapshot_requests] == ["member_link_up"]

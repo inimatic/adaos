@@ -263,6 +263,9 @@ The implementation should avoid:
 - add a runtime-level `request_member_hub_reconnect()` path
 - in dev/no-supervisor mode, activate directly in the running runtime
 - keep the current Root join-code contract unchanged
+- when the member link comes up, have the hub request an immediate runtime snapshot and
+  keep one bounded follow-up refresh if the first payload does not yet carry desktop
+  catalog material for remote desktop/YJS projection seeding
 
 Success criteria:
 
