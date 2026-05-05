@@ -53,6 +53,15 @@ This works once the runtime is restarted or booted as `member`, but it is weaker
 the target lifecycle because the connectivity contract is not yet owned by a stable
 always-on authority.
 
+As of the current implementation increment:
+
+- `adaos node join` also performs a best-effort local activation request
+- runtime exposes `request_member_hub_reconnect()`
+- member connectivity status carries semantic transition states for restart/update windows
+
+This closes the biggest developer-experience gap, but it is still not the final
+production model because supervisor does not yet own the full member-hub watchdog.
+
 ## Target architecture
 
 ### 1. Role-scoped upstream link

@@ -20,6 +20,7 @@ from adaos.services.bootstrap import (
     is_ready,
     load_config,
     request_hub_root_reconnect,
+    request_member_hub_reconnect,
     request_hub_root_route_reset,
     switch_role,
 )
@@ -930,6 +931,10 @@ class HubRootReconnectRequest(BaseModel):
     url_override: Optional[str] = None
 
 
+class MemberHubReconnectRequest(BaseModel):
+    force: bool = False
+
+
 class HubRootRouteResetRequest(BaseModel):
     reason: str | None = None
     notify_browser: bool = True
@@ -1144,6 +1149,11 @@ async def node_reliability_summary(webspace_id: str | None = None) -> dict[str, 
 @router.post("/hub-root/reconnect", dependencies=[Depends(require_token)])
 async def hub_root_reconnect(payload: HubRootReconnectRequest) -> dict[str, Any]:
     return await request_hub_root_reconnect(transport=payload.transport, url_override=payload.url_override)
+
+
+@router.post("/member-hub/reconnect", dependencies=[Depends(require_token)])
+async def member_hub_reconnect(payload: MemberHubReconnectRequest) -> dict[str, Any]:
+    return await request_member_hub_reconnect(force=bool(payload.force))
 
 
 @router.post("/hub-root/route-reset", dependencies=[Depends(require_token)])

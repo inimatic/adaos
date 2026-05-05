@@ -964,6 +964,129 @@ class BootstrapService:
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
+    def _member_hub_transition_snapshot(self) -> dict[str, Any]:
+        try:
+            from adaos.services.core_update import read_status as _read_core_update_status
+        except Exception:
+            _read_core_update_status = None
+        try:
+            from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot as _runtime_lifecycle_snapshot
+        except Exception:
+            _runtime_lifecycle_snapshot = None
+
+        update_status = _read_core_update_status() if callable(_read_core_update_status) else {}
+        lifecycle = _runtime_lifecycle_snapshot() if callable(_runtime_lifecycle_snapshot) else {}
+        status = update_status if isinstance(update_status, dict) else {}
+        runtime = lifecycle if isinstance(lifecycle, dict) else {}
+        state = str(status.get("state") or "").strip().lower()
+        phase = str(status.get("phase") or "").strip().lower()
+        node_state = str(runtime.get("node_state") or "").strip().lower()
+        draining = bool(runtime.get("draining"))
+
+        transition_state = "ready"
+        reason = "none"
+        recovery_blocked = False
+        if state in {"preparing", "countdown", "draining", "stopping", "applying"}:
+            transition_state = "paused_for_update"
+            reason = state
+            recovery_blocked = True
+        elif state == "restarting" or phase in {"launch", "root_promoted"}:
+            transition_state = "restarting"
+            reason = state or phase or "restarting"
+            recovery_blocked = True
+        elif state == "validated" and phase == "root_promotion_pending":
+            transition_state = "waiting_restart"
+            reason = "root_promotion_pending"
+            recovery_blocked = True
+        elif draining or node_state in {"stopping", "stopped", "restarting"}:
+            transition_state = "waiting_restart"
+            reason = node_state or "draining"
+            recovery_blocked = True
+        return {
+            "transition_state": transition_state,
+            "reason": reason,
+            "recovery_blocked": recovery_blocked,
+            "update_state": state or None,
+            "update_phase": phase or None,
+            "node_state": node_state or None,
+            "draining": draining,
+        }
+
+    async def request_member_hub_reconnect(self, *, force: bool = False) -> dict[str, Any]:
+        conf = load_config(ctx=self.ctx)
+        transition = self._member_hub_transition_snapshot()
+        if str(getattr(conf, "role", "") or "").strip().lower() != "member":
+            return {
+                "ok": False,
+                "accepted": False,
+                "error": "role_not_member",
+                "role": str(getattr(conf, "role", "") or "").strip().lower() or None,
+                "transition": transition,
+            }
+        hub_url = str(getattr(conf, "hub_url", "") or "").strip()
+        if not hub_url:
+            return {
+                "ok": False,
+                "accepted": False,
+                "error": "hub_url_missing",
+                "transition": transition,
+            }
+        member_hub_token = str(load_member_hub_token() or getattr(conf, "token", "") or "").strip()
+        if not member_hub_token:
+            return {
+                "ok": False,
+                "accepted": False,
+                "error": "member_hub_token_missing",
+                "transition": transition,
+            }
+        if transition.get("recovery_blocked") and not force:
+            return {
+                "ok": True,
+                "accepted": False,
+                "transition": transition,
+                "reason": "transition_in_progress",
+            }
+
+        from adaos.services.subnet.link_client import get_member_link_client
+
+        existing = self._find_live_boot_task("adaos-heartbeat")
+        if existing is not None:
+            existing.cancel()
+            try:
+                await existing
+            except asyncio.CancelledError:
+                pass
+            except BaseException:
+                pass
+        try:
+            await get_member_link_client().stop()
+        except Exception:
+            pass
+
+        heartbeat_task = await self._member_register_and_heartbeat(conf)
+        if heartbeat_task is not None:
+            self._boot_tasks.append(heartbeat_task)
+        try:
+            await get_member_link_client().start()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "accepted": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "transition": transition,
+            }
+        return {
+            "ok": True,
+            "accepted": True,
+            "transition": transition,
+            "role": "member",
+            "hub_url": hub_url,
+            "started": {
+                "heartbeat": heartbeat_task is not None,
+                "link_client": True,
+            },
+        }
+
     async def request_hub_root_route_reset(
         self,
         *,
@@ -8258,6 +8381,10 @@ def is_ready() -> bool:
 
 async def request_hub_root_reconnect(*, transport: str | None = None, url_override: str | None = None) -> dict[str, Any]:
     return await _svc().request_hub_root_reconnect(transport=transport, url_override=url_override)
+
+
+async def request_member_hub_reconnect(*, force: bool = False) -> dict[str, Any]:
+    return await _svc().request_member_hub_reconnect(force=bool(force))
 
 
 async def request_hub_root_route_reset(*, reason: str, notify_browser: bool = True) -> dict[str, Any]:
