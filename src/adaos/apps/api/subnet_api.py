@@ -37,6 +37,7 @@ class HeartbeatRequest(BaseModel):
     node_id: str
     node_state: str | None = None
     capacity: Dict[str, Any] | None = None
+    base_url: str | None = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -102,7 +103,12 @@ async def heartbeat(body: HeartbeatRequest):
     # Если нода неизвестна — 404 (сохраняем поведение)
     if not directory.repo.get_node(body.node_id):
         raise HTTPException(status_code=404, detail="node not registered")
-    directory.on_heartbeat(body.node_id, body.capacity or None, node_state=body.node_state)
+    directory.on_heartbeat(
+        body.node_id,
+        body.capacity or None,
+        node_state=body.node_state,
+        base_url=body.base_url,
+    )
     return HeartbeatResponse(ok=True, lease_seconds=LEASE_SECONDS_DEFAULT)
 
 

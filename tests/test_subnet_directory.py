@@ -36,11 +36,21 @@ class _FakeRepo:
     def upsert_node(self, node):
         self.nodes[str(node.get("node_id"))] = dict(node)
 
-    def touch_heartbeat(self, node_id: str, last_seen: float, capacity=None, *, node_state: str | None = None):
+    def touch_heartbeat(
+        self,
+        node_id: str,
+        last_seen: float,
+        capacity=None,
+        *,
+        node_state: str | None = None,
+        base_url: str | None = None,
+    ):
         node = dict(self.nodes.get(node_id, {}))
         node["last_seen"] = last_seen
         if node_state is not None:
             node["node_state"] = node_state
+        if base_url is not None:
+            node["base_url"] = base_url
         self.nodes[node_id] = node
 
     def io_for_node(self, node_id: str):
@@ -157,6 +167,20 @@ def test_subnet_directory_snapshot_heartbeat_touches_runtime_projection(monkeypa
     assert node["online"] is True
     assert node["runtime_projection"]["captured_at"] == 42.0
     assert repo.runtime_touches == [("member-1", 42.0, "ready")]
+
+
+def test_subnet_directory_heartbeat_refreshes_member_base_url(monkeypatch) -> None:
+    repo = _FakeRepo()
+    monkeypatch.setattr(mod, "get_ctx", lambda: type("Ctx", (), {"sql": object()})())
+    monkeypatch.setattr(mod, "SubnetRepo", lambda sql: repo)
+
+    directory = mod.SubnetDirectory()
+    directory.on_heartbeat("member-1", None, node_state="ready", base_url="http://127.0.0.1:8778")
+
+    node = directory.get_node("member-1")
+
+    assert node is not None
+    assert node["base_url"] == "http://127.0.0.1:8778"
 
 
 def test_subnet_directory_get_node_exposes_persisted_display_metadata(monkeypatch) -> None:

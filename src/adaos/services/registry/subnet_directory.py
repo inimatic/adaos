@@ -40,9 +40,16 @@ class SubnetDirectory:
         self.repo.replace_scenario_capacity(node["node_id"], capacity.get("scenarios") or [])
         self.live[node["node_id"]] = {"online": True, "last_seen": node["last_seen"]}
 
-    def on_heartbeat(self, node_id: str, capacity: Optional[Dict[str, Any]], *, node_state: str | None = None) -> None:
+    def on_heartbeat(
+        self,
+        node_id: str,
+        capacity: Optional[Dict[str, Any]],
+        *,
+        node_state: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         ts = time.time()
-        self.repo.touch_heartbeat(node_id, ts, capacity, node_state=node_state)
+        self.repo.touch_heartbeat(node_id, ts, capacity, node_state=node_state, base_url=base_url)
         st = self.live.get(node_id) or {}
         st["online"] = True
         st["last_seen"] = ts
