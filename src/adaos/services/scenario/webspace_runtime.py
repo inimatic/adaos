@@ -4172,6 +4172,15 @@ async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
         if str(getattr(row, "workspace_id", "") or "").strip()
     ] or [default_webspace_id()]
     for webspace_id in targets:
+        try:
+            await _seed_member_snapshot_ydoc_defaults(webspace_id=webspace_id, node_id=node_id)
+        except Exception:
+            _log.debug(
+                "failed to seed member snapshot defaults webspace=%s node_id=%s",
+                webspace_id,
+                node_id,
+                exc_info=True,
+            )
         key = f"{node_id}\0{webspace_id}"
         last_at = float(_MEMBER_SNAPSHOT_REBUILD_AT.get(key) or 0.0)
         if interval_s > 0 and last_at > 0 and now - last_at < interval_s:
@@ -4224,6 +4233,47 @@ def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str) -> None
         name=f"member-snapshot-rebuild:{webspace_id}:{node_id}",
     )
     _MEMBER_SNAPSHOT_REBUILD_TASKS[task_key] = task
+
+
+async def _seed_member_snapshot_ydoc_defaults(*, webspace_id: str, node_id: str) -> None:
+    try:
+        from adaos.services.registry.subnet_directory import get_directory
+
+        node = get_directory().get_node(node_id) or {}
+    except Exception:
+        return
+    runtime_projection = node.get("runtime_projection") if isinstance(node.get("runtime_projection"), Mapping) else {}
+    snapshot = runtime_projection.get("snapshot") if isinstance(runtime_projection.get("snapshot"), Mapping) else {}
+    desktop_catalog = snapshot.get("desktop_catalog") if isinstance(snapshot.get("desktop_catalog"), Mapping) else {}
+    defaults = desktop_catalog.get("ydoc_defaults") if isinstance(desktop_catalog.get("ydoc_defaults"), Mapping) else {}
+    if not defaults:
+        return
+
+    async with _webspace_runtime_async_write_meta(root_names=["data"], source="member_snapshot.seed_defaults"):
+        async with async_get_ydoc(webspace_id, prefer_live_room=True) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                for raw_path, raw_value in defaults.items():
+                    path = str(raw_path or "").strip()
+                    if not path:
+                        continue
+                    segments = [segment for segment in path.split("/") if segment]
+                    if len(segments) < 2:
+                        continue
+                    root_name = segments[0]
+                    root = ydoc.get_map(root_name)
+                    value = _clone_json_like(raw_value)
+                    if len(segments) == 2:
+                        key = segments[1]
+                        current = root.get(key)
+                        if _json_like_equal(current, value):
+                            continue
+                        root.set(txn, key, value)
+                        continue
+                    top_key = segments[1]
+                    current_top = root.get(top_key)
+                    changed, merged = _merge_nested_json_path(current_top, segments[2:], value)
+                    if changed:
+                        root.set(txn, top_key, merged)
 
 
 @subscribe("desktop.webspace.create")

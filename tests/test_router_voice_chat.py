@@ -10,6 +10,7 @@ import pytest
 
 from adaos.domain import Event
 from adaos.services.eventbus import LocalEventBus
+from adaos.services.scenario.node_data_scope import node_scope_data_path
 
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
@@ -99,3 +100,5 @@ async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
 
     await bus.wait_for_idle(timeout=1.0)
     assert calls == [("какая погода в москве", {"route_id": "voice_chat", "webspace_id": "default"})]
+def test_voice_chat_data_path_is_node_scoped() -> None:
+    assert node_scope_data_path("data/voice_chat", "member-1") == "data/nodes/member-1/voice_chat"

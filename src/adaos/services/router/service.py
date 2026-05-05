@@ -28,6 +28,7 @@ from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 from adaos.services.webspace_id import coerce_webspace_id
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
+from adaos.services.scenario.node_data_scope import node_scope_data_path
 from adaos.skills.runtime_runner import execute_tool
 from adaos.sdk.io.context import io_meta
 
@@ -537,21 +538,60 @@ class RouterService:
             _route_cache[(src_ws, route_id)] = (now, base_ids)
             return base_ids
 
-        async def _ensure_voice_chat_state(webspace_id: str) -> None:
+        def _voice_chat_data_path(target_node_id: str | None) -> str:
+            return node_scope_data_path("data/voice_chat", str(target_node_id or "").strip())
+
+        def _read_voice_chat_state(data_map: Any, target_node_id: str | None) -> dict:
+            current = data_map.to_json() if hasattr(data_map, "to_json") else {}
+            if isinstance(current, str):
+                try:
+                    current = json.loads(current)
+                except Exception:
+                    current = {}
+            if not isinstance(current, dict):
+                return {}
+            path = _voice_chat_data_path(target_node_id)
+            segments = [segment for segment in path.split("/") if segment]
+            cursor: Any = current
+            for segment in segments[1:]:
+                if not isinstance(cursor, dict):
+                    return {}
+                cursor = cursor.get(segment)
+            return dict(cursor) if isinstance(cursor, dict) else {}
+
+        def _write_voice_chat_state(data_map: Any, txn: Any, target_node_id: str | None, value: dict) -> None:
+            path = _voice_chat_data_path(target_node_id)
+            segments = [segment for segment in path.split("/") if segment]
+            if len(segments) < 2:
+                return
+            top_key = segments[1]
+            if len(segments) == 2:
+                data_map.set(txn, top_key, value)
+                return
+            current_top = data_map.get(top_key)
+            changed, merged = _merge_nested_path(current_top, segments[2:], value)
+            if changed:
+                data_map.set(txn, top_key, merged)
+
+        async def _ensure_voice_chat_state(webspace_id: str, target_node_id: str | None = None) -> None:
             async with self._router_yjs_write_meta():
                 async with async_get_ydoc(webspace_id) as ydoc:
                     data_map = ydoc.get_map("data")
-                    current = data_map.get("voice_chat")
+                    current = _read_voice_chat_state(data_map, target_node_id)
                     if isinstance(current, dict) and isinstance(current.get("messages"), list):
                         return
                     with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "voice_chat", {"messages": []})
+                        _write_voice_chat_state(data_map, txn, target_node_id, {"messages": []})
 
-        async def _append_voice_chat_message(webspace_id: str, msg: dict) -> None:
+        async def _append_voice_chat_message(
+            webspace_id: str,
+            msg: dict,
+            target_node_id: str | None = None,
+        ) -> None:
             async with self._router_yjs_write_meta():
                 async with async_get_ydoc(webspace_id) as ydoc:
                     data_map = ydoc.get_map("data")
-                    current = data_map.get("voice_chat")
+                    current = _read_voice_chat_state(data_map, target_node_id)
                     messages = []
                     if isinstance(current, dict) and isinstance(current.get("messages"), list):
                         messages = list(current.get("messages") or [])
@@ -560,11 +600,12 @@ class RouterService:
                     if len(messages) > 60:
                         messages = messages[-60:]
                     with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "voice_chat", {"messages": messages})
+                        _write_voice_chat_state(data_map, txn, target_node_id, {"messages": messages})
                     try:
                         self._vlog.debug(
-                            "voice_chat.append webspace=%s count=%d last_from=%s last_text=%r",
+                            "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
                             webspace_id,
+                            str(target_node_id or "").strip() or None,
                             len(messages),
                             msg.get("from"),
                             msg.get("text"),
@@ -1084,8 +1125,10 @@ class RouterService:
             payload = ev.payload or {}
             if not self._event_targets_local_node(payload):
                 return
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            target_node_id = str(payload.get("target_node_id") or meta.get("target_node_id") or "").strip() or None
             for ws in await _resolve_webspace_ids(payload):
-                await _ensure_voice_chat_state(ws)
+                await _ensure_voice_chat_state(ws, target_node_id)
                 await _ensure_tts_state(ws)
 
         async def _on_io_out_chat_append(ev: Event) -> None:
@@ -1158,18 +1201,20 @@ class RouterService:
                 "ts": float(payload.get("ts") or time.time()),
             }
             targets = await _resolve_webspace_ids(payload)
+            target_node_id = str(meta.get("target_node_id") or payload.get("target_node_id") or "").strip() or None
             try:
                 self._vlog.debug(
-                    "io.out.chat.append received text=%r from=%s targets=%s",
+                    "io.out.chat.append received text=%r from=%s targets=%s node_id=%s",
                     msg["text"],
                     msg["from"],
                     targets,
+                    target_node_id,
                 )
             except Exception:
                 pass
             for ws in targets:
-                await _ensure_voice_chat_state(ws)
-                await _append_voice_chat_message(ws, msg)
+                await _ensure_voice_chat_state(ws, target_node_id)
+                await _append_voice_chat_message(ws, msg, target_node_id)
 
         async def _on_io_out_say(ev: Event) -> None:
             payload = ev.payload or {}
@@ -1337,7 +1382,19 @@ class RouterService:
                 pass
 
             try:
-                await _ensure_voice_chat_state(ws)
+                await _ensure_voice_chat_state(
+                    ws,
+                    str(
+                        payload.get("target_node_id")
+                        or (
+                            payload.get("_meta", {}).get("target_node_id")
+                            if isinstance(payload.get("_meta"), dict)
+                            else ""
+                        )
+                        or ""
+                    ).strip()
+                    or None,
+                )
             except Exception:
                 try:
                     logging.getLogger("adaos.router").warning("voice.chat.user: failed to ensure voice_chat state", exc_info=True)
@@ -1349,6 +1406,7 @@ class RouterService:
             meta = {**meta, "webspace_id": ws}
             if len(target_webspaces) > 1:
                 meta["webspace_ids"] = list(target_webspaces)
+            target_node_id = str(meta.get("target_node_id") or payload.get("target_node_id") or "").strip() or None
             # Ensure voice chat history is updated even if io.out.chat.append routing breaks.
             msg = {
                 "id": _make_id("m"),
@@ -1357,7 +1415,7 @@ class RouterService:
                 "ts": time.time(),
             }
             try:
-                await _append_voice_chat_message(ws, msg)
+                await _append_voice_chat_message(ws, msg, target_node_id)
             except Exception:
                 pass
             try:

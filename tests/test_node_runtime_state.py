@@ -46,3 +46,14 @@ def test_save_node_runtime_state_preserves_fields_across_concurrent_writers(monk
     assert payload["token"] == "dev-local-token"
     assert payload["member_hub_token"] == "join-session-token"
 
+
+def test_runtime_state_lock_clears_stale_pid_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(mod, "current_state_dir", lambda: tmp_path)
+    lock_path = tmp_path / "node_runtime.lock"
+    lock_path.write_text("999999", encoding="utf-8")
+    monkeypatch.setattr(mod, "_pid_is_alive", lambda _pid: False)
+
+    payload = mod.save_node_runtime_state(role="member")
+
+    assert payload["role"] == "member"
+    assert not lock_path.exists()
