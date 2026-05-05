@@ -79,6 +79,25 @@ class RouterService:
                 continue
         return False
 
+    def _event_targets_local_node(self, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return True
+        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+        target_node_id = str(
+            payload.get("target_node_id")
+            or payload.get("node_id")
+            or meta.get("target_node_id")
+            or meta.get("node_target_id")
+            or ""
+        ).strip()
+        if not target_node_id:
+            return True
+        try:
+            local_node_id = str(get_ctx().config.node_id or "").strip()
+        except Exception:
+            local_node_id = ""
+        return not local_node_id or target_node_id == local_node_id
+
     async def _on_event(self, ev: Event) -> None:
         try:
             task = asyncio.create_task(self._handle_notify_event(ev), name=f"router-ui-notify:{str(ev.type or 'ui.notify')}")
@@ -1063,6 +1082,8 @@ class RouterService:
 
         async def _on_voice_open(ev: Event) -> None:
             payload = ev.payload or {}
+            if not self._event_targets_local_node(payload):
+                return
             for ws in await _resolve_webspace_ids(payload):
                 await _ensure_voice_chat_state(ws)
                 await _ensure_tts_state(ws)
@@ -1294,6 +1315,8 @@ class RouterService:
 
         async def _on_voice_user(ev: Event) -> None:
             payload = ev.payload or {}
+            if not self._event_targets_local_node(payload):
+                return
             try:
                 target_webspaces = await _resolve_webspace_ids(payload)
             except Exception:
@@ -1394,6 +1417,17 @@ class RouterService:
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 text = ""
+            if route_id.strip() == "voice_chat" and text:
+                try:
+                    result = await asyncio.to_thread(_call_voice_chat_tool, text, meta)
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").warning(
+                        "voice.chat fallback tool failed",
+                        exc_info=True,
+                    )
+                else:
+                    if isinstance(result, dict) and bool(result.get("ok")):
+                        return
             reason = payload.get("reason")
             msg_text = "Я пока не понял запрос."
             if isinstance(reason, str) and reason:
