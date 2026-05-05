@@ -225,8 +225,24 @@ def _load_node_yaml(base_dir: Path | None = None) -> Dict[str, Any]:
 def _save_node_yaml(data: Dict[str, Any], base_dir: Path | None = None) -> None:
     base = _resolve_base_dir(base_dir)
     path = Path(base) / "node.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    current = _load_node_yaml(base_dir)
+    if not isinstance(current, dict):
+        current = {}
+    next_payload = dict(current)
+    # Legacy capacity/nats cleanup must not overwrite canonical node identity
+    # fields such as role, subnet_id, node_id, or hub_url.
+    for key in ("capacity", "nats"):
+        if key in data:
+            next_payload[key] = data[key]
+        else:
+            next_payload.pop(key, None)
+    try:
+        from adaos.services.node_config import _write_text_atomically
+
+        _write_text_atomically(path, yaml.safe_dump(next_payload, allow_unicode=True, sort_keys=False))
+    except Exception:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(next_payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
     _CAPACITY_CACHE.pop(_cache_key(base), None)
 
 

@@ -2,6 +2,10 @@
 
 Goal: add a *member* node to an AdaOS hub using a short one-time join-code (no long-lived tokens in CLI args), then start `python -m adaos api serve` via OS autostart/service when possible.
 
+For the target-state architecture beyond this phase-1 flow, including supervisor-owned
+member-hub lifecycle, restart-aware connectivity semantics, and QR-based onboarding,
+see [Member-Hub Connectivity](../architecture/member-hub-connectivity.md).
+
 ## Prereqs
 
 - Python 3.11
@@ -113,6 +117,12 @@ Expected (example):
 - `role` is `member`
 - `ready` is `true`
 - `route_mode` is `ws` when connected to hub via `/ws/subnet`
+
+Current phase-1 note:
+
+- `adaos node join` persists the membership contract immediately
+- live `member -> hub` activation may still depend on the running runtime picking up the new configuration
+- the target design is to make join self-activating in dev and supervisor-managed in production; see the roadmap in [Member-Hub Connectivity](../architecture/member-hub-connectivity.md)
 
 ## Where config is stored
 

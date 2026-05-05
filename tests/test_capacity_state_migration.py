@@ -6,7 +6,7 @@ import yaml
 
 from adaos.services import capacity as capacity_mod
 from adaos.services.agent_context import get_ctx
-from adaos.services.node_config import load_config
+from adaos.services.node_config import load_config, save_config
 from adaos.services.registry import subnet_directory as subnet_directory_mod
 
 
@@ -57,3 +57,34 @@ def test_capacity_updates_registry_without_restoring_node_yaml_capacity() -> Non
     assert any(item.get("name") == "new_skill" for item in repo.skills_for_node(cfg.node_id))
     assert any(item.get("name") == "desk" for item in repo.scenarios_for_node(cfg.node_id))
     assert any(item.get("io_type") == "voice" for item in repo.io_for_node(cfg.node_id))
+
+
+def test_legacy_capacity_writer_preserves_member_identity_fields() -> None:
+    ctx = get_ctx()
+    node_path = Path(ctx.paths.base_dir()) / "node.yaml"
+    cfg = load_config()
+    cfg.role = "member"
+    cfg.node_id = "member-node-1"
+    cfg.subnet_id = "sn_member01"
+    cfg.subnet_settings.id = "sn_member01"
+    cfg.hub_url = "https://ru.api.inimatic.com/hubs/sn_member01"
+    save_config(cfg)
+
+    stale_payload = {
+        "zone_id": "ru",
+        "node_id": "legacy-hub-node",
+        "subnet_id": "sn_legacyhub",
+        "role": "hub",
+        "capacity": {
+            "skills": [{"name": "legacy_skill", "version": "1.0.0", "active": True}],
+        },
+    }
+
+    capacity_mod._save_node_yaml(stale_payload)
+    saved = yaml.safe_load(node_path.read_text(encoding="utf-8")) or {}
+
+    assert saved.get("role") == "member"
+    assert saved.get("node_id") == "member-node-1"
+    assert saved.get("subnet_id") == "sn_member01"
+    assert saved.get("hub_url") == "https://ru.api.inimatic.com/hubs/sn_member01"
+    assert ((saved.get("capacity") or {}).get("skills") or [])[0]["name"] == "legacy_skill"
