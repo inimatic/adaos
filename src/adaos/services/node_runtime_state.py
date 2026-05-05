@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,12 @@ _UNSET = object()
 
 def _state_path() -> Path:
     path = (current_state_dir() / "node_runtime.json").resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _lock_path() -> Path:
+    path = (_state_path().parent / "node_runtime.lock").resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -44,6 +51,33 @@ def _clear_node_config_cache() -> None:
         node_config_mod._NODE_CONFIG_CACHE.clear()
 
 
+@contextlib.contextmanager
+def _runtime_state_lock(*, timeout_sec: float = 5.0):
+    lock_path = _lock_path()
+    deadline = time.time() + max(0.1, float(timeout_sec))
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if time.time() >= deadline:
+                raise TimeoutError(f"timed out acquiring runtime state lock: {lock_path}")
+            time.sleep(0.05)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+        yield
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            lock_path.unlink()
+
+
+def _write_text_atomically(path: Path, text: str) -> None:
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def save_node_runtime_state(
     *,
     hub_url: str | None | object = _UNSET,
@@ -53,44 +87,45 @@ def save_node_runtime_state(
     nats: dict[str, Any] | None | object = _UNSET,
     node_display: dict[str, Any] | None | object = _UNSET,
 ) -> dict[str, Any]:
-    payload = load_node_runtime_state()
-    if hub_url is not _UNSET:
-        value = str(hub_url or "").strip()
-        if value:
-            payload["hub_url"] = value
-        else:
-            payload.pop("hub_url", None)
-    if token is not _UNSET:
-        value = str(token or "").strip()
-        if value:
-            payload["token"] = value
-        else:
-            payload.pop("token", None)
-    if member_hub_token is not _UNSET:
-        value = str(member_hub_token or "").strip()
-        if value:
-            payload["member_hub_token"] = value
-        else:
-            payload.pop("member_hub_token", None)
-    if role is not _UNSET:
-        value = str(role or "").strip().lower()
-        if value in {"hub", "member"}:
-            payload["role"] = value
-        else:
-            payload.pop("role", None)
-    if nats is not _UNSET:
-        if isinstance(nats, dict) and nats:
-            payload["nats"] = dict(nats)
-        else:
-            payload.pop("nats", None)
-    if node_display is not _UNSET:
-        if isinstance(node_display, dict) and node_display:
-            payload["node_display"] = dict(node_display)
-        else:
-            payload.pop("node_display", None)
-    payload["updated_at"] = time.time()
     path = _state_path()
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _runtime_state_lock():
+        payload = load_node_runtime_state()
+        if hub_url is not _UNSET:
+            value = str(hub_url or "").strip()
+            if value:
+                payload["hub_url"] = value
+            else:
+                payload.pop("hub_url", None)
+        if token is not _UNSET:
+            value = str(token or "").strip()
+            if value:
+                payload["token"] = value
+            else:
+                payload.pop("token", None)
+        if member_hub_token is not _UNSET:
+            value = str(member_hub_token or "").strip()
+            if value:
+                payload["member_hub_token"] = value
+            else:
+                payload.pop("member_hub_token", None)
+        if role is not _UNSET:
+            value = str(role or "").strip().lower()
+            if value in {"hub", "member"}:
+                payload["role"] = value
+            else:
+                payload.pop("role", None)
+        if nats is not _UNSET:
+            if isinstance(nats, dict) and nats:
+                payload["nats"] = dict(nats)
+            else:
+                payload.pop("nats", None)
+        if node_display is not _UNSET:
+            if isinstance(node_display, dict) and node_display:
+                payload["node_display"] = dict(node_display)
+            else:
+                payload.pop("node_display", None)
+        payload["updated_at"] = time.time()
+        _write_text_atomically(path, json.dumps(payload, ensure_ascii=False, indent=2))
     _clear_node_config_cache()
     return dict(payload)
 
