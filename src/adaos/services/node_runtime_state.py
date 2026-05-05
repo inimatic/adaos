@@ -51,6 +51,40 @@ def _clear_node_config_cache() -> None:
         node_config_mod._NODE_CONFIG_CACHE.clear()
 
 
+def _read_lock_pid(lock_path: Path) -> int | None:
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True
+    return True
+
+
+def _clear_stale_runtime_state_lock(lock_path: Path) -> bool:
+    pid = _read_lock_pid(lock_path)
+    if pid is not None and _pid_is_alive(pid):
+        return False
+    with contextlib.suppress(FileNotFoundError):
+        lock_path.unlink()
+        return True
+    return False
+
+
 @contextlib.contextmanager
 def _runtime_state_lock(*, timeout_sec: float = 5.0):
     lock_path = _lock_path()
@@ -60,6 +94,8 @@ def _runtime_state_lock(*, timeout_sec: float = 5.0):
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
+            if _clear_stale_runtime_state_lock(lock_path):
+                continue
             if time.time() >= deadline:
                 raise TimeoutError(f"timed out acquiring runtime state lock: {lock_path}")
             time.sleep(0.05)
