@@ -216,6 +216,10 @@ Node-targeted skill tool calls should follow the same contract. If the browser
 asks the hub to execute `tools/call` with `target_node_id`, the hub must proxy
 that tool invocation to the selected member instead of executing its own local
 copy of the skill.
+Skill handlers that participate in node-scoped desktop flows should therefore
+accept optional `node_id`, `target_node_id`, and `**_` keyword arguments even
+when the tool does not use them directly. This keeps proxied member calls and
+local calls compatible under the same `tools/call` contract.
 
 Skills that own a stream receiver should answer that request by publishing the
 current bounded state for the receiver. This is the recommended way to provide

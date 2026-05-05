@@ -41,6 +41,15 @@ def _local_node_id() -> str:
 
 
 def _clone_json_like(value: Any) -> Any:
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        try:
+            raw = to_json()
+            if isinstance(raw, str):
+                return json.loads(raw)
+            return json.loads(json.dumps(raw))
+        except Exception:
+            pass
     try:
         return json.loads(json.dumps(value))
     except Exception:
@@ -48,10 +57,17 @@ def _clone_json_like(value: Any) -> Any:
             return {str(k): _clone_json_like(v) for k, v in value.items()}
         if isinstance(value, list):
             return [_clone_json_like(v) for v in value]
+        if isinstance(value, tuple):
+            return [_clone_json_like(v) for v in value]
         items = getattr(value, "items", None)
         if callable(items):
             try:
                 return {str(k): _clone_json_like(v) for k, v in items()}
+            except Exception:
+                return value
+        if hasattr(value, "__iter__") and not isinstance(value, (str, bytes, bytearray)):
+            try:
+                return [_clone_json_like(v) for v in list(value)]
             except Exception:
                 return value
         return value
