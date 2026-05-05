@@ -54,6 +54,30 @@ def _to_ws_url(http_base: str, path: str) -> str:
     return urllib.parse.urlunparse((scheme, netloc, full_path, "", "", ""))
 
 
+def _member_link_transition_snapshot() -> dict[str, Any]:
+    update_status = read_core_update_status() or {}
+    status = update_status if isinstance(update_status, dict) else {}
+    state = str(status.get("state") or "").strip().lower()
+    phase = str(status.get("phase") or "").strip().lower()
+    transition_state = "ready"
+    reason = "none"
+    if state in {"preparing", "countdown", "draining", "stopping", "applying"}:
+        transition_state = "paused_for_update"
+        reason = state
+    elif state == "restarting" or phase in {"launch", "root_promoted"}:
+        transition_state = "restarting"
+        reason = state or phase or "restarting"
+    elif state == "validated" and phase == "root_promotion_pending":
+        transition_state = "waiting_restart"
+        reason = "root_promotion_pending"
+    return {
+        "transition_state": transition_state,
+        "reason": reason,
+        "update_state": state or None,
+        "update_phase": phase or None,
+    }
+
+
 class MemberLinkClient:
     def __init__(self) -> None:
         self._stop = asyncio.Event()
@@ -115,6 +139,7 @@ class MemberLinkClient:
             if isinstance(self._last_hub_core_update, dict)
             else {}
         )
+        transition = _member_link_transition_snapshot()
         return {
             "role": "member",
             "connected": self.is_connected(),
@@ -135,6 +160,8 @@ class MemberLinkClient:
             "last_control_error": self._last_control_error or None,
             "last_control_request_ago_s": round(max(0.0, now - self._last_control_requested_at), 3) if self._last_control_requested_at else None,
             "last_control_result_ago_s": round(max(0.0, now - self._last_control_completed_at), 3) if self._last_control_completed_at else None,
+            "transition_state": str(transition.get("transition_state") or "ready"),
+            "transition_reason": str(transition.get("reason") or "none"),
             "updated_at": now,
         }
 
@@ -142,6 +169,7 @@ class MemberLinkClient:
         conf = get_ctx().config
         lifecycle = runtime_lifecycle_snapshot()
         update_status = read_core_update_status() or {}
+        transition = _member_link_transition_snapshot()
         last_result = read_core_update_last_result() or {}
         slots = slot_status() or {}
         active_manifest = active_slot_manifest() or {}
@@ -161,6 +189,7 @@ class MemberLinkClient:
             "draining": bool(lifecycle.get("draining")),
             "route_mode": "ws" if self.is_connected() else "none",
             "connected_to_hub": bool(self.is_connected()),
+            "member_link_transition": transition,
             "capacity": get_local_capacity(),
             "desktop_catalog": desktop_catalog,
             "build": {

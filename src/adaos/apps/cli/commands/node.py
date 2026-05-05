@@ -379,6 +379,60 @@ def _resolve_node_control_base_url(*, explicit: str | None = None) -> str:
         return resolve_control_base_url(explicit=explicit)
 
 
+def _request_local_member_activation(
+    cfg: Any,
+    *,
+    previous_role: str | None,
+) -> dict[str, Any]:
+    previous_role_norm = str(previous_role or "").strip().lower() or None
+    try:
+        control0 = _resolve_node_control_base_url()
+        token0 = _resolved_local_control_token(control0, cfg)
+    except Exception as exc:
+        return {
+            "attempted": False,
+            "ok": False,
+            "reason": "control_resolution_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    if previous_role_norm != "member":
+        status, payload = _control_post_json(
+            control=control0,
+            path="/api/node/role",
+            token=token0,
+            body={"role": "member", "subnet_id": str(getattr(cfg, "subnet_id", "") or "")},
+            timeout=10.0,
+        )
+        return {
+            "attempted": True,
+            "ok": bool(status == 200),
+            "mode": "role_switch",
+            "control": control0,
+            "status_code": status,
+            "payload": payload,
+        }
+
+    status, payload = _control_post_json(
+        control=control0,
+        path="/api/node/member-hub/reconnect",
+        token=token0,
+        body={},
+        timeout=10.0,
+    )
+    accepted = False
+    if isinstance(payload, dict):
+        accepted = bool(payload.get("accepted") or payload.get("ok"))
+    return {
+        "attempted": True,
+        "ok": bool(status == 200 and accepted),
+        "mode": "member_hub_reconnect",
+        "control": control0,
+        "status_code": status,
+        "payload": payload,
+    }
+
+
 def _print_reliability_summary(payload: dict[str, Any]) -> None:
     node = payload.get("node") if isinstance(payload.get("node"), dict) else {}
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -2090,6 +2144,7 @@ def node_join(
     This stores the returned subnet token + hub URL in the local runtime state under the active base_dir.
     """
     cfg = load_config()
+    previous_role = str(getattr(cfg, "role", "") or "").strip().lower() or None
 
     root_base = root.rstrip("/")
     candidates = [
@@ -2205,6 +2260,7 @@ def node_join(
         hub_url=rendezvous_url,
         member_hub_token=token,
     )
+    activation = _request_local_member_activation(cfg, previous_role=previous_role)
 
     out = {
         "ok": True,
@@ -2214,7 +2270,16 @@ def node_join(
         "hub_url": cfg.hub_url,
         "root_url": cfg.root_settings.base_url,
         "join_url": used_url,
+        "activation": activation,
     }
+    if not json_output:
+        if activation.get("ok"):
+            mode = str(activation.get("mode") or "activation").replace("_", " ")
+            typer.echo(f"[AdaOS] local member activation requested via {mode}")
+        elif activation.get("attempted"):
+            typer.echo(f"[AdaOS] local member activation was not accepted: {activation.get('payload')}")
+        else:
+            typer.echo(f"[AdaOS] local member activation was skipped: {activation.get('reason') or activation.get('error') or 'unavailable'}")
     _print(out, json_output=json_output)
 
 

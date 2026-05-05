@@ -3658,9 +3658,13 @@ def hub_member_connection_state_snapshot(
             "last_follow_result": {},
             "updated_at": now,
         }
+    transition_state = str(raw.get("transition_state") or "").strip().lower()
     state = "connected" if bool(raw.get("connected")) else ("member_link" if str(route_mode or "") == "ws" else "disconnected")
     assessment_state = "nominal" if bool(raw.get("connected")) else "degraded"
     assessment_reason = "linked_to_hub" if bool(raw.get("connected")) else "member_link_down"
+    if not bool(raw.get("connected")) and transition_state in {"waiting_restart", "restarting", "paused_for_update"}:
+        state = transition_state
+        assessment_reason = str(raw.get("transition_reason") or transition_state)
     return {
         "role": "member",
         "local_node": {
