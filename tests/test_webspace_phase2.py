@@ -557,7 +557,6 @@ def test_remote_member_catalog_entries_are_node_scoped_and_auto_installed(monkey
         lambda: SimpleNamespace(role="hub", node_id="hub-1", node_settings=SimpleNamespace(node_names=[])),
     )
     monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "hub-1")
-
     try:
         runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
         decls = runtime._collect_remote_skill_decls()
@@ -588,6 +587,110 @@ def test_remote_member_catalog_entries_are_node_scoped_and_auto_installed(monkey
             "autoInstall": True,
         },
     ]
+
+
+def test_member_snapshot_change_seeds_ydoc_defaults_without_waiting_for_rebuild(monkeypatch) -> None:
+    seeded: dict[str, object] = {}
+
+    class _FakeDataMap:
+        def __init__(self) -> None:
+            self._data: dict[str, object] = {}
+
+        def to_json(self) -> dict[str, object]:
+            return self._data
+
+        def get(self, key: str) -> object:
+            return self._data.get(key)
+
+        def set(self, _txn: object, key: str, value: object) -> None:
+            self._data[key] = value
+
+    class _FakeDoc:
+        def __init__(self) -> None:
+            self.data_map = _FakeDataMap()
+
+        def get_map(self, name: str) -> _FakeDataMap:
+            assert name == "data"
+            return self.data_map
+
+        class _Txn:
+            def __enter__(self) -> object:
+                return object()
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+        def begin_transaction(self) -> "_FakeDoc._Txn":
+            return _FakeDoc._Txn()
+
+    fake_doc = _FakeDoc()
+
+    class _AsyncDocCtx:
+        async def __aenter__(self) -> _FakeDoc:
+            return fake_doc
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _AsyncMetaCtx:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    previous_directory_module = sys.modules.get("adaos.services.registry.subnet_directory")
+    directory_module = types.ModuleType("adaos.services.registry.subnet_directory")
+    directory_module.get_directory = lambda: SimpleNamespace(
+        get_node=lambda _node_id: {
+            "runtime_projection": {
+                "snapshot": {
+                    "desktop_catalog": {
+                        "ydoc_defaults": {
+                            "data/nodes/member-1/weather/current": {"city": "Berlin"},
+                            "data/nodes/member-1/infrastate": {"state": "succeeded"},
+                        }
+                    }
+                }
+            }
+        }
+    )
+    sys.modules["adaos.services.registry.subnet_directory"] = directory_module
+
+    monkeypatch.setattr(webspace_runtime_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDocCtx())
+    monkeypatch.setattr(webspace_runtime_module, "_webspace_runtime_async_write_meta", lambda **_kwargs: _AsyncMetaCtx())
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
+    )
+    monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 60.0)
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
+
+    async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
+        seeded["rebuild"] = (webspace_id, action, source_of_truth)
+        return {"accepted": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    async def _exercise() -> None:
+        await webspace_runtime_module._on_subnet_member_snapshot_changed({"node_id": "member-1"})
+        await asyncio.sleep(0)
+
+    try:
+        asyncio.run(_exercise())
+    finally:
+        if previous_directory_module is not None:
+            sys.modules["adaos.services.registry.subnet_directory"] = previous_directory_module
+        else:
+            sys.modules.pop("adaos.services.registry.subnet_directory", None)
+
+    nodes_bucket = fake_doc.data_map.to_json().get("nodes")
+    assert isinstance(nodes_bucket, dict)
+    assert nodes_bucket["member-1"]["weather"]["current"]["city"] == "Berlin"
+    assert nodes_bucket["member-1"]["infrastate"]["state"] == "succeeded"
+    assert seeded["rebuild"] == ("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")
 
 
 class _FakeTxn:

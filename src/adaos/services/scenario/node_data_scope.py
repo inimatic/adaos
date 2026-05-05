@@ -12,7 +12,6 @@ _RESERVED_DATA_ROOTS = {
     "routing",
     "scenarios",
     "tts",
-    "voice_chat",
     "webio",
     "webspaces",
 }
