@@ -146,6 +146,10 @@ def _supervisor_hub_root_watchdog_log_path() -> Path:
     return (_supervisor_state_dir() / "hub_root_watchdog.jsonl").resolve()
 
 
+def _supervisor_member_hub_watchdog_log_path() -> Path:
+    return (_supervisor_state_dir() / "member_hub_watchdog.jsonl").resolve()
+
+
 def _supervisor_update_attempt_path() -> Path:
     return (_supervisor_state_dir() / "update_attempt.json").resolve()
 
@@ -452,6 +456,34 @@ def _hub_root_watchdog_verify_timeout_sec() -> float:
 def _hub_root_watchdog_verify_interval_sec() -> float:
     try:
         return max(0.25, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_INTERVAL_SEC") or "1").strip()))
+    except Exception:
+        return 1.0
+
+
+def _member_hub_watchdog_enabled() -> bool:
+    raw = os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_WATCHDOG")
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _member_hub_watchdog_cooldown_sec() -> float:
+    try:
+        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_RECONNECT_COOLDOWN_SEC") or "20").strip()))
+    except Exception:
+        return 20.0
+
+
+def _member_hub_watchdog_verify_timeout_sec() -> float:
+    try:
+        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_VERIFY_TIMEOUT_SEC") or "10").strip()))
+    except Exception:
+        return 10.0
+
+
+def _member_hub_watchdog_verify_interval_sec() -> float:
+    try:
+        return max(0.25, float(str(os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_VERIFY_INTERVAL_SEC") or "1").strip()))
     except Exception:
         return 1.0
 
@@ -1135,6 +1167,11 @@ class SupervisorManager:
         self._hub_root_watchdog_last_reason: str | None = None
         self._hub_root_watchdog_reconnect_total = 0
         self._hub_root_watchdog_last_result: dict[str, Any] | None = None
+        self._member_hub_watchdog_last_reconnect_at: float | None = None
+        self._member_hub_watchdog_last_state: str | None = None
+        self._member_hub_watchdog_last_reason: str | None = None
+        self._member_hub_watchdog_reconnect_total = 0
+        self._member_hub_watchdog_last_result: dict[str, Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
         self._update_task_cancel_mode: str | None = None
         self._managed_runtime_instance_id: str | None = None
@@ -2304,6 +2341,21 @@ class SupervisorManager:
             "last_result": dict(self._hub_root_watchdog_last_result or {}),
         }
 
+    def _member_hub_watchdog_state_payload(self) -> dict[str, Any]:
+        log_path = _supervisor_member_hub_watchdog_log_path()
+        return {
+            "enabled": _member_hub_watchdog_enabled(),
+            "last_state": self._member_hub_watchdog_last_state,
+            "last_reason": self._member_hub_watchdog_last_reason,
+            "last_reconnect_at": self._member_hub_watchdog_last_reconnect_at,
+            "reconnect_total": int(self._member_hub_watchdog_reconnect_total),
+            "cooldown_sec": _member_hub_watchdog_cooldown_sec(),
+            "verify_timeout_sec": _member_hub_watchdog_verify_timeout_sec(),
+            "log_path": str(log_path),
+            "recent_events": _read_jsonl_tail(log_path, limit=10),
+            "last_result": dict(self._member_hub_watchdog_last_result or {}),
+        }
+
     @staticmethod
     def _hub_root_channel_state(runtime: dict[str, Any]) -> dict[str, Any]:
         runtime = runtime if isinstance(runtime, dict) else {}
@@ -2333,6 +2385,40 @@ class SupervisorManager:
             "last_summary": str(strategy.get("last_summary") or "").strip() or None,
             "selected_server": str(strategy.get("selected_server") or "").strip() or None,
             "effective_transport": str(strategy.get("effective_transport") or "").strip() or None,
+        }
+
+    @staticmethod
+    def _member_hub_channel_state(runtime: dict[str, Any]) -> dict[str, Any]:
+        runtime = runtime if isinstance(runtime, dict) else {}
+        readiness_tree = runtime.get("readiness_tree") if isinstance(runtime.get("readiness_tree"), dict) else {}
+        route = readiness_tree.get("route") if isinstance(readiness_tree.get("route"), dict) else {}
+        hub_member = readiness_tree.get("hub_member") if isinstance(readiness_tree.get("hub_member"), dict) else {}
+        member_state = (
+            runtime.get("hub_member_connection_state")
+            if isinstance(runtime.get("hub_member_connection_state"), dict)
+            else {}
+        )
+        hub = member_state.get("hub") if isinstance(member_state.get("hub"), dict) else {}
+        return {
+            "route_status": str(route.get("status") or "").strip().lower() or None,
+            "hub_member_status": str(hub_member.get("status") or "").strip().lower() or None,
+            "member_state": str(member_state.get("state") or "").strip().lower() or None,
+            "assessment_state": (
+                str((member_state.get("assessment") or {}).get("state") or "").strip().lower()
+                if isinstance(member_state.get("assessment"), dict)
+                else None
+            ),
+            "assessment_reason": (
+                str((member_state.get("assessment") or {}).get("reason") or "").strip() or None
+                if isinstance(member_state.get("assessment"), dict)
+                else None
+            ),
+            "connected": bool(hub.get("connected")),
+            "transition_state": str(hub.get("transition_state") or "").strip().lower() or None,
+            "transition_reason": str(hub.get("transition_reason") or "").strip() or None,
+            "hub_url": str(hub.get("hub_url") or "").strip() or None,
+            "last_error": str(hub.get("last_error") or "").strip() or None,
+            "last_close_reason": str(hub.get("last_close_reason") or "").strip() or None,
         }
 
     @staticmethod
@@ -2369,6 +2455,17 @@ class SupervisorManager:
             _append_jsonl(_supervisor_hub_root_watchdog_log_path(), event)
         except Exception:
             _LOG.debug("failed to append hub-root watchdog event", exc_info=True)
+
+    def _append_member_hub_watchdog_event(self, payload: dict[str, Any]) -> None:
+        event = {
+            "ts": time.time(),
+            "runtime_url": self.runtime_base_url,
+            **payload,
+        }
+        try:
+            _append_jsonl(_supervisor_member_hub_watchdog_log_path(), event)
+        except Exception:
+            _LOG.debug("failed to append member-hub watchdog event", exc_info=True)
 
     def _hub_root_watchdog_decision(
         self,
@@ -2543,6 +2640,154 @@ class SupervisorManager:
             {
                 "event": "recovery_attempt",
                 "action": action,
+                "transport_owner": decision.get("transport_owner"),
+                "decision": decision,
+                "result": result,
+                "verification": verification,
+            }
+        )
+        self._persist_runtime_state()
+
+    def _member_hub_watchdog_decision(
+        self,
+        runtime: dict[str, Any],
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        if not _member_hub_watchdog_enabled():
+            self._member_hub_watchdog_last_state = "disabled"
+            self._member_hub_watchdog_last_reason = "watchdog disabled"
+            return None
+        if self._stopping or not self._desired_running:
+            return None
+        current_time = time.time() if now is None else float(now)
+        node = runtime.get("node") if isinstance(runtime.get("node"), dict) else {}
+        role = str(node.get("role") or self._sidecar_role() or "").strip().lower()
+        if role != "member":
+            self._member_hub_watchdog_last_state = "not_applicable"
+            self._member_hub_watchdog_last_reason = f"role={role or '-'}"
+            return None
+
+        channel_state = self._member_hub_channel_state(runtime)
+        transition_state = str(channel_state.get("transition_state") or "").strip().lower()
+        if transition_state in {"waiting_restart", "restarting", "paused_for_update"}:
+            self._member_hub_watchdog_last_state = transition_state
+            self._member_hub_watchdog_last_reason = (
+                str(channel_state.get("transition_reason") or "").strip() or transition_state
+            )
+            return None
+
+        if bool(channel_state.get("connected")):
+            self._member_hub_watchdog_last_state = "ready"
+            self._member_hub_watchdog_last_reason = "member-hub link is connected"
+            return None
+
+        cooldown = _member_hub_watchdog_cooldown_sec()
+        last_reconnect = self._member_hub_watchdog_last_reconnect_at
+        if last_reconnect is not None and (current_time - float(last_reconnect)) < cooldown:
+            self._member_hub_watchdog_last_state = "cooldown"
+            self._member_hub_watchdog_last_reason = (
+                f"member-hub down but reconnect cooldown is active ({cooldown:.0f}s)"
+            )
+            return None
+
+        route_status = str(channel_state.get("route_status") or "").strip().lower() or "-"
+        member_state = str(channel_state.get("member_state") or "").strip().lower() or "-"
+        reason = (
+            f"route={route_status} "
+            f"member_state={member_state} "
+            f"assessment={str(channel_state.get('assessment_state') or '-')} "
+            f"hub_url={str(channel_state.get('hub_url') or '-')}"
+        )
+        return {
+            "reason": "supervisor.member_hub.watchdog_reconnect",
+            "message": f"member-hub watchdog requesting runtime_reconnect ({reason})",
+            "action": "runtime_reconnect",
+            "transport_owner": "runtime",
+            "route_status": channel_state.get("route_status"),
+            "hub_member_status": channel_state.get("hub_member_status"),
+            "member_state": channel_state.get("member_state"),
+            "assessment_state": channel_state.get("assessment_state"),
+            "assessment_reason": channel_state.get("assessment_reason"),
+            "transition_state": channel_state.get("transition_state"),
+            "transition_reason": channel_state.get("transition_reason"),
+            "last_error": channel_state.get("last_error"),
+            "last_close_reason": channel_state.get("last_close_reason"),
+            "channel_before": channel_state,
+        }
+
+    async def _verify_member_hub_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
+        timeout = _member_hub_watchdog_verify_timeout_sec() if timeout_sec is None else max(0.0, float(timeout_sec))
+        interval = _member_hub_watchdog_verify_interval_sec()
+        deadline = time.time() + timeout
+        attempts = 0
+        last_state: dict[str, Any] = {}
+        while True:
+            attempts += 1
+            runtime = self._runtime_reliability_payload(timeout=1.5)
+            last_state = self._member_hub_channel_state(runtime)
+            if bool(last_state.get("connected")):
+                return {
+                    "ok": True,
+                    "state": "ready",
+                    "attempts": attempts,
+                    "timeout_sec": timeout,
+                    "channel": last_state,
+                }
+            if timeout <= 0.0 or time.time() >= deadline:
+                return {
+                    "ok": False,
+                    "state": "not_ready",
+                    "attempts": attempts,
+                    "timeout_sec": timeout,
+                    "channel": last_state,
+                }
+            await asyncio.sleep(interval)
+
+    async def _maybe_reconnect_member_hub_from_watchdog(self) -> None:
+        if not _member_hub_watchdog_enabled() or self._stopping or not self._desired_running:
+            return
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        runtime = self._runtime_reliability_payload(timeout=1.5)
+        if not runtime:
+            return
+        decision = self._member_hub_watchdog_decision(runtime, now=time.time())
+        if decision is None:
+            return
+        self._member_hub_watchdog_last_state = "reconnect_requested"
+        self._member_hub_watchdog_last_reason = str(decision.get("message") or decision.get("reason") or "")
+        self._member_hub_watchdog_last_reconnect_at = time.time()
+        self._member_hub_watchdog_reconnect_total += 1
+        try:
+            result = self._runtime_request_json(
+                path="/api/node/member-hub/reconnect",
+                method="POST",
+                payload={},
+                timeout=5.0,
+            )
+        except Exception as exc:
+            result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            _LOG.warning("member-hub watchdog reconnect request failed: %s: %s", type(exc).__name__, exc)
+        verification = await self._verify_member_hub_watchdog_recovery()
+        self._member_hub_watchdog_last_result = {
+            "requested_at": self._member_hub_watchdog_last_reconnect_at,
+            "action": "runtime_reconnect",
+            "decision": decision,
+            "result": result,
+            "verification": verification,
+        }
+        self._member_hub_watchdog_last_state = "ready" if bool(verification.get("ok")) else "recovery_failed"
+        self._member_hub_watchdog_last_reason = (
+            "member-hub channel recovered"
+            if bool(verification.get("ok"))
+            else "member-hub channel did not recover after watchdog action"
+        )
+        self._append_member_hub_watchdog_event(
+            {
+                "event": "recovery_attempt",
+                "action": "runtime_reconnect",
                 "transport_owner": decision.get("transport_owner"),
                 "decision": decision,
                 "result": result,
@@ -2919,6 +3164,7 @@ class SupervisorManager:
             "managed_cwd": managed_cwd,
             "managed_start_reason": self._managed_start_reason,
             "hub_root_watchdog": self._hub_root_watchdog_state_payload(),
+            "member_hub_watchdog": self._member_hub_watchdog_state_payload(),
             "expected_managed_executable": expected_executable,
             "expected_managed_cwd": expected_cwd,
             "managed_matches_active_slot": managed_matches_active_slot,
@@ -4190,6 +4436,10 @@ class SupervisorManager:
                     await self._maybe_reconnect_hub_root_from_watchdog()
                 except Exception:
                     _LOG.warning("hub-root supervisor watchdog failed", exc_info=True)
+                try:
+                    await self._maybe_reconnect_member_hub_from_watchdog()
+                except Exception:
+                    _LOG.warning("member-hub supervisor watchdog failed", exc_info=True)
                 restart_decision = self._runtime_self_heal_decision()
                 if restart_decision is not None:
                     self._last_error = str(restart_decision.get("message") or "active runtime became unhealthy")
