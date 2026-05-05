@@ -29,6 +29,20 @@ _ROOT_STATE_KEY = "root_state"
 _log = logging.getLogger("adaos.node_config")
 
 
+def _write_text_atomically(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
+    try:
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+
+
 def _load_node_yaml_payload(path: Path) -> dict[str, Any]:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -962,9 +976,9 @@ def save_node(conf: NodeConfig, *, ctx: AgentContext | None = None) -> None:
     if isinstance(root_payload, dict):
         for key in ("profile", "access_token_cached", "refresh_token_fallback"):
             root_payload.pop(key, None)
-    path.write_text(
+    _write_text_atomically(
+        path,
         yaml.safe_dump(merged, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
     )
     try:
         save_node_runtime_state(

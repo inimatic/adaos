@@ -579,3 +579,36 @@ def test_load_config_recovers_from_malformed_node_yaml(tmp_path: Path) -> None:
     assert fresh.token == "tok-broken"
     assert fresh.subnet_id
     assert node_path.with_name("node.yaml.invalid").exists()
+
+
+def test_load_config_recovers_member_role_from_runtime_state_when_node_yaml_is_malformed() -> None:
+    ctx = get_ctx()
+    base_dir = Path(ctx.paths.base_dir())
+    node_path = base_dir / "node.yaml"
+    node_path.write_text(
+        "\n".join(
+            [
+                "zone_id: ru",
+                "node_id: stale-hub-node",
+                "subnet_id: sn_stalehub",
+                "role: hub",
+                "dev:",
+                "  workspace: /root/.adaos/state/core_slots/slots/A/repo/dev",
+                "/core_slots/slots/B/repo/dev",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    save_node_runtime_state(
+        role="member",
+        hub_url="https://ru.api.inimatic.com/hubs/sn_member01",
+        token="dev-local-token",
+        member_hub_token="join-token-1",
+    )
+    node_config_mod._NODE_CONFIG_CACHE.clear()
+
+    fresh = load_config()
+
+    assert fresh.role == "member"
+    assert fresh.hub_url == "https://ru.api.inimatic.com/hubs/sn_member01"
+    assert load_node_runtime_state().get("member_hub_token") == "join-token-1"
