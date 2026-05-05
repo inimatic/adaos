@@ -79,7 +79,7 @@ def test_projection_service_merges_deep_yjs_paths_without_overwriting_siblings(m
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator: False)
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
 
     asyncio.run(
@@ -129,7 +129,7 @@ def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator: False)
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
 
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
@@ -163,7 +163,7 @@ def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator: False)
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
 
     asyncio.run(service.apply("runtime", "profile", {"theme": "dark"}, webspace_id="ws-test"))
@@ -188,7 +188,7 @@ def test_projection_service_passes_target_root_to_async_get_ydoc(monkeypatch) ->
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator: False)
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
     monkeypatch.setattr(
         projection_service_module,
         "async_get_ydoc",
@@ -198,6 +198,35 @@ def test_projection_service_passes_target_root_to_async_get_ydoc(monkeypatch) ->
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
 
     assert calls == [{"load_mark_roots": ["data"]}]
+
+
+def test_merge_nested_path_clones_y_like_arrays_before_rewriting_node_scoped_roots() -> None:
+    class _JsonOnlyArray:
+        def __init__(self, values: list[object]) -> None:
+            self._values = list(values)
+
+        def to_json(self) -> str:
+            import json as _json
+
+            return _json.dumps(self._values)
+
+    existing = {
+        "member-1": {
+            "weather": {
+                "history": _JsonOnlyArray([{"city": "Berlin"}]),
+            },
+        },
+    }
+
+    changed, merged = projection_service_module._merge_nested_path(
+        existing,
+        ["member-1", "voice_chat"],
+        {"messages": [{"text": "hello"}]},
+    )
+
+    assert changed is True
+    assert merged["member-1"]["weather"]["history"] == [{"city": "Berlin"}]
+    assert merged["member-1"]["voice_chat"] == {"messages": [{"text": "hello"}]}
 
 
 def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> None:
@@ -220,7 +249,7 @@ def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> 
         registry=registry,
     )
 
-    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator: False)
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
     monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
     monkeypatch.setattr(projection_service_module, "ystore_write_metadata", _capture_metadata)
     monkeypatch.setattr(
