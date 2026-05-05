@@ -212,6 +212,11 @@ The server emits `webio.stream.snapshot.requested` with:
   answer the request
 * `transport`
 
+Node-targeted skill tool calls should follow the same contract. If the browser
+asks the hub to execute `tools/call` with `target_node_id`, the hub must proxy
+that tool invocation to the selected member instead of executing its own local
+copy of the skill.
+
 Skills that own a stream receiver should answer that request by publishing the
 current bounded state for the receiver. This is the recommended way to provide
 "recent history" for stream widgets.
@@ -408,6 +413,7 @@ either `payload.webspace_id` or `payload._meta.webspace_id`. This ensures:
 * multiple browsers in different webspaces can change the city independently
 * all writes go through `async_get_ydoc(webspace_id)`, so only the intended
   YDoc is mutated
+* when `target_node_id` is present, only the matching node applies the change
 
 `RouterService` follows the same pattern: when emitting runtime events
 destined for UI-integrated skills, include a `_meta.webspace_id` hint so
@@ -424,6 +430,9 @@ These events are routed purely by `_meta.webspace_id`, so different
 devices/webspaces can receive replies independently. `data.media.route` stays
 a plain JSON subtree so browser widgets can observe one router-owned view of
 need/capability/ability/attempt/degradation/observed-failure state without
+For `voice.chat.*` the runtime should also preserve `target_node_id`
+end-to-end so a member-targeted browser session cannot leak requests into the
+hub or another member's chat flow.
 depending on a specific transport adapter.
 
 ## Frontend Experience
