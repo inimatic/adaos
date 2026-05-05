@@ -262,6 +262,10 @@ def test_infrastate_adaos_update_local_uses_shared_webspace_refresh(monkeypatch)
         def get(self, name: str):
             return SimpleNamespace(version="1.2.3")
 
+    class _ScenarioRepo:
+        def get(self, name: str):
+            return SimpleNamespace(version="4.5.6")
+
     class _Ctx:
         sql = object()
         git = object()
@@ -270,12 +274,14 @@ def test_infrastate_adaos_update_local_uses_shared_webspace_refresh(monkeypatch)
         caps = object()
         settings = object()
         skills_repo = _Repo()
+        scenarios_repo = _ScenarioRepo()
 
     class _SkillManager:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
     refresh_calls: list[tuple[str, str]] = []
+    scenario_capacity_calls: list[tuple[str, str, bool]] = []
     rebuild_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(mod, "get_ctx", lambda: _Ctx())
@@ -288,11 +294,21 @@ def test_infrastate_adaos_update_local_uses_shared_webspace_refresh(monkeypatch)
     )
     monkeypatch.setattr(
         mod,
+        "reconcile_workspace_db_to_materialized",
+        lambda ctx: {"ok": True, "skills": ["weather_skill"], "scenarios": ["web_desktop"]},
+    )
+    monkeypatch.setattr(
+        mod,
         "refresh_skill_runtime",
         lambda mgr, name, **kwargs: refresh_calls.append((name, str(kwargs.get("webspace_id") or ""))) or {
             "runtime_updated": True,
             "runtime_migrated": False,
         },
+    )
+    monkeypatch.setattr(
+        mod,
+        "install_scenario_in_capacity",
+        lambda name, version, *, active=True, dev=False, base_dir=None: scenario_capacity_calls.append((name, version, active)),
     )
     monkeypatch.setattr(
         mod,
@@ -303,9 +319,12 @@ def test_infrastate_adaos_update_local_uses_shared_webspace_refresh(monkeypatch)
     result = mod._adaos_update_local(dry_run=False)
 
     assert result["ok"] is True
+    assert result["registry_reconciled"] is True
     assert result["runtime_updated"] == ["weather_skill"]
+    assert result["scenario_capacity_updated"] == ["web_desktop"]
     expected_webspace_id = mod.default_webspace_id()
     assert refresh_calls == [("weather_skill", expected_webspace_id)]
+    assert scenario_capacity_calls == [("web_desktop", "4.5.6", True)]
     assert rebuild_calls == [
         {
             "webspace_id": expected_webspace_id,
@@ -314,6 +333,50 @@ def test_infrastate_adaos_update_local_uses_shared_webspace_refresh(monkeypatch)
         }
     ]
     assert result["webspace_refresh"]["ok"] is True
+
+
+def test_infrastate_remote_adaos_update_requests_member_snapshot_after_success(monkeypatch):
+    mod = _load_infrastate_module()
+
+    class _Conf:
+        role = "hub"
+        node_id = "hub-1"
+
+    ui_updates: list[dict[str, object]] = []
+    calls: list[tuple[str, str]] = []
+
+    class _Manager:
+        async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object] | None, timeout: float | None, dev: bool):
+            calls.append(("rpc", node_id))
+            assert tool == "infrastate_skill:adaos_update"
+            return {"ok": True, "updated": True}
+
+        async def request_member_snapshot(self, node_id: str, reason: str) -> dict[str, object]:
+            calls.append(("snapshot", f"{node_id}:{reason}"))
+            return {"ok": True, "accepted": True}
+
+    def _no_loop():
+        raise RuntimeError("no running loop")
+
+    monkeypatch.setattr(mod, "_ui_state", lambda: {"selected_node_id": "member-1"})
+    monkeypatch.setattr(mod, "_write_ui_state", lambda **kwargs: ui_updates.append(dict(kwargs)))
+    monkeypatch.setattr(mod.asyncio, "get_running_loop", _no_loop)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.subnet.link_manager",
+        types.SimpleNamespace(get_hub_link_manager=lambda: _Manager()),
+    )
+
+    result = mod._perform_action("adaos_update", _Conf(), {})
+
+    assert result["ok"] is True
+    assert result["updated"] is True
+    assert result["snapshot_requested"] is True
+    assert calls == [
+        ("rpc", "member-1"),
+        ("snapshot", "member-1:infrastate.adaos_update"),
+    ]
+    assert ui_updates[-1]["selected_node_id"] == "member-1"
 
 
 def test_infrastate_forget_subnet_clears_directory_and_requests_member_refresh(monkeypatch):
@@ -762,6 +825,7 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
 def test_infrastate_adaos_update_uses_union_sparse_sync_and_installed_skill_names(monkeypatch):
     mod = _load_infrastate_module()
     runtime_updates: list[str] = []
+    scenario_capacity_updates: list[tuple[str, str]] = []
 
     ctx = SimpleNamespace(
         sql=object(),
@@ -782,19 +846,32 @@ def test_infrastate_adaos_update_uses_union_sparse_sync_and_installed_skill_name
     )
     monkeypatch.setattr(
         mod,
+        "reconcile_workspace_db_to_materialized",
+        lambda current_ctx: {"ok": True, "skills": ["installed_skill"], "scenarios": ["scene_one"]},
+    )
+    monkeypatch.setattr(
+        mod,
         "SkillManager",
         lambda **kwargs: SimpleNamespace(runtime_update=lambda name, space="workspace": runtime_updates.append(name) or {"ok": True}),
     )
     monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: object())
+    monkeypatch.setattr(
+        mod,
+        "install_scenario_in_capacity",
+        lambda name, version, *, active=True, dev=False, base_dir=None: scenario_capacity_updates.append((name, version)),
+    )
 
     result = mod._adaos_update_local()
 
     assert result["ok"] is True
     assert result["skills_synced"] is True
     assert result["scenarios_synced"] is True
+    assert result["registry_reconciled"] is True
     assert result["skills"] == ["installed_skill"]
     assert result["scenarios"] == ["scene_one"]
+    assert result["scenario_capacity_updated"] == ["scene_one"]
     assert runtime_updates == ["installed_skill"]
+    assert scenario_capacity_updates == [("scene_one", "unknown")]
 
 
 def test_infrastate_marketplace_filters_installed_and_marks_running_operations(monkeypatch):

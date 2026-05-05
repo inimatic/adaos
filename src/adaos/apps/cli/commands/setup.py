@@ -421,14 +421,21 @@ def _autostart_admin_base_url(token: Optional[str] = None) -> str:
     if bind is not None:
         host, port = bind
         _push(f"http://{host}:{int(port)}")
-    _push(resolve_control_base_url())
+    try:
+        local_control = resolve_control_base_url(prefer_local=True)
+    except TypeError:
+        # Test doubles may still expose the older signature.
+        local_control = resolve_control_base_url()
+    _push(local_control)
 
     resolved_token = str(_autostart_cli_token(token) or resolve_control_token(explicit=token)).strip()
     for base in candidates:
         code, _payload = probe_control_api(base_url=base, token=resolved_token, timeout_s=0.75)
         if code is not None:
             return base
-    return candidates[0] if candidates else resolve_control_base_url()
+    if candidates:
+        return candidates[0]
+    return local_control or resolve_control_base_url()
 
 
 def _autostart_service_token() -> str:
@@ -471,8 +478,14 @@ def _autostart_cli_token(token: Optional[str] = None) -> str:
     ).strip()
 
 
-def _autostart_admin_headers(token: Optional[str] = None) -> dict[str, str]:
+def _autostart_admin_headers(token: Optional[str] = None, *, base_url: str | None = None) -> dict[str, str]:
     resolved = _autostart_cli_token(token)
+    if not resolved:
+        try:
+            resolved = str(resolve_control_token(explicit=token, base_url=base_url)).strip()
+        except TypeError:
+            # Test doubles may still expose the older signature.
+            resolved = str(resolve_control_token(explicit=token)).strip()
     headers = {"Content-Type": "application/json"}
     if resolved:
         headers["X-AdaOS-Token"] = resolved
@@ -585,7 +598,7 @@ def _autostart_supervisor_post(path: str, *, body: dict | None = None, token: Op
 def _autostart_admin_get(path: str, *, token: Optional[str] = None) -> dict:
     try:
         base_url = _autostart_admin_base_url(token=token)
-        response = requests.get(base_url + path, headers=_autostart_admin_headers(token), timeout=15)
+        response = requests.get(base_url + path, headers=_autostart_admin_headers(token, base_url=base_url), timeout=15)
         response.raise_for_status()
         payload = response.json()
         return payload if isinstance(payload, dict) else {"ok": True, "response": payload}
@@ -598,7 +611,7 @@ def _autostart_admin_post(path: str, *, body: dict | None = None, token: Optiona
         base_url = _autostart_admin_base_url(token=token)
         response = requests.post(
             base_url + path,
-            headers=_autostart_admin_headers(token),
+            headers=_autostart_admin_headers(token, base_url=base_url),
             json=body or {},
             timeout=30,
         )
