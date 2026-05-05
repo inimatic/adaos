@@ -2523,6 +2523,7 @@ class WebspaceScenarioRuntime:
                         "pageSchema": _coerce_dict(getattr(row, "page_schema_overlay", {}) or {}),
                         "iconOrder": list(getattr(row, "icon_order_overlay", []) or []),
                         "widgetOrder": list(getattr(row, "widget_order_overlay", []) or []),
+                        "hiddenSections": list(getattr(row, "hidden_sections_overlay", []) or []),
                         "source": "workspace_manifest_overlay",
                     }
         except Exception:
@@ -2662,8 +2663,22 @@ class WebspaceScenarioRuntime:
                 if ep == "desktop.apps" and ctype == "app":
                     auto_app_ids.add(cid)
 
-        merged_apps = [_mark_entry(it, source=f"scenario:{scenario_id}", dev=False) for it in scenario_apps]
-        merged_widgets = [_mark_entry(it, source=f"scenario:{scenario_id}", dev=False) for it in scenario_widgets]
+        merged_apps = [
+            _apply_node_display_to_entry(
+                _mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
+                local_display,
+                node_id=_local_node_id(),
+            )
+            for it in scenario_apps
+        ]
+        merged_widgets = [
+            _apply_node_display_to_entry(
+                _mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
+                local_display,
+                node_id=_local_node_id(),
+            )
+            for it in scenario_widgets
+        ]
 
         extra_apps: List[Dict[str, Any]] = []
         for sid, title in inputs.desktop_scenarios:
@@ -2671,12 +2686,16 @@ class WebspaceScenarioRuntime:
                 continue
             app_id = f"scenario:{sid}"
             extra_apps.append(
-                {
+                _apply_node_display_to_entry(
+                    {
                     "id": app_id,
                     "title": title,
                     "icon": "apps-outline",
                     "scenario_id": sid,
-                }
+                    },
+                    local_display,
+                    node_id=_local_node_id(),
+                )
             )
             auto_app_ids.add(app_id)
 
@@ -2713,6 +2732,7 @@ class WebspaceScenarioRuntime:
         overlay_pinned_widgets = _normalize_overlay_widget_entries((inputs.overlay_snapshot or {}).get("pinnedWidgets"))
         overlay_icon_order = _dedupe_str_list((inputs.overlay_snapshot or {}).get("iconOrder"))
         overlay_widget_order = _dedupe_str_list((inputs.overlay_snapshot or {}).get("widgetOrder"))
+        overlay_hidden_sections = _dedupe_str_list((inputs.overlay_snapshot or {}).get("hiddenSections"))
         scenario_pinned_widgets = _normalize_overlay_widget_entries(scenario_desktop.get("pinnedWidgets"))
         scenario_topbar = list(scenario_desktop.get("topbar") or []) if isinstance(scenario_desktop.get("topbar"), list) else []
         scenario_page_schema = _coerce_dict(scenario_desktop.get("pageSchema") or {})
@@ -2858,6 +2878,7 @@ class WebspaceScenarioRuntime:
         )
         desktop_config["iconOrder"] = list(overlay_icon_order)
         desktop_config["widgetOrder"] = list(overlay_widget_order)
+        desktop_config["hiddenSections"] = list(overlay_hidden_sections)
         app_with_modals["desktop"] = desktop_config
 
         desktop_next = _coerce_dict((inputs.live_state or {}).get("desktop") or {})
@@ -2870,6 +2891,7 @@ class WebspaceScenarioRuntime:
         desktop_next["pinnedWidgets"] = list(desktop_config.get("pinnedWidgets") or [])
         desktop_next["iconOrder"] = list(desktop_config.get("iconOrder") or [])
         desktop_next["widgetOrder"] = list(desktop_config.get("widgetOrder") or [])
+        desktop_next["hiddenSections"] = list(desktop_config.get("hiddenSections") or [])
 
         webio_dict = _merge_webio_receivers(skill_decls)
 

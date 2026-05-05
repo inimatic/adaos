@@ -430,10 +430,20 @@ These events are routed purely by `_meta.webspace_id`, so different
 devices/webspaces can receive replies independently. `data.media.route` stays
 a plain JSON subtree so browser widgets can observe one router-owned view of
 need/capability/ability/attempt/degradation/observed-failure state without
+depending on a specific transport adapter.
+
+For node-owned skills, the effective shared-desktop branches are now:
+
+* `data/nodes/<node_id>/voice_chat`
+* `data/nodes/<node_id>/tts`
+* `data/nodes/<node_id>/media`
+
+The browser/runtime may still declare local skill defaults under
+`data/voice_chat`, `data/tts`, or `data/media`, but once a widget/modal is
+opened for a concrete node the effective contract must stay node-scoped.
 For `voice.chat.*` the runtime should also preserve `target_node_id`
 end-to-end so a member-targeted browser session cannot leak requests into the
 hub or another member's chat flow.
-depending on a specific transport adapter.
 
 ## Frontend Experience
 
@@ -461,6 +471,7 @@ desktop ordering through:
 
 * `iconOrder` for desktop app/icon order
 * `widgetOrder` for desktop widget order
+* `hiddenSections` for persistent per-webspace section visibility
 
 For the current desktop/subnet migration scope, the browser should treat those
 effective branches as the render contract and should not depend on
