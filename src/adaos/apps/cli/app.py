@@ -4,6 +4,7 @@ from __future__ import annotations
 import os, traceback
 import sys
 import shutil
+import json
 from pathlib import Path
 from typing import Optional
 import typer
@@ -28,6 +29,46 @@ def _repo_venv_python() -> str | None:
     except Exception:
         pass
     return None
+
+
+def _active_slot_manifest_payload() -> tuple[str | None, dict[str, str], str | None]:
+    try:
+        base_dir = Path(os.getenv("ADAOS_BASE_DIR") or (Path.home() / ".adaos")).expanduser().resolve()
+        active_path = base_dir / "state" / "core_slots" / "active"
+        if not active_path.exists():
+            return None, {}, None
+        active_slot = active_path.read_text(encoding="utf-8").strip().upper()
+        if active_slot not in {"A", "B"}:
+            return None, {}, None
+        manifest_path = base_dir / "state" / "core_slots" / "slots" / active_slot / "manifest.json"
+        if not manifest_path.exists():
+            return None, {}, None
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            return None, {}, None
+        venv_dir = str(manifest.get("venv_dir") or "").strip()
+        repo_dir = str(manifest.get("repo_dir") or manifest.get("cwd") or "").strip()
+        env_map = manifest.get("env") if isinstance(manifest.get("env"), dict) else {}
+        merged_env = {str(key): str(value) for key, value in env_map.items()}
+        if repo_dir:
+            merged_env.setdefault("ADAOS_SLOT_REPO_ROOT", repo_dir)
+            src_dir = Path(repo_dir) / "src"
+            if src_dir.exists():
+                existing_pythonpath = str(os.getenv("PYTHONPATH") or "").strip()
+                merged_env["PYTHONPATH"] = (
+                    f"{src_dir}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else str(src_dir)
+                )
+        merged_env.setdefault("ADAOS_BASE_DIR", str(base_dir))
+        if not venv_dir:
+            return None, merged_env, repo_dir or None
+        venv_path = Path(venv_dir)
+        candidates = [venv_path / "Scripts" / "python.exe", venv_path / "bin" / "python"]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate), merged_env, repo_dir or None
+    except Exception:
+        pass
+    return None, {}, None
 
 
 def _preferred_cli_python() -> str:
@@ -78,9 +119,23 @@ def _should_reexec_repo_venv() -> bool:
     return not _same_executable_path(preferred, sys.executable)
 
 
-def _reexec_preferred_python(reason: str) -> None:
+def _should_reexec_active_slot_venv() -> bool:
+    if os.getenv("ADAOS_CLI_REEXECED") == "1":
+        return False
+    if os.getenv("ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC") == "1":
+        return False
+    preferred, _, _ = _active_slot_manifest_payload()
+    if not preferred:
+        return False
+    return not _same_executable_path(preferred, sys.executable)
+
+
+def _reexec_preferred_python(reason: str, *, python: str | None = None, extra_env: dict[str, str] | None = None) -> None:
     os.environ["ADAOS_CLI_REEXECED"] = "1"
-    python = _preferred_cli_python()
+    python = python or _preferred_cli_python()
+    if extra_env:
+        for key, value in extra_env.items():
+            os.environ[str(key)] = str(value)
     try:
         print(f"[AdaOS] re-exec CLI via {python} ({reason})", file=sys.stderr)
     except Exception:
@@ -100,7 +155,22 @@ def _maybe_reexec_repo_venv():
     _reexec_preferred_python("repo .venv")
 
 
+def _maybe_reexec_active_slot_venv():
+    if not _should_reexec_active_slot_venv():
+        return
+    preferred, extra_env, repo_dir = _active_slot_manifest_payload()
+    if not preferred:
+        return
+    if repo_dir:
+        try:
+            os.chdir(repo_dir)
+        except Exception:
+            pass
+    _reexec_preferred_python("active slot .venv", python=preferred, extra_env=extra_env)
+
+
 _maybe_reexec_windows_wrapper()
+_maybe_reexec_active_slot_venv()
 _maybe_reexec_repo_venv()
 
 load_dotenv(find_dotenv())
