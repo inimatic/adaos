@@ -1153,6 +1153,7 @@ def test_supervisor_transition_runtime_snapshot_surfaces_browser_safe_transition
                     "state": "planned",
                 },
                 "runtime": {
+                    "transition_role": "member",
                     "transition_mode": "warm_switch",
                     "candidate_slot": "B",
                     "candidate_runtime_url": "http://127.0.0.1:8778",
@@ -1164,6 +1165,13 @@ def test_supervisor_transition_runtime_snapshot_surfaces_browser_safe_transition
                     "warm_switch_supported": True,
                     "warm_switch_allowed": True,
                     "warm_switch_reason": "warm switch admitted",
+                    "member_hub_watchdog": {
+                        "last_state": "ready",
+                        "last_reason": "member-hub link is connected",
+                        "reconnect_total": 2,
+                        "cooldown_sec": 20,
+                        "verify_timeout_sec": 10,
+                    },
                 },
                 "_served_by": "supervisor_fallback",
             }
@@ -1199,6 +1207,10 @@ def test_supervisor_transition_runtime_snapshot_surfaces_browser_safe_transition
     assert snapshot["browser_safe_surface"]["transition_mode_visible"] is True
     assert snapshot["browser_safe_surface"]["candidate_runtime_visible"] is True
     assert snapshot["browser_safe_surface"]["warm_switch_visible"] is True
+    assert snapshot["required_upstream_link"]["kind"] == "member_hub"
+    assert snapshot["required_upstream_link"]["state"] == "ready"
+    assert snapshot["required_upstream_link"]["ready"] is True
+    assert snapshot["required_upstream_link"]["reconnect_total"] == 2
 
 
 def test_event_model_phase0_communication_checkpoint_keeps_supervisor_and_optional_continuity_out_of_pending_reasons() -> None:
@@ -1781,6 +1793,15 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
                             "warm_switch_visible": True,
                             "blockers": [],
                         },
+                        "required_upstream_link": {
+                            "kind": "member_hub",
+                            "owner": "supervisor",
+                            "state": "ready",
+                            "ready": True,
+                            "reconnect_total": 2,
+                            "served_by": "supervisor_fallback",
+                            "blockers": [],
+                        },
                     },
                     "sync_runtime": {
                         "assessment": {"state": "nominal"},
@@ -1976,6 +1997,7 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
     assert "event_model.phase0.runtime_comm_ready: status=in_progress class_a=complete:6/6 ws=planned yws=ready continuity=planned supervisor=ready route-supervisor=ready:supervisor_public_status" in result.output
     assert "event_model.phase0.runtime_comm_ready.blockers: browser route websocket still terminates in the runtime FastAPI app" in result.output
     assert "supervisor_runtime: available=True state=countdown phase=scheduled mode=warm_switch candidate=ready warm_switch=warm switch admitted surface=ready served_by=supervisor_fallback" in result.output
+    assert "supervisor_runtime.upstream_link: kind=member_hub owner=supervisor state=ready ready=True reconnects=2 served_by=supervisor_fallback" in result.output
     assert "media.update_guard: live=yes" in result.output
     assert "member=defer hub=preserve_sidecar" in result.output
 
