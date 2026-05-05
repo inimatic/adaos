@@ -2516,12 +2516,17 @@ async def process_events_command(
         return None
 
     if kind == "voice.chat.open":
-        _publish_bus("voice.chat.open", {"webspace_id": payload.get("webspace_id")})
+        event_payload = dict(payload or {})
+        event_payload["webspace_id"] = payload.get("webspace_id")
+        _publish_bus("voice.chat.open", event_payload)
         await _ack()
         return None
 
     if kind == "voice.chat.user":
-        _publish_bus("voice.chat.user", {"text": payload.get("text"), "webspace_id": payload.get("webspace_id")})
+        event_payload = dict(payload or {})
+        event_payload["text"] = payload.get("text")
+        event_payload["webspace_id"] = payload.get("webspace_id")
+        _publish_bus("voice.chat.user", event_payload)
         await _ack()
         return None
 
