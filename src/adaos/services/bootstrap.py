@@ -1203,7 +1203,12 @@ class BootstrapService:
             backoff = 1
             while True:
                 try:
-                    ok_hb = await self.heartbeat.heartbeat(hub_url, member_hub_token, node_id=conf.node_id)
+                    ok_hb = await self.heartbeat.heartbeat(
+                        hub_url,
+                        member_hub_token,
+                        node_id=conf.node_id,
+                        base_url=str(os.getenv("ADAOS_SELF_BASE_URL") or "").strip() or None,
+                    )
                     if ok_hb:
                         backoff = 1
                     else:
