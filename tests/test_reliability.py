@@ -1172,6 +1172,29 @@ def test_supervisor_transition_runtime_snapshot_surfaces_browser_safe_transition
                         "cooldown_sec": 20,
                         "verify_timeout_sec": 10,
                     },
+                    "required_upstream_link": {
+                        "kind": "member_hub",
+                        "role": "member",
+                        "owner": "supervisor",
+                        "state": "ready",
+                        "reason": "member-hub link is connected",
+                        "ready": True,
+                        "visible": True,
+                        "desired_state": "connected",
+                        "current_owner": "runtime",
+                        "planned_owner": "runtime",
+                        "future_owner": "sidecar",
+                        "continuity_mode": "runtime_bound",
+                        "sidecar_enabled": False,
+                        "reconnect_total": 2,
+                        "cooldown_sec": 20,
+                        "verify_timeout_sec": 10,
+                        "served_by": "supervisor",
+                        "watchdog": {
+                            "last_state": "ready",
+                        },
+                        "blockers": [],
+                    },
                 },
                 "_served_by": "supervisor_fallback",
             }
@@ -1210,6 +1233,9 @@ def test_supervisor_transition_runtime_snapshot_surfaces_browser_safe_transition
     assert snapshot["required_upstream_link"]["kind"] == "member_hub"
     assert snapshot["required_upstream_link"]["state"] == "ready"
     assert snapshot["required_upstream_link"]["ready"] is True
+    assert snapshot["required_upstream_link"]["desired_state"] == "connected"
+    assert snapshot["required_upstream_link"]["current_owner"] == "runtime"
+    assert snapshot["required_upstream_link"]["future_owner"] == "sidecar"
     assert snapshot["required_upstream_link"]["reconnect_total"] == 2
 
 
@@ -1798,6 +1824,11 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
                             "owner": "supervisor",
                             "state": "ready",
                             "ready": True,
+                            "desired_state": "connected",
+                            "current_owner": "runtime",
+                            "planned_owner": "runtime",
+                            "future_owner": "sidecar",
+                            "continuity_mode": "runtime_bound",
                             "reconnect_total": 2,
                             "served_by": "supervisor_fallback",
                             "blockers": [],
@@ -1997,7 +2028,7 @@ def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -
     assert "event_model.phase0.runtime_comm_ready: status=in_progress class_a=complete:6/6 ws=planned yws=ready continuity=planned supervisor=ready route-supervisor=ready:supervisor_public_status" in result.output
     assert "event_model.phase0.runtime_comm_ready.blockers: browser route websocket still terminates in the runtime FastAPI app" in result.output
     assert "supervisor_runtime: available=True state=countdown phase=scheduled mode=warm_switch candidate=ready warm_switch=warm switch admitted surface=ready served_by=supervisor_fallback" in result.output
-    assert "supervisor_runtime.upstream_link: kind=member_hub owner=supervisor state=ready ready=True reconnects=2 served_by=supervisor_fallback" in result.output
+    assert "supervisor_runtime.upstream_link: kind=member_hub owner=supervisor state=ready desired=connected current_owner=runtime planned_owner=runtime continuity=runtime_bound ready=True reconnects=2 served_by=supervisor_fallback" in result.output
     assert "media.update_guard: live=yes" in result.output
     assert "member=defer hub=preserve_sidecar" in result.output
 
