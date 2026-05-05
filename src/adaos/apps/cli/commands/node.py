@@ -903,6 +903,11 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             if isinstance(supervisor_runtime.get("browser_safe_surface"), dict)
             else {}
         )
+        upstream_link = (
+            supervisor_runtime.get("required_upstream_link")
+            if isinstance(supervisor_runtime.get("required_upstream_link"), dict)
+            else {}
+        )
         typer.echo(
             "supervisor_runtime: "
             f"available={bool(supervisor_runtime.get('available'))} "
@@ -921,6 +926,23 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
         ]
         if surface_blockers:
             typer.echo(f"supervisor_runtime.surface_blockers: {', '.join(surface_blockers)}")
+        if upstream_link:
+            typer.echo(
+                "supervisor_runtime.upstream_link: "
+                f"kind={upstream_link.get('kind') or '-'} "
+                f"owner={upstream_link.get('owner') or '-'} "
+                f"state={upstream_link.get('state') or '-'} "
+                f"ready={bool(upstream_link.get('ready'))} "
+                f"reconnects={upstream_link.get('reconnect_total') or 0} "
+                f"served_by={upstream_link.get('served_by') or '-'}"
+            )
+            upstream_blockers = [
+                str(item).strip()
+                for item in (upstream_link.get("blockers") or [])
+                if str(item).strip()
+            ]
+            if upstream_blockers:
+                typer.echo(f"supervisor_runtime.upstream_link.blockers: {', '.join(upstream_blockers)}")
     if hub_member:
         assessment = hub_member.get("assessment") if isinstance(hub_member.get("assessment"), dict) else {}
         channels = hub_member.get("channels") if isinstance(hub_member.get("channels"), dict) else {}

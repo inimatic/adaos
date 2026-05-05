@@ -4982,6 +4982,57 @@ def _supervisor_browser_safe_surface(*, payload: dict[str, Any] | None) -> dict[
     }
 
 
+def _supervisor_required_upstream_link(*, payload: dict[str, Any] | None) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
+    role = str(runtime.get("transition_role") or "").strip().lower() or None
+    hub_root = runtime.get("hub_root_watchdog") if isinstance(runtime.get("hub_root_watchdog"), dict) else {}
+    member_hub = runtime.get("member_hub_watchdog") if isinstance(runtime.get("member_hub_watchdog"), dict) else {}
+
+    if role == "member":
+        kind = "member_hub"
+        watchdog = member_hub
+    elif role == "hub":
+        kind = "hub_root"
+        watchdog = hub_root
+    elif member_hub:
+        kind = "member_hub"
+        watchdog = member_hub
+    else:
+        kind = "hub_root"
+        watchdog = hub_root
+
+    state = str(watchdog.get("last_state") or "").strip().lower() or ("unavailable" if not data.get("available") else "unknown")
+    reason = str(watchdog.get("last_reason") or "").strip() or None
+    reconnect_total = int(watchdog.get("reconnect_total") or 0)
+    cooldown_sec = float(watchdog.get("cooldown_sec") or 0.0)
+    verify_timeout_sec = float(watchdog.get("verify_timeout_sec") or 0.0)
+    visible = bool(watchdog)
+    blockers: list[str] = []
+    if not data.get("available"):
+        blockers.append("supervisor.public_update_status.unavailable")
+    if not visible:
+        blockers.append(f"supervisor.{kind}.watchdog.hidden")
+    ready_states = {"ready", "not_applicable"}
+    paused_states = {"waiting_restart", "restarting", "paused_for_update", "cooldown"}
+    ready = state in ready_states or state in paused_states
+    owner = "supervisor" if bool(data.get("available")) else "unknown"
+    return {
+        "kind": kind,
+        "role": role,
+        "owner": owner,
+        "state": state,
+        "reason": reason,
+        "ready": ready if visible else False,
+        "visible": visible,
+        "reconnect_total": reconnect_total,
+        "cooldown_sec": cooldown_sec,
+        "verify_timeout_sec": verify_timeout_sec,
+        "served_by": str(data.get("_served_by") or "").strip() or None,
+        "blockers": blockers,
+    }
+
+
 def _ws_base_from_http_base(value: str | None) -> str | None:
     raw = str(value or "").strip().rstrip("/")
     if not raw:
@@ -5071,6 +5122,7 @@ def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[
             "_served_by": None,
         }
         payload["browser_safe_surface"] = _supervisor_browser_safe_surface(payload=payload)
+        payload["required_upstream_link"] = _supervisor_required_upstream_link(payload=payload)
         return payload
 
     try:
@@ -5087,6 +5139,7 @@ def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[
             "error": f"{type(exc).__name__}: {exc}",
         }
         payload["browser_safe_surface"] = _supervisor_browser_safe_surface(payload=payload)
+        payload["required_upstream_link"] = _supervisor_required_upstream_link(payload=payload)
         return payload
 
     session = requests.Session()
@@ -5129,6 +5182,7 @@ def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[
                 "_served_by": str(body.get("_served_by") or "").strip() or None,
             }
             payload["browser_safe_surface"] = _supervisor_browser_safe_surface(payload=payload)
+            payload["required_upstream_link"] = _supervisor_required_upstream_link(payload=payload)
             return payload
         payload = {
             "available": False,
@@ -5141,6 +5195,7 @@ def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[
             "error": last_error or None,
         }
         payload["browser_safe_surface"] = _supervisor_browser_safe_surface(payload=payload)
+        payload["required_upstream_link"] = _supervisor_required_upstream_link(payload=payload)
         return payload
     finally:
         with contextlib.suppress(Exception):
