@@ -534,6 +534,114 @@ def test_hub_root_watchdog_restarts_sidecar_when_sidecar_owns_transport(monkeypa
     assert events[-1]["verification"]["ok"] is True
 
 
+def test_member_hub_watchdog_requests_reconnect_when_member_link_is_down(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "member")
+
+    decision = manager._member_hub_watchdog_decision(
+        {
+            "node": {"role": "member"},
+            "readiness_tree": {
+                "route": {"status": "down"},
+                "hub_member": {"status": "down"},
+            },
+            "hub_member_connection_state": {
+                "state": "disconnected",
+                "assessment": {"state": "degraded", "reason": "member_link_down"},
+                "hub": {
+                    "connected": False,
+                    "hub_url": "https://ru.api.inimatic.com/hubs/sn_demo",
+                },
+            },
+        },
+        now=100.0,
+    )
+
+    assert isinstance(decision, dict)
+    assert decision["reason"] == "supervisor.member_hub.watchdog_reconnect"
+    assert decision["action"] == "runtime_reconnect"
+    assert decision["transport_owner"] == "runtime"
+    assert decision["member_state"] == "disconnected"
+
+
+def test_member_hub_watchdog_skips_recovery_during_restart_transition(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "member")
+
+    decision = manager._member_hub_watchdog_decision(
+        {
+            "node": {"role": "member"},
+            "hub_member_connection_state": {
+                "state": "restarting",
+                "assessment": {"state": "degraded", "reason": "restarting"},
+                "hub": {
+                    "connected": False,
+                    "transition_state": "restarting",
+                    "transition_reason": "core update launch",
+                },
+            },
+        },
+        now=100.0,
+    )
+
+    assert decision is None
+    assert manager._member_hub_watchdog_last_state == "restarting"
+    assert manager._member_hub_watchdog_last_reason == "core update launch"
+
+
+def test_member_hub_watchdog_invokes_runtime_reconnect(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMBER_HUB_VERIFY_TIMEOUT_SEC", "0")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        @staticmethod
+        def poll():
+            return None
+
+    calls: list[dict[str, object]] = []
+    manager._proc = _Proc()
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "member")
+    monkeypatch.setattr(
+        manager,
+        "_runtime_reliability_payload",
+        lambda timeout=1.5: {
+            "node": {"role": "member"},
+            "readiness_tree": {
+                "route": {"status": "down"},
+                "hub_member": {"status": "down"},
+            },
+            "hub_member_connection_state": {
+                "state": "disconnected",
+                "assessment": {"state": "degraded", "reason": "member_link_down"},
+                "hub": {
+                    "connected": False,
+                    "hub_url": "https://ru.api.inimatic.com/hubs/sn_demo",
+                },
+            },
+        },
+    )
+
+    def _request(**kwargs):
+        calls.append(dict(kwargs))
+        return {"ok": True, "accepted": True}
+
+    monkeypatch.setattr(manager, "_runtime_request_json", _request)
+
+    asyncio.run(manager._maybe_reconnect_member_hub_from_watchdog())
+
+    assert len(calls) == 1
+    assert calls[0]["path"] == "/api/node/member-hub/reconnect"
+    assert manager._member_hub_watchdog_reconnect_total == 1
+    assert manager._member_hub_watchdog_last_result["result"]["accepted"] is True
+    assert manager._member_hub_watchdog_last_result["verification"]["ok"] is False
+    events = supervisor._read_jsonl_tail(supervisor._supervisor_member_hub_watchdog_log_path(), limit=5)
+    assert events[-1]["action"] == "runtime_reconnect"
+
+
 def test_supervisor_start_update_and_cancel(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")
@@ -1967,6 +2075,7 @@ def test_runtime_state_payload_clears_root_promotion_requirement_when_root_match
 
 def test_runtime_self_heal_decision_restarts_after_listener_loss_timeout(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_RUNTIME_STARTUP_GRACE_SEC", "0")
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
 
     class _Proc:
