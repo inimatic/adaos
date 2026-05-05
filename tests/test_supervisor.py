@@ -642,6 +642,44 @@ def test_member_hub_watchdog_invokes_runtime_reconnect(monkeypatch, tmp_path) ->
     assert events[-1]["action"] == "runtime_reconnect"
 
 
+def test_required_upstream_link_maintenance_dispatches_to_member_watchdog(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._managed_transition_role = "member"
+    calls: list[str] = []
+
+    async def _member() -> None:
+        calls.append("member")
+
+    async def _hub() -> None:
+        calls.append("hub")
+
+    monkeypatch.setattr(manager, "_maybe_reconnect_member_hub_from_watchdog", _member)
+    monkeypatch.setattr(manager, "_maybe_reconnect_hub_root_from_watchdog", _hub)
+
+    asyncio.run(manager._maybe_maintain_required_upstream_link())
+
+    assert calls == ["member"]
+
+
+def test_required_upstream_link_maintenance_dispatches_to_hub_watchdog(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._managed_transition_role = "hub"
+    calls: list[str] = []
+
+    async def _member() -> None:
+        calls.append("member")
+
+    async def _hub() -> None:
+        calls.append("hub")
+
+    monkeypatch.setattr(manager, "_maybe_reconnect_member_hub_from_watchdog", _member)
+    monkeypatch.setattr(manager, "_maybe_reconnect_hub_root_from_watchdog", _hub)
+
+    asyncio.run(manager._maybe_maintain_required_upstream_link())
+
+    assert calls == ["hub"]
+
+
 def test_supervisor_start_update_and_cancel(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")
@@ -1830,6 +1868,55 @@ def test_runtime_state_payload_surfaces_previous_slot(monkeypatch, tmp_path) -> 
 
     assert payload["active_slot"] == "B"
     assert payload["previous_slot"] == "A"
+
+
+def test_runtime_state_payload_surfaces_required_upstream_link_for_member(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 32123
+        args = ["python", "-m", "adaos.apps.autostart_runner", "--host", "127.0.0.1", "--port", "8777"]
+        cwd = str(tmp_path)
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()
+    manager._managed_transition_role = "member"
+    manager._member_hub_watchdog_last_state = "ready"
+    manager._member_hub_watchdog_last_reason = "member-hub link is connected"
+    manager._member_hub_watchdog_reconnect_total = 3
+    monkeypatch.setattr(
+        supervisor,
+        "core_slot_status",
+        lambda: {"active_slot": "B", "previous_slot": "A", "slots": {}},
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "argv": ["python", "-m", "adaos.apps.autostart_runner", "--host", "127.0.0.1", "--port", "8777"],
+            "cwd": str(tmp_path),
+        },
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "validate_slot_structure",
+        lambda slot: {"slot": slot, "ok": True, "issues": [], "repo_dir": "/slots/B/repo", "venv_dir": "/slots/B/venv"},
+    )
+    monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
+
+    payload = manager.status()
+
+    assert payload["required_upstream_link"]["kind"] == "member_hub"
+    assert payload["required_upstream_link"]["owner"] == "supervisor"
+    assert payload["required_upstream_link"]["state"] == "ready"
+    assert payload["required_upstream_link"]["ready"] is True
+    assert payload["required_upstream_link"]["reconnect_total"] == 3
 
 
 def test_runtime_state_payload_reports_slot_mismatch(monkeypatch, tmp_path) -> None:
