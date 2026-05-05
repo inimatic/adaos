@@ -261,6 +261,48 @@ def test_skill_migrate_passes_force_flag_to_remote_sync_when_requested(monkeypat
     ]
 
 
+def test_skill_hub_post_prefers_local_control_base_and_matching_token(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        skill_cmd,
+        "resolve_control_base_url",
+        lambda **kwargs: calls.append(("base", dict(kwargs))) or "http://127.0.0.1:8779",
+    )
+
+    def _fake_resolve_control_token(*, explicit=None, base_url=None):
+        calls.append(("token", {"explicit": explicit, "base_url": base_url}))
+        return "wrapper-service-token" if base_url == "http://127.0.0.1:8779" else "stale-token"
+
+    monkeypatch.setattr(skill_cmd, "resolve_control_token", _fake_resolve_control_token)
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    def _fake_post(url: str, *, headers=None, json=None, timeout=None):
+        assert url == "http://127.0.0.1:8779/api/skills/sync"
+        assert headers == {"X-AdaOS-Token": "wrapper-service-token"}
+        assert json == {}
+        assert timeout == 30
+        return _Resp()
+
+    monkeypatch.setattr(skill_cmd.requests, "post", _fake_post)
+
+    payload = skill_cmd._hub_post("/api/skills/sync")
+
+    assert payload == {"ok": True}
+    assert calls == [
+        ("base", {"prefer_local": True}),
+        ("token", {"explicit": None, "base_url": "http://127.0.0.1:8779"}),
+    ]
+
+
 def test_skill_uninstall_suggests_force_when_workspace_is_dirty(monkeypatch) -> None:
     runner = CliRunner()
 

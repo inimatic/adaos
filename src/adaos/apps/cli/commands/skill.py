@@ -239,8 +239,9 @@ def _mgr() -> SkillManager:
 
 
 def _hub_base_url() -> str:
-    # Unified control-plane resolver (env > role-aware node.yaml > localhost fallback).
-    return resolve_control_base_url()
+    # Skill operations are node-local even on member nodes, so prefer the
+    # local control API over the durable member->hub rendezvous URL.
+    return resolve_control_base_url(prefer_local=True)
 
 
 def _hub_api_ready(*, timeout_s: float = 2.0) -> bool:
@@ -254,13 +255,20 @@ def _hub_api_ready(*, timeout_s: float = 2.0) -> bool:
     return isinstance(payload, dict)
 
 
-def _hub_headers() -> dict[str, str]:
-    return {"X-AdaOS-Token": str(resolve_control_token())}
+def _hub_headers(*, base_url: str | None = None) -> dict[str, str]:
+    resolved_base = str(base_url or _hub_base_url() or "").strip() or None
+    try:
+        token = str(resolve_control_token(base_url=resolved_base))
+    except TypeError:
+        # Some tests still patch the older signature without base_url support.
+        token = str(resolve_control_token())
+    return {"X-AdaOS-Token": token}
 
 
 def _hub_get(path: str, *, params: dict | None = None) -> dict:
-    url = _hub_base_url() + path
-    resp = requests.get(url, headers=_hub_headers(), params=params or {}, timeout=10)
+    base = _hub_base_url()
+    url = base + path
+    resp = requests.get(url, headers=_hub_headers(base_url=base), params=params or {}, timeout=10)
     try:
         resp.raise_for_status()
     except requests.HTTPError as exc:
@@ -278,8 +286,9 @@ def _hub_get(path: str, *, params: dict | None = None) -> dict:
 
 
 def _hub_post(path: str, *, body: dict | None = None, timeout_s: float = 30) -> dict:
-    url = _hub_base_url() + path
-    resp = requests.post(url, headers=_hub_headers(), json=body or {}, timeout=timeout_s)
+    base = _hub_base_url()
+    url = base + path
+    resp = requests.post(url, headers=_hub_headers(base_url=base), json=body or {}, timeout=timeout_s)
     try:
         resp.raise_for_status()
     except requests.HTTPError as exc:
@@ -1119,17 +1128,14 @@ def activate(name: str, slot: Optional[str] = typer.Option(None, "--slot"), vers
     # skills.activated отработал в его процессе и web_desktop_skill
     # сразу обновил каталог без перезапуска, не трогая ещё раз runtime.
     try:
-        url = resolve_control_base_url().rstrip("/") + "/api/skills/runtime/notify-activated"
+        base = _hub_base_url().rstrip("/")
+        url = base + "/api/skills/runtime/notify-activated"
         payload = {
             "name": name,
             "space": "default",
             "webspace_id": default_webspace_id(),
         }
-        headers = {}
-        try:
-            headers["X-AdaOS-Token"] = resolve_control_token()
-        except Exception:
-            pass
+        headers = _hub_headers(base_url=base)
         # Таймаут маленький и любые ошибки игнорируем, чтобы CLI
         # оставался работоспособен, даже когда API ещё не поднят.
         try:
