@@ -35,21 +35,9 @@ from adaos.apps.cli.commands import skill as skill_cmd
 from adaos.services.skill.update import SkillUpdateResult
 
 
-def test_skill_migrate_detects_changed_skills_when_name_omitted(monkeypatch, tmp_path: Path) -> None:
+def test_skill_migrate_syncs_and_updates_detected_workspace_skills(monkeypatch) -> None:
     runner = CliRunner()
-    workspace = tmp_path / "workspace"
-    skills_dir = workspace / "skills"
-    (skills_dir / "alpha").mkdir(parents=True, exist_ok=True)
-    (skills_dir / "beta").mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(skill_cmd, "_workspace_root", lambda: skills_dir)
-
-    class _Proc:
-        returncode = 0
-        stdout = " M skills/alpha/skill.yaml\n?? skills/beta/webui.json\n"
-        stderr = ""
-
-    monkeypatch.setattr(skill_cmd.subprocess, "run", lambda *args, **kwargs: _Proc())
+    sync_calls: list[bool] = []
 
     calls: list[tuple[str, bool]] = []
 
@@ -58,12 +46,22 @@ def test_skill_migrate_detects_changed_skills_when_name_omitted(monkeypatch, tmp
             calls.append((skill_id, dry_run))
             return SkillUpdateResult(updated=True, version="1.2.3")
 
+    class _Mgr:
+        def sync(self, *, force: bool | None = None) -> None:
+            sync_calls.append(bool(force))
+
     side_effects: list[tuple[str, dict[str, object]]] = []
     rebuilds: list[str | None] = []
 
+    monkeypatch.setattr(skill_cmd, "_hub_api_ready", lambda timeout_s=3.0: False)
     monkeypatch.setattr(skill_cmd, "SkillUpdateService", lambda _ctx: _Service())
     monkeypatch.setattr(skill_cmd, "get_ctx", lambda: object())
-    monkeypatch.setattr(skill_cmd, "_mgr", lambda: object())
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(
+        skill_cmd,
+        "_list_migratable_workspace_skills",
+        lambda *, ctx, mgr: ["alpha", "beta"],
+    )
     monkeypatch.setattr(skill_cmd, "default_webspace_id", lambda: "default")
     monkeypatch.setattr(
         skill_cmd,
@@ -84,6 +82,7 @@ def test_skill_migrate_detects_changed_skills_when_name_omitted(monkeypatch, tmp
     result = runner.invoke(skill_cmd.app, ["migrate"])
 
     assert result.exit_code == 0, result.output
+    assert sync_calls == [False]
     assert calls == [("alpha", False), ("beta", False)]
     assert side_effects == [
         (
@@ -112,27 +111,60 @@ def test_skill_migrate_detects_changed_skills_when_name_omitted(monkeypatch, tmp
     assert "beta: updated (version 1.2.3)" in result.output
 
 
-def test_skill_migrate_reports_no_changed_skills(monkeypatch, tmp_path: Path) -> None:
+def test_skill_migrate_reports_no_changed_skills(monkeypatch) -> None:
     runner = CliRunner()
-    workspace = tmp_path / "workspace"
-    skills_dir = workspace / "skills"
-    skills_dir.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(skill_cmd, "_workspace_root", lambda: skills_dir)
-
-    class _Proc:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    monkeypatch.setattr(skill_cmd.subprocess, "run", lambda *args, **kwargs: _Proc())
+    monkeypatch.setattr(skill_cmd, "_hub_api_ready", lambda timeout_s=3.0: False)
     monkeypatch.setattr(skill_cmd, "SkillUpdateService", lambda _ctx: object())
     monkeypatch.setattr(skill_cmd, "get_ctx", lambda: object())
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: types.SimpleNamespace(sync=lambda force=None: None))
+    monkeypatch.setattr(skill_cmd, "_list_migratable_workspace_skills", lambda *, ctx, mgr: [])
 
     result = runner.invoke(skill_cmd.app, ["migrate"])
 
     assert result.exit_code == 0, result.output
     assert "no changed skills detected" in result.output.lower()
+
+
+def test_list_migratable_workspace_skills_detects_version_drift(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skills_dir = workspace / "skills"
+    skill_dir = skills_dir / "infrastate_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "skill.yaml").write_text(
+        "id: infrastate_skill\nname: Infra State\nversion: '0.56.0'\n",
+        encoding="utf-8",
+    )
+
+    ctx = types.SimpleNamespace(
+        sql=object(),
+        paths=types.SimpleNamespace(
+            workspace_dir=lambda: workspace,
+            skills_workspace_dir=lambda: skills_dir,
+            repo_root=lambda: None,
+        ),
+    )
+
+    class _Mgr:
+        def runtime_status(self, name: str):
+            assert name == "infrastate_skill"
+            return {
+                "name": name,
+                "version": "0.52.0",
+                "installed": True,
+                "state": "active",
+            }
+
+    monkeypatch.setattr(
+        skill_cmd,
+        "SqliteSkillRegistry",
+        lambda sql: types.SimpleNamespace(list=lambda: [types.SimpleNamespace(name="infrastate_skill", installed=True)]),
+    )
+    monkeypatch.setattr(skill_cmd, "list_workspace_registry_entries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(skill_cmd, "_list_changed_workspace_skills", lambda: [])
+
+    names = skill_cmd._list_migratable_workspace_skills(ctx=ctx, mgr=_Mgr())
+
+    assert names == ["infrastate_skill"]
 
 
 def test_skill_migrate_uses_longer_hub_timeout_for_remote_updates(monkeypatch) -> None:
