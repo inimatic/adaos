@@ -908,6 +908,16 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             if isinstance(supervisor_runtime.get("required_upstream_link"), dict)
             else {}
         )
+        if upstream_link and sidecar:
+            try:
+                from adaos.services.reliability import _enrich_required_upstream_link_with_sidecar
+
+                upstream_link = _enrich_required_upstream_link_with_sidecar(
+                    required_upstream_link=upstream_link,
+                    sidecar_runtime=sidecar,
+                )
+            except Exception:
+                pass
         typer.echo(
             "supervisor_runtime: "
             f"available={bool(supervisor_runtime.get('available'))} "
@@ -936,6 +946,9 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"current_owner={upstream_link.get('current_owner') or '-'} "
                 f"planned_owner={upstream_link.get('planned_owner') or '-'} "
                 f"continuity={upstream_link.get('continuity_mode') or '-'} "
+                f"support={upstream_link.get('current_support') or '-'} "
+                f"handoff={upstream_link.get('handoff_state') or '-'} "
+                f"restart_policy={((upstream_link.get('recovery_policy') or {}) if isinstance(upstream_link.get('recovery_policy'), dict) else {}).get('on_runtime_restart') or '-'} "
                 f"ready={bool(upstream_link.get('ready'))} "
                 f"reconnects={upstream_link.get('reconnect_total') or 0} "
                 f"served_by={upstream_link.get('served_by') or '-'}"

@@ -5040,6 +5040,97 @@ def _supervisor_required_upstream_link(*, payload: dict[str, Any] | None) -> dic
     }
 
 
+def _enrich_required_upstream_link_with_sidecar(
+    *,
+    required_upstream_link: dict[str, Any] | None,
+    sidecar_runtime: dict[str, Any] | None,
+) -> dict[str, Any]:
+    link = dict(required_upstream_link or {})
+    sidecar = sidecar_runtime if isinstance(sidecar_runtime, dict) else {}
+    if not link:
+        return link
+
+    continuity_contract = (
+        sidecar.get("continuity_contract")
+        if isinstance(sidecar.get("continuity_contract"), dict)
+        else {}
+    )
+    route_tunnel_contract = (
+        sidecar.get("route_tunnel_contract")
+        if isinstance(sidecar.get("route_tunnel_contract"), dict)
+        else {}
+    )
+    transport_owner = str(sidecar.get("transport_owner") or "").strip().lower() or None
+    sidecar_enabled = bool(sidecar.get("enabled"))
+    lifecycle_manager = str(sidecar.get("lifecycle_manager") or "").strip().lower() or None
+    current_support = str(continuity_contract.get("current_support") or "").strip().lower() or None
+    link["sidecar_enabled"] = sidecar_enabled
+    link["sidecar_lifecycle_manager"] = lifecycle_manager
+    if current_support:
+        link["current_support"] = current_support
+
+    kind = str(link.get("kind") or "").strip().lower()
+    if kind == "hub_root":
+        if transport_owner == "sidecar":
+            link["current_owner"] = "sidecar"
+            link["planned_owner"] = "sidecar"
+            link["continuity_mode"] = "slot_sticky"
+        link["handoff_state"] = "ready" if str(link.get("current_owner") or "") == "sidecar" else "not_applicable"
+        link["handoff_ready"] = bool(str(link.get("current_owner") or "") == "sidecar")
+        link["recovery_policy"] = {
+            "on_runtime_restart": "preserve_sidecar" if str(link.get("current_owner") or "") == "sidecar" else "runtime_reconnect",
+            "while_owner_runtime": "runtime_reconnect",
+            "while_owner_sidecar": "preserve_sidecar",
+        }
+        return link
+
+    if kind != "member_hub":
+        return link
+
+    ws_entry = _sidecar_route_tunnel_entry(route_tunnel_contract, "ws")
+    yws_entry = _sidecar_route_tunnel_entry(route_tunnel_contract, "yws")
+    ws_planned = str(ws_entry.get("planned_owner") or "").strip().lower() == "sidecar"
+    yws_planned = str(yws_entry.get("planned_owner") or "").strip().lower() == "sidecar"
+    ws_current = str(ws_entry.get("current_owner") or "").strip().lower() == "sidecar"
+    yws_current = str(yws_entry.get("current_owner") or "").strip().lower() == "sidecar"
+    ws_ready = bool(ws_entry.get("handoff_ready"))
+    yws_ready = bool(yws_entry.get("handoff_ready"))
+    handoff_planned = sidecar_enabled and (ws_planned or yws_planned)
+    handoff_ready = sidecar_enabled and ws_current and yws_current and ws_ready and yws_ready
+    blockers: list[str] = [str(item).strip() for item in (link.get("blockers") or []) if str(item).strip()]
+    if handoff_planned and not handoff_ready:
+        for boundary, entry in (("browser_events_ws", ws_entry), ("browser_yjs_ws", yws_entry)):
+            for item in (entry.get("blockers") or []):
+                text = str(item).strip()
+                if text:
+                    blockers.append(f"{boundary}: {text}")
+                    break
+    if handoff_ready:
+        link["current_owner"] = "sidecar"
+        link["planned_owner"] = "sidecar"
+        link["continuity_mode"] = "slot_sticky"
+        link["handoff_state"] = "ready"
+    elif handoff_planned:
+        link["planned_owner"] = "sidecar"
+        link["continuity_mode"] = "handoff_planned"
+        listener_ready = bool(ws_entry.get("listener_ready")) or bool(yws_entry.get("listener_ready"))
+        proxy_ready = (
+            str(ws_entry.get("current_support") or "").strip().lower() == "proxy_ready"
+            or str(yws_entry.get("current_support") or "").strip().lower() == "proxy_ready"
+        )
+        link["handoff_state"] = "in_progress" if listener_ready or proxy_ready else "planned"
+    else:
+        link["handoff_state"] = "not_planned" if sidecar_enabled else "disabled"
+    link["handoff_ready"] = handoff_ready
+    link["blockers"] = blockers
+    link["recovery_policy"] = {
+        "on_runtime_restart": "preserve_sidecar" if handoff_ready else "runtime_reconnect",
+        "while_owner_runtime": "runtime_reconnect",
+        "while_owner_sidecar": "preserve_sidecar",
+    }
+    return link
+
+
 def _ws_base_from_http_base(value: str | None) -> str | None:
     raw = str(value or "").strip().rstrip("/")
     if not raw:
@@ -5923,6 +6014,15 @@ def reliability_snapshot(
         transport_strategy=transport_strategy,
         media_runtime=media_runtime,
     )
+    if isinstance(supervisor_runtime, dict):
+        supervisor_runtime["required_upstream_link"] = _enrich_required_upstream_link_with_sidecar(
+            required_upstream_link=(
+                supervisor_runtime.get("required_upstream_link")
+                if isinstance(supervisor_runtime.get("required_upstream_link"), dict)
+                else {}
+            ),
+            sidecar_runtime=sidecar_runtime,
+        )
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
         sidecar_runtime=sidecar_runtime,
