@@ -28,6 +28,50 @@ from adaos.apps.cli.commands import setup as setup_cmd
 from requests import ConnectionError as RequestsConnectionError
 
 
+def test_autostart_admin_base_url_prefers_local_control_on_member(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(setup_cmd, "get_ctx", lambda: types.SimpleNamespace(config=types.SimpleNamespace()))
+    monkeypatch.setattr(setup_cmd, "autostart_status", lambda ctx: {})
+    monkeypatch.setattr(setup_cmd, "_resolve_stop_bind", lambda conf: None)
+    monkeypatch.setattr(setup_cmd, "_autostart_cli_token", lambda token=None: "")
+    monkeypatch.setattr(setup_cmd, "resolve_control_token", lambda explicit=None: "dev-local-token")
+    monkeypatch.setattr(
+        setup_cmd,
+        "resolve_control_base_url",
+        lambda **kwargs: calls.append(dict(kwargs)) or "http://127.0.0.1:8779",
+    )
+    monkeypatch.setattr(
+        setup_cmd,
+        "probe_control_api",
+        lambda *, base_url, token, timeout_s=0.75: (200, {"ok": True}),
+    )
+
+    base = setup_cmd._autostart_admin_base_url()
+
+    assert base == "http://127.0.0.1:8779"
+    assert calls == [{"prefer_local": True}]
+
+
+def test_autostart_admin_headers_resolve_token_for_selected_base(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(setup_cmd, "_autostart_cli_token", lambda token=None: "")
+    monkeypatch.setattr(
+        setup_cmd,
+        "resolve_control_token",
+        lambda *, explicit=None, base_url=None: calls.append({"explicit": explicit, "base_url": base_url}) or "wrapper-service-token",
+    )
+
+    headers = setup_cmd._autostart_admin_headers(base_url="http://127.0.0.1:8779")
+
+    assert headers == {
+        "Content-Type": "application/json",
+        "X-AdaOS-Token": "wrapper-service-token",
+    }
+    assert calls == [{"explicit": None, "base_url": "http://127.0.0.1:8779"}]
+
+
 def test_autostart_update_status_uses_local_admin_api(monkeypatch) -> None:
     runner = CliRunner()
     def _fake_supervisor_get(path, *, token=None):
@@ -908,7 +952,11 @@ def test_probe_http_json_uses_default_autostart_headers(monkeypatch) -> None:
         captured["headers"] = dict(headers or {})
         return _Response()
 
-    monkeypatch.setattr(setup_cmd, "_autostart_admin_headers", lambda token=None: {"X-AdaOS-Token": "dev-local-token"})
+    monkeypatch.setattr(
+        setup_cmd,
+        "_autostart_admin_headers",
+        lambda token=None, base_url=None: {"X-AdaOS-Token": "dev-local-token"},
+    )
     monkeypatch.setattr(setup_cmd.requests, "get", _get)
 
     payload = setup_cmd._probe_http_json("http://127.0.0.1:8776", "/api/supervisor/status")
@@ -936,7 +984,11 @@ def test_probe_http_result_reports_http_error_payload(monkeypatch) -> None:
         captured["headers"] = dict(headers or {})
         return _Response()
 
-    monkeypatch.setattr(setup_cmd, "_autostart_admin_headers", lambda token=None: {"X-AdaOS-Token": "dev-local-token"})
+    monkeypatch.setattr(
+        setup_cmd,
+        "_autostart_admin_headers",
+        lambda token=None, base_url=None: {"X-AdaOS-Token": "dev-local-token"},
+    )
     monkeypatch.setattr(setup_cmd.requests, "get", _get)
 
     payload = setup_cmd._probe_http_result("http://127.0.0.1:8776", "/api/supervisor/status")
