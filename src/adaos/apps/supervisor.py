@@ -1685,6 +1685,18 @@ class SupervisorManager:
             eventbus_backlog = dict(snapshot) if isinstance(snapshot, dict) else {}
         except Exception:
             eventbus_backlog = {}
+        incident_summary: dict[str, Any] = {}
+        try:
+            from adaos.services.hmg_incident_summary import build_hmg_incident_summary
+
+            incident_summary = build_hmg_incident_summary(
+                route_diagnostics=route_diagnostics,
+                yjs_pressure=yjs_pressure,
+                member_snapshot_rebuild=member_snapshot_rebuild,
+                eventbus_backlog=eventbus_backlog,
+            )
+        except Exception:
+            incident_summary = {}
         payload = {
             "captured_at": now,
             "reason": str(reason or "").strip() or "memory_profile_failure",
@@ -1698,6 +1710,7 @@ class SupervisorManager:
             "route_diagnostics": route_diagnostics,
             "member_snapshot_rebuild": member_snapshot_rebuild,
             "eventbus_backlog": eventbus_backlog,
+            "incident_summary": incident_summary,
         }
         artifact_dir = supervisor_memory_session_artifacts_dir(token)
         path = (artifact_dir / f"{artifact_id}.json").resolve()
@@ -1725,6 +1738,11 @@ class SupervisorManager:
         window["local_incident_stage"] = stage_token
         window["local_incident_reason"] = str(reason or "").strip() or "memory_profile_failure"
         window["local_incident_captured_at"] = now
+        if incident_summary:
+            window["local_incident_headline"] = str(incident_summary.get("headline") or "").strip() or None
+            window["local_incident_dominant_signal"] = (
+                str(incident_summary.get("dominant_signal") or "").strip() or None
+            )
         summary["operation_window"] = window
         self._upsert_memory_session_summary(summary)
         return artifact_ref
@@ -5099,6 +5117,22 @@ class SupervisorManager:
                         if isinstance(session.get("operation_window"), dict)
                         else {}
                     ).get("local_incident_artifact_id")
+                    or ""
+                ).strip() or None,
+                "local_incident_headline": str(
+                    (
+                        session.get("operation_window")
+                        if isinstance(session.get("operation_window"), dict)
+                        else {}
+                    ).get("local_incident_headline")
+                    or ""
+                ).strip() or None,
+                "local_incident_dominant_signal": str(
+                    (
+                        session.get("operation_window")
+                        if isinstance(session.get("operation_window"), dict)
+                        else {}
+                    ).get("local_incident_dominant_signal")
                     or ""
                 ).strip() or None,
                 "retry_depth": int(session.get("retry_depth") or 0),
