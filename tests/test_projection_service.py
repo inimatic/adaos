@@ -307,3 +307,48 @@ def test_projection_service_skips_live_room_fast_path_for_skill_owned_writes(mon
 
     assert mutate_calls == []
     assert calls == [{"load_mark_roots": ["data"]}]
+
+
+def test_projection_service_throttles_skill_owned_primary_doc_writes_when_policy_is_critical(monkeypatch) -> None:
+    fake_state = {"data": _FakeMap()}
+    throttle_calls: list[dict[str, object]] = []
+
+    async def _capture_throttle(**kwargs):
+        throttle_calls.append(dict(kwargs))
+
+    target = SimpleNamespace(
+        backend="yjs",
+        path="data/infrastate",
+        webspace_id=None,
+    )
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(
+        ctx=SimpleNamespace(),
+        registry=registry,
+    )
+
+    monkeypatch.setattr(projection_service_module, "mutate_live_room", lambda _ws, _mutator, **_kwargs: False)
+    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+    monkeypatch.setattr(
+        projection_service_module,
+        "_yjs_primary_doc_policy_state",
+        lambda **_kwargs: {"policy_state": "throttle", "observed_state": "critical"},
+    )
+    monkeypatch.setattr(projection_service_module, "_throttle_primary_doc_write", _capture_throttle)
+    monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="infrastate_skill"),
+    )
+
+    asyncio.run(service.apply("subnet", "infrastate.snapshot", {"ok": True}, webspace_id="ws-test"))
+
+    assert throttle_calls == [
+        {
+            "policy": {"policy_state": "throttle", "observed_state": "critical"},
+            "webspace_id": "ws-test",
+            "path": "data/nodes/hub/infrastate",
+            "owner": "skill:infrastate_skill",
+        }
+    ]
