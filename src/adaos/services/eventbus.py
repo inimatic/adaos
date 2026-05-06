@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from threading import RLock
 from typing import Callable, Awaitable, Any, DefaultDict, List
 
@@ -66,6 +66,34 @@ def _pending_backlog_warn_interval_s() -> float:
     return max(0.0, min(value, 300.0))
 
 
+def _bounded_event_topics() -> tuple[str, ...]:
+    raw = str(
+        os.getenv(
+            "ADAOS_EVENTBUS_BOUNDED_TOPICS",
+            "webio.stream.snapshot.requested,subnet.member.snapshot.changed",
+        )
+        or ""
+    ).strip()
+    items = [str(item or "").strip() for item in raw.split(",") if str(item or "").strip()]
+    return tuple(items)
+
+
+def _bounded_event_concurrency() -> int:
+    try:
+        value = int(str(os.getenv("ADAOS_EVENTBUS_BOUNDED_CONCURRENCY", "1") or "1").strip())
+    except Exception:
+        value = 1
+    return max(1, min(value, 32))
+
+
+def _bounded_event_queue_limit() -> int:
+    try:
+        value = int(str(os.getenv("ADAOS_EVENTBUS_BOUNDED_QUEUE_LIMIT", "128") or "128").strip())
+    except Exception:
+        value = 128
+    return max(1, min(value, 100000))
+
+
 async def _run_coro_with_timing(coro: Awaitable[Any], handler: Handler, event: Event) -> None:
     """
     Wrapper for async handlers that records execution time and logs slow/crashing
@@ -115,6 +143,30 @@ class LocalEventBus(EventBus):
         self._pending_by_handler: DefaultDict[str, int] = defaultdict(int)
         self._pending_peak = 0
         self._last_pending_warn_at = 0.0
+        self._incoming_total = 0
+        self._incoming_by_type: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_topics = _bounded_event_topics()
+        self._bounded_concurrency = _bounded_event_concurrency()
+        self._bounded_queue_limit = _bounded_event_queue_limit()
+        self._bounded_queues: DefaultDict[str, deque[tuple[Awaitable[Any], Handler, Event, str, str]]] = defaultdict(deque)
+        self._bounded_worker_tasks: set[asyncio.Task[Any]] = set()
+        self._bounded_active_workers: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_peak_workers: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_queued_by_type: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_queued_by_handler: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_dropped_by_topic: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_dropped_by_type: DefaultDict[str, int] = defaultdict(int)
+        self._bounded_queue_peak = 0
+
+    def _bounded_topic_key(self, event_type: str) -> str | None:
+        for spec in self._bounded_topics:
+            if spec.endswith("*"):
+                prefix = spec[:-1]
+                if prefix and event_type.startswith(prefix):
+                    return spec
+            elif event_type == spec:
+                return spec
+        return None
 
     def _pending_backlog_snapshot_locked(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -131,12 +183,46 @@ class LocalEventBus(EventBus):
             ((handler_name, count) for handler_name, count in self._pending_by_handler.items() if count > 0),
             key=lambda item: (-item[1], item[0]),
         )[:5]
+        bounded_queue_total = sum(len(queue) for queue in self._bounded_queues.values())
+        bounded_active_workers = sum(int(count or 0) for count in self._bounded_active_workers.values())
+        top_queued_types = sorted(
+            ((event_type, count) for event_type, count in self._bounded_queued_by_type.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        top_queued_handlers = sorted(
+            ((handler_name, count) for handler_name, count in self._bounded_queued_by_handler.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        top_bounded_topics = sorted(
+            ((topic, len(queue)) for topic, queue in self._bounded_queues.items() if len(queue) > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        top_bounded_drops = sorted(
+            ((topic, count) for topic, count in self._bounded_dropped_by_topic.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        top_incoming_types = sorted(
+            ((event_type, count) for event_type, count in self._incoming_by_type.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
         return {
             "pending_tasks": len(self._pending_tasks),
             "pending_peak": int(self._pending_peak),
             "oldest_age_s": float(oldest_age_s),
             "top_types": top_types,
             "top_handlers": top_handlers,
+            "incoming_total": int(self._incoming_total),
+            "top_incoming_types": top_incoming_types,
+            "bounded_topics": list(self._bounded_topics),
+            "bounded_concurrency": int(self._bounded_concurrency),
+            "bounded_queue_limit": int(self._bounded_queue_limit),
+            "bounded_queue_total": int(bounded_queue_total),
+            "bounded_queue_peak": int(self._bounded_queue_peak),
+            "bounded_active_workers": int(bounded_active_workers),
+            "top_queued_types": top_queued_types,
+            "top_queued_handlers": top_queued_handlers,
+            "top_bounded_topics": top_bounded_topics,
+            "top_bounded_drops": top_bounded_drops,
         }
 
     def backlog_snapshot(self) -> dict[str, Any]:
@@ -145,7 +231,8 @@ class LocalEventBus(EventBus):
 
     def _maybe_log_pending_backlog_locked(self) -> None:
         pending_total = len(self._pending_tasks)
-        if pending_total < _pending_backlog_warn_threshold():
+        bounded_queue_total = sum(len(queue) for queue in self._bounded_queues.values())
+        if pending_total < _pending_backlog_warn_threshold() and bounded_queue_total < _pending_backlog_warn_threshold():
             return
         now = time.monotonic()
         if now - float(self._last_pending_warn_at or 0.0) < _pending_backlog_warn_interval_s():
@@ -153,12 +240,21 @@ class LocalEventBus(EventBus):
         snapshot = self._pending_backlog_snapshot_locked()
         self._last_pending_warn_at = now
         _log.warning(
-            "eventbus backlog pending_tasks=%s peak_pending_tasks=%s oldest_age_s=%.3fs top_types=%s top_handlers=%s",
+            "eventbus backlog pending_tasks=%s peak_pending_tasks=%s oldest_age_s=%.3fs "
+            "bounded_queue_total=%s bounded_queue_peak=%s bounded_active_workers=%s "
+            "top_types=%s top_handlers=%s top_queued_types=%s top_queued_handlers=%s top_bounded_topics=%s top_bounded_drops=%s",
             int(snapshot["pending_tasks"]),
             int(snapshot["pending_peak"]),
             float(snapshot["oldest_age_s"]),
+            int(snapshot["bounded_queue_total"]),
+            int(snapshot["bounded_queue_peak"]),
+            int(snapshot["bounded_active_workers"]),
             snapshot["top_types"],
             snapshot["top_handlers"],
+            snapshot["top_queued_types"],
+            snapshot["top_queued_handlers"],
+            snapshot["top_bounded_topics"],
+            snapshot["top_bounded_drops"],
         )
 
     def _track_task(self, task: asyncio.Task[Any], handler: Handler, event: Event) -> None:
@@ -192,6 +288,59 @@ class LocalEventBus(EventBus):
 
         task.add_done_callback(_cleanup)
 
+    async def _bounded_worker(self, topic_key: str) -> None:
+        try:
+            while True:
+                queued: tuple[Awaitable[Any], Handler, Event, str, str] | None = None
+                with self._lock:
+                    queue = self._bounded_queues.get(topic_key)
+                    if queue:
+                        queued = queue.popleft()
+                    if queued is not None:
+                        _coro, _handler, _event, event_type, handler_name = queued
+                        if event_type in self._bounded_queued_by_type:
+                            self._bounded_queued_by_type[event_type] = max(0, int(self._bounded_queued_by_type[event_type]) - 1)
+                            if self._bounded_queued_by_type[event_type] <= 0:
+                                self._bounded_queued_by_type.pop(event_type, None)
+                        if handler_name in self._bounded_queued_by_handler:
+                            self._bounded_queued_by_handler[handler_name] = max(0, int(self._bounded_queued_by_handler[handler_name]) - 1)
+                            if self._bounded_queued_by_handler[handler_name] <= 0:
+                                self._bounded_queued_by_handler.pop(handler_name, None)
+                    if queued is None:
+                        break
+                coro, handler, event, _event_type, _handler_name = queued
+                await _run_coro_with_timing(coro, handler, event)
+        finally:
+            with self._lock:
+                task = asyncio.current_task()
+                if task is not None:
+                    self._bounded_worker_tasks.discard(task)
+                if topic_key in self._bounded_active_workers:
+                    self._bounded_active_workers[topic_key] = max(0, int(self._bounded_active_workers[topic_key]) - 1)
+                    if self._bounded_active_workers[topic_key] <= 0:
+                        self._bounded_active_workers.pop(topic_key, None)
+                queue = self._bounded_queues.get(topic_key)
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if queue and loop is not None:
+                    self._ensure_bounded_workers_locked(loop, topic_key)
+
+    def _ensure_bounded_workers_locked(self, loop: asyncio.AbstractEventLoop, topic_key: str) -> None:
+        queue = self._bounded_queues.get(topic_key)
+        if not queue:
+            return
+        active = int(self._bounded_active_workers.get(topic_key) or 0)
+        target = min(self._bounded_concurrency, len(queue))
+        while active < target:
+            task = loop.create_task(self._bounded_worker(topic_key), name=f"eventbus-bounded:{topic_key}")
+            self._bounded_worker_tasks.add(task)
+            active += 1
+            self._bounded_active_workers[topic_key] = active
+            if active > int(self._bounded_peak_workers.get(topic_key) or 0):
+                self._bounded_peak_workers[topic_key] = active
+
     async def wait_for_idle(self, timeout: float = 5.0) -> bool:
         """
         Wait until all async handlers spawned by ``publish()`` finish.
@@ -201,12 +350,18 @@ class LocalEventBus(EventBus):
         while True:
             with self._lock:
                 pending = [task for task in self._pending_tasks if not task.done()]
-            if not pending:
+                worker_pending = [task for task in self._bounded_worker_tasks if not task.done()]
+                bounded_queued = sum(len(queue) for queue in self._bounded_queues.values())
+            if not pending and not worker_pending and bounded_queued <= 0:
                 return True
             remaining = deadline - loop.time()
             if remaining <= 0:
                 return False
-            await asyncio.wait(pending, timeout=min(0.1, remaining), return_when=asyncio.FIRST_COMPLETED)
+            wait_on = pending + worker_pending
+            if wait_on:
+                await asyncio.wait(wait_on, timeout=min(0.1, remaining), return_when=asyncio.FIRST_COMPLETED)
+            else:
+                await asyncio.sleep(min(0.1, remaining))
 
     def subscribe(self, type_prefix: str, handler: Handler) -> None:
         with self._lock:
@@ -215,7 +370,10 @@ class LocalEventBus(EventBus):
             _log.debug("bus.subscribe prefix=%r handler=%s", type_prefix, _handler_label(handler))
 
     def publish(self, event: Event) -> None:
+        event_type = str(getattr(event, "type", "<unknown>") or "<unknown>")
         with self._lock:
+            self._incoming_total += 1
+            self._incoming_by_type[event_type] += 1
             pairs = [(p, hs[:]) for p, hs in self._subs.items()]
 
         if _log.isEnabledFor(logging.DEBUG):
@@ -252,8 +410,43 @@ class LocalEventBus(EventBus):
                         # Если нет текущего цикла, fallback на asyncio.run (CLI/скрипты).
                         asyncio.run(res)
                     else:
-                        task = loop.create_task(_run_coro_with_timing(res, h, event))
-                        self._track_task(task, h, event)
+                        topic_key = self._bounded_topic_key(event_type)
+                        if topic_key:
+                            handler_name = _handler_label(h)
+                            dropped_total = 0
+                            with self._lock:
+                                queue = self._bounded_queues[topic_key]
+                                if len(queue) >= self._bounded_queue_limit:
+                                    self._bounded_dropped_by_topic[topic_key] += 1
+                                    self._bounded_dropped_by_type[event_type] += 1
+                                    dropped_total = int(self._bounded_dropped_by_topic[topic_key] or 0)
+                                else:
+                                    queue.append((res, h, event, event_type, handler_name))
+                                    self._bounded_queued_by_type[event_type] += 1
+                                    self._bounded_queued_by_handler[handler_name] += 1
+                                    bounded_total = sum(len(items) for items in self._bounded_queues.values())
+                                    if bounded_total > self._bounded_queue_peak:
+                                        self._bounded_queue_peak = bounded_total
+                                    self._ensure_bounded_workers_locked(loop, topic_key)
+                                    self._maybe_log_pending_backlog_locked()
+                            if dropped_total > 0:
+                                try:
+                                    res.close()
+                                except Exception:
+                                    pass
+                                if dropped_total == 1 or dropped_total % 25 == 0:
+                                    _log.warning(
+                                        "eventbus bounded queue dropped topic=%s type=%s handler=%s dropped_total=%s queue_limit=%s",
+                                        topic_key,
+                                        event_type,
+                                        handler_name,
+                                        dropped_total,
+                                        int(self._bounded_queue_limit),
+                                    )
+                                continue
+                        else:
+                            task = loop.create_task(_run_coro_with_timing(res, h, event))
+                            self._track_task(task, h, event)
                 else:
                     duration = time.perf_counter() - started
                     if duration >= _slow_handler_threshold_s("sync", 0.1):
