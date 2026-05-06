@@ -39,5 +39,7 @@ Current target-state control-plane extensions are documented in:
 - [Root MCP Roadmap](root-mcp-roadmap.md): sequencing for planes, descriptor cache, session leases, and companion slices such as `ProfileOps`
 - [AdaOS Supervisor](adaos-supervisor.md): local always-on process and update supervision authority above the restartable runtime
 - [Member-Hub Connectivity](member-hub-connectivity.md): target control-plane architecture for member join, member-hub lifecycle ownership, restart-aware health semantics, and QR onboarding
+- [Device Access and Browsers](device-access-and-browsers.md): target architecture for durable device identity, browser and member access policy, device-centric desktop UX, and reusable access management surfaces
+- [Device Access Roadmap](device-access-roadmap.md): recommended migration order from bootstrap-only links and ad hoc UI actions to a shared access-link control plane
 - [Semantic State Plane](semantic-state-plane.md): target kernel architecture for separating connectivity, shared-state sync freshness, and Yjs pressure governance without adding redundant status entities
 - [Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md): target architecture and migration checklist for moving scenario switching from materialize-and-copy to pointer-first semantic rebuild
