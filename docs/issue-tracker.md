@@ -175,9 +175,10 @@ Actions:
 
 #### HMG-004: Make eventbus and async backlog visible and bounded
 
-Status: in progress. Wave 1 landed in core: eventbus now tracks pending async
-backlog by topic and handler, records peaks, and emits structured warnings when
-pressure grows.
+Status: in progress. Wave 4 landed in core: eventbus now bounds selected
+hot-topic async fanout through per-topic worker queues, preserves incoming /
+queued / dropped visibility, and exposes richer backlog state for incident
+artifacts.
 
 Evidence:
 
@@ -190,8 +191,9 @@ Actions:
 - [x] Add first-wave live backlog snapshot data for eventbus pending async
   tasks plus per-topic and per-handler in-flight counts; extend with oldest
   pending task age and per-handler slow-count totals where still missing.
-- [ ] Bound selected hot-path async fanout with semaphores or per-topic work
-  queues instead of unlimited `create_task` growth.
+- [x] Bound selected hot-path async fanout with first-wave per-topic work
+  queues instead of unlimited `create_task` growth; extend the same approach
+  to more hot topics as incident evidence evolves.
 - [ ] Add per-topic and per-handler cancellation / supersede semantics for
   stale snapshot work.
 - [x] Keep raw incoming-event counters visible even when bounded execution
@@ -204,7 +206,8 @@ Actions:
 Status: in progress. Wave 3 landed in supervisor: requested memory-profile
 sessions now expire instead of hanging indefinitely, apply failures persist
 structured context, and supervisor writes local incident artifacts with
-telemetry, operations, and Yjs pressure snapshots.
+telemetry, operations, Yjs pressure, route diagnostics, rebuild pressure, and
+eventbus backlog snapshots.
 
 Evidence:
 
