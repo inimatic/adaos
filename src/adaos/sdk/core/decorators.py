@@ -198,7 +198,7 @@ async def register_subscriptions():
 
 
 def tool(
-    public_name: Optional[str] = None,
+    public_name: Optional[str] | Callable = None,
     *,
     summary: str = "",
     stability: str = "experimental",
@@ -213,7 +213,7 @@ def tool(
     """Маркер инструмента с публичным именем и метаданными."""
 
     def deco(fn: Callable):
-        name = public_name or fn.__name__
+        name = fn.__name__ if callable(public_name) else (public_name or fn.__name__)
         mod = fn.__module__
         tools_registry.setdefault(mod, {})[name] = fn
         qn = f"{mod}.{fn.__name__}"
@@ -230,6 +230,9 @@ def tool(
             "output_schema": output_schema,
         }
         return fn
+
+    if callable(public_name):
+        return deco(public_name)
 
     return deco
 

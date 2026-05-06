@@ -48,31 +48,62 @@ def execute_tool(
 
     if io_meta is not None and isinstance(meta, Mapping):
         with io_meta(meta):
-            if _should_expand_keywords(func):
-                return func(**mapping)
+            if _should_expand_keywords(func, mapping):
+                return func(**_keyword_payload(func, mapping))
             return func(mapping)
 
-    if _should_expand_keywords(func):
-        return func(**mapping)
+    if _should_expand_keywords(func, mapping):
+        return func(**_keyword_payload(func, mapping))
     return func(mapping)
 
 
-def _should_expand_keywords(func) -> bool:
+def _keyword_payload(func, payload: Mapping[str, Any]) -> dict[str, Any]:
     try:
         import inspect
 
         sig = inspect.signature(func)
         params = list(sig.parameters.values())
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+            filtered = dict(payload)
+            if "_meta" not in sig.parameters:
+                filtered.pop("_meta", None)
+            return filtered
+
+        allowed = {
+            p.name
+            for p in params
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        return {key: value for key, value in payload.items() if key in allowed}
+    except Exception:
+        filtered = dict(payload)
+        filtered.pop("_meta", None)
+        return filtered
+
+
+def _should_expand_keywords(func, payload: Mapping[str, Any]) -> bool:
+    try:
+        import inspect
+
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
+        keyword_payload = _keyword_payload(func, payload)
         if not params:
-            return False
+            return not keyword_payload
         if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
             return True
         if any(p.kind == inspect.Parameter.KEYWORD_ONLY for p in params):
             return True
         positional = [p for p in params if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD]
-        if len(positional) <= 1:
-            return False
-        return True
+        if len(positional) > 1:
+            return True
+        if len(positional) == 1:
+            param = positional[0]
+            if param.name in keyword_payload:
+                return True
+            if not keyword_payload and param.default is not inspect._empty:
+                return True
+        return False
     except Exception:
         return False
 

@@ -25,6 +25,9 @@ from adaos.services.yjs.webspace import default_webspace_id
 
 router = APIRouter()
 _log = logging.getLogger("adaos.api.tool_bridge")
+_HUB_LOCAL_TOOL_PREFIXES: tuple[str, ...] = (
+    "browsers_skill:",
+)
 
 
 def _debug_autosync_enabled() -> bool:
@@ -92,6 +95,26 @@ def _is_loopback_base_url(base_url: str | None) -> bool:
     except Exception:
         return False
     return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _should_proxy_tool_call_to_target(
+    *,
+    conf: Any,
+    tool_name: str,
+    target_node_id: str,
+    local_node_id: str,
+) -> bool:
+    if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+        return False
+    if not target_node_id or target_node_id == local_node_id:
+        return False
+    tool_token = str(tool_name or "").strip()
+    # browsers_skill manages the hub-side access-link registry and live member
+    # link state, so even when the UI is focused on a specific member node the
+    # tool must execute on the hub rather than be proxied to that member.
+    if any(tool_token.startswith(prefix) for prefix in _HUB_LOCAL_TOOL_PREFIXES):
+        return False
+    return True
 
 
 async def _proxy_tool_call_to_node(
@@ -233,11 +256,11 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     target_node_id = _resolve_target_node_id(payload)
     conf = getattr(ctx, "config", None)
     local_node_id = str(getattr(conf, "node_id", "") or "").strip()
-    if (
-        conf
-        and str(getattr(conf, "role", "") or "").strip().lower() == "hub"
-        and target_node_id
-        and target_node_id != local_node_id
+    if conf and _should_proxy_tool_call_to_target(
+        conf=conf,
+        tool_name=body.tool,
+        target_node_id=target_node_id,
+        local_node_id=local_node_id,
     ):
         proxied = await _proxy_tool_call_to_node(
             conf=conf,

@@ -10,3 +10,13 @@ def test_tool_registration_and_resolve():
 
     fn = resolve_tool(echo.__module__, "unit.echo")
     assert fn is echo
+
+
+def test_tool_registration_supports_bare_decorator():
+    @tool
+    def bare_echo(x: int) -> int:
+        return x
+
+    fn = resolve_tool(bare_echo.__module__, "bare_echo")
+    assert fn is bare_echo
+    assert bare_echo(7) == 7
