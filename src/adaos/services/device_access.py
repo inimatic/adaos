@@ -9,6 +9,13 @@ from adaos.services import device_inventory as _device_inventory
 
 _log = logging.getLogger("adaos.device_access")
 _LIFETIME_PRESETS = ["permanent", "1h", "1d", "7d", "30d"]
+_LIFETIME_PRESET_LABELS = {
+    "permanent": "Permanent",
+    "1h": "1h",
+    "1d": "1d",
+    "7d": "7d",
+    "30d": "30d",
+}
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -34,6 +41,36 @@ def _toggle(
     if node_id:
         payload["node_id"] = node_id
     return payload
+
+
+def _lifetime_label(policy: Mapping[str, Any]) -> str:
+    return _access_links.lifetime_label(
+        {
+            "lifetime_mode": _text(policy.get("lifetime_mode")) or "permanent",
+            "expires_at": policy.get("expires_at"),
+        }
+    )
+
+
+def _lifetime_options(meta: Mapping[str, Any]) -> list[dict[str, Any]]:
+    enabled = bool(meta.get("enabled"))
+    reason = _text(meta.get("reason")) or None
+    presets = [
+        _text(item)
+        for item in list(meta.get("presets") or _LIFETIME_PRESETS)
+        if _text(item)
+    ] or list(_LIFETIME_PRESETS)
+    options: list[dict[str, Any]] = []
+    for preset in presets:
+        option = {
+            "id": preset,
+            "label": _LIFETIME_PRESET_LABELS.get(preset, preset),
+            "enabled": enabled,
+        }
+        if reason:
+            option["reason"] = reason
+        options.append(option)
+    return options
 
 
 def _run_coro(coro: Any) -> Any:
@@ -116,6 +153,76 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
         "detach": _toggle(detach_enabled, reason=detach_reason),
         "open_apps": _toggle(apps_enabled, reason=apps_reason, node_id=node_id),
         "open_marketplace": _toggle(apps_enabled, reason=apps_reason, node_id=node_id),
+    }
+
+
+def get_device_settings(device_ref: str) -> dict[str, Any] | None:
+    device, error = _device_or_error(device_ref)
+    if error is not None:
+        return None
+    assert device is not None
+    profile = get_command_profile(_text(device_ref)) or {}
+    identity = _mapping(device.get("identity"))
+    policy = _mapping(device.get("policy"))
+    observation = _mapping(device.get("observation"))
+    runtime = _mapping(device.get("runtime"))
+    name_meta = _mapping(profile.get("rename"))
+    lifetime_meta = _mapping(profile.get("set_lifetime"))
+    detach_meta = _mapping(profile.get("detach"))
+    effective_name = _text(policy.get("effective_name")) or _text(device.get("ref"))
+    current_name = _text(policy.get("display_name")) or effective_name
+    return {
+        "device_ref": _text(device_ref),
+        "kind": _text(device.get("kind")),
+        "title": effective_name,
+        "device": device,
+        "status": {
+            "online": bool(observation.get("online")),
+            "managed_state": _text(policy.get("managed_state")) or "observed_only",
+            "connection_state": _text(observation.get("connection_state")) or None,
+            "observation_source": _text(observation.get("source")) or None,
+            "connected_to_subnet": runtime.get("connected_to_subnet"),
+        },
+        "name": {
+            "value": current_name,
+            "placeholder": "Living room TV",
+            "save": _toggle(
+                bool(name_meta.get("enabled")),
+                reason=_text(name_meta.get("reason")) or None,
+            ),
+        },
+        "lifetime": {
+            "current_label": _lifetime_label(policy),
+            "current_mode": _text(policy.get("lifetime_mode")) or "permanent",
+            "expires_at": policy.get("expires_at"),
+            "set": _toggle(
+                bool(lifetime_meta.get("enabled")),
+                reason=_text(lifetime_meta.get("reason")) or None,
+                presets=[
+                    _text(item)
+                    for item in list(lifetime_meta.get("presets") or _LIFETIME_PRESETS)
+                    if _text(item)
+                ] or list(_LIFETIME_PRESETS),
+            ),
+            "options": _lifetime_options(lifetime_meta),
+        },
+        "detach": {
+            **_toggle(
+                bool(detach_meta.get("enabled")),
+                reason=_text(detach_meta.get("reason")) or None,
+            ),
+            "confirm_title": "Detach device",
+            "confirm_message": f'Detach device "{effective_name}"?',
+        },
+        "actions": {
+            "open_apps": _mapping(profile.get("open_apps")),
+            "open_marketplace": _mapping(profile.get("open_marketplace")),
+        },
+        "identity": {
+            "node_id": _text(identity.get("node_id")) or None,
+            "browser_device_id": _text(identity.get("browser_device_id")) or None,
+            "hostname": _text(identity.get("hostname")) or None,
+        },
     }
 
 
@@ -202,6 +309,7 @@ def detach_device(device_ref: str) -> dict[str, Any]:
 
 __all__ = [
     "detach_device",
+    "get_device_settings",
     "get_command_profile",
     "rename_device",
     "set_device_lifetime",
