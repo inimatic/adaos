@@ -967,6 +967,7 @@ class NodeStatus(BaseModel):
     node_state: str = "ready"
     draining: bool = False
     route_mode: Optional[str] = None
+    connected_to_subnet: Optional[bool] = None
     connected_to_hub: Optional[bool] = None
 
 
@@ -1287,6 +1288,7 @@ async def node_change_role(req: Request, payload: RoleChangeRequest):
         "now_ready": is_ready(),
         "node_state": runtime_lifecycle_snapshot().get("node_state", "ready"),
         "route_mode": route_mode,
+        "connected_to_subnet": connected,
         "connected_to_hub": connected,
         "deprecated_fields": deprecated_fields,
     }
@@ -1306,6 +1308,7 @@ async def node_change_role(req: Request, payload: RoleChangeRequest):
             node_state=str(runtime_lifecycle_snapshot().get("node_state") or "ready"),
             draining=bool(runtime_lifecycle_snapshot().get("draining")),
             route_mode=route_mode,
+            connected_to_subnet=connected,
             connected_to_hub=connected,
         ),
         diagnostics=diags,

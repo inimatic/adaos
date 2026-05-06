@@ -393,6 +393,26 @@ def test_should_emit_node_status_suppresses_duplicate_fingerprint_within_window(
     assert should_emit is True
 
 
+def test_node_status_emit_fingerprint_reads_connected_to_subnet_alias() -> None:
+    payload = {
+        "node_id": "member-1",
+        "subnet_id": "sn-1",
+        "role": "member",
+        "node_names": ["Kitchen member"],
+        "primary_node_name": "Kitchen member",
+        "ready": True,
+        "node_state": "ready",
+        "draining": False,
+        "route_mode": "p2p",
+        "connected_to_subnet": False,
+        "trigger": "heartbeat",
+    }
+
+    fingerprint = bootstrap_mod._node_status_emit_fingerprint(payload)
+
+    assert fingerprint[-2] is False
+
+
 def test_start_boot_task_once_reuses_existing_named_task() -> None:
     svc = bootstrap_mod.BootstrapService(
         SimpleNamespace(config=SimpleNamespace(role="hub")),
