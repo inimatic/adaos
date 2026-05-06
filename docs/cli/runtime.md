@@ -101,10 +101,13 @@ adaos hub join-code create
 adaos hub root status
 adaos hub root reconnect
 adaos node join --join-code <CODE>
+adaos node role switch --role hub
 adaos node role set --role member
 ```
 
 `adaos hub root reports --kind memory-profile` is the first operator-facing Phase 3 retrieval path for remotely published memory-profile summaries. It complements the local `runtime memory-*` commands by showing what root has already ingested for one hub, can be narrowed further with `--session-id`, and now also supports compact remote filtering such as `--state finished --suspected-only`. `adaos hub root memory-session <SESSION_ID>` opens one remotely published profiling incident directly and prints the compact RSS / retry / artifact summary without requiring raw JSON output. `adaos hub root memory-artifacts <SESSION_ID>` lists the remote artifact catalog together with publish-policy status such as `inline_available`, `size_limit_exceeded`, or `kind_not_allowed`. `adaos hub root memory-artifact <SESSION_ID> <ARTIFACT_ID>` now exposes a normalized root-side delivery contract: for inline artifacts it returns `delivery mode: root_inline_content` plus transfer metadata, and for local-only artifacts it returns the fetch strategy and source control path. `adaos hub root memory-artifact-pull <SESSION_ID> <ARTIFACT_ID>` then executes that contract: it tries root first and, when the artifact is not stored inline at root, falls back to the current hub control API for direct retrieval with transfer metadata (`json`, `utf-8`, or `base64`) and chunk limits via `--max-bytes`.
+
+`adaos node role switch --role <hub|member>` goes through the local control API and performs a real runtime role transition (shutdown plus rebootstrap). `adaos node role set --role <hub|member>` remains config-only and is useful when you explicitly want to persist the role without asking the running node to switch immediately.
 
 ## Yjs webspace operations
 
