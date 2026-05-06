@@ -241,6 +241,78 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     assert ("rpc", "member-1") in calls
 
 
+def test_call_tool_keeps_browsers_skill_local_on_hub(monkeypatch) -> None:
+    calls: list[tuple[str, str] | tuple[str, str, dict[str, object]]] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(("run_tool", f"{skill_name}:{tool_name}", payload))
+            return {"skill": skill_name, "tool": tool_name, "payload": payload, "timeout": timeout}
+
+    class _FakeDirectory:
+        def get_node_base_url(self, node_id: str) -> str | None:
+            calls.append(("base_url", node_id))
+            return "https://member.example"
+
+    class _FakeLinkManager:
+        def is_connected(self, node_id: str) -> bool:
+            calls.append(("is_connected", node_id))
+            return True
+
+        async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False):
+            calls.append(("rpc", node_id))
+            raise AssertionError("browsers_skill should stay local on the hub")
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append(("run_sync", "local"))
+        return func(*args, **kwargs)
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=None,
+        caps=None,
+        settings=None,
+        bus=None,
+        config=SimpleNamespace(role="hub", node_id="hub-1", token="hub-token"),
+    )
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "get_directory", lambda: _FakeDirectory())
+    monkeypatch.setattr(tool_bridge_module, "get_hub_link_manager", lambda: _FakeLinkManager())
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="browsers_skill:rename_link",
+                arguments={
+                    "name": "Kitchen display",
+                    "node_id": "member-1",
+                    "target_node_id": "member-1",
+                    "webspace_id": "desktop",
+                },
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=ctx,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["trace_id"] == "trace-123"
+    assert ("run_sync", "local") in calls
+    assert ("base_url", "member-1") not in calls
+    assert ("rpc", "member-1") not in calls
+
+
 def test_call_tool_does_not_http_fallback_to_loopback_member_base_url_when_rpc_fails(monkeypatch) -> None:
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
