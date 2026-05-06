@@ -93,6 +93,16 @@ async def subnet_ws(websocket: WebSocket) -> None:
         hostname = raw.get("hostname")
         roles = raw.get("roles") or []
         node_names = raw.get("node_names") or []
+        try:
+            from adaos.services.access_links import authorize_link
+
+            allowed, reason = authorize_link("member", node_id)
+            if not allowed:
+                await websocket.send_json({"t": "hello.ack", "ok": False, "error": f"device_{reason or 'denied'}"})
+                await websocket.close(code=1008)
+                return
+        except Exception:
+            pass
         link = await mgr.register(
             node_id,
             websocket,
@@ -100,6 +110,18 @@ async def subnet_ws(websocket: WebSocket) -> None:
             roles=list(roles) if isinstance(roles, list) else [],
             node_names=list(node_names) if isinstance(node_names, list) else [],
         )
+        try:
+            from adaos.services.access_links import touch_member_link
+
+            touch_member_link(
+                node_id,
+                hostname=str(hostname) if hostname else None,
+                node_names=list(node_names) if isinstance(node_names, list) else [],
+                online=True,
+                connection_state="connected",
+            )
+        except Exception:
+            pass
         await link.send_json(
             {"t": "hello.ack", "ok": True, "hub_node_id": conf.node_id, "subnet_id": conf.subnet_id, "server_time": time.time()}
         )
@@ -172,6 +194,18 @@ async def subnet_ws(websocket: WebSocket) -> None:
             _ = link
     finally:
         if node_id:
+            try:
+                from adaos.services.access_links import touch_member_link
+
+                touch_member_link(
+                    node_id,
+                    hostname=str(hostname) if hostname else None,
+                    node_names=list(node_names) if isinstance(node_names, list) else [],
+                    online=False,
+                    connection_state="closed",
+                )
+            except Exception:
+                pass
             try:
                 await mgr.unregister(node_id)
             except Exception:
