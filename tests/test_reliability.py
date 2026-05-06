@@ -1552,6 +1552,9 @@ def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) 
     assert payload["model"]["authority_boundaries"]["sidecar"]["must_not_own"]
     assert payload["runtime"]["readiness_tree"]["root_control"]["status"] == "ready"
     assert payload["runtime"]["degraded_matrix"]["root_routed_browser_proxy"]["allowed"] is True
+    assert payload["runtime"]["connectivity"]["required_upstream_link"]["kind"] == "hub_root"
+    assert payload["runtime"]["state_sync"]["replay"]["mode"] == "snapshot_plus_diff"
+    assert payload["runtime"]["yjs_pressure"]["target"] == "primary_shared_doc"
 
 
 def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monkeypatch) -> None:
@@ -1606,6 +1609,53 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
                     "status": {"state": "countdown", "phase": "scheduled"},
                     "runtime": {"transition_mode": "warm_switch"},
                 },
+                "connectivity": {
+                    "required_upstream_link": {
+                        "kind": "hub_root",
+                        "scope_id": "node-1",
+                        "transport_state": "ready",
+                        "transition_state": "waiting_restart",
+                        "planned_transition": {"active": True, "reason": "update"},
+                        "reason": None,
+                        "blockers": [],
+                        "served_by": "supervisor_fallback",
+                    },
+                    "browser_control_route": {
+                        "kind": "browser_control_route",
+                        "scope_id": "node-1",
+                        "transport_state": "degraded",
+                        "transition_state": "reconnecting",
+                        "planned_transition": {"active": False, "reason": None},
+                        "reason": "flapping",
+                        "blockers": ["route.flapping"],
+                        "served_by": "runtime",
+                    },
+                },
+                "state_sync": {
+                    "webspace_id": "desktop",
+                    "transport_state": "attached",
+                    "first_sync_state": "complete",
+                    "semantic_state": "ready",
+                    "freshness_state": "fresh",
+                    "last_good_sync_at": 1778055331.0,
+                    "last_materialization_at": 1778055331.0,
+                    "replay": {"mode": "snapshot_plus_diff", "cursor": "3/32"},
+                    "fallback_mode": "off",
+                    "blockers": [],
+                },
+                "yjs_pressure": {
+                    "webspace_id": "desktop",
+                    "owner": "_by_owner/skill_infrastate_skill",
+                    "recent_bytes": 167296,
+                    "recent_writes": 1,
+                    "peak_bps": 167296.0,
+                    "peak_wps": 1.0,
+                    "policy_state": "warn",
+                    "target": "primary_shared_doc",
+                    "reason": "write_amplification",
+                    "blocked_roots": [],
+                    "observed_state": "critical",
+                },
                 "event_model_phase0_communication": {
                     "state": "complete",
                     "ready": True,
@@ -1647,6 +1697,9 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["sidecarEnablement"]["source"] == "env_override"
     assert payload["sidecarContinuity"]["currentSupport"] == "ready"
     assert payload["browserYwsHandoffReady"] is True
+    assert payload["connectivity"]["requiredUpstreamLink"]["transitionState"] == "waiting_restart"
+    assert payload["stateSync"]["replay"]["cursor"] == "3/32"
+    assert payload["yjsPressure"]["policyState"] == "warn"
     assert payload["phase0Communication"]["tasks"]["nodeBrowserReady"]["status"] == "done"
 
 
@@ -1758,6 +1811,43 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                         "llm_action_completion": {"allowed": False},
                         "core_update_coordination_via_root": {"allowed": True},
                     },
+                    "connectivity": {
+                        "required_upstream_link": {
+                            "kind": "hub_root",
+                            "transport_state": "ready",
+                            "transition_state": "ready",
+                            "planned_transition": {"active": False, "reason": None},
+                            "served_by": "supervisor",
+                        },
+                        "browser_control_route": {
+                            "kind": "browser_control_route",
+                            "transport_state": "degraded",
+                            "transition_state": "reconnecting",
+                            "planned_transition": {"active": False, "reason": "flapping"},
+                            "served_by": "runtime",
+                        },
+                    },
+                    "state_sync": {
+                        "webspace_id": "desktop",
+                        "transport_state": "attached",
+                        "first_sync_state": "complete",
+                        "semantic_state": "degraded",
+                        "freshness_state": "aging",
+                        "replay": {"mode": "snapshot_plus_diff", "cursor": "3/32"},
+                        "fallback_mode": "off",
+                        "blockers": ["bounded_replay_window_near_limit"],
+                    },
+                    "yjs_pressure": {
+                        "webspace_id": "desktop",
+                        "owner": "_by_owner/skill_infrastate_skill",
+                        "observed_state": "high",
+                        "policy_state": "warn",
+                        "recent_bytes": 65536,
+                        "recent_writes": 2,
+                        "peak_bps": 65536.0,
+                        "peak_wps": 2.0,
+                        "reason": "write_amplification",
+                    },
                 },
             },
         ),
@@ -1770,6 +1860,9 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "integration.telegram: ready" in result.output
     assert "diag.root_control: flapping score=62 recent_non_ready_5m=2" in result.output
     assert "root_routed_browser_proxy: blocked" in result.output
+    assert "connectivity.required_upstream_link: kind=hub_root transport=ready transition=ready" in result.output
+    assert "state_sync: webspace=desktop transport=attached first_sync=complete semantic=degraded freshness=aging" in result.output
+    assert "yjs_pressure: webspace=desktop owner=_by_owner/skill_infrastate_skill state=high policy=warn" in result.output
 
 
 def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -> None:

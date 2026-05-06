@@ -5208,6 +5208,322 @@ def _routed_browser_supervisor_surface(
     }
 
 
+def _planned_transition_snapshot_from_supervisor_status(
+    status: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    data = status if isinstance(status, dict) else {}
+    state = str(data.get("state") or "").strip().lower()
+    phase = str(data.get("phase") or "").strip().lower()
+    action = str(data.get("action") or "").strip().lower() or None
+    if state in {"countdown", "preparing"} or phase in {"scheduled", "prepare", "drain"}:
+        return "waiting_restart", {"active": True, "reason": action or "core_update"}
+    if state in {"restarting", "validated"} or phase in {"launch", "root_promotion_pending", "root_promoted"}:
+        return "restarting", {"active": True, "reason": action or "core_update"}
+    return "ready", {"active": False, "reason": None}
+
+
+def _map_connectivity_transport_state(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"ready", "reachable", "connected", "nominal", "stable", "attached", "active"}:
+        return "ready"
+    if token in {"degraded", "pressure", "unstable", "flapping", "reconnecting", "cooldown"}:
+        return "degraded"
+    if token in {"down", "disconnected", "failed", "offline"}:
+        return "disconnected"
+    if token in {"disabled", "not_applicable"}:
+        return "not_applicable"
+    return "unknown"
+
+
+def _connectivity_transition_state_for_link(
+    link: dict[str, Any] | None,
+    *,
+    supervisor_status: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    data = link if isinstance(link, dict) else {}
+    raw_state = str(data.get("state") or "").strip().lower()
+    if raw_state in {"waiting_restart", "restarting", "paused_for_update", "disabled", "not_applicable"}:
+        active = raw_state in {"waiting_restart", "restarting", "paused_for_update"}
+        reason = str(data.get("reason") or "").strip() or None
+        return raw_state, {"active": active, "reason": reason}
+    if raw_state in {"cooldown", "reconnect", "reconnecting", "verify", "verifying"}:
+        reason = str(data.get("reason") or "").strip() or None
+        return "reconnecting", {"active": True, "reason": reason}
+    derived_state, planned = _planned_transition_snapshot_from_supervisor_status(supervisor_status)
+    if planned.get("active"):
+        return derived_state, planned
+    transport_state = _map_connectivity_transport_state(raw_state)
+    if transport_state == "ready":
+        return "ready", {"active": False, "reason": None}
+    if transport_state == "disconnected":
+        return "reconnecting", {"active": False, "reason": str(data.get("reason") or "").strip() or None}
+    if transport_state == "degraded":
+        return "reconnecting", {"active": False, "reason": str(data.get("reason") or "").strip() or None}
+    return "unknown", {"active": False, "reason": str(data.get("reason") or "").strip() or None}
+
+
+def _connectivity_transition_state_for_browser_route(
+    route_item: dict[str, Any] | None,
+    *,
+    supervisor_status: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    item = route_item if isinstance(route_item, dict) else {}
+    derived_state, planned = _planned_transition_snapshot_from_supervisor_status(supervisor_status)
+    if planned.get("active"):
+        return derived_state, planned
+    effective_state = str(item.get("effective_state") or "").strip().lower()
+    transport_state = _map_connectivity_transport_state(item.get("effective_status"))
+    if effective_state in {"flapping", "unstable"}:
+        return "reconnecting", {"active": False, "reason": effective_state}
+    if transport_state == "ready":
+        return "ready", {"active": False, "reason": None}
+    if transport_state in {"degraded", "disconnected"}:
+        return "reconnecting", {"active": False, "reason": effective_state or transport_state}
+    if transport_state == "not_applicable":
+        return "disabled", {"active": False, "reason": "not_applicable"}
+    return "unknown", {"active": False, "reason": effective_state or None}
+
+
+def _connectivity_snapshot(
+    *,
+    node_id: str | None,
+    channel_overview: dict[str, Any] | None,
+    supervisor_runtime: dict[str, Any] | None,
+) -> dict[str, Any]:
+    overview = channel_overview if isinstance(channel_overview, dict) else {}
+    supervisor = supervisor_runtime if isinstance(supervisor_runtime, dict) else {}
+    status = supervisor.get("status") if isinstance(supervisor.get("status"), dict) else {}
+    required_link = (
+        supervisor.get("required_upstream_link")
+        if isinstance(supervisor.get("required_upstream_link"), dict)
+        else {}
+    )
+    browser_route = (
+        overview.get("hub_root_browser")
+        if isinstance(overview.get("hub_root_browser"), dict)
+        else {}
+    )
+    link_transition_state, link_planned = _connectivity_transition_state_for_link(
+        required_link,
+        supervisor_status=status,
+    )
+    route_transition_state, route_planned = _connectivity_transition_state_for_browser_route(
+        browser_route,
+        supervisor_status=status,
+    )
+    return {
+        "required_upstream_link": {
+            "kind": str(required_link.get("kind") or "").strip() or "unknown",
+            "scope_id": str(node_id or "").strip() or None,
+            "transport_state": _map_connectivity_transport_state(required_link.get("state")),
+            "transition_state": link_transition_state,
+            "planned_transition": link_planned,
+            "reason": str(required_link.get("reason") or "").strip() or None,
+            "blockers": list(required_link.get("blockers") or []),
+            "served_by": str(required_link.get("served_by") or required_link.get("owner") or "").strip() or None,
+        },
+        "browser_control_route": {
+            "kind": "browser_control_route",
+            "scope_id": str(node_id or "").strip() or None,
+            "transport_state": _map_connectivity_transport_state(browser_route.get("effective_status")),
+            "transition_state": route_transition_state,
+            "planned_transition": route_planned,
+            "reason": str(browser_route.get("effective_state") or "").strip() or None,
+            "blockers": list(
+                (
+                    browser_route.get("diagnostics")
+                    if isinstance(browser_route.get("diagnostics"), dict)
+                    else {}
+                ).get("blockers")
+                or []
+            ),
+            "served_by": "runtime",
+        },
+    }
+
+
+def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
+    runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
+    assessment = runtime.get("assessment") if isinstance(runtime.get("assessment"), dict) else {}
+    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
+    selected_webspace = (
+        runtime.get("selected_webspace")
+        if isinstance(runtime.get("selected_webspace"), dict)
+        else {}
+    )
+    selected_webspace_id = str(
+        runtime.get("selected_webspace_id")
+        or selected_webspace.get("webspace_id")
+        or ""
+    ).strip() or None
+    load_mark = (
+        selected_webspace.get("load_mark")
+        if isinstance(selected_webspace.get("load_mark"), dict)
+        else {}
+    )
+    rebuild = (
+        selected_webspace.get("rebuild")
+        if isinstance(selected_webspace.get("rebuild"), dict)
+        else {}
+    )
+    materialization = (
+        rebuild.get("materialization")
+        if isinstance(rebuild.get("materialization"), dict)
+        else {}
+    )
+    gateway_room = (
+        selected_webspace.get("gateway_room")
+        if isinstance(selected_webspace.get("gateway_room"), dict)
+        else {}
+    )
+    webspaces = runtime.get("webspaces") if isinstance(runtime.get("webspaces"), dict) else {}
+    selected_entry = (
+        webspaces.get(selected_webspace_id)
+        if selected_webspace_id and isinstance(webspaces.get(selected_webspace_id), dict)
+        else {}
+    )
+
+    assessment_state = str(assessment.get("state") or "").strip().lower() or "unknown"
+    if not bool(runtime.get("available")) and assessment_state == "not_applicable":
+        transport_state = "not_applicable"
+    elif bool(transport.get("server_ready")) or bool(gateway_room.get("ready")):
+        transport_state = "attached"
+    elif int(transport.get("active_yws_connections") or 0) > 0 or int(transport.get("webrtc_open_yjs_channels") or 0) > 0:
+        transport_state = "attached"
+    elif assessment_state in {"degraded", "pressure", "unavailable"}:
+        transport_state = "degraded"
+    elif not bool(runtime.get("available")):
+        transport_state = "disconnected"
+    else:
+        transport_state = "unknown"
+
+    if transport_state == "not_applicable":
+        first_sync_state = "not_applicable"
+    elif bool(gateway_room.get("ready")) or int(transport.get("active_yws_connections") or 0) > 0 or int(transport.get("webrtc_open_yjs_channels") or 0) > 0:
+        first_sync_state = "complete"
+    elif int(gateway_room.get("open_total") or 0) > 0 or int(transport.get("room_open_total") or 0) > 0:
+        first_sync_state = "timeout" if assessment_state in {"degraded", "pressure", "unavailable"} else "pending"
+    else:
+        first_sync_state = "pending"
+
+    materialization_ready = bool(materialization.get("ready"))
+    if transport_state == "not_applicable":
+        semantic_state = "not_applicable"
+    elif materialization_ready and assessment_state in {"nominal", "idle"}:
+        semantic_state = "ready"
+    elif materialization_ready and assessment_state in {"pressure", "degraded"}:
+        semantic_state = "degraded"
+    else:
+        semantic_state = "stale"
+
+    freshness_state = (
+        "fresh"
+        if semantic_state == "ready"
+        else "aging"
+        if semantic_state == "degraded"
+        else "stale"
+        if semantic_state == "stale"
+        else semantic_state
+    )
+    last_materialization_at = rebuild.get("finished_at") or rebuild.get("updated_at") or load_mark.get("updated_at")
+    last_good_sync_at = gateway_room.get("last_open_at") or last_materialization_at
+    replay_entries = int(selected_entry.get("replay_window_entries") or 0)
+    replay_limit = int(selected_entry.get("replay_window_limit") or 0)
+
+    blockers: list[str] = []
+    reason = str(assessment.get("reason") or "").strip()
+    if reason:
+        blockers.append(reason)
+    if semantic_state == "stale" and not materialization_ready:
+        blockers.append(str(materialization.get("readiness_state") or "materialization_not_ready"))
+    for item in list(materialization.get("missing_branches") or []):
+        text = str(item).strip()
+        if text:
+            blockers.append(f"missing_branch:{text}")
+    error = str(rebuild.get("error") or "").strip()
+    if error:
+        blockers.append(error)
+
+    return {
+        "webspace_id": selected_webspace_id,
+        "transport_state": transport_state,
+        "first_sync_state": first_sync_state,
+        "semantic_state": semantic_state,
+        "freshness_state": freshness_state,
+        "last_good_sync_at": last_good_sync_at,
+        "last_materialization_at": last_materialization_at,
+        "replay": {
+            "mode": str(
+                (
+                    runtime.get("channel_contract")
+                    if isinstance(runtime.get("channel_contract"), dict)
+                    else {}
+                ).get("recovery_model")
+                or "snapshot_plus_diff"
+            ).strip()
+            or "snapshot_plus_diff",
+            "cursor": f"{replay_entries}/{replay_limit}" if replay_limit > 0 else f"{replay_entries}/0",
+        },
+        "fallback_mode": (
+            "hard_degraded_recovery"
+            if not bool(runtime.get("available")) and assessment_state != "not_applicable"
+            else "off"
+        ),
+        "blockers": blockers,
+    }
+
+
+def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
+    runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
+    selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
+    load_mark = runtime.get("load_mark") if isinstance(runtime.get("load_mark"), dict) else {}
+    selected_webspace = (
+        load_mark.get("selected_webspace")
+        if isinstance(load_mark.get("selected_webspace"), dict)
+        else {}
+    )
+    owner_items = list(selected_webspace.get("owner_items") or [])
+    owner_rows = [item for item in owner_items if isinstance(item, dict)]
+    owner_rows.sort(
+        key=lambda item: (
+            -float(item.get("peak_bps") or 0.0),
+            -float(item.get("peak_wps") or 0.0),
+            -int(item.get("recent_bytes") or 0),
+            str(item.get("owner") or ""),
+        )
+    )
+    owner = owner_rows[0] if owner_rows else {}
+    observed_state = str(
+        owner.get("status")
+        or (
+            selected_webspace.get("assessment")
+            if isinstance(selected_webspace.get("assessment"), dict)
+            else {}
+        ).get("state")
+        or (
+            load_mark.get("assessment")
+            if isinstance(load_mark.get("assessment"), dict)
+            else {}
+        ).get("state")
+        or "idle"
+    ).strip().lower() or "idle"
+    policy_state = "warn" if observed_state in {"high", "critical"} else "ok"
+    reason = "write_amplification" if policy_state == "warn" else "healthy"
+    return {
+        "webspace_id": selected_webspace_id,
+        "owner": str(owner.get("owner") or "").strip() or None,
+        "recent_bytes": int(owner.get("recent_bytes") or 0),
+        "recent_writes": int(owner.get("recent_writes") or 0),
+        "peak_bps": float(owner.get("peak_bps") or 0.0),
+        "peak_wps": float(owner.get("peak_wps") or 0.0),
+        "policy_state": policy_state,
+        "target": "primary_shared_doc",
+        "reason": reason,
+        "blocked_roots": [],
+        "observed_state": observed_state,
+    }
+
+
 def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         payload = {
@@ -6023,6 +6339,13 @@ def reliability_snapshot(
             ),
             sidecar_runtime=sidecar_runtime,
         )
+    connectivity = _connectivity_snapshot(
+        node_id=node_id,
+        channel_overview=channel_overview,
+        supervisor_runtime=supervisor_runtime,
+    )
+    state_sync = _state_sync_snapshot(sync_runtime)
+    yjs_pressure = _yjs_pressure_snapshot(sync_runtime)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
         sidecar_runtime=sidecar_runtime,
@@ -6061,6 +6384,9 @@ def reliability_snapshot(
             "hub_member_connection_state": hub_member_connection_state,
             "sidecar_runtime": sidecar_runtime,
             "sync_runtime": sync_runtime,
+            "connectivity": connectivity,
+            "state_sync": state_sync,
+            "yjs_pressure": yjs_pressure,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,
             "event_model_phase0_communication": event_model_phase0_communication,
