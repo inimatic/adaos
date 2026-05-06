@@ -446,6 +446,9 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
     hub_member_connection_state = runtime.get("hub_member_connection_state") if isinstance(runtime.get("hub_member_connection_state"), dict) else {}
     sidecar = runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {}
     sync_runtime = runtime.get("sync_runtime") if isinstance(runtime.get("sync_runtime"), dict) else {}
+    connectivity = runtime.get("connectivity") if isinstance(runtime.get("connectivity"), dict) else {}
+    state_sync = runtime.get("state_sync") if isinstance(runtime.get("state_sync"), dict) else {}
+    yjs_pressure = runtime.get("yjs_pressure") if isinstance(runtime.get("yjs_pressure"), dict) else {}
     media_runtime = runtime.get("media_runtime") if isinstance(runtime.get("media_runtime"), dict) else {}
     supervisor_runtime = runtime.get("supervisor_runtime") if isinstance(runtime.get("supervisor_runtime"), dict) else {}
     strategy_assessment = strategy.get("assessment") if isinstance(strategy.get("assessment"), dict) else {}
@@ -472,6 +475,38 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                     f"{name}: {item.get('effective_status') or 'unknown'}/"
                     f"{item.get('effective_state') or 'unknown'}"
                 )
+    if connectivity:
+        upstream = (
+            connectivity.get("required_upstream_link")
+            if isinstance(connectivity.get("required_upstream_link"), dict)
+            else {}
+        )
+        browser_route = (
+            connectivity.get("browser_control_route")
+            if isinstance(connectivity.get("browser_control_route"), dict)
+            else {}
+        )
+        if upstream:
+            planned = upstream.get("planned_transition") if isinstance(upstream.get("planned_transition"), dict) else {}
+            typer.echo(
+                "connectivity.required_upstream_link: "
+                f"kind={upstream.get('kind') or '-'} "
+                f"transport={upstream.get('transport_state') or '-'} "
+                f"transition={upstream.get('transition_state') or '-'} "
+                f"planned={'yes' if planned.get('active') else 'no'} "
+                f"reason={planned.get('reason') or upstream.get('reason') or '-'} "
+                f"served_by={upstream.get('served_by') or '-'}"
+            )
+        if browser_route:
+            planned = browser_route.get("planned_transition") if isinstance(browser_route.get("planned_transition"), dict) else {}
+            typer.echo(
+                "connectivity.browser_control_route: "
+                f"transport={browser_route.get('transport_state') or '-'} "
+                f"transition={browser_route.get('transition_state') or '-'} "
+                f"planned={'yes' if planned.get('active') else 'no'} "
+                f"reason={planned.get('reason') or browser_route.get('reason') or '-'} "
+                f"served_by={browser_route.get('served_by') or '-'}"
+            )
     if strategy:
         typer.echo(
             "hub_root.transport: "
@@ -676,6 +711,33 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"compat={compatibility.get('owner') or '-'}:{compatibility.get('mode') or '-'} "
                 f"transport={transport_session.get('owner') or '-'}->{transport_session.get('planned_owner') or '-'}"
             )
+    if state_sync:
+        replay = state_sync.get("replay") if isinstance(state_sync.get("replay"), dict) else {}
+        typer.echo(
+            "state_sync: "
+            f"webspace={state_sync.get('webspace_id') or '-'} "
+            f"transport={state_sync.get('transport_state') or '-'} "
+            f"first_sync={state_sync.get('first_sync_state') or '-'} "
+            f"semantic={state_sync.get('semantic_state') or '-'} "
+            f"freshness={state_sync.get('freshness_state') or '-'} "
+            f"replay={replay.get('mode') or '-'}:{replay.get('cursor') or '-'} "
+            f"fallback={state_sync.get('fallback_mode') or '-'}"
+        )
+        blockers = [str(item).strip() for item in (state_sync.get("blockers") or []) if str(item).strip()]
+        if blockers:
+            typer.echo(f"state_sync.blockers: {', '.join(blockers)}")
+    if yjs_pressure:
+        typer.echo(
+            "yjs_pressure: "
+            f"webspace={yjs_pressure.get('webspace_id') or '-'} "
+            f"owner={yjs_pressure.get('owner') or '-'} "
+            f"state={yjs_pressure.get('observed_state') or '-'} "
+            f"policy={yjs_pressure.get('policy_state') or '-'} "
+            f"bytes={yjs_pressure.get('recent_bytes') or 0} "
+            f"writes={yjs_pressure.get('recent_writes') or 0} "
+            f"peak={yjs_pressure.get('peak_bps') or 0}/{yjs_pressure.get('peak_wps') or 0} "
+            f"reason={yjs_pressure.get('reason') or '-'}"
+        )
     if media_runtime:
         assessment = media_runtime.get("assessment") if isinstance(media_runtime.get("assessment"), dict) else {}
         transport = media_runtime.get("transport") if isinstance(media_runtime.get("transport"), dict) else {}

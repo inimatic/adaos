@@ -235,6 +235,12 @@ def _compact_runtime_reliability_payload(payload: dict[str, Any], *, webspace_id
     ws = _coerce_dict(route_tunnel.get("ws"))
     yws = _coerce_dict(route_tunnel.get("yws"))
     supervisor_runtime = _coerce_dict(runtime.get("supervisor_runtime"))
+    connectivity = _coerce_dict(runtime.get("connectivity"))
+    required_upstream_link = _coerce_dict(connectivity.get("required_upstream_link"))
+    browser_control_route = _coerce_dict(connectivity.get("browser_control_route"))
+    state_sync = _coerce_dict(runtime.get("state_sync"))
+    replay = _coerce_dict(state_sync.get("replay"))
+    yjs_pressure = _coerce_dict(runtime.get("yjs_pressure"))
     resolved_webspace_id = _coerce_node_webspace_id(
         webspace_id
         or runtime.get("webspace_id")
@@ -290,6 +296,56 @@ def _compact_runtime_reliability_payload(payload: dict[str, Any], *, webspace_id
         "browserYwsHandoffState": _compact_route_tunnel_state(yws),
         "browserWsHandoffBlocker": (str((_coerce_list(ws.get("blockers"))[:1] or [""])[0]).strip() or None),
         "browserYwsHandoffBlocker": (str((_coerce_list(yws.get("blockers"))[:1] or [""])[0]).strip() or None),
+        "connectivity": {
+            "requiredUpstreamLink": {
+                "kind": str(required_upstream_link.get("kind") or "").strip() or None,
+                "scopeId": str(required_upstream_link.get("scope_id") or "").strip() or None,
+                "transportState": str(required_upstream_link.get("transport_state") or "unknown").strip() or "unknown",
+                "transitionState": str(required_upstream_link.get("transition_state") or "unknown").strip() or "unknown",
+                "plannedTransition": _coerce_dict(required_upstream_link.get("planned_transition")),
+                "reason": str(required_upstream_link.get("reason") or "").strip() or None,
+                "blockers": _coerce_list(required_upstream_link.get("blockers")),
+                "servedBy": str(required_upstream_link.get("served_by") or "").strip() or None,
+            },
+            "browserControlRoute": {
+                "kind": str(browser_control_route.get("kind") or "").strip() or "browser_control_route",
+                "scopeId": str(browser_control_route.get("scope_id") or "").strip() or None,
+                "transportState": str(browser_control_route.get("transport_state") or "unknown").strip() or "unknown",
+                "transitionState": str(browser_control_route.get("transition_state") or "unknown").strip() or "unknown",
+                "plannedTransition": _coerce_dict(browser_control_route.get("planned_transition")),
+                "reason": str(browser_control_route.get("reason") or "").strip() or None,
+                "blockers": _coerce_list(browser_control_route.get("blockers")),
+                "servedBy": str(browser_control_route.get("served_by") or "").strip() or None,
+            },
+        },
+        "stateSync": {
+            "webspaceId": str(state_sync.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
+            "transportState": str(state_sync.get("transport_state") or "unknown").strip() or "unknown",
+            "firstSyncState": str(state_sync.get("first_sync_state") or "unknown").strip() or "unknown",
+            "semanticState": str(state_sync.get("semantic_state") or "unknown").strip() or "unknown",
+            "freshnessState": str(state_sync.get("freshness_state") or "unknown").strip() or "unknown",
+            "lastGoodSyncAt": state_sync.get("last_good_sync_at"),
+            "lastMaterializationAt": state_sync.get("last_materialization_at"),
+            "replay": {
+                "mode": str(replay.get("mode") or "snapshot_plus_diff").strip() or "snapshot_plus_diff",
+                "cursor": str(replay.get("cursor") or "0/0").strip() or "0/0",
+            },
+            "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
+            "blockers": _coerce_list(state_sync.get("blockers")),
+        },
+        "yjsPressure": {
+            "webspaceId": str(yjs_pressure.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
+            "owner": str(yjs_pressure.get("owner") or "").strip() or None,
+            "recentBytes": int(yjs_pressure.get("recent_bytes") or 0),
+            "recentWrites": int(yjs_pressure.get("recent_writes") or 0),
+            "peakBps": float(yjs_pressure.get("peak_bps") or 0.0),
+            "peakWps": float(yjs_pressure.get("peak_wps") or 0.0),
+            "policyState": str(yjs_pressure.get("policy_state") or "ok").strip() or "ok",
+            "target": str(yjs_pressure.get("target") or "primary_shared_doc").strip() or "primary_shared_doc",
+            "reason": str(yjs_pressure.get("reason") or "").strip() or None,
+            "blockedRoots": _coerce_list(yjs_pressure.get("blocked_roots")),
+            "observedState": str(yjs_pressure.get("observed_state") or "idle").strip() or "idle",
+        },
         "supervisorRuntime": supervisor_runtime,
         "phase0Communication": _compact_phase0_checkpoint(runtime.get("event_model_phase0_communication")),
     }
