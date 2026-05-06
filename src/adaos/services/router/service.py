@@ -582,7 +582,15 @@ class RouterService:
                     if isinstance(current, dict) and isinstance(current.get("messages"), list):
                         return
                     with ydoc.begin_transaction() as txn:
-                        _write_voice_chat_state(data_map, txn, target_node_id, {"messages": []})
+                        _write_voice_chat_state(
+                            data_map,
+                            txn,
+                            target_node_id,
+                            {
+                                "messages": [],
+                                "last_refresh_ts": time.time(),
+                            },
+                        )
 
         async def _append_voice_chat_message(
             webspace_id: str,
@@ -601,7 +609,15 @@ class RouterService:
                     if len(messages) > 60:
                         messages = messages[-60:]
                     with ydoc.begin_transaction() as txn:
-                        _write_voice_chat_state(data_map, txn, target_node_id, {"messages": messages})
+                        _write_voice_chat_state(
+                            data_map,
+                            txn,
+                            target_node_id,
+                            {
+                                "messages": messages,
+                                "last_refresh_ts": time.time(),
+                            },
+                        )
                     try:
                         self._vlog.debug(
                             "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
