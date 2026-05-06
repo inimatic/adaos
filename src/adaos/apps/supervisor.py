@@ -1659,6 +1659,26 @@ class SupervisorManager:
             yjs_pressure = dict(snapshot) if isinstance(snapshot, dict) else {}
         except Exception:
             yjs_pressure = {}
+        route_diagnostics: dict[str, Any] = {}
+        try:
+            from adaos.services.reliability import channel_diagnostics_snapshot
+
+            snapshot = channel_diagnostics_snapshot()
+            route_diagnostics = (
+                dict(snapshot.get("route") or {})
+                if isinstance(snapshot, dict) and isinstance(snapshot.get("route"), dict)
+                else {}
+            )
+        except Exception:
+            route_diagnostics = {}
+        member_snapshot_rebuild: dict[str, Any] = {}
+        try:
+            from adaos.services.scenario.webspace_runtime import member_snapshot_rebuild_runtime_snapshot
+
+            snapshot = member_snapshot_rebuild_runtime_snapshot(limit=25)
+            member_snapshot_rebuild = dict(snapshot) if isinstance(snapshot, dict) else {}
+        except Exception:
+            member_snapshot_rebuild = {}
         payload = {
             "captured_at": now,
             "reason": str(reason or "").strip() or "memory_profile_failure",
@@ -1669,6 +1689,8 @@ class SupervisorManager:
             "telemetry_tail": [dict(item) for item in telemetry_tail[-50:] if isinstance(item, dict)],
             "operations_tail": [dict(item) for item in operations_tail[-50:] if isinstance(item, dict)],
             "yjs_pressure": yjs_pressure,
+            "route_diagnostics": route_diagnostics,
+            "member_snapshot_rebuild": member_snapshot_rebuild,
         }
         artifact_dir = supervisor_memory_session_artifacts_dir(token)
         path = (artifact_dir / f"{artifact_id}.json").resolve()
