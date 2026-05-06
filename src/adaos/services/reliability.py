@@ -2843,6 +2843,7 @@ def _hub_member_transport_evidence_snapshot(
             "available": False,
             "source": "subnet.link_client",
             "route_mode": route_mode,
+            "connected_to_subnet": _connected_to_subnet_alias(connected_to_hub),
             "connected_to_hub": connected_to_hub,
         },
         "webrtc_media": {"available": False, "source": "webrtc.peer"},
@@ -3379,6 +3380,10 @@ def _member_rollout_state(update_state: str, *, snapshot_state: str) -> str:
     if snapshot_state in {"pending", "aging", "stale"}:
         return snapshot_state
     return "steady"
+
+
+def _connected_to_subnet_alias(connected_to_hub: bool | None) -> bool | None:
+    return connected_to_hub if isinstance(connected_to_hub, bool) else None
 
 
 def hub_member_connection_state_snapshot(
@@ -6153,6 +6158,7 @@ def media_plane_runtime_snapshot(
             "transport": {
                 "role": role_norm or None,
                 "route_mode": str(route_mode or "").strip() or None,
+                "connected_to_subnet": _connected_to_subnet_alias(connected_to_hub),
                 "connected_to_hub": connected_to_hub,
                 "control_readiness_impact": "none",
             },
@@ -6166,6 +6172,7 @@ def media_plane_runtime_snapshot(
     runtime["transport"] = {
         "role": role_norm or None,
         "route_mode": str(route_mode or "").strip() or None,
+        "connected_to_subnet": _connected_to_subnet_alias(connected_to_hub),
         "connected_to_hub": connected_to_hub,
         "control_readiness_impact": "none",
         "hub_member_semantic_state": "isolated_from_phase4_control_and_sync",
@@ -6344,6 +6351,7 @@ def reliability_snapshot(
             "transport": {
                 "role": str(role or "").strip().lower() or None,
                 "route_mode": str(route_mode or "").strip() or None,
+                "connected_to_subnet": _connected_to_subnet_alias(connected_to_hub),
                 "connected_to_hub": connected_to_hub,
                 "control_readiness_impact": "none",
             },
@@ -6411,6 +6419,7 @@ def reliability_snapshot(
             "node_state": node_state,
             "draining": bool(draining),
             "route_mode": route_mode,
+            "connected_to_subnet": _connected_to_subnet_alias(connected_to_hub),
             "connected_to_hub": connected_to_hub,
             "node_names": list(node_names or []),
         },
