@@ -156,6 +156,8 @@ nav:
       - Root MCP Roadmap: architecture/root-mcp-roadmap.md
       - Infrascope Roadmap: architecture/infrascope-roadmap.md
       - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
+      - Device Access and Browsers: architecture/device-access-and-browsers.md
+      - Device Access Roadmap: architecture/device-access-roadmap.md
   - CLI:
       - Overview: cli/index.md
       - API Service: cli/api.md

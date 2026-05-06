@@ -257,6 +257,8 @@ Backend versioning:
 - Quick start: `docs/quickstart.md`
 - Architecture overview: `docs/architecture/overview.md`
 - Skill activation and scenario binding: `docs/architecture/skill-activation-and-scenario-binding.md`
+- Device access architecture: `docs/architecture/device-access-and-browsers.md`
+- Device access transition roadmap: `docs/architecture/device-access-roadmap.md`
 - ABI schemas: `src/adaos/abi/`
 - CLI reference: `docs/reference/cli.md`
 - SDK docs: `docs/sdk/`
