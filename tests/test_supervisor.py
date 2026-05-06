@@ -3311,6 +3311,58 @@ def test_policy_memory_profile_restart_is_blocked_while_member_link_is_connected
     assert manager._memory_auto_profile_last_block_reason == "member_hub_connected"
 
 
+def test_policy_memory_profile_restart_is_blocked_by_connected_to_subnet_alias(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "300")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 22334
+        args = ["python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()  # type: ignore[assignment]
+    manager._last_start_at = 100.0
+    manager._memory_active_session_id = "mem-member"
+    manager._memory_requested_profile_mode = "sampled_profile"
+    supervisor.write_memory_session_summary(
+        "mem-member",
+        {
+            "session_id": "mem-member",
+            "profile_mode": "sampled_profile",
+            "session_state": "requested",
+            "trigger_source": "policy",
+            "trigger_reason": "memory.growth_and_slope_threshold",
+            "requested_at": 150.0,
+        },
+    )
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(
+        manager,
+        "_runtime_reliability_payload",
+        lambda timeout=1.0: {
+            "node": {"role": "member", "connected_to_subnet": True},
+            "hub_member_connection_state": {"hub": {"connected": False}},
+        },
+    )
+    restarts: list[str] = []
+
+    async def _restart_runtime(*, reason: str):
+        restarts.append(reason)
+        return {"ok": True}
+
+    monkeypatch.setattr(manager, "restart_runtime", _restart_runtime)
+
+    asyncio.run(manager._maybe_apply_memory_profile_mode())
+
+    assert restarts == []
+    assert manager._memory_auto_profile_last_block_reason == "member_hub_connected"
+
+
 def test_critical_memory_restart_is_allowed_while_live_subnet_is_present(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT", "5")
