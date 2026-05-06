@@ -7,6 +7,10 @@ def get_command_profile(device_ref: str) -> dict | None:
     return _service.get_command_profile(str(device_ref or ""))
 
 
+def get_device_settings(device_ref: str) -> dict | None:
+    return _service.get_device_settings(str(device_ref or ""))
+
+
 def rename_device(device_ref: str, display_name: str) -> dict:
     return _service.rename_device(str(device_ref or ""), str(display_name or ""))
 
@@ -17,4 +21,3 @@ def set_device_lifetime(device_ref: str, preset: str) -> dict:
 
 def detach_device(device_ref: str) -> dict:
     return _service.detach_device(str(device_ref or ""))
-

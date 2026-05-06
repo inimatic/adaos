@@ -93,3 +93,24 @@ def test_browsers_skill_detach_link_refreshes_snapshot_without_nameerror(monkeyp
     assert mod._SELECTED_BROWSER_BY_WS["default"] == "browser-1"
     assert any(slot == "browsers.current_name" and webspace_id == "default" for slot, webspace_id, _value in published)
     assert any(slot == "browsers.current_name" and webspace_id == "desktop" for slot, webspace_id, _value in published)
+
+
+def test_browsers_skill_get_link_settings_uses_sdk_device_access(monkeypatch) -> None:
+    mod = _load_browsers_skill_module()
+    expected = {
+        "device_ref": "member:member-2",
+        "title": "Kitchen tablet",
+        "detach": {"enabled": True, "confirm_message": 'Detach device "Kitchen tablet"?'},
+    }
+    seen: list[str] = []
+
+    def _fake_get_device_settings(device_ref: str):
+        seen.append(str(device_ref or "").strip())
+        return dict(expected)
+
+    monkeypatch.setattr(mod.sdk_device_access, "get_device_settings", _fake_get_device_settings)
+
+    result = mod.get_link_settings(node_id="member-2")
+
+    assert result == expected
+    assert seen == ["member:member-2"]
