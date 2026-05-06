@@ -91,6 +91,8 @@ def upsert_workspace_registry_entry(
     payload = load_workspace_registry(workspace_root, fallback_to_scan=True)
     entry = build_registry_entry(kind, artifact_dir)
     if entry is None:
+        entry = _find_existing_registry_entry(payload, kind, Path(artifact_dir).name)
+    if entry is None:
         raise FileNotFoundError(f"cannot build registry entry for {kind[:-1]} at {artifact_dir}")
     if version:
         entry["version"] = str(version)
@@ -263,6 +265,35 @@ def _normalize_entries(kind: RegistryKind, raw_entries: Any) -> list[dict[str, A
         item["name"] = name
         merged[name] = item
     return [merged[key] for key in sorted(merged, key=str.lower)]
+
+
+def _find_existing_registry_entry(
+    payload: dict[str, Any],
+    kind: RegistryKind,
+    artifact_name: str,
+) -> dict[str, Any] | None:
+    token = _clean_text(artifact_name)
+    if not token:
+        return None
+    for raw in list(payload.get(kind) or []):
+        if not isinstance(raw, dict):
+            continue
+        name = _clean_text(raw.get("name"))
+        artifact_id = _clean_text(raw.get("id"))
+        if token not in {name, artifact_id}:
+            continue
+        item = dict(raw)
+        item["kind"] = kind[:-1]
+        item["name"] = name or token
+        item.setdefault("id", artifact_id or token)
+        item.setdefault("path", f"{kind}/{token}")
+        install = dict(item.get("install") or {}) if isinstance(item.get("install"), dict) else {}
+        install.setdefault("kind", kind[:-1])
+        install.setdefault("name", item["name"])
+        install.setdefault("id", item.get("id") or token)
+        item["install"] = install
+        return item
+    return None
 
 
 def _load_manifest(directory: Path, kind: RegistryKind) -> tuple[Path | None, dict[str, Any]]:

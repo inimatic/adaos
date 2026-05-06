@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Literal
 
 import yaml
+from adaos.adapters.git.workspace import wait_for_materialized
 
 from adaos.domain import SkillMeta, SkillRecord
 from adaos.ports import EventBus, GitClient, Capabilities
@@ -35,6 +36,7 @@ from adaos.services.workspace_registry import upsert_workspace_registry_entry
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.scenario.manager")
 _RUNTIME_OWNED_DATA_KEYS = {"catalog", "installed", "desktop", "routing"}
+_SCENARIO_MANIFEST_NAMES = ("scenario.yaml", "scenario.yml", "scenario.json")
 
 
 def _local_node_id() -> str:
@@ -514,6 +516,7 @@ class ScenarioManager:
             raise RuntimeError("Scenarios repo is not initialized. Run `adaos scenario sync` once.")
         sub = name.strip()
         subpath = f"scenarios/{sub}"
+        self._ensure_scenario_subpath_materialized(Path(root), sub)
         version = self._bump_scenario_manifest_minor(Path(root) / "scenarios" / sub)
         upsert_workspace_registry_entry(Path(root), "scenarios", Path(root) / "scenarios" / sub)
         if version and getattr(self, "reg", None) is not None:
@@ -545,6 +548,26 @@ class ScenarioManager:
         if sha != "nothing-to-commit":
             self.git.push(str(root))
         return sha
+
+    def _ensure_scenario_subpath_materialized(self, root: Path, name: str) -> None:
+        scenario_dir = root / "scenarios" / name
+        if any((scenario_dir / item).exists() for item in _SCENARIO_MANIFEST_NAMES):
+            return
+        try:
+            self.git.sparse_add(str(root), f"scenarios/{name}")
+        except Exception:
+            return
+        try:
+            self.git.pull(str(root))
+        except Exception:
+            pass
+        try:
+            wait_for_materialized(scenario_dir, files=_SCENARIO_MANIFEST_NAMES, attempts=5, delay=0.1)
+        except FileNotFoundError:
+            if not scenario_dir.exists():
+                raise FileNotFoundError(
+                    f"scenario '{name}' is not materialized in workspace sparse checkout"
+                ) from None
 
     def _bump_scenario_manifest_minor(self, scenario_dir: Path) -> str | None:
         candidates = ("scenario.yaml", "scenario.yml", "scenario.json")
