@@ -20,6 +20,7 @@ DEV_MODE="0"
 MIN_PYTHON="3.11.9"
 PYTHON_ARG=""
 NODE_NAME=""
+NO_CORE_UPDATE="0"
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
@@ -86,11 +87,23 @@ write_env_var() {
   local env_file="${3:-.env}"
   [[ -n "${key:-}" ]] || return 0
   touch "$env_file"
-  if grep -q "^${key}=" "$env_file" 2>/dev/null; then
-    sed -i "s/^${key}=.*/${key}=${value}/" "$env_file"
-  else
-    printf '%s=%s\n' "$key" "$value" >> "$env_file"
-  fi
+  local tmp_file
+  tmp_file="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { updated = 0 }
+    $0 ~ ("^" key "=") {
+      print key "=" value
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) {
+        print key "=" value
+      }
+    }
+  ' "$env_file" > "$tmp_file"
+  mv "$tmp_file" "$env_file"
 }
 
 show_qr_if_available() {
@@ -198,6 +211,7 @@ print_bootstrap_config() {
   echo "  adaos_base_dir: ${ADAOS_BASE_DIR:-}"
   echo "  dev_mode:       ${DEV_MODE:-0}"
   echo "  node_name:      ${NODE_NAME:-}"
+  echo "  core_update:    $( [[ "${NO_CORE_UPDATE:-0}" == "1" ]] && printf '%s' "disabled" || printf '%s' "enabled" )"
   echo
 }
 
@@ -382,6 +396,22 @@ print("node_names=" + ",".join(names))
 PY
 }
 
+set_core_update_enabled() {
+  local py="$1"
+  local enabled="$2"
+  log "Setting core update enabled: ${enabled}"
+  "$py" - "$enabled" <<'PY'
+import sys
+
+from adaos.services.node_config import set_core_update_enabled
+
+token = str(sys.argv[1] or "").strip().lower()
+enabled = token in {"1", "true", "yes", "on"}
+conf = set_core_update_enabled(enabled)
+print("core_update_enabled=" + str(bool(getattr(conf, "core_update_enabled", True))).lower())
+PY
+}
+
 py_is_311() {
   local bin="$1"
   "$bin" -c 'import sys; raise SystemExit(0 if (sys.version_info[0], sys.version_info[1]) == (3, 11) else 1)' \
@@ -442,6 +472,7 @@ while [[ $# -gt 0 ]]; do
     --zone|--zone-id) ZONE_ID="${2:-}"; shift 2 ;;
     --python) PYTHON_ARG="${2:-}"; shift 2 ;;
     --node-name) NODE_NAME="${2:-}"; shift 2 ;;
+    --no-core-update|--no_core_update) NO_CORE_UPDATE="1"; shift ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
     -h|--help)
@@ -458,6 +489,7 @@ Usage: tools/bootstrap_uv.sh [options]
   --zone ZONE_ID
   --python /path/to/python3.11
   --node-name NAME
+  --no-core-update      Disable hub/member core updates from CI/CD signals for this node
   --dev
   --no_voice            Skip voice/NLU deps (Rasa)
 EOF
@@ -568,6 +600,9 @@ if [[ "${DEV_MODE:-0}" == "1" ]]; then
   write_env_var "ENV_TYPE" "dev" ".env"
   write_env_var "ADAOS_SUPERVISOR_ENABLED" "0" ".env"
 fi
+if [[ -n "${ADAOS_CORE_UPDATE_REPO_URL:-}" ]]; then
+  write_env_var "ADAOS_CORE_UPDATE_REPO_URL" "${ADAOS_CORE_UPDATE_REPO_URL}" ".env"
+fi
 
 # 5) Convenience PATH for current shell session
 if [[ -d ".venv/bin" ]]; then
@@ -621,6 +656,12 @@ if [[ "${ROLE:-}" == "hub" ]]; then
   log "Initializing Root subnet (adaos dev root init)..."
   if ! "$ADAOS_PY" -m adaos dev root init; then
     warn "adaos dev root init failed (check output above)"
+  fi
+fi
+
+if [[ "${NO_CORE_UPDATE:-0}" == "1" ]]; then
+  if ! set_core_update_enabled "$ADAOS_PY" "false"; then
+    warn "core update flag setup failed (check output above)"
   fi
 fi
 

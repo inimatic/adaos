@@ -20,6 +20,10 @@ in_codespaces() {
   [[ "${CODESPACES:-}" == "true" || -n "${GITHUB_WORKSPACE:-}" ]]
 }
 
+current_dir_resolved() {
+  pwd -P
+}
+
 codespaces_workspace_root() {
   local root="${GITHUB_WORKSPACE:-$PWD}"
   if [[ -d "$root" ]]; then
@@ -32,13 +36,24 @@ codespaces_workspace_root() {
   fi
 }
 
+repo_origin_url() {
+  local repo_dir="$1"
+  have git || return 0
+  git -C "$repo_dir" remote get-url origin 2>/dev/null || true
+}
+
+looks_like_adaos_checkout() {
+  local repo_dir="$1"
+  [[ -f "$repo_dir/tools/bootstrap.sh" && -f "$repo_dir/pyproject.toml" ]]
+}
+
 default_dest() {
   if [[ -n "${ADAOS_INIT_DEST:-}" ]]; then
     printf '%s\n' "$ADAOS_INIT_DEST"
     return 0
   fi
   if in_codespaces; then
-    printf '%s/%s\n' "$(codespaces_workspace_root)" "$REPO_NAME"
+    printf '%s\n' "$(current_dir_resolved)"
     return 0
   fi
   printf '%s/%s\n' "$HOME" "$REPO_NAME"
@@ -71,8 +86,8 @@ Defaults:
 Examples:
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --zone ru
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --node-name "Codespace Member" --zone ru
+  curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --role hub --install-service auto --zone ru
-  curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --join-code ABCD --zone ru
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
 EOF
 }
@@ -135,7 +150,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$CODESPACES_MODE" == "1" ]]; then
-  DEST="$(codespaces_workspace_root)/${REPO_NAME}"
+  DEST="$(current_dir_resolved)"
 fi
 
 [[ -n "${DEST:-}" ]] || die "--dest is empty"
@@ -146,6 +161,8 @@ if [[ -n "${REPO_URL:-}" ]]; then
 fi
 
 REPO_DIR="$DEST"
+REUSE_EXISTING_REPO=0
+CORE_UPDATE_REPO_URL="${ADAOS_CORE_UPDATE_REPO_URL:-}"
 
 log "Preparing repo at: ${REPO_DIR}"
 mkdir -p "$REPO_DIR"
@@ -159,7 +176,17 @@ if ! have git; then
   fi
 fi
 
-if [[ "$USE_GIT" == "1" ]]; then
+if in_codespaces && looks_like_adaos_checkout "$REPO_DIR"; then
+  REUSE_EXISTING_REPO=1
+  ok "Using existing AdaOS checkout in-place: ${REPO_DIR}"
+  if [[ -n "${REPO_URL:-}" ]]; then
+    log "Codespaces mode reuses the current checkout; --use-git-from will be used for core updates without recloning."
+  fi
+fi
+
+if [[ "$REUSE_EXISTING_REPO" == "1" ]]; then
+  :
+elif [[ "$USE_GIT" == "1" ]]; then
   if ! have git; then
     die "git is not installed (required for --use-git / --use-git-from). Either install git, or run without git mode (archive download)."
   fi
@@ -190,8 +217,22 @@ else
   fetch_to_file "$url" "$archive"
 
   log "Extracting..."
-  rm -rf "$REPO_DIR"
-  mkdir -p "$REPO_DIR"
+  if [[ -d "$REPO_DIR" ]]; then
+    resolved_repo_dir="$(
+      cd "$REPO_DIR" >/dev/null 2>&1 || exit 1
+      pwd -P
+    )"
+    if [[ "$resolved_repo_dir" == "$(current_dir_resolved)" ]]; then
+      if find "$REPO_DIR" -mindepth 1 -maxdepth 1 | read -r _; then
+        die "Refusing to overwrite the current working directory. Use --codespaces in an existing checkout, --use-git, or an empty destination."
+      fi
+    else
+      rm -rf "$REPO_DIR"
+      mkdir -p "$REPO_DIR"
+    fi
+  else
+    mkdir -p "$REPO_DIR"
+  fi
   tar -xzf "$archive" -C "$tmp"
   top_dir="$(find "$tmp" -maxdepth 1 -type d -name "${REPO_NAME}-*" | head -n 1 || true)"
   [[ -n "${top_dir:-}" ]] || die "Failed to locate extracted directory"
@@ -200,6 +241,17 @@ else
 fi
 
 cd "$REPO_DIR"
+
+if [[ -z "${CORE_UPDATE_REPO_URL:-}" && -n "${REPO_URL:-}" ]]; then
+  CORE_UPDATE_REPO_URL="$REPO_URL"
+fi
+if [[ -z "${CORE_UPDATE_REPO_URL:-}" && -d "$REPO_DIR/.git" ]]; then
+  CORE_UPDATE_REPO_URL="$(repo_origin_url "$REPO_DIR")"
+fi
+if [[ -n "${CORE_UPDATE_REPO_URL:-}" ]]; then
+  log "Core update repo URL: ${CORE_UPDATE_REPO_URL}"
+  export ADAOS_CORE_UPDATE_REPO_URL="$CORE_UPDATE_REPO_URL"
+fi
 
 # Ensure bootstrap gets a --rev unless caller already passed one.
 have_rev=0

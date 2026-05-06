@@ -135,11 +135,16 @@ def _extract_subnet_id_from_nats_user(raw_user: Any) -> str | None:
 
 
 def _base_dir(ctx: AgentContext | None = None) -> Path:
-    return get_ctx().paths.base_dir()
+    if ctx is not None:
+        return Path(ctx.paths.base_dir())
+    env_base_dir = str(os.environ.get("ADAOS_BASE_DIR") or "").strip()
+    if env_base_dir:
+        return Path(env_base_dir).expanduser()
+    return Path(get_ctx().paths.base_dir())
 
 
 def _config_path(ctx: AgentContext | None = None) -> Path:
-    p = get_ctx().paths.base_dir() / "node.yaml"
+    p = _base_dir(ctx) / "node.yaml"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -211,6 +216,7 @@ class SubnetSettings:
 class NodeSettings:
     id: str | None = None
     node_names: list[str] = field(default_factory=list)
+    core_update_enabled: bool = True
 
 
 @dataclass
@@ -375,6 +381,10 @@ class NodeConfig:
             return "member"
         return self.node_id_value or "node"
 
+    @property
+    def core_update_enabled(self) -> bool:
+        return bool(getattr(self.node_settings, "core_update_enabled", True))
+
 
 def _expand_path(value: str | None, fallback: str) -> Path:
     target = value or fallback
@@ -491,10 +501,29 @@ def normalize_node_names(value: Any, *, limit: int = 8) -> list[str]:
     return result
 
 
+def _coerce_bool(value: Any, *, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if not token:
+            return default
+        if token in {"1", "true", "yes", "on"}:
+            return True
+        if token in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 def _settings_to_dict(settings: Any) -> dict[str, Any]:
     data = asdict(settings)
     if isinstance(settings, NodeSettings):
         data["node_names"] = normalize_node_names(data.get("node_names"))
+        data["core_update_enabled"] = _coerce_bool(data.get("core_update_enabled"), default=True)
     if isinstance(settings, RootSettings):
         data["base_url"] = data.get("base_url") or "https://api.inimatic.com"
         data["ca_cert"] = _config_stringify_path(data.get("ca_cert"))
@@ -568,6 +597,10 @@ def _settings_from_dict(settings_cls: type, payload: Any):
         return NodeSettings(
             id=payload.get("id") if isinstance(payload, dict) else None,
             node_names=normalize_node_names(payload.get("node_names") if isinstance(payload, dict) else None),
+            core_update_enabled=_coerce_bool(
+                payload.get("core_update_enabled") if isinstance(payload, dict) else None,
+                default=True,
+            ),
         )
     if settings_cls is DevSettings:
         workspace = payload.get("workspace") if isinstance(payload, dict) else None
@@ -799,7 +832,7 @@ def _save_persisted_root_state(root_state: RootState | None) -> None:
 
 
 def load_node(ctx: AgentContext | None = None) -> NodeConfig:
-    path = _config_path()
+    path = _config_path(ctx)
     if not path.exists():
         conf = _default_conf()
         save_node(conf, ctx=ctx)
@@ -929,6 +962,7 @@ def load_node(ctx: AgentContext | None = None) -> NodeConfig:
 def save_node(conf: NodeConfig, *, ctx: AgentContext | None = None) -> None:
     conf.sync_sections()
     conf.node_settings.node_names = normalize_node_names(conf.node_settings.node_names)
+    conf.node_settings.core_update_enabled = _coerce_bool(conf.node_settings.core_update_enabled, default=True)
     path = _config_path(ctx)
     data = conf.to_dict()
 
@@ -1032,6 +1066,13 @@ def set_role(role: str, *, hub_url: str | None = None, subnet_id: str | None = N
 def set_node_names(node_names: Any, *, ctx: AgentContext | None = None) -> NodeConfig:
     conf = load_config(ctx=ctx)
     conf.node_settings.node_names = normalize_node_names(node_names)
+    save_config(conf, ctx=ctx)
+    return conf
+
+
+def set_core_update_enabled(enabled: Any, *, ctx: AgentContext | None = None) -> NodeConfig:
+    conf = load_config(ctx=ctx)
+    conf.node_settings.core_update_enabled = _coerce_bool(enabled, default=True)
     save_config(conf, ctx=ctx)
     return conf
 
