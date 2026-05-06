@@ -7,14 +7,44 @@ set -euo pipefail
 
 REPO_OWNER="${ADAOS_INIT_REPO_OWNER:-stipot-com}"
 REPO_NAME="${ADAOS_INIT_REPO_NAME:-adaos}"
+REPO_URL_DEFAULT="${ADAOS_INIT_REPO_URL:-}"
 REV_DEFAULT="${ADAOS_INIT_REV:-rev2026}"
-DEST_DEFAULT="${ADAOS_INIT_DEST:-$HOME/adaos}"
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m[!] %s\033[0m\n' "$*"; }
 die()  { printf '\033[31m[x] %s\033[0m\n' "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+in_codespaces() {
+  [[ "${CODESPACES:-}" == "true" || -n "${GITHUB_WORKSPACE:-}" ]]
+}
+
+codespaces_workspace_root() {
+  local root="${GITHUB_WORKSPACE:-$PWD}"
+  if [[ -d "$root" ]]; then
+    (
+      cd "$root" >/dev/null 2>&1 || exit 1
+      pwd -P
+    )
+  else
+    printf '%s\n' "$root"
+  fi
+}
+
+default_dest() {
+  if [[ -n "${ADAOS_INIT_DEST:-}" ]]; then
+    printf '%s\n' "$ADAOS_INIT_DEST"
+    return 0
+  fi
+  if in_codespaces; then
+    printf '%s/%s\n' "$(codespaces_workspace_root)" "$REPO_NAME"
+    return 0
+  fi
+  printf '%s/%s\n' "$HOME" "$REPO_NAME"
+}
+
+DEST_DEFAULT="$(default_dest)"
 
 fetch_to_file() {
   local url="$1"
@@ -32,7 +62,7 @@ fetch_to_file() {
 
 usage() {
   cat <<EOF
-Usage: init.sh [--dest DIR] [--rev REV] [--use-git] [--] [bootstrap args...]
+Usage: init.sh [--dest DIR] [--rev REV] [--use-git] [--use-git-from URL] [--codespaces] [--] [bootstrap args...]
 
 Defaults:
   --rev  ${REV_DEFAULT}
@@ -40,7 +70,10 @@ Defaults:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --zone ru
+  curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --join-code ABCD --node-name "Codespace Member" --zone ru
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --role hub --install-service auto --zone ru
+  curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --join-code ABCD --zone ru
+  curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
 EOF
 }
 
@@ -80,7 +113,13 @@ try_install_git() {
 DEST="$DEST_DEFAULT"
 REV="$REV_DEFAULT"
 USE_GIT="${ADAOS_INIT_USE_GIT:-0}"
+REPO_URL="$REPO_URL_DEFAULT"
+CODESPACES_MODE="${ADAOS_INIT_CODESPACES:-0}"
 BOOTSTRAP_ARGS=()
+
+if [[ -n "${REPO_URL:-}" ]]; then
+  USE_GIT="1"
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,13 +127,23 @@ while [[ $# -gt 0 ]]; do
     --dest) DEST="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
     --use-git) USE_GIT="1"; shift ;;
+    --use-git-from) REPO_URL="${2:-}"; USE_GIT="1"; shift 2 ;;
+    --codespaces) CODESPACES_MODE="1"; shift ;;
     --) shift; BOOTSTRAP_ARGS+=("$@"); break ;;
     *) BOOTSTRAP_ARGS+=("$1"); shift ;;
   esac
 done
 
+if [[ "$CODESPACES_MODE" == "1" ]]; then
+  DEST="$(codespaces_workspace_root)/${REPO_NAME}"
+fi
+
 [[ -n "${DEST:-}" ]] || die "--dest is empty"
 [[ -n "${REV:-}" ]] || die "--rev is empty"
+if [[ -n "${REPO_URL:-}" ]]; then
+  REPO_URL="$(printf '%s' "$REPO_URL" | xargs)"
+  [[ -n "${REPO_URL:-}" ]] || die "--use-git-from requires a non-empty URL"
+fi
 
 REPO_DIR="$DEST"
 
@@ -112,16 +161,24 @@ fi
 
 if [[ "$USE_GIT" == "1" ]]; then
   if ! have git; then
-    die "git is not installed (required for --use-git). Either install git, or run without --use-git (archive download)."
+    die "git is not installed (required for --use-git / --use-git-from). Either install git, or run without git mode (archive download)."
   fi
+  clone_url="${REPO_URL:-https://github.com/${REPO_OWNER}/${REPO_NAME}.git}"
   if [[ -d "$REPO_DIR/.git" ]]; then
     log "Existing git repo detected; updating..."
+    if [[ -n "${REPO_URL:-}" ]]; then
+      current_origin="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
+      if [[ "$current_origin" != "$REPO_URL" ]]; then
+        log "Updating origin URL: ${REPO_URL}"
+        git -C "$REPO_DIR" remote set-url origin "$REPO_URL"
+      fi
+    fi
     git -C "$REPO_DIR" fetch --all --prune
     git -C "$REPO_DIR" checkout "$REV"
     git -C "$REPO_DIR" pull --ff-only
   else
-    log "Cloning ${REPO_OWNER}/${REPO_NAME} (${REV})..."
-    git clone -b "$REV" "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$REPO_DIR"
+    log "Cloning ${clone_url} (${REV})..."
+    git clone -b "$REV" "$clone_url" "$REPO_DIR"
   fi
 else
   # No-git path: download GitHub archive.
@@ -146,14 +203,21 @@ cd "$REPO_DIR"
 
 # Ensure bootstrap gets a --rev unless caller already passed one.
 have_rev=0
+have_install_service=0
 for ((i=0; i<${#BOOTSTRAP_ARGS[@]}; i++)); do
   if [[ "${BOOTSTRAP_ARGS[$i]}" == "--rev" ]]; then
     have_rev=1
-    break
+  fi
+  if [[ "${BOOTSTRAP_ARGS[$i]}" == "--install-service" ]]; then
+    have_install_service=1
   fi
 done
 if [[ "$have_rev" != "1" ]]; then
   BOOTSTRAP_ARGS+=("--rev" "$REV")
+fi
+if in_codespaces && [[ "$have_install_service" != "1" ]]; then
+  warn "Codespaces detected; defaulting to --install-service never because systemd user services are usually unavailable."
+  BOOTSTRAP_ARGS+=("--install-service" "never")
 fi
 
 log "Running bootstrap..."

@@ -21,6 +21,8 @@ REV="rev2026"
 ZONE_ID=""
 NO_VOICE="0"
 DEV_MODE="0"
+PYTHON_ARG=""
+NODE_NAME=""
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
@@ -28,6 +30,40 @@ warn() { printf '\033[33m[!] %s\033[0m\n' "$*"; }
 fail() { printf '\033[31m[x] %s\033[0m\n' "$*"; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+resolve_symlink_path() {
+  local target="$1"
+  [[ -n "${target:-}" ]] || return 1
+
+  while [[ -L "$target" ]]; do
+    local dir link
+    dir="$(cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd)" || return 1
+    link="$(readlink "$target")" || return 1
+    if [[ "$link" == /* ]]; then
+      target="$link"
+    else
+      target="$dir/$link"
+    fi
+  done
+
+  if [[ "$target" == /* ]]; then
+    printf '%s\n' "$target"
+  else
+    local dir
+    dir="$(cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd)" || return 1
+    printf '%s/%s\n' "$dir" "$(basename "$target")"
+  fi
+}
+
+normalize_python_candidate() {
+  local candidate="$1"
+  local resolved=""
+  if resolved="$(resolve_symlink_path "$candidate" 2>/dev/null)" && [[ -x "$resolved" ]]; then
+    printf '%s\n' "$resolved"
+  else
+    printf '%s\n' "$candidate"
+  fi
+}
 
 effective_root_url() {
   local root_url="$1"
@@ -177,7 +213,27 @@ print_bootstrap_config() {
   echo "  env_type:       ${ENV_TYPE:-}"
   echo "  adaos_base_dir: ${ADAOS_BASE_DIR:-}"
   echo "  dev_mode:       ${DEV_MODE:-0}"
+  echo "  node_name:      ${NODE_NAME:-}"
   echo
+}
+
+set_node_name() {
+  local py="$1"
+  local node_name="$2"
+  [[ -n "${node_name:-}" ]] || return 0
+  log "Setting node name: ${node_name}"
+  "$py" - "$node_name" <<'PY'
+import sys
+
+from adaos.services.node_config import set_node_names
+
+name = str(sys.argv[1] or "").strip()
+if not name:
+    raise SystemExit(0)
+conf = set_node_names([name])
+names = list(getattr(conf, "node_names", []) or [])
+print("node_names=" + ",".join(names))
+PY
 }
 
 wait_for_autostart_activation() {
@@ -374,11 +430,15 @@ choose_python_311() {
 
   for c in "${cands[@]}"; do
     have "$c" || continue
-    local p
+    local p resolved_p
     p="$(command -v "$c")"
-    if py_is_311 "$p" && py_meets_min "$p" "$MIN_PYTHON"; then
-      PY_BIN="$p"
-      PY_VER="$("$p" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}")' 2>/dev/null || echo "3.11")"
+    resolved_p="$(normalize_python_candidate "$p")"
+    if py_is_311 "$resolved_p" && py_meets_min "$resolved_p" "$MIN_PYTHON"; then
+      PY_BIN="$resolved_p"
+      PY_VER="$("$resolved_p" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}")' 2>/dev/null || echo "3.11")"
+      if [[ "$p" != "$resolved_p" ]]; then
+        log "Resolved Python shim ${p} -> ${resolved_p}"
+      fi
       log "Using Python ${PY_VER} -> ${PY_BIN}"
       return 0
     fi
@@ -445,6 +505,8 @@ while [[ $# -gt 0 ]]; do
     --root-url) ROOT_URL="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
     --zone|--zone-id) ZONE_ID="${2:-}"; shift 2 ;;
+    --python) PYTHON_ARG="${2:-}"; shift 2 ;;
+    --node-name) NODE_NAME="${2:-}"; shift 2 ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
     -h|--help)
@@ -459,6 +521,8 @@ Usage: tools/bootstrap.sh [options]
   --root-url URL
   --rev REV
   --zone ZONE_ID
+  --python /path/to/python3.11
+  --node-name NAME
   --dev
   --no_voice            Skip voice/NLU deps (Rasa)
 EOF
@@ -467,6 +531,11 @@ EOF
     *) fail "Unknown arg: $1 (try --help)" ;;
   esac
 done
+
+if [[ -n "${PYTHON_ARG:-}" ]]; then
+  ADAOS_PYTHON="$PYTHON_ARG"
+  export ADAOS_PYTHON
+fi
 
 if [[ -n "${ZONE_ID:-}" ]]; then
   ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
@@ -618,6 +687,12 @@ if [[ "${ROLE:-}" == "hub" ]]; then
   log "Initializing Root subnet (adaos dev root init)..."
   if ! python -m adaos dev root init; then
     warn "adaos dev root init failed (check output above)"
+  fi
+fi
+
+if [[ -n "${NODE_NAME:-}" ]]; then
+  if ! set_node_name "python" "$NODE_NAME"; then
+    warn "node name setup failed (check output above)"
   fi
 fi
 

@@ -18,12 +18,48 @@ ZONE_ID=""
 NO_VOICE="0"
 DEV_MODE="0"
 MIN_PYTHON="3.11.9"
+PYTHON_ARG=""
+NODE_NAME=""
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m[!] %s\033[0m\n' "$*"; }
 die()  { printf '\033[31m[x] %s\033[0m\n' "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+resolve_symlink_path() {
+  local target="$1"
+  [[ -n "${target:-}" ]] || return 1
+
+  while [[ -L "$target" ]]; do
+    local dir link
+    dir="$(cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd)" || return 1
+    link="$(readlink "$target")" || return 1
+    if [[ "$link" == /* ]]; then
+      target="$link"
+    else
+      target="$dir/$link"
+    fi
+  done
+
+  if [[ "$target" == /* ]]; then
+    printf '%s\n' "$target"
+  else
+    local dir
+    dir="$(cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd)" || return 1
+    printf '%s/%s\n' "$dir" "$(basename "$target")"
+  fi
+}
+
+normalize_python_candidate() {
+  local candidate="$1"
+  local resolved=""
+  if resolved="$(resolve_symlink_path "$candidate" 2>/dev/null)" && [[ -x "$resolved" ]]; then
+    printf '%s\n' "$resolved"
+  else
+    printf '%s\n' "$candidate"
+  fi
+}
 
 effective_root_url() {
   local root_url="$1"
@@ -161,6 +197,7 @@ print_bootstrap_config() {
   echo "  env_type:       ${ENV_TYPE:-}"
   echo "  adaos_base_dir: ${ADAOS_BASE_DIR:-}"
   echo "  dev_mode:       ${DEV_MODE:-0}"
+  echo "  node_name:      ${NODE_NAME:-}"
   echo
 }
 
@@ -326,6 +363,69 @@ install_voice_deps() {
   fi
 }
 
+set_node_name() {
+  local py="$1"
+  local node_name="$2"
+  [[ -n "${node_name:-}" ]] || return 0
+  log "Setting node name: ${node_name}"
+  "$py" - "$node_name" <<'PY'
+import sys
+
+from adaos.services.node_config import set_node_names
+
+name = str(sys.argv[1] or "").strip()
+if not name:
+    raise SystemExit(0)
+conf = set_node_names([name])
+names = list(getattr(conf, "node_names", []) or [])
+print("node_names=" + ",".join(names))
+PY
+}
+
+py_is_311() {
+  local bin="$1"
+  "$bin" -c 'import sys; raise SystemExit(0 if (sys.version_info[0], sys.version_info[1]) == (3, 11) else 1)' \
+    >/dev/null 2>&1
+}
+
+py_meets_min() {
+  local bin="$1"
+  local min_ver="$2"
+  "$bin" - "$min_ver" <<'PY' >/dev/null 2>&1
+import sys
+min_ver = tuple(int(x) for x in sys.argv[1].split("."))
+cur = sys.version_info[:3]
+raise SystemExit(0 if cur >= min_ver else 1)
+PY
+}
+
+choose_system_python_311() {
+  local cands=()
+  local c p resolved_p py_ver
+
+  if [[ -n "${ADAOS_PYTHON:-}" ]]; then
+    cands+=("$ADAOS_PYTHON")
+  fi
+  cands+=(python3.11 python3 python)
+
+  for c in "${cands[@]}"; do
+    have "$c" || continue
+    p="$(command -v "$c")"
+    resolved_p="$(normalize_python_candidate "$p")"
+    if py_is_311 "$resolved_p" && py_meets_min "$resolved_p" "$MIN_PYTHON"; then
+      UV_PYTHON="$resolved_p"
+      py_ver="$("$resolved_p" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}")' 2>/dev/null || echo "3.11")"
+      if [[ "$p" != "$resolved_p" ]]; then
+        log "Resolved Python shim ${p} -> ${resolved_p}"
+      fi
+      log "Using Python ${py_ver} -> ${UV_PYTHON}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 # Repo root
 cd "$(dirname "$0")/.." || die "cannot cd to repo root"
 
@@ -340,6 +440,8 @@ while [[ $# -gt 0 ]]; do
     --root-url) ROOT_URL="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
     --zone|--zone-id) ZONE_ID="${2:-}"; shift 2 ;;
+    --python) PYTHON_ARG="${2:-}"; shift 2 ;;
+    --node-name) NODE_NAME="${2:-}"; shift 2 ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
     -h|--help)
@@ -354,6 +456,8 @@ Usage: tools/bootstrap_uv.sh [options]
   --root-url URL
   --rev REV
   --zone ZONE_ID
+  --python /path/to/python3.11
+  --node-name NAME
   --dev
   --no_voice            Skip voice/NLU deps (Rasa)
 EOF
@@ -362,6 +466,11 @@ EOF
     *) die "Unknown arg: $1 (try --help)" ;;
   esac
 done
+
+if [[ -n "${PYTHON_ARG:-}" ]]; then
+  ADAOS_PYTHON="$PYTHON_ARG"
+  export ADAOS_PYTHON
+fi
 
 if [[ -n "${ZONE_ID:-}" ]]; then
   ZONE_ID="$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')"
@@ -397,24 +506,38 @@ fi
 # 1.5) Python 3.11.9+ only (uv-managed)
 log "Ensuring Python ${MIN_PYTHON}+..."
 uv python install "${MIN_PYTHON}" || die "uv python install ${MIN_PYTHON} failed"
-export UV_PYTHON="${MIN_PYTHON}"
+
+if choose_system_python_311; then
+  export UV_PYTHON
+else
+  set +e
+  UV_PYTHON="$(uv python find --system --managed-python "${MIN_PYTHON}" 2>/dev/null)"
+  rc=$?
+  set -e
+  [[ $rc -eq 0 && -n "${UV_PYTHON:-}" ]] || die "Failed to locate a usable Python ${MIN_PYTHON}+ interpreter for uv sync"
+  UV_PYTHON="$(normalize_python_candidate "$UV_PYTHON")"
+  py_is_311 "$UV_PYTHON" && py_meets_min "$UV_PYTHON" "$MIN_PYTHON" \
+    || die "Resolved uv-managed Python is not a usable ${MIN_PYTHON}+ interpreter: ${UV_PYTHON}"
+  log "Using uv-managed Python -> ${UV_PYTHON}"
+  export UV_PYTHON
+fi
 
 # 2) Python deps
 if [[ -f uv.lock ]]; then
   log "Syncing environment from uv.lock..."
   set +e
-  uv sync --locked
+  uv sync --python "$UV_PYTHON" --locked
   rc=$?
   set -e
   if [[ $rc -ne 0 ]]; then
     warn "uv sync --locked failed, refreshing lock..."
     uv lock || die "uv lock failed"
-    uv sync || die "uv sync failed"
+    uv sync --python "$UV_PYTHON" || die "uv sync failed"
   fi
 else
   log "Locking and syncing environment..."
   uv lock || die "uv lock failed"
-  uv sync || die "uv sync failed"
+  uv sync --python "$UV_PYTHON" || die "uv sync failed"
 fi
 ok "Python environment ready"
 
@@ -498,6 +621,12 @@ if [[ "${ROLE:-}" == "hub" ]]; then
   log "Initializing Root subnet (adaos dev root init)..."
   if ! "$ADAOS_PY" -m adaos dev root init; then
     warn "adaos dev root init failed (check output above)"
+  fi
+fi
+
+if [[ -n "${NODE_NAME:-}" ]]; then
+  if ! set_node_name "$ADAOS_PY" "$NODE_NAME"; then
+    warn "node name setup failed (check output above)"
   fi
 fi
 

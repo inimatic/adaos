@@ -10,6 +10,7 @@ param(
   [string]$Rev = "rev2026",
   [string]$RepoOwner = "stipot-com",
   [string]$RepoName = "adaos",
+  [string]$UseGitFrom = "",
   [string]$JoinCode = "",
   [string]$Role = "",
   [switch]$Dev,
@@ -31,6 +32,12 @@ function Write-Info([string]$s) { Write-Host "[*] $s" -ForegroundColor Cyan }
 function Write-Ok([string]$s) { Write-Host "[+] $s" -ForegroundColor Green }
 function Write-Warn([string]$s) { Write-Host "[!] $s" -ForegroundColor Yellow }
 function Have([string]$cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
+function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
+  & $FilePath @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw ("Command failed with exit code {0}: {1} {2}" -f $LASTEXITCODE, $FilePath, ($Arguments -join " "))
+  }
+}
 
 if (-not $PSVersionTable -or -not $PSVersionTable.PSVersion) {
   throw "Unsupported PowerShell runtime: unable to detect PSVersionTable.PSVersion. Use Windows PowerShell 5.1+ or PowerShell 7+."
@@ -46,6 +53,9 @@ try {
 
 if ([string]::IsNullOrWhiteSpace($Dest)) { throw "Dest is empty" }
 if ([string]::IsNullOrWhiteSpace($Rev)) { throw "Rev is empty" }
+if (-not [string]::IsNullOrWhiteSpace($UseGitFrom)) {
+  $UseGitFrom = $UseGitFrom.Trim()
+}
 
 Write-Info ("Preparing repo at: {0}" -f $Dest)
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
@@ -67,32 +77,59 @@ if (-not (Have "git")) {
   }
 }
 
+$cloneUrl = if (-not [string]::IsNullOrWhiteSpace($UseGitFrom)) { $UseGitFrom } else { "https://github.com/$RepoOwner/$RepoName.git" }
 $zipUrl = "https://github.com/$RepoOwner/$RepoName/archive/refs/heads/$Rev.zip"
 $tmp = Join-Path $env:TEMP ("adaos_init_{0}" -f [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $zipPath = Join-Path $tmp "adaos.zip"
 
 try {
-  Write-Info ("Downloading source archive: {0}" -f $zipUrl)
-  Invoke-WebRequest -UseBasicParsing -Uri $zipUrl -OutFile $zipPath
-  Write-Info "Extracting..."
-  Expand-Archive -LiteralPath $zipPath -DestinationPath $tmp -Force
+  if (-not [string]::IsNullOrWhiteSpace($UseGitFrom)) {
+    if (-not (Have "git")) {
+      throw "git is required for -UseGitFrom. Install git or run without -UseGitFrom."
+    }
+    if (Test-Path (Join-Path $Dest ".git")) {
+      Write-Info "Existing git repo detected; updating..."
+      $currentOrigin = ""
+      try { $currentOrigin = (git -C $Dest remote get-url origin 2>$null) } catch { $currentOrigin = "" }
+      if ($currentOrigin -ne $UseGitFrom) {
+        Write-Info ("Updating origin URL: {0}" -f $UseGitFrom)
+        Invoke-Checked "git" @("-C", $Dest, "remote", "set-url", "origin", $UseGitFrom)
+      }
+      Invoke-Checked "git" @("-C", $Dest, "fetch", "--all", "--prune")
+      Invoke-Checked "git" @("-C", $Dest, "checkout", $Rev)
+      Invoke-Checked "git" @("-C", $Dest, "pull", "--ff-only")
+    } else {
+      if (Test-Path $Dest) {
+        try { Remove-Item -Recurse -Force -LiteralPath $Dest } catch { }
+      }
+      Write-Info ("Cloning {0} ({1})..." -f $cloneUrl, $Rev)
+      Invoke-Checked "git" @("clone", "-b", $Rev, $cloneUrl, $Dest)
+    }
+    Write-Ok ("Source ready at: {0}" -f $Dest)
+  }
+  else {
+    Write-Info ("Downloading source archive: {0}" -f $zipUrl)
+    Invoke-WebRequest -UseBasicParsing -Uri $zipUrl -OutFile $zipPath
+    Write-Info "Extracting..."
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $tmp -Force
 
-  $extracted = Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { $_.Name -like "$RepoName-*" } | Select-Object -First 1
-  if (-not $extracted) { throw "Failed to locate extracted directory in $tmp" }
-  $extractedItems = @(Get-ChildItem -LiteralPath $extracted.FullName -Force)
-  if ($extractedItems.Count -eq 0) {
-    throw "Extracted directory is empty: $($extracted.FullName)"
-  }
+    $extracted = Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { $_.Name -like "$RepoName-*" } | Select-Object -First 1
+    if (-not $extracted) { throw "Failed to locate extracted directory in $tmp" }
+    $extractedItems = @(Get-ChildItem -LiteralPath $extracted.FullName -Force)
+    if ($extractedItems.Count -eq 0) {
+      throw "Extracted directory is empty: $($extracted.FullName)"
+    }
 
-  if (Test-Path $Dest) {
-    try { Remove-Item -Recurse -Force -LiteralPath $Dest } catch { }
+    if (Test-Path $Dest) {
+      try { Remove-Item -Recurse -Force -LiteralPath $Dest } catch { }
+    }
+    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+    foreach ($item in $extractedItems) {
+      Copy-Item -Recurse -Force -LiteralPath $item.FullName -Destination $Dest
+    }
+    Write-Ok ("Source extracted to: {0}" -f $Dest)
   }
-  New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-  foreach ($item in $extractedItems) {
-    Copy-Item -Recurse -Force -LiteralPath $item.FullName -Destination $Dest
-  }
-  Write-Ok ("Source extracted to: {0}" -f $Dest)
 }
 finally {
   try { Remove-Item -Recurse -Force -LiteralPath $tmp } catch { }

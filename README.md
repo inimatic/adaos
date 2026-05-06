@@ -60,6 +60,16 @@ With AdaOS you can:
 ```bash
 # use optional key to join member to subnet: --zone ru --join-code CODE 
 curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru|us|eu
+# if your PATH points at a uv shim, force a real interpreter path:
+# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --python /usr/bin/python3.11 --zone ru
+# set a friendly node name that will be shown in the desktop:
+# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --node-name "Codespace Member" --zone ru
+# bootstrap from a fork instead of the upstream core repo:
+# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+# in GitHub Codespaces, keep the checkout inside the visible workspace tree:
+# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --zone ru
+# or install directly into the current directory:
+# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dest . --zone ru
 ```
 
 ### Windows (PowerShell)
@@ -70,6 +80,8 @@ curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init
 & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content))
 # pick zone explicitly when needed:
 # & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
+# bootstrap from a fork instead of the upstream core repo:
+# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content)) -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
 # enable dev bootstrap when needed:
 # & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru -Dev
 ```
@@ -82,6 +94,8 @@ REM requires Windows PowerShell 5.1+ or PowerShell 7+
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -JoinCode CODE
 REM pick zone explicitly when needed:
 REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru
+REM bootstrap from a fork instead of the upstream core repo:
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
 REM enable dev bootstrap when needed:
 REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru -Dev
 ```
@@ -185,6 +199,8 @@ bash tools/bootstrap.sh
 source .venv/bin/activate
 adaos --help
 # bash tools/bootstrap.sh --zone ru --dev
+# bash tools/bootstrap.sh --python /usr/bin/python3.11 --zone ru --dev
+# bash tools/bootstrap.sh --node-name "Local Dev Node" --zone ru --dev
 ```
 
 ### Windows PowerShell
