@@ -101,6 +101,7 @@ adaos hub join-code create
 adaos hub root status
 adaos hub root reconnect
 adaos node join --join-code <CODE>
+adaos node role switch --role hub
 adaos node role set --role member
 ```
 
@@ -109,6 +110,8 @@ adaos node role set --role member
 `adaos hub root memory-artifacts <SESSION_ID>` показывает remote artifact catalog вместе с publish-policy status вроде `inline_available`, `size_limit_exceeded` или `kind_not_allowed`.
 `adaos hub root memory-artifact <SESSION_ID> <ARTIFACT_ID>` теперь возвращает нормализованный root-side delivery contract: для inline artifacts это `delivery mode: root_inline_content` плюс transfer metadata, а для local-only artifacts — fetch strategy, source control path и признак relay readiness.
 `adaos hub root memory-artifact-pull <SESSION_ID> <ARTIFACT_ID>` исполняет этот контракт: сначала пробует root, а если artifact не хранится inline на root, fallback'ится на current hub control API и забирает данные с transfer metadata (`json`, `utf-8` или `base64`) и chunk limits через `--max-bytes`.
+
+`adaos node role switch --role <hub|member>` проходит через local control API и делает реальное runtime-переключение роли (shutdown + rebootstrap). `adaos node role set --role <hub|member>` остаётся config-only командой и полезен, когда роль нужно только сохранить в конфиге без немедленного переключения запущенного узла.
 
 ## Операции с Yjs webspace
 

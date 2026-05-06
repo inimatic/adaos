@@ -77,6 +77,61 @@ def test_request_local_member_activation_reconnects_existing_member(monkeypatch)
     assert calls[0]["path"] == "/api/node/member-hub/reconnect"
 
 
+def test_role_switch_cli_posts_to_runtime_control(monkeypatch) -> None:
+    node_cli = importlib.import_module("adaos.apps.cli.commands.node")
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(node_cli, "load_config", lambda: SimpleNamespace(token="dev-token"))
+    monkeypatch.setattr(node_cli, "_resolve_node_control_base_url", lambda explicit=None: "http://127.0.0.1:8777")
+    monkeypatch.setattr(node_cli, "_resolved_local_control_token", lambda control, cfg: "dev-token")
+
+    def _fake_post_json(**kwargs):
+        calls.append(dict(kwargs))
+        return 200, {
+            "ok": True,
+            "node": {
+                "node_id": "node-1",
+                "subnet_id": "sn_hub01",
+                "role": "hub",
+            },
+            "diagnostics": {
+                "now_ready": True,
+                "node_state": "ready",
+                "route_mode": "local",
+                "connected_to_hub": False,
+            },
+        }
+
+    monkeypatch.setattr(node_cli, "_control_post_json", _fake_post_json)
+
+    result = CliRunner().invoke(node_cli.app, ["role", "switch", "--role", "hub", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["node"]["role"] == "hub"
+    assert calls[0]["path"] == "/api/node/role"
+    assert calls[0]["body"] == {"role": "hub", "subnet_id": None}
+
+
+def test_role_switch_cli_reports_unreachable_control_api(monkeypatch) -> None:
+    node_cli = importlib.import_module("adaos.apps.cli.commands.node")
+
+    monkeypatch.setattr(node_cli, "load_config", lambda: SimpleNamespace(token="dev-token"))
+    monkeypatch.setattr(node_cli, "_resolve_node_control_base_url", lambda explicit=None: "http://127.0.0.1:8777")
+    monkeypatch.setattr(node_cli, "_resolved_local_control_token", lambda control, cfg: "dev-token")
+    monkeypatch.setattr(
+        node_cli,
+        "_control_post_json",
+        lambda **kwargs: (None, {"error": "connection_error", "detail": "connection refused"}),
+    )
+
+    result = CliRunner().invoke(node_cli.app, ["role", "switch", "--role", "hub"])
+
+    assert result.exit_code == 2
+    assert "role switch failed: local control API connection failed" in result.output
+
+
 def test_node_join_reports_activation_and_persists_member_session(monkeypatch) -> None:
     node_cli = importlib.import_module("adaos.apps.cli.commands.node")
     cfg = SimpleNamespace(
