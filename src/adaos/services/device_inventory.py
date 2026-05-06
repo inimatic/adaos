@@ -257,9 +257,16 @@ class DeviceInventoryService:
         if device is None:
             return None
         diagnostics = _mapping(device.pop("diagnostics", {}))
+        try:
+            from adaos.services import device_reconciler as _device_reconciler
+
+            reconcile = _device_reconciler.reconcile_device(device_ref)
+        except Exception:
+            reconcile = None
         return {
             "device": device,
             "diagnostics": diagnostics,
+            "reconcile": reconcile,
         }
 
     def _list_browser_devices(self, *, now: float) -> list[dict[str, Any]]:

@@ -114,3 +114,21 @@ def test_browsers_skill_get_link_settings_uses_sdk_device_access(monkeypatch) ->
 
     assert result == expected
     assert seen == ["member:member-2"]
+
+
+def test_browsers_skill_adopt_link_uses_sdk_device_access(monkeypatch) -> None:
+    mod = _load_browsers_skill_module()
+    seen: list[tuple[str, str | None, str]] = []
+
+    monkeypatch.setattr(mod, "_refresh_snapshot_sync", lambda webspace_id=None: {"ok": True, "webspace_id": webspace_id})
+
+    def _fake_adopt(device_ref: str, display_name: str | None = None, preset: str = "permanent"):
+        seen.append((str(device_ref or "").strip(), display_name, str(preset or "").strip()))
+        return {"ok": True, "device_ref": device_ref}
+
+    monkeypatch.setattr(mod.sdk_device_access, "adopt_device", _fake_adopt)
+
+    result = mod.adopt_link(node_id="member-3", name="Workshop display", preset="7d", webspace_id="desktop")
+
+    assert result == {"ok": True, "device_ref": "member:member-3"}
+    assert seen == [("member:member-3", "Workshop display", "7d")]
