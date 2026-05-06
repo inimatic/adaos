@@ -172,3 +172,4 @@ async def test_io_out_chat_append_writes_node_scoped_history_without_crashing(mo
     await bus.wait_for_idle(timeout=1.0)
 
     assert doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["messages"][0]["text"] == "hello"
+    assert float(doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["last_refresh_ts"]) > 0
