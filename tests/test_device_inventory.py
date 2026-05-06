@@ -253,3 +253,25 @@ def test_sdk_devices_inspect_device_separates_diagnostics(monkeypatch) -> None:
         "runtime_sources": ["browser_session"],
         "aggregated_at": 1000.0,
     }
+    assert payload["reconcile"] == {
+        "device_ref": "browser:browser-9",
+        "kind": "browser",
+        "title": "browser-9",
+        "state": "steady",
+        "consistent": True,
+        "issue_total": 0,
+        "issues": [],
+        "actions": {
+            "adopt_device": {
+                "enabled": False,
+                "suggested_display_name": "",
+                "preset": "permanent",
+            },
+            "sync_runtime_name": {"enabled": False},
+            "detach_runtime": {"enabled": False},
+        },
+        "runtime": {
+            "connected_to_subnet": None,
+            "observation_source": "browser_session",
+        },
+    }

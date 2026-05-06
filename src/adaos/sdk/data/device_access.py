@@ -11,6 +11,14 @@ def get_device_settings(device_ref: str) -> dict | None:
     return _service.get_device_settings(str(device_ref or ""))
 
 
+def adopt_device(device_ref: str, display_name: str | None = None, preset: str = "permanent") -> dict:
+    return _service.adopt_device(
+        str(device_ref or ""),
+        str(display_name or "") or None,
+        str(preset or "permanent"),
+    )
+
+
 def rename_device(device_ref: str, display_name: str) -> dict:
     return _service.rename_device(str(device_ref or ""), str(display_name or ""))
 

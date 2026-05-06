@@ -274,6 +274,23 @@ def rename_link(kind: LinkKind, entry_id: str, display_name: str) -> dict[str, A
     return saved
 
 
+def upsert_link(kind: LinkKind, entry_id: str, patch: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    token = str(entry_id or "").strip()
+    if not token:
+        raise ValueError("entry id is required")
+    registry = _load_registry()
+    entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
+    payload = dict(patch or {})
+    for key, value in payload.items():
+        if key in {"id", "kind"}:
+            continue
+        entry[key] = value
+    entry = _updated(entry)
+    saved = _put_entry(registry, kind, entry)
+    _save_registry(registry)
+    return saved
+
+
 def set_link_lifetime(kind: LinkKind, entry_id: str, preset: str) -> dict[str, Any]:
     token = str(entry_id or "").strip()
     if not token:
@@ -334,4 +351,3 @@ def lifetime_label(entry: Mapping[str, Any]) -> str:
         return "Permanent"
     expires_at = _iso_from_ts(entry.get("expires_at"))
     return f"Until {expires_at}" if expires_at else "Fixed"
-

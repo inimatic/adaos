@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 from adaos.services import access_links as _access_links
 from adaos.services import device_inventory as _device_inventory
+from adaos.services import device_reconciler as _device_reconciler
 
 _log = logging.getLogger("adaos.device_access")
 _LIFETIME_PRESETS = ["permanent", "1h", "1d", "7d", "30d"]
@@ -169,6 +170,9 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     name_meta = _mapping(profile.get("rename"))
     lifetime_meta = _mapping(profile.get("set_lifetime"))
     detach_meta = _mapping(profile.get("detach"))
+    reconcile = _device_reconciler.reconcile_device(_text(device_ref)) or {}
+    adopt_meta = _mapping(reconcile.get("actions")).get("adopt_device")
+    adopt_payload = _mapping(adopt_meta)
     effective_name = _text(policy.get("effective_name")) or _text(device.get("ref"))
     current_name = _text(policy.get("display_name")) or effective_name
     return {
@@ -217,6 +221,12 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
         "actions": {
             "open_apps": _mapping(profile.get("open_apps")),
             "open_marketplace": _mapping(profile.get("open_marketplace")),
+        },
+        "reconcile": reconcile,
+        "adopt": {
+            "enabled": bool(adopt_payload.get("enabled")),
+            "suggested_display_name": _text(adopt_payload.get("suggested_display_name")) or current_name,
+            "preset": _text(adopt_payload.get("preset")) or "permanent",
         },
         "identity": {
             "node_id": _text(identity.get("node_id")) or None,
@@ -307,7 +317,16 @@ def detach_device(device_ref: str) -> dict[str, Any]:
     }
 
 
+def adopt_device(device_ref: str, display_name: str | None = None, preset: str = "permanent") -> dict[str, Any]:
+    return _device_reconciler.adopt_device(
+        _text(device_ref),
+        display_name=_text(display_name) or None,
+        preset=_text(preset) or "permanent",
+    )
+
+
 __all__ = [
+    "adopt_device",
     "detach_device",
     "get_device_settings",
     "get_command_profile",

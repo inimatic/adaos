@@ -120,6 +120,12 @@ def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatc
     ]
     assert settings["detach"]["confirm_message"] == 'Detach device "Kitchen tablet"?'
     assert settings["actions"]["open_apps"] == {"enabled": True, "node_id": "member-1"}
+    assert settings["reconcile"]["issue_total"] == 0
+    assert settings["adopt"] == {
+        "enabled": False,
+        "suggested_display_name": "Kitchen tablet",
+        "preset": "permanent",
+    }
 
 
 def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -> None:
@@ -175,6 +181,28 @@ def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -
     ]
     assert settings["detach"]["enabled"] is False
     assert settings["detach"]["reason"] == "device_policy_missing"
+    assert settings["reconcile"]["state"] == "attention"
+    assert settings["reconcile"]["issues"][0]["id"] == "device_policy_missing"
+    assert settings["adopt"] == {
+        "enabled": True,
+        "suggested_display_name": "Node 2",
+        "preset": "permanent",
+    }
+
+
+def test_adopt_device_delegates_to_reconciler(monkeypatch) -> None:
+    captured: list[tuple[str, str | None, str]] = []
+
+    def _fake_adopt(device_ref: str, *, display_name: str | None = None, preset: str = "permanent"):
+        captured.append((device_ref, display_name, preset))
+        return {"ok": True, "device_ref": device_ref}
+
+    monkeypatch.setattr(device_access._device_reconciler, "adopt_device", _fake_adopt)
+
+    result = device_access.adopt_device("member:member-2", "Workshop display", "7d")
+
+    assert result == {"ok": True, "device_ref": "member:member-2"}
+    assert captured == [("member:member-2", "Workshop display", "7d")]
 
 
 def test_rename_device_updates_live_member_when_connected(monkeypatch) -> None:
