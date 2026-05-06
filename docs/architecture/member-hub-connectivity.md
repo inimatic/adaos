@@ -10,6 +10,7 @@ Read this together with:
 
 - [AdaOS Supervisor](adaos-supervisor.md)
 - [AdaOS Realtime Sidecar](adaos-realtime-sidecar.md)
+- [Semantic State Plane](semantic-state-plane.md)
 - [Transport Ownership](transport-ownership.md)
 - [Member node onboarding (phase 1)](../onboarding/member-node-phase1.md)
 
