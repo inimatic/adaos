@@ -3295,6 +3295,42 @@ def _node_label(node_names: Any, *, fallback: str) -> str:
     return fallback
 
 
+def _member_device_inventory_map() -> dict[str, dict[str, Any]]:
+    try:
+        from adaos.services.device_inventory import list_devices
+    except Exception:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    try:
+        items = list_devices(kind="member")
+    except Exception:
+        return {}
+    for item in list(items or []):
+        if not isinstance(item, dict):
+            continue
+        identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
+        node_id = str(identity.get("node_id") or "").strip()
+        if node_id:
+            result[node_id] = item
+    return result
+
+
+def _member_inventory_overlay(item: dict[str, Any] | None) -> dict[str, Any]:
+    payload = item if isinstance(item, dict) else {}
+    policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    return {
+        "device_ref": str(payload.get("ref") or "").strip() or None,
+        "policy_present": bool(policy.get("present")),
+        "managed_state": str(policy.get("managed_state") or "").strip() or None,
+        "display_name": str(policy.get("display_name") or "").strip() or None,
+        "effective_name": str(policy.get("effective_name") or "").strip() or None,
+        "access_class": str(policy.get("access_class") or "").strip() or None,
+        "lifetime_mode": str(policy.get("lifetime_mode") or "").strip() or None,
+        "connected_to_subnet": runtime.get("connected_to_subnet"),
+    }
+
+
 def _connection_local_node_display(*, role: str, node_id: str, node_names: list[str]) -> dict[str, Any]:
     conf = SimpleNamespace(
         role=str(role or "").strip().lower(),
@@ -3378,6 +3414,7 @@ def hub_member_connection_state_snapshot(
         version_counts: dict[str, int] = {}
         connected_ids: set[str] = set()
         directory_by_id: dict[str, dict[str, Any]] = {}
+        inventory_by_id = _member_device_inventory_map()
         for node in directory_nodes:
             if not isinstance(node, dict):
                 continue
@@ -3444,7 +3481,8 @@ def hub_member_connection_state_snapshot(
             rollout_counts[rollout_state] = int(rollout_counts.get(rollout_state) or 0) + 1
             if runtime_ref:
                 version_counts[runtime_ref] = int(version_counts.get(runtime_ref) or 0) + 1
-            label = str(directory_item.get("node_label") or "").strip() or _node_label(
+            inventory_overlay = _member_inventory_overlay(inventory_by_id.get(member_id))
+            label = str(inventory_overlay.get("effective_name") or "").strip() or str(directory_item.get("node_label") or "").strip() or _node_label(
                 member_names,
                 fallback=f"Node {index}",
             )
@@ -3476,6 +3514,7 @@ def hub_member_connection_state_snapshot(
                     "snapshot_runtime_version": str(build.get("runtime_version") or build.get("version") or ""),
                     "media_capability": media_capability,
                     "media_capable": bool(media_capability.get("member_browser_direct")),
+                    **inventory_overlay,
                 }
             )
             known_members.append(items[-1])
@@ -3546,6 +3585,8 @@ def hub_member_connection_state_snapshot(
                 )
             except Exception:
                 media_capability = {}
+            inventory_overlay = _member_inventory_overlay(inventory_by_id.get(known_id))
+            label = str(inventory_overlay.get("effective_name") or "").strip() or label
             known_members.append(
                 {
                     "node_id": known_id,
@@ -3579,6 +3620,7 @@ def hub_member_connection_state_snapshot(
                     "snapshot_runtime_version": str(build.get("runtime_version") or build.get("version") or ""),
                     "media_capability": media_capability,
                     "media_capable": bool(media_capability.get("member_browser_direct")),
+                    **inventory_overlay,
                 }
             )
         assessment_state = "idle"
@@ -3679,6 +3721,7 @@ def hub_member_connection_state_snapshot(
             "reason": assessment_reason,
         },
         "route_mode": route_mode,
+        "connected_to_subnet": connected_to_hub,
         "connected_to_hub": connected_to_hub,
         "state": state,
         "hub": raw,

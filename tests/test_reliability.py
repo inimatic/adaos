@@ -290,6 +290,25 @@ def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkl
         lambda: _FakeDirectory(),
     )
     monkeypatch.setattr(
+        "adaos.services.device_inventory.list_devices",
+        lambda kind=None: [
+            {
+                "ref": "member:member-2",
+                "kind": "member",
+                "identity": {"node_id": "member-2"},
+                "policy": {
+                    "present": True,
+                    "managed_state": "managed",
+                    "display_name": "Kitchen tablet",
+                    "effective_name": "Kitchen tablet",
+                    "access_class": "device",
+                    "lifetime_mode": "permanent",
+                },
+                "runtime": {"connected_to_subnet": True},
+            }
+        ],
+    )
+    monkeypatch.setattr(
         "adaos.services.reliability.time.time",
         lambda: 1_700_000_060.0,
     )
@@ -305,7 +324,13 @@ def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkl
     assert snapshot["assessment"]["reason"] == "known_members_without_links"
     assert snapshot["known_total"] == 1
     member = snapshot["known_members"][0]
+    assert member["device_ref"] == "member:member-2"
+    assert member["managed_state"] == "managed"
+    assert member["display_name"] == "Kitchen tablet"
+    assert member["effective_name"] == "Kitchen tablet"
+    assert member["connected_to_subnet"] is True
     assert member["observed_via"] == "subnet_directory"
+    assert member["label"] == "Kitchen tablet"
     assert member["node_names"] == ["Kitchen East"]
     assert member["snapshot_ready"] is True
     assert member["snapshot_state"] == "fresh"
