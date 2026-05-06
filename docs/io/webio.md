@@ -449,6 +449,14 @@ For `voice.chat.*` the runtime should also preserve `target_node_id`
 end-to-end so a member-targeted browser session cannot leak requests into the
 hub or another member's chat flow.
 
+For browser observability, `voice.chat.user` command acknowledgement must be
+treated only as "the runtime accepted the command", not as "the chat history is
+already materialized in the browser". Member-owned chat flows add one more hop
+(`member local YDoc -> hub/shared desktop -> browser sync`), so the browser now
+falls back to `voice_chat_skill.get_snapshot` whenever node-scoped chat history
+is remote or the current Yjs runtime reports a recent semantic recovery
+failure (`first_sync_timeout`, failed resync, and similar states).
+
 Operational node-scoped snapshots such as `infrastate` and `subnet_env`
 should stay responsive on members. Member-side snapshot generation must not
 block on hub-only marketplace catalog enrichment such as remote registry URL
