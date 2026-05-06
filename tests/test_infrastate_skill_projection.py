@@ -822,6 +822,86 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
     ]
 
 
+def test_infrastate_skill_items_skip_remote_version_probe_by_default(monkeypatch, tmp_path: Path):
+    mod = _load_infrastate_module()
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "infrastate_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "skill.yaml").write_text("id: infrastate_skill\nversion: '0.19.0'\n", encoding="utf-8")
+
+    class _SkillRecord:
+        def __init__(self, name: str, active_version: str):
+            self.name = name
+            self.active_version = active_version
+
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            sql=object(),
+            git=object(),
+            paths=SimpleNamespace(workspace_dir=lambda: workspace),
+            bus=None,
+            caps=object(),
+            settings=object(),
+            skills_repo=object(),
+        ),
+    )
+    monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: SimpleNamespace(list=lambda: [_SkillRecord("infrastate_skill", "0.18.0")]))
+    monkeypatch.setattr(mod, "SkillManager", lambda **kwargs: SimpleNamespace(runtime_status=lambda name: {"active_slot": "A"}))
+    monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", False)
+    monkeypatch.setattr(
+        mod,
+        "_marketplace_catalog_entries",
+        lambda kind: (_ for _ in ()).throw(AssertionError("remote registry probe should be skipped when disabled")),
+    )
+
+    items = mod._skills_items()
+
+    assert items[0]["remote_version"] == ""
+    assert items[0]["update_available"] is False
+
+
+def test_infrastate_marketplace_catalog_skips_remote_url_fetch_on_member(monkeypatch, tmp_path: Path):
+    mod = _load_infrastate_module()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace)),
+    )
+    monkeypatch.setattr(mod, "load_config", lambda: SimpleNamespace(role="member"))
+    monkeypatch.setattr(mod, "list_workspace_registry_entries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        mod,
+        "rebuild_workspace_registry",
+        lambda workspace_root: {
+            "skills": [
+                {"kind": "skill", "id": "local_skill", "name": "local_skill", "version": "0.1.0"},
+            ]
+        },
+    )
+    called = {"url": 0, "git": 0}
+
+    def _fail_url():
+        called["url"] += 1
+        raise AssertionError("member snapshot path should not hit marketplace URL fetch")
+
+    def _fail_git(*args, **kwargs):
+        called["git"] += 1
+        raise AssertionError("member snapshot path should not hit git ref registry lookup")
+
+    monkeypatch.setattr(mod, "_registry_payload_from_url", _fail_url)
+    monkeypatch.setattr(mod.subprocess, "run", _fail_git)
+
+    items = mod._marketplace_catalog_entries("skills")
+
+    assert [item["name"] for item in items] == ["local_skill"]
+    assert called == {"url": 0, "git": 0}
+
+
 def test_infrastate_adaos_update_uses_union_sparse_sync_and_installed_skill_names(monkeypatch):
     mod = _load_infrastate_module()
     runtime_updates: list[str] = []

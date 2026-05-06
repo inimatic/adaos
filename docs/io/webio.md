@@ -449,6 +449,12 @@ For `voice.chat.*` the runtime should also preserve `target_node_id`
 end-to-end so a member-targeted browser session cannot leak requests into the
 hub or another member's chat flow.
 
+Operational node-scoped snapshots such as `infrastate` and `subnet_env`
+should stay responsive on members. Member-side snapshot generation must not
+block on hub-only marketplace catalog enrichment such as remote registry URL
+fetches or git-ref registry probes; those enrichments belong on the hub path,
+while member snapshots should prefer local state and local workspace scans.
+
 ## Frontend Experience
 
 * Toolbar displays the current webspace and offers CRUD buttons
