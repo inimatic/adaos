@@ -71,6 +71,12 @@ def _member_snapshot_rebuild_min_interval_s() -> float:
     return 5.0
 
 
+def _member_snapshot_rebuild_request_id(*, webspace_id: str, node_id: str) -> str:
+    webspace_token = str(webspace_id or "").strip() or default_webspace_id()
+    node_token = str(node_id or "").strip() or "member"
+    return f"member-snapshot-rebuild:{webspace_token}:{node_token}:{time.time_ns()}"
+
+
 def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
     stats = _MEMBER_SNAPSHOT_REBUILD_STATS.get(task_key)
     if stats is None:
@@ -86,6 +92,10 @@ def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
             "last_requested_at": 0.0,
             "last_scheduled_at": 0.0,
             "last_completed_at": 0.0,
+            "last_request_id": "",
+            "current_request_id": "",
+            "last_completed_request_id": "",
+            "last_delayed_request_id": "",
         }
         _MEMBER_SNAPSHOT_REBUILD_STATS[task_key] = stats
     return stats
@@ -116,6 +126,10 @@ def member_snapshot_rebuild_runtime_snapshot(*, limit: int = 25) -> Dict[str, An
                 "coalesced_interval_total": int(raw_stats.get("coalesced_interval_total") or 0),
                 "delayed_total": int(raw_stats.get("delayed_total") or 0),
                 "last_reason": str(raw_stats.get("last_reason") or "").strip() or None,
+                "last_request_id": str(raw_stats.get("last_request_id") or "").strip() or None,
+                "current_request_id": str(raw_stats.get("current_request_id") or "").strip() or None,
+                "last_completed_request_id": str(raw_stats.get("last_completed_request_id") or "").strip() or None,
+                "last_delayed_request_id": str(raw_stats.get("last_delayed_request_id") or "").strip() or None,
                 "last_requested_at": last_requested_at or None,
                 "last_requested_age_s": round(max(0.0, now_ts - last_requested_at), 3) if last_requested_at > 0.0 else None,
                 "last_completed_at": last_completed_at or None,
@@ -127,6 +141,13 @@ def member_snapshot_rebuild_runtime_snapshot(*, limit: int = 25) -> Dict[str, An
                 "dirty_mode": str(dirty.get("last_mode") or "").strip() or None,
                 "dirty_count": int(dirty.get("count") or 0),
                 "dirty_requested_at": dirty.get("last_requested_at"),
+                "dirty_request_id": str(dirty.get("last_request_id") or "").strip() or None,
+                "correlation_id": (
+                    str(raw_stats.get("current_request_id") or "").strip()
+                    or str(dirty.get("last_request_id") or "").strip()
+                    or str(raw_stats.get("last_request_id") or "").strip()
+                    or None
+                ),
             }
         )
     items.sort(
@@ -164,7 +185,7 @@ def _member_snapshot_rebuild_reason(evt: Any, payload: Any) -> str:
     return event_type
 
 
-def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str) -> None:
+def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str, request_id: str | None = None) -> None:
     dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key)
     if dirty is None:
         dirty = {
@@ -172,11 +193,13 @@ def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str
             "last_reason": "",
             "last_mode": "",
             "last_requested_at": 0.0,
+            "last_request_id": "",
         }
     dirty["count"] = int(dirty.get("count") or 0) + 1
     dirty["last_reason"] = str(reason or "").strip() or "subnet.member.snapshot.changed"
     dirty["last_mode"] = str(mode or "").strip() or "coalesced"
     dirty["last_requested_at"] = time.time()
+    dirty["last_request_id"] = str(request_id or "").strip() or str(dirty.get("last_request_id") or "").strip()
     _MEMBER_SNAPSHOT_REBUILD_DIRTY[task_key] = dirty
     stats = _member_snapshot_rebuild_stats(task_key)
     if mode == "task_running":
@@ -185,13 +208,27 @@ def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str
         stats["coalesced_interval_total"] = int(stats.get("coalesced_interval_total") or 0) + 1
     stats["last_reason"] = dirty["last_reason"]
     stats["last_requested_at"] = dirty["last_requested_at"]
+    stats["last_request_id"] = str(dirty.get("last_request_id") or "").strip()
 
 
-def _schedule_member_snapshot_rebuild_delayed(*, webspace_id: str, node_id: str, delay_s: float, reason: str) -> None:
+def _schedule_member_snapshot_rebuild_delayed(
+    *,
+    webspace_id: str,
+    node_id: str,
+    delay_s: float,
+    reason: str,
+    request_id: str | None = None,
+) -> None:
     task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
     existing = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
     if existing is not None and not existing.done():
         return
+    delayed_request_id = str(request_id or "").strip() or _member_snapshot_rebuild_request_id(
+        webspace_id=webspace_id,
+        node_id=node_id,
+    )
+    stats = _member_snapshot_rebuild_stats(task_key)
+    stats["last_delayed_request_id"] = delayed_request_id
 
     async def _runner() -> None:
         try:
@@ -209,6 +246,7 @@ def _schedule_member_snapshot_rebuild_delayed(*, webspace_id: str, node_id: str,
                 webspace_id=webspace_id,
                 node_id=node_id,
                 reason=f"{delayed_reason}:delayed",
+                request_id=str((_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}).get("last_request_id") or delayed_request_id),
             )
         finally:
             current_delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
@@ -4351,28 +4389,37 @@ async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
     for webspace_id in targets:
         key = f"{node_id}\0{webspace_id}"
         stats = _member_snapshot_rebuild_stats(key)
+        request_id = _member_snapshot_rebuild_request_id(webspace_id=webspace_id, node_id=node_id)
         stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
         stats["last_reason"] = reason
         stats["last_requested_at"] = time.time()
+        stats["last_request_id"] = request_id
         existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(key)
         if existing is not None and not existing.done():
-            _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running")
+            _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running", request_id=request_id)
             continue
         last_at = float(_MEMBER_SNAPSHOT_REBUILD_AT.get(key) or 0.0)
         if interval_s > 0 and last_at > 0 and now - last_at < interval_s:
-            _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="interval_window")
+            _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="interval_window", request_id=request_id)
             _schedule_member_snapshot_rebuild_delayed(
                 webspace_id=webspace_id,
                 node_id=node_id,
                 delay_s=max(0.0, interval_s - (now - last_at)),
                 reason=reason,
+                request_id=request_id,
             )
             continue
         _MEMBER_SNAPSHOT_REBUILD_AT[key] = now
-        _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id, reason=reason)
+        _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id, reason=reason, request_id=request_id)
 
 
-def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str, reason: str = "subnet.member.snapshot.changed") -> None:
+def _schedule_member_snapshot_rebuild(
+    *,
+    webspace_id: str,
+    node_id: str,
+    reason: str = "subnet.member.snapshot.changed",
+    request_id: str | None = None,
+) -> None:
     task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
     try:
         current_task = asyncio.current_task()
@@ -4383,12 +4430,18 @@ def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str, reason:
         delayed.cancel()
     existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
     if existing and not existing.done():
-        _mark_member_snapshot_rebuild_dirty(task_key=task_key, reason=reason, mode="task_running")
+        _mark_member_snapshot_rebuild_dirty(task_key=task_key, reason=reason, mode="task_running", request_id=request_id)
         return
     stats = _member_snapshot_rebuild_stats(task_key)
+    effective_request_id = str(request_id or "").strip() or _member_snapshot_rebuild_request_id(
+        webspace_id=webspace_id,
+        node_id=node_id,
+    )
     stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
     stats["last_reason"] = str(reason or "").strip() or str(stats.get("last_reason") or "") or "subnet.member.snapshot.changed"
     stats["last_scheduled_at"] = time.time()
+    stats["last_request_id"] = effective_request_id
+    stats["current_request_id"] = effective_request_id
 
     async def _runner() -> None:
         try:
@@ -4402,9 +4455,10 @@ def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str, reason:
                     exc_info=True,
                 )
             _log.info(
-                "starting member snapshot rebuild webspace=%s node_id=%s reason=%s requested_total=%s scheduled_total=%s",
+                "starting member snapshot rebuild webspace=%s node_id=%s request_id=%s reason=%s requested_total=%s scheduled_total=%s",
                 webspace_id,
                 node_id,
+                effective_request_id,
                 str(stats.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed",
                 int(stats.get("requested_total") or 0),
                 int(stats.get("scheduled_total") or 0),
@@ -4413,14 +4467,17 @@ def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str, reason:
                 webspace_id,
                 action="subnet_member_snapshot_sync",
                 source_of_truth="member_runtime_snapshot",
+                request_id=effective_request_id,
             )
             stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
             stats["last_completed_at"] = time.time()
+            stats["last_completed_request_id"] = effective_request_id
             dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}
             _log.info(
-                "completed member snapshot rebuild webspace=%s node_id=%s accepted=%s error=%s requested_total=%s scheduled_total=%s rerun_total=%s coalesced_running_total=%s coalesced_interval_total=%s delayed_total=%s dirty_pending=%s",
+                "completed member snapshot rebuild webspace=%s node_id=%s request_id=%s accepted=%s error=%s requested_total=%s scheduled_total=%s rerun_total=%s coalesced_running_total=%s coalesced_interval_total=%s delayed_total=%s dirty_pending=%s",
                 webspace_id,
                 node_id,
+                effective_request_id,
                 bool(result.get("accepted")),
                 str(result.get("error") or "").strip() or None,
                 int(stats.get("requested_total") or 0),
@@ -4444,6 +4501,8 @@ def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str, reason:
             current = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
             if current is task:
                 _MEMBER_SNAPSHOT_REBUILD_TASKS.pop(task_key, None)
+            if str(stats.get("current_request_id") or "").strip() == effective_request_id:
+                stats["current_request_id"] = ""
             dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.pop(task_key, None)
             if dirty:
                 stats["rerun_total"] = int(stats.get("rerun_total") or 0) + 1
@@ -4453,6 +4512,7 @@ def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str, reason:
                     webspace_id=webspace_id,
                     node_id=node_id,
                     reason=f"{rerun_reason}:coalesced",
+                    request_id=str(dirty.get("last_request_id") or "").strip() or None,
                 )
 
     task = asyncio.create_task(

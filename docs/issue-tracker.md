@@ -112,9 +112,11 @@ Actions:
 
 #### HMG-002: Bound webspace rebuild amplification
 
-Status: in progress. Wave 1 landed in core: overlapping rebuild triggers for
-the same `(node, webspace)` key now coalesce into one active rebuild plus at
-most one dirty rerun, with preserved trigger reasons and counters.
+Status: in progress. Wave 1 and Wave 7 landed in core: overlapping rebuild
+triggers for the same `(node, webspace)` key now coalesce into one active
+rebuild plus at most one dirty rerun, with preserved trigger reasons,
+counters, and operator-visible rebuild request IDs carried through dirty /
+delayed / rerun states.
 
 Evidence:
 
@@ -140,10 +142,11 @@ Actions:
 
 #### HMG-003: Add route and Yjs guardrails that preserve root-cause visibility
 
-Status: in progress. Wave 2 landed in core: route starvation now exposes a
-guardrail state with activation reasons, Yjs rooms publish reusable pressure
-state, and `load_mark` downshifts under active Yjs pressure without hiding the
-incoming pressure.
+Status: in progress. Wave 2 and Wave 5 landed in core: route starvation now
+exposes a guardrail state with activation reasons, Yjs rooms publish reusable
+pressure state, and noncritical `load_mark` / `events.recent` fanout now
+downshifts under both Yjs pressure and route guardrail activation without
+hiding the incoming pressure.
 
 Evidence:
 
@@ -175,10 +178,10 @@ Actions:
 
 #### HMG-004: Make eventbus and async backlog visible and bounded
 
-Status: in progress. Wave 4 landed in core: eventbus now bounds selected
-hot-topic async fanout through per-topic worker queues, preserves incoming /
-queued / dropped visibility, and exposes richer backlog state for incident
-artifacts.
+Status: in progress. Wave 4 and Wave 5 landed in core: eventbus now bounds
+selected hot-topic async fanout through per-topic worker queues, preserves
+incoming / queued / dropped visibility, supersedes stale queued snapshot work,
+and exposes richer backlog state for incident artifacts.
 
 Evidence:
 
@@ -194,20 +197,21 @@ Actions:
 - [x] Bound selected hot-path async fanout with first-wave per-topic work
   queues instead of unlimited `create_task` growth; extend the same approach
   to more hot topics as incident evidence evolves.
-- [ ] Add per-topic and per-handler cancellation / supersede semantics for
+- [x] Add per-topic and per-handler cancellation / supersede semantics for
   stale snapshot work.
 - [x] Keep raw incoming-event counters visible even when bounded execution
   drops or coalesces work.
-- [ ] Add an operator-facing incident summary that names the top topics and
+- [x] Add an operator-facing incident summary that names the top topics and
   handlers contributing to backlog growth.
 
 #### HMG-005: Make memory incident capture reliable before the hub stalls
 
-Status: in progress. Wave 3 landed in supervisor: requested memory-profile
-sessions now expire instead of hanging indefinitely, apply failures persist
-structured context, and supervisor writes local incident artifacts with
-telemetry, operations, Yjs pressure, route diagnostics, rebuild pressure, and
-eventbus backlog snapshots.
+Status: in progress. Wave 3 and Wave 6 landed in supervisor: requested
+memory-profile sessions now expire instead of hanging indefinitely, apply
+failures persist structured context, supervisor writes local incident artifacts
+with telemetry, operations, Yjs pressure, route diagnostics, rebuild pressure,
+and eventbus backlog snapshots, and the artifact now includes a compact
+operator-facing incident summary/headline.
 
 Evidence:
 
@@ -266,9 +270,9 @@ Actions:
 
 #### HMG-007: Keep guardrails observability-first
 
-Status: in progress. Wave 1 and Wave 2 guardrails were implemented with
-preserved evidence at the same logical boundary so suppression does not hide
-the original incoming pressure.
+Status: in progress. Wave 1, Wave 2, Wave 5, Wave 6, and Wave 7 guardrails were
+implemented with preserved evidence at the same logical boundary so
+suppression does not hide the original incoming pressure.
 
 Principle:
 
@@ -285,10 +289,12 @@ Actions:
   `coalesced`, `scheduled`, and `rerun` at the same logical boundary; extend
   the same pattern with `suppressed`, `timed_out`, and `failed` as degraded
   mode expands.
-- [ ] Ensure telemetry and logs distinguish "incoming load reduced by
+- [x] Ensure telemetry and logs distinguish "incoming load reduced by
   guardrail" from "incoming load disappeared".
 - [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,
   rebuild, route, and Yjs stages.
+  First wave landed for member snapshot rebuild pressure and incident summary;
+  extend the same IDs into route and Yjs pressure payloads.
 - [ ] Reject any guardrail that improves memory only by hiding the overload
   source from incident review.
 
