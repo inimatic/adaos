@@ -132,6 +132,7 @@ def test_update_member_snapshot_publishes_only_material_changes(monkeypatch) -> 
 
     payload = changed_events[0].payload
     assert "snapshot" not in payload
+    assert payload["snapshot_connected_to_subnet"] is None
     assert payload["snapshot_capacity"] == {"io_total": 1, "skill_total": 1, "scenario_total": 1}
     assert payload["snapshot_build"]["runtime_git_short_commit"] == "abc1234"
     assert payload["snapshot_update"]["state"] == "succeeded"
@@ -182,6 +183,33 @@ def test_update_member_snapshot_ignores_nested_capacity_timestamps(monkeypatch) 
     assert first["changed"] is True
     assert second["changed"] is False
     assert len(changed_events) == 1
+
+
+def test_update_member_snapshot_event_payload_carries_connected_to_subnet_alias(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+
+    snapshot = {
+        "captured_at": 100.0,
+        "node_id": "member-1",
+        "subnet_id": "sn-1",
+        "role": "member",
+        "ready": True,
+        "node_state": "ready",
+        "route_mode": "p2p",
+        "connected_to_subnet": False,
+    }
+
+    asyncio.run(manager.update_member_snapshot("member-1", snapshot=snapshot))
+
+    changed_event = next(event for event in fake_bus.events if event.type == "subnet.member.snapshot.changed")
+    assert changed_event.payload["snapshot_connected_to_subnet"] is False
+    assert changed_event.payload["snapshot_connected_to_hub"] is None
 
 
 def test_broadcast_event_sends_node_targeted_payload_only_to_matching_member() -> None:

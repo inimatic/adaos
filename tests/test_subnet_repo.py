@@ -102,3 +102,30 @@ def test_touch_heartbeat_updates_base_url_when_runtime_port_changes(tmp_path: Pa
     node = repo.get_node("member-1")
     assert node is not None
     assert node["base_url"] == "http://127.0.0.1:8778"
+
+
+def test_runtime_projection_accepts_connected_to_subnet_alias_and_returns_legacy_field(tmp_path: Path) -> None:
+    sql = SQLite(_FakePaths(tmp_path))
+    repo = SubnetRepo(sql)
+
+    repo.upsert_runtime_projection(
+        "member-1",
+        {
+            "captured_at": 2.0,
+            "node_names": ["Kitchen member"],
+            "primary_node_name": "Kitchen member",
+            "ready": True,
+            "node_state": "ready",
+            "route_mode": "p2p",
+            "connected_to_subnet": False,
+            "snapshot": {
+                "captured_at": 2.0,
+                "connected_to_subnet": False,
+            },
+        },
+    )
+
+    projection = repo.runtime_projection_for_node("member-1")
+
+    assert projection["connected_to_subnet"] is False
+    assert projection["connected_to_hub"] is False

@@ -66,6 +66,7 @@ def _snapshot_event_payload(node_id: str, *, node_names: list[str], snapshot: di
         "snapshot_ready": bool(snapshot.get("ready")),
         "snapshot_node_state": str(snapshot.get("node_state") or "").strip(),
         "snapshot_route_mode": str(snapshot.get("route_mode") or "").strip(),
+        "snapshot_connected_to_subnet": snapshot.get("connected_to_subnet"),
         "snapshot_connected_to_hub": snapshot.get("connected_to_hub"),
         "snapshot_capacity": {
             "io_total": len(capacity.get("io") or []) if isinstance(capacity.get("io"), list) else 0,
