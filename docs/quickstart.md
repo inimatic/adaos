@@ -124,10 +124,12 @@ curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init
 # curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru
 # set a visible node name for desktop listings:
 # curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --node-name "Codespace Member" --zone ru
+# disable hub/member core updates from CI/CD signals for this node:
+# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --no-core-update --zone ru
 # bootstrap from a fork instead of the upstream core repo:
 # curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
-# in GitHub Codespaces:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --zone ru
+# in GitHub Codespaces, reuse the current checkout directly:
+# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
 # install into the current directory explicitly:
 # curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dest . --zone ru
 ```

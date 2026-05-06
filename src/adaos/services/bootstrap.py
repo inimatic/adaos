@@ -4339,6 +4339,7 @@ class BootstrapService:
                                 conf_local = getattr(self.ctx, "config", None)
                                 if (
                                     getattr(conf_local, "role", None) == "hub"
+                                    and bool(getattr(conf_local, "core_update_enabled", True))
                                     and not candidate_passive_mode
                                     and not _dev_api_serve_core_update_sync_disabled()
                                 ):

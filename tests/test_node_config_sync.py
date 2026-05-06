@@ -70,6 +70,26 @@ def test_save_config_syncs_agent_context() -> None:
     assert load_config().subnet_id == "sn_saved_sync"
 
 
+def test_node_config_setters_work_with_adaos_base_dir_without_agent_context(monkeypatch) -> None:
+    ctx = get_ctx()
+    base_dir = Path(ctx.paths.base_dir())
+    node_config_mod._NODE_CONFIG_CACHE.clear()
+
+    def _raise_missing_ctx():
+        raise RuntimeError("AgentContext is not initialized")
+
+    monkeypatch.setattr(node_config_mod, "get_ctx", _raise_missing_ctx)
+
+    node_config_mod.set_node_names(["Codespaces KPD"])
+    node_config_mod.set_core_update_enabled(False)
+
+    saved = yaml.safe_load((base_dir / "node.yaml").read_text(encoding="utf-8")) or {}
+    node = saved.get("node") or {}
+
+    assert node.get("node_names") == ["Codespaces KPD"]
+    assert node.get("core_update_enabled") is False
+
+
 def test_load_config_refreshes_agent_context() -> None:
     ctx = get_ctx()
     load_config()
