@@ -51,6 +51,15 @@ def coerce_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _connected_to_subnet_value(data: Mapping[str, Any] | None) -> bool | None:
+    payload = data if isinstance(data, Mapping) else {}
+    connected = payload.get("connected_to_subnet")
+    if isinstance(connected, bool):
+        return connected
+    legacy = payload.get("connected_to_hub")
+    return legacy if isinstance(legacy, bool) else None
+
+
 def canonical_object_from_node_status(payload: Any) -> CanonicalObject:
     data = coerce_mapping(payload)
     node_id = str(data.get("node_id") or "unknown").strip() or "unknown"
@@ -59,7 +68,7 @@ def canonical_object_from_node_status(payload: Any) -> CanonicalObject:
     primary_name = str(data.get("primary_node_name") or "").strip()
     node_names = [str(item or "").strip() for item in list(data.get("node_names") or []) if str(item or "").strip()]
     route_mode = str(data.get("route_mode") or "").strip() or None
-    connected_to_hub = data.get("connected_to_hub")
+    connected_to_subnet = _connected_to_subnet_value(data)
     ready = data.get("ready")
     draining = bool(data.get("draining"))
     node_state = str(data.get("node_state") or "").strip() or None
@@ -69,7 +78,7 @@ def canonical_object_from_node_status(payload: Any) -> CanonicalObject:
         status = CanonicalStatus.ONLINE
     elif draining:
         status = CanonicalStatus.WARNING
-    elif ready is False and connected_to_hub is False:
+    elif ready is False and connected_to_subnet is False:
         status = CanonicalStatus.OFFLINE
     elif ready is False and status == CanonicalStatus.UNKNOWN:
         status = CanonicalStatus.WARNING
@@ -80,7 +89,7 @@ def canonical_object_from_node_status(payload: Any) -> CanonicalObject:
         {
             "availability": status,
             "connectivity": normalize_connectivity_status(
-                connected_to_hub if connected_to_hub is not None else route_mode
+                connected_to_subnet if connected_to_subnet is not None else route_mode
             ),
             "route_mode": route_mode,
         }
@@ -89,6 +98,8 @@ def canonical_object_from_node_status(payload: Any) -> CanonicalObject:
         {
             "node_state": node_state,
             "draining": draining,
+            "connected_to_subnet": connected_to_subnet,
+            "connected_to_hub": connected_to_subnet,
         }
     )
     representations = compact_mapping(
@@ -459,6 +470,107 @@ def canonical_object_from_browser_session(payload: Any) -> CanonicalObject:
 
 def canonical_object_from_device_endpoint(payload: Any) -> CanonicalObject:
     data = coerce_mapping(payload)
+    identity = coerce_mapping(data.get("identity"))
+    policy = coerce_mapping(data.get("policy"))
+    observation = coerce_mapping(data.get("observation"))
+    runtime_state = coerce_mapping(data.get("runtime"))
+
+    if identity or policy or observation or runtime_state:
+        device_kind = str(data.get("kind") or data.get("device_kind") or "device").strip().lower() or "device"
+        link_id = str(
+            identity.get("browser_device_id")
+            if device_kind == "browser"
+            else data.get("ref") or identity.get("node_id") or identity.get("link_id") or data.get("device_id") or data.get("id") or "unknown"
+        ).strip() or "unknown"
+        if device_kind == "browser":
+            link_id = str(identity.get("browser_device_id") or identity.get("link_id") or data.get("device_id") or data.get("id") or "unknown").strip() or "unknown"
+        workspace_ids = [
+            str(item or "").strip()
+            for item in list(data.get("workspace_ids") or [])
+            if str(item or "").strip()
+        ]
+        last_webspace_id = str(observation.get("last_webspace_id") or "").strip()
+        if last_webspace_id and last_webspace_id not in workspace_ids:
+            workspace_ids.append(last_webspace_id)
+        session_ids = [
+            str(item or "").strip()
+            for item in list(data.get("session_ids") or [])
+            if str(item or "").strip()
+        ]
+        if not session_ids:
+            if device_kind == "browser":
+                browser_id = str(identity.get("browser_device_id") or identity.get("link_id") or "").strip()
+                if browser_id:
+                    session_ids.append(f"browser:{browser_id}")
+            elif device_kind == "member":
+                node_id = str(identity.get("node_id") or identity.get("link_id") or "").strip()
+                if node_id:
+                    session_ids.append(f"member:{node_id}")
+        online = observation.get("online")
+        last_seen = observation.get("last_seen_at")
+        display_name = str(policy.get("display_name") or "").strip() or None
+        effective_name = str(policy.get("effective_name") or "").strip() or link_id
+        managed_state = str(policy.get("managed_state") or "").strip() or None
+        connected_to_subnet = _connected_to_subnet_value(runtime_state)
+        connectivity = online if isinstance(online, bool) else connected_to_subnet
+        status = normalize_operational_status(connectivity)
+        if managed_state == "revoked":
+            status = CanonicalStatus.OFFLINE
+        elif managed_state == "expired" and status == CanonicalStatus.UNKNOWN:
+            status = CanonicalStatus.WARNING
+        elif connectivity is None:
+            status = CanonicalStatus.UNKNOWN if workspace_ids else CanonicalStatus.WARNING
+
+        return CanonicalObject(
+            id=canonical_ref(CanonicalKind.DEVICE, link_id) or f"device:{link_id}",
+            kind=CanonicalKind.DEVICE.value,
+            title=effective_name,
+            summary=f"{device_kind} device endpoint",
+            status=status,
+            health=compact_mapping(
+                {
+                    "connectivity": normalize_connectivity_status(connectivity),
+                    "route_mode": runtime_state.get("route_mode"),
+                }
+            ),
+            relations=compact_mapping(
+                {
+                    RelationKind.WORKSPACE.value: [canonical_ref(CanonicalKind.WORKSPACE, item) or f"workspace:{item}" for item in workspace_ids],
+                    RelationKind.CONNECTED_TO.value: session_ids,
+                }
+            ),
+            runtime=compact_mapping(
+                {
+                    "device_kind": device_kind,
+                    "binding_total": len(workspace_ids),
+                    "session_total": len(session_ids),
+                    "last_seen": last_seen,
+                    "managed_state": managed_state,
+                    "access_class": policy.get("access_class"),
+                    "lifetime_mode": policy.get("lifetime_mode"),
+                    "connection_state": observation.get("connection_state"),
+                    "observation_source": observation.get("source"),
+                    "route_mode": runtime_state.get("route_mode"),
+                    "connected_to_subnet": connected_to_subnet,
+                    "connected_to_hub": connected_to_subnet,
+                    "runtime_version": runtime_state.get("runtime_version"),
+                    "snapshot_state": runtime_state.get("snapshot_state"),
+                }
+            ),
+            actual_state=compact_mapping(
+                {
+                    "device_ref": data.get("ref"),
+                    "workspace_ids": workspace_ids,
+                    "session_ids": session_ids,
+                    "source": data.get("source"),
+                    "display_name": display_name,
+                    "hostname": identity.get("hostname"),
+                    "node_names": identity.get("node_names"),
+                    "base_url": identity.get("base_url"),
+                }
+            ),
+        )
+
     device_id = str(data.get("device_id") or data.get("id") or "unknown").strip() or "unknown"
     device_kind = str(data.get("device_kind") or "device").strip().lower() or "device"
     workspace_ids = [
@@ -550,6 +662,7 @@ def canonical_object_from_subnet_directory_node(payload: Any) -> CanonicalObject
         if str(item or "").strip()
     ]
     primary_node_name = str(runtime_projection.get("primary_node_name") or "").strip() or None
+    connected_to_subnet = _connected_to_subnet_value(runtime_projection)
 
     status = normalize_operational_status(node_state)
     if online is True and status in {CanonicalStatus.UNKNOWN, CanonicalStatus.OFFLINE}:
@@ -600,7 +713,8 @@ def canonical_object_from_subnet_directory_node(payload: Any) -> CanonicalObject
                 "primary_node_name": primary_node_name,
                 "ready": runtime_projection.get("ready"),
                 "route_mode": runtime_projection.get("route_mode"),
-                "connected_to_hub": runtime_projection.get("connected_to_hub"),
+                "connected_to_subnet": connected_to_subnet,
+                "connected_to_hub": connected_to_subnet,
                 "runtime_projection_captured_at": runtime_projection.get("captured_at"),
                 "runtime_projection_freshness": runtime_projection_freshness,
                 "build": runtime_projection.get("build") if isinstance(runtime_projection.get("build"), Mapping) else {},

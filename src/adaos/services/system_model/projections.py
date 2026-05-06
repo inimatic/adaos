@@ -170,6 +170,7 @@ def _subnet_planning_nodes(subject: CanonicalObject, objects: list[CanonicalObje
                     "runtime_git_short_commit": build.get("runtime_git_short_commit"),
                     "update_state": update_status.get("state"),
                     "update_phase": update_status.get("phase"),
+                    "connected_to_subnet": runtime.get("connected_to_subnet") if runtime.get("connected_to_subnet") is not None else runtime.get("connected_to_hub"),
                     "connected_to_hub": runtime.get("connected_to_hub"),
                 }
             )

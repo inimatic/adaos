@@ -67,6 +67,14 @@ def _is_expired(entry: Mapping[str, Any] | None, *, now: float) -> bool:
     return bool(expires_at is not None and expires_at <= now)
 
 
+def _connected_to_subnet(data: Mapping[str, Any] | None) -> bool | None:
+    payload = data if isinstance(data, Mapping) else {}
+    connected = _bool_or_none(payload.get("connected_to_subnet"))
+    if connected is not None:
+        return connected
+    return _bool_or_none(payload.get("connected_to_hub"))
+
+
 def make_device_ref(kind: DeviceKind, link_id: str) -> str:
     token = _text(link_id)
     if not token:
@@ -169,6 +177,11 @@ def _runtime_projection_like(
 ) -> dict[str, Any]:
     projection = _mapping(runtime_projection)
     if projection:
+        connected = _connected_to_subnet(projection)
+        if connected is not None:
+            projection["connected_to_subnet"] = connected
+            projection["connected_to_hub"] = connected
+    if projection:
         snapshot = _mapping(projection.get("snapshot"))
         if live_snapshot and (
             _float_or_none(live_snapshot.get("captured_at")) or 0.0
@@ -182,19 +195,23 @@ def _runtime_projection_like(
                 projection["node_state"] = live_snapshot.get("node_state")
             if live_snapshot.get("route_mode") is not None:
                 projection["route_mode"] = live_snapshot.get("route_mode")
-            if isinstance(live_snapshot.get("connected_to_hub"), bool):
-                projection["connected_to_hub"] = live_snapshot.get("connected_to_hub")
+            connected = _connected_to_subnet(live_snapshot)
+            if connected is not None:
+                projection["connected_to_subnet"] = connected
+                projection["connected_to_hub"] = connected
         return projection
     snapshot = _mapping(live_snapshot)
     if not snapshot:
         return {}
+    connected = _connected_to_subnet(snapshot)
     return {
         "snapshot": snapshot,
         "captured_at": _float_or_none(snapshot.get("captured_at")),
         "ready": _bool_or_none(snapshot.get("ready")),
         "node_state": _text_or_none(snapshot.get("node_state")),
         "route_mode": _text_or_none(snapshot.get("route_mode")),
-        "connected_to_hub": _bool_or_none(snapshot.get("connected_to_hub")),
+        "connected_to_subnet": connected,
+        "connected_to_hub": connected,
     }
 
 
@@ -366,7 +383,7 @@ class DeviceInventoryService:
             directory_online = bool(directory_entry.get("online")) if directory_entry else False
             policy_online = bool(policy_entry.get("online")) if policy_entry else False
             online = live_connected or directory_online or policy_online
-            runtime_connected = _bool_or_none(projection_like.get("connected_to_hub"))
+            runtime_connected = _connected_to_subnet(projection_like)
             if live_connected:
                 runtime_connected = True
             freshness = subnet_runtime_projection_freshness(

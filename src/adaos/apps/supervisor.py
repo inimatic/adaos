@@ -1679,6 +1679,12 @@ class SupervisorManager:
             member_snapshot_rebuild = dict(snapshot) if isinstance(snapshot, dict) else {}
         except Exception:
             member_snapshot_rebuild = {}
+        eventbus_backlog: dict[str, Any] = {}
+        try:
+            snapshot = self._ctx.bus.backlog_snapshot() if hasattr(self._ctx.bus, "backlog_snapshot") else {}
+            eventbus_backlog = dict(snapshot) if isinstance(snapshot, dict) else {}
+        except Exception:
+            eventbus_backlog = {}
         payload = {
             "captured_at": now,
             "reason": str(reason or "").strip() or "memory_profile_failure",
@@ -1691,6 +1697,7 @@ class SupervisorManager:
             "yjs_pressure": yjs_pressure,
             "route_diagnostics": route_diagnostics,
             "member_snapshot_rebuild": member_snapshot_rebuild,
+            "eventbus_backlog": eventbus_backlog,
         }
         artifact_dir = supervisor_memory_session_artifacts_dir(token)
         path = (artifact_dir / f"{artifact_id}.json").resolve()
@@ -2020,7 +2027,7 @@ class SupervisorManager:
                 else {}
             )
             hub_state = member_state.get("hub") if isinstance(member_state.get("hub"), dict) else {}
-            connected = bool(node.get("connected_to_hub")) or bool(hub_state.get("connected"))
+            connected = bool(node.get("connected_to_subnet")) or bool(node.get("connected_to_hub")) or bool(hub_state.get("connected"))
             if connected:
                 return True, "member_hub_connected"
         return False, None
