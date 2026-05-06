@@ -14,7 +14,7 @@ from adaos.services.node_runtime_state import save_node_runtime_state
 from adaos.apps.cli.active_control import resolve_control_token
 
 app = typer.Typer(help="Node operations (join/status/role).")
-role_app = typer.Typer(help="Manage local node role.")
+role_app = typer.Typer(help="Manage local node role and runtime role switches.")
 yjs_app = typer.Typer(help="Yjs sync diagnostics and control.")
 app.add_typer(role_app, name="role")
 app.add_typer(yjs_app, name="yjs")
@@ -3518,12 +3518,60 @@ def node_member_update(
     )
 
 
+@role_app.command("switch")
+def role_switch(
+    role: str = typer.Option(..., "--role", help="hub|member"),
+    subnet_id: str | None = typer.Option(None, "--subnet-id"),
+    control: str | None = typer.Option(None, "--control", help="Control API base URL (default: active server)"),
+    json_output: bool = typer.Option(False, "--json", help="JSON output"),
+):
+    """
+    Switch the running node role via the local control API.
+    """
+    cfg = load_config()
+    control0 = _resolve_node_control_base_url(explicit=control)
+    status_code, payload = _control_post_json(
+        control=control0,
+        path="/api/node/role",
+        token=_resolved_local_control_token(control0, cfg),
+        body={"role": role, "subnet_id": subnet_id},
+        timeout=20.0,
+    )
+    if status_code is None:
+        typer.secho(_control_error_message("role switch", payload), fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+    if status_code != 200 or not isinstance(payload, dict):
+        typer.secho(f"[AdaOS] role switch failed: HTTP {status_code}", fg=typer.colors.RED)
+        if payload:
+            typer.echo(payload)
+        raise typer.Exit(code=1)
+    if json_output:
+        _print(payload, json_output=True)
+        return
+
+    node = payload.get("node") if isinstance(payload.get("node"), dict) else {}
+    diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
+    typer.echo(
+        f"role switch: ok={payload.get('ok')} "
+        f"node_id={node.get('node_id') or '-'} "
+        f"role={node.get('role') or role} "
+        f"subnet_id={node.get('subnet_id') or subnet_id or '-'} "
+        f"ready={diagnostics.get('now_ready')} "
+        f"state={diagnostics.get('node_state') or '-'} "
+        f"route_mode={diagnostics.get('route_mode') or '-'} "
+        f"connected_to_hub={diagnostics.get('connected_to_hub')}"
+    )
+
+
 @role_app.command("set")
 def role_set(
     role: str = typer.Option(..., "--role", help="hub|member"),
     subnet_id: str | None = typer.Option(None, "--subnet-id"),
     json_output: bool = typer.Option(False, "--json", help="JSON output"),
 ):
+    """
+    Persist the role in local config only.
+    """
     cfg = cfg_set_role(role, hub_url=None, subnet_id=subnet_id)
     out = {"ok": True, "node_id": cfg.node_id, "subnet_id": cfg.subnet_id, "role": cfg.role, "ready": None}
     _print(out, json_output=json_output)
