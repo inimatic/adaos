@@ -5478,9 +5478,14 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
     selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
     try:
         from adaos.services.yjs.load_mark import yjs_primary_doc_policy_snapshot
+        from adaos.services.scenario.projection_service import primary_doc_governance_snapshot
 
         payload = yjs_primary_doc_policy_snapshot(webspace_id=selected_webspace_id)
         if isinstance(payload, dict):
+            governance = primary_doc_governance_snapshot(
+                webspace_id=str(payload.get("webspace_id") or selected_webspace_id or "").strip() or None,
+                owner=str(payload.get("owner") or "").strip() or None,
+            )
             return {
                 "webspace_id": str(payload.get("webspace_id") or selected_webspace_id or "").strip() or None,
                 "owner": str(payload.get("owner") or "").strip() or None,
@@ -5493,6 +5498,12 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
                 "reason": str(payload.get("reason") or "healthy").strip() or "healthy",
                 "blocked_roots": list(payload.get("blocked_roots") or []),
                 "observed_state": str(payload.get("observed_state") or "idle").strip() or "idle",
+                "blocked_total": int(governance.get("blocked_total") or 0),
+                "throttled_total": int(governance.get("throttled_total") or 0),
+                "last_policy_state": str(governance.get("last_policy_state") or "").strip() or None,
+                "last_reason": str(governance.get("last_reason") or "").strip() or None,
+                "last_path": str(governance.get("last_path") or "").strip() or None,
+                "last_at": float(governance.get("last_at") or 0.0) or None,
             }
     except Exception:
         pass
@@ -5509,6 +5520,12 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
         "reason": "healthy",
         "blocked_roots": [],
         "observed_state": "idle",
+        "blocked_total": 0,
+        "throttled_total": 0,
+        "last_policy_state": None,
+        "last_reason": None,
+        "last_path": None,
+        "last_at": None,
     }
 
 

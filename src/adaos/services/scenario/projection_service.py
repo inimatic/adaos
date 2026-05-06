@@ -26,6 +26,8 @@ _PRIMARY_DOC_PRESSURE_THROTTLE_SEC = max(
 )
 _PRIMARY_DOC_THROTTLE_LOCK = threading.Lock()
 _PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT: dict[str, float] = {}
+_PRIMARY_DOC_GOVERNANCE_LOCK = threading.Lock()
+_PRIMARY_DOC_GOVERNANCE_STATS: dict[str, dict[str, Any]] = {}
 
 
 def _projection_write_owner() -> str:
@@ -70,9 +72,51 @@ def _yjs_primary_doc_policy_state(*, webspace_id: str, owner: str, root_name: st
     return {"policy_state": "ok"}
 
 
+def _record_primary_doc_governance_event(*, webspace_id: str, owner: str, path: str, policy: dict[str, Any]) -> None:
+    token_ws = str(webspace_id or "").strip() or "default"
+    token_owner = str(owner or "").strip() or "unknown"
+    key = f"{token_ws}\0{token_owner}"
+    policy_state = str(policy.get("policy_state") or "").strip().lower()
+    if policy_state not in {"block", "throttle"}:
+        return
+    with _PRIMARY_DOC_GOVERNANCE_LOCK:
+        current = dict(_PRIMARY_DOC_GOVERNANCE_STATS.get(key) or {})
+        if policy_state == "block":
+            current["blocked_total"] = int(current.get("blocked_total") or 0) + 1
+        if policy_state == "throttle":
+            current["throttled_total"] = int(current.get("throttled_total") or 0) + 1
+        current["webspace_id"] = token_ws
+        current["owner"] = token_owner
+        current["last_policy_state"] = policy_state
+        current["last_reason"] = str(policy.get("reason") or "").strip() or None
+        current["last_path"] = str(path or "").strip() or None
+        current["last_at"] = time.time()
+        current["last_blocked_roots"] = list(policy.get("blocked_roots") or [])
+        _PRIMARY_DOC_GOVERNANCE_STATS[key] = current
+
+
+def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: str | None = None) -> dict[str, Any]:
+    token_ws = str(webspace_id or "").strip() or "default"
+    token_owner = str(owner or "").strip()
+    with _PRIMARY_DOC_GOVERNANCE_LOCK:
+        current = dict(_PRIMARY_DOC_GOVERNANCE_STATS.get(f"{token_ws}\0{token_owner}") or {})
+    return {
+        "webspace_id": token_ws,
+        "owner": token_owner or None,
+        "blocked_total": int(current.get("blocked_total") or 0),
+        "throttled_total": int(current.get("throttled_total") or 0),
+        "last_policy_state": str(current.get("last_policy_state") or "").strip() or None,
+        "last_reason": str(current.get("last_reason") or "").strip() or None,
+        "last_path": str(current.get("last_path") or "").strip() or None,
+        "last_at": float(current.get("last_at") or 0.0) or None,
+        "last_blocked_roots": list(current.get("last_blocked_roots") or []),
+    }
+
+
 async def _govern_primary_doc_write(*, policy: dict[str, Any], webspace_id: str, path: str, owner: str) -> bool:
     policy_state = str(policy.get("policy_state") or "").strip().lower()
     if policy_state == "block":
+        _record_primary_doc_governance_event(webspace_id=webspace_id, owner=owner, path=path, policy=policy)
         _log.warning(
             "blocked YJS primary-doc write webspace=%s owner=%s path=%s reason=%s roots=%s",
             webspace_id,
@@ -84,6 +128,7 @@ async def _govern_primary_doc_write(*, policy: dict[str, Any], webspace_id: str,
         return False
     if policy_state != "throttle":
         return True
+    _record_primary_doc_governance_event(webspace_id=webspace_id, owner=owner, path=path, policy=policy)
     delay = float(_PRIMARY_DOC_PRESSURE_THROTTLE_SEC)
     if delay <= 0.0:
         return True
@@ -350,4 +395,4 @@ class ProjectionService:
             _log.debug("kv projection ignored for scope=%s slot=%s (no handler)", scope, slot)
 
 
-__all__ = ["ProjectionService"]
+__all__ = ["ProjectionService", "primary_doc_governance_snapshot"]

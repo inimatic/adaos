@@ -1237,6 +1237,10 @@ def test_infrastate_realtime_items_include_semantic_state_plane_cards():
                     "peak_bps": 167296.0,
                     "peak_wps": 2.0,
                     "reason": "write_amplification",
+                    "throttled_total": 4,
+                    "blocked_total": 1,
+                    "last_policy_state": "block",
+                    "last_reason": "write_amplification_blocked",
                 },
             }
         },
@@ -1250,6 +1254,9 @@ def test_infrastate_realtime_items_include_semantic_state_plane_cards():
     assert "upstream=hub_root:ready/waiting_restart" in str(by_id["semantic_connectivity"]["description"])
     assert "semantic=stale" in str(by_id["semantic_state_sync"]["description"])
     assert "policy=throttle" in str(by_id["semantic_yjs_pressure"]["description"])
+    assert "throttled=4" in str(by_id["semantic_yjs_pressure"]["description"])
+    assert "blocked=1" in str(by_id["semantic_yjs_pressure"]["description"])
+    assert "last=block:write_amplification_blocked" in str(by_id["semantic_yjs_pressure"]["subtitle"])
 
 
 def test_infrastate_project_async_skips_snapshot_with_only_timestamp_changes(monkeypatch):

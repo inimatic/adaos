@@ -1847,6 +1847,11 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                         "peak_bps": 65536.0,
                         "peak_wps": 2.0,
                         "reason": "write_amplification",
+                        "throttled_total": 3,
+                        "blocked_total": 1,
+                        "last_policy_state": "block",
+                        "last_reason": "write_amplification_blocked",
+                        "last_path": "data/infrastate",
                     },
                 },
             },
@@ -1863,6 +1868,8 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "connectivity.required_upstream_link: kind=hub_root transport=ready transition=ready" in result.output
     assert "state_sync: webspace=desktop transport=attached first_sync=complete semantic=degraded freshness=aging" in result.output
     assert "yjs_pressure: webspace=desktop owner=_by_owner/skill_infrastate_skill state=high policy=warn" in result.output
+    assert "throttled=3 blocked=1" in result.output
+    assert "yjs_pressure.last: policy=block reason=write_amplification_blocked path=data/infrastate" in result.output
 
 
 def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -> None:
