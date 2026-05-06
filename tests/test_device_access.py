@@ -66,6 +66,117 @@ def test_command_profile_for_observed_only_member_disables_policy_commands(monke
     assert profile["open_marketplace"] == {"enabled": True, "node_id": "member-2"}
 
 
+def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatch) -> None:
+    device = {
+        "ref": "member:member-1",
+        "kind": "member",
+        "identity": {
+            "node_id": "member-1",
+            "browser_device_id": None,
+            "hostname": "kitchen-tablet",
+        },
+        "policy": {
+            "present": True,
+            "managed_state": "managed",
+            "display_name": "Kitchen tablet",
+            "effective_name": "Kitchen tablet",
+            "lifetime_mode": "permanent",
+            "expires_at": None,
+            "revoked": False,
+        },
+        "observation": {
+            "online": True,
+            "connection_state": "connected",
+            "source": "member_link",
+        },
+        "runtime": {
+            "connected_to_subnet": True,
+        },
+    }
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("member", "member-1"),
+    )
+
+    settings = device_access.get_device_settings("member:member-1")
+
+    assert settings is not None
+    assert settings["title"] == "Kitchen tablet"
+    assert settings["name"] == {
+        "value": "Kitchen tablet",
+        "placeholder": "Living room TV",
+        "save": {"enabled": True},
+    }
+    assert settings["lifetime"]["current_label"] == "Permanent"
+    assert settings["lifetime"]["options"] == [
+        {"id": "permanent", "label": "Permanent", "enabled": True},
+        {"id": "1h", "label": "1h", "enabled": True},
+        {"id": "1d", "label": "1d", "enabled": True},
+        {"id": "7d", "label": "7d", "enabled": True},
+        {"id": "30d", "label": "30d", "enabled": True},
+    ]
+    assert settings["detach"]["confirm_message"] == 'Detach device "Kitchen tablet"?'
+    assert settings["actions"]["open_apps"] == {"enabled": True, "node_id": "member-1"}
+
+
+def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -> None:
+    device = {
+        "ref": "member:member-2",
+        "kind": "member",
+        "identity": {
+            "node_id": "member-2",
+            "browser_device_id": None,
+            "hostname": None,
+        },
+        "policy": {
+            "present": False,
+            "managed_state": "observed_only",
+            "display_name": None,
+            "effective_name": "Node 2",
+            "lifetime_mode": "permanent",
+            "expires_at": None,
+            "revoked": False,
+        },
+        "observation": {
+            "online": False,
+            "connection_state": None,
+            "source": "subnet_directory",
+        },
+        "runtime": {
+            "connected_to_subnet": False,
+        },
+    }
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("member", "member-2"),
+    )
+
+    settings = device_access.get_device_settings("member:member-2")
+
+    assert settings is not None
+    assert settings["name"]["save"] == {"enabled": False, "reason": "device_policy_missing"}
+    assert settings["lifetime"]["set"] == {
+        "enabled": False,
+        "reason": "device_policy_missing",
+        "presets": ["permanent", "1h", "1d", "7d", "30d"],
+    }
+    assert settings["lifetime"]["options"] == [
+        {"id": "permanent", "label": "Permanent", "enabled": False, "reason": "device_policy_missing"},
+        {"id": "1h", "label": "1h", "enabled": False, "reason": "device_policy_missing"},
+        {"id": "1d", "label": "1d", "enabled": False, "reason": "device_policy_missing"},
+        {"id": "7d", "label": "7d", "enabled": False, "reason": "device_policy_missing"},
+        {"id": "30d", "label": "30d", "enabled": False, "reason": "device_policy_missing"},
+    ]
+    assert settings["detach"]["enabled"] is False
+    assert settings["detach"]["reason"] == "device_policy_missing"
+
+
 def test_rename_device_updates_live_member_when_connected(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
     device = {
