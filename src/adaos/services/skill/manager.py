@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 import yaml
+from adaos.adapters.git.workspace import wait_for_materialized
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 
 from adaos.domain import SkillMeta, SkillRecord
@@ -40,6 +41,7 @@ import ast
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.skill.manager")
+_SKILL_MANIFEST_NAMES = ("skill.yaml", "manifest.yaml", "adaos.skill.yaml")
 
 
 def _env_type() -> str:
@@ -967,6 +969,7 @@ class SkillManager:
 
         sub = name.strip()
         subpath = f"skills/{sub}"
+        self._ensure_skill_subpath_materialized(root, sub)
         version = self._bump_skill_manifest_minor(root / "skills" / sub)
         upsert_workspace_registry_entry(root, "skills", root / "skills" / sub)
         if version and getattr(self, "reg", None) is not None:
@@ -1009,6 +1012,26 @@ class SkillManager:
         if sha != "nothing-to-commit":
             self.ctx.git.push(str(root))
         return sha
+
+    def _ensure_skill_subpath_materialized(self, root: Path, name: str) -> None:
+        skill_dir = root / "skills" / name
+        if any((skill_dir / item).exists() for item in _SKILL_MANIFEST_NAMES):
+            return
+        try:
+            self.ctx.git.sparse_add(str(root), f"skills/{name}")
+        except Exception:
+            return
+        try:
+            self.ctx.git.pull(str(root))
+        except Exception:
+            pass
+        try:
+            wait_for_materialized(skill_dir, files=_SKILL_MANIFEST_NAMES, attempts=5, delay=0.1)
+        except FileNotFoundError:
+            if not skill_dir.exists():
+                raise FileNotFoundError(
+                    f"skill '{name}' is not materialized in workspace sparse checkout"
+                ) from None
 
     def _bump_skill_manifest_minor(self, skill_dir: Path) -> str | None:
         skill_yaml = skill_dir / "skill.yaml"

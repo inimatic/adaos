@@ -115,6 +115,52 @@ def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Pa
     assert items[1]["version"] == "2.0.0"
 
 
+def test_upsert_workspace_registry_entry_falls_back_to_existing_metadata_when_manifest_missing(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "browsers_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "handlers").mkdir(parents=True)
+    (skill_dir / "handlers" / "main.py").write_text("def handle():\n    return {'ok': True}\n", encoding="utf-8")
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace_registry_path(workspace).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-03-06T00:00:00+00:00",
+                "skills": [
+                    {
+                        "kind": "skill",
+                        "id": "browsers_skill",
+                        "name": "browsers_skill",
+                        "version": "0.4.0",
+                        "updated_at": "2026-03-06T10:00:00+00:00",
+                        "path": "skills/browsers_skill",
+                        "manifest": "skills/browsers_skill/skill.yaml",
+                        "install": {
+                            "kind": "skill",
+                            "name": "browsers_skill",
+                            "id": "browsers_skill",
+                        },
+                        "entry": "handlers/main.py",
+                    }
+                ],
+                "scenarios": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    entry = upsert_workspace_registry_entry(workspace, "skills", skill_dir)
+
+    assert entry["name"] == "browsers_skill"
+    assert entry["id"] == "browsers_skill"
+    assert entry["entry"] == "handlers/main.py"
+    assert entry["path"] == "skills/browsers_skill"
+
+
 def test_registry_entry_includes_tags_and_publisher(tmp_path: Path):
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "infra_skill"

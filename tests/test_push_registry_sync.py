@@ -36,11 +36,19 @@ class _FakeGit:
     def __init__(self) -> None:
         self.commit_calls: list[dict[str, object]] = []
         self.push_calls: list[str] = []
+        self.pull_calls: list[str] = []
+        self.sparse_add_calls: list[tuple[str, str]] = []
 
     def changed_files(self, root: str, *, subpath: str):
         if subpath == "registry.json":
             return ["registry.json"]
         return [subpath]
+
+    def sparse_add(self, root: str, path: str) -> None:
+        self.sparse_add_calls.append((root, path))
+
+    def pull(self, root: str) -> None:
+        self.pull_calls.append(root)
 
     def commit_subpath(self, root: str, *, subpath, message: str, author_name: str, author_email: str, signoff: bool = False):
         self.commit_calls.append(
@@ -130,6 +138,63 @@ def test_skill_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Path)
     assert git.push_calls == [str(workspace)]
 
 
+def test_skill_push_uses_existing_registry_entry_when_manifest_is_missing(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    skill_dir = workspace / "skills" / "browsers_skill"
+    (skill_dir / "handlers").mkdir(parents=True)
+    (skill_dir / "handlers" / "main.py").write_text("def tool():\n    return {'ok': True}\n", encoding="utf-8")
+    (workspace / "registry.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-05-06T20:56:18+00:00",
+                "skills": [
+                    {
+                        "kind": "skill",
+                        "id": "browsers_skill",
+                        "name": "browsers_skill",
+                        "version": "0.4.0",
+                        "updated_at": "2026-05-06T20:56:18+00:00",
+                        "path": "skills/browsers_skill",
+                        "manifest": "skills/browsers_skill/skill.yaml",
+                        "install": {
+                            "kind": "skill",
+                            "name": "browsers_skill",
+                            "id": "browsers_skill",
+                        },
+                        "entry": "handlers/main.py",
+                    }
+                ],
+                "scenarios": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    git = _FakeGit()
+    monkeypatch.setattr("adaos.services.skill.manager.get_git_availability", lambda base_dir=None: SimpleNamespace(enabled=True), raising=False)
+
+    manager = object.__new__(SkillManager)
+    manager.caps = _FakeCaps()
+    manager.settings = SimpleNamespace(git_author_name="Ada Tester", git_author_email="tester@adaos.local")
+    manager.ctx = _workspace_ctx(workspace, git)
+
+    revision = manager.push("browsers_skill", "publish browsers skill")
+
+    registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
+    assert revision == "rev-1"
+    assert [item["id"] for item in registry["skills"]] == ["browsers_skill"]
+    assert registry["skills"][0]["entry"] == "handlers/main.py"
+    assert git.sparse_add_calls == [(str(workspace), "skills/browsers_skill")]
+    assert git.pull_calls == [str(workspace)]
+    assert git.commit_calls[0]["subpath"] == ["skills/browsers_skill", "registry.json"]
+    assert git.push_calls == [str(workspace)]
+
+
 def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / ".git").mkdir(parents=True)
@@ -162,6 +227,63 @@ def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Pa
     registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
     assert revision == "rev-1"
     assert [item["id"] for item in registry["scenarios"]] == ["welcome_scene"]
+    assert git.commit_calls[0]["subpath"] == ["scenarios/welcome_scene", "registry.json"]
+    assert git.push_calls == [str(workspace)]
+
+
+def test_scenario_push_uses_existing_registry_entry_when_manifest_is_missing(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    scenario_dir = workspace / "scenarios" / "welcome_scene"
+    (scenario_dir / "docs").mkdir(parents=True)
+    (scenario_dir / "docs" / "note.md").write_text("# hello\n", encoding="utf-8")
+    (workspace / "registry.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-05-06T20:56:18+00:00",
+                "skills": [],
+                "scenarios": [
+                    {
+                        "kind": "scenario",
+                        "id": "welcome_scene",
+                        "name": "welcome_scene",
+                        "version": "0.1.0",
+                        "updated_at": "2026-05-06T20:56:18+00:00",
+                        "path": "scenarios/welcome_scene",
+                        "manifest": "scenarios/welcome_scene/scenario.yaml",
+                        "install": {
+                            "kind": "scenario",
+                            "name": "welcome_scene",
+                            "id": "welcome_scene",
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    git = _FakeGit()
+    ctx = _workspace_ctx(workspace, git)
+    monkeypatch.setattr("adaos.services.scenario.manager.get_git_availability", lambda base_dir=None: SimpleNamespace(enabled=True), raising=False)
+    monkeypatch.setattr("adaos.services.scenario.manager.get_ctx", lambda: ctx)
+
+    manager = object.__new__(ScenarioManager)
+    manager.caps = _FakeCaps()
+    manager.git = git
+    manager.ctx = ctx
+
+    revision = manager.push("welcome_scene", "publish welcome scenario")
+
+    registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
+    assert revision == "rev-1"
+    assert [item["id"] for item in registry["scenarios"]] == ["welcome_scene"]
+    assert git.sparse_add_calls == [(str(workspace), "scenarios/welcome_scene")]
+    assert git.pull_calls == [str(workspace)]
     assert git.commit_calls[0]["subpath"] == ["scenarios/welcome_scene", "registry.json"]
     assert git.push_calls == [str(workspace)]
 
