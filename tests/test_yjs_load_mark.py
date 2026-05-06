@@ -223,3 +223,29 @@ def test_load_mark_primary_doc_policy_throttles_critical_owner_pressure() -> Non
     assert policy["observed_state"] == "critical"
     assert policy["policy_state"] == "throttle"
     assert policy["throttled_roots"] == ["data"]
+
+
+def test_load_mark_primary_doc_policy_blocks_extreme_owner_pressure() -> None:
+    _reset_load_mark_state()
+
+    load_mark_module.record_write_update(
+        "default",
+        total_bytes=320 * 1024,
+        root_names=["data"],
+        now_ts=72.0,
+        source="projection_service",
+        owner="skill:infrastate_skill",
+    )
+
+    policy = load_mark_module.yjs_primary_doc_policy_snapshot(
+        webspace_id="default",
+        owner="skill:infrastate_skill",
+        root_names=["data"],
+        now_ts=73.0,
+    )
+
+    assert policy["owner"] == "_by_owner/skill_infrastate_skill"
+    assert policy["observed_state"] == "critical"
+    assert policy["policy_state"] == "block"
+    assert policy["reason"] == "write_amplification_blocked"
+    assert policy["blocked_roots"] == ["data"]
