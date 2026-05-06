@@ -20,6 +20,15 @@ Instead, AdaOS should expose one coherent device access plane with:
 - observability
 - reusable SDK and skill surfaces
 
+## Current target decisions
+
+- [x] `DeviceInventoryService` is the canonical device-facing aggregation layer, not a replacement storage owner.
+- [x] `access_links` remains the authoritative source for durable access policy.
+- [x] `subnet_directory` remains the authoritative source for remembered member runtime snapshots and capacity.
+- [x] Live browser session and member-link layers remain the authoritative source for transient presence.
+- [x] Skills should access device inventory and device access commands through SDK surfaces, not direct `services.*` imports.
+- [x] The device-facing connectivity field should converge on `connected_to_subnet`, while low-level routing details remain separate.
+
 ## Problem statement
 
 The current runtime already has most of the raw ingredients:
@@ -196,18 +205,125 @@ The runtime should:
 
 ## 5. SDK surface
 
-The registry must be reusable by skills.
-The canonical access path is an SDK helper surface, for example:
+The registry and device inventory must be reusable by skills.
+The canonical access path is an SDK helper surface, not direct imports of runtime services from skills.
+
+The target SDK split is:
+
+- `sdk.data.access_links.*` for low-level access-link policy records
+- `sdk.data.devices.*` for aggregated device read models
+- `sdk.data.device_access.*` for device-facing commands and settings schemas
+
+Representative examples:
 
 - `sdk.data.access_links.list_browser_links()`
 - `sdk.data.access_links.list_member_links()`
-- `sdk.data.access_links.rename_*()`
-- `sdk.data.access_links.set_*_lifetime()`
-- `sdk.data.access_links.detach_*()`
+- `sdk.data.devices.list_devices()`
+- `sdk.data.devices.get_device(device_ref)`
+- `sdk.data.devices.inspect_device(device_ref)`
+- `sdk.data.device_access.get_command_profile(device_ref)`
+- `sdk.data.device_access.rename_device(device_ref, display_name)`
+- `sdk.data.device_access.set_device_lifetime(device_ref, preset)`
+- `sdk.data.device_access.detach_device(device_ref)`
 
-This keeps the skill API stable while allowing the core storage or enforcement internals to evolve.
+This keeps the skill API stable while allowing the core storage, aggregation, and enforcement internals to evolve.
 
-## 6. Skill layer
+## 6. Device inventory read model
+
+The core runtime should expose one canonical device-facing read model through `DeviceInventoryService`.
+
+This read model is an aggregate over:
+
+- durable access policy from `access_links`
+- remembered member metadata and runtime snapshots from `subnet_directory`
+- transient browser and member presence from live runtime channels
+
+The base payload should stay focused on facts and computed device semantics, not UI action flags or debug provenance.
+
+Recommended shape:
+
+```text
+DeviceRecord
+  ref: "browser:<device_id>" | "member:<node_id>"
+  kind: "browser" | "member"
+  identity:
+    link_id
+    browser_device_id?
+    node_id?
+    hostname?
+    node_names[]
+    base_url?
+  policy:
+    present
+    managed_state: "managed" | "observed_only" | "revoked" | "expired"
+    display_name?
+    effective_name
+    access_class
+    lifetime_mode
+    expires_at?
+    revoked
+    revoked_at?
+  observation:
+    online
+    connection_state?
+    last_seen_at?
+    source: "browser_session" | "member_link" | "subnet_directory"
+    last_webspace_id?
+  runtime:
+    snapshot_ready?
+    snapshot_state?
+    route_mode?
+    connected_to_subnet?
+    runtime_version?
+```
+
+Important boundaries:
+
+- `managed_state` belongs in the canonical read model because it is a device-level semantic derived from policy plus observation.
+- `observation.source` belongs in the read model because it explains whether the device is live, link-backed, or only remembered.
+- command availability such as `can_rename` or `can_detach` should not live inside `DeviceRecord`; it belongs to a separate command-profile surface.
+- diagnostics such as `policy_source`, raw runtime sources, or aggregation timestamps should not be part of the default payload; they belong to an explicit inspect surface.
+
+For member devices, the device-facing connectivity bit should converge on `connected_to_subnet`.
+That field answers whether the device is currently attached strongly enough to the subnet control plane to be treated as reachable in device UX.
+It intentionally does not encode whether the underlying path is hub-relayed, direct peer-to-peer, or another future transport mode.
+Low-level routing detail should remain in separate fields such as `route_mode`.
+Existing `connected_to_hub` consumers can be preserved behind a compatibility alias during the migration, but the target vocabulary should move to `connected_to_subnet`.
+
+## 7. DeviceInventoryService boundaries
+
+`DeviceInventoryService` should be the canonical interface for device-facing consumers:
+
+- `web_desktop`
+- settings modals
+- inventory and admin skills
+- assistant and automation skills
+- system-model views that need device semantics instead of raw runtime topology
+
+Its responsibilities are:
+
+- define canonical `DeviceRef` identity
+- merge policy, runtime, and presence inputs into `DeviceRecord`
+- compute `effective_name`
+- compute `managed_state`
+- expose stable list and get queries for devices
+- orchestrate device-facing commands through core policy and runtime services
+
+Its responsibilities do not include:
+
+- owning policy persistence
+- owning member runtime snapshot persistence
+- owning app catalog or marketplace state
+- owning presentation-only state such as `Hide` or `Show`
+- becoming a second hidden registry of raw facts
+
+The supporting surfaces should stay separate:
+
+- `DeviceRecord` for default read access
+- `DeviceCommandProfile` for command availability, presets, and reasons
+- `DeviceDiagnostics` for explicit inspect and debug flows
+
+## 8. Skill layer
 
 The first skill surface for this model is `browsers_skill`.
 
@@ -228,7 +344,7 @@ That makes the architecture reusable for:
 - policy automation skills
 - admin or fleet-management surfaces
 
-## 7. `web_desktop` as a device-centric shell
+## 9. `web_desktop` as a device-centric shell
 
 The `desktop-icons` surface should be reframed from `Applications` to `Devices`.
 
@@ -251,7 +367,7 @@ It should expose:
 
 This keeps the panel compact while preserving the full control surface.
 
-## 8. Browsers UI model
+## 10. Browsers UI model
 
 The `Devices` panel should also expose a `Browsers` entry point.
 
@@ -268,7 +384,7 @@ Browser settings should mirror the same device access model:
 - permanent versus fixed lifetime
 - detach
 
-## 9. Marketplace and app management stay node-scoped
+## 11. Marketplace and app management stay node-scoped
 
 The device-centric shell does not remove node-scoped capability management.
 
@@ -281,7 +397,7 @@ Instead, it clarifies ownership:
 
 `Marketplace` therefore remains a node-scoped operational action, but it is launched from the device settings context instead of being mixed with every other section button.
 
-## 10. Offline semantics
+## 12. Offline semantics
 
 Offline state should not flap on brief transport loss.
 
@@ -299,7 +415,7 @@ This separates:
 - current connectivity
 - UI confidence window
 
-## 11. Relationship to other architecture slices
+## 13. Relationship to other architecture slices
 
 This design complements:
 
@@ -312,4 +428,3 @@ This design complements:
 
 The recommended implementation order is documented in
 [Device Access Roadmap](device-access-roadmap.md).
-

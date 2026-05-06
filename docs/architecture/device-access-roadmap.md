@@ -10,6 +10,15 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [x] Treat browser and member links with the same operator mental model.
 - [x] Keep `web_desktop` compact by moving section operations into settings modals.
 
+## Locked target decisions
+
+- [x] Treat `DeviceInventoryService` as a canonical aggregation layer, not as a replacement raw-data registry.
+- [x] Keep `access_links` as the authoritative source for durable access policy.
+- [x] Keep `subnet_directory` as the authoritative source for remembered member runtime snapshots and capacity.
+- [x] Keep live browser and member-link layers as the authoritative source for transient presence.
+- [x] Keep skill access to device inventory and device commands SDK-first rather than `services.*`-first.
+- [x] Converge the device-facing connectivity field on `connected_to_subnet`, while preserving low-level route detail separately.
+
 ## Core access model
 
 - [x] Rename the desktop surface from `Applications` to `Devices`.
@@ -19,6 +28,26 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [x] Support member links keyed by `node_id`.
 - [x] Store display name, lifetime mode, expiry, revocation, last seen, connectivity, and webspace affinity.
 - [x] Publish SDK helpers under `sdk.data.access_links`.
+
+## Device inventory model
+
+- [ ] Introduce `DeviceInventoryService` as the core aggregation layer over policy, remembered runtime state, and live presence.
+- [ ] Define one canonical `DeviceRecord` read model for both browser and member endpoints.
+- [ ] Standardize device references as `browser:<device_id>` and `member:<node_id>`.
+- [ ] Keep the default `DeviceRecord` focused on identity, policy, observation, and runtime state.
+- [ ] Keep command availability out of `DeviceRecord` and expose it through a separate command-profile surface.
+- [ ] Keep diagnostics and provenance out of `DeviceRecord` and expose them through an explicit inspect surface.
+- [ ] Rename the device-facing member connectivity field from `connected_to_hub` to `connected_to_subnet`.
+- [ ] Preserve a compatibility alias or adapter for existing `connected_to_hub` consumers during migration.
+- [ ] Preserve `route_mode` and related routing detail separately from device-facing connectivity.
+
+## SDK-first device surfaces
+
+- [ ] Publish aggregated device read APIs under `sdk.data.devices`.
+- [ ] Publish device command APIs under `sdk.data.device_access`.
+- [ ] Keep `sdk.data.access_links` as the low-level access-policy surface.
+- [ ] Migrate device skills to SDK entrypoints instead of direct `services.*` imports.
+- [ ] Expose a stable settings-schema or command-profile contract through the SDK for modal and assistant consumers.
 
 ## Enforcement and lifecycle
 
@@ -62,8 +91,17 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [x] Use the same access policy concepts for browsers and member nodes.
 - [x] Allow rename for member devices through runtime-controlled node naming flows.
 - [x] Allow detach for connected members through link manager unregistration.
+- [ ] Build a reconciler that materializes a consistent device aggregate from policy, remembered runtime state, and live presence.
+- [ ] Define how `observed_only` devices are promoted into managed policy records, if at all.
+- [ ] Define the merge rules for `display_name`, `node_names`, `hostname`, and effective device naming.
 - [ ] Define offline behavior for members detached while currently disconnected.
-- [ ] Add a reconciler that closes gaps between durable access policy and transient runtime link state.
+- [ ] Close policy/runtime drift for revoke, rename, expiry, and offline-detach flows.
+
+## System-model alignment
+
+- [ ] Move device-facing projections to `DeviceInventoryService` rather than rebuilding them ad hoc from `subnet_directory` and link state.
+- [ ] Keep topology and routing projections separate from device inventory semantics.
+- [ ] Migrate user-facing device status fields and labels onto the canonical `DeviceRecord` vocabulary.
 
 ## Voice and automation follow-up
 
@@ -80,7 +118,9 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [x] Phase 2: ingress enforcement.
 - [x] Phase 3: first browser observability slice.
 - [~] Phase 4: `web_desktop` device shell.
-- [ ] Phase 5: unified node-scoped settings contract.
-- [ ] Phase 6: browser and member convergence cleanup.
-- [ ] Phase 7: issuer-side autorotation.
-- [ ] Phase 8: voice and automation integration.
+- [ ] Phase 5: `DeviceInventoryService`, canonical `DeviceRecord`, and device reference normalization.
+- [ ] Phase 6: SDK-first `devices` and `device_access` surfaces plus skill migration off direct service imports.
+- [ ] Phase 7: unified settings contract and command-profile surface.
+- [ ] Phase 8: browser and member convergence cleanup, reconciler rollout, and `connected_to_subnet` migration.
+- [ ] Phase 9: issuer-side autorotation.
+- [ ] Phase 10: system-model, voice, and automation integration.
