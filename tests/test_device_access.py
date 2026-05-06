@@ -108,9 +108,19 @@ def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatc
     assert settings["name"] == {
         "value": "Kitchen tablet",
         "placeholder": "Living room TV",
-        "save": {"enabled": True},
+        "save": {
+            "enabled": True,
+            "target": "browsers_skill.rename_device",
+            "params": {"device_ref": "member:member-1"},
+        },
     }
     assert settings["lifetime"]["current_label"] == "Permanent"
+    assert settings["lifetime"]["set"] == {
+        "enabled": True,
+        "presets": ["permanent", "1h", "1d", "7d", "30d"],
+        "target": "browsers_skill.set_device_lifetime",
+        "params": {"device_ref": "member:member-1"},
+    }
     assert settings["lifetime"]["options"] == [
         {"id": "permanent", "label": "Permanent", "enabled": True},
         {"id": "1h", "label": "1h", "enabled": True},
@@ -119,12 +129,16 @@ def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatc
         {"id": "30d", "label": "30d", "enabled": True},
     ]
     assert settings["detach"]["confirm_message"] == 'Detach device "Kitchen tablet"?'
+    assert settings["detach"]["target"] == "browsers_skill.detach_device"
+    assert settings["detach"]["params"] == {"device_ref": "member:member-1"}
     assert settings["actions"]["open_apps"] == {"enabled": True, "node_id": "member-1"}
     assert settings["reconcile"]["issue_total"] == 0
     assert settings["adopt"] == {
         "enabled": False,
         "suggested_display_name": "Kitchen tablet",
         "preset": "permanent",
+        "target": "browsers_skill.adopt_device",
+        "params": {"device_ref": "member:member-1"},
     }
 
 
@@ -166,11 +180,18 @@ def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -
     settings = device_access.get_device_settings("member:member-2")
 
     assert settings is not None
-    assert settings["name"]["save"] == {"enabled": False, "reason": "device_policy_missing"}
+    assert settings["name"]["save"] == {
+        "enabled": False,
+        "reason": "device_policy_missing",
+        "target": "browsers_skill.rename_device",
+        "params": {"device_ref": "member:member-2"},
+    }
     assert settings["lifetime"]["set"] == {
         "enabled": False,
         "reason": "device_policy_missing",
         "presets": ["permanent", "1h", "1d", "7d", "30d"],
+        "target": "browsers_skill.set_device_lifetime",
+        "params": {"device_ref": "member:member-2"},
     }
     assert settings["lifetime"]["options"] == [
         {"id": "permanent", "label": "Permanent", "enabled": False, "reason": "device_policy_missing"},
@@ -181,12 +202,16 @@ def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -
     ]
     assert settings["detach"]["enabled"] is False
     assert settings["detach"]["reason"] == "device_policy_missing"
+    assert settings["detach"]["target"] == "browsers_skill.detach_device"
+    assert settings["detach"]["params"] == {"device_ref": "member:member-2"}
     assert settings["reconcile"]["state"] == "attention"
     assert settings["reconcile"]["issues"][0]["id"] == "device_policy_missing"
     assert settings["adopt"] == {
         "enabled": True,
         "suggested_display_name": "Node 2",
         "preset": "permanent",
+        "target": "browsers_skill.adopt_device",
+        "params": {"device_ref": "member:member-2"},
     }
 
 

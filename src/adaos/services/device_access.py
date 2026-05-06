@@ -33,6 +33,8 @@ def _toggle(
     reason: str | None = None,
     presets: list[str] | None = None,
     node_id: str | None = None,
+    target: str | None = None,
+    params: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"enabled": bool(enabled)}
     if reason:
@@ -41,6 +43,16 @@ def _toggle(
         payload["presets"] = list(presets)
     if node_id:
         payload["node_id"] = node_id
+    if target:
+        payload["target"] = target
+    if isinstance(params, Mapping):
+        normalized_params = {
+            str(key): value
+            for key, value in dict(params).items()
+            if value is not None
+        }
+        if normalized_params:
+            payload["params"] = normalized_params
     return payload
 
 
@@ -173,10 +185,12 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     reconcile = _device_reconciler.reconcile_device(_text(device_ref)) or {}
     adopt_meta = _mapping(reconcile.get("actions")).get("adopt_device")
     adopt_payload = _mapping(adopt_meta)
+    device_ref_token = _text(device_ref)
+    command_params = {"device_ref": device_ref_token}
     effective_name = _text(policy.get("effective_name")) or _text(device.get("ref"))
     current_name = _text(policy.get("display_name")) or effective_name
     return {
-        "device_ref": _text(device_ref),
+        "device_ref": device_ref_token,
         "kind": _text(device.get("kind")),
         "title": effective_name,
         "device": device,
@@ -193,6 +207,8 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "save": _toggle(
                 bool(name_meta.get("enabled")),
                 reason=_text(name_meta.get("reason")) or None,
+                target="browsers_skill.rename_device",
+                params=command_params,
             ),
         },
         "lifetime": {
@@ -207,6 +223,8 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
                     for item in list(lifetime_meta.get("presets") or _LIFETIME_PRESETS)
                     if _text(item)
                 ] or list(_LIFETIME_PRESETS),
+                target="browsers_skill.set_device_lifetime",
+                params=command_params,
             ),
             "options": _lifetime_options(lifetime_meta),
         },
@@ -214,6 +232,8 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             **_toggle(
                 bool(detach_meta.get("enabled")),
                 reason=_text(detach_meta.get("reason")) or None,
+                target="browsers_skill.detach_device",
+                params=command_params,
             ),
             "confirm_title": "Detach device",
             "confirm_message": f'Detach device "{effective_name}"?',
@@ -227,6 +247,8 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "enabled": bool(adopt_payload.get("enabled")),
             "suggested_display_name": _text(adopt_payload.get("suggested_display_name")) or current_name,
             "preset": _text(adopt_payload.get("preset")) or "permanent",
+            "target": "browsers_skill.adopt_device",
+            "params": command_params,
         },
         "identity": {
             "node_id": _text(identity.get("node_id")) or None,

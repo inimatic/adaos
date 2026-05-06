@@ -2410,6 +2410,7 @@ def node_status(
         "hub_url": cfg.hub_url,
         "ready": None,
         "route_mode": None,
+        "connected_to_subnet": None,
         "connected_to_hub": None,
     }
     if probe:
@@ -2421,7 +2422,11 @@ def node_status(
         if status_code == 200 and isinstance(payload, dict):
             result["ready"] = bool(payload.get("ready"))
             result["route_mode"] = payload.get("route_mode")
-            result["connected_to_hub"] = payload.get("connected_to_hub")
+            connected = payload.get("connected_to_subnet")
+            if connected is None:
+                connected = payload.get("connected_to_hub")
+            result["connected_to_subnet"] = connected
+            result["connected_to_hub"] = payload.get("connected_to_hub", connected)
     _print(result, json_output=json_output)
 
 
@@ -3559,6 +3564,7 @@ def role_switch(
         f"ready={diagnostics.get('now_ready')} "
         f"state={diagnostics.get('node_state') or '-'} "
         f"route_mode={diagnostics.get('route_mode') or '-'} "
+        f"connected_to_subnet={diagnostics.get('connected_to_subnet', diagnostics.get('connected_to_hub'))} "
         f"connected_to_hub={diagnostics.get('connected_to_hub')}"
     )
 
