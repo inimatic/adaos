@@ -35,7 +35,9 @@ def _normalize_runtime_projection_payload(payload: Any) -> dict[str, Any]:
     except Exception:
         captured_at_value = None
     ready = snapshot.get("ready")
-    connected_to_hub = snapshot.get("connected_to_hub")
+    connected_to_subnet = snapshot.get("connected_to_subnet")
+    if not isinstance(connected_to_subnet, bool):
+        connected_to_subnet = snapshot.get("connected_to_hub")
     return {
         "captured_at": captured_at_value,
         "node_names": node_names,
@@ -43,9 +45,9 @@ def _normalize_runtime_projection_payload(payload: Any) -> dict[str, Any]:
         "ready": bool(ready) if isinstance(ready, bool) else None,
         "node_state": str(snapshot.get("node_state") or "").strip(),
         "route_mode": str(snapshot.get("route_mode") or "").strip(),
-        "connected_to_hub": (
-            bool(connected_to_hub)
-            if isinstance(connected_to_hub, bool)
+        "connected_to_subnet": (
+            bool(connected_to_subnet)
+            if isinstance(connected_to_subnet, bool)
             else None
         ),
         "build": dict(build),
@@ -398,7 +400,7 @@ class SubnetRepo:
         projection = _normalize_runtime_projection_payload(payload)
         now = _now()
         ready = projection.get("ready")
-        connected_to_hub = projection.get("connected_to_hub")
+        connected_to_subnet = projection.get("connected_to_subnet")
         with self.sql.connect() as con:
             con.execute(
                 """
@@ -444,9 +446,9 @@ class SubnetRepo:
                     projection.get("route_mode") or None,
                     (
                         1
-                        if connected_to_hub is True
+                        if connected_to_subnet is True
                         else 0
-                        if connected_to_hub is False
+                        if connected_to_subnet is False
                         else None
                     ),
                     json.dumps(projection.get("build") or {}, ensure_ascii=False),
@@ -514,6 +516,7 @@ class SubnetRepo:
             "ready": (bool(row[3]) if row[3] is not None else None),
             "node_state": row[4] or "",
             "route_mode": row[5] or "",
+            "connected_to_subnet": (bool(row[6]) if row[6] is not None else None),
             "connected_to_hub": (bool(row[6]) if row[6] is not None else None),
             "build": json.loads(row[7] or "{}"),
             "update_status": json.loads(row[8] or "{}"),

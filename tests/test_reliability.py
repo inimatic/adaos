@@ -1523,6 +1523,23 @@ def test_member_reliability_snapshot_uses_connected_to_hub_for_route_and_sync() 
     assert connected["runtime"]["readiness_tree"]["route"]["status"] == "ready"
     assert connected["runtime"]["readiness_tree"]["sync"]["status"] == "ready"
     assert connected["runtime"]["degraded_matrix"]["root_routed_browser_proxy"]["allowed"] is True
+    assert connected["node"]["connected_to_subnet"] is True
+    assert connected["node"]["connected_to_hub"] is True
+    assert connected["runtime"]["media_runtime"]["transport"]["connected_to_subnet"] is True
+    assert connected["runtime"]["media_runtime"]["transport"]["connected_to_hub"] is True
+
+
+def test_member_transport_evidence_exposes_connected_to_subnet_alias() -> None:
+    evidence = _hub_member_transport_evidence_snapshot(
+        role="member",
+        route_mode="p2p",
+        connected_to_hub=False,
+        hub_root_protocol={},
+    )
+
+    member_link = evidence["member_link_ws"]
+    assert member_link["connected_to_subnet"] is False
+    assert member_link["connected_to_hub"] is False
 
 
 def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) -> None:

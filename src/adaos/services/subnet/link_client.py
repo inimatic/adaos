@@ -196,6 +196,7 @@ class MemberLinkClient:
             "reason": str(lifecycle.get("reason") or ""),
             "draining": bool(lifecycle.get("draining")),
             "route_mode": "ws" if self.is_connected() else "none",
+            "connected_to_subnet": bool(self.is_connected()),
             "connected_to_hub": bool(self.is_connected()),
             "member_link_transition": transition,
             "capacity": get_local_capacity(),
