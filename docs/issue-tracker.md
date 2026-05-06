@@ -157,9 +157,10 @@ Actions:
 - [x] Add first-wave degraded / pressure thresholds for route pending age/data
   and Yjs buffer, pending task, and update-size pressure; extend with explicit
   publish-latency and persist-backlog thresholds where still missing.
-- [x] When a threshold is crossed, downshift the first noncritical stream path:
-  repeated `load_mark` fanout is now suppressed under active Yjs pressure;
-  extend the same policy to `events.recent` and equivalent cosmetic fanout.
+- [x] When a threshold is crossed, downshift the first noncritical stream
+  paths: repeated `load_mark` and `events.recent` fanout are now suppressed
+  under active Yjs pressure; extend the same policy to equivalent cosmetic
+  fanout.
 - [x] Preserve observability by logging both the original attempted work and
   the reduced emitted work through pressure-state transitions and suppression
   counters.
@@ -223,8 +224,9 @@ Actions:
   requiring a full runtime restart; extend with allocator-level artifacts where
   available.
 - [x] Tie memory incidents to the active operation and first-wave pressure
-  context through telemetry, operation history, and Yjs pressure; extend with
-  snapshot counters, rebuild queue depth, and route pending bytes.
+  context through telemetry, operation history, Yjs pressure, route
+  diagnostics, and member snapshot rebuild pressure; extend with finer-grained
+  snapshot/request counters where still missing.
 - [x] Publish enough local-only artifacts to debug the next incident even if
   root publication is unavailable.
 
@@ -250,8 +252,9 @@ Actions:
 - [x] Refactor `infrascope_skill` snapshot publishing to prefer cached or diff
   output when the source generation did not materially change.
 - [ ] Ensure skill snapshot handlers are idempotent and generation-aware.
-- [ ] Limit skill-triggered `webio.stream.*` fanout for noncritical diagnostics
-  under degraded route or memory pressure.
+- [x] Add first-wave suppression for noncritical skill-triggered
+  `webio.stream.*` fanout under active Yjs pressure; extend the same policy to
+  degraded route and additional cosmetic receivers.
 - [ ] Fix the `browsers_skill` `current_device_id` bug and ensure background
   snapshot tasks fail noisily but safely, without leaving orphan churn behind.
 - [ ] Review all skills subscribed to `subnet.member.snapshot.changed` and

@@ -91,6 +91,63 @@ def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
     return stats
 
 
+def member_snapshot_rebuild_runtime_snapshot(*, limit: int = 25) -> Dict[str, Any]:
+    items: list[Dict[str, Any]] = []
+    now_ts = time.time()
+    for task_key, raw_stats in list(_MEMBER_SNAPSHOT_REBUILD_STATS.items()):
+        if not isinstance(raw_stats, dict):
+            continue
+        node_id, _, webspace_id = str(task_key or "").partition("\0")
+        dirty = dict(_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {})
+        task = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
+        delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
+        last_requested_at = float(raw_stats.get("last_requested_at") or 0.0)
+        last_completed_at = float(raw_stats.get("last_completed_at") or 0.0)
+        items.append(
+            {
+                "task_key": task_key,
+                "node_id": node_id or "member",
+                "webspace_id": webspace_id or default_webspace_id(),
+                "requested_total": int(raw_stats.get("requested_total") or 0),
+                "scheduled_total": int(raw_stats.get("scheduled_total") or 0),
+                "rerun_total": int(raw_stats.get("rerun_total") or 0),
+                "completed_total": int(raw_stats.get("completed_total") or 0),
+                "coalesced_running_total": int(raw_stats.get("coalesced_running_total") or 0),
+                "coalesced_interval_total": int(raw_stats.get("coalesced_interval_total") or 0),
+                "delayed_total": int(raw_stats.get("delayed_total") or 0),
+                "last_reason": str(raw_stats.get("last_reason") or "").strip() or None,
+                "last_requested_at": last_requested_at or None,
+                "last_requested_age_s": round(max(0.0, now_ts - last_requested_at), 3) if last_requested_at > 0.0 else None,
+                "last_completed_at": last_completed_at or None,
+                "last_completed_age_s": round(max(0.0, now_ts - last_completed_at), 3) if last_completed_at > 0.0 else None,
+                "active": bool(task is not None and not task.done()),
+                "delayed_active": bool(delayed is not None and not delayed.done()),
+                "dirty_pending": bool(dirty),
+                "dirty_reason": str(dirty.get("last_reason") or "").strip() or None,
+                "dirty_mode": str(dirty.get("last_mode") or "").strip() or None,
+                "dirty_count": int(dirty.get("count") or 0),
+                "dirty_requested_at": dirty.get("last_requested_at"),
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            0 if bool(item.get("active")) else 1,
+            0 if bool(item.get("dirty_pending")) else 1,
+            -int(item.get("requested_total") or 0),
+            -float(item.get("last_requested_at") or 0.0),
+            str(item.get("webspace_id") or ""),
+        )
+    )
+    capped = items[: max(1, int(limit or 1))]
+    return {
+        "tracked_key_total": len(items),
+        "active_total": sum(1 for item in items if bool(item.get("active"))),
+        "delayed_total": sum(1 for item in items if bool(item.get("delayed_active"))),
+        "dirty_total": sum(1 for item in items if bool(item.get("dirty_pending"))),
+        "items": capped,
+    }
+
+
 def _member_snapshot_rebuild_reason(evt: Any, payload: Any) -> str:
     event_type = str(
         getattr(evt, "type", "")
