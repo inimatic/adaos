@@ -3,8 +3,11 @@
 Goal: add a *member* node to an AdaOS hub using a short one-time join-code (no long-lived tokens in CLI args), then start `python -m adaos api serve` via OS autostart/service when possible.
 
 For the target-state architecture beyond this phase-1 flow, including supervisor-owned
-member-hub lifecycle, restart-aware connectivity semantics, and QR-based onboarding,
-see [Member-Hub Connectivity](../architecture/member-hub-connectivity.md).
+member-hub lifecycle, restart-aware connectivity semantics, QR-based onboarding,
+and unified device access policy for members and browsers, see
+[Member-Hub Connectivity](../architecture/member-hub-connectivity.md),
+[Device Access and Browsers](../architecture/device-access-and-browsers.md), and
+[Device Access Roadmap](../architecture/device-access-roadmap.md).
 
 ## Prereqs
 
