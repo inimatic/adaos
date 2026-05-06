@@ -1622,7 +1622,92 @@ class SupervisorManager:
             window.append(item)
         return window[-max(1, int(limit or 1)) :]
 
-    def _fail_active_memory_session(self, *, reason: str, exit_code: int | None = None) -> None:
+    def _memory_profile_request_timeout_sec(self) -> float:
+        try:
+            timeout_sec = float(
+                os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_REQUEST_TIMEOUT_S", "90") or "90"
+            )
+        except Exception:
+            timeout_sec = 90.0
+        return max(5.0, float(timeout_sec))
+
+    def _capture_memory_profile_local_incident_artifact(
+        self,
+        session_id: str,
+        *,
+        reason: str,
+        stage: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        token = str(session_id or "").strip()
+        if not token:
+            return None
+        summary = read_memory_session_summary(token)
+        if not isinstance(summary, dict):
+            return None
+        stage_token = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(stage or "incident"))
+        stage_token = stage_token.strip("-_") or "incident"
+        artifact_id = f"local-incident-{stage_token}"
+        now = time.time()
+        operations_tail = read_memory_session_operations(token, limit=200)
+        telemetry_tail = self._memory_session_telemetry_window(summary, limit=200)
+        yjs_pressure: dict[str, Any] = {}
+        try:
+            from adaos.services.yjs.gateway_ws import yjs_pressure_snapshot
+
+            snapshot = yjs_pressure_snapshot()
+            yjs_pressure = dict(snapshot) if isinstance(snapshot, dict) else {}
+        except Exception:
+            yjs_pressure = {}
+        payload = {
+            "captured_at": now,
+            "reason": str(reason or "").strip() or "memory_profile_failure",
+            "stage": stage_token,
+            "details": dict(details or {}),
+            "session": summary,
+            "runtime": self._memory_runtime_state_payload(),
+            "telemetry_tail": [dict(item) for item in telemetry_tail[-50:] if isinstance(item, dict)],
+            "operations_tail": [dict(item) for item in operations_tail[-50:] if isinstance(item, dict)],
+            "yjs_pressure": yjs_pressure,
+        }
+        artifact_dir = supervisor_memory_session_artifacts_dir(token)
+        path = (artifact_dir / f"{artifact_id}.json").resolve()
+        content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        path.write_bytes(content)
+        artifact_ref = {
+            "artifact_id": artifact_id,
+            "kind": "local_incident_context",
+            "path": str(path),
+            "content_type": "application/json",
+            "size_bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "created_at": now,
+            "published_ref": None,
+        }
+        refs = summary.get("artifact_refs") if isinstance(summary.get("artifact_refs"), list) else []
+        summary["artifact_refs"] = [
+            dict(item)
+            for item in refs
+            if isinstance(item, dict) and str(item.get("artifact_id") or "").strip() != artifact_id
+        ] + [artifact_ref]
+        window = summary.get("operation_window") if isinstance(summary.get("operation_window"), dict) else {}
+        window = dict(window)
+        window["local_incident_artifact_id"] = artifact_id
+        window["local_incident_stage"] = stage_token
+        window["local_incident_reason"] = str(reason or "").strip() or "memory_profile_failure"
+        window["local_incident_captured_at"] = now
+        summary["operation_window"] = window
+        self._upsert_memory_session_summary(summary)
+        return artifact_ref
+
+    def _fail_active_memory_session(
+        self,
+        *,
+        reason: str,
+        exit_code: int | None = None,
+        stage: str = "profile_runtime",
+        details: dict[str, Any] | None = None,
+    ) -> None:
         session_id = str(self._memory_active_session_id or "").strip()
         if not session_id:
             return
@@ -1637,12 +1722,35 @@ class SupervisorManager:
         summary["stop_reason"] = reason
         summary["stopped_at"] = now
         summary["finished_at"] = summary.get("finished_at") or now
+        operation_window = summary.get("operation_window") if isinstance(summary.get("operation_window"), dict) else {}
+        operation_window = dict(operation_window)
+        operation_window["failure_reason"] = str(reason or "").strip() or "memory_profile_failure"
+        operation_window["failure_stage"] = str(stage or "profile_runtime").strip() or "profile_runtime"
+        operation_window["failure_at"] = now
+        if details:
+            operation_window["failure_details"] = dict(details)
         if exit_code is not None:
-            summary["operation_window"] = {
-                **(summary.get("operation_window") if isinstance(summary.get("operation_window"), dict) else {}),
-                "exit_code": int(exit_code),
-            }
+            operation_window["exit_code"] = int(exit_code)
+        summary["operation_window"] = operation_window
         updated = self._upsert_memory_session_summary(summary)
+        artifact_ref = None
+        try:
+            artifact_ref = self._capture_memory_profile_local_incident_artifact(
+                session_id,
+                reason=reason,
+                stage=stage,
+                details={
+                    **(dict(details or {})),
+                    "exit_code": int(exit_code) if exit_code is not None else None,
+                },
+            )
+        except Exception:
+            _LOG.warning(
+                "failed to capture local memory incident artifact session_id=%s stage=%s",
+                session_id,
+                stage,
+                exc_info=True,
+            )
         self._append_memory_operation(
             session_id=session_id,
             event="tool_invoked",
@@ -1650,13 +1758,18 @@ class SupervisorManager:
             details={
                 "action": "profile_failed",
                 "reason": reason,
+                "stage": str(stage or "profile_runtime").strip() or "profile_runtime",
                 "exit_code": int(exit_code) if exit_code is not None else None,
+                "artifact_id": str((artifact_ref or {}).get("artifact_id") or "").strip() or None,
                 "control_mode": IMPLEMENTED_PROFILE_CONTROL_MODE,
             },
         )
         self._memory_active_session_id = None
         self._memory_requested_profile_mode = None
+        if session_id == str(self._memory_publish_request_session_id or "").strip():
+            self._memory_publish_request_session_id = None
         self._memory_profile_mode = "normal"
+        self._persist_runtime_state()
 
     def _persist_memory_session_index_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         payload = {
@@ -2016,6 +2129,52 @@ class SupervisorManager:
             "elapsed_sec": elapsed_sec,
             "max_runtime_sec": max_runtime_sec,
             "reason": f"supervisor.memory.profile_window_complete.{profile_mode}",
+        }
+
+    def _expire_stuck_requested_memory_profile(self, *, now: float | None = None) -> dict[str, Any] | None:
+        session_id = str(self._memory_active_session_id or "").strip()
+        if not session_id:
+            return None
+        if str(self._memory_profile_mode or "").strip().lower() != "normal":
+            return None
+        desired_mode = self._desired_memory_profile_mode()
+        if desired_mode == "normal":
+            return None
+        summary = read_memory_session_summary(session_id)
+        if not isinstance(summary, dict):
+            return None
+        session_state = str(summary.get("session_state") or "").strip().lower()
+        if session_state != "requested":
+            return None
+        current_time = time.time() if now is None else float(now)
+        requested_at = float(summary.get("requested_at") or 0.0)
+        if requested_at <= 0.0:
+            return None
+        timeout_sec = self._memory_profile_request_timeout_sec()
+        elapsed_sec = max(0.0, current_time - requested_at)
+        if elapsed_sec < timeout_sec:
+            return None
+        details = {
+            "desired_profile_mode": desired_mode,
+            "current_profile_mode": str(self._memory_profile_mode or "").strip().lower() or "normal",
+            "requested_elapsed_sec": round(elapsed_sec, 3),
+            "request_timeout_sec": timeout_sec,
+            "active_slot": str(active_slot() or "").strip().upper() or None,
+            "runtime_instance_id": self._managed_runtime_instance_id,
+            "transition_role": self._managed_transition_role,
+            "last_block_reason": self._memory_auto_profile_last_block_reason,
+            "last_block_at": self._memory_auto_profile_last_block_at,
+        }
+        self._fail_active_memory_session(
+            reason=f"requested_profile_mode_timeout.{desired_mode}",
+            stage="profile_apply_timeout",
+            details=details,
+        )
+        return {
+            "session_id": session_id,
+            "desired_mode": desired_mode,
+            "elapsed_sec": elapsed_sec,
+            "timeout_sec": timeout_sec,
         }
 
     async def _maybe_apply_memory_profile_mode(self) -> None:
@@ -4732,8 +4891,23 @@ class SupervisorManager:
                     continue
                 try:
                     await self._maybe_apply_memory_profile_mode()
-                except Exception:
+                except Exception as exc:
                     _LOG.warning("failed to apply requested memory profile mode", exc_info=True)
+                    if str(self._memory_active_session_id or "").strip() and self._desired_memory_profile_mode() != "normal":
+                        self._fail_active_memory_session(
+                            reason=f"requested_profile_mode_apply_error.{self._desired_memory_profile_mode()}",
+                            stage="profile_apply_error",
+                            details={
+                                "error": f"{type(exc).__name__}: {exc}",
+                                "active_slot": str(active_slot() or "").strip().upper() or None,
+                                "runtime_instance_id": self._managed_runtime_instance_id,
+                                "transition_role": self._managed_transition_role,
+                            },
+                        )
+                try:
+                    self._expire_stuck_requested_memory_profile()
+                except Exception:
+                    _LOG.warning("failed to expire stuck requested memory profile session", exc_info=True)
                 finalize_profile = self._should_finalize_active_memory_profile()
                 if finalize_profile is not None:
                     try:
@@ -4871,8 +5045,33 @@ class SupervisorManager:
                 "trigger_reason": str(session.get("trigger_reason") or "").strip() or None,
                 "requested_at": session.get("requested_at"),
                 "finished_at": session.get("finished_at"),
+                "stopped_at": session.get("stopped_at"),
                 "publish_state": str(session.get("publish_state") or "").strip() or None,
                 "published_ref": str(session.get("published_ref") or "").strip() or None,
+                "failure_reason": str(
+                    (
+                        session.get("operation_window")
+                        if isinstance(session.get("operation_window"), dict)
+                        else {}
+                    ).get("failure_reason")
+                    or ""
+                ).strip() or None,
+                "failure_stage": str(
+                    (
+                        session.get("operation_window")
+                        if isinstance(session.get("operation_window"), dict)
+                        else {}
+                    ).get("failure_stage")
+                    or ""
+                ).strip() or None,
+                "local_incident_artifact_id": str(
+                    (
+                        session.get("operation_window")
+                        if isinstance(session.get("operation_window"), dict)
+                        else {}
+                    ).get("local_incident_artifact_id")
+                    or ""
+                ).strip() or None,
                 "retry_depth": int(session.get("retry_depth") or 0),
                 "suspected_leak": bool(session.get("suspected_leak")),
             }

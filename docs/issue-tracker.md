@@ -200,7 +200,10 @@ Actions:
 
 #### HMG-005: Make memory incident capture reliable before the hub stalls
 
-Status: open.
+Status: in progress. Wave 3 landed in supervisor: requested memory-profile
+sessions now expire instead of hanging indefinitely, apply failures persist
+structured context, and supervisor writes local incident artifacts with
+telemetry, operations, and Yjs pressure snapshots.
 
 Evidence:
 
@@ -211,16 +214,18 @@ Evidence:
 
 Actions:
 
-- [ ] Fix the supervisor profile-mode transition so a triggered session cannot
+- [x] Fix the supervisor profile-mode transition so a triggered session cannot
   remain indefinitely in `requested`.
-- [ ] Persist a structured failure reason when automatic profile mode cannot be
-  applied, including slot, runtime, requested mode, and blocking condition.
-- [ ] Add a fallback capture path that records top allocators / growth context
-  without requiring a full runtime restart.
-- [ ] Tie memory incidents to the active operation and pressure context:
-  snapshot counters, rebuild queue depth, route pending bytes, and Yjs
-  pressure.
-- [ ] Publish enough local-only artifacts to debug the next incident even if
+- [x] Persist a structured first-wave failure reason when automatic profile
+  mode cannot be applied, including slot, runtime, requested mode, and the
+  most recent blocking / apply-error context.
+- [x] Add a fallback capture path that records growth context without
+  requiring a full runtime restart; extend with allocator-level artifacts where
+  available.
+- [x] Tie memory incidents to the active operation and first-wave pressure
+  context through telemetry, operation history, and Yjs pressure; extend with
+  snapshot counters, rebuild queue depth, and route pending bytes.
+- [x] Publish enough local-only artifacts to debug the next incident even if
   root publication is unavailable.
 
 #### HMG-006: Fix skill-level amplifiers in snapshot and webio hot paths
