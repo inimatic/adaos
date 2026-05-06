@@ -4651,6 +4651,30 @@ class BootstrapService:
                             _route_pending_data_warn_bytes = 256 * 1024
                         if _route_pending_data_warn_bytes < 0:
                             _route_pending_data_warn_bytes = 0
+                        try:
+                            _route_guard_pending_data_bytes = int(
+                                os.getenv(
+                                    "HUB_ROUTE_GUARD_PENDING_DATA_BYTES",
+                                    str(max(_route_pending_data_warn_bytes, 512 * 1024)),
+                                )
+                                or str(max(_route_pending_data_warn_bytes, 512 * 1024))
+                            )
+                        except Exception:
+                            _route_guard_pending_data_bytes = max(_route_pending_data_warn_bytes, 512 * 1024)
+                        if _route_guard_pending_data_bytes < 0:
+                            _route_guard_pending_data_bytes = 0
+                        try:
+                            _route_guard_oldest_age_s = float(
+                                os.getenv(
+                                    "HUB_ROUTE_GUARD_OLDEST_AGE_S",
+                                    str(max(_route_starvation_warn_s, 1.5)),
+                                )
+                                or str(max(_route_starvation_warn_s, 1.5))
+                            )
+                        except Exception:
+                            _route_guard_oldest_age_s = max(_route_starvation_warn_s, 1.5)
+                        if _route_guard_oldest_age_s < 0.05:
+                            _route_guard_oldest_age_s = 0.05
 
                         # Optional probe mitigation: resend inline probe replies after short delays.
                         # Useful when NATS-over-WS intermittently drops a single PUB frame and Root times out.
@@ -4708,6 +4732,11 @@ class BootstrapService:
                             "last_publish_slow_ms": 0.0,
                             "last_flush_slow_key_tag": "",
                             "last_flush_slow_ms": 0.0,
+                            "guardrail_active": False,
+                            "guardrail_reason": "",
+                            "guardrail_age_s": 0.0,
+                            "guardrail_activation_total": 0,
+                            "guardrail_clear_total": 0,
                             "dispatch_queue_size": 0,
                             "dispatch_queue_max": 0,
                             "dispatch_enqueued_total": 0,
@@ -4744,6 +4773,70 @@ class BootstrapService:
                                 )
                             except Exception:
                                 pass
+                            try:
+                                _route_refresh_guardrail_state()
+                            except Exception:
+                                pass
+
+                        def _route_refresh_guardrail_state() -> None:
+                            try:
+                                pending_oldest_age_s = float(route_diag_state.get("pending_oldest_age_s") or 0.0)
+                            except Exception:
+                                pending_oldest_age_s = 0.0
+                            try:
+                                pending_data_size = int(route_diag_state.get("last_nc_pending_data_size") or 0)
+                            except Exception:
+                                pending_data_size = 0
+                            active = False
+                            reason = ""
+                            if _route_guard_pending_data_bytes > 0 and pending_data_size >= _route_guard_pending_data_bytes:
+                                active = True
+                                reason = "pending_data"
+                            elif _route_guard_oldest_age_s > 0.0 and pending_oldest_age_s >= _route_guard_oldest_age_s:
+                                active = True
+                                reason = "pending_age"
+                            was_active = bool(route_diag_state.get("guardrail_active"))
+                            previous_reason = str(route_diag_state.get("guardrail_reason") or "")
+                            changed = False
+                            now_ts = time.time()
+                            if active:
+                                if not was_active:
+                                    route_diag_state["guardrail_activation_total"] = int(
+                                        route_diag_state.get("guardrail_activation_total") or 0
+                                    ) + 1
+                                    route_diag_state["guardrail_since_at"] = now_ts
+                                    changed = True
+                                elif previous_reason != reason:
+                                    route_diag_state["guardrail_since_at"] = now_ts
+                                    changed = True
+                                route_diag_state["guardrail_active"] = True
+                                route_diag_state["guardrail_reason"] = reason
+                                since_at = float(route_diag_state.get("guardrail_since_at") or 0.0)
+                                route_diag_state["guardrail_age_s"] = (
+                                    round(max(0.0, now_ts - since_at), 3) if since_at > 0.0 else 0.0
+                                )
+                            else:
+                                if was_active:
+                                    route_diag_state["guardrail_clear_total"] = int(
+                                        route_diag_state.get("guardrail_clear_total") or 0
+                                    ) + 1
+                                    changed = True
+                                route_diag_state["guardrail_active"] = False
+                                route_diag_state["guardrail_reason"] = ""
+                                route_diag_state["guardrail_since_at"] = 0.0
+                                route_diag_state["guardrail_age_s"] = 0.0
+                            if changed:
+                                _rl_log(
+                                    "hub-route.guardrail_state",
+                                    (
+                                        f"[hub-route] guardrail active={active} reason={reason or 'healthy'} "
+                                        f"pending_oldest_age_s={pending_oldest_age_s:.3f} "
+                                        f"pending_data_size={pending_data_size} "
+                                        f"activations={route_diag_state.get('guardrail_activation_total')} "
+                                        f"clears={route_diag_state.get('guardrail_clear_total')}"
+                                    ),
+                                    every_s=0.25,
+                                )
 
                         def _route_note_starvation(
                             reason: str,

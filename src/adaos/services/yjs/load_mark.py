@@ -281,9 +281,65 @@ def _stream_payload_items_locked(webspace_id: str, *, now_ts: float, last_publis
     return rows
 
 
+_LOAD_MARK_GUARDRAIL_SUPPRESSED_TOTAL = 0
+_LOAD_MARK_GUARDRAIL_SUPPRESSED_BYTES = 0
+_LOAD_MARK_GUARDRAIL_BY_REASON: dict[str, int] = {}
+
+
+def _active_load_mark_guardrail(webspace_id: str) -> dict[str, Any]:
+    try:
+        from adaos.services.yjs.gateway_ws import yjs_pressure_snapshot
+
+        snapshot = yjs_pressure_snapshot(webspace_id=webspace_id)
+    except Exception:
+        return {}
+    if not isinstance(snapshot, dict) or not bool(snapshot.get("active")):
+        return {}
+    return snapshot
+
+
+def _record_load_mark_guardrail_suppression(
+    webspace_id: str,
+    *,
+    guardrail: dict[str, Any],
+    payload: list[dict[str, Any]],
+) -> None:
+    global _LOAD_MARK_GUARDRAIL_SUPPRESSED_TOTAL, _LOAD_MARK_GUARDRAIL_SUPPRESSED_BYTES
+
+    reason = str(guardrail.get("reason") or "yjs_pressure").strip() or "yjs_pressure"
+    try:
+        payload_bytes = len(repr(payload).encode("utf-8", errors="replace"))
+    except Exception:
+        payload_bytes = 0
+    _LOAD_MARK_GUARDRAIL_SUPPRESSED_TOTAL += 1
+    _LOAD_MARK_GUARDRAIL_SUPPRESSED_BYTES += payload_bytes
+    _LOAD_MARK_GUARDRAIL_BY_REASON[reason] = int(_LOAD_MARK_GUARDRAIL_BY_REASON.get(reason) or 0) + 1
+    total = int(_LOAD_MARK_GUARDRAIL_SUPPRESSED_TOTAL or 0)
+    reason_total = int(_LOAD_MARK_GUARDRAIL_BY_REASON.get(reason) or 0)
+    if total == 1 or total % 25 == 0:
+        _log.warning(
+            "load_mark guardrail suppressed stream publish webspace=%s reason=%s "
+            "suppressed_total=%s reason_total=%s payload_rows=%s payload_bytes=%s "
+            "pressure_age_s=%s pending_send=%s pending_store=%s buffer_used=%s waiting_send=%s",
+            webspace_id,
+            reason,
+            total,
+            reason_total,
+            len(payload or []),
+            payload_bytes,
+            float(guardrail.get("age_s") or 0.0),
+            int(guardrail.get("pending_send_tasks") or 0),
+            int(guardrail.get("pending_store_tasks") or 0),
+            int(guardrail.get("buffer_used") or 0),
+            int(guardrail.get("waiting_send") or 0),
+        )
+
+
 def _maybe_publish_stream_update(webspace_id: str, *, now_ts: float | None = None) -> None:
     now = time.time() if now_ts is None else float(now_ts)
     key = _webspace_token(webspace_id)
+    publish_payload: list[dict[str, Any]] | None = None
+    publish_fingerprint = ""
     with _LOCK:
         if not _has_active_stream_subscription_locked(key):
             return
@@ -304,12 +360,25 @@ def _maybe_publish_stream_update(webspace_id: str, *, now_ts: float | None = Non
         )
         if unchanged and not keepalive_due:
             return
+        publish_payload = payload
+        publish_fingerprint = fingerprint
+    guardrail = _active_load_mark_guardrail(key)
+    if guardrail:
+        _record_load_mark_guardrail_suppression(
+            key,
+            guardrail=guardrail,
+            payload=publish_payload or [],
+        )
+        return
+    with _LOCK:
+        if not _has_active_stream_subscription_locked(key):
+            return
         _LAST_STREAM_PUBLISH_AT[key] = now
-        _LAST_STREAM_FINGERPRINT[key] = fingerprint
+        _LAST_STREAM_FINGERPRINT[key] = publish_fingerprint
     try:
         stream_publish(
             _STREAM_RECEIVER,
-            payload,
+            publish_payload,
             _meta={"webspace_id": key},
             ts=now,
         )
@@ -320,7 +389,7 @@ def _maybe_publish_stream_update(webspace_id: str, *, now_ts: float | None = Non
         append_history_snapshot(
             webspace_id=key,
             ts=now,
-            rows=payload,
+            rows=publish_payload,
         )
     except Exception:
         _log.debug("failed to append load_mark history webspace=%s", key, exc_info=True)

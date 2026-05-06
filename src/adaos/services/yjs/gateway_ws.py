@@ -200,6 +200,50 @@ def _memory_stream_statistics(stream: Any) -> dict[str, Any]:
     }
 
 
+_YROOM_PRESSURE_STATE: dict[str, dict[str, Any]] = {}
+
+
+def yjs_pressure_snapshot(webspace_id: str | None = None) -> dict[str, Any]:
+    now = time.monotonic()
+    if webspace_id is None:
+        active = 0
+        rooms: list[dict[str, Any]] = []
+        for key, raw in list(_YROOM_PRESSURE_STATE.items()):
+            item = dict(raw or {})
+            if bool(item.get("active")):
+                active += 1
+            since_at = float(item.get("since_mono") or 0.0)
+            item["age_s"] = round(max(0.0, now - since_at), 3) if bool(item.get("active")) and since_at > 0.0 else 0.0
+            item["webspace_id"] = str(item.get("webspace_id") or key or "default").strip() or "default"
+            rooms.append(item)
+        rooms.sort(key=lambda item: (0 if bool(item.get("active")) else 1, -float(item.get("age_s") or 0.0), str(item.get("webspace_id") or "")))
+        return {
+            "active_room_total": active,
+            "room_total": len(rooms),
+            "rooms": rooms,
+        }
+    key = _coerce_gateway_webspace_id(webspace_id)
+    raw = dict(_YROOM_PRESSURE_STATE.get(key) or {})
+    if not raw:
+        return {
+            "webspace_id": key,
+            "active": False,
+            "reason": "",
+            "age_s": 0.0,
+            "pending_send_tasks": 0,
+            "pending_store_tasks": 0,
+            "buffer_used": 0,
+            "waiting_send": 0,
+            "waiting_receive": 0,
+            "update_bytes": 0,
+            "message_bytes": 0,
+        }
+    since_at = float(raw.get("since_mono") or 0.0)
+    raw["age_s"] = round(max(0.0, now - since_at), 3) if bool(raw.get("active")) and since_at > 0.0 else 0.0
+    raw["webspace_id"] = key
+    return raw
+
+
 class DiagnosticYRoom(YRoom):
     """
     Thin YRoom wrapper that logs pressure signals without changing semantics.
@@ -222,6 +266,11 @@ class DiagnosticYRoom(YRoom):
         self._diag_backend_persist_skip_total = 0
         self._diag_backend_persist_skip_bytes = 0
         self._diag_last_log_mono = 0.0
+        self._diag_pressure_active = False
+        self._diag_pressure_reason = ""
+        self._diag_pressure_since_mono = 0.0
+        self._diag_pressure_activation_total = 0
+        self._diag_pressure_clear_total = 0
 
     def _diag_room_id(self) -> str:
         return str(getattr(self, "_webspace_id", "") or "default").strip() or "default"
@@ -246,6 +295,12 @@ class DiagnosticYRoom(YRoom):
     def _diag_snapshot(self, *, include_ystore: bool = False) -> dict[str, Any]:
         send_stats = _memory_stream_statistics(getattr(self, "_update_send_stream", None))
         recv_stats = _memory_stream_statistics(getattr(self, "_update_receive_stream", None))
+        now_mono = time.monotonic()
+        pressure_age_s = (
+            round(max(0.0, now_mono - float(self._diag_pressure_since_mono or 0.0)), 3)
+            if self._diag_pressure_active and float(self._diag_pressure_since_mono or 0.0) > 0.0
+            else 0.0
+        )
         return {
             "webspace_id": self._diag_room_id(),
             "client_total": len(getattr(self, "clients", []) or []),
@@ -259,8 +314,94 @@ class DiagnosticYRoom(YRoom):
             "empty_update_skip_bytes": int(self._diag_empty_update_skip_bytes),
             "backend_persist_skip_total": int(self._diag_backend_persist_skip_total),
             "backend_persist_skip_bytes": int(self._diag_backend_persist_skip_bytes),
+            "peak_buffer_used": int(self._diag_peak_buffer_used),
+            "peak_pending_send_tasks": int(self._diag_peak_pending_send_tasks),
+            "peak_pending_store_tasks": int(self._diag_peak_pending_store_tasks),
+            "pressure_active": bool(self._diag_pressure_active),
+            "pressure_reason": str(self._diag_pressure_reason or ""),
+            "pressure_age_s": pressure_age_s,
+            "pressure_activation_total": int(self._diag_pressure_activation_total),
+            "pressure_clear_total": int(self._diag_pressure_clear_total),
             "ystore": self._diag_ystore_snapshot() if include_ystore else {},
         }
+
+    def _diag_update_pressure_state(
+        self,
+        *,
+        reason: str,
+        active: bool,
+        snapshot: dict[str, Any],
+        buffer_used: int,
+        waiting_send: int,
+        waiting_receive: int,
+        pending_send: int,
+        pending_store: int,
+        update_bytes: int,
+        message_bytes: int,
+    ) -> None:
+        now_mono = time.monotonic()
+        previous_active = bool(self._diag_pressure_active)
+        previous_reason = str(self._diag_pressure_reason or "")
+        transition = False
+        if active:
+            if not previous_active:
+                self._diag_pressure_activation_total += 1
+                self._diag_pressure_since_mono = now_mono
+                transition = True
+            elif previous_reason != reason:
+                transition = True
+            self._diag_pressure_active = True
+            self._diag_pressure_reason = str(reason or "").strip() or "pressure"
+        else:
+            if previous_active:
+                self._diag_pressure_clear_total += 1
+                transition = True
+            self._diag_pressure_active = False
+            self._diag_pressure_reason = ""
+            self._diag_pressure_since_mono = 0.0
+        age_s = (
+            round(max(0.0, now_mono - float(self._diag_pressure_since_mono or 0.0)), 3)
+            if self._diag_pressure_active and float(self._diag_pressure_since_mono or 0.0) > 0.0
+            else 0.0
+        )
+        _YROOM_PRESSURE_STATE[self._diag_room_id()] = {
+            "webspace_id": self._diag_room_id(),
+            "active": bool(self._diag_pressure_active),
+            "reason": str(self._diag_pressure_reason or ""),
+            "since_mono": float(self._diag_pressure_since_mono or 0.0),
+            "age_s": age_s,
+            "pending_send_tasks": int(pending_send),
+            "pending_store_tasks": int(pending_store),
+            "buffer_used": int(buffer_used),
+            "waiting_send": int(waiting_send),
+            "waiting_receive": int(waiting_receive),
+            "update_bytes": int(update_bytes or 0),
+            "message_bytes": int(message_bytes or 0),
+            "peak_buffer_used": int(self._diag_peak_buffer_used),
+            "peak_pending_send_tasks": int(self._diag_peak_pending_send_tasks),
+            "peak_pending_store_tasks": int(self._diag_peak_pending_store_tasks),
+            "pressure_activation_total": int(self._diag_pressure_activation_total),
+            "pressure_clear_total": int(self._diag_pressure_clear_total),
+            "update_total": int(snapshot.get("update_total") or 0),
+            "update_bytes_total": int(snapshot.get("update_bytes_total") or 0),
+        }
+        if transition:
+            self.log.warning(
+                "yroom pressure state webspace=%s active=%s reason=%s age_s=%s "
+                "send_buffer=%s waiting_send=%s waiting_receive=%s pending_send=%s pending_store=%s "
+                "activations=%s clears=%s",
+                self._diag_room_id(),
+                bool(self._diag_pressure_active),
+                str(self._diag_pressure_reason or "healthy"),
+                age_s,
+                int(buffer_used),
+                int(waiting_send),
+                int(waiting_receive),
+                int(pending_send),
+                int(pending_store),
+                int(self._diag_pressure_activation_total),
+                int(self._diag_pressure_clear_total),
+            )
 
     def _diag_log_pressure(
         self,
@@ -300,6 +441,18 @@ class DiagnosticYRoom(YRoom):
             self._diag_peak_pending_store_tasks = pending_store
             peak = True
         now_mono = time.monotonic()
+        self._diag_update_pressure_state(
+            reason=reason,
+            active=pressure,
+            snapshot=snapshot,
+            buffer_used=buffer_used,
+            waiting_send=waiting_send,
+            waiting_receive=waiting_receive,
+            pending_send=pending_send,
+            pending_store=pending_store,
+            update_bytes=int(update_bytes or 0),
+            message_bytes=int(message_bytes or 0),
+        )
         if not force and not pressure and not peak:
             return
         if not force and not peak and now_mono - self._diag_last_log_mono < _YROOM_DIAG_LOG_INTERVAL_SEC:

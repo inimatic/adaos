@@ -140,9 +140,10 @@ Actions:
 
 #### HMG-003: Add route and Yjs guardrails that preserve root-cause visibility
 
-Status: in progress. Wave 1 landed in core: eventbus now tracks pending async
-backlog by topic and handler, records peaks, and emits structured warnings when
-pressure grows.
+Status: in progress. Wave 2 landed in core: route starvation now exposes a
+guardrail state with activation reasons, Yjs rooms publish reusable pressure
+state, and `load_mark` downshifts under active Yjs pressure without hiding the
+incoming pressure.
 
 Evidence:
 
@@ -153,22 +154,29 @@ Evidence:
 
 Actions:
 
-- [ ] Add explicit degraded mode thresholds for route pending bytes, publish
-  latency, Yjs update bytes, and Yjs persist backlog.
-- [ ] When a threshold is crossed, downshift noncritical stream updates such as
-  repeated `events.recent`, `load_mark`, and equivalent cosmetic fanout.
-- [ ] Preserve observability by logging both the original attempted payload
-  rate and the reduced emitted payload rate.
-- [ ] Export route metrics for pending bytes, pending messages, max flush
-  latency, and suppressed publications.
-- [ ] Export Yjs metrics for update bytes, pending send/store tasks, replay
-  bytes, persist queue depth, and per-webspace pressure state.
-- [ ] Ensure every guardrail activation produces a structured reason record
+- [x] Add first-wave degraded / pressure thresholds for route pending age/data
+  and Yjs buffer, pending task, and update-size pressure; extend with explicit
+  publish-latency and persist-backlog thresholds where still missing.
+- [x] When a threshold is crossed, downshift the first noncritical stream path:
+  repeated `load_mark` fanout is now suppressed under active Yjs pressure;
+  extend the same policy to `events.recent` and equivalent cosmetic fanout.
+- [x] Preserve observability by logging both the original attempted work and
+  the reduced emitted work through pressure-state transitions and suppression
+  counters.
+- [x] Export first-wave route metrics/state for pending age/data and guardrail
+  activation; extend with pending messages, max flush latency, and suppressed
+  publication totals.
+- [x] Export Yjs metrics for update bytes, pending send/store tasks, replay
+  bytes, and per-webspace pressure state; extend with persist queue depth where
+  still missing.
+- [x] Ensure every guardrail activation produces a structured reason record
   that points back to the triggering stream, webspace, skill, or event type.
 
 #### HMG-004: Make eventbus and async backlog visible and bounded
 
-Status: open.
+Status: in progress. Wave 1 landed in core: eventbus now tracks pending async
+backlog by topic and handler, records peaks, and emits structured warnings when
+pressure grows.
 
 Evidence:
 
@@ -192,10 +200,7 @@ Actions:
 
 #### HMG-005: Make memory incident capture reliable before the hub stalls
 
-Status: in progress. Wave 1 landed in skills: duplicate
-`webio.stream.snapshot.requested` bursts are now debounced in
-`infrastate_skill` and `infrascope_skill` before they can multiply into
-repeated full publishes.
+Status: open.
 
 Evidence:
 
@@ -220,7 +225,10 @@ Actions:
 
 #### HMG-006: Fix skill-level amplifiers in snapshot and webio hot paths
 
-Status: open.
+Status: in progress. Wave 1 landed in skills: duplicate
+`webio.stream.snapshot.requested` bursts are now debounced in
+`infrastate_skill` and `infrascope_skill` before they can multiply into
+repeated full publishes.
 
 Evidence:
 
@@ -247,9 +255,9 @@ Actions:
 
 #### HMG-007: Keep guardrails observability-first
 
-Status: in progress. Wave 1 guardrails were implemented with preserved evidence
-at the same logical boundary so suppression does not hide the original
-incoming pressure.
+Status: in progress. Wave 1 and Wave 2 guardrails were implemented with
+preserved evidence at the same logical boundary so suppression does not hide
+the original incoming pressure.
 
 Principle:
 
