@@ -80,7 +80,10 @@ Working hypothesis:
 
 #### HMG-001: Coalesce snapshot storms before they become fanout storms
 
-Status: open.
+Status: in progress. Wave 1 landed in core and skills: duplicate stream
+snapshot requests are debounced/coalesced, and repeated
+`subnet.member.snapshot.changed` bursts now collapse into bounded rebuild
+cycles.
 
 Evidence:
 
@@ -94,21 +97,24 @@ Actions:
 
 - [ ] Add a single in-flight snapshot guard per `(stream, webspace, node,
   subscriber)` key.
-- [ ] Coalesce repeated `webio.stream.snapshot.requested` events into a dirty
+- [x] Coalesce repeated `webio.stream.snapshot.requested` events into a dirty
   flag plus last-request metadata instead of spawning duplicate work.
-- [ ] Add debounce / batch windows for `subnet.member.snapshot.changed` so one
+- [x] Add debounce / batch windows for `subnet.member.snapshot.changed` so one
   flap burst produces one bounded rebuild cycle.
 - [ ] Separate full snapshot paths from incremental refresh paths; reconnect
   and resubscribe must prefer bounded incremental bootstrap where possible.
-- [ ] Emit per-key counters for `requested`, `coalesced`, `executed`,
+- [x] Emit first-wave per-key counters for `requested`, `forced`, and
+  `coalesced`; extend the same boundary with `executed`,
   `skipped_unchanged`, and `dropped_due_to_guardrail`.
-- [ ] Make coalescing observable in logs and telemetry so operators can still
+- [x] Make coalescing observable in logs and telemetry so operators can still
   see the original incoming pressure and the amount of suppressed duplicate
   work.
 
 #### HMG-002: Bound webspace rebuild amplification
 
-Status: open.
+Status: in progress. Wave 1 landed in core: overlapping rebuild triggers for
+the same `(node, webspace)` key now coalesce into one active rebuild plus at
+most one dirty rerun, with preserved trigger reasons and counters.
 
 Evidence:
 
@@ -119,20 +125,24 @@ Evidence:
 
 Actions:
 
-- [ ] Add per-webspace rebuild queue depth, newest generation, oldest waiting
-  age, and rebuild result counters.
-- [ ] Skip or supersede stale rebuild requests when a newer generation is
-  already queued or executing.
-- [ ] Prevent one snapshot event from scheduling overlapping semantic rebuilds
+- [x] Add first-wave per-webspace rebuild counters for `requested`,
+  `scheduled`, `rerun`, `coalesced_running`, `coalesced_interval`, and
+  `delayed`; extend with queue depth, newest generation, and oldest waiting
+  age.
+- [x] Skip or supersede stale rebuild requests when a newer request for the
+  same key is already queued or executing.
+- [x] Prevent one snapshot event from scheduling overlapping semantic rebuilds
   for the same webspace.
 - [ ] Add a degraded rebuild mode that defers noncritical projections or
   secondary webspaces while the hub is in memory or route pressure.
-- [ ] Record which upstream event caused each rebuild so we can trace pressure
+- [x] Record which upstream event caused each rebuild so we can trace pressure
   back to a skill, browser, reconnect, or subnet state change.
 
 #### HMG-003: Add route and Yjs guardrails that preserve root-cause visibility
 
-Status: open.
+Status: in progress. Wave 1 landed in core: eventbus now tracks pending async
+backlog by topic and handler, records peaks, and emits structured warnings when
+pressure grows.
 
 Evidence:
 
@@ -168,20 +178,24 @@ Evidence:
 
 Actions:
 
-- [ ] Add live gauges for eventbus pending async tasks, oldest pending task
-  age, per-topic in-flight counts, and per-handler slow-count totals.
+- [x] Add first-wave live backlog snapshot data for eventbus pending async
+  tasks plus per-topic and per-handler in-flight counts; extend with oldest
+  pending task age and per-handler slow-count totals where still missing.
 - [ ] Bound selected hot-path async fanout with semaphores or per-topic work
   queues instead of unlimited `create_task` growth.
 - [ ] Add per-topic and per-handler cancellation / supersede semantics for
   stale snapshot work.
-- [ ] Keep raw incoming-event counters visible even when bounded execution
+- [x] Keep raw incoming-event counters visible even when bounded execution
   drops or coalesces work.
 - [ ] Add an operator-facing incident summary that names the top topics and
   handlers contributing to backlog growth.
 
 #### HMG-005: Make memory incident capture reliable before the hub stalls
 
-Status: open.
+Status: in progress. Wave 1 landed in skills: duplicate
+`webio.stream.snapshot.requested` bursts are now debounced in
+`infrastate_skill` and `infrascope_skill` before they can multiply into
+repeated full publishes.
 
 Evidence:
 
@@ -218,9 +232,9 @@ Evidence:
 
 Actions:
 
-- [ ] Refactor `infrastate_skill` snapshot publishing to avoid full repeated
+- [x] Refactor `infrastate_skill` snapshot publishing to avoid bursty repeated
   republish of unchanged payloads.
-- [ ] Refactor `infrascope_skill` snapshot publishing to prefer cached or diff
+- [x] Refactor `infrascope_skill` snapshot publishing to prefer cached or diff
   output when the source generation did not materially change.
 - [ ] Ensure skill snapshot handlers are idempotent and generation-aware.
 - [ ] Limit skill-triggered `webio.stream.*` fanout for noncritical diagnostics
@@ -233,7 +247,9 @@ Actions:
 
 #### HMG-007: Keep guardrails observability-first
 
-Status: open.
+Status: in progress. Wave 1 guardrails were implemented with preserved evidence
+at the same logical boundary so suppression does not hide the original
+incoming pressure.
 
 Principle:
 
@@ -244,10 +260,12 @@ Principle:
 
 Actions:
 
-- [ ] For every new guardrail, define the preserved evidence set before
+- [x] For every new guardrail, define the preserved evidence set before
   implementing the drop/coalesce behavior.
-- [ ] Add structured counters for `received`, `executed`, `coalesced`,
-  `suppressed`, `timed_out`, and `failed` at the same logical boundary.
+- [x] Add structured first-wave counters for `requested`, `forced`,
+  `coalesced`, `scheduled`, and `rerun` at the same logical boundary; extend
+  the same pattern with `suppressed`, `timed_out`, and `failed` as degraded
+  mode expands.
 - [ ] Ensure telemetry and logs distinguish "incoming load reduced by
   guardrail" from "incoming load disappeared".
 - [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,

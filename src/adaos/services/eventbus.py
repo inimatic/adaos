@@ -50,6 +50,22 @@ def _slow_handler_threshold_s(kind: str, default: float) -> float:
     return max(0.0, value)
 
 
+def _pending_backlog_warn_threshold() -> int:
+    try:
+        value = int(str(os.getenv("ADAOS_EVENTBUS_PENDING_WARN_THRESHOLD", "64") or "64").strip())
+    except Exception:
+        value = 64
+    return max(1, min(value, 100000))
+
+
+def _pending_backlog_warn_interval_s() -> float:
+    try:
+        value = float(str(os.getenv("ADAOS_EVENTBUS_PENDING_WARN_INTERVAL_S", "5.0") or "5.0").strip())
+    except Exception:
+        value = 5.0
+    return max(0.0, min(value, 300.0))
+
+
 async def _run_coro_with_timing(coro: Awaitable[Any], handler: Handler, event: Event) -> None:
     """
     Wrapper for async handlers that records execution time and logs slow/crashing
@@ -94,14 +110,85 @@ class LocalEventBus(EventBus):
         self._subs: DefaultDict[str, List[Handler]] = defaultdict(list)
         self._lock = RLock()
         self._pending_tasks: set[asyncio.Task[Any]] = set()
+        self._pending_task_meta: dict[asyncio.Task[Any], tuple[str, str, float]] = {}
+        self._pending_by_type: DefaultDict[str, int] = defaultdict(int)
+        self._pending_by_handler: DefaultDict[str, int] = defaultdict(int)
+        self._pending_peak = 0
+        self._last_pending_warn_at = 0.0
 
-    def _track_task(self, task: asyncio.Task[Any]) -> None:
+    def _pending_backlog_snapshot_locked(self) -> dict[str, Any]:
+        now = time.monotonic()
+        oldest_age_s = 0.0
+        for pending_task, (_event_type, _handler_name, started) in self._pending_task_meta.items():
+            if pending_task.done():
+                continue
+            oldest_age_s = max(oldest_age_s, max(0.0, now - float(started or now)))
+        top_types = sorted(
+            ((event_type, count) for event_type, count in self._pending_by_type.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        top_handlers = sorted(
+            ((handler_name, count) for handler_name, count in self._pending_by_handler.items() if count > 0),
+            key=lambda item: (-item[1], item[0]),
+        )[:5]
+        return {
+            "pending_tasks": len(self._pending_tasks),
+            "pending_peak": int(self._pending_peak),
+            "oldest_age_s": float(oldest_age_s),
+            "top_types": top_types,
+            "top_handlers": top_handlers,
+        }
+
+    def backlog_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return self._pending_backlog_snapshot_locked()
+
+    def _maybe_log_pending_backlog_locked(self) -> None:
+        pending_total = len(self._pending_tasks)
+        if pending_total < _pending_backlog_warn_threshold():
+            return
+        now = time.monotonic()
+        if now - float(self._last_pending_warn_at or 0.0) < _pending_backlog_warn_interval_s():
+            return
+        snapshot = self._pending_backlog_snapshot_locked()
+        self._last_pending_warn_at = now
+        _log.warning(
+            "eventbus backlog pending_tasks=%s peak_pending_tasks=%s oldest_age_s=%.3fs top_types=%s top_handlers=%s",
+            int(snapshot["pending_tasks"]),
+            int(snapshot["pending_peak"]),
+            float(snapshot["oldest_age_s"]),
+            snapshot["top_types"],
+            snapshot["top_handlers"],
+        )
+
+    def _track_task(self, task: asyncio.Task[Any], handler: Handler, event: Event) -> None:
+        event_type = str(getattr(event, "type", "<unknown>") or "<unknown>")
+        handler_name = _handler_label(handler)
+        started = time.monotonic()
         with self._lock:
             self._pending_tasks.add(task)
+            self._pending_task_meta[task] = (event_type, handler_name, started)
+            self._pending_by_type[event_type] += 1
+            self._pending_by_handler[handler_name] += 1
+            if len(self._pending_tasks) > self._pending_peak:
+                self._pending_peak = len(self._pending_tasks)
+            self._maybe_log_pending_backlog_locked()
 
         def _cleanup(done: asyncio.Task[Any]) -> None:
             with self._lock:
                 self._pending_tasks.discard(done)
+                meta = self._pending_task_meta.pop(done, None)
+                if meta is None:
+                    return
+                done_event_type, done_handler_name, _done_started = meta
+                if done_event_type in self._pending_by_type:
+                    self._pending_by_type[done_event_type] = max(0, int(self._pending_by_type[done_event_type]) - 1)
+                    if self._pending_by_type[done_event_type] <= 0:
+                        self._pending_by_type.pop(done_event_type, None)
+                if done_handler_name in self._pending_by_handler:
+                    self._pending_by_handler[done_handler_name] = max(0, int(self._pending_by_handler[done_handler_name]) - 1)
+                    if self._pending_by_handler[done_handler_name] <= 0:
+                        self._pending_by_handler.pop(done_handler_name, None)
 
         task.add_done_callback(_cleanup)
 
@@ -166,7 +253,7 @@ class LocalEventBus(EventBus):
                         asyncio.run(res)
                     else:
                         task = loop.create_task(_run_coro_with_timing(res, h, event))
-                        self._track_task(task)
+                        self._track_task(task, h, event)
                 else:
                     duration = time.perf_counter() - started
                     if duration >= _slow_handler_threshold_s("sync", 0.1):

@@ -45,6 +45,9 @@ _WEBSPACE_REBUILD_STATUS: dict[str, Dict[str, Any]] = {}
 _WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
 _MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
 _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
+_MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS: dict[str, asyncio.Task[Any]] = {}
+_MEMBER_SNAPSHOT_REBUILD_DIRTY: dict[str, Dict[str, Any]] = {}
+_MEMBER_SNAPSHOT_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
 _RESOLVED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 64
 _EFFECTIVE_BRANCH_PATHS = (
@@ -66,6 +69,100 @@ def _member_snapshot_rebuild_min_interval_s() -> float:
         except Exception:
             pass
     return 5.0
+
+
+def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
+    stats = _MEMBER_SNAPSHOT_REBUILD_STATS.get(task_key)
+    if stats is None:
+        stats = {
+            "requested_total": 0,
+            "scheduled_total": 0,
+            "coalesced_running_total": 0,
+            "coalesced_interval_total": 0,
+            "rerun_total": 0,
+            "delayed_total": 0,
+            "completed_total": 0,
+            "last_reason": "",
+            "last_requested_at": 0.0,
+            "last_scheduled_at": 0.0,
+            "last_completed_at": 0.0,
+        }
+        _MEMBER_SNAPSHOT_REBUILD_STATS[task_key] = stats
+    return stats
+
+
+def _member_snapshot_rebuild_reason(evt: Any, payload: Any) -> str:
+    event_type = str(
+        getattr(evt, "type", "")
+        or (payload.get("type") if isinstance(payload, Mapping) else "")
+        or "subnet.member.snapshot.changed"
+    ).strip()
+    source = str(
+        getattr(evt, "source", "")
+        or (payload.get("source") if isinstance(payload, Mapping) else "")
+        or ""
+    ).strip()
+    if source:
+        return f"{event_type}:{source}"
+    return event_type
+
+
+def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str) -> None:
+    dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key)
+    if dirty is None:
+        dirty = {
+            "count": 0,
+            "last_reason": "",
+            "last_mode": "",
+            "last_requested_at": 0.0,
+        }
+    dirty["count"] = int(dirty.get("count") or 0) + 1
+    dirty["last_reason"] = str(reason or "").strip() or "subnet.member.snapshot.changed"
+    dirty["last_mode"] = str(mode or "").strip() or "coalesced"
+    dirty["last_requested_at"] = time.time()
+    _MEMBER_SNAPSHOT_REBUILD_DIRTY[task_key] = dirty
+    stats = _member_snapshot_rebuild_stats(task_key)
+    if mode == "task_running":
+        stats["coalesced_running_total"] = int(stats.get("coalesced_running_total") or 0) + 1
+    else:
+        stats["coalesced_interval_total"] = int(stats.get("coalesced_interval_total") or 0) + 1
+    stats["last_reason"] = dirty["last_reason"]
+    stats["last_requested_at"] = dirty["last_requested_at"]
+
+
+def _schedule_member_snapshot_rebuild_delayed(*, webspace_id: str, node_id: str, delay_s: float, reason: str) -> None:
+    task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
+    existing = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
+    if existing is not None and not existing.done():
+        return
+
+    async def _runner() -> None:
+        try:
+            await asyncio.sleep(max(0.0, float(delay_s)))
+            if task_key not in _MEMBER_SNAPSHOT_REBUILD_DIRTY:
+                return
+            current = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
+            if current is not None and not current.done():
+                return
+            _MEMBER_SNAPSHOT_REBUILD_AT[task_key] = time.monotonic()
+            stats = _member_snapshot_rebuild_stats(task_key)
+            stats["delayed_total"] = int(stats.get("delayed_total") or 0) + 1
+            delayed_reason = str((_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}).get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
+            _schedule_member_snapshot_rebuild(
+                webspace_id=webspace_id,
+                node_id=node_id,
+                reason=f"{delayed_reason}:delayed",
+            )
+        finally:
+            current_delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
+            if current_delayed is task:
+                _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.pop(task_key, None)
+
+    task = asyncio.create_task(
+        _runner(),
+        name=f"member-snapshot-rebuild-delayed:{webspace_id}:{node_id}",
+    )
+    _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS[task_key] = task
 
 
 def _webspace_runtime_async_write_meta(*, root_names: list[str], source: str):
@@ -4182,6 +4279,7 @@ async def _on_scenario_removed(evt: Dict[str, Any]) -> None:
 async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
     payload = _payload(evt)
     node_id = str(payload.get("node_id") or "").strip() or "member"
+    reason = _member_snapshot_rebuild_reason(evt, payload)
     now = time.monotonic()
     interval_s = _member_snapshot_rebuild_min_interval_s()
     try:
@@ -4194,47 +4292,87 @@ async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
         if str(getattr(row, "workspace_id", "") or "").strip()
     ] or [default_webspace_id()]
     for webspace_id in targets:
-        try:
-            await _seed_member_snapshot_ydoc_defaults(webspace_id=webspace_id, node_id=node_id)
-        except Exception:
-            _log.debug(
-                "failed to seed member snapshot defaults webspace=%s node_id=%s",
-                webspace_id,
-                node_id,
-                exc_info=True,
-            )
         key = f"{node_id}\0{webspace_id}"
+        stats = _member_snapshot_rebuild_stats(key)
+        stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
+        stats["last_reason"] = reason
+        stats["last_requested_at"] = time.time()
+        existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(key)
+        if existing is not None and not existing.done():
+            _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running")
+            continue
         last_at = float(_MEMBER_SNAPSHOT_REBUILD_AT.get(key) or 0.0)
         if interval_s > 0 and last_at > 0 and now - last_at < interval_s:
+            _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="interval_window")
+            _schedule_member_snapshot_rebuild_delayed(
+                webspace_id=webspace_id,
+                node_id=node_id,
+                delay_s=max(0.0, interval_s - (now - last_at)),
+                reason=reason,
+            )
             continue
         _MEMBER_SNAPSHOT_REBUILD_AT[key] = now
-        _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id)
+        _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id, reason=reason)
 
 
-def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str) -> None:
+def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str, reason: str = "subnet.member.snapshot.changed") -> None:
     task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
+    try:
+        current_task = asyncio.current_task()
+    except RuntimeError:
+        current_task = None
+    delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.pop(task_key, None)
+    if delayed is not None and delayed is not current_task and not delayed.done():
+        delayed.cancel()
     existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
     if existing and not existing.done():
+        _mark_member_snapshot_rebuild_dirty(task_key=task_key, reason=reason, mode="task_running")
         return
+    stats = _member_snapshot_rebuild_stats(task_key)
+    stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
+    stats["last_reason"] = str(reason or "").strip() or str(stats.get("last_reason") or "") or "subnet.member.snapshot.changed"
+    stats["last_scheduled_at"] = time.time()
 
     async def _runner() -> None:
         try:
+            try:
+                await _seed_member_snapshot_ydoc_defaults(webspace_id=webspace_id, node_id=node_id)
+            except Exception:
+                _log.debug(
+                    "failed to seed member snapshot defaults webspace=%s node_id=%s",
+                    webspace_id,
+                    node_id,
+                    exc_info=True,
+                )
             _log.info(
-                "starting member snapshot rebuild webspace=%s node_id=%s",
+                "starting member snapshot rebuild webspace=%s node_id=%s reason=%s requested_total=%s scheduled_total=%s",
                 webspace_id,
                 node_id,
+                str(stats.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed",
+                int(stats.get("requested_total") or 0),
+                int(stats.get("scheduled_total") or 0),
             )
             result = await rebuild_webspace_from_sources(
                 webspace_id,
                 action="subnet_member_snapshot_sync",
                 source_of_truth="member_runtime_snapshot",
             )
+            stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
+            stats["last_completed_at"] = time.time()
+            dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}
             _log.info(
-                "completed member snapshot rebuild webspace=%s node_id=%s accepted=%s error=%s",
+                "completed member snapshot rebuild webspace=%s node_id=%s accepted=%s error=%s requested_total=%s scheduled_total=%s rerun_total=%s coalesced_running_total=%s coalesced_interval_total=%s delayed_total=%s dirty_pending=%s",
                 webspace_id,
                 node_id,
                 bool(result.get("accepted")),
                 str(result.get("error") or "").strip() or None,
+                int(stats.get("requested_total") or 0),
+                int(stats.get("scheduled_total") or 0),
+                int(stats.get("rerun_total") or 0),
+                int(stats.get("coalesced_running_total") or 0),
+                int(stats.get("coalesced_interval_total") or 0),
+                int(stats.get("delayed_total") or 0),
+                int(dirty.get("count") or 0),
             )
         except asyncio.CancelledError:
             raise
@@ -4249,6 +4387,16 @@ def _schedule_member_snapshot_rebuild(*, webspace_id: str, node_id: str) -> None
             current = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
             if current is task:
                 _MEMBER_SNAPSHOT_REBUILD_TASKS.pop(task_key, None)
+            dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.pop(task_key, None)
+            if dirty:
+                stats["rerun_total"] = int(stats.get("rerun_total") or 0) + 1
+                _MEMBER_SNAPSHOT_REBUILD_AT[task_key] = time.monotonic()
+                rerun_reason = str(dirty.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
+                _schedule_member_snapshot_rebuild(
+                    webspace_id=webspace_id,
+                    node_id=node_id,
+                    reason=f"{rerun_reason}:coalesced",
+                )
 
     task = asyncio.create_task(
         _runner(),
