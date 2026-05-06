@@ -1,10 +1,14 @@
 # \src\adaos\services\scenario\projection_service.py
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, List, Optional
 import json
 import logging
+import os
+import threading
+import time
 
 from adaos.sdk.data.context import get_current_skill
 from adaos.services.agent_context import AgentContext, get_ctx
@@ -16,6 +20,12 @@ from adaos.services.user.profile import UserProfileService
 from .projection_registry import ProjectionRegistry, ProjectionTarget
 
 _log = logging.getLogger("adaos.scenario.projection")
+_PRIMARY_DOC_PRESSURE_THROTTLE_SEC = max(
+    0.0,
+    float(os.getenv("ADAOS_YJS_PRIMARY_DOC_PRESSURE_THROTTLE_SEC") or "0.35"),
+)
+_PRIMARY_DOC_THROTTLE_LOCK = threading.Lock()
+_PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT: dict[str, float] = {}
 
 
 def _projection_write_owner() -> str:
@@ -38,6 +48,47 @@ def _local_node_id() -> str:
     except Exception:
         pass
     return "hub"
+
+
+def _yjs_primary_doc_policy_state(*, webspace_id: str, owner: str, root_name: str) -> dict[str, Any]:
+    if _PRIMARY_DOC_PRESSURE_THROTTLE_SEC <= 0.0:
+        return {"policy_state": "ok"}
+    if not str(owner or "").strip().startswith("skill:"):
+        return {"policy_state": "ok"}
+    try:
+        from adaos.services.yjs.load_mark import yjs_primary_doc_policy_snapshot
+
+        payload = yjs_primary_doc_policy_snapshot(
+            webspace_id=webspace_id,
+            owner=owner,
+            root_names=[root_name],
+        )
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        _log.debug("failed to evaluate YJS primary-doc pressure policy webspace=%s root=%s", webspace_id, root_name, exc_info=True)
+    return {"policy_state": "ok"}
+
+
+async def _throttle_primary_doc_write(*, policy: dict[str, Any], webspace_id: str, path: str, owner: str) -> None:
+    if str(policy.get("policy_state") or "").strip().lower() != "throttle":
+        return
+    delay = float(_PRIMARY_DOC_PRESSURE_THROTTLE_SEC)
+    if delay <= 0.0:
+        return
+    key = f"{str(webspace_id or '').strip()}\0{str(owner or '').strip()}\0{str(path or '').strip()}"
+    wait_s = 0.0
+    with _PRIMARY_DOC_THROTTLE_LOCK:
+        now = time.monotonic()
+        deadline = float(_PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.get(key) or 0.0)
+        if deadline > now:
+            wait_s = deadline - now
+            next_allowed = deadline + delay
+        else:
+            next_allowed = now + delay
+        _PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT[key] = next_allowed
+    if wait_s > 0.0:
+        await asyncio.sleep(wait_s)
 
 
 def _clone_json_like(value: Any) -> Any:
@@ -224,6 +275,8 @@ class ProjectionService:
         root_name = segments[0]
         owner = _projection_write_owner()
         prefer_live_room = owner == "core"
+        policy = _yjs_primary_doc_policy_state(webspace_id=ws_id, owner=owner, root_name=root_name)
+        await _throttle_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner)
 
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)

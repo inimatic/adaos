@@ -5476,51 +5476,39 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
 def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
     selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
-    load_mark = runtime.get("load_mark") if isinstance(runtime.get("load_mark"), dict) else {}
-    selected_webspace = (
-        load_mark.get("selected_webspace")
-        if isinstance(load_mark.get("selected_webspace"), dict)
-        else {}
-    )
-    owner_items = list(selected_webspace.get("owner_items") or [])
-    owner_rows = [item for item in owner_items if isinstance(item, dict)]
-    owner_rows.sort(
-        key=lambda item: (
-            -float(item.get("peak_bps") or 0.0),
-            -float(item.get("peak_wps") or 0.0),
-            -int(item.get("recent_bytes") or 0),
-            str(item.get("owner") or ""),
-        )
-    )
-    owner = owner_rows[0] if owner_rows else {}
-    observed_state = str(
-        owner.get("status")
-        or (
-            selected_webspace.get("assessment")
-            if isinstance(selected_webspace.get("assessment"), dict)
-            else {}
-        ).get("state")
-        or (
-            load_mark.get("assessment")
-            if isinstance(load_mark.get("assessment"), dict)
-            else {}
-        ).get("state")
-        or "idle"
-    ).strip().lower() or "idle"
-    policy_state = "warn" if observed_state in {"high", "critical"} else "ok"
-    reason = "write_amplification" if policy_state == "warn" else "healthy"
+    try:
+        from adaos.services.yjs.load_mark import yjs_primary_doc_policy_snapshot
+
+        payload = yjs_primary_doc_policy_snapshot(webspace_id=selected_webspace_id)
+        if isinstance(payload, dict):
+            return {
+                "webspace_id": str(payload.get("webspace_id") or selected_webspace_id or "").strip() or None,
+                "owner": str(payload.get("owner") or "").strip() or None,
+                "recent_bytes": int(payload.get("recent_bytes") or 0),
+                "recent_writes": int(payload.get("recent_writes") or 0),
+                "peak_bps": float(payload.get("peak_bps") or 0.0),
+                "peak_wps": float(payload.get("peak_wps") or 0.0),
+                "policy_state": str(payload.get("policy_state") or "ok").strip() or "ok",
+                "target": str(payload.get("target") or "primary_shared_doc").strip() or "primary_shared_doc",
+                "reason": str(payload.get("reason") or "healthy").strip() or "healthy",
+                "blocked_roots": list(payload.get("blocked_roots") or []),
+                "observed_state": str(payload.get("observed_state") or "idle").strip() or "idle",
+            }
+    except Exception:
+        pass
+
     return {
         "webspace_id": selected_webspace_id,
-        "owner": str(owner.get("owner") or "").strip() or None,
-        "recent_bytes": int(owner.get("recent_bytes") or 0),
-        "recent_writes": int(owner.get("recent_writes") or 0),
-        "peak_bps": float(owner.get("peak_bps") or 0.0),
-        "peak_wps": float(owner.get("peak_wps") or 0.0),
-        "policy_state": policy_state,
+        "owner": None,
+        "recent_bytes": 0,
+        "recent_writes": 0,
+        "peak_bps": 0.0,
+        "peak_wps": 0.0,
+        "policy_state": "ok",
         "target": "primary_shared_doc",
-        "reason": reason,
+        "reason": "healthy",
         "blocked_roots": [],
-        "observed_state": observed_state,
+        "observed_state": "idle",
     }
 
 

@@ -182,6 +182,15 @@ def _normalize_owner_bucket(owner: str | None) -> str:
     return f"{_OWNER_PREFIX}{safe}"
 
 
+def _policy_state_for_observed_state(observed_state: str) -> str:
+    token = str(observed_state or "").strip().lower()
+    if token == "critical":
+        return "throttle"
+    if token == "high":
+        return "warn"
+    return "ok"
+
+
 def _has_active_stream_subscription_locked(webspace_id: str) -> bool:
     return int(_ACTIVE_STREAM_SUBSCRIPTIONS.get(_webspace_token(webspace_id)) or 0) > 0
 
@@ -988,6 +997,65 @@ def yjs_load_mark_snapshot(*, webspace_id: str | None = None, now_ts: float | No
     }
 
 
+def yjs_primary_doc_policy_snapshot(
+    *,
+    webspace_id: str | None = None,
+    owner: str | None = None,
+    root_names: list[str] | tuple[str, ...] | None = None,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    snapshot = yjs_load_mark_snapshot(webspace_id=webspace_id, now_ts=now_ts)
+    selected_webspace_id = str(snapshot.get("selected_webspace_id") or "").strip() or None
+    selected = snapshot.get("selected_webspace") if isinstance(snapshot.get("selected_webspace"), dict) else {}
+    owners = selected.get("owners") if isinstance(selected.get("owners"), dict) else {}
+    roots = selected.get("roots") if isinstance(selected.get("roots"), dict) else {}
+    owner_bucket = _normalize_owner_bucket(owner) if owner else ""
+    owner_row = owners.get(owner_bucket) if owner_bucket and isinstance(owners.get(owner_bucket), dict) else {}
+    if not owner_row:
+        owner_items = [item for item in list(selected.get("owner_items") or []) if isinstance(item, dict)]
+        owner_items.sort(
+            key=lambda item: (
+                -float(item.get("peak_bps") or 0.0),
+                -float(item.get("peak_wps") or 0.0),
+                -int(item.get("recent_bytes") or 0),
+                str(item.get("owner") or ""),
+            )
+        )
+        owner_row = owner_items[0] if owner_items else {}
+    selected_assessment = selected.get("assessment") if isinstance(selected.get("assessment"), dict) else {}
+    overall_assessment = snapshot.get("assessment") if isinstance(snapshot.get("assessment"), dict) else {}
+    observed_state = str(
+        owner_row.get("status")
+        or selected_assessment.get("state")
+        or overall_assessment.get("state")
+        or "idle"
+    ).strip().lower() or "idle"
+    policy_state = _policy_state_for_observed_state(observed_state)
+    affected_roots: list[str] = []
+    for raw_name in list(root_names or ()):
+        name = str(raw_name or "").strip()
+        if not name:
+            continue
+        root_row = roots.get(name) if isinstance(roots.get(name), dict) else {}
+        root_state = str(root_row.get("status") or "").strip().lower()
+        if root_state in {"high", "critical"} and name not in affected_roots:
+            affected_roots.append(name)
+    return {
+        "webspace_id": selected_webspace_id,
+        "owner": str(owner_row.get("owner") or "").strip() or None,
+        "recent_bytes": int(owner_row.get("recent_bytes") or 0),
+        "recent_writes": int(owner_row.get("recent_writes") or 0),
+        "peak_bps": float(owner_row.get("peak_bps") or 0.0),
+        "peak_wps": float(owner_row.get("peak_wps") or 0.0),
+        "policy_state": policy_state,
+        "target": "primary_shared_doc",
+        "reason": "write_amplification" if policy_state in {"warn", "throttle"} else "healthy",
+        "blocked_roots": [],
+        "throttled_roots": affected_roots if policy_state == "throttle" else [],
+        "observed_state": observed_state,
+    }
+
+
 def _load_mark_write_listener(webspace_id: str, update: bytes, meta: dict[str, Any] | None = None) -> None:
     payload = bytes(update or b"")
     if not payload:
@@ -1037,4 +1105,5 @@ __all__ = [
     "record_write_update",
     "record_root_flow",
     "yjs_load_mark_snapshot",
+    "yjs_primary_doc_policy_snapshot",
 ]

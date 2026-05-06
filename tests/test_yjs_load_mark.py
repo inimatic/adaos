@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+import sys
+import types
+
+if "y_py" not in sys.modules:
+    sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
+if "ypy_websocket.ystore" not in sys.modules:
+    ystore_module = types.ModuleType("ypy_websocket.ystore")
+    ystore_module.BaseYStore = type("BaseYStore", (), {})
+    ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
+    sys.modules["ypy_websocket.ystore"] = ystore_module
+if "ypy_websocket" not in sys.modules:
+    pkg = types.ModuleType("ypy_websocket")
+    pkg.ystore = sys.modules["ypy_websocket.ystore"]
+    sys.modules["ypy_websocket"] = pkg
+
 from adaos.services.yjs import load_mark as load_mark_module
 
 
@@ -183,3 +198,28 @@ def test_load_mark_non_gateway_peak_burst_still_warns(monkeypatch) -> None:
     )
 
     assert calls
+
+
+def test_load_mark_primary_doc_policy_throttles_critical_owner_pressure() -> None:
+    _reset_load_mark_state()
+
+    load_mark_module.record_write_update(
+        "default",
+        total_bytes=160 * 1024,
+        root_names=["data"],
+        now_ts=70.0,
+        source="projection_service",
+        owner="skill:infrastate_skill",
+    )
+
+    policy = load_mark_module.yjs_primary_doc_policy_snapshot(
+        webspace_id="default",
+        owner="skill:infrastate_skill",
+        root_names=["data"],
+        now_ts=71.0,
+    )
+
+    assert policy["owner"] == "_by_owner/skill_infrastate_skill"
+    assert policy["observed_state"] == "critical"
+    assert policy["policy_state"] == "throttle"
+    assert policy["throttled_roots"] == ["data"]
