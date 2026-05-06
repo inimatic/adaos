@@ -2,9 +2,32 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
+import types
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
+
+from adaos.services.runtime_lifecycle import request_drain, reset_runtime_lifecycle
+
+if "nats" not in sys.modules:
+    sys.modules["nats"] = types.SimpleNamespace()
+if "y_py" not in sys.modules:
+    sys.modules["y_py"] = types.SimpleNamespace(
+        YDoc=type("YDoc", (), {}),
+        encode_state_vector=lambda *args, **kwargs: b"",
+        encode_state_as_update=lambda *args, **kwargs: b"",
+        apply_update=lambda *args, **kwargs: None,
+    )
+if "ypy_websocket.ystore" not in sys.modules:
+    ystore_module = types.ModuleType("ypy_websocket.ystore")
+    ystore_module.BaseYStore = type("BaseYStore", (), {})
+    ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
+    sys.modules["ypy_websocket.ystore"] = ystore_module
+if "ypy_websocket" not in sys.modules:
+    pkg = types.ModuleType("ypy_websocket")
+    pkg.ystore = sys.modules["ypy_websocket.ystore"]
+    sys.modules["ypy_websocket"] = pkg
 
 
 def test_request_local_member_activation_switches_role_for_non_member(monkeypatch) -> None:
@@ -112,3 +135,33 @@ def test_node_join_reports_activation_and_persists_member_session(monkeypatch) -
         "hub_url": "https://ru.api.inimatic.com/hubs/sn_member01",
     }
     assert runtime_state["member_hub_token"] == "join-session-token"
+
+
+def test_member_hub_transition_snapshot_reports_drain_reason(monkeypatch) -> None:
+    bootstrap = importlib.import_module("adaos.services.bootstrap")
+    svc = bootstrap.BootstrapService.__new__(bootstrap.BootstrapService)
+    monkeypatch.setattr("adaos.services.core_update.read_status", lambda: {})
+    reset_runtime_lifecycle()
+    try:
+        request_drain(reason="supervisor.memory.critical_pressure")
+        snapshot = svc._member_hub_transition_snapshot()
+    finally:
+        reset_runtime_lifecycle()
+
+    assert snapshot["transition_state"] == "waiting_restart"
+    assert snapshot["reason"] == "supervisor.memory.critical_pressure"
+    assert snapshot["recovery_blocked"] is True
+
+
+def test_member_link_transition_snapshot_reports_drain_reason(monkeypatch) -> None:
+    link_client = importlib.import_module("adaos.services.subnet.link_client")
+    monkeypatch.setattr("adaos.services.core_update.read_status", lambda: {})
+    reset_runtime_lifecycle()
+    try:
+        request_drain(reason="supervisor.memory.critical_pressure")
+        snapshot = link_client._member_link_transition_snapshot()
+    finally:
+        reset_runtime_lifecycle()
+
+    assert snapshot["transition_state"] == "waiting_restart"
+    assert snapshot["reason"] == "supervisor.memory.critical_pressure"

@@ -981,6 +981,7 @@ class BootstrapService:
         state = str(status.get("state") or "").strip().lower()
         phase = str(status.get("phase") or "").strip().lower()
         node_state = str(runtime.get("node_state") or "").strip().lower()
+        lifecycle_reason = str(runtime.get("reason") or "").strip().lower()
         draining = bool(runtime.get("draining"))
 
         transition_state = "ready"
@@ -1000,7 +1001,7 @@ class BootstrapService:
             recovery_blocked = True
         elif draining or node_state in {"stopping", "stopped", "restarting"}:
             transition_state = "waiting_restart"
-            reason = node_state or "draining"
+            reason = lifecycle_reason or node_state or "draining"
             recovery_blocked = True
         return {
             "transition_state": transition_state,

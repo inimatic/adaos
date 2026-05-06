@@ -235,6 +235,53 @@ def _available_memory_bytes() -> int | None:
         return None
 
 
+def _total_memory_bytes() -> int | None:
+    if psutil is None:
+        return None
+    try:
+        vm = psutil.virtual_memory()
+    except Exception:
+        return None
+    try:
+        return int(vm.total)
+    except Exception:
+        return None
+
+
+def _memory_critical_available_percent_threshold() -> float:
+    try:
+        return max(
+            1.0,
+            min(25.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT") or "5").strip())),
+        )
+    except Exception:
+        return 5.0
+
+
+def _memory_critical_available_bytes_threshold() -> int:
+    try:
+        return max(
+            64 * 1024 * 1024,
+            int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES") or str(256 * 1024 * 1024)).strip()),
+        )
+    except Exception:
+        return 256 * 1024 * 1024
+
+
+def _memory_critical_duration_sec() -> float:
+    try:
+        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC") or "20").strip()))
+    except Exception:
+        return 20.0
+
+
+def _memory_critical_restart_cooldown_sec() -> float:
+    try:
+        return max(30.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_RESTART_COOLDOWN_SEC") or "120").strip()))
+    except Exception:
+        return 120.0
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1204,6 +1251,7 @@ class SupervisorManager:
         self._memory_profile_mode = "normal"
         self._memory_requested_profile_mode: str | None = None
         self._memory_publish_request_session_id: str | None = None
+        self._memory_profile_current_trigger_source: str | None = None
         self._memory_suspicion_state = "idle"
         self._memory_suspicion_reason: str | None = None
         self._memory_suspicion_since: float | None = None
@@ -1213,9 +1261,13 @@ class SupervisorManager:
         self._memory_last_growth_bytes: int | None = None
         self._memory_last_growth_bytes_per_min: float | None = None
         self._memory_last_available_bytes: int | None = None
+        self._memory_last_available_percent: float | None = None
         self._memory_last_telemetry_at: float | None = None
         self._memory_auto_profile_last_block_reason: str | None = None
         self._memory_auto_profile_last_block_at: float | None = None
+        self._memory_critical_since: float | None = None
+        self._memory_critical_reason: str | None = None
+        self._memory_critical_restart_last_at: float | None = None
         self._sidecar_launch_cwd: str | None = None
         self._sidecar_last_start_reason: str | None = None
         self._sidecar_last_restart_reason: str | None = None
@@ -1804,22 +1856,130 @@ class SupervisorManager:
                 recent_policy_sessions += 1
                 if recent_policy_sessions >= _memory_auto_profile_circuit_limit():
                     return False, "auto_profile_circuit_open"
+        return self._memory_profile_subnet_guard()
+
+    def _memory_live_subnet_state(
+        self,
+        *,
+        runtime: dict[str, Any] | None = None,
+    ) -> tuple[bool, str | None]:
+        runtime_payload = runtime if isinstance(runtime, dict) else self._runtime_reliability_payload(timeout=1.0)
+        if not runtime_payload:
+            return False, None
+        node = runtime_payload.get("node") if isinstance(runtime_payload.get("node"), dict) else {}
+        role = str(node.get("role") or self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        if role == "hub":
+            member_state = (
+                runtime_payload.get("hub_member_connection_state")
+                if isinstance(runtime_payload.get("hub_member_connection_state"), dict)
+                else {}
+            )
+            connected_total = int(member_state.get("connected_total") or 0)
+            if connected_total > 0:
+                return True, f"subnet_members_connected:{connected_total}"
+            return False, None
+        if role == "member":
+            member_state = (
+                runtime_payload.get("hub_member_connection_state")
+                if isinstance(runtime_payload.get("hub_member_connection_state"), dict)
+                else {}
+            )
+            hub_state = member_state.get("hub") if isinstance(member_state.get("hub"), dict) else {}
+            connected = bool(node.get("connected_to_hub")) or bool(hub_state.get("connected"))
+            if connected:
+                return True, "member_hub_connected"
+        return False, None
+
+    def _memory_profile_subnet_guard(
+        self,
+        *,
+        runtime: dict[str, Any] | None = None,
+    ) -> tuple[bool, str | None]:
+        subnet_live, subnet_reason = self._memory_live_subnet_state(runtime=runtime)
+        if subnet_live:
+            return False, subnet_reason
         return True, None
 
     def _memory_profile_restart_guard(self, *, desired_mode: str, now: float | None = None) -> tuple[bool, str | None]:
         normalized_mode = str(desired_mode or "").strip().lower()
         if normalized_mode == "normal":
+            if self._memory_profile_mode != "normal" and str(self._memory_profile_current_trigger_source or "").strip().lower() == "policy":
+                return self._memory_profile_subnet_guard()
             return True, None
         if self._active_memory_profile_trigger_source() != "policy":
             return True, None
         min_uptime_sec = _memory_auto_profile_min_uptime_sec()
         if min_uptime_sec <= 0:
-            return True, None
+            return self._memory_profile_subnet_guard()
         uptime_sec = self._managed_runtime_uptime_sec(now=now)
         if uptime_sec is None or uptime_sec < min_uptime_sec:
             observed = "unknown" if uptime_sec is None else f"{uptime_sec:.1f}s"
             return False, f"auto_profile_min_uptime:{observed}<{min_uptime_sec:.1f}s"
-        return True, None
+        return self._memory_profile_subnet_guard()
+
+    def _memory_critical_restart_decision(self, *, now: float | None = None) -> dict[str, Any] | None:
+        if self._stopping or not self._desired_running:
+            self._memory_critical_since = None
+            self._memory_critical_reason = None
+            return None
+        if self._proc is None or self._proc.poll() is not None:
+            self._memory_critical_since = None
+            self._memory_critical_reason = None
+            return None
+        if _is_transition_in_progress(read_core_update_status(), _read_update_attempt()):
+            self._memory_critical_since = None
+            self._memory_critical_reason = None
+            return None
+        available_bytes = self._memory_last_available_bytes
+        total_bytes = _total_memory_bytes()
+        if available_bytes is None or total_bytes is None or total_bytes <= 0:
+            self._memory_critical_since = None
+            self._memory_critical_reason = None
+            return None
+        available_percent = (float(available_bytes) / float(total_bytes)) * 100.0
+        self._memory_last_available_percent = available_percent
+        threshold_percent = _memory_critical_available_percent_threshold()
+        threshold_bytes = _memory_critical_available_bytes_threshold()
+        reasons: list[str] = []
+        if available_percent <= threshold_percent:
+            reasons.append(f"available_percent<={threshold_percent:.1f}")
+        if int(available_bytes) <= int(threshold_bytes):
+            reasons.append(f"available_bytes<={int(threshold_bytes)}")
+        if not reasons:
+            self._memory_critical_since = None
+            self._memory_critical_reason = None
+            return None
+        current_time = time.time() if now is None else float(now)
+        reason = ",".join(reasons)
+        if self._memory_critical_reason != reason:
+            self._memory_critical_reason = reason
+            self._memory_critical_since = current_time
+            return None
+        critical_since = float(self._memory_critical_since or current_time)
+        duration_sec = _memory_critical_duration_sec()
+        if (current_time - critical_since) < duration_sec:
+            return None
+        cooldown_sec = _memory_critical_restart_cooldown_sec()
+        last_restart_at = float(self._memory_critical_restart_last_at or 0.0)
+        if last_restart_at > 0.0 and (current_time - last_restart_at) < cooldown_sec:
+            return None
+        subnet_live, subnet_reason = self._memory_live_subnet_state()
+        return {
+            "reason": "supervisor.memory.critical_pressure",
+            "message": (
+                "runtime restart requested because free memory stayed below the critical threshold"
+                f" for {duration_sec:.0f}s (available={int(available_bytes)}B, total={int(total_bytes)}B)"
+            ),
+            "available_memory_bytes": int(available_bytes),
+            "available_memory_percent": round(available_percent, 3),
+            "threshold_percent": float(threshold_percent),
+            "threshold_bytes": int(threshold_bytes),
+            "critical_for_sec": max(0.0, current_time - critical_since),
+            "restart_cooldown_sec": float(cooldown_sec),
+            "critical_reason": reason,
+            "subnet_live": bool(subnet_live),
+            "subnet_reason": subnet_reason,
+        }
 
     def _record_memory_auto_profile_block(self, reason: str | None, *, now: float | None = None) -> None:
         reason_text = str(reason or "").strip()
@@ -1852,6 +2012,7 @@ class SupervisorManager:
         return {
             "session_id": session_id,
             "profile_mode": profile_mode,
+            "trigger_source": str(summary.get("trigger_source") or "").strip().lower() or None,
             "elapsed_sec": elapsed_sec,
             "max_runtime_sec": max_runtime_sec,
             "reason": f"supervisor.memory.profile_window_complete.{profile_mode}",
@@ -1888,6 +2049,12 @@ class SupervisorManager:
             return None
         self._memory_last_telemetry_at = now
         self._memory_last_available_bytes = _available_memory_bytes()
+        total_memory_bytes = _total_memory_bytes()
+        self._memory_last_available_percent = (
+            ((float(self._memory_last_available_bytes) / float(total_memory_bytes)) * 100.0)
+            if self._memory_last_available_bytes is not None and total_memory_bytes not in {None, 0}
+            else None
+        )
         if self._memory_baseline_family_rss_bytes is None:
             self._memory_baseline_family_rss_bytes = int(family_rss_bytes)
         elif family_rss_bytes < self._memory_baseline_family_rss_bytes:
@@ -1938,6 +2105,7 @@ class SupervisorManager:
                 "process_rss_bytes": process_rss_bytes,
                 "family_rss_bytes": family_rss_bytes,
                 "available_memory_bytes": self._memory_last_available_bytes,
+                "available_memory_percent": self._memory_last_available_percent,
                 "baseline_rss_bytes": self._memory_baseline_family_rss_bytes,
                 "rss_growth_bytes": growth_bytes,
                 "rss_growth_bytes_per_min": slope,
@@ -3394,6 +3562,7 @@ class SupervisorManager:
             "current_process_rss_bytes": process_rss_bytes,
             "current_family_rss_bytes": family_rss_bytes,
             "available_memory_bytes": self._memory_last_available_bytes,
+            "available_memory_percent": self._memory_last_available_percent,
             "telemetry_interval_sec": _memory_telemetry_interval_sec(),
             "telemetry_window_sec": _memory_telemetry_window_sec(),
             "telemetry_samples_total": len(telemetry_tail),
@@ -3405,6 +3574,14 @@ class SupervisorManager:
             "auto_profile_min_uptime_sec": _memory_auto_profile_min_uptime_sec(),
             "auto_profile_last_block_reason": self._memory_auto_profile_last_block_reason,
             "auto_profile_last_block_at": self._memory_auto_profile_last_block_at,
+            "critical_available_percent_threshold": _memory_critical_available_percent_threshold(),
+            "critical_available_bytes_threshold": _memory_critical_available_bytes_threshold(),
+            "critical_duration_sec": _memory_critical_duration_sec(),
+            "critical_restart_cooldown_sec": _memory_critical_restart_cooldown_sec(),
+            "critical_state": "critical" if self._memory_critical_since is not None else "normal",
+            "critical_reason": self._memory_critical_reason,
+            "critical_since": self._memory_critical_since,
+            "critical_restart_last_at": self._memory_critical_restart_last_at,
             "telemetry_path": str(supervisor_memory_telemetry_path()),
             "sessions_index_path": str(supervisor_memory_sessions_index_path()),
             "implemented_operation_events": list(TOP_LEVEL_OPERATION_EVENTS),
@@ -3923,11 +4100,13 @@ class SupervisorManager:
             return
         profile_mode = self._desired_memory_profile_mode()
         profile_session_id = str(self._memory_active_session_id or "").strip() or None
+        profile_trigger_source = self._active_memory_profile_trigger_source() if profile_mode != "normal" else ""
         allowed, block_reason = self._memory_profile_restart_guard(desired_mode=profile_mode)
         if not allowed:
             self._record_memory_auto_profile_block(block_reason)
             profile_mode = "normal"
             profile_session_id = None
+            profile_trigger_source = ""
         argv, command, env, cwd, runtime_instance_id, transition_role = self._runtime_launch_spec(
             profile_mode=profile_mode,
             profile_session_id=profile_session_id,
@@ -3949,6 +4128,7 @@ class SupervisorManager:
         self._managed_runtime_cwd = str(cwd or os.getcwd())
         self._managed_start_reason = str(reason or "supervisor.start")
         self._memory_profile_mode = profile_mode
+        self._memory_profile_current_trigger_source = str(profile_trigger_source or "").strip().lower() or None
         self._last_start_at = time.time()
         self._last_error = None
         self._runtime_unhealthy_since = None
@@ -4536,6 +4716,20 @@ class SupervisorManager:
             if rc is None:
                 with contextlib.suppress(Exception):
                     self._sample_memory_telemetry()
+                critical_memory_decision = self._memory_critical_restart_decision()
+                if critical_memory_decision is not None:
+                    self._last_error = str(
+                        critical_memory_decision.get("message") or "runtime restart requested due to critical memory pressure"
+                    )
+                    self._memory_critical_restart_last_at = time.time()
+                    self._persist_runtime_state()
+                    try:
+                        await self.restart_runtime(
+                            reason=str(critical_memory_decision.get("reason") or "supervisor.memory.critical_pressure")
+                        )
+                    except Exception:
+                        _LOG.warning("failed to self-heal critical memory pressure", exc_info=True)
+                    continue
                 try:
                     await self._maybe_apply_memory_profile_mode()
                 except Exception:
@@ -4543,10 +4737,18 @@ class SupervisorManager:
                 finalize_profile = self._should_finalize_active_memory_profile()
                 if finalize_profile is not None:
                     try:
+                        finalize_trigger_source = str(finalize_profile.get("trigger_source") or "").strip().lower() or None
                         self.stop_memory_profile(
                             str(finalize_profile.get("session_id") or ""),
                             reason=str(finalize_profile.get("reason") or "supervisor.memory.profile_window_complete"),
                         )
+                        if finalize_trigger_source:
+                            self._memory_profile_current_trigger_source = finalize_trigger_source
+                        allowed, block_reason = self._memory_profile_restart_guard(desired_mode="normal")
+                        if not allowed:
+                            self._record_memory_auto_profile_block(block_reason)
+                            self._persist_runtime_state()
+                            continue
                         await self.restart_runtime(
                             reason=f"supervisor.memory.complete_profile_mode.{str(finalize_profile.get('profile_mode') or 'profile')}"
                         )
@@ -4586,6 +4788,7 @@ class SupervisorManager:
             self._runtime_unhealthy_since = None
             self._runtime_unhealthy_kind = None
             self._memory_profile_mode = "normal"
+            self._memory_profile_current_trigger_source = None
             self._persist_runtime_state()
             if self._stopping or not self._desired_running:
                 continue
@@ -4689,10 +4892,20 @@ class SupervisorManager:
                 "baseline_family_rss_bytes": runtime.get("baseline_family_rss_bytes"),
                 "rss_growth_bytes": runtime.get("rss_growth_bytes"),
                 "rss_growth_bytes_per_min": runtime.get("rss_growth_bytes_per_min"),
+                "available_memory_bytes": runtime.get("available_memory_bytes"),
+                "available_memory_percent": runtime.get("available_memory_percent"),
                 "auto_profile_min_uptime_sec": runtime.get("auto_profile_min_uptime_sec"),
                 "auto_profile_last_block_reason": str(runtime.get("auto_profile_last_block_reason") or "").strip()
                 or None,
                 "auto_profile_last_block_at": runtime.get("auto_profile_last_block_at"),
+                "critical_available_percent_threshold": runtime.get("critical_available_percent_threshold"),
+                "critical_available_bytes_threshold": runtime.get("critical_available_bytes_threshold"),
+                "critical_duration_sec": runtime.get("critical_duration_sec"),
+                "critical_restart_cooldown_sec": runtime.get("critical_restart_cooldown_sec"),
+                "critical_state": str(runtime.get("critical_state") or "normal"),
+                "critical_reason": str(runtime.get("critical_reason") or "").strip() or None,
+                "critical_since": runtime.get("critical_since"),
+                "critical_restart_last_at": runtime.get("critical_restart_last_at"),
                 "selected_profiler_adapter": str(runtime.get("selected_profiler_adapter") or DEFAULT_PROFILER_ADAPTER),
                 "sessions_total": int(runtime.get("sessions_total") or 0),
                 "last_session": compact_session,
