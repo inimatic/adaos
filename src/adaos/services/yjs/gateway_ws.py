@@ -2205,6 +2205,24 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             )
         except Exception:
             pass
+    try:
+        from adaos.services.access_links import authorize_link, touch_browser_session
+
+        allowed, reason = authorize_link("browser", dev_id)
+        if not allowed:
+            try:
+                touch_browser_session(
+                    dev_id,
+                    webspace_id=webspace_id,
+                    connection_state=reason or "denied",
+                    online=False,
+                )
+            except Exception:
+                pass
+            await websocket.close(code=1008, reason=f"device_{reason or 'denied'}")
+            return
+    except Exception:
+        _ylog.debug("browser access policy check failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
     _ylog.info("yws connection open webspace=%s dev=%s", webspace_id, dev_id)
     if not await _accept_websocket(websocket, channel="yws"):
         return
@@ -2229,6 +2247,12 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     _record_yws_open(webspace_id, dev_id)
     _track_yws_connection(webspace_id, websocket, device_id=dev_id)
     _transport_mark_open("yws")
+    try:
+        from adaos.services.access_links import touch_browser_session
+
+        touch_browser_session(dev_id, webspace_id=webspace_id, connection_state="connected", online=True)
+    except Exception:
+        _ylog.debug("browser access registry open update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
     _publish_runtime_event(
         "browser.session.changed",
         {
@@ -2246,6 +2270,12 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     finally:
         _untrack_yws_connection(webspace_id, websocket)
         _transport_mark_close("yws")
+        try:
+            from adaos.services.access_links import touch_browser_session
+
+            touch_browser_session(dev_id, webspace_id=webspace_id, connection_state="closed", online=False)
+        except Exception:
+            _ylog.debug("browser access registry close update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
         _publish_runtime_event(
             "browser.session.changed",
             {
