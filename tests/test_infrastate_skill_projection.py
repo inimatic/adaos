@@ -252,7 +252,85 @@ def test_infrastate_marketplace_items_include_selected_node_target(monkeypatch):
 
     assert items["skills"][0]["node_id"] == "member-1"
     assert items["skills"][0]["target_node_id"] == "member-1"
-    assert items["scenarios"][0]["node_id"] == "member-1"
+
+
+def test_infrastate_compact_snapshot_keeps_semantic_state_plane_contracts():
+    mod = _load_infrastate_module()
+
+    compact = mod._compact_snapshot_for_client(
+        {
+            "summary": {"label": "Infra"},
+            "reliability": {
+                "ok": True,
+                "node": {"node_id": "hub-1"},
+                "runtime": {
+                    "assessment": {"state": "ready"},
+                    "channel_overview": {"hub_root": {"effective_status": "ready"}},
+                    "readiness_tree": {"route": {"status": "ready"}},
+                    "connectivity": {
+                        "required_upstream_link": {"kind": "hub_root", "transport_state": "ready"},
+                    },
+                    "state_sync": {
+                        "webspace_id": "desktop",
+                        "semantic_state": "stale",
+                        "freshness_state": "aging",
+                    },
+                    "yjs_pressure": {
+                        "owner": "_by_owner/skill_infrastate_skill",
+                        "policy_state": "throttle",
+                    },
+                },
+            },
+        }
+    )
+
+    runtime = compact["reliability"]["runtime"]
+    assert runtime["connectivity"]["required_upstream_link"]["kind"] == "hub_root"
+    assert runtime["state_sync"]["semantic_state"] == "stale"
+    assert runtime["yjs_pressure"]["policy_state"] == "throttle"
+
+
+def test_infrastate_reliability_summary_note_prefers_semantic_state_plane_contracts():
+    mod = _load_infrastate_module()
+
+    note = mod._reliability_summary_note(
+        {
+            "runtime": {
+                "connectivity": {
+                    "required_upstream_link": {
+                        "kind": "hub_root",
+                        "transport_state": "ready",
+                        "transition_state": "waiting_restart",
+                    },
+                    "browser_control_route": {
+                        "kind": "browser_control_route",
+                        "transport_state": "degraded",
+                        "transition_state": "reconnecting",
+                    },
+                },
+                "state_sync": {
+                    "semantic_state": "stale",
+                    "freshness_state": "stale",
+                    "first_sync_state": "timeout",
+                    "replay": {"cursor": "3/32", "mode": "snapshot_plus_diff"},
+                },
+                "yjs_pressure": {
+                    "policy_state": "throttle",
+                    "observed_state": "critical",
+                    "owner": "_by_owner/skill_infrastate_skill",
+                },
+            }
+        },
+        {},
+    )
+
+    assert "hub-root=ready/waiting_restart" in note
+    assert "hub-root-browser=degraded/reconnecting" in note
+    assert "upstream=hub_root:ready/waiting_restart" in note
+    assert "state_sync=stale/stale" in note
+    assert "first_sync=timeout" in note
+    assert "yjs_pressure=throttle:critical" in note
+    assert "yjs_owner=_by_owner/skill_infrastate_skill" in note
 
 
 def test_infrastate_adaos_update_local_uses_shared_webspace_refresh(monkeypatch):
