@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -3183,6 +3184,37 @@ def test_memory_policy_auto_profile_waits_for_min_uptime(monkeypatch, tmp_path) 
     assert reason_after_grace is None
 
 
+def test_available_memory_bytes_and_total_memory_bytes_read_psutil(monkeypatch) -> None:
+    class _Vm:
+        available = 123
+        total = 456
+
+    monkeypatch.setattr(supervisor, "psutil", SimpleNamespace(virtual_memory=lambda: _Vm()))
+
+    assert supervisor._available_memory_bytes() == 123
+    assert supervisor._total_memory_bytes() == 456
+
+
+def test_memory_policy_auto_profile_is_blocked_while_hub_has_connected_members(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "300")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._last_start_at = 100.0
+    monkeypatch.setattr(
+        manager,
+        "_runtime_reliability_payload",
+        lambda timeout=1.0: {
+            "node": {"role": "hub"},
+            "hub_member_connection_state": {"connected_total": 1},
+        },
+    )
+
+    allowed, reason = manager._memory_policy_auto_profile_guard(now=401.0)
+
+    assert allowed is False
+    assert reason == "subnet_members_connected:1"
+
+
 def test_policy_memory_profile_restart_is_delayed_during_min_uptime(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "300")
@@ -3225,6 +3257,99 @@ def test_policy_memory_profile_restart_is_delayed_during_min_uptime(monkeypatch,
 
     assert restarts == []
     assert str(manager._memory_auto_profile_last_block_reason).startswith("auto_profile_min_uptime:")
+
+
+def test_policy_memory_profile_restart_is_blocked_while_member_link_is_connected(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "300")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 22334
+        args = ["python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()  # type: ignore[assignment]
+    manager._last_start_at = 100.0
+    manager._memory_active_session_id = "mem-member"
+    manager._memory_requested_profile_mode = "sampled_profile"
+    supervisor.write_memory_session_summary(
+        "mem-member",
+        {
+            "session_id": "mem-member",
+            "profile_mode": "sampled_profile",
+            "session_state": "requested",
+            "trigger_source": "policy",
+            "trigger_reason": "memory.growth_and_slope_threshold",
+            "requested_at": 150.0,
+        },
+    )
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(
+        manager,
+        "_runtime_reliability_payload",
+        lambda timeout=1.0: {
+            "node": {"role": "member", "connected_to_hub": True},
+            "hub_member_connection_state": {"hub": {"connected": True}},
+        },
+    )
+    restarts: list[str] = []
+
+    async def _restart_runtime(*, reason: str):
+        restarts.append(reason)
+        return {"ok": True}
+
+    monkeypatch.setattr(manager, "restart_runtime", _restart_runtime)
+
+    asyncio.run(manager._maybe_apply_memory_profile_mode())
+
+    assert restarts == []
+    assert manager._memory_auto_profile_last_block_reason == "member_hub_connected"
+
+
+def test_critical_memory_restart_is_allowed_while_live_subnet_is_present(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES", "64")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC", "20")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 9988
+        args = ["python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()  # type: ignore[assignment]
+    manager._desired_running = True
+    manager._stopping = False
+    manager._memory_last_available_bytes = 32
+    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024)
+    monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {})
+    monkeypatch.setattr(supervisor, "_read_update_attempt", lambda: {})
+    monkeypatch.setattr(
+        manager,
+        "_runtime_reliability_payload",
+        lambda timeout=1.0: {
+            "node": {"role": "hub"},
+            "hub_member_connection_state": {"connected_total": 2},
+        },
+    )
+
+    first = manager._memory_critical_restart_decision(now=100.0)
+    second = manager._memory_critical_restart_decision(now=121.0)
+
+    assert first is None
+    assert second is not None
+    assert second["reason"] == "supervisor.memory.critical_pressure"
+    assert second["subnet_live"] is True
+    assert second["subnet_reason"] == "subnet_members_connected:2"
 
 
 def test_spawn_runtime_locked_prefers_active_slot_manifest(monkeypatch, tmp_path) -> None:
