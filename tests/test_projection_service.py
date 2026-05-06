@@ -402,3 +402,38 @@ def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_re
     ]
     assert async_get_calls == []
     assert fake_state["data"] == {}
+
+
+def test_projection_service_governance_snapshot_tracks_throttle_and_block_events(monkeypatch) -> None:
+    projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
+
+    monkeypatch.setattr(projection_service_module.time, "time", lambda: 1778055331.0)
+
+    asyncio.run(
+        projection_service_module._govern_primary_doc_write(
+            policy={"policy_state": "throttle", "reason": "write_amplification"},
+            webspace_id="desktop",
+            path="data/infrastate",
+            owner="skill:infrastate_skill",
+        )
+    )
+    asyncio.run(
+        projection_service_module._govern_primary_doc_write(
+            policy={"policy_state": "block", "reason": "write_amplification_blocked", "blocked_roots": ["data"]},
+            webspace_id="desktop",
+            path="data/infrastate",
+            owner="skill:infrastate_skill",
+        )
+    )
+
+    snapshot = projection_service_module.primary_doc_governance_snapshot(
+        webspace_id="desktop",
+        owner="skill:infrastate_skill",
+    )
+
+    assert snapshot["throttled_total"] == 1
+    assert snapshot["blocked_total"] == 1
+    assert snapshot["last_policy_state"] == "block"
+    assert snapshot["last_reason"] == "write_amplification_blocked"
+    assert snapshot["last_path"] == "data/infrastate"
+    assert snapshot["last_blocked_roots"] == ["data"]
