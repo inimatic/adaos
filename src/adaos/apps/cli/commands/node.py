@@ -736,8 +736,17 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             f"bytes={yjs_pressure.get('recent_bytes') or 0} "
             f"writes={yjs_pressure.get('recent_writes') or 0} "
             f"peak={yjs_pressure.get('peak_bps') or 0}/{yjs_pressure.get('peak_wps') or 0} "
-            f"reason={yjs_pressure.get('reason') or '-'}"
+            f"reason={yjs_pressure.get('reason') or '-'} "
+            f"throttled={yjs_pressure.get('throttled_total') or 0} "
+            f"blocked={yjs_pressure.get('blocked_total') or 0}"
         )
+        if yjs_pressure.get("last_reason") or yjs_pressure.get("last_path"):
+            typer.echo(
+                "yjs_pressure.last: "
+                f"policy={yjs_pressure.get('last_policy_state') or '-'} "
+                f"reason={yjs_pressure.get('last_reason') or '-'} "
+                f"path={yjs_pressure.get('last_path') or '-'}"
+            )
     if media_runtime:
         assessment = media_runtime.get("assessment") if isinstance(media_runtime.get("assessment"), dict) else {}
         transport = media_runtime.get("transport") if isinstance(media_runtime.get("transport"), dict) else {}
