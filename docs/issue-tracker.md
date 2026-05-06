@@ -6,6 +6,255 @@ and delivery work.
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 
+## Hub Memory Growth Under Snapshot and Webspace Fanout
+
+### Goal
+
+Prevent runaway hub memory growth during snapshot, webspace rebuild, and Yjs
+fanout storms without hiding the underlying overload signal from operators,
+skills, or core diagnostics.
+
+Success means:
+
+- A hub does not grow from a normal working set into multi-gigabyte RSS during
+  a 10-minute snapshot/rebuild storm.
+- `webio.stream.snapshot.requested` and
+  `subnet.member.snapshot.changed` bursts are coalesced into bounded work.
+- Route, Yjs, and eventbus backpressure enter degraded mode before memory
+  runaway, while preserving causal diagnostics.
+- Guardrails reduce amplification but do not suppress evidence needed to fix
+  the originating skill or core hot path.
+- Policy-triggered memory profiling always leaves an operator-visible reason,
+  state transition, and artifact trail even when the live profile mode cannot
+  be applied immediately.
+
+### Current Status
+
+Snapshot date: 2026-05-06.
+
+Incident reference:
+
+- Live hub: `ssh -i c:/Users/Zver/.ssh/adaos_linux_exp root@192.168.0.30`
+- Subnet: `sn_92ffc943`
+- Runtime: `rt-b-a-ff6605f0`
+- Growth window: `2026-05-06 18:12:50 UTC` -> `18:22:21 UTC`
+- RSS growth in best 10-minute window: about `100 MiB` -> `2.07 GiB`
+
+Observed behavior:
+
+- NATS bridge was connected normally at runtime start, so this incident was not
+  driven by a root reconnect loop.
+- The hot path was a local storm of `webio.stream.snapshot.requested`,
+  `subnet.member.snapshot.changed`, multi-webspace semantic rebuilds, and
+  `webio` / Yjs fanout.
+- In the critical window the hub emitted repeated slow async handlers for
+  `infrastate_skill`, `infrascope_skill`, and
+  `webspace_runtime._on_subnet_member_snapshot_changed`.
+- The route layer showed repeated starvation via `publish_slow`,
+  `pending_data`, and `flush_slow`.
+- Yjs pressure warnings showed repeated large update bursts during the same
+  window.
+- The current sampled-profile session `mem-78c3dab0` stayed stuck in
+  `requested`, and supervisor repeatedly logged `failed to apply requested
+  memory profile mode`, so memory guardrails detected the incident but did not
+  capture a useful growth artifact.
+- A concurrent skill bug also appeared in the hot path:
+  `browsers_skill ... NameError: current_device_id is not defined`.
+
+Working hypothesis:
+
+- The primary cause is internal snapshot/fanout amplification, not external
+  root traffic.
+- The dominant amplification chain is:
+  `snapshot.requested` -> `snapshot.changed` -> multi-webspace rebuild ->
+  repeated `webio` / Yjs publish -> route starvation -> websocket reconnect /
+  reattach -> another snapshot cycle.
+- The memory plateau near `2 GiB` is consistent with a backlog-stuck runtime:
+  allocations stop accelerating because useful processing has mostly stalled,
+  not because retained memory was released.
+- Guardrails must therefore be designed as observability-first reducers of
+  amplification, not as opaque drops that erase the evidence needed to improve
+  core and skills.
+
+### Tasks
+
+#### HMG-001: Coalesce snapshot storms before they become fanout storms
+
+Status: open.
+
+Evidence:
+
+- Dense bursts of `webio.stream.snapshot.requested source=events_ws`.
+- Repeated `subnet.member.snapshot.requested` /
+  `subnet.member.snapshot.changed` cycles during websocket reconnects.
+- Slow async handlers clustered around snapshot handlers in
+  `infrastate_skill` and `infrascope_skill`.
+
+Actions:
+
+- [ ] Add a single in-flight snapshot guard per `(stream, webspace, node,
+  subscriber)` key.
+- [ ] Coalesce repeated `webio.stream.snapshot.requested` events into a dirty
+  flag plus last-request metadata instead of spawning duplicate work.
+- [ ] Add debounce / batch windows for `subnet.member.snapshot.changed` so one
+  flap burst produces one bounded rebuild cycle.
+- [ ] Separate full snapshot paths from incremental refresh paths; reconnect
+  and resubscribe must prefer bounded incremental bootstrap where possible.
+- [ ] Emit per-key counters for `requested`, `coalesced`, `executed`,
+  `skipped_unchanged`, and `dropped_due_to_guardrail`.
+- [ ] Make coalescing observable in logs and telemetry so operators can still
+  see the original incoming pressure and the amount of suppressed duplicate
+  work.
+
+#### HMG-002: Bound webspace rebuild amplification
+
+Status: open.
+
+Evidence:
+
+- In the incident window the same snapshot wave rebuilt `desktop`, `default`,
+  `test1`, and `test1-1` repeatedly.
+- Semantic rebuild durations rose into hundreds of milliseconds and over a
+  second for some spaces while new rebuild triggers were still arriving.
+
+Actions:
+
+- [ ] Add per-webspace rebuild queue depth, newest generation, oldest waiting
+  age, and rebuild result counters.
+- [ ] Skip or supersede stale rebuild requests when a newer generation is
+  already queued or executing.
+- [ ] Prevent one snapshot event from scheduling overlapping semantic rebuilds
+  for the same webspace.
+- [ ] Add a degraded rebuild mode that defers noncritical projections or
+  secondary webspaces while the hub is in memory or route pressure.
+- [ ] Record which upstream event caused each rebuild so we can trace pressure
+  back to a skill, browser, reconnect, or subnet state change.
+
+#### HMG-003: Add route and Yjs guardrails that preserve root-cause visibility
+
+Status: open.
+
+Evidence:
+
+- `hub-route` starvation repeatedly reported `publish_slow`, `pending_data`,
+  and `flush_slow`.
+- Yjs owner-flow and `yroom pressure` warnings showed large update bursts in
+  the same interval.
+
+Actions:
+
+- [ ] Add explicit degraded mode thresholds for route pending bytes, publish
+  latency, Yjs update bytes, and Yjs persist backlog.
+- [ ] When a threshold is crossed, downshift noncritical stream updates such as
+  repeated `events.recent`, `load_mark`, and equivalent cosmetic fanout.
+- [ ] Preserve observability by logging both the original attempted payload
+  rate and the reduced emitted payload rate.
+- [ ] Export route metrics for pending bytes, pending messages, max flush
+  latency, and suppressed publications.
+- [ ] Export Yjs metrics for update bytes, pending send/store tasks, replay
+  bytes, persist queue depth, and per-webspace pressure state.
+- [ ] Ensure every guardrail activation produces a structured reason record
+  that points back to the triggering stream, webspace, skill, or event type.
+
+#### HMG-004: Make eventbus and async backlog visible and bounded
+
+Status: open.
+
+Evidence:
+
+- The incident produced about 210 slow async handler warnings in one window.
+- Current logs show slow handlers, but not the complete backlog shape or the
+  amount of queued overlapping async work.
+
+Actions:
+
+- [ ] Add live gauges for eventbus pending async tasks, oldest pending task
+  age, per-topic in-flight counts, and per-handler slow-count totals.
+- [ ] Bound selected hot-path async fanout with semaphores or per-topic work
+  queues instead of unlimited `create_task` growth.
+- [ ] Add per-topic and per-handler cancellation / supersede semantics for
+  stale snapshot work.
+- [ ] Keep raw incoming-event counters visible even when bounded execution
+  drops or coalesces work.
+- [ ] Add an operator-facing incident summary that names the top topics and
+  handlers contributing to backlog growth.
+
+#### HMG-005: Make memory incident capture reliable before the hub stalls
+
+Status: open.
+
+Evidence:
+
+- Supervisor detected the growth threshold but left session `mem-78c3dab0` in
+  `requested`.
+- Repeated `failed to apply requested memory profile mode` warnings prevented a
+  useful memory artifact from being captured during the live incident.
+
+Actions:
+
+- [ ] Fix the supervisor profile-mode transition so a triggered session cannot
+  remain indefinitely in `requested`.
+- [ ] Persist a structured failure reason when automatic profile mode cannot be
+  applied, including slot, runtime, requested mode, and blocking condition.
+- [ ] Add a fallback capture path that records top allocators / growth context
+  without requiring a full runtime restart.
+- [ ] Tie memory incidents to the active operation and pressure context:
+  snapshot counters, rebuild queue depth, route pending bytes, and Yjs
+  pressure.
+- [ ] Publish enough local-only artifacts to debug the next incident even if
+  root publication is unavailable.
+
+#### HMG-006: Fix skill-level amplifiers in snapshot and webio hot paths
+
+Status: open.
+
+Evidence:
+
+- The heaviest repeated slow handlers in the incident were
+  `infrastate_skill.on_webio_stream_snapshot_requested` and
+  `infrascope_skill.on_webio_stream_snapshot_requested`.
+- A concurrent `browsers_skill` background task failed with
+  `NameError: current_device_id is not defined`.
+
+Actions:
+
+- [ ] Refactor `infrastate_skill` snapshot publishing to avoid full repeated
+  republish of unchanged payloads.
+- [ ] Refactor `infrascope_skill` snapshot publishing to prefer cached or diff
+  output when the source generation did not materially change.
+- [ ] Ensure skill snapshot handlers are idempotent and generation-aware.
+- [ ] Limit skill-triggered `webio.stream.*` fanout for noncritical diagnostics
+  under degraded route or memory pressure.
+- [ ] Fix the `browsers_skill` `current_device_id` bug and ensure background
+  snapshot tasks fail noisily but safely, without leaving orphan churn behind.
+- [ ] Review all skills subscribed to `subnet.member.snapshot.changed` and
+  `webio.stream.snapshot.requested` for duplicate work, full-state publish, and
+  missing debounce.
+
+#### HMG-007: Keep guardrails observability-first
+
+Status: open.
+
+Principle:
+
+- Predohranitel must reduce amplification, not erase cause.
+- If the hub suppresses or coalesces work, operators still need to see:
+  what arrived, what would have run, what was skipped, why it was skipped, and
+  which skill/core path created the pressure.
+
+Actions:
+
+- [ ] For every new guardrail, define the preserved evidence set before
+  implementing the drop/coalesce behavior.
+- [ ] Add structured counters for `received`, `executed`, `coalesced`,
+  `suppressed`, `timed_out`, and `failed` at the same logical boundary.
+- [ ] Ensure telemetry and logs distinguish "incoming load reduced by
+  guardrail" from "incoming load disappeared".
+- [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,
+  rebuild, route, and Yjs stages.
+- [ ] Reject any guardrail that improves memory only by hiding the overload
+  source from incident review.
+
 ## Realtime First 3 Minutes
 
 ### Goal
