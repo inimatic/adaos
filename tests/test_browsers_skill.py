@@ -116,6 +116,44 @@ def test_browsers_skill_get_link_settings_uses_sdk_device_access(monkeypatch) ->
     assert seen == ["member:member-2"]
 
 
+def test_browsers_skill_get_device_settings_accepts_generic_device_ref(monkeypatch) -> None:
+    mod = _load_browsers_skill_module()
+    expected = {
+        "device_ref": "member:member-4",
+        "title": "Workshop display",
+    }
+    seen: list[str] = []
+
+    def _fake_get_device_settings(device_ref: str):
+        seen.append(str(device_ref or "").strip())
+        return dict(expected)
+
+    monkeypatch.setattr(mod.sdk_device_access, "get_device_settings", _fake_get_device_settings)
+
+    result = mod.get_device_settings(device_ref="member:member-4")
+
+    assert result == expected
+    assert seen == ["member:member-4"]
+
+
+def test_browsers_skill_rename_device_uses_generic_device_ref(monkeypatch) -> None:
+    mod = _load_browsers_skill_module()
+    seen: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(mod, "_refresh_snapshot_sync", lambda webspace_id=None: {"ok": True, "webspace_id": webspace_id})
+
+    def _fake_rename(device_ref: str, display_name: str):
+        seen.append((str(device_ref or "").strip(), str(display_name or "").strip()))
+        return {"ok": True, "device_ref": device_ref}
+
+    monkeypatch.setattr(mod.sdk_device_access, "rename_device", _fake_rename)
+
+    result = mod.rename_device(device_ref="member:member-4", name="Workshop display", webspace_id="desktop")
+
+    assert result == {"ok": True, "device_ref": "member:member-4"}
+    assert seen == [("member:member-4", "Workshop display")]
+
+
 def test_browsers_skill_adopt_link_uses_sdk_device_access(monkeypatch) -> None:
     mod = _load_browsers_skill_module()
     seen: list[tuple[str, str | None, str]] = []

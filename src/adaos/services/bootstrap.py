@@ -140,6 +140,12 @@ def _node_status_emit_fingerprint(payload: object) -> tuple[Any, ...]:
         normalized_node_names = tuple(str(item or "").strip() for item in node_names if str(item or "").strip())
     else:
         normalized_node_names = ()
+    connected_to_subnet = payload.get("connected_to_subnet")
+    if connected_to_subnet is None:
+        connected_to_subnet = payload.get("connected_to_hub")
+    connected_to_hub = payload.get("connected_to_hub")
+    if connected_to_hub is None:
+        connected_to_hub = connected_to_subnet
     return (
         str(payload.get("node_id") or "").strip(),
         str(payload.get("subnet_id") or "").strip(),
@@ -150,7 +156,8 @@ def _node_status_emit_fingerprint(payload: object) -> tuple[Any, ...]:
         str(payload.get("node_state") or "").strip(),
         bool(payload.get("draining")),
         str(payload.get("route_mode") or "").strip(),
-        payload.get("connected_to_hub"),
+        connected_to_subnet,
+        connected_to_hub,
         str(payload.get("trigger") or "").strip(),
     )
 
