@@ -70,12 +70,23 @@ def _yjs_primary_doc_policy_state(*, webspace_id: str, owner: str, root_name: st
     return {"policy_state": "ok"}
 
 
-async def _throttle_primary_doc_write(*, policy: dict[str, Any], webspace_id: str, path: str, owner: str) -> None:
-    if str(policy.get("policy_state") or "").strip().lower() != "throttle":
-        return
+async def _govern_primary_doc_write(*, policy: dict[str, Any], webspace_id: str, path: str, owner: str) -> bool:
+    policy_state = str(policy.get("policy_state") or "").strip().lower()
+    if policy_state == "block":
+        _log.warning(
+            "blocked YJS primary-doc write webspace=%s owner=%s path=%s reason=%s roots=%s",
+            webspace_id,
+            owner,
+            path,
+            str(policy.get("reason") or "write_amplification_blocked"),
+            ",".join(str(item) for item in list(policy.get("blocked_roots") or [])) or "-",
+        )
+        return False
+    if policy_state != "throttle":
+        return True
     delay = float(_PRIMARY_DOC_PRESSURE_THROTTLE_SEC)
     if delay <= 0.0:
-        return
+        return True
     key = f"{str(webspace_id or '').strip()}\0{str(owner or '').strip()}\0{str(path or '').strip()}"
     wait_s = 0.0
     with _PRIMARY_DOC_THROTTLE_LOCK:
@@ -89,6 +100,7 @@ async def _throttle_primary_doc_write(*, policy: dict[str, Any], webspace_id: st
         _PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT[key] = next_allowed
     if wait_s > 0.0:
         await asyncio.sleep(wait_s)
+    return True
 
 
 def _clone_json_like(value: Any) -> Any:
@@ -276,7 +288,8 @@ class ProjectionService:
         owner = _projection_write_owner()
         prefer_live_room = owner == "core"
         policy = _yjs_primary_doc_policy_state(webspace_id=ws_id, owner=owner, root_name=root_name)
-        await _throttle_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner)
+        if not await _govern_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner):
+            return
 
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)

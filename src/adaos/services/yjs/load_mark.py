@@ -32,6 +32,8 @@ _STREAM_UNCHANGED_KEEPALIVE_SEC = max(0.0, float(os.getenv("ADAOS_YJS_LOAD_MARK_
 _STREAM_TOP_N = max(0, int(os.getenv("ADAOS_YJS_LOAD_MARK_STREAM_TOP_N") or "24"))
 _HIGH_WPS = max(1.0, float(os.getenv("ADAOS_YJS_LOAD_MARK_HIGH_WPS") or "8"))
 _CRITICAL_WPS = max(_HIGH_WPS + 0.1, float(os.getenv("ADAOS_YJS_LOAD_MARK_CRITICAL_WPS") or "32"))
+_BLOCK_BPS = max(_CRITICAL_BPS + 1, int(os.getenv("ADAOS_YJS_LOAD_MARK_BLOCK_BPS") or str(256 * 1024)))
+_BLOCK_WPS = max(_CRITICAL_WPS + 0.1, float(os.getenv("ADAOS_YJS_LOAD_MARK_BLOCK_WPS") or "64"))
 _GATEWAY_HIGH_WPS = max(_HIGH_WPS, float(os.getenv("ADAOS_YJS_LOAD_MARK_GATEWAY_HIGH_WPS") or "64"))
 _GATEWAY_CRITICAL_WPS = max(
     _GATEWAY_HIGH_WPS + 0.1,
@@ -184,11 +186,25 @@ def _normalize_owner_bucket(owner: str | None) -> str:
 
 def _policy_state_for_observed_state(observed_state: str) -> str:
     token = str(observed_state or "").strip().lower()
-    if token == "critical":
-        return "throttle"
     if token == "high":
         return "warn"
     return "ok"
+
+
+def _policy_state_for_owner_metrics(
+    *,
+    observed_state: str,
+    avg_bps: float,
+    peak_bps: float,
+    avg_wps: float,
+    peak_wps: float,
+) -> str:
+    if peak_bps >= float(_BLOCK_BPS) or avg_bps >= float(_BLOCK_BPS) or peak_wps >= float(_BLOCK_WPS) or avg_wps >= float(_BLOCK_WPS):
+        return "block"
+    token = str(observed_state or "").strip().lower()
+    if token == "critical":
+        return "throttle"
+    return _policy_state_for_observed_state(token)
 
 
 def _has_active_stream_subscription_locked(webspace_id: str) -> bool:
@@ -1030,7 +1046,17 @@ def yjs_primary_doc_policy_snapshot(
         or overall_assessment.get("state")
         or "idle"
     ).strip().lower() or "idle"
-    policy_state = _policy_state_for_observed_state(observed_state)
+    avg_bps = float(owner_row.get("avg_bps") or 0.0)
+    peak_bps = float(owner_row.get("peak_bps") or 0.0)
+    avg_wps = float(owner_row.get("avg_wps") or 0.0)
+    peak_wps = float(owner_row.get("peak_wps") or 0.0)
+    policy_state = _policy_state_for_owner_metrics(
+        observed_state=observed_state,
+        avg_bps=avg_bps,
+        peak_bps=peak_bps,
+        avg_wps=avg_wps,
+        peak_wps=peak_wps,
+    )
     affected_roots: list[str] = []
     for raw_name in list(root_names or ()):
         name = str(raw_name or "").strip()
@@ -1045,12 +1071,20 @@ def yjs_primary_doc_policy_snapshot(
         "owner": str(owner_row.get("owner") or "").strip() or None,
         "recent_bytes": int(owner_row.get("recent_bytes") or 0),
         "recent_writes": int(owner_row.get("recent_writes") or 0),
-        "peak_bps": float(owner_row.get("peak_bps") or 0.0),
-        "peak_wps": float(owner_row.get("peak_wps") or 0.0),
+        "peak_bps": peak_bps,
+        "peak_wps": peak_wps,
         "policy_state": policy_state,
         "target": "primary_shared_doc",
-        "reason": "write_amplification" if policy_state in {"warn", "throttle"} else "healthy",
-        "blocked_roots": [],
+        "reason": (
+            "write_amplification_blocked"
+            if policy_state == "block"
+            else "write_amplification"
+            if policy_state == "throttle"
+            else "write_pressure_warning"
+            if policy_state == "warn"
+            else "healthy"
+        ),
+        "blocked_roots": affected_roots if policy_state == "block" else [],
         "throttled_roots": affected_roots if policy_state == "throttle" else [],
         "observed_state": observed_state,
     }

@@ -725,6 +725,56 @@ def test_infrastate_summary_highlights_against_previous_render(monkeypatch):
     assert "countdown completed" in second["description"]
     assert "𝐩𝐞𝐧𝐝𝐢𝐧𝐠_𝐚𝐜𝐤𝐬=𝟐" in second["description"]
 
+def test_infrastate_summary_exposes_semantic_state_plane_contracts(monkeypatch):
+    mod = _load_infrastate_module()
+    memory: dict[str, object] = {}
+
+    monkeypatch.setattr(mod, "skill_memory_get", lambda key, default=None: memory.get(key, default))
+    monkeypatch.setattr(mod, "skill_memory_set", lambda key, value: memory.__setitem__(key, value))
+    monkeypatch.setattr(mod, "_node_tabs", lambda conf, ui_state, reliability: ([], {"kind": "local", "node_id": "hub-1", "label": "hub"}))
+    monkeypatch.setattr(mod, "_skill_runtime_migration_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_runtime_migration_note", lambda report: "")
+    monkeypatch.setattr(mod, "_skill_runtime_rollback_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_runtime_rollback_note", lambda report: "")
+    monkeypatch.setattr(mod, "_skill_post_commit_checks_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_post_commit_checks_note", lambda report: "")
+    monkeypatch.setattr(mod, "_supervisor_transition_note", lambda status: {})
+    monkeypatch.setattr(mod, "_reliability_summary_note", lambda reliability, transport_diag: "")
+    monkeypatch.setattr(mod, "_hub_root_strategy", lambda reliability, transport_diag: {})
+    monkeypatch.setattr(mod, "_effective_channel_view", lambda *args, **kwargs: ("ready", "stable", {}))
+    monkeypatch.setattr(mod, "_selected_yjs_webspace_id", lambda ui_state, reliability: "default")
+
+    summary = mod._summary(
+        status={"state": "ready", "message": "ok", "phase": "validate"},
+        last_result={},
+        slots_payload={"active_slot": "A"},
+        lifecycle={},
+        conf=SimpleNamespace(role="hub", node_id="hub-1"),
+        build={"runtime_git_short_commit": "77fab7d"},
+        ui_state={},
+        reliability={
+            "runtime": {
+                "connectivity": {
+                    "required_upstream_link": {"kind": "hub_root", "transport_state": "ready"},
+                },
+                "state_sync": {
+                    "webspace_id": "desktop",
+                    "semantic_state": "stale",
+                },
+                "yjs_pressure": {
+                    "owner": "_by_owner/skill_infrastate_skill",
+                    "policy_state": "block",
+                },
+            }
+        },
+        transport_diag={},
+        selected_member=None,
+    )
+
+    assert summary["semantic_connectivity"]["required_upstream_link"]["kind"] == "hub_root"
+    assert summary["semantic_state_sync"]["semantic_state"] == "stale"
+    assert summary["semantic_yjs_pressure"]["policy_state"] == "block"
+
 
 def test_infrastate_summary_buttons_offer_defer_during_countdown():
     mod = _load_infrastate_module()
@@ -1150,6 +1200,58 @@ def test_infrastate_marketplace_catalog_uses_ttl_cache(monkeypatch, tmp_path: Pa
     assert calls == {"git": 1, "scan": 1}
 
 
+def test_infrastate_realtime_items_include_semantic_state_plane_cards():
+    mod = _load_infrastate_module()
+
+    items = mod._realtime_items(
+        {
+            "runtime": {
+                "connectivity": {
+                    "required_upstream_link": {
+                        "kind": "hub_root",
+                        "transport_state": "ready",
+                        "transition_state": "waiting_restart",
+                        "served_by": "supervisor",
+                    },
+                    "browser_control_route": {
+                        "transport_state": "degraded",
+                        "transition_state": "reconnecting",
+                        "blockers": ["route.flapping"],
+                    },
+                },
+                "state_sync": {
+                    "webspace_id": "desktop",
+                    "transport_state": "attached",
+                    "first_sync_state": "timeout",
+                    "semantic_state": "stale",
+                    "freshness_state": "stale",
+                    "fallback_mode": "hard_degraded_recovery",
+                    "replay": {"cursor": "3/32", "mode": "snapshot_plus_diff"},
+                },
+                "yjs_pressure": {
+                    "owner": "_by_owner/skill_infrastate_skill",
+                    "policy_state": "throttle",
+                    "observed_state": "critical",
+                    "recent_bytes": 167296,
+                    "recent_writes": 2,
+                    "peak_bps": 167296.0,
+                    "peak_wps": 2.0,
+                    "reason": "write_amplification",
+                },
+            }
+        },
+        {},
+    )
+
+    by_id = {str(item.get("id") or ""): item for item in items}
+    assert "semantic_connectivity" in by_id
+    assert "semantic_state_sync" in by_id
+    assert "semantic_yjs_pressure" in by_id
+    assert "upstream=hub_root:ready/waiting_restart" in str(by_id["semantic_connectivity"]["description"])
+    assert "semantic=stale" in str(by_id["semantic_state_sync"]["description"])
+    assert "policy=throttle" in str(by_id["semantic_yjs_pressure"]["description"])
+
+
 def test_infrastate_project_async_skips_snapshot_with_only_timestamp_changes(monkeypatch):
     mod = _load_infrastate_module()
     applied: list[tuple[str | None, str]] = []
@@ -1182,6 +1284,101 @@ def test_infrastate_project_async_skips_snapshot_with_only_timestamp_changes(mon
     assert applied == [("default", "ready")]
     assert mod._projection_diag["apply_total"] == 1
     assert mod._projection_diag["skip_total"] == 1
+
+
+def test_infrastate_project_async_uses_throttled_interval_when_yjs_policy_requires(monkeypatch):
+    mod = _load_infrastate_module()
+    applied: list[tuple[str | None, str]] = []
+    mod._projection_fingerprints.clear()
+    mod._projection_last_applied_at.clear()
+    mod._projection_diag.update(
+        {
+            "apply_total": 0,
+            "skip_total": 0,
+            "cache_hit_total": 0,
+            "rate_limited_total": 0,
+            "last_policy_state": "",
+            "last_policy_owner": "",
+            "last_policy_observed_state": "",
+            "last_policy_webspace_id": "",
+            "last_policy_throttled_roots": [],
+        }
+    )
+
+    async def _fake_set_async(slot, value, *, user_id=None, webspace_id=None):
+        applied.append((webspace_id, str(value.get("summary", {}).get("value") or "")))
+
+    monkeypatch.setattr(mod, "ctx_subnet", SimpleNamespace(set_async=_fake_set_async))
+    monkeypatch.setattr(mod, "_projection_webspace_ids", lambda webspace_id=None: ["default"])
+    monkeypatch.setattr(mod, "_publish_snapshot_streams", lambda snapshot, webspace_id=None: None)
+    monkeypatch.setattr(
+        mod,
+        "_projection_pressure_policy",
+        lambda webspace_id=None: {"policy_state": "throttle", "observed_state": "critical", "throttled_roots": ["data"]},
+    )
+    monkeypatch.setattr(mod, "_MIN_YJS_PROJECTION_INTERVAL_S", 0.1)
+    monkeypatch.setattr(mod, "_THROTTLED_YJS_PROJECTION_INTERVAL_S", 2.0)
+
+    first = {"summary": {"value": "ready-1"}}
+    second = {"summary": {"value": "ready-2"}}
+
+    asyncio.run(mod._project_async(first, webspace_id="default"))
+    asyncio.run(mod._project_async(second, webspace_id="default"))
+
+    assert applied == [("default", "ready-1")]
+    assert mod._projection_diag["apply_total"] == 1
+    assert mod._projection_diag["rate_limited_total"] == 1
+
+
+def test_infrastate_project_async_blocks_primary_yjs_projection_but_keeps_streams(monkeypatch):
+    mod = _load_infrastate_module()
+    applied: list[tuple[str | None, str]] = []
+    published: list[str] = []
+    mod._projection_fingerprints.clear()
+    mod._projection_last_applied_at.clear()
+    mod._projection_diag.update(
+        {
+            "apply_total": 0,
+            "skip_total": 0,
+            "cache_hit_total": 0,
+            "rate_limited_total": 0,
+            "blocked_total": 0,
+            "last_policy_state": "",
+            "last_policy_owner": "",
+            "last_policy_observed_state": "",
+            "last_policy_webspace_id": "",
+            "last_policy_throttled_roots": [],
+            "last_policy_blocked_roots": [],
+            "last_policy_reason": "",
+        }
+    )
+
+    async def _fake_set_async(slot, value, *, user_id=None, webspace_id=None):
+        applied.append((webspace_id, str(value.get("summary", {}).get("value") or "")))
+
+    monkeypatch.setattr(mod, "ctx_subnet", SimpleNamespace(set_async=_fake_set_async))
+    monkeypatch.setattr(mod, "_projection_webspace_ids", lambda webspace_id=None: ["default"])
+    monkeypatch.setattr(
+        mod,
+        "_publish_snapshot_streams",
+        lambda snapshot, webspace_id=None: published.append(str(snapshot.get("summary", {}).get("value") or "")),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_projection_pressure_policy",
+        lambda webspace_id=None: {
+            "policy_state": "block",
+            "observed_state": "critical",
+            "blocked_roots": ["data"],
+            "reason": "write_amplification_blocked",
+        },
+    )
+
+    asyncio.run(mod._project_async({"summary": {"value": "ready"}}, webspace_id="default"))
+
+    assert applied == []
+    assert published == ["ready"]
+    assert mod._projection_diag["blocked_total"] == 1
 
 
 def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch):
