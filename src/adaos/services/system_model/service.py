@@ -89,6 +89,7 @@ def current_node_status_payload() -> dict[str, Any]:
         "node_state": str(lifecycle.get("node_state") or "ready"),
         "draining": bool(lifecycle.get("draining")),
         "route_mode": route_mode,
+        "connected_to_subnet": connected,
         "connected_to_hub": connected,
     }
 

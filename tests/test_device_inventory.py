@@ -189,6 +189,40 @@ def test_device_inventory_includes_observed_only_member_without_policy(monkeypat
     assert item["runtime"]["snapshot_state"] == "stale"
 
 
+def test_device_inventory_reads_connected_to_subnet_field_directly(monkeypatch) -> None:
+    _patch_sources(
+        monkeypatch,
+        directory_nodes=[
+            {
+                "node_id": "member-3",
+                "hostname": "display-node",
+                "online": True,
+                "last_seen": 990.0,
+                "runtime_projection": {
+                    "captured_at": 995.0,
+                    "ready": True,
+                    "route_mode": "p2p",
+                    "connected_to_subnet": True,
+                    "snapshot": {
+                        "captured_at": 995.0,
+                        "ready": True,
+                        "node_names": ["Hall display"],
+                        "route_mode": "p2p",
+                        "connected_to_subnet": True,
+                    },
+                },
+            }
+        ],
+        now=1000.0,
+    )
+
+    item = device_inventory.get_device("member:member-3")
+
+    assert item is not None
+    assert item["runtime"]["connected_to_subnet"] is True
+    assert item["runtime"]["route_mode"] == "p2p"
+
+
 def test_sdk_devices_inspect_device_separates_diagnostics(monkeypatch) -> None:
     _patch_sources(
         monkeypatch,

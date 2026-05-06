@@ -105,6 +105,26 @@ def test_canonical_object_from_node_status_accepts_pydantic_payload() -> None:
     assert obj["health"]["connectivity"] == "reachable"
 
 
+def test_canonical_object_from_node_status_accepts_connected_to_subnet_alias() -> None:
+    obj = canonical_object_from_node_status(
+        {
+            "node_id": "member-9",
+            "subnet_id": "subnet-a",
+            "role": "member",
+            "primary_node_name": "Kitchen member",
+            "ready": False,
+            "node_state": "ready",
+            "draining": False,
+            "route_mode": "p2p",
+            "connected_to_subnet": False,
+        }
+    ).to_dict()
+
+    assert obj["status"] == "offline"
+    assert obj["runtime"]["connected_to_subnet"] is False
+    assert obj["runtime"]["connected_to_hub"] is False
+
+
 def test_canonical_object_from_node_status_marks_draining_as_warning() -> None:
     obj = canonical_object_from_node_status(
         {
@@ -277,6 +297,123 @@ def test_browser_session_catalog_unions_yws_and_webrtc_snapshots(monkeypatch) ->
     assert objects[1]["health"]["yjs_channel"] == "reachable"
 
 
+def test_device_catalog_uses_device_inventory_records_and_preserves_workspace_bindings(monkeypatch) -> None:
+    sys.modules.setdefault("nats", SimpleNamespace())
+    sys.modules.setdefault(
+        "y_py",
+        SimpleNamespace(
+            YDoc=type("YDoc", (), {}),
+            apply_update=lambda *args, **kwargs: None,
+            encode_state_as_update=lambda *args, **kwargs: b"",
+            encode_state_vector=lambda *args, **kwargs: b"",
+        ),
+    )
+    if "ypy_websocket.ystore" not in sys.modules:
+        ystore_module = types.ModuleType("ypy_websocket.ystore")
+        ystore_module.BaseYStore = type("BaseYStore", (), {})
+        ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
+        sys.modules["ypy_websocket.ystore"] = ystore_module
+    if "ypy_websocket" not in sys.modules:
+        pkg = types.ModuleType("ypy_websocket")
+        pkg.ystore = sys.modules["ypy_websocket.ystore"]
+        sys.modules["ypy_websocket"] = pkg
+    from adaos.services.system_model import catalog
+
+    monkeypatch.setattr(catalog, "_governed", lambda obj: obj)
+    monkeypatch.setattr(
+        catalog,
+        "list_device_inventory_records",
+        lambda: [
+            {
+                "ref": "browser:tablet-kitchen",
+                "kind": "browser",
+                "identity": {
+                    "link_id": "tablet-kitchen",
+                    "browser_device_id": "tablet-kitchen",
+                    "node_id": None,
+                    "hostname": "tablet-host",
+                    "node_names": [],
+                    "base_url": None,
+                },
+                "policy": {
+                    "present": True,
+                    "managed_state": "managed",
+                    "display_name": "Kitchen tablet",
+                    "effective_name": "Kitchen tablet",
+                    "access_class": "device",
+                    "lifetime_mode": "permanent",
+                    "revoked": False,
+                },
+                "observation": {
+                    "online": True,
+                    "connection_state": "connected",
+                    "last_seen_at": 321.0,
+                    "source": "browser_session",
+                    "last_webspace_id": "desk",
+                },
+                "runtime": {
+                    "connected_to_subnet": None,
+                    "route_mode": None,
+                    "runtime_version": None,
+                    "snapshot_state": None,
+                },
+            },
+            {
+                "ref": "member:member-2",
+                "kind": "member",
+                "identity": {
+                    "link_id": "member-2",
+                    "browser_device_id": None,
+                    "node_id": "member-2",
+                    "hostname": "member-host",
+                    "node_names": ["Kitchen East"],
+                    "base_url": "http://member-2.local",
+                },
+                "policy": {
+                    "present": False,
+                    "managed_state": "observed_only",
+                    "display_name": None,
+                    "effective_name": "Kitchen East",
+                    "access_class": "device",
+                    "lifetime_mode": "permanent",
+                    "revoked": False,
+                },
+                "observation": {
+                    "online": True,
+                    "connection_state": "connected",
+                    "last_seen_at": 654.0,
+                    "source": "member_link",
+                    "last_webspace_id": None,
+                },
+                "runtime": {
+                    "connected_to_subnet": True,
+                    "route_mode": "p2p",
+                    "runtime_version": "1.2.3",
+                    "snapshot_state": "fresh",
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        catalog.workspace_index,
+        "list_workspaces",
+        lambda: [
+            SimpleNamespace(workspace_id="desk", device_binding="tablet-kitchen"),
+            SimpleNamespace(workspace_id="kitchen", device_binding="tablet-kitchen"),
+        ],
+    )
+
+    objects = [item.to_dict() for item in catalog.device_objects()]
+
+    assert [item["id"] for item in objects] == ["device:member:member-2", "device:tablet-kitchen"]
+    member_obj, browser_obj = objects
+    assert member_obj["runtime"]["connected_to_subnet"] is True
+    assert member_obj["relations"]["connected_to"] == ["member:member-2"]
+    assert browser_obj["title"] == "Kitchen tablet"
+    assert browser_obj["relations"]["workspace"] == ["workspace:desk", "workspace:kitchen"]
+    assert browser_obj["relations"]["connected_to"] == ["browser:tablet-kitchen"]
+
+
 def test_canonical_object_from_device_endpoint_merges_workspace_and_session_links() -> None:
     obj = canonical_object_from_device_endpoint(
         {
@@ -294,6 +431,54 @@ def test_canonical_object_from_device_endpoint_merges_workspace_and_session_link
     assert obj["relations"]["workspace"] == ["workspace:kitchen"]
     assert obj["relations"]["connected_to"] == ["browser:tablet-kitchen"]
     assert obj["health"]["connectivity"] == "reachable"
+
+
+def test_canonical_object_from_device_endpoint_accepts_device_record_shape() -> None:
+    obj = canonical_object_from_device_endpoint(
+        {
+            "ref": "member:member-2",
+            "kind": "member",
+            "identity": {
+                "link_id": "member-2",
+                "node_id": "member-2",
+                "hostname": "kitchen-member",
+                "node_names": ["Kitchen East"],
+                "base_url": "http://member-2.local",
+            },
+            "policy": {
+                "present": True,
+                "managed_state": "managed",
+                "display_name": "Kitchen tablet",
+                "effective_name": "Kitchen tablet",
+                "access_class": "device",
+                "lifetime_mode": "permanent",
+                "revoked": False,
+            },
+            "observation": {
+                "online": True,
+                "connection_state": "connected",
+                "last_seen_at": 123.0,
+                "source": "member_link",
+            },
+            "runtime": {
+                "route_mode": "p2p",
+                "connected_to_subnet": True,
+                "runtime_version": "1.2.3",
+                "snapshot_state": "fresh",
+            },
+            "workspace_ids": [],
+            "session_ids": ["member:member-2"],
+            "source": "device_inventory",
+        }
+    ).to_dict()
+
+    assert obj["id"] == "device:member:member-2"
+    assert obj["title"] == "Kitchen tablet"
+    assert obj["relations"]["connected_to"] == ["member:member-2"]
+    assert obj["runtime"]["connected_to_subnet"] is True
+    assert obj["runtime"]["connected_to_hub"] is True
+    assert obj["runtime"]["route_mode"] == "p2p"
+    assert obj["actual_state"]["device_ref"] == "member:member-2"
 
 
 def test_canonical_object_from_subnet_directory_node_maps_capacity_and_presence() -> None:
@@ -318,6 +503,7 @@ def test_canonical_object_from_subnet_directory_node_maps_capacity_and_presence(
                 "node_names": ["Kitchen East"],
                 "ready": True,
                 "route_mode": "ws",
+                "connected_to_subnet": True,
                 "build": {"runtime_version": "0.2.0"},
                 "update_status": {"state": "succeeded"},
             },
@@ -334,6 +520,8 @@ def test_canonical_object_from_subnet_directory_node_maps_capacity_and_presence(
     assert obj["health"]["route_mode"] == "ws"
     assert obj["health"]["runtime_freshness"] == "fresh"
     assert obj["runtime"]["runtime_projection_freshness"]["state"] == "fresh"
+    assert obj["runtime"]["connected_to_subnet"] is True
+    assert obj["runtime"]["connected_to_hub"] is True
     assert obj["health"]["connectivity"] == "reachable"
 
 

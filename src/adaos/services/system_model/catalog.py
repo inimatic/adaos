@@ -6,6 +6,7 @@ from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.services.bootstrap import load_config
 from adaos.services.capacity import get_local_capacity
 from adaos.services.agent_context import AgentContext, get_ctx
+from adaos.services.device_inventory import list_devices as list_device_inventory_records
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.skill.manager import SkillManager
 from adaos.services.system_model.governance import apply_governance_defaults
@@ -187,6 +188,35 @@ def browser_session_objects() -> list[Any]:
 def device_objects() -> list[Any]:
     records: dict[str, dict[str, Any]] = {}
 
+    for item in list_device_inventory_records():
+        if not isinstance(item, dict):
+            continue
+        identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
+        observation = item.get("observation") if isinstance(item.get("observation"), dict) else {}
+        device_kind = str(item.get("kind") or "device").strip().lower() or "device"
+        browser_device_id = str(identity.get("browser_device_id") or identity.get("link_id") or "").strip()
+        member_node_id = str(identity.get("node_id") or identity.get("link_id") or "").strip()
+        device_key = browser_device_id if device_kind == "browser" and browser_device_id else str(item.get("ref") or member_node_id or "unknown").strip() or "unknown"
+        workspace_ids: list[str] = []
+        last_webspace_id = str(observation.get("last_webspace_id") or "").strip()
+        if last_webspace_id:
+            workspace_ids.append(last_webspace_id)
+        session_ids: list[str] = []
+        if device_kind == "browser" and browser_device_id:
+            session_ids.append(f"browser:{browser_device_id}")
+        elif device_kind == "member" and member_node_id:
+            session_ids.append(f"member:{member_node_id}")
+        records[device_key] = {
+            **item,
+            "device_id": device_key,
+            "device_kind": device_kind,
+            "workspace_ids": workspace_ids,
+            "session_ids": session_ids,
+            "online": observation.get("online"),
+            "last_seen": observation.get("last_seen_at"),
+            "source": "device_inventory",
+        }
+
     for row in list(workspace_index.list_workspaces() or []):
         device_id = str(getattr(row, "device_binding", "") or "").strip()
         if not device_id:
@@ -203,35 +233,9 @@ def device_objects() -> list[Any]:
             },
         )
         workspace_id = str(getattr(row, "workspace_id", "") or "").strip()
-        if workspace_id and workspace_id not in record["workspace_ids"]:
-            record["workspace_ids"].append(workspace_id)
-
-    for item in _browser_session_payloads():
-        device_id = str(item.get("device_id") or item.get("id") or "").strip()
-        if not device_id:
-            continue
-        record = records.setdefault(
-            device_id,
-            {
-                "device_id": device_id,
-                "device_kind": "browser",
-                "workspace_ids": [],
-                "session_ids": [],
-                "online": None,
-                "source": "browser_runtime",
-            },
-        )
-        workspace_id = str(item.get("webspace_id") or "").strip()
-        if workspace_id and workspace_id not in record["workspace_ids"]:
-            record["workspace_ids"].append(workspace_id)
-        session_id = f"browser:{device_id}"
-        if session_id not in record["session_ids"]:
-            record["session_ids"].append(session_id)
-        state = str(item.get("connection_state") or "").strip().lower()
-        if state == "connected":
-            record["online"] = True
-        elif record.get("online") is None and state in {"disconnected", "failed", "closed"}:
-            record["online"] = False
+        workspace_ids = record.setdefault("workspace_ids", [])
+        if workspace_id and workspace_id not in workspace_ids:
+            workspace_ids.append(workspace_id)
 
     return [
         _governed(canonical_object_from_device_endpoint(item))
