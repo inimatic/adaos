@@ -29,6 +29,10 @@ def _dev_api_serve_core_update_sync_disabled() -> bool:
     }
 
 
+def _node_core_update_disabled(conf: Any) -> bool:
+    return not bool(getattr(conf, "core_update_enabled", True))
+
+
 def _core_update_stream_id(conf) -> str:
     subnet_id = str(getattr(conf, "subnet_id", "") or "").strip() or "unknown_hub"
     return f"hub-integration:github-core-update:{subnet_id}:{runtime_instance_id()}"
@@ -118,6 +122,12 @@ def report_hub_core_update_state(conf) -> dict[str, Any] | None:
 
 
 def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str, Any] | None:
+    if _node_core_update_disabled(conf):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "node_core_update_disabled",
+        }
     if _dev_api_serve_core_update_sync_disabled():
         return {
             "ok": True,

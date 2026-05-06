@@ -20,7 +20,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.core_slots import active_slot_manifest, slot_status
 from adaos.services.core_update import read_last_result as read_core_update_last_result
 from adaos.services.core_update import read_status as read_core_update_status
-from adaos.services.node_config import normalize_node_names, set_node_names as persist_node_names
+from adaos.services.node_config import load_config, normalize_node_names, set_node_names as persist_node_names
 from adaos.services.node_runtime_state import save_node_runtime_state
 from adaos.services.node_runtime_state import load_member_hub_token
 from adaos.services.capacity import get_local_capacity
@@ -796,6 +796,12 @@ class MemberLinkClient:
 
     async def _follow_hub_core_update(self, payload: dict[str, Any]) -> None:
         if str(os.getenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", "1")).strip().lower() in {"0", "false", "no", "off"}:
+            return
+        try:
+            conf = getattr(get_ctx(), "config", None) or load_config()
+        except Exception:
+            conf = None
+        if conf is not None and not bool(getattr(conf, "core_update_enabled", True)):
             return
         state = str(payload.get("state") or "").strip().lower()
         action = str(payload.get("action") or "update").strip().lower()
