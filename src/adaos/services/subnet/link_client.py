@@ -56,9 +56,14 @@ def _to_ws_url(http_base: str, path: str) -> str:
 
 def _member_link_transition_snapshot() -> dict[str, Any]:
     update_status = read_core_update_status() or {}
+    lifecycle = runtime_lifecycle_snapshot()
     status = update_status if isinstance(update_status, dict) else {}
+    runtime = lifecycle if isinstance(lifecycle, dict) else {}
     state = str(status.get("state") or "").strip().lower()
     phase = str(status.get("phase") or "").strip().lower()
+    node_state = str(runtime.get("node_state") or "").strip().lower()
+    lifecycle_reason = str(runtime.get("reason") or "").strip().lower()
+    draining = bool(runtime.get("draining"))
     transition_state = "ready"
     reason = "none"
     if state in {"preparing", "countdown", "draining", "stopping", "applying"}:
@@ -70,6 +75,9 @@ def _member_link_transition_snapshot() -> dict[str, Any]:
     elif state == "validated" and phase == "root_promotion_pending":
         transition_state = "waiting_restart"
         reason = "root_promotion_pending"
+    elif draining or node_state in {"stopping", "stopped", "restarting"}:
+        transition_state = "waiting_restart"
+        reason = lifecycle_reason or node_state or "draining"
     return {
         "transition_state": transition_state,
         "reason": reason,
