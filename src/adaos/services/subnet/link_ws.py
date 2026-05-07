@@ -191,6 +191,20 @@ async def subnet_ws(websocket: WebSocket) -> None:
                     continue
                 continue
 
+            if t == "yjs.node_state":
+                try:
+                    webspace_id = str(msg.get("webspace_id") or "default")
+                    state = msg.get("state")
+                    if isinstance(state, dict):
+                        await mgr.ingest_member_node_state(
+                            node_id=node_id,
+                            webspace_id=webspace_id,
+                            state=state,
+                        )
+                except Exception:
+                    continue
+                continue
+
             _ = link
     finally:
         if node_id:

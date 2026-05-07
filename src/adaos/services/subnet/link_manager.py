@@ -15,8 +15,8 @@ from fastapi import WebSocket
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_display import node_display_from_directory_node
-from adaos.services.yjs.doc import apply_update_to_live_room
-from adaos.services.yjs.store import get_ystore_for_webspace, suppress_ystore_write_notifications
+from adaos.services.yjs.doc import apply_update_to_live_room, async_get_ydoc
+from adaos.services.yjs.store import get_ystore_for_webspace, suppress_ystore_write_notifications, ystore_write_metadata
 
 _log = logging.getLogger("adaos.subnet.link")
 
@@ -165,6 +165,16 @@ class HubLinkManager:
         self._hub_event_total = 0
         self._hub_core_update_broadcast_total = 0
         self._snapshot_refresh_tasks: dict[str, asyncio.Task] = {}
+        self._yjs_ingest_total = 0
+        self._yjs_ingest_bytes = 0
+        self._yjs_live_apply_total = 0
+        self._yjs_live_apply_failed_total = 0
+        self._yjs_broadcast_total = 0
+        self._yjs_broadcast_failed_total = 0
+        self._last_yjs_ingest_at = 0.0
+        self._last_yjs_ingest_node_id = ""
+        self._last_yjs_ingest_webspace_id = ""
+        self._last_yjs_ingest_bytes = 0
 
     @staticmethod
     def _member_snapshot_followup_delay_s() -> float:
@@ -668,6 +678,18 @@ class HubLinkManager:
             "connected_total": len(items),
             "hub_event_total": self._hub_event_total,
             "hub_core_update_broadcast_total": self._hub_core_update_broadcast_total,
+            "yjs_replication": {
+                "ingest_total": int(self._yjs_ingest_total),
+                "ingest_bytes": int(self._yjs_ingest_bytes),
+                "live_apply_total": int(self._yjs_live_apply_total),
+                "live_apply_failed_total": int(self._yjs_live_apply_failed_total),
+                "broadcast_total": int(self._yjs_broadcast_total),
+                "broadcast_failed_total": int(self._yjs_broadcast_failed_total),
+                "last_ingest_ago_s": round(max(0.0, now - self._last_yjs_ingest_at), 3) if self._last_yjs_ingest_at else None,
+                "last_ingest_node_id": self._last_yjs_ingest_node_id or None,
+                "last_ingest_webspace_id": self._last_yjs_ingest_webspace_id or None,
+                "last_ingest_bytes": int(self._last_yjs_ingest_bytes),
+            },
             "members": items,
             "updated_at": now,
         }
@@ -742,8 +764,10 @@ class HubLinkManager:
                         "ts": time.time(),
                     }
                 )
+                self._yjs_broadcast_total += 1
             except Exception:
                 # best-effort
+                self._yjs_broadcast_failed_total += 1
                 continue
 
     async def ingest_member_yjs_update(self, *, node_id: str, webspace_id: str, update: bytes) -> None:
@@ -752,10 +776,16 @@ class HubLinkManager:
         """
         if not update:
             return
+        self._yjs_ingest_total += 1
+        self._yjs_ingest_bytes += len(update)
+        self._last_yjs_ingest_at = time.time()
+        self._last_yjs_ingest_node_id = str(node_id or "")
+        self._last_yjs_ingest_webspace_id = str(webspace_id or "default")
+        self._last_yjs_ingest_bytes = len(update)
         store = get_ystore_for_webspace(webspace_id)
         async with suppress_ystore_write_notifications():
             await store.write(update)
-        apply_update_to_live_room(
+        applied = apply_update_to_live_room(
             webspace_id,
             update,
             root_names=["data", "ui"],
@@ -763,7 +793,57 @@ class HubLinkManager:
             owner="core:subnet_link_manager",
             channel="core.subnet.link.update",
         )
+        if applied:
+            self._yjs_live_apply_total += 1
+        else:
+            self._yjs_live_apply_failed_total += 1
         await self.broadcast_yjs_update(webspace_id=webspace_id, update=update, origin_node_id=node_id)
+
+    async def ingest_member_node_state(self, *, node_id: str, webspace_id: str, state: dict[str, Any]) -> None:
+        """
+        Merge a member-owned data.nodes/<node_id> state branch into the hub YDoc.
+
+        Member-local YDocs store node-owned skill state under the shared
+        data.nodes JSON envelope. Raw Yjs updates for that envelope can clobber
+        sibling nodes, so member-link replication uses this semantic merge for
+        the runtime-owned hub document.
+        """
+        node_key = str(node_id or "").strip()
+        if not node_key or not isinstance(state, dict):
+            return
+        ws_id = str(webspace_id or "").strip() or "default"
+        encoded_size = 0
+        try:
+            encoded_size = len(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        except Exception:
+            encoded_size = 0
+        self._yjs_ingest_total += 1
+        self._yjs_ingest_bytes += int(encoded_size)
+        self._last_yjs_ingest_at = time.time()
+        self._last_yjs_ingest_node_id = node_key
+        self._last_yjs_ingest_webspace_id = ws_id
+        self._last_yjs_ingest_bytes = int(encoded_size)
+        try:
+            async with ystore_write_metadata(
+                root_names=["data"],
+                source="subnet.link_manager.node_state",
+                owner="core:subnet_link_manager",
+                channel="core.subnet.link.node_state",
+                governed=True,
+            ):
+                async with async_get_ydoc(ws_id, load_mark_roots=["data"], governed=True) as ydoc:
+                    data_map = ydoc.get_map("data")
+                    current = data_map.get("nodes")
+                    nodes = dict(current) if isinstance(current, dict) else {}
+                    if nodes.get(node_key) == state:
+                        return
+                    nodes[node_key] = json.loads(json.dumps(state))
+                    with ydoc.begin_transaction() as txn:
+                        data_map.set(txn, "nodes", nodes)
+            self._yjs_live_apply_total += 1
+        except Exception:
+            self._yjs_live_apply_failed_total += 1
+            _log.warning("failed to ingest member node state node_id=%s webspace=%s", node_key, ws_id, exc_info=True)
 
     async def ingest_member_bus_event(self, *, node_id: str, event: dict[str, Any]) -> None:
         """
