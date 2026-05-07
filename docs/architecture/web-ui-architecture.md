@@ -436,6 +436,14 @@ Status note:
   JSON fallback
 - Taiga-specific renderers are not implemented yet
 
+Current pre-stand milestone:
+
+- the demo skill and demo scenario are now ready for first-environment manual
+  verification
+- both semantic and compatibility paths render a table, chart, and event log
+- table selection now drives the linked chart series through shared `view:`
+  state
+
 ### 0. Architecture Fixation
 
 - [x] freeze the shell/manifest/semantic/renderer/data/action layer split
@@ -512,6 +520,16 @@ Recommended identifiers:
   and local view state
 - [x] include one shared table-plus-chart drill-down flow suitable for Taiga
   renderer validation
+
+### 7a. Stand Verification
+
+- [x] demo skill and scenario exist in the repository
+- [x] desktop and modal paths both have a renderable chart surface
+- [x] the chart changes with table selection through shared local `view:` state
+- [x] the event surface is present through `stream:demo_metrics.events`
+- [x] compatibility rendering remains available if semantic rendering is
+  bypassed
+- [ ] manual verification on the target stand
 
 Recommended demo data shape:
 
