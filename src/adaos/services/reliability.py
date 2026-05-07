@@ -5534,6 +5534,8 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
                 webspace_id=str(payload.get("webspace_id") or selected_webspace_id or "").strip() or None,
                 owner=str(payload.get("owner") or "").strip() or None,
             )
+            blocked_roots = list(payload.get("blocked_roots") or [])
+            throttled_roots = list(payload.get("throttled_roots") or [])
             return {
                 "webspace_id": str(payload.get("webspace_id") or selected_webspace_id or "").strip() or None,
                 "owner": str(payload.get("owner") or "").strip() or None,
@@ -5544,7 +5546,9 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
                 "policy_state": str(payload.get("policy_state") or "ok").strip() or "ok",
                 "target": str(payload.get("target") or "primary_shared_doc").strip() or "primary_shared_doc",
                 "reason": str(payload.get("reason") or "healthy").strip() or "healthy",
-                "blocked_roots": list(payload.get("blocked_roots") or []),
+                "blocked_roots": blocked_roots,
+                "throttled_roots": throttled_roots,
+                "affected_roots": blocked_roots or throttled_roots,
                 "observed_state": str(payload.get("observed_state") or "idle").strip() or "idle",
                 "blocked_total": int(governance.get("blocked_total") or 0),
                 "throttled_total": int(governance.get("throttled_total") or 0),
@@ -5552,6 +5556,9 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
                 "last_reason": str(governance.get("last_reason") or "").strip() or None,
                 "last_path": str(governance.get("last_path") or "").strip() or None,
                 "last_at": float(governance.get("last_at") or 0.0) or None,
+                "last_blocked_roots": list(governance.get("last_blocked_roots") or []),
+                "last_throttled_roots": list(governance.get("last_throttled_roots") or []),
+                "last_affected_roots": list(governance.get("last_affected_roots") or []),
             }
     except Exception:
         pass
@@ -5567,6 +5574,8 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
         "target": "primary_shared_doc",
         "reason": "healthy",
         "blocked_roots": [],
+        "throttled_roots": [],
+        "affected_roots": [],
         "observed_state": "idle",
         "blocked_total": 0,
         "throttled_total": 0,
@@ -5574,6 +5583,9 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
         "last_reason": None,
         "last_path": None,
         "last_at": None,
+        "last_blocked_roots": [],
+        "last_throttled_roots": [],
+        "last_affected_roots": [],
     }
 
 

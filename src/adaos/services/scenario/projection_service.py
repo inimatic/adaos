@@ -30,6 +30,16 @@ _PRIMARY_DOC_GOVERNANCE_LOCK = threading.Lock()
 _PRIMARY_DOC_GOVERNANCE_STATS: dict[str, dict[str, Any]] = {}
 
 
+def _int_env(name: str, default: int, minimum: int) -> int:
+    try:
+        return max(int(minimum), int(str(os.getenv(name) or str(default)).strip()))
+    except Exception:
+        return max(int(minimum), int(default))
+
+
+_PRIMARY_DOC_MAX_STRING_CHARS = _int_env("ADAOS_YJS_PRIMARY_DOC_MAX_STRING_CHARS", 4096, 512)
+
+
 def _projection_write_owner() -> str:
     current = get_current_skill()
     name = str(getattr(current, "name", "") or "").strip()
@@ -91,7 +101,12 @@ def _record_primary_doc_governance_event(*, webspace_id: str, owner: str, path: 
         current["last_reason"] = str(policy.get("reason") or "").strip() or None
         current["last_path"] = str(path or "").strip() or None
         current["last_at"] = time.time()
-        current["last_blocked_roots"] = list(policy.get("blocked_roots") or [])
+        if policy_state == "block":
+            current["last_blocked_roots"] = list(policy.get("blocked_roots") or [])
+            current["last_affected_roots"] = list(policy.get("blocked_roots") or [])
+        if policy_state == "throttle":
+            current["last_throttled_roots"] = list(policy.get("throttled_roots") or [])
+            current["last_affected_roots"] = list(policy.get("throttled_roots") or [])
         _PRIMARY_DOC_GOVERNANCE_STATS[key] = current
 
 
@@ -110,6 +125,8 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
         "last_path": str(current.get("last_path") or "").strip() or None,
         "last_at": float(current.get("last_at") or 0.0) or None,
         "last_blocked_roots": list(current.get("last_blocked_roots") or []),
+        "last_throttled_roots": list(current.get("last_throttled_roots") or []),
+        "last_affected_roots": list(current.get("last_affected_roots") or []),
     }
 
 
@@ -191,6 +208,33 @@ def _mapping_items(value: Any) -> list[tuple[str, Any]] | None:
         except Exception:
             return None
     return None
+
+
+def _compact_projection_string(value: str) -> str:
+    limit = int(_PRIMARY_DOC_MAX_STRING_CHARS)
+    if len(value) <= limit:
+        return value
+    marker = f"... [truncated chars={len(value)} limit={limit}] ..."
+    head_len = max(128, int(limit * 0.75))
+    tail_len = max(64, limit - head_len - len(marker))
+    if head_len + tail_len + len(marker) >= len(value):
+        return value
+    return value[:head_len] + marker + value[-tail_len:]
+
+
+def _compact_projection_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return _compact_projection_string(value)
+    if isinstance(value, dict):
+        return {str(key): _compact_projection_payload(item) for key, item in value.items() if str(key)}
+    if isinstance(value, list):
+        return [_compact_projection_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [_compact_projection_payload(item) for item in value]
+    items = _mapping_items(value)
+    if items is not None:
+        return {key: _compact_projection_payload(item) for key, item in items if key}
+    return _clone_json_like(value)
 
 
 def _json_like_equal(current: Any, next_value: Any) -> bool:
@@ -335,6 +379,7 @@ class ProjectionService:
         policy = _yjs_primary_doc_policy_state(webspace_id=ws_id, owner=owner, root_name=root_name)
         if not await _govern_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner):
             return
+        projected_value = _compact_projection_payload(value)
 
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)
@@ -347,14 +392,14 @@ class ProjectionService:
             if len(segments) == 2:
                 key = segments[1]
                 current = root.get(key)
-                if _json_like_equal(current, value):
+                if _json_like_equal(current, projected_value):
                     return
-                root.set(txn, key, _clone_json_like(value))
+                root.set(txn, key, _clone_json_like(projected_value))
                 return
 
             top_key = segments[1]
             current_top = root.get(top_key)
-            changed, merged = _merge_nested_path(current_top, segments[2:], value)
+            changed, merged = _merge_nested_path(current_top, segments[2:], projected_value)
             if not changed:
                 return
             root.set(txn, top_key, merged)
