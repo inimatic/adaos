@@ -421,20 +421,21 @@ class AdaosMemoryYStore(BaseYStore):
             return False
 
         metadata = await self.get_metadata()
-        if not bool(metadata.get("governed")):
+        governance_meta = dict(_WRITE_META.get() or {})
+        if not bool(governance_meta.get("governed")):
             try:
                 from adaos.services.yjs.governance import govern_primary_doc_write
 
-                root_names = metadata.get("root_names")
+                root_names = governance_meta.get("root_names")
                 if not isinstance(root_names, (list, tuple)):
                     root_names = []
                 allowed = await govern_primary_doc_write(
                     webspace_id=self.path,
-                    owner=str(metadata.get("owner") or "").strip() or None,
+                    owner=str(governance_meta.get("owner") or "").strip() or None,
                     root_names=[str(item or "").strip() for item in root_names if str(item or "").strip()],
                     path=",".join(str(item or "").strip() for item in root_names if str(item or "").strip()) or "primary_shared_doc",
-                    source=str(metadata.get("source") or "ystore.write_update"),
-                    channel=str(metadata.get("channel") or update_kind or "ystore.write_update"),
+                    source=str(governance_meta.get("source") or "ystore.write_update"),
+                    channel=str(governance_meta.get("channel") or update_kind or "ystore.write_update"),
                     update_bytes=len(payload),
                 )
                 if not allowed:

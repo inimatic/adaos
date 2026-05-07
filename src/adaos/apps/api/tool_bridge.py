@@ -97,6 +97,39 @@ def _is_loopback_base_url(base_url: str | None) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}
 
 
+def _is_readonly_snapshot_tool(tool_name: str) -> bool:
+    token = str(tool_name or "").strip()
+    return token == "get_snapshot" or token.endswith(":get_snapshot") or token.endswith(".get_snapshot")
+
+
+def _target_snapshot_unavailable_response(
+    *,
+    tool_name: str,
+    target_node_id: str,
+    reason: str,
+) -> Dict[str, Any]:
+    payload = {
+        "ok": False,
+        "degraded": True,
+        "unavailable": True,
+        "source": "hub_tool_bridge",
+        "error": "target_member_unavailable",
+        "reason": reason,
+        "tool": str(tool_name or ""),
+        "target_node_id": str(target_node_id or ""),
+        "retryable": True,
+        "updated_at": time.time(),
+        "summary": {
+            "value": "unavailable",
+            "status": "degraded",
+            "label": "Target member snapshot",
+            "description": reason,
+            "selected_node_id": str(target_node_id or ""),
+        },
+    }
+    return {"ok": True, "degraded": True, "result": payload}
+
+
 def _should_proxy_tool_call_to_target(
     *,
     conf: Any,
@@ -145,10 +178,22 @@ async def _proxy_tool_call_to_node(
     if _is_loopback_base_url(base_url):
         if rpc_error is not None:
             raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
+        if _is_readonly_snapshot_tool(body.tool):
+            return _target_snapshot_unavailable_response(
+                tool_name=body.tool,
+                target_node_id=target_node_id,
+                reason="member base_url is loopback-only and the live member link is unavailable",
+            )
         raise HTTPException(status_code=503, detail="member base_url is loopback-only and the live member link is unavailable")
     if not base_url:
         if rpc_error is not None:
             raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
+        if _is_readonly_snapshot_tool(body.tool):
+            return _target_snapshot_unavailable_response(
+                tool_name=body.tool,
+                target_node_id=target_node_id,
+                reason="no base_url or p2p link for target node",
+            )
         raise HTTPException(status_code=503, detail="no base_url or p2p link for target node")
     forward = {"tool": body.tool, "arguments": payload}
     if body.timeout is not None:
@@ -335,10 +380,22 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         if _is_loopback_base_url(base_url):
             if rpc_error is not None:
                 raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
+            if _is_readonly_snapshot_tool(body.tool):
+                return _target_snapshot_unavailable_response(
+                    tool_name=body.tool,
+                    target_node_id=target_node_id,
+                    reason="member base_url is loopback-only and the live member link is unavailable",
+                )
             raise HTTPException(status_code=503, detail="member base_url is loopback-only and the live member link is unavailable")
         if not base_url:
             if rpc_error is not None:
                 raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
+            if _is_readonly_snapshot_tool(body.tool):
+                return _target_snapshot_unavailable_response(
+                    tool_name=body.tool,
+                    target_node_id=target_node_id,
+                    reason="no base_url or p2p link for target node",
+                )
             raise HTTPException(status_code=503, detail="no base_url or p2p link for target node")
 
         # Проксируем запрос прозрачно
