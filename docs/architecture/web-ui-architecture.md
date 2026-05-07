@@ -86,6 +86,7 @@ It describes UI in semantic terms rather than framework components.
 Representative kinds:
 
 - `collection_grid`
+- `metric_chart`
 - `form_matrix`
 - `form`
 - `detail_view`
@@ -247,6 +248,21 @@ notifications, and status feeds.
 
 This is the canonical semantic type for assistant-like interaction.
 
+### Metric chart
+
+This is the first chart-oriented semantic type needed by the browser MVP.
+
+It should cover the browser-facing needs of:
+
+- time-series metrics
+- operational trend lines
+- simple comparative series
+- selection-linked charts paired with a table or grid
+
+It should not try to become a universal visualization language on day one.
+The first contract only needs enough structure for one strong reusable chart
+slice that can be rendered through Taiga-compatible browser composition.
+
 ### Review surface
 
 This should become a standard semantic type, but it does not need to be in the
@@ -369,6 +385,20 @@ Neither should be treated as a substitute for the other.
 Semantic view bindings should use the canonical typed ref model described in
 [UI Addressing](ui-addressing.md).
 
+### Demo-first ABI discipline
+
+The first semantic ABI slice should be designed against one concrete demo
+scenario and one demo skill rather than against a hypothetical universal UI.
+
+That demo slice should exercise:
+
+- one table-like semantic view
+- one chart-like semantic view
+- one shared selection model
+- one live stream
+- one local view-state branch
+- one honest staged-loading flow
+
 ## Explicit Prohibitions
 
 To keep the browser stable:
@@ -419,7 +449,7 @@ The target architecture is successful when:
 ### 3. Web UI Priority Slice
 
 - [ ] implement the first four semantic view kinds:
-  `collection_grid`, `form_matrix`, `event_log`, `chat_panel`
+  `collection_grid`, `metric_chart`, `event_log`, `chat_panel`
 - [ ] implement the first typed action kinds:
   `emit`, `open_modal`, `set_view_state`, `call_host`,
   `invoke_skill_action`
@@ -427,6 +457,19 @@ The target architecture is successful when:
   `stack`, `split`, `tabs`
 - [ ] support the first state mechanisms:
   Yjs binding, stream receiver, local view state
+
+### 3a. Demo Control Task
+
+- [ ] define one demo skill for Taiga-oriented semantic UI validation
+- [ ] define one demo scenario that composes table, chart, and event stream
+- [ ] make table and chart share one selection and filter model
+- [ ] make the chart consume the same addressing vocabulary as the table
+- [ ] keep the demo domain operational and neutral rather than product-specific
+
+Recommended identifiers:
+
+- skill: `demo_metrics_skill`
+- scenario: `taiga_ui_demo_scenario`
 
 ### 4. Renderer Registry
 
@@ -452,10 +495,20 @@ The target architecture is successful when:
 
 - [ ] create one demo skill for semantic UI coverage
 - [ ] create one demo scenario that exercises workspace composition
-- [ ] cover simple grid, sortable/filterable grid, editable grid, form matrix,
+- [ ] cover simple grid, sortable/filterable grid, one chart-oriented surface,
   event stream, and chat panel
 - [ ] include examples of shared state, node-scoped state, stream-driven state,
   and local view state
+- [ ] include one shared table-plus-chart drill-down flow suitable for Taiga
+  renderer validation
+
+Recommended demo data shape:
+
+- one collection of metric rows with `id`, `title`, `status`, `value`,
+  `updated_at`, and grouping tags
+- one time-series collection keyed by metric id
+- one event receiver for append-oriented runtime updates
+- one shared selection branch that links grid rows and chart series
 
 ### 8. Cleanup and Migration
 
@@ -463,4 +516,3 @@ The target architecture is successful when:
 - [ ] remove browser-core special cases once semantic equivalents are proven
 - [ ] keep legacy compatibility paths only where the runtime still depends on
   them
-

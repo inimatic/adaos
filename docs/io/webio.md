@@ -7,6 +7,30 @@ A2.
 
 For the target architecture and the agreed evolutionary path, see
 [Webspace Scenario Pointer/Projection Roadmap](../architecture/webspace-scenario-pointer-projection-roadmap.md).
+For the browser-facing typed ref vocabulary used by semantic UI manifests, see
+[UI Addressing](../architecture/ui-addressing.md).
+For the target browser client structure above the current runtime contracts, see
+[Web UI Architecture](../architecture/web-ui-architecture.md).
+
+## Relationship to UI Addressing
+
+This note documents concrete current runtime contracts.
+The target browser-facing addressing model treats those contracts as part of a
+larger typed vocabulary rather than as isolated implementation details.
+
+The key mapping is:
+
+- Yjs-backed runtime state in this note corresponds to `y:` refs in
+  [UI Addressing](../architecture/ui-addressing.md)
+- `webio.receivers` correspond to `stream:` refs
+- browser-local interaction state such as filters, selection, and open tabs
+  corresponds to `view:` refs
+- demanded materialized views described elsewhere through `projection_key`
+  correspond to `projection:` refs
+
+This distinction matters because `webio` is not the whole UI contract.
+It is the stream and browser-runtime transport slice inside a larger semantic
+UI architecture.
 
 ## Architecture Overview
 
@@ -81,6 +105,15 @@ Recommended rule of thumb:
   build that bounded history explicitly in the skill/runtime and publish it as
   the receiver snapshot rather than expecting Yjs to preserve the tail for free
 
+For the target browser contract, the same rule can be expressed as:
+
+- use `y:` refs for reconnect-stable shared facts
+- use `stream:` refs for high-churn live feeds
+- use `view:` refs for browser-local interaction state
+
+Skills and scenarios should not invent a second hidden state vocabulary on top
+of those three families when designing semantic browser surfaces.
+
 ## Stream Receivers
 
 `webui.json` can now declare transport-independent browser receivers:
@@ -119,6 +152,25 @@ Widgets bind them through `dataSource.kind = "stream"`:
   }
 }
 ```
+
+In target semantic UI terms, the same binding should later be representable as
+a typed source object such as:
+
+```json
+{
+  "source": {
+    "kind": "stream",
+    "ref": "stream:infrastate.operations.active",
+    "scope": "node",
+    "nodeRef": "$context.nodeId"
+  }
+}
+```
+
+The current `dataSource.kind = "stream"` contract remains valid during
+migration.
+The semantic binding form above exists to make browser authoring and LLM
+authoring less dependent on renderer-era widget conventions.
 
 Current client behavior:
 
@@ -190,6 +242,12 @@ Targeting rules:
 * `_meta.route_id` resolves through `data.routing.routes[route_id]`
 * if no target metadata is present, the router falls back to `desktop`
 
+At the addressing level, those routing details should be read as transport and
+delivery ownership metadata, not as a replacement for semantic ref identity.
+For example, `stream:chat.live` remains the browser-facing receiver identity,
+while `_meta.webspace_id`, `_meta.node_id`, and transport preferences decide
+how that receiver is delivered.
+
 `desktop` is the canonical default webspace. Legacy clients and stored browser
 preferences may still ask for `default`; the browser runtime, Yjs gateway, and
 node API normalize that value to `desktop` before selecting Yjs rooms, catalog
@@ -211,6 +269,16 @@ The server emits `webio.stream.snapshot.requested` with:
 * `target_node_id` and `_meta.target_node_id` when a concrete member should
   answer the request
 * `transport`
+
+For semantic browser surfaces, this means one `stream:` ref may still require:
+
+- `shared` webspace scope
+- node-aware ownership
+- transport preference
+- bounded snapshot semantics
+
+Those are runtime binding properties, not reasons to make the browser manifest
+invent a separate stream identity for every transport variant.
 
 Node-targeted skill tool calls should follow the same contract. If the browser
 asks the hub to execute `tools/call` with `target_node_id`, the hub must proxy
