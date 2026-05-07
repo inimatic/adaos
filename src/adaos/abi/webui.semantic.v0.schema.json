@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.webui.semantic.v0",
+  "title": "AdaOS Semantic Web UI Draft ABI",
+  "description": "Draft semantic browser UI ABI layered above webui.v1 runtime manifests. This schema is intentionally additive and does not replace current webui.v1 compatibility contracts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "layout", "views"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional self-reference for embedded semantic blocks."
+    },
+    "id": { "$ref": "#/$defs/id" },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "layout": { "$ref": "#/$defs/layout" },
+    "views": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/view" }
+    },
+    "viewState": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/viewStateEntry" }
+    },
+    "load": { "$ref": "#/$defs/loadHint" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "loadPhase": {
+      "type": "string",
+      "enum": ["eager", "visible", "interaction", "deferred"]
+    },
+    "focusPhase": {
+      "type": "string",
+      "enum": ["primary", "supporting", "off_focus", "background"]
+    },
+    "readinessState": {
+      "type": "string",
+      "enum": ["pending_structure", "first_paint", "interactive", "hydrating", "ready", "degraded"]
+    },
+    "loadHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "structure": { "$ref": "#/$defs/loadPhase" },
+        "data": { "$ref": "#/$defs/loadPhase" },
+        "focus": { "$ref": "#/$defs/focusPhase" },
+        "offFocusReadyState": { "$ref": "#/$defs/readinessState" }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern", "areas"],
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "enum": [
+            "stack",
+            "split",
+            "tabs",
+            "grid",
+            "sidebar-content",
+            "dashboard",
+            "modal",
+            "sheet",
+            "focus-detail",
+            "desktop-zones"
+          ]
+        },
+        "areas": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/area" }
+        }
+      }
+    },
+    "area": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": { "type": "string" }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "area"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "collection_grid",
+            "metric_chart",
+            "form_matrix",
+            "event_log",
+            "chat_panel"
+          ]
+        },
+        "area": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" },
+        "variant": { "type": "string" },
+        "source": { "$ref": "#/$defs/binding" },
+        "selection": { "$ref": "#/$defs/binding" },
+        "viewStateRef": { "type": "string" },
+        "config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/action" }
+        },
+        "load": { "$ref": "#/$defs/loadHint" }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["y", "stream", "view", "projection"]
+        },
+        "ref": { "type": "string", "minLength": 1 },
+        "scope": {
+          "type": "string",
+          "enum": ["shared", "node", "local", "workspace"]
+        },
+        "nodeRef": { "type": "string" },
+        "transport": {
+          "type": "string",
+          "enum": ["auto", "member", "hub"]
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "kind", "trigger"],
+      "properties": {
+        "ref": { "type": "string", "minLength": 1 },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "emit",
+            "open_modal",
+            "navigate",
+            "call_host",
+            "set_view_state",
+            "patch_y",
+            "invoke_skill_action",
+            "open_workspace",
+            "apply_review_change"
+          ]
+        },
+        "trigger": { "type": "string", "minLength": 1 },
+        "target": { "type": "string" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "viewStateEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref"],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^view:[A-Za-z0-9_.:-]+$"
+        },
+        "default": {},
+        "persistence": {
+          "type": "string",
+          "enum": ["local_only", "local_persisted", "y_sync"]
+        }
+      }
+    }
+  }
+}
