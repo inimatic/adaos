@@ -378,6 +378,11 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
 
         base_url = target.get("base_url") or directory.get_node_base_url(target_node_id)
         if _is_loopback_base_url(base_url):
+            if target_node_id and target_node_id == local_node_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"local skill '{skill_name}', tool '{public_tool}' is unavailable: {e}",
+                )
             if rpc_error is not None:
                 raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
             if _is_readonly_snapshot_tool(body.tool):
@@ -388,6 +393,11 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
                 )
             raise HTTPException(status_code=503, detail="member base_url is loopback-only and the live member link is unavailable")
         if not base_url:
+            if target_node_id and target_node_id == local_node_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"local skill '{skill_name}', tool '{public_tool}' is unavailable: {e}",
+                )
             if rpc_error is not None:
                 raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
             if _is_readonly_snapshot_tool(body.tool):
