@@ -307,6 +307,39 @@ Actions:
 - [ ] Reject any guardrail that improves memory only by hiding the overload
   source from incident review.
 
+#### HMG-008: Make ProjectionService the normal skill write ingress
+
+Status: planned. Kernel pressure governance is now the last-resort safety net,
+but the target architecture is stricter: LLM-authored skills should not write
+browser-visible primary Yjs state directly during normal operation.
+
+Principle:
+
+- `ProjectionService` is the normal skill-facing write boundary for primary
+  shared document state.
+- Direct skill-owned Yjs writes are legacy or capability-gated.
+- Details and large diagnostics belong in section endpoints, streams, or
+  `360log`, not broad primary-doc branches.
+
+Roadmap:
+
+- [ ] Observe and count direct skill-owned Yjs writes with owner, source,
+  channel, root, path, and update size.
+- [ ] Emit `deprecated_direct_skill_yjs_write` warnings for skill paths that
+  bypass `ProjectionService`.
+- [ ] Apply stricter budgets to direct skill writes than to governed projection
+  writes.
+- [ ] Block broad direct skill writes to shared roots such as `data`, `ui`,
+  `registry`, and desktop-wide branches unless explicitly allowlisted.
+- [ ] Add `skill.yaml` capability declarations for direct Yjs exceptions and
+  projection targets.
+- [ ] Make direct skill-owned primary-doc writes deny-by-default outside
+  declared capabilities.
+- [ ] Add migration tooling/reporting for skills that still depend on direct
+  Yjs access.
+- [ ] Update LLM skill templates and prompts so generated skills use
+  projections, streams, HTTP details, or skill-local storage by default.
+
 ## Realtime First 3 Minutes
 
 ### Goal

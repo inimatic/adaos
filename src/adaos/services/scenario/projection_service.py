@@ -412,9 +412,9 @@ class ProjectionService:
                     channel=f"projection.{str(target.backend or 'yjs')}",
                     governed=True,
                 ):
-                async with async_get_ydoc(ws_id, load_mark_roots=[root_name], governed=True) as ydoc:
-                    with ydoc.begin_transaction() as txn:
-                        _mutator(ydoc, txn)
+                    async with async_get_ydoc(ws_id, load_mark_roots=[root_name], governed=True) as ydoc:
+                        with ydoc.begin_transaction() as txn:
+                            _mutator(ydoc, txn)
         except Exception:
             _log.warning("failed to apply yjs projection webspace=%s path=%s", ws_id, path, exc_info=True)
 
