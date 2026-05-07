@@ -86,6 +86,7 @@ async def ystore_write_metadata(
     source: str | None = None,
     owner: str | None = None,
     channel: str | None = None,
+    governed: bool | None = None,
 ):
     payload = dict(_WRITE_META.get() or {})
     names = [str(name or "").strip() for name in (root_names or ()) if str(name or "").strip()]
@@ -97,6 +98,8 @@ async def ystore_write_metadata(
         payload["owner"] = str(owner or "").strip() or None
     if channel is not None:
         payload["channel"] = str(channel or "").strip() or None
+    if governed is not None:
+        payload["governed"] = bool(governed)
     token = _WRITE_META.set(payload)
     try:
         yield
@@ -114,6 +117,7 @@ def ystore_write_metadata_sync(
     source: str | None = None,
     owner: str | None = None,
     channel: str | None = None,
+    governed: bool | None = None,
 ):
     payload = dict(_WRITE_META.get() or {})
     names = [str(name or "").strip() for name in (root_names or ()) if str(name or "").strip()]
@@ -125,6 +129,8 @@ def ystore_write_metadata_sync(
         payload["owner"] = str(owner or "").strip() or None
     if channel is not None:
         payload["channel"] = str(channel or "").strip() or None
+    if governed is not None:
+        payload["governed"] = bool(governed)
     token = _WRITE_META.set(payload)
     try:
         yield
@@ -415,6 +421,28 @@ class AdaosMemoryYStore(BaseYStore):
             return False
 
         metadata = await self.get_metadata()
+        if not bool(metadata.get("governed")):
+            try:
+                from adaos.services.yjs.governance import govern_primary_doc_write
+
+                root_names = metadata.get("root_names")
+                if not isinstance(root_names, (list, tuple)):
+                    root_names = []
+                allowed = await govern_primary_doc_write(
+                    webspace_id=self.path,
+                    owner=str(metadata.get("owner") or "").strip() or None,
+                    root_names=[str(item or "").strip() for item in root_names if str(item or "").strip()],
+                    path=",".join(str(item or "").strip() for item in root_names if str(item or "").strip()) or "primary_shared_doc",
+                    source=str(metadata.get("source") or "ystore.write_update"),
+                    channel=str(metadata.get("channel") or update_kind or "ystore.write_update"),
+                    update_bytes=len(payload),
+                )
+                if not allowed:
+                    async with self._lock:
+                        self._write_skipped_total += 1
+                    return False
+            except Exception:
+                _log.debug("failed to apply YStore primary-doc governance webspace=%s", self.path, exc_info=True)
         auto_backup_reason: str | None = None
         async with self._lock:
             was_empty = not self._updates

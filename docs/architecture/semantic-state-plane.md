@@ -303,6 +303,16 @@ Success criteria:
 
 Turn `yjs_pressure` from warning-only telemetry into enforced kernel policy.
 
+Current implementation progress:
+
+- [x] Load-mark telemetry computes owner/root pressure and maps it to `warn`, `throttle`, and `block`.
+- [x] Reliability and Infra State expose compact `yjs_pressure` plus blocked/throttled counters.
+- [x] Kernel write-boundary guard exists for `get_ydoc`, `async_get_ydoc`, `mutate_live_room`, and direct `YStore.write_update`.
+- [x] Guard decisions preserve evidence: owner, roots, source, channel, path, update size, policy state, reason, and counters.
+- [ ] Replace remaining skill-local pressure guards with calls into the shared kernel governor where they still carry custom logic.
+- [ ] Add correlation/generation ids across snapshot, rebuild, route, and Yjs governance events.
+- [ ] Add acceptance coverage for abusive LLM-generated skill write patterns without depending on a specific `infrastate` workaround.
+
 Work items:
 
 - define owner budgets for the primary shared desktop doc
