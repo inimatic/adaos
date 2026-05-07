@@ -252,6 +252,7 @@ def get_ydoc(
     timings: dict[str, float] | None = None,
     timing_prefix: str = "",
     load_mark_roots: list[str] | tuple[str, ...] | None = None,
+    governed: bool = False,
 ) -> Iterator[Y.YDoc]:
     """
     Synchronously load a webspace-backed YDoc, applying persisted updates on
@@ -305,7 +306,7 @@ def get_ydoc(
                     try:
                         from adaos.services.yjs.governance import govern_primary_doc_write_sync
 
-                        if not govern_primary_doc_write_sync(
+                        if not governed and not govern_primary_doc_write_sync(
                             webspace_id=webspace_id,
                             owner=owner,
                             root_names=tracked_load_mark_roots,
@@ -377,6 +378,7 @@ async def async_get_ydoc(
     timings: dict[str, float] | None = None,
     timing_prefix: str = "",
     load_mark_roots: list[str] | tuple[str, ...] | None = None,
+    governed: bool = False,
 ) -> AsyncIterator[Y.YDoc]:
     """
     Async counterpart of :func:`get_ydoc` for use inside running event loops.
@@ -386,7 +388,7 @@ async def async_get_ydoc(
     ystore = get_ystore_for_webspace(webspace_id)
     room = _resolve_live_room(webspace_id) if prefer_live_room else None
     use_live_room = _can_access_live_room_directly(room)
-    if use_live_room and not read_only:
+    if use_live_room and not read_only and not governed:
         owner = _resolve_yjs_write_owner()
         try:
             from adaos.services.yjs.governance import govern_primary_doc_write
@@ -451,7 +453,7 @@ async def async_get_ydoc(
                     try:
                         from adaos.services.yjs.governance import govern_primary_doc_write
 
-                        if not await govern_primary_doc_write(
+                        if not governed and not await govern_primary_doc_write(
                             webspace_id=webspace_id,
                             owner=owner,
                             root_names=tracked_load_mark_roots,
@@ -536,6 +538,7 @@ def mutate_live_room(
     source: str = "yjs.doc.mutate_live_room",
     owner: str | None = None,
     channel: str = "core.yjs.live_room.sync",
+    governed: bool = False,
 ) -> bool:
     """
     Attempt to mutate the active YDoc directly so connected clients receive the change.
@@ -550,7 +553,7 @@ def mutate_live_room(
         try:
             from adaos.services.yjs.governance import govern_primary_doc_write_sync
 
-            if not govern_primary_doc_write_sync(
+            if not governed and not govern_primary_doc_write_sync(
                 webspace_id=webspace_id,
                 owner=owner_token,
                 root_names=list(root_names or []),

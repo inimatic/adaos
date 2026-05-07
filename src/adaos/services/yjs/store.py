@@ -49,10 +49,10 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def add_ystore_write_listener(cb: Callable[[str, bytes], Any]) -> Callable[[], None]:
+def add_ystore_write_listener(cb: Callable[..., Any]) -> Callable[[], None]:
     """
     Register a global listener called on every YStore write:
-      cb(webspace_id: str, update: bytes) -> Any
+      cb(webspace_id: str, update: bytes[, metadata: dict]) -> Any
 
     Returns a function that removes the listener.
     """

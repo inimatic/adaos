@@ -295,6 +295,11 @@ Actions:
   `get_ydoc`, `async_get_ydoc`, `mutate_live_room`, and direct
   `YStore.write_update` now evaluate the shared `warn` / `throttle` / `block`
   policy before persisting or broadcasting skill-owned writes.
+- [x] Move `ProjectionService` onto the shared Yjs governor and tag
+  already-governed writes to avoid double-throttling in downstream Yjs paths.
+- [x] Attach explicit SDK Yjs ownership metadata for sync and async skill
+  wrappers so LLM-generated skills are attributable even when they use the
+  supported SDK facade.
 - [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,
   rebuild, route, and Yjs stages.
   First wave landed for member snapshot rebuild pressure and incident summary;

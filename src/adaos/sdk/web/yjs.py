@@ -5,7 +5,7 @@ from typing import Any, AsyncIterator, Iterator
 
 from adaos.sdk.data.context import get_current_skill
 from adaos.services.yjs.doc import async_get_ydoc, async_read_ydoc, get_ydoc
-from adaos.services.yjs.store import ystore_write_metadata
+from adaos.services.yjs.store import ystore_write_metadata, ystore_write_metadata_sync
 from adaos.services.yjs.webspace import default_webspace_id
 
 
@@ -34,6 +34,7 @@ async def webspace_ydoc(
     async with ystore_write_metadata(
         owner=_sdk_yjs_owner(),
         channel="sdk.web.yjs",
+        root_names=load_mark_roots,
     ):
         async with async_get_ydoc(
             target,
@@ -60,12 +61,17 @@ def webspace_ydoc_sync(
     load_mark_roots: list[str] | tuple[str, ...] | None = None,
 ) -> Iterator[Any]:
     target = str(webspace_id or "").strip() or default_webspace_id()
-    with get_ydoc(
-        target,
-        read_only=read_only,
-        load_mark_roots=load_mark_roots,
-    ) as ydoc:
-        yield ydoc
+    with ystore_write_metadata_sync(
+        owner=_sdk_yjs_owner(),
+        channel="sdk.web.yjs.sync",
+        root_names=load_mark_roots,
+    ):
+        with get_ydoc(
+            target,
+            read_only=read_only,
+            load_mark_roots=load_mark_roots,
+        ) as ydoc:
+            yield ydoc
 
 
 __all__ = [
