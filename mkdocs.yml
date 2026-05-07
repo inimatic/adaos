@@ -149,6 +149,8 @@ nav:
       - Agent Context: architecture/context.md
       - Security: architecture/security.md
       - Infrascope: architecture/infrascope.md
+      - UI Addressing: architecture/ui-addressing.md
+      - Web UI Architecture: architecture/web-ui-architecture.md
       - Operational Event Model: architecture/operational-event-model.md
       - Operational Event Model Roadmap: architecture/operational-event-model-roadmap.md
       - Projection Subscription Roadmap: architecture/projection-subscription-roadmap.md
@@ -186,7 +188,6 @@ nav:
       - NLU Teacher: concepts/nlu-teacher-llm.md
       - Device Initialization: concepts/init_device.md
       - Event Management: concepts/event_mgmnt.md
-      - Data Management: concepts/data_mgmnt.md
       - AdaOS Resource Locator: concepts/arl.md
       - Context Compression: concepts/context_compression.md
       - Scenario Concepts:

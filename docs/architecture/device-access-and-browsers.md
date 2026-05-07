@@ -50,6 +50,12 @@ What was missing is a single architectural model that answers:
 
 ## Core vocabulary
 
+This document is the device-domain slice of the broader browser/runtime
+addressing model described in [UI Addressing](ui-addressing.md).
+Its device refs, webspace affinity fields, and command surfaces should remain
+compatible with that shared vocabulary rather than define a separate generic UI
+address space.
+
 ### Access link
 
 An `access link` is the canonical managed relationship between AdaOS and a remote endpoint.
@@ -276,6 +282,13 @@ DeviceRecord
     connected_to_subnet?
     runtime_version?
 ```
+
+During migration, the short `browser:<device_id>` and `member:<node_id>` forms
+remain acceptable inside device-facing read models.
+The broader target vocabulary should treat them as domain refs of the form:
+
+- `device:browser:<device_id>`
+- `device:member:<node_id>`
 
 Important boundaries:
 
