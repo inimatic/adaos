@@ -153,6 +153,15 @@ The first concrete validation target should be a demo scenario and demo skill
 with a table-oriented view, a chart-oriented view, and one shared
 selection/filter model rather than a broad speculative visualization catalog.
 
+Current status of that validation target:
+
+- the repository now contains `demo_metrics_skill` and
+  `taiga_ui_demo_scenario`
+- the browser runtime can already materialize the demo table/chart/event slice
+  through the current compatibility bridge
+- first-environment stand verification is the next milestone before broader
+  projection-oriented renderer work
+
 Counter-example:
 
 - simple low-churn skills with one small projection do not need to be forced onto this model immediately
