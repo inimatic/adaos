@@ -111,6 +111,12 @@ def _record_primary_doc_governance_event(*, webspace_id: str, owner: str, path: 
 
 
 def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: str | None = None) -> dict[str, Any]:
+    try:
+        from adaos.services.yjs.governance import primary_doc_governance_snapshot as shared_snapshot
+
+        return shared_snapshot(webspace_id=webspace_id, owner=owner)
+    except Exception:
+        _log.debug("failed to read shared primary-doc governance snapshot", exc_info=True)
     token_ws = str(webspace_id or "").strip() or "default"
     token_owner = str(owner or "").strip()
     with _PRIMARY_DOC_GOVERNANCE_LOCK:
@@ -131,38 +137,22 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
 
 
 async def _govern_primary_doc_write(*, policy: dict[str, Any], webspace_id: str, path: str, owner: str) -> bool:
-    policy_state = str(policy.get("policy_state") or "").strip().lower()
-    if policy_state == "block":
-        _record_primary_doc_governance_event(webspace_id=webspace_id, owner=owner, path=path, policy=policy)
-        _log.warning(
-            "blocked YJS primary-doc write webspace=%s owner=%s path=%s reason=%s roots=%s",
-            webspace_id,
-            owner,
-            path,
-            str(policy.get("reason") or "write_amplification_blocked"),
-            ",".join(str(item) for item in list(policy.get("blocked_roots") or [])) or "-",
+    try:
+        from adaos.services.yjs.governance import govern_primary_doc_write
+
+        root_name = path.split("/", 1)[0] if path else ""
+        return await govern_primary_doc_write(
+            webspace_id=webspace_id,
+            owner=owner,
+            root_names=[root_name] if root_name else [],
+            path=path,
+            source="projection_service",
+            channel="projection.yjs",
+            policy=policy,
         )
-        return False
-    if policy_state != "throttle":
+    except Exception:
+        _log.debug("failed to apply shared primary-doc governance", exc_info=True)
         return True
-    _record_primary_doc_governance_event(webspace_id=webspace_id, owner=owner, path=path, policy=policy)
-    delay = float(_PRIMARY_DOC_PRESSURE_THROTTLE_SEC)
-    if delay <= 0.0:
-        return True
-    key = f"{str(webspace_id or '').strip()}\0{str(owner or '').strip()}\0{str(path or '').strip()}"
-    wait_s = 0.0
-    with _PRIMARY_DOC_THROTTLE_LOCK:
-        now = time.monotonic()
-        deadline = float(_PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.get(key) or 0.0)
-        if deadline > now:
-            wait_s = deadline - now
-            next_allowed = deadline + delay
-        else:
-            next_allowed = now + delay
-        _PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT[key] = next_allowed
-    if wait_s > 0.0:
-        await asyncio.sleep(wait_s)
-    return True
 
 
 def _clone_json_like(value: Any) -> Any:
@@ -411,16 +401,18 @@ class ProjectionService:
             source="projection_service",
             owner=owner,
             channel=f"projection.{str(target.backend or 'yjs')}.live_room",
+            governed=True,
         ):
             return
         try:
-            async with ystore_write_metadata(
-                root_names=[root_name],
-                source="projection_service",
-                owner=owner,
-                channel=f"projection.{str(target.backend or 'yjs')}",
-            ):
-                async with async_get_ydoc(ws_id, load_mark_roots=[root_name]) as ydoc:
+                async with ystore_write_metadata(
+                    root_names=[root_name],
+                    source="projection_service",
+                    owner=owner,
+                    channel=f"projection.{str(target.backend or 'yjs')}",
+                    governed=True,
+                ):
+                async with async_get_ydoc(ws_id, load_mark_roots=[root_name], governed=True) as ydoc:
                     with ydoc.begin_transaction() as txn:
                         _mutator(ydoc, txn)
         except Exception:
