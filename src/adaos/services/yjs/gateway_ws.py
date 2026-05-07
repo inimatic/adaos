@@ -265,6 +265,11 @@ class DiagnosticYRoom(YRoom):
         self._diag_empty_update_skip_bytes = 0
         self._diag_backend_persist_skip_total = 0
         self._diag_backend_persist_skip_bytes = 0
+        self._diag_destructive_update_block_total = 0
+        self._diag_destructive_update_block_bytes = 0
+        self._diag_effective_repair_total = 0
+        self._diag_effective_repair_bytes = 0
+        self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
         self._diag_last_log_mono = 0.0
         self._diag_pressure_active = False
         self._diag_pressure_reason = ""
@@ -314,6 +319,10 @@ class DiagnosticYRoom(YRoom):
             "empty_update_skip_bytes": int(self._diag_empty_update_skip_bytes),
             "backend_persist_skip_total": int(self._diag_backend_persist_skip_total),
             "backend_persist_skip_bytes": int(self._diag_backend_persist_skip_bytes),
+            "destructive_update_block_total": int(self._diag_destructive_update_block_total),
+            "destructive_update_block_bytes": int(self._diag_destructive_update_block_bytes),
+            "effective_repair_total": int(self._diag_effective_repair_total),
+            "effective_repair_bytes": int(self._diag_effective_repair_bytes),
             "peak_buffer_used": int(self._diag_peak_buffer_used),
             "peak_pending_send_tasks": int(self._diag_peak_pending_send_tasks),
             "peak_pending_store_tasks": int(self._diag_peak_pending_store_tasks),
@@ -527,6 +536,39 @@ class DiagnosticYRoom(YRoom):
         finally:
             self._diag_pending_store_tasks = max(0, int(self._diag_pending_store_tasks) - 1)
 
+    async def _repair_effective_branches_after_destructive_update(
+        self,
+        *,
+        destructive_update_bytes: int,
+        snapshot: dict[str, Any],
+    ) -> bytes:
+        self._diag_destructive_update_block_total += 1
+        self._diag_destructive_update_block_bytes += int(destructive_update_bytes or 0)
+        self.log.warning(
+            "blocked destructive YRoom update webspace=%s bytes=%s blocks=%s snapshot=%s",
+            self._diag_room_id(),
+            int(destructive_update_bytes or 0),
+            int(self._diag_destructive_update_block_total),
+            json.dumps(snapshot, ensure_ascii=True, sort_keys=True)[:1000],
+        )
+        repair_update = await _repair_room_effective_branches(
+            self._diag_room_id(),
+            getattr(self, "ystore", None),
+            self,
+            reason="destructive_client_update",
+        )
+        if repair_update:
+            self._diag_effective_repair_total += 1
+            self._diag_effective_repair_bytes += len(repair_update)
+            try:
+                self._diag_effective_branch_snapshot = _room_effective_branch_snapshot(self.ydoc)
+            except Exception as exc:
+                self._diag_effective_branch_snapshot = {
+                    "ready": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        return repair_update
+
     async def _broadcast_updates(self):
         if self.ystore is not None and not self.ystore.started.is_set():
             self._task_group.start_soon(self.ystore.start)
@@ -543,6 +585,35 @@ class DiagnosticYRoom(YRoom):
                     self._diag_empty_update_skip_bytes += update_len
                     continue
                 self._diag_log_pressure("broadcast.update.received", update_bytes=update_len)
+                previous_effective_ready = bool(
+                    isinstance(self._diag_effective_branch_snapshot, dict)
+                    and self._diag_effective_branch_snapshot.get("ready")
+                )
+                effective_snapshot: dict[str, Any] = {}
+                try:
+                    effective_snapshot = _room_effective_branch_snapshot(self.ydoc)
+                    self._diag_effective_branch_snapshot = effective_snapshot
+                except Exception as exc:
+                    effective_snapshot = {
+                        "ready": previous_effective_ready,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                if previous_effective_ready and not bool(effective_snapshot.get("ready")):
+                    repair_update = await self._repair_effective_branches_after_destructive_update(
+                        destructive_update_bytes=update_len,
+                        snapshot=effective_snapshot,
+                    )
+                    if repair_update:
+                        repair_message = create_update_message(repair_update)
+                        for client in self.clients:
+                            self.log.debug("Sending Y repair update to client with endpoint: %s", client.path)
+                            self._task_group.start_soon(
+                                self._tracked_client_send,
+                                client,
+                                repair_message,
+                                len(repair_update),
+                            )
+                    continue
                 for client in self.clients:
                     self.log.debug("Sending Y update to client with endpoint: %s", client.path)
                     message = create_update_message(update)
@@ -826,6 +897,10 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
                 "pending_store_tasks": int(raw_diag.get("pending_store_tasks") or 0),
                 "update_total": int(raw_diag.get("update_total") or 0),
                 "update_bytes_total": int(raw_diag.get("update_bytes_total") or 0),
+                "destructive_update_block_total": int(raw_diag.get("destructive_update_block_total") or 0),
+                "destructive_update_block_bytes": int(raw_diag.get("destructive_update_block_bytes") or 0),
+                "effective_repair_total": int(raw_diag.get("effective_repair_total") or 0),
+                "effective_repair_bytes": int(raw_diag.get("effective_repair_bytes") or 0),
                 "send_stream": {
                     "current_buffer_used": int(send_stream.get("current_buffer_used") or 0),
                     "max_buffer_size": int(send_stream.get("max_buffer_size") or 0),
@@ -883,6 +958,11 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
         "started": bool(getattr(started_event, "is_set", lambda: False)()) if started_event is not None else False,
         "task_group_active": bool(task_group is not None),
         "ystore_attached": bool(ystore is not None),
+        "effective_branches": (
+            getattr(room, "_diag_effective_branch_snapshot", None)
+            if isinstance(getattr(room, "_diag_effective_branch_snapshot", None), dict)
+            else {"ready": False, "error": "not_observed"}
+        ),
         "ystore_runtime": ystore_runtime,
         "diagnostic": room_diagnostic,
         "update_send_stream": send_stream_stats,
@@ -1841,6 +1921,20 @@ def _y_server_runtime_snapshot() -> dict[str, Any]:
     task_cancelled = bool(task is not None and task.cancelled())
     rooms = getattr(y_server, "rooms", None)
     room_total = len(rooms) if isinstance(rooms, dict) else 0
+    room_effective_branches: dict[str, Any] = {}
+    if isinstance(rooms, dict):
+        for room_name, room in list(rooms.items()):
+            room_key = str(room_name or "")
+            try:
+                clients = getattr(room, "clients", None)
+                client_total = len(clients) if hasattr(clients, "__len__") else None
+            except Exception:
+                client_total = None
+            cached_branches = getattr(room, "_diag_effective_branch_snapshot", None)
+            room_effective_branches[room_key] = {
+                "client_total": client_total,
+                "branches": cached_branches if isinstance(cached_branches, dict) else {"ready": False, "error": "not_observed"},
+            }
     error: str | None = None
     if task_done and not task_cancelled:
         try:
@@ -1858,6 +1952,7 @@ def _y_server_runtime_snapshot() -> dict[str, Any]:
         "task_done": task_done,
         "task_cancelled": task_cancelled,
         "room_total": room_total,
+        "room_effective_branches": room_effective_branches,
         "ready": ready,
         "error": error,
     }
@@ -2080,6 +2175,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
             try:
                 ui_map = room.ydoc.get_map("ui")
                 data_map = room.ydoc.get_map("data")
+                room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(room.ydoc)
                 _ylog.debug(
                     "YRoom ready webspace=%s ui keys=%s data keys=%s",
                     webspace_id,
@@ -2122,6 +2218,148 @@ def _room_effective_branches_ready(ydoc: Any) -> bool:
         return True
     except Exception:
         return False
+
+
+def _branch_collection_count(value: Any) -> int:
+    if isinstance(value, (dict, list, tuple, set)):
+        return len(value)
+    return 0
+
+
+def _branch_json_safe(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 5:
+        return "<max_depth>"
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _branch_json_safe(item, depth=depth + 1)
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))[:80]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_branch_json_safe(item, depth=depth + 1) for item in list(value)[:80]]
+    return repr(value)[:200]
+
+
+def _branch_hash(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        payload = json.dumps(
+            _branch_json_safe(value),
+            sort_keys=True,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+    except Exception:
+        payload = repr(value)
+    return hashlib.sha1(payload.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
+    if ydoc is None:
+        return {"ready": False, "error": "missing_ydoc"}
+    try:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        registry_map = ydoc.get_map("registry")
+        ui_keys = [str(key) for key in list(ui_map.keys())]
+        data_keys = [str(key) for key in list(data_map.keys())]
+        registry_keys = [str(key) for key in list(registry_map.keys())]
+        application = ui_map.get("application")
+        application_desktop = application.get("desktop") if isinstance(application, dict) else None
+        modals = application.get("modals") if isinstance(application, dict) else None
+        catalog = data_map.get("catalog")
+        installed = data_map.get("installed")
+        desktop = data_map.get("desktop")
+        return {
+            "ready": _room_effective_branches_ready(ydoc),
+            "ui_keys": ui_keys,
+            "data_keys": data_keys,
+            "registry_keys": registry_keys,
+            "has_application": isinstance(application, dict) and bool(application),
+            "has_application_desktop": isinstance(application_desktop, dict) and bool(application_desktop),
+            "modal_count": _branch_collection_count(modals),
+            "has_apps_catalog_modal": isinstance(modals, dict) and "apps_catalog" in modals,
+            "has_widgets_catalog_modal": isinstance(modals, dict) and "widgets_catalog" in modals,
+            "catalog_app_count": _branch_collection_count(catalog.get("apps") if isinstance(catalog, dict) else None),
+            "catalog_widget_count": _branch_collection_count(catalog.get("widgets") if isinstance(catalog, dict) else None),
+            "installed_key_count": _branch_collection_count(installed),
+            "installed_app_count": _branch_collection_count(installed.get("apps") if isinstance(installed, dict) else None),
+            "installed_widget_count": _branch_collection_count(installed.get("widgets") if isinstance(installed, dict) else None),
+            "desktop_key_count": _branch_collection_count(desktop),
+            "desktop_widget_count": _branch_collection_count(desktop.get("widgets") if isinstance(desktop, dict) else None),
+            "application_hash": _branch_hash(application),
+            "catalog_hash": _branch_hash(catalog),
+            "installed_hash": _branch_hash(installed),
+            "desktop_hash": _branch_hash(desktop),
+        }
+    except Exception as exc:
+        return {
+            "ready": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+async def _repair_room_effective_branches(
+    webspace_id: str,
+    ystore: Any,
+    room: Any,
+    *,
+    reason: str,
+) -> bytes:
+    ydoc = getattr(room, "ydoc", None)
+    if ydoc is None:
+        return b""
+    try:
+        import y_py as Y  # pylint: disable=import-outside-toplevel
+        from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
+
+        before = Y.encode_state_vector(ydoc)
+        runtime = WebspaceScenarioRuntime()
+        with ystore_write_metadata_sync(
+            root_names=["ui", "data", "registry"],
+            source=f"yjs.gateway_ws.{reason}",
+            owner="core:yjs_gateway",
+            channel="core.yjs.gateway.repair",
+            governed=True,
+        ):
+            runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - invariant repair needs in-doc materialization
+        if not _room_effective_branches_ready(ydoc):
+            _ylog.warning(
+                "YRoom effective branch repair did not restore required branches webspace=%s reason=%s snapshot=%s",
+                webspace_id,
+                reason,
+                json.dumps(_room_effective_branch_snapshot(ydoc), ensure_ascii=True, sort_keys=True)[:1000],
+            )
+            return b""
+        update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
+        if update and ystore is not None:
+            async with ystore_write_metadata(
+                root_names=["ui", "data", "registry"],
+                source=f"yjs.gateway_ws.{reason}",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.repair",
+                governed=True,
+            ):
+                await ystore.write_update(update, update_kind="diff", notify=False)
+        _ylog.warning(
+            "YRoom effective branches repaired webspace=%s reason=%s bytes=%s persisted=%s",
+            webspace_id,
+            reason,
+            len(update or b""),
+            bool(update and ystore is not None),
+        )
+        return bytes(update or b"")
+    except Exception as exc:
+        _ylog.warning(
+            "YRoom effective branch repair failed webspace=%s reason=%s: %s",
+            webspace_id,
+            reason,
+            exc,
+            exc_info=True,
+        )
+        return b""
 
 
 async def _ensure_room_effective_materialized(
