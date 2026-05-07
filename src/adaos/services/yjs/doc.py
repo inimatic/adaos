@@ -302,6 +302,23 @@ def get_ydoc(
                     update = _encode_diff(ydoc, before)
                     _record_doc_timing(timings, "encode_diff", stage_started, prefix=timing_prefix)
                     owner = _resolve_yjs_write_owner()
+                    try:
+                        from adaos.services.yjs.governance import govern_primary_doc_write_sync
+
+                        if not govern_primary_doc_write_sync(
+                            webspace_id=webspace_id,
+                            owner=owner,
+                            root_names=tracked_load_mark_roots,
+                            path=",".join(tracked_load_mark_roots) or "primary_shared_doc",
+                            source="get_ydoc",
+                            channel="yjs.doc.sync",
+                            update_bytes=len(update or b""),
+                        ):
+                            _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
+                            _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
+                            return None
+                    except Exception:
+                        _log.debug("failed to apply sync YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
                     persisted = False
                     try:
                         stage_started = time.perf_counter()
@@ -310,6 +327,7 @@ def get_ydoc(
                             source="get_ydoc",
                             owner=owner,
                             channel="yjs.doc.sync",
+                            governed=True,
                         ):
                             if update:
                                 await ystore.write_update(update, update_kind="diff")
@@ -368,6 +386,22 @@ async def async_get_ydoc(
     ystore = get_ystore_for_webspace(webspace_id)
     room = _resolve_live_room(webspace_id) if prefer_live_room else None
     use_live_room = _can_access_live_room_directly(room)
+    if use_live_room and not read_only:
+        owner = _resolve_yjs_write_owner()
+        try:
+            from adaos.services.yjs.governance import govern_primary_doc_write
+
+            if not await govern_primary_doc_write(
+                webspace_id=webspace_id,
+                owner=owner,
+                root_names=[str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()],
+                path=",".join(str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()) or "primary_shared_doc",
+                source="async_get_ydoc.live_room",
+                channel="yjs.doc.async.live_room",
+            ):
+                use_live_room = False
+        except Exception:
+            _log.debug("failed to apply live-room admission YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
     ydoc = room.ydoc if use_live_room else Y.YDoc()
     if use_live_room:
         _set_doc_timing(timings, "ystore_start", 0.0, prefix=timing_prefix)
@@ -414,6 +448,23 @@ async def async_get_ydoc(
                     update = _encode_diff(ydoc, before)
                     _record_doc_timing(timings, "encode_diff", stage_started, prefix=timing_prefix)
                     owner = _resolve_yjs_write_owner()
+                    try:
+                        from adaos.services.yjs.governance import govern_primary_doc_write
+
+                        if not await govern_primary_doc_write(
+                            webspace_id=webspace_id,
+                            owner=owner,
+                            root_names=tracked_load_mark_roots,
+                            path=",".join(tracked_load_mark_roots) or "primary_shared_doc",
+                            source="async_get_ydoc",
+                            channel="yjs.doc.async",
+                            update_bytes=len(update or b""),
+                        ):
+                            _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
+                            _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
+                            return
+                    except Exception:
+                        _log.debug("failed to apply async YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
                     persisted = False
                     try:
                         stage_started = time.perf_counter()
@@ -422,6 +473,7 @@ async def async_get_ydoc(
                             source="async_get_ydoc",
                             owner=owner,
                             channel="yjs.doc.async",
+                            governed=True,
                         ):
                             if update:
                                 await ystore.write_update(update, update_kind="diff")
@@ -494,12 +546,28 @@ def mutate_live_room(
         return False
 
     def _apply() -> None:
+        owner_token = owner or _resolve_yjs_write_owner()
+        try:
+            from adaos.services.yjs.governance import govern_primary_doc_write_sync
+
+            if not govern_primary_doc_write_sync(
+                webspace_id=webspace_id,
+                owner=owner_token,
+                root_names=list(root_names or []),
+                path=",".join(str(item or "").strip() for item in list(root_names or []) if str(item or "").strip()) or "primary_shared_doc",
+                source=source,
+                channel=channel,
+            ):
+                return
+        except Exception:
+            _log.debug("failed to apply live-room YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
         try:
             with ystore_write_metadata_sync(
                 root_names=list(root_names or []),
                 source=source,
-                owner=(owner or _resolve_yjs_write_owner()),
+                owner=owner_token,
                 channel=channel,
+                governed=True,
             ):
                 with room.ydoc.begin_transaction() as txn:
                     mutator(room.ydoc, txn)
