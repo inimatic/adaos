@@ -335,11 +335,21 @@ LLM-authored skills and scenarios should follow these rules:
 
 ## Roadmap
 
+Status note:
+
+- the typed ref vocabulary is now documented and used by the draft semantic Web
+  UI ABI
+- demo skill and scenario manifests already use `y:`, `stream:`, `view:`, and
+  `action:` refs
+- desktop and modal runtime adapters now preserve the same binding vocabulary
+  during compatibility rendering
+- broader cross-document harmonization is still in progress
+
 ### 0. Vocabulary Fixation
 
-- [ ] publish this addressing vocabulary as the canonical browser/runtime
+- [x] publish this addressing vocabulary as the canonical browser/runtime
   reference model
-- [ ] freeze the distinction between logical, routing, runtime, projection,
+- [x] freeze the distinction between logical, routing, runtime, projection,
   action, and domain refs
 - [ ] align naming guidance across `ctx.*`, `data_projections`,
   `webio.receivers`, and `projection_key`
@@ -357,30 +367,30 @@ LLM-authored skills and scenarios should follow these rules:
 
 ### 2. Web UI Priority Slice
 
-- [ ] define the first browser-facing binding object shape for `y`, `stream`,
+- [x] define the first browser-facing binding object shape for `y`, `stream`,
   and `view` refs
-- [ ] define typed browser action refs for the first semantic UI actions
+- [x] define typed browser action refs for the first semantic UI actions
 - [ ] define the first canonical `webspace:<id>` and `device:*` refs needed by
   workspace and device surfaces
 - [ ] define the first projection-ref usage rules for pages, widgets, modals,
   and platform-emitted projections
-- [ ] define the first shared binding pattern that both table-like and
+- [x] define the first shared binding pattern that both table-like and
   chart-like semantic views can reuse
 
 ### 3. Runtime and ABI Alignment
 
-- [ ] teach runtime manifest and semantic UI ABI docs to use the same ref
+- [x] teach runtime manifest and semantic UI ABI docs to use the same ref
   vocabulary
-- [ ] align browser adapters with explicit scope handling instead of implicit
+- [x] align browser adapters with explicit scope handling instead of implicit
   path conventions alone
-- [ ] preserve compatibility for current `webui.json`, Yjs, and stream
+- [x] preserve compatibility for current `webui.json`, Yjs, and stream
   contracts during migration
 
 ### 4. Authoring and Tooling
 
 - [ ] publish LLM-oriented authoring examples using the finalized ref classes
 - [ ] validate manifests against allowed ref kinds and scope combinations
-- [ ] add repository examples covering shared, node-scoped, and local browser
+- [x] add repository examples covering shared, node-scoped, and local browser
   state
 
 ### 5. Deferred Generalization
