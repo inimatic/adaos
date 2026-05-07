@@ -344,6 +344,8 @@ Status note:
 - desktop and modal runtime adapters now preserve the same binding vocabulary
   during compatibility rendering
 - broader cross-document harmonization is still in progress
+- the demo metrics table and chart now share the same `view:` selection ref on
+  both semantic and compatibility paths
 
 ### 0. Vocabulary Fixation
 
@@ -392,6 +394,14 @@ Status note:
 - [ ] validate manifests against allowed ref kinds and scope combinations
 - [x] add repository examples covering shared, node-scoped, and local browser
   state
+
+### 4a. Stand-Oriented Demo Readiness
+
+- [x] repository demo manifests use `y:`, `stream:`, `view:`, and `action:`
+  refs together
+- [x] one shared `view:` ref links table selection to chart rendering
+- [x] the same addressing slice is used in both desktop and modal demo surfaces
+- [ ] manual verification on the target stand
 
 ### 5. Deferred Generalization
 
