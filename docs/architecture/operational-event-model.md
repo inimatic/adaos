@@ -10,6 +10,9 @@ The goal is to keep Yjs as a live collaborative projection layer while making de
 The implementation order for this target state is tracked in
 [Operational Event Model Roadmap](operational-event-model-roadmap.md).
 
+For the target typed ref vocabulary used by browser-facing manifests and
+projection-aware runtime contracts, see [UI Addressing](ui-addressing.md).
+
 ## Why This Exists
 
 AdaOS now has enough browser-facing runtime behavior that a simple "subscribe to many events and rewrite one big Yjs snapshot" model no longer scales well.
