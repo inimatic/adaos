@@ -17,10 +17,21 @@ StrOrPath = Union[str, Path]
 _log = logging.getLogger(__name__)
 
 
+def _git_command_timeout_s() -> float:
+    try:
+        return max(1.0, float(str(os.getenv("ADAOS_GIT_COMMAND_TIMEOUT_S") or "90").strip()))
+    except Exception:
+        return 90.0
+
+
 def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
     if cwd is not None:
         cwd = str(Path(cwd))  # единая точка приведения к str
-    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    timeout_s = _git_command_timeout_s()
+    try:
+        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
     # TODO Проверить, git нет, но папка не пустая. Вместо операции c git даем дружественную ошибку
     # destination path 'C:\git\MUIV\adaos_test\adaos\.adaos_1\workspace' already exists and is not an empty directory
     if p.returncode != 0:
