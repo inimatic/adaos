@@ -2048,6 +2048,16 @@ class WorkspaceWebsocketServer(WebsocketServer):
                         space=space,
                         ydoc=room.ydoc,
                     )
+                    await _ensure_room_effective_materialized(
+                        webspace_id,
+                        ystore,
+                        room,
+                        seed_result=seed_result,
+                    )
+                    await _finalize_room_bootstrap_rebuild_status(
+                        webspace_id,
+                        seed_result=seed_result,
+                    )
                     self.rooms[name] = room
                     _mark_room_created(webspace_id, room)
         room = self.rooms[name]
@@ -2085,6 +2095,153 @@ y_server = WorkspaceWebsocketServer(auto_clean_rooms=False)
 _y_server_started = False
 _y_server_task: asyncio.Task[None] | None = None
 _room_locks: dict[str, asyncio.Lock] = {}
+
+
+def _room_effective_branches_ready(ydoc: Any) -> bool:
+    try:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        application = ui_map.get("application")
+        if not isinstance(application, dict) or not application:
+            return False
+        desktop = application.get("desktop")
+        modals = application.get("modals")
+        if not isinstance(desktop, dict) or not desktop:
+            return False
+        if not isinstance(modals, dict) or "apps_catalog" not in modals or "widgets_catalog" not in modals:
+            return False
+        catalog = data_map.get("catalog")
+        if not isinstance(catalog, dict):
+            return False
+        if not isinstance(catalog.get("apps"), list) or not isinstance(catalog.get("widgets"), list):
+            return False
+        if not isinstance(data_map.get("installed"), dict):
+            return False
+        if not isinstance(data_map.get("desktop"), dict):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+async def _ensure_room_effective_materialized(
+    webspace_id: str,
+    ystore: Any,
+    room: Any,
+    *,
+    seed_result: dict[str, Any] | None = None,
+) -> bool:
+    """
+    Ensure cold YRoom opens with effective desktop branches already present.
+
+    ``ensure_webspace_seeded_from_scenario`` may legitimately reuse projected
+    scenario branches and emit an async semantic rebuild nudge. That is too late
+    for the first browser sync: the initial Yjs state can reach the client
+    before ``ui.application``/``data.catalog`` are materialized. For room
+    bootstrap we run the semantic materializer in the room YDoc synchronously
+    and persist just the resulting diff before exposing the room.
+    """
+    ydoc = getattr(room, "ydoc", None)
+    if ydoc is None or _room_effective_branches_ready(ydoc):
+        return False
+
+    try:
+        import y_py as Y  # pylint: disable=import-outside-toplevel
+        from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
+
+        before = Y.encode_state_vector(ydoc)
+        runtime = WebspaceScenarioRuntime()
+        with ystore_write_metadata_sync(
+            root_names=["ui", "data", "registry"],
+            source="yjs.gateway_ws.room_bootstrap",
+            owner="core:yjs_gateway",
+            channel="core.yjs.gateway.bootstrap",
+            governed=True,
+        ):
+            runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - room bootstrap needs in-doc materialization
+
+        if not _room_effective_branches_ready(ydoc):
+            if seed_result is not None:
+                seed_result["room_effective_materialized"] = False
+                seed_result["room_effective_materialize_error"] = "effective_branches_still_missing"
+            _ylog.warning(
+                "YRoom effective materialization left required branches missing webspace=%s",
+                webspace_id,
+            )
+            return False
+
+        update = Y.encode_state_as_update(ydoc, before)  # type: ignore[arg-type]
+        persisted = False
+        if update:
+            async with ystore_write_metadata(
+                root_names=["ui", "data", "registry"],
+                source="yjs.gateway_ws.room_bootstrap",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.bootstrap",
+                governed=True,
+            ):
+                persisted = bool(await ystore.write_update(update, update_kind="diff", notify=False))
+        if seed_result is not None:
+            seed_result["room_effective_materialized"] = True
+            seed_result["room_effective_materialized_persisted"] = bool(persisted)
+            seed_result["room_effective_materialized_bytes"] = len(update or b"")
+        _ylog.info(
+            "YRoom effective branches materialized before open webspace=%s persisted=%s bytes=%d",
+            webspace_id,
+            bool(persisted),
+            len(update or b""),
+        )
+        return True
+    except Exception as exc:
+        if seed_result is not None:
+            seed_result["room_effective_materialized"] = False
+            seed_result["room_effective_materialize_error"] = f"{type(exc).__name__}: {exc}"
+        _ylog.warning(
+            "YRoom effective materialization failed before open webspace=%s: %s",
+            webspace_id,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
+async def _finalize_room_bootstrap_rebuild_status(
+    webspace_id: str,
+    *,
+    seed_result: dict[str, Any] | None = None,
+) -> None:
+    """
+    Publish a semantic rebuild status for rooms restored from a disk snapshot.
+
+    A cold YRoom can already contain all effective branches because the durable
+    snapshot is healthy. In that path no semantic rebuild event is emitted, so
+    in-memory diagnostics may still report ``materialization_not_ready`` after a
+    process restart. Run the public rebuild primitive once before the room is
+    exposed so readiness reflects the actual YDoc state.
+    """
+    try:
+        from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources  # pylint: disable=import-outside-toplevel
+
+        result = await rebuild_webspace_from_sources(
+            webspace_id,
+            action="room_bootstrap",
+            source_of_truth="room_bootstrap",
+        )
+        if seed_result is not None:
+            seed_result["room_bootstrap_rebuild_status"] = (
+                "ready" if bool(result.get("ok")) and bool(result.get("accepted")) else "not_accepted"
+            )
+            seed_result["room_bootstrap_rebuild_error"] = str(result.get("error") or "") or None
+    except Exception as exc:
+        if seed_result is not None:
+            seed_result["room_bootstrap_rebuild_status"] = "failed"
+            seed_result["room_bootstrap_rebuild_error"] = f"{type(exc).__name__}: {exc}"
+        _ylog.warning(
+            "YRoom bootstrap rebuild status finalization failed webspace=%s: %s",
+            webspace_id,
+            exc,
+            exc_info=True,
+        )
 
 
 async def start_y_server() -> None:
