@@ -309,9 +309,25 @@ Current implementation progress:
 - [x] Reliability and Infra State expose compact `yjs_pressure` plus blocked/throttled counters.
 - [x] Kernel write-boundary guard exists for `get_ydoc`, `async_get_ydoc`, `mutate_live_room`, and direct `YStore.write_update`.
 - [x] Guard decisions preserve evidence: owner, roots, source, channel, path, update size, policy state, reason, and counters.
+- [x] `ProjectionService` delegates governance decisions to the shared kernel governor and marks already-governed writes so downstream write paths do not double-throttle.
+- [x] SDK Yjs wrappers attach explicit skill ownership metadata for both async and sync usage.
 - [ ] Replace remaining skill-local pressure guards with calls into the shared kernel governor where they still carry custom logic.
 - [ ] Add correlation/generation ids across snapshot, rebuild, route, and Yjs governance events.
 - [ ] Add acceptance coverage for abusive LLM-generated skill write patterns without depending on a specific `infrastate` workaround.
+
+Operational knobs:
+
+- `ADAOS_YJS_PRIMARY_DOC_GOVERNANCE_ENABLE=1` enables kernel enforcement.
+- `ADAOS_YJS_PRIMARY_DOC_GOVERNANCE_FAIL_OPEN=1` keeps policy-evaluation failures from blocking core liveness.
+- `ADAOS_YJS_PRIMARY_DOC_PRESSURE_THROTTLE_SEC=0.35` controls per-owner/root throttle spacing.
+- `ADAOS_YJS_LOAD_MARK_HIGH_BPS`, `ADAOS_YJS_LOAD_MARK_CRITICAL_BPS`, and `ADAOS_YJS_LOAD_MARK_BLOCK_BPS` define byte-pressure thresholds.
+- `ADAOS_YJS_LOAD_MARK_HIGH_WPS`, `ADAOS_YJS_LOAD_MARK_CRITICAL_WPS`, and `ADAOS_YJS_LOAD_MARK_BLOCK_WPS` define write-rate thresholds.
+
+Expected operator signals:
+
+- Reliability `yjs_pressure.policy_state` reports the current `ok` / `warn` / `throttle` / `block` state.
+- Reliability governance counters report `attempted_total`, `allowed_total`, `throttled_total`, and `blocked_total`.
+- Logs include `throttled YJS primary-doc write` or `blocked YJS primary-doc write` with owner, roots, source, channel, path, reason, and update size.
 
 Work items:
 
