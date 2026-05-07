@@ -9,6 +9,7 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
 - `scenario.schema.json` - scenario manifest (`scenario.yaml` or `scenario.json`)
 - `skill.schema.json` - skill manifest (`skill.yaml`)
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including staged readiness hints for page, widget, modal, and catalog surfaces
+- `webui.semantic.v0.schema.json` - draft semantic browser UI ABI for future semantic views, typed bindings, view state, and typed actions layered above `webui.v1`
 
 ## Current Manifest Runtime Extensions
 
