@@ -291,6 +291,10 @@ Actions:
   mode expands.
 - [x] Ensure telemetry and logs distinguish "incoming load reduced by
   guardrail" from "incoming load disappeared".
+- [x] Add kernel-level Yjs primary-doc governance at the write boundary:
+  `get_ydoc`, `async_get_ydoc`, `mutate_live_room`, and direct
+  `YStore.write_update` now evaluate the shared `warn` / `throttle` / `block`
+  policy before persisting or broadcasting skill-owned writes.
 - [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,
   rebuild, route, and Yjs stages.
   First wave landed for member snapshot rebuild pressure and incident summary;

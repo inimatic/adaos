@@ -5526,7 +5526,7 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
     selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
     try:
         from adaos.services.yjs.load_mark import yjs_primary_doc_policy_snapshot
-        from adaos.services.scenario.projection_service import primary_doc_governance_snapshot
+        from adaos.services.yjs.governance import primary_doc_governance_snapshot
 
         payload = yjs_primary_doc_policy_snapshot(webspace_id=selected_webspace_id)
         if isinstance(payload, dict):
