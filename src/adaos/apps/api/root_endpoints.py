@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 from adaos.adapters.db import sqlite as sqlite_db
 from adaos.apps.api.auth import require_owner_token
 from adaos.services.agent_context import get_ctx
+from adaos.services.diag360 import create_360log_snapshot, list_360log_snapshots, view_360log_snapshot
 from adaos.services.id_gen import new_id
 from adaos.services.join_codes import (
     JoinCodeConsumed,
@@ -1416,6 +1417,16 @@ class RootMcpAccessTokenIssueRequest(BaseModel):
     note: str | None = Field(default=None, max_length=512)
 
 
+class RootMcp360LogSnapshotRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=512)
+    scope: str = Field(default="auto", pattern="^(auto|local|subnet)$")
+    subnet_id: str | None = Field(default=None, max_length=128)
+    webspace_id: str | None = Field(default="desktop", max_length=128)
+    lines: int = Field(default=300, ge=1, le=2000)
+    files: int = Field(default=8, ge=1, le=50)
+    timeout: float = Field(default=2.0, ge=0.2, le=15.0)
+
+
 class RootMcpAccessTokenRevokeRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=512)
 
@@ -2151,6 +2162,99 @@ async def root_mcp_subnet_diagnostics(
         "auth": {"method": auth.get("method")},
         "scope": scope,
         "diagnostics": diagnostics,
+    }
+
+
+@root_router.post("/mcp/360log/snapshots")
+async def root_mcp_create_360log_snapshot(
+    payload: RootMcp360LogSnapshotRequest,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("audit.read", auth=auth)
+    result = await asyncio.to_thread(
+        create_360log_snapshot,
+        reason=payload.reason,
+        scope=payload.scope,
+        subnet_id=payload.subnet_id or scope.get("subnet_id"),
+        webspace_id=payload.webspace_id,
+        lines=payload.lines,
+        files=payload.files,
+        timeout=payload.timeout,
+    )
+    audit_event_id = _append_direct_root_mcp_audit(
+        tool_id="operations.create_360log_snapshot",
+        actor=str(auth.get("actor") or "root:unknown"),
+        auth_method=str(auth.get("method") or "unknown"),
+        capability="audit.read",
+        status="ok",
+        meta={"scope": scope, "query": payload.model_dump()},
+        result_summary={
+            "kind": "360log_snapshot",
+            "snapshot_id": result.get("snapshot_id"),
+            "items_total": result.get("items_total"),
+        },
+    )
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "snapshot": result,
+        "audit_event_id": audit_event_id,
+    }
+
+
+@root_router.get("/mcp/360log/snapshots")
+async def root_mcp_list_360log_snapshot(
+    limit: int = 20,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("audit.read", auth=auth)
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "snapshots": list_360log_snapshots(limit=max(1, min(int(limit), 100))),
+    }
+
+
+@root_router.get("/mcp/360log/snapshots/{snapshot_id}")
+async def root_mcp_get_360log_snapshot(
+    snapshot_id: str,
+    include_timeline: bool = True,
+    timeline_limit: int = 300,
+    include_sources: bool = True,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    _enforce_mcp_capability("audit.read", auth=auth)
+    try:
+        snapshot = view_360log_snapshot(
+            snapshot_id,
+            include_timeline=bool(include_timeline),
+            timeline_limit=max(1, min(int(timeline_limit), 2000)),
+            include_sources=bool(include_sources),
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail={"code": "snapshot_not_found", "message": "360log snapshot was not found."}) from None
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "scope": scope,
+        "snapshot": snapshot,
     }
 
 
