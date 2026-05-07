@@ -258,6 +258,73 @@ but they must not rely on high-frequency broad branch rewrites as a normal stead
 Snapshot fallback must stay bounded and explicit.
 If the normal user experience depends on frequent snapshot substitution, the real defect is in `state_sync` or `yjs_pressure`, not in the lack of more snapshots.
 
+## Target skill write architecture
+
+Skills, especially LLM-authored skills, should not treat the primary shared Yjs
+document as a free-form database. The target architecture is:
+
+- `ProjectionService` is the only normal skill-facing write ingress for
+  browser-visible primary shared state.
+- SDK helpers may stay ergonomic, but primary-doc writes from those helpers
+  should route through `ProjectionService` or another governed projection
+  facade.
+- Direct Yjs access from skills is a legacy or explicitly-capability-gated path,
+  not the default.
+- Core/runtime internals may use direct Yjs primitives, but only through
+  explicitly marked internal paths with ownership metadata.
+- Details, diagnostics, logs, and large operational payloads should use
+  section endpoints, streams, or `360log` snapshots rather than broad primary
+  Yjs rewrites.
+
+The goal is not to make skills weaker. The goal is to make browser-visible state
+safe by default:
+
+- one schema and budget boundary
+- one place for compaction and generation ids
+- one place for `warn` / `throttle` / `block`
+- one operator-visible trail for abusive writes
+
+### Direct Yjs policy target
+
+The eventual default should be deny-by-default for skill-owned direct writes to
+the primary shared document, with narrow capability exceptions:
+
+```yaml
+runtime:
+  yjs:
+    primary_doc:
+      direct_write: false
+      projections:
+        - id: weather.current
+          path: data/weather/current
+          max_bytes: 8192
+          mode: replace
+    details:
+      stream: true
+      http: true
+```
+
+Temporary legacy skills may declare an explicit migration state:
+
+```yaml
+runtime:
+  yjs:
+    primary_doc:
+      direct_write: legacy_warn
+      allowed_paths:
+        - data/weather
+```
+
+Path awareness matters. The policy should distinguish safe narrow writes from
+unsafe broad rewrites:
+
+- allowed target shape: `data/weather/current`
+- risky target shape: replacing `data` or `ui` as a whole branch
+- skill-private runtime data should prefer `runtime/skills/<skill_id>/...` or
+  skill-local storage, not primary desktop branches
+- heavy details should not live in primary Yjs unless explicitly compacted and
+  budgeted
+
 ## Roadmap
 
 ### Phase 1 - Contract freeze and mapping
@@ -362,7 +429,39 @@ Success criteria:
 - reconnect/recovery does not trigger large repeated desktop rewrites
 - operational skills no longer dominate `yjs_pressure` in healthy steady state
 
-### Phase 5 - UI adoption and legacy cleanup
+### Phase 5 - ProjectionService as the skill write boundary
+
+Make `ProjectionService` the required path for normal skill-owned writes into
+browser-visible primary shared state.
+
+Migration stages:
+
+- [ ] Observe direct skill-owned Yjs writes and expose them as
+  `direct_yjs_write=true` with owner, source, channel, root, path, and size.
+- [ ] Warn on direct skill writes that bypass `ProjectionService`:
+  `deprecated_direct_skill_yjs_write`.
+- [ ] Apply stricter budgets to direct skill writes than to governed projection
+  writes.
+- [ ] Block broad direct skill writes to roots such as `data`, `ui`,
+  `registry`, and shared desktop branches unless explicitly allowlisted.
+- [ ] Add `skill.yaml` capability declarations for direct Yjs exceptions and
+  projection targets.
+- [ ] Make direct skill-owned primary-doc writes deny-by-default outside
+  declared capabilities.
+- [ ] Provide migration tooling that reports each skill's direct Yjs usage and
+  suggests projection declarations.
+- [ ] Update LLM skill-generation prompts/templates so generated skills use
+  projections, streams, HTTP details, or skill-local storage instead of direct
+  primary Yjs writes.
+
+Success criteria:
+
+- LLM-generated skills cannot accidentally rewrite broad browser-visible Yjs
+  branches.
+- Direct skill Yjs writes are either rejected or tied to explicit capabilities.
+- Operators can see which skills still depend on legacy direct Yjs access.
+
+### Phase 6 - UI adoption and legacy cleanup
 
 Make browser UI consume the canonical contracts directly and retire misleading aggregates.
 
