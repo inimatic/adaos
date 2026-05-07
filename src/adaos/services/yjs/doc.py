@@ -15,6 +15,13 @@ from adaos.services.yjs.update_origin import mark_backend_room_update
 
 T = TypeVar("T")
 _log = logging.getLogger("adaos.yjs.doc")
+_LIVE_MAP_VALUE_CACHE_TTL_S = 1.0
+_LIVE_MAP_VALUE_CACHE_MAX = 128
+_LIVE_MAP_VALUE_CACHE: dict[tuple[str, str, str], tuple[float, Any]] = {}
+
+
+def _cacheable_live_map_value(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
 
 
 def _resolve_yjs_write_owner() -> str:
@@ -129,12 +136,23 @@ def try_read_live_map_value(webspace_id: str, map_name: str, key: str) -> tuple[
     The helper only reads directly when the current thread already owns the
     room, so it stays non-blocking and safe for hot-path diagnostics.
     """
-    room = _resolve_live_room(webspace_id)
+    cache_key = (str(webspace_id or ""), str(map_name or ""), str(key or ""))
+    now = time.monotonic()
+    cached = _LIVE_MAP_VALUE_CACHE.get(cache_key)
+    if cached is not None and (now - cached[0]) <= _LIVE_MAP_VALUE_CACHE_TTL_S:
+        return True, cached[1]
+
+    room = _resolve_live_room(cache_key[0])
     if not _can_access_live_room_directly(room):
         return False, None
     try:
-        y_map = room.ydoc.get_map(str(map_name or ""))
-        return True, y_map.get(str(key or ""))
+        y_map = room.ydoc.get_map(cache_key[1])
+        value = y_map.get(cache_key[2])
+        if _cacheable_live_map_value(value):
+            if len(_LIVE_MAP_VALUE_CACHE) >= _LIVE_MAP_VALUE_CACHE_MAX:
+                _LIVE_MAP_VALUE_CACHE.pop(next(iter(_LIVE_MAP_VALUE_CACHE)), None)
+            _LIVE_MAP_VALUE_CACHE[cache_key] = (now, value)
+        return True, value
     except Exception:
         return True, None
 

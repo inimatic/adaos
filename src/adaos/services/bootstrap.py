@@ -228,7 +228,10 @@ def _is_local_http_base(url: str) -> bool:
 
 
 def _hub_route_prefers_supervisor_public_status(path_norm: str, method: str) -> bool:
-    return method in ("GET", "HEAD") and path_norm == "/api/supervisor/public/update-status"
+    return method in ("GET", "HEAD") and path_norm in {
+        "/api/supervisor/public/update-status",
+        "/api/supervisor/public/memory-status",
+    }
 
 
 def _dev_without_supervisor() -> bool:
@@ -584,10 +587,10 @@ def _build_hub_route_http_bases(
     if _hub_route_prefers_supervisor_public_status(path_norm, method):
         bases.extend(_supervisor_local_bases())
     else:
+        bases.extend(state_bases)
         if runtime_port_base:
             _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
             bases.append(runtime_port_base)
-        bases.extend(state_bases)
         if cfg_base and _is_local_http_base(cfg_base):
             bases.append(cfg_base.rstrip("/"))
         if runtime_port.isdigit():
@@ -640,11 +643,11 @@ def _build_hub_route_ws_bases(
     runtime_port_base = _runtime_port_local_http_base()
     state_bases = _active_runtime_state_local_http_bases(ctx)
 
+    for state_base in state_bases:
+        bases.append(_http_base_to_ws_base(state_base))
     if runtime_port_base:
         _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
         bases.append(_http_base_to_ws_base(runtime_port_base))
-    for state_base in state_bases:
-        bases.append(_http_base_to_ws_base(state_base))
     if env_base and _is_local_http_base(env_base):
         bases.append(_http_base_to_ws_base(env_base))
     if cfg_base and _is_local_http_base(cfg_base):
