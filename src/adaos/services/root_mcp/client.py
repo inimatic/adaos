@@ -878,6 +878,53 @@ class RootMcpClient:
             params["target_id"] = target_id
         return dict(self._request("GET", "/v1/root/mcp/subnet/diagnostics", params=params))
 
+    def create_360log_snapshot(
+        self,
+        *,
+        reason: str | None = None,
+        scope: str = "auto",
+        subnet_id: str | None = None,
+        webspace_id: str | None = "desktop",
+        lines: int = 300,
+        files: int = 8,
+        timeout: float = 2.0,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "scope": scope,
+            "webspace_id": webspace_id,
+            "lines": int(lines),
+            "files": int(files),
+            "timeout": float(timeout),
+        }
+        if reason:
+            payload["reason"] = reason
+        if subnet_id:
+            payload["subnet_id"] = subnet_id
+        return dict(self._request("POST", "/v1/root/mcp/360log/snapshots", json=payload))
+
+    def list_360log_snapshots(self, *, limit: int = 20) -> dict[str, Any]:
+        return dict(self._request("GET", "/v1/root/mcp/360log/snapshots", params={"limit": int(limit)}))
+
+    def get_360log_snapshot(
+        self,
+        snapshot_id: str,
+        *,
+        include_timeline: bool = True,
+        timeline_limit: int = 300,
+        include_sources: bool = True,
+    ) -> dict[str, Any]:
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/root/mcp/360log/snapshots/{snapshot_id}",
+                params={
+                    "include_timeline": bool(include_timeline),
+                    "timeline_limit": int(timeline_limit),
+                    "include_sources": bool(include_sources),
+                },
+            )
+        )
+
     def call(
         self,
         tool_id: str,

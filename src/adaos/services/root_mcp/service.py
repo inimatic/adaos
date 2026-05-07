@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from adaos.build_info import BUILD_INFO
+from adaos.services.diag360 import create_360log_snapshot, list_360log_snapshots, view_360log_snapshot
 from adaos.services.agent_context import get_ctx
 from adaos.services.id_gen import new_id
 
@@ -580,6 +581,54 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="operations.read.targets",
             metadata={"published_by": "root", "handler": "get_managed_target"},
+        ),
+        RootMcpToolContract(
+            id="operations.create_360log_snapshot",
+            title="Create 360log snapshot",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Persist a bounded 360log flight-recorder snapshot and return a snapshot id for later analysis.",
+            input_schema=schema_object(
+                properties={
+                    "reason": {"type": "string"},
+                    "scope": {"type": "string", "enum": ["auto", "local", "subnet"]},
+                    "subnet_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "lines": {"type": "integer", "minimum": 1, "maximum": 2000},
+                    "files": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "timeout": {"type": "number", "minimum": 0.2, "maximum": 15.0},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="audit.read",
+            metadata={"published_by": "root", "handler": "create_360log_snapshot"},
+        ),
+        RootMcpToolContract(
+            id="operations.list_360log_snapshots",
+            title="List 360log snapshots",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="List persisted 360log flight-recorder snapshots.",
+            input_schema=schema_object(properties={"limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="audit.read",
+            metadata={"published_by": "root", "handler": "list_360log_snapshots"},
+        ),
+        RootMcpToolContract(
+            id="operations.get_360log_snapshot",
+            title="Get 360log snapshot",
+            surface=RootMcpSurface.OPERATIONS,
+            summary="Return a persisted 360log snapshot by id, optionally with bounded timeline/source payload.",
+            input_schema=schema_object(
+                properties={
+                    "snapshot_id": {"type": "string"},
+                    "include_timeline": {"type": "boolean"},
+                    "timeline_limit": {"type": "integer", "minimum": 1, "maximum": 2000},
+                    "include_sources": {"type": "boolean"},
+                },
+                required=["snapshot_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="audit.read",
+            metadata={"published_by": "root", "handler": "get_360log_snapshot"},
         ),
         RootMcpToolContract(
             id="hub.issue_access_token",
@@ -1690,6 +1739,42 @@ def _handle_hub_rollback_last_test_deploy(arguments: dict[str, Any], *, dry_run:
     }
 
 
+def _handle_create_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    query = {
+        "reason": str(arguments.get("reason") or "").strip() or None,
+        "scope": str(arguments.get("scope") or "auto").strip().lower() or "auto",
+        "subnet_id": str(arguments.get("subnet_id") or "").strip() or None,
+        "webspace_id": str(arguments.get("webspace_id") or "desktop").strip() or "desktop",
+        "lines": max(1, min(int(arguments.get("lines") or 300), 2000)),
+        "files": max(1, min(int(arguments.get("files") or 8), 50)),
+        "timeout": max(0.2, min(float(arguments.get("timeout") or 2.0), 15.0)),
+    }
+    if query["scope"] not in {"auto", "local", "subnet"}:
+        raise ValueError("scope must be one of: auto, local, subnet")
+    if dry_run:
+        return {"would_create": True, "query": query}
+    return create_360log_snapshot(**query)
+
+
+def _handle_list_360log_snapshots(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    limit = max(1, min(int(arguments.get("limit") or 20), 100))
+    return {"snapshots": list_360log_snapshots(limit=limit)}
+
+
+def _handle_get_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    snapshot_id = str(arguments.get("snapshot_id") or "").strip()
+    if not snapshot_id:
+        raise ValueError("snapshot_id is required")
+    return {
+        "snapshot": view_360log_snapshot(
+            snapshot_id,
+            include_timeline=bool(arguments.get("include_timeline", True)),
+            timeline_limit=max(1, min(int(arguments.get("timeline_limit") or 300), 2000)),
+            include_sources=bool(arguments.get("include_sources", True)),
+        )
+    }
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "development.describe_foundation": lambda arguments, dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
     "development.list_contracts": lambda arguments, dry_run=False: _handle_list_contracts(arguments, dry_run=dry_run),
@@ -1736,6 +1821,9 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "operations.list_contracts": lambda arguments, dry_run=False: _handle_operational_contracts(arguments, dry_run=dry_run),
     "operations.list_managed_targets": lambda arguments, dry_run=False: _handle_managed_targets(arguments, dry_run=dry_run),
     "operations.get_managed_target": lambda arguments, dry_run=False: _handle_get_managed_target(arguments, dry_run=dry_run),
+    "operations.create_360log_snapshot": lambda arguments, dry_run=False: _handle_create_360log_snapshot(arguments, dry_run=dry_run),
+    "operations.list_360log_snapshots": lambda arguments, dry_run=False: _handle_list_360log_snapshots(arguments, dry_run=dry_run),
+    "operations.get_360log_snapshot": lambda arguments, dry_run=False: _handle_get_360log_snapshot(arguments, dry_run=dry_run),
 }
 
 
@@ -1862,6 +1950,8 @@ def _execution_adapter_for_tool(tool_id: str) -> str:
     if token.startswith("development."):
         return "root.descriptor_registry"
     if token.startswith("operations."):
+        if "360log" in token:
+            return "root.diag360_snapshot_store"
         return "root.managed_target_registry"
     return "root.local_handler"
 
