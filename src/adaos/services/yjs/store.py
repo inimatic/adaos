@@ -352,6 +352,10 @@ class AdaosMemoryYStore(BaseYStore):
         self._state_vector_compute_total = 0
         self._state_vector_cache_miss_total = 0
         self._last_apply_mode = ""
+        self._disk_snapshot_prepend_total = 0
+        self._disk_snapshot_skip_nonempty_total = 0
+        self._last_disk_load_mode = ""
+        self._last_disk_snapshot_bytes = 0
 
     async def start(self, *, task_status: TaskStatus[None] = TASK_STATUS_IGNORED):
         """
@@ -658,6 +662,40 @@ class AdaosMemoryYStore(BaseYStore):
                 self._last_snapshot_bytes = len(data)
                 self._persisted_generation = int(self._generation)
                 self._persisted_snapshot_bytes = len(data)
+                self._last_disk_load_mode = "base_snapshot"
+                self._last_disk_snapshot_bytes = len(data)
+            elif not self._base_snapshot_present:
+                # A hot-path writer may append runtime diffs before the first
+                # reader opens the store. Those diffs are intended to layer on
+                # top of the persisted document, not replace it. If we mark the
+                # store as loaded while non-empty updates exist, the disk
+                # snapshot is silently ignored and the live YRoom starts from a
+                # partial document (for example, only early projection writes).
+                #
+                # Prepend the persisted snapshot as the base update and keep the
+                # already captured runtime diffs as replay tail. Yjs updates are
+                # CRDT updates, so this preserves the early writes while
+                # restoring the durable baseline.
+                self._updates.insert(0, (data, metadata, now))
+                self._base_snapshot_present = True
+                self._base_state_vector = None
+                self._last_loaded_from_disk_at = now
+                self._last_snapshot_bytes = len(data)
+                self._persisted_generation = int(self._generation)
+                self._persisted_snapshot_bytes = len(data)
+                self._disk_snapshot_prepend_total += 1
+                self._last_disk_load_mode = "prepended_before_runtime_updates"
+                self._last_disk_snapshot_bytes = len(data)
+                _log.warning(
+                    "YStore disk snapshot prepended before existing runtime updates webspace=%s updates=%d bytes=%d",
+                    self.path,
+                    max(0, len(self._updates) - 1),
+                    len(data),
+                )
+            else:
+                self._disk_snapshot_skip_nonempty_total += 1
+                self._last_disk_load_mode = "skipped_existing_base_snapshot"
+                self._last_disk_snapshot_bytes = len(data)
         self._loaded_from_disk = True
 
     def _schedule_auto_backup(self, *, reason: str) -> bool:
@@ -882,6 +920,10 @@ class AdaosMemoryYStore(BaseYStore):
             "state_vector_fast_path_total": int(self._state_vector_fast_path_total),
             "state_vector_compute_total": int(self._state_vector_compute_total),
             "state_vector_cache_miss_total": int(self._state_vector_cache_miss_total),
+            "disk_snapshot_prepend_total": int(self._disk_snapshot_prepend_total),
+            "disk_snapshot_skip_nonempty_total": int(self._disk_snapshot_skip_nonempty_total),
+            "last_disk_load_mode": self._last_disk_load_mode or None,
+            "last_disk_snapshot_bytes": int(self._last_disk_snapshot_bytes),
             "last_update_bytes": int(self._last_update_bytes),
             "last_snapshot_bytes": int(self._last_snapshot_bytes),
             "last_backup_mode": self._last_backup_mode or None,
