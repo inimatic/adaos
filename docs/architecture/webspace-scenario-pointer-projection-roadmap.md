@@ -12,6 +12,12 @@ the backend-owned reconcile primitive while taking it off the latency-critical
 path for full scenario payload copy and evolving it toward fragmented,
 phase-aware materialization.
 
+For the stabilized browser-facing target contracts that sit above this runtime
+ownership model, see:
+
+- [UI Addressing](ui-addressing.md)
+- [Web UI Architecture](web-ui-architecture.md)
+
 ## Status
 
 - Current implementation: `pointer_only` switch by default; semantic rebuild
