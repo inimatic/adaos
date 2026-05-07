@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -24,6 +25,7 @@ from packaging.version import Version, InvalidVersion
 
 router = APIRouter(tags=["skills"], dependencies=[Depends(require_token)])
 log = logging.getLogger(__name__)
+_BACKGROUND_REBUILD_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def _get_manager(ctx: AgentContext = Depends(get_ctx)) -> SkillManager:
@@ -57,6 +59,47 @@ def _to_mapping(obj: Any) -> Dict[str, Any]:
                 value = getattr(value, "value")
             data[key] = value
     return data or {"repr": repr(obj)}
+
+
+def _schedule_webspace_rebuild(
+    *,
+    webspace_id: str,
+    action: str,
+    source_of_truth: str,
+    reason: str,
+) -> dict[str, Any]:
+    async def _runner() -> None:
+        try:
+            await rebuild_webspace_projection(
+                webspace_id=webspace_id,
+                action=action,
+                source_of_truth=source_of_truth,
+            )
+        except Exception:
+            log.exception("background webspace rebuild failed reason=%s webspace=%s", reason, webspace_id)
+
+    try:
+        task = asyncio.create_task(_runner(), name=f"adaos-webspace-rebuild:{action}:{webspace_id}")
+        _BACKGROUND_REBUILD_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_REBUILD_TASKS.discard)
+        return {
+            "scheduled": True,
+            "mode": "background",
+            "webspace_id": webspace_id,
+            "action": action,
+            "source_of_truth": source_of_truth,
+            "task": task.get_name(),
+        }
+    except Exception as exc:
+        log.exception("failed to schedule webspace rebuild reason=%s webspace=%s", reason, webspace_id)
+        return {
+            "scheduled": False,
+            "mode": "background",
+            "webspace_id": webspace_id,
+            "action": action,
+            "source_of_truth": source_of_truth,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 class UpdateReq(BaseModel):
@@ -545,7 +588,7 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
         kwargs: dict[str, Any] = {"dry_run": body.dry_run}
         if body.force is not None:
             kwargs["force"] = body.force
-        result = service.request_update(body.name, **kwargs)
+        result = await asyncio.to_thread(service.request_update, body.name, **kwargs)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -558,11 +601,18 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
         log.exception("skill update failed: %s", body.name)
         raise HTTPException(status_code=500, detail=str(exc) or "skill update failed") from exc
     webspace_id = body.webspace_id or default_webspace_id()
+    runtime_refresh: dict[str, Any] = {}
+    webspace_rebuild: dict[str, Any] = {
+        "scheduled": False,
+        "mode": "deferred" if bool(body.defer_webspace_rebuild) else "not_requested",
+        "webspace_id": webspace_id,
+    }
     if not body.dry_run:
         mgr = _get_manager(ctx)
         source_version = str(result.version or "").strip()
         try:
-            refresh_skill_runtime(
+            runtime_refresh = await asyncio.to_thread(
+                refresh_skill_runtime,
                 mgr,
                 body.name,
                 webspace_id=webspace_id,
@@ -596,12 +646,16 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
                 "api.skills",
             )
         if not body.defer_webspace_rebuild:
-            try:
-                await rebuild_webspace_projection(
-                    webspace_id=webspace_id,
-                    action="skill_update_sync",
-                    source_of_truth="skill_runtime",
-                )
-            except Exception:
-                log.exception("webspace rebuild failed after skill update: %s", body.name)
-    return {"ok": True, "updated": result.updated, "version": result.version}
+            webspace_rebuild = _schedule_webspace_rebuild(
+                webspace_id=webspace_id,
+                action="skill_update_sync",
+                source_of_truth="skill_runtime",
+                reason=f"skill_update:{body.name}",
+            )
+    return {
+        "ok": True,
+        "updated": result.updated,
+        "version": result.version,
+        "runtime_refresh": runtime_refresh,
+        "webspace_rebuild": webspace_rebuild,
+    }
