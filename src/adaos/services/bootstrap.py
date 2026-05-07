@@ -331,6 +331,74 @@ def _runtime_port_probe_candidates() -> list[str]:
     return [b for b in bases if (b not in seen and not seen.add(b))]
 
 
+def _route_state_dir_from_ctx(ctx: Any | None) -> Path | None:
+    try:
+        paths = getattr(ctx, "paths", None)
+        raw = getattr(paths, "state_dir", None)
+        value = raw() if callable(raw) else raw
+        if value:
+            return Path(value).expanduser().resolve()
+    except Exception:
+        return None
+    return None
+
+
+def _route_state_dir_fallback() -> Path | None:
+    try:
+        base_dir = str(os.getenv("ADAOS_BASE_DIR") or "").strip()
+        if base_dir:
+            return Path(base_dir).expanduser().resolve() / "state"
+        return Path(os.path.expanduser("~")).expanduser().resolve() / ".adaos" / "state"
+    except Exception:
+        return None
+
+
+def _active_runtime_state_local_http_bases(ctx: Any | None = None) -> list[str]:
+    """Return supervisor-advertised local runtime bases without network probing.
+
+    Route handlers run on the runtime event loop and must not synchronously probe
+    localhost on the hot path. During slot switches the shared dotenv may still
+    point at the legacy configured port (often 8777), while supervisor state and
+    node_runtime.json already know the live slot port. Resolve those paths from
+    ctx first; env/home are only fallbacks for early bootstrap paths where ctx is
+    not ready yet.
+    """
+    state_dir = _route_state_dir_from_ctx(ctx) or _route_state_dir_fallback()
+    if state_dir is None:
+        return []
+
+    paths = [
+        state_dir / "supervisor" / "runtime.json",
+        state_dir / "node_runtime.json",
+    ]
+    bases: list[str] = []
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                payload = _json.load(fh)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        for key in ("runtime_url", "hub_url"):
+            value = str(payload.get(key) or "").strip().rstrip("/")
+            if value and _is_local_http_base(value):
+                bases.append(value)
+
+        try:
+            port_raw = payload.get("runtime_port")
+            port = int(port_raw) if port_raw is not None else 0
+            host = str(payload.get("runtime_host") or "127.0.0.1").strip() or "127.0.0.1"
+            if port > 0 and host in ("127.0.0.1", "localhost"):
+                bases.append(f"http://127.0.0.1:{port}")
+        except Exception:
+            pass
+
+    seen: set[str] = set()
+    return [b for b in bases if (b not in seen and not seen.add(b))]
+
+
 def _probe_runtime_http_base(sess: Any, *, base: str, timeout_s: float) -> bool:
     try:
         response = sess.get(
@@ -498,7 +566,9 @@ def _discover_active_runtime_local_base(
     return result
 
 
-def _build_hub_route_http_bases(*, path_norm: str, method: str, cfg: Any | None) -> list[str]:
+def _build_hub_route_http_bases(
+    *, path_norm: str, method: str, cfg: Any | None, ctx: Any | None = None
+) -> list[str]:
     bases: list[str] = []
     env_base = (
         os.getenv("ADAOS_SELF_BASE_URL")
@@ -508,24 +578,40 @@ def _build_hub_route_http_bases(*, path_norm: str, method: str, cfg: Any | None)
     ).strip()
     cfg_base = str(getattr(cfg, "hub_url", None) or "").strip()
     runtime_port = str(os.getenv("ADAOS_RUNTIME_PORT") or "").strip()
+    runtime_port_base = _runtime_port_local_http_base()
+    state_bases = _active_runtime_state_local_http_bases(ctx)
 
     if _hub_route_prefers_supervisor_public_status(path_norm, method):
         bases.extend(_supervisor_local_bases())
     else:
-        runtime_port_base = _runtime_port_local_http_base()
         if runtime_port_base:
             _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
+            bases.append(runtime_port_base)
+        bases.extend(state_bases)
+        if cfg_base and _is_local_http_base(cfg_base):
+            bases.append(cfg_base.rstrip("/"))
+        if runtime_port.isdigit():
+            bases.append(f"http://127.0.0.1:{runtime_port}")
+        if env_base:
+            bases.append(env_base.rstrip("/"))
+        if not runtime_port_base and not state_bases:
+            active_runtime_base = _discover_active_runtime_local_base()
+            if active_runtime_base:
+                bases.append(active_runtime_base.rstrip("/"))
+    if _hub_route_prefers_supervisor_public_status(path_norm, method):
+        bases.extend(state_bases)
+        if runtime_port_base:
+            bases.append(runtime_port_base)
+        if cfg_base and _is_local_http_base(cfg_base):
+            bases.append(cfg_base.rstrip("/"))
+        if runtime_port.isdigit():
+            bases.append(f"http://127.0.0.1:{runtime_port}")
+        if env_base:
+            bases.append(env_base.rstrip("/"))
         else:
             active_runtime_base = _discover_active_runtime_local_base()
             if active_runtime_base:
                 bases.append(active_runtime_base.rstrip("/"))
-
-    if env_base:
-        bases.append(env_base.rstrip("/"))
-    if cfg_base and _is_local_http_base(cfg_base):
-        bases.append(cfg_base.rstrip("/"))
-    if runtime_port.isdigit():
-        bases.append(f"http://127.0.0.1:{runtime_port}")
 
     # Keep runtime ports as fallback even for the browser-safe supervisor status path.
     bases.extend(["http://127.0.0.1:8778", "http://127.0.0.1:8777"])
@@ -543,23 +629,28 @@ def _http_base_to_ws_base(base: str) -> str:
     return value
 
 
-def _build_hub_route_ws_bases(*, cfg: Any | None, path: str | None = None) -> list[str]:
+def _build_hub_route_ws_bases(
+    *, cfg: Any | None, path: str | None = None, ctx: Any | None = None
+) -> list[str]:
     bases: list[str] = []
     role = str(getattr(cfg, "role", None) or "").strip().lower() or None
     bases.extend(realtime_sidecar_route_tunnel_ws_bases(path=path, role=role))
     env_base = str(os.getenv("ADAOS_SELF_BASE_URL") or "").strip()
     cfg_base = str(getattr(cfg, "hub_url", None) or "").strip()
+    runtime_port_base = _runtime_port_local_http_base()
+    state_bases = _active_runtime_state_local_http_bases(ctx)
 
+    if runtime_port_base:
+        _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
+        bases.append(_http_base_to_ws_base(runtime_port_base))
+    for state_base in state_bases:
+        bases.append(_http_base_to_ws_base(state_base))
     if env_base and _is_local_http_base(env_base):
         bases.append(_http_base_to_ws_base(env_base))
     if cfg_base and _is_local_http_base(cfg_base):
         bases.append(_http_base_to_ws_base(cfg_base))
 
-    runtime_port_base = _runtime_port_local_http_base()
-    if runtime_port_base:
-        _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
-        bases.append(_http_base_to_ws_base(runtime_port_base))
-    else:
+    if not runtime_port_base and not state_bases:
         active_runtime_base = _discover_active_runtime_local_base()
         if active_runtime_base:
             bases.append(_http_base_to_ws_base(active_runtime_base))
@@ -6324,10 +6415,10 @@ class BootstrapService:
                                         from adaos.services.node_config import load_config
 
                                         cfg = getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)
-                                        ws_bases = _build_hub_route_ws_bases(cfg=cfg, path=path)
+                                        ws_bases = _build_hub_route_ws_bases(cfg=cfg, path=path, ctx=self.ctx)
                                         token_local = getattr(cfg, "token", None) or os.getenv("ADAOS_TOKEN", "") or None
                                     except Exception:
-                                        ws_bases = _build_hub_route_ws_bases(cfg=None, path=path)
+                                        ws_bases = _build_hub_route_ws_bases(cfg=None, path=path, ctx=self.ctx)
                                         token_local = os.getenv("ADAOS_TOKEN", "") or None
                                     route_diag_state["last_open_base_total"] = len(list(ws_bases or []))
                                     _update_route_protocol_runtime()
@@ -6971,6 +7062,7 @@ class BootstrapService:
                                                     path_norm=path_norm,
                                                     method=method,
                                                     cfg=cfg,
+                                                    ctx=self.ctx,
                                                 )
                                                 token_local = getattr(cfg, "token", None) or os.getenv("ADAOS_TOKEN", "") or None
                                             except Exception:
@@ -6978,6 +7070,7 @@ class BootstrapService:
                                                     path_norm=path_norm,
                                                     method=method,
                                                     cfg=None,
+                                                    ctx=self.ctx,
                                                 )
                                                 token_local = os.getenv("ADAOS_TOKEN", "") or None
 
