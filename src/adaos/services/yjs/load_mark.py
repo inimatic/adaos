@@ -1137,13 +1137,20 @@ def yjs_primary_doc_policy_snapshot(
     peak_bps = float(owner_row.get("peak_bps") or 0.0)
     avg_wps = float(owner_row.get("avg_wps") or 0.0)
     peak_wps = float(owner_row.get("peak_wps") or 0.0)
-    policy_state = _policy_state_for_owner_metrics(
-        observed_state=observed_state,
-        avg_bps=avg_bps,
-        peak_bps=peak_bps,
-        avg_wps=avg_wps,
-        peak_wps=peak_wps,
-    )
+    owner_name = str(owner_row.get("owner") or "").strip()
+    if owner_name == _GATEWAY_OWNER_BUCKET:
+        # Gateway/YWS attach bursts are transport pressure, not skill-owned
+        # primary-doc writes. Keep them operator-visible, but do not advertise
+        # them as a block/throttle policy for skill write governance.
+        policy_state = "warn" if observed_state in {"high", "critical"} else "ok"
+    else:
+        policy_state = _policy_state_for_owner_metrics(
+            observed_state=observed_state,
+            avg_bps=avg_bps,
+            peak_bps=peak_bps,
+            avg_wps=avg_wps,
+            peak_wps=peak_wps,
+        )
     affected_roots: list[str] = []
     for raw_name in list(root_names or ()):
         name = str(raw_name or "").strip()
@@ -1155,7 +1162,7 @@ def yjs_primary_doc_policy_snapshot(
             affected_roots.append(name)
     return {
         "webspace_id": selected_webspace_id,
-        "owner": str(owner_row.get("owner") or "").strip() or None,
+        "owner": owner_name or None,
         "recent_bytes": int(owner_row.get("recent_bytes") or 0),
         "recent_writes": int(owner_row.get("recent_writes") or 0),
         "peak_bps": peak_bps,
@@ -1167,6 +1174,8 @@ def yjs_primary_doc_policy_snapshot(
             if policy_state == "block"
             else "write_amplification"
             if policy_state == "throttle"
+            else "gateway_sync_pressure"
+            if owner_name == _GATEWAY_OWNER_BUCKET and policy_state == "warn"
             else "write_pressure_warning"
             if policy_state == "warn"
             else "healthy"
