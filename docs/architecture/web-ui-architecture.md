@@ -425,25 +425,36 @@ The target architecture is successful when:
 
 ## Roadmap
 
+Status note:
+
+- `webui.semantic.v0` draft ABI is published
+- semantic desktop and modal surfaces already pass through a runtime
+  compatibility bridge
+- `collection_grid`, `metric_chart`, and `event_log` already materialize into
+  current browser widgets
+- `metric_chart` now has a dedicated temporary browser widget rather than a raw
+  JSON fallback
+- Taiga-specific renderers are not implemented yet
+
 ### 0. Architecture Fixation
 
-- [ ] freeze the shell/manifest/semantic/renderer/data/action layer split
-- [ ] publish semantic UI as the primary future browser contract
-- [ ] explicitly preserve compatibility with current `webui.v1`
+- [x] freeze the shell/manifest/semantic/renderer/data/action layer split
+- [x] publish semantic UI as the primary future browser contract
+- [x] explicitly preserve compatibility with current `webui.v1`
 
 ### 1. Browser Manifest Preservation
 
-- [ ] keep `webui.v1` as the runtime shell manifest layer
-- [ ] document current `catalog`, `registry`, `webio`, `ydoc_defaults`, and
+- [x] keep `webui.v1` as the runtime shell manifest layer
+- [x] document current `catalog`, `registry`, `webio`, `ydoc_defaults`, and
   `contributions` as preserved inputs
-- [ ] stop treating `webui.v1` as the long-term complete UI language
+- [x] stop treating `webui.v1` as the long-term complete UI language
 
 ### 2. Semantic UI ABI
 
-- [ ] define the first semantic `view` block shape
-- [ ] define typed action shapes for the first browser actions
-- [ ] define explicit `viewState` ownership rules
-- [ ] define the compatibility rule for pages and modals that still use current
+- [x] define the first semantic `view` block shape
+- [x] define typed action shapes for the first browser actions
+- [x] define explicit `viewState` ownership rules
+- [x] define the compatibility rule for pages and modals that still use current
   widget schemas
 
 ### 3. Web UI Priority Slice
@@ -453,18 +464,18 @@ The target architecture is successful when:
 - [ ] implement the first typed action kinds:
   `emit`, `open_modal`, `set_view_state`, `call_host`,
   `invoke_skill_action`
-- [ ] support the first layout patterns:
+- [x] support the first layout patterns:
   `stack`, `split`, `tabs`
-- [ ] support the first state mechanisms:
+- [x] support the first state mechanisms:
   Yjs binding, stream receiver, local view state
 
 ### 3a. Demo Control Task
 
-- [ ] define one demo skill for Taiga-oriented semantic UI validation
-- [ ] define one demo scenario that composes table, chart, and event stream
-- [ ] make table and chart share one selection and filter model
-- [ ] make the chart consume the same addressing vocabulary as the table
-- [ ] keep the demo domain operational and neutral rather than product-specific
+- [x] define one demo skill for Taiga-oriented semantic UI validation
+- [x] define one demo scenario that composes table, chart, and event stream
+- [x] make table and chart share one selection and filter model
+- [x] make the chart consume the same addressing vocabulary as the table
+- [x] keep the demo domain operational and neutral rather than product-specific
 
 Recommended identifiers:
 
@@ -474,10 +485,10 @@ Recommended identifiers:
 ### 4. Renderer Registry
 
 - [ ] add a semantic renderer registry with lazy `import()` support
-- [ ] bridge semantic view kinds to current browser widget infrastructure
+- [x] bridge semantic view kinds to current browser widget infrastructure
 - [ ] add the first Taiga-backed renderer entries without forcing a same-day
   rewrite of the whole browser client
-- [ ] keep Ionic focused on shell/navigation/mobile interaction
+- [x] keep Ionic focused on shell/navigation/mobile interaction
 
 ### 5. Workspace Composition
 
@@ -487,19 +498,19 @@ Recommended identifiers:
 
 ### 6. Load and Responsiveness
 
-- [ ] align semantic UI loading with `loadHint` and readiness phases
+- [x] align semantic UI loading with `loadHint` and readiness phases
 - [ ] support focused and off-focus hydration boundaries
 - [ ] define desktop-rich versus mobile-compact renderer-profile rules
 
 ### 7. Demo Slice
 
-- [ ] create one demo skill for semantic UI coverage
-- [ ] create one demo scenario that exercises workspace composition
+- [x] create one demo skill for semantic UI coverage
+- [x] create one demo scenario that exercises workspace composition
 - [ ] cover simple grid, sortable/filterable grid, one chart-oriented surface,
   event stream, and chat panel
 - [ ] include examples of shared state, node-scoped state, stream-driven state,
   and local view state
-- [ ] include one shared table-plus-chart drill-down flow suitable for Taiga
+- [x] include one shared table-plus-chart drill-down flow suitable for Taiga
   renderer validation
 
 Recommended demo data shape:
