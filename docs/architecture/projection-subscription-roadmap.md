@@ -147,6 +147,12 @@ Recommended order:
 6. voice/media or other bursty interactive surfaces
    Valuable after the core dispatcher and client adapter are stable.
 
+For the browser-client semantic ABI work that should precede broader renderer
+expansion, see [Web UI Architecture](web-ui-architecture.md).
+The first concrete validation target should be a demo scenario and demo skill
+with a table-oriented view, a chart-oriented view, and one shared
+selection/filter model rather than a broad speculative visualization catalog.
+
 Counter-example:
 
 - simple low-churn skills with one small projection do not need to be forced onto this model immediately

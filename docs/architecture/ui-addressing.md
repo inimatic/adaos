@@ -129,6 +129,10 @@ Examples:
 - `stream:chat.live`
 - `stream:infrastate.operations.active`
 
+Stream refs identify the semantic receiver family.
+Webspace targeting, node ownership, and transport preference remain binding
+properties rather than part of the ref identity itself.
+
 ### View-state refs
 
 View-state refs identify client-owned interaction state.
@@ -162,6 +166,11 @@ Examples:
 - `action:skill.chat.send`
 - `action:device_access.rename`
 - `action:webspace.open`
+
+For current compatibility work, one action ref may still resolve through
+existing `callSkill`, `callHost`, or modal-opening behavior.
+The important boundary is to keep the browser-facing action identity stable
+even while the underlying compatibility bridge evolves.
 
 ### Domain refs
 
@@ -308,6 +317,10 @@ Example:
 }
 ```
 
+For chart-like views, a compatible semantic binding should follow the same
+shape and only vary by semantic kind and source contract, not by introducing a
+second addressing model for time-series data.
+
 ## LLM Authoring Guidance
 
 LLM-authored skills and scenarios should follow these rules:
@@ -351,6 +364,8 @@ LLM-authored skills and scenarios should follow these rules:
   workspace and device surfaces
 - [ ] define the first projection-ref usage rules for pages, widgets, modals,
   and platform-emitted projections
+- [ ] define the first shared binding pattern that both table-like and
+  chart-like semantic views can reuse
 
 ### 3. Runtime and ABI Alignment
 
@@ -374,4 +389,3 @@ LLM-authored skills and scenarios should follow these rules:
   browser/runtime addressing stabilizes
 - [ ] if kept, position that layer as a facade over the canonical addressing
   model rather than as a competing architecture
-
