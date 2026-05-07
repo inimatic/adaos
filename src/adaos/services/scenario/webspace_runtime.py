@@ -50,6 +50,8 @@ _MEMBER_SNAPSHOT_REBUILD_DIRTY: dict[str, Dict[str, Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
 _RESOLVED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 64
+_LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
+_LOCAL_NODE_DISPLAY_CACHE: tuple[float, dict[str, Any]] = (0.0, {})
 _EFFECTIVE_BRANCH_PATHS = (
     "ui.application",
     "data.catalog",
@@ -334,15 +336,21 @@ def _local_node_label() -> str:
 
 
 def _local_node_display() -> dict[str, Any]:
+    cached_at, cached = _LOCAL_NODE_DISPLAY_CACHE
+    now = time.monotonic()
+    if cached and (now - cached_at) <= _LOCAL_NODE_DISPLAY_CACHE_TTL_S:
+        return dict(cached)
     try:
-        return node_display_from_config(load_config())
+        display = node_display_from_config(load_config())
     except Exception:
-        return {
+        display = {
             "node_label": _local_node_label(),
             "node_compact_label": "N0",
             "node_index": 0,
             "node_color": "",
         }
+    globals()["_LOCAL_NODE_DISPLAY_CACHE"] = (now, dict(display))
+    return dict(display)
 
 
 _HOME_SCENARIO_REF_UNSET = object()
@@ -3702,9 +3710,15 @@ def _webspace_listing() -> List[Dict[str, Any]]:
     ]
 
 
-def _webspace_info_from_row(row: workspace_index.WebspaceManifest) -> WebspaceInfo:
-    local_display = _local_node_display()
-    current_scenario = _try_read_live_current_scenario(row.workspace_id)
+def _webspace_info_from_row(
+    row: workspace_index.WebspaceManifest,
+    *,
+    local_display: Mapping[str, Any] | None = None,
+    current_scenario: Any = _HOME_SCENARIO_REF_UNSET,
+) -> WebspaceInfo:
+    resolved_display = dict(local_display) if isinstance(local_display, Mapping) else _local_node_display()
+    if current_scenario is _HOME_SCENARIO_REF_UNSET:
+        current_scenario = _try_read_live_current_scenario(row.workspace_id)
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
@@ -3720,10 +3734,10 @@ def _webspace_info_from_row(row: workspace_index.WebspaceManifest) -> WebspaceIn
         home_scenario_ref=getattr(row, "home_scenario_ref_overlay", {}) or None,
         source_mode=row.effective_source_mode,
         node_id=_local_node_id(),
-        node_label=str(local_display.get("node_label") or _local_node_label()),
-        node_compact_label=str(local_display.get("node_compact_label") or "") or None,
-        node_index=local_display.get("node_index"),
-        node_color=str(local_display.get("node_color") or "") or None,
+        node_label=str(resolved_display.get("node_label") or _local_node_label()),
+        node_compact_label=str(resolved_display.get("node_compact_label") or "") or None,
+        node_index=resolved_display.get("node_index"),
+        node_color=str(resolved_display.get("node_color") or "") or None,
         is_dev=row.is_dev,
         current_scenario=current_scenario,
         stored_home_scenario_exists=validation.get("stored_home_scenario_exists"),
@@ -3991,6 +4005,20 @@ class WebspaceService:
     def __init__(self, ctx: Optional[AgentContext] = None) -> None:
         self.ctx: AgentContext = ctx or get_ctx()
 
+    def list_ids(self, *, mode: str = "mixed") -> List[str]:
+        rows = workspace_index.list_workspaces()
+        ids: List[str] = []
+        for row in rows:
+            kind = row.effective_kind
+            if mode == "workspace" and kind != "workspace":
+                continue
+            if mode == "dev" and kind != "dev":
+                continue
+            token = str(row.workspace_id or "").strip()
+            if token:
+                ids.append(token)
+        return ids
+
     def list(self, *, mode: str = "mixed") -> List[WebspaceInfo]:
         """
         List known webspaces.
@@ -4002,6 +4030,7 @@ class WebspaceService:
         """
         rows = workspace_index.list_workspaces()
         infos: List[WebspaceInfo] = []
+        local_display = _local_node_display()
         for row in rows:
             title = row.title
             kind = row.effective_kind
@@ -4010,7 +4039,7 @@ class WebspaceService:
                 continue
             if mode == "dev" and kind != "dev":
                 continue
-            infos.append(_webspace_info_from_row(row))
+            infos.append(_webspace_info_from_row(row, local_display=local_display))
         return infos
 
     async def _sync_listing(self) -> None:
