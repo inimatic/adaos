@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import gc
 import os
 import time
+import tracemalloc
 from functools import partial
 from typing import Any, Mapping, Optional
 
@@ -1360,6 +1362,84 @@ async def node_yjs_runtime(webspace_id: str | None = None) -> dict[str, Any]:
             role=conf.role,
             webspace_id=target_webspace_id,
         ),
+    }
+
+
+@router.get("/memory/status", dependencies=[Depends(require_token)])
+async def node_memory_status() -> dict[str, Any]:
+    """Return a cheap runtime-local memory snapshot.
+
+    This endpoint intentionally does not depend on the supervisor memory bridge:
+    when route/profiler plumbing is degraded, operators still need a bounded
+    process RSS signal through the active runtime API.
+    """
+    pid = os.getpid()
+    now = time.time()
+    process: dict[str, Any] = {
+        "pid": pid,
+        "rss_bytes": None,
+        "vms_bytes": None,
+        "create_time": None,
+        "uptime_s": None,
+        "num_threads": None,
+        "children_total": 0,
+        "children_rss_bytes": 0,
+        "family_rss_bytes": None,
+    }
+    psutil_error = ""
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process(pid)
+        mem = proc.memory_info()
+        rss = int(getattr(mem, "rss", 0) or 0)
+        vms = int(getattr(mem, "vms", 0) or 0)
+        create_time = float(proc.create_time())
+        children = proc.children(recursive=True)
+        children_rss = 0
+        for child in children:
+            try:
+                children_rss += int(child.memory_info().rss)
+            except Exception:
+                continue
+        process.update(
+            {
+                "rss_bytes": rss,
+                "vms_bytes": vms,
+                "create_time": create_time,
+                "uptime_s": round(max(0.0, now - create_time), 3),
+                "num_threads": int(proc.num_threads()),
+                "children_total": len(children),
+                "children_rss_bytes": children_rss,
+                "family_rss_bytes": rss + children_rss,
+            }
+        )
+    except Exception as exc:
+        psutil_error = f"{type(exc).__name__}: {exc}"
+
+    tracing = bool(tracemalloc.is_tracing())
+    traced_current = None
+    traced_peak = None
+    if tracing:
+        try:
+            traced_current, traced_peak = tracemalloc.get_traced_memory()
+        except Exception:
+            traced_current = None
+            traced_peak = None
+
+    return {
+        "ok": True,
+        "ts": now,
+        "node": _local_node_display(),
+        "process": process,
+        "python": {
+            "gc_count": list(gc.get_count()),
+            "gc_threshold": list(gc.get_threshold()),
+            "tracemalloc_tracing": tracing,
+            "tracemalloc_current_bytes": traced_current,
+            "tracemalloc_peak_bytes": traced_peak,
+        },
+        "errors": {"psutil": psutil_error} if psutil_error else {},
     }
 
 

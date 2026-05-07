@@ -585,13 +585,27 @@ def hub_root_reports(
     if kind_key in {"all", "core-update", "core_update"}:
         payload["core_update"] = client.root_core_update_reports(root_token=root_token, hub_id=target_hub_id)
     if kind_key in {"all", "memory-profile", "memory_profile"}:
-        payload["memory_profile"] = _mcp_result(
-            mcp_client.list_profileops_sessions(
-                _profileops_target_id(conf, target_hub_id),
-                state=state,
+        try:
+            payload["memory_profile"] = _mcp_result(
+                mcp_client.list_profileops_sessions(
+                    _profileops_target_id(conf, target_hub_id),
+                    state=state,
+                    suspected_only=bool(suspected_only),
+                )
+            )
+        except Exception as exc:
+            payload["memory_profile"] = client.root_memory_profile_reports(
+                root_token=root_token,
+                hub_id=target_hub_id,
+                session_id=session_id,
+                session_state=state,
                 suspected_only=bool(suspected_only),
             )
-        )
+            if isinstance(payload["memory_profile"], dict):
+                payload["memory_profile"]["mcp_fallback"] = {
+                    "used": True,
+                    "reason": f"{type(exc).__name__}: {str(exc)[:240]}",
+                }
     if json_output:
         _print(payload, json_output=True)
         return
