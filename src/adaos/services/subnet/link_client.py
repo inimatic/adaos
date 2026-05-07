@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 import requests
 import websockets  # type: ignore
+import y_py as Y
 
 from adaos.apps.cli.active_control import resolve_control_token
 from adaos.build_info import BUILD_INFO
@@ -115,6 +116,27 @@ class MemberLinkClient:
         self._last_control_completed_at = 0.0
         self._last_forced_snapshot_at = 0.0
         self._last_yjs_write_snapshot_at = 0.0
+        self._yjs_write_seen_total = 0
+        self._yjs_write_queued_total = 0
+        self._yjs_write_drop_disconnected_total = 0
+        self._yjs_write_drop_encode_total = 0
+        self._yjs_write_drop_queue_total = 0
+        self._yjs_sent_total = 0
+        self._yjs_send_failed_total = 0
+        self._yjs_received_total = 0
+        self._yjs_received_bytes = 0
+        self._yjs_snapshot_queued_total = 0
+        self._yjs_snapshot_failed_total = 0
+        self._yjs_snapshot_bytes = 0
+        self._last_yjs_write_at = 0.0
+        self._last_yjs_sent_at = 0.0
+        self._last_yjs_received_at = 0.0
+        self._last_yjs_snapshot_at = 0.0
+        self._last_yjs_write_webspace_id = ""
+        self._last_yjs_write_bytes = 0
+        self._last_yjs_snapshot_webspace_id = ""
+        self._last_yjs_snapshot_reason = ""
+        self._last_yjs_queue_size = 0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._snapshot_task: asyncio.Task | None = None
 
@@ -168,6 +190,30 @@ class MemberLinkClient:
             "last_control_error": self._last_control_error or None,
             "last_control_request_ago_s": round(max(0.0, now - self._last_control_requested_at), 3) if self._last_control_requested_at else None,
             "last_control_result_ago_s": round(max(0.0, now - self._last_control_completed_at), 3) if self._last_control_completed_at else None,
+            "yjs_replication": {
+                "enabled": bool(self._yjs_enabled),
+                "write_seen_total": int(self._yjs_write_seen_total),
+                "write_queued_total": int(self._yjs_write_queued_total),
+                "write_drop_disconnected_total": int(self._yjs_write_drop_disconnected_total),
+                "write_drop_encode_total": int(self._yjs_write_drop_encode_total),
+                "write_drop_queue_total": int(self._yjs_write_drop_queue_total),
+                "sent_total": int(self._yjs_sent_total),
+                "send_failed_total": int(self._yjs_send_failed_total),
+                "received_total": int(self._yjs_received_total),
+                "received_bytes": int(self._yjs_received_bytes),
+                "snapshot_queued_total": int(self._yjs_snapshot_queued_total),
+                "snapshot_failed_total": int(self._yjs_snapshot_failed_total),
+                "snapshot_bytes": int(self._yjs_snapshot_bytes),
+                "last_write_ago_s": round(max(0.0, now - self._last_yjs_write_at), 3) if self._last_yjs_write_at else None,
+                "last_sent_ago_s": round(max(0.0, now - self._last_yjs_sent_at), 3) if self._last_yjs_sent_at else None,
+                "last_received_ago_s": round(max(0.0, now - self._last_yjs_received_at), 3) if self._last_yjs_received_at else None,
+                "last_snapshot_ago_s": round(max(0.0, now - self._last_yjs_snapshot_at), 3) if self._last_yjs_snapshot_at else None,
+                "last_write_webspace_id": self._last_yjs_write_webspace_id or None,
+                "last_write_bytes": int(self._last_yjs_write_bytes),
+                "last_snapshot_webspace_id": self._last_yjs_snapshot_webspace_id or None,
+                "last_snapshot_reason": self._last_yjs_snapshot_reason or None,
+                "last_queue_size": int(self._last_yjs_queue_size),
+            },
             "transition_state": str(transition.get("transition_state") or "ready"),
             "transition_reason": str(transition.get("reason") or "none"),
             "updated_at": now,
@@ -404,25 +450,91 @@ class MemberLinkClient:
         def _on_write(webspace_id: str, update: bytes) -> None:
             if not update:
                 return
+            self._yjs_write_seen_total += 1
+            self._last_yjs_write_at = time.time()
+            self._last_yjs_write_webspace_id = str(webspace_id or "default")
+            self._last_yjs_write_bytes = len(update)
             if not self._connected.is_set():
+                self._yjs_write_drop_disconnected_total += 1
                 return
             try:
-                b64 = base64.b64encode(update).decode("ascii")
+                loop = self._loop or asyncio.get_running_loop()
             except Exception:
+                self._yjs_write_drop_queue_total += 1
                 return
-            msg = {
-                "t": "yjs.update",
-                "webspace_id": webspace_id or "default",
-                "update_b64": b64,
-                "ts": time.time(),
-            }
             try:
-                self._out_q.put_nowait(msg)
+                loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(
+                        self._queue_yjs_node_state(
+                            webspace_id=webspace_id or "default",
+                            reason="ystore_write",
+                        )
+                    )
+                )
             except Exception:
+                self._yjs_write_drop_queue_total += 1
                 return
             self._queue_node_snapshot_from_yjs_write(webspace_id=webspace_id)
 
         self._remove_ystore_listener = add_ystore_write_listener(_on_write)
+
+    @staticmethod
+    def _yjs_snapshot_webspaces() -> list[str]:
+        raw = str(os.getenv("ADAOS_SUBNET_YJS_REPLICATION_WEBSPACES") or "desktop").strip()
+        out: list[str] = []
+        for item in raw.split(","):
+            token = str(item or "").strip()
+            if token and token not in out:
+                out.append(token)
+        return out or ["desktop"]
+
+    async def _queue_yjs_node_state(self, *, webspace_id: str, reason: str) -> None:
+        if not self._yjs_enabled:
+            return
+        ws_id = str(webspace_id or "").strip() or "default"
+        try:
+            local_node_id = str(get_ctx().config.node_id or "").strip()
+        except Exception:
+            local_node_id = ""
+        if not local_node_id:
+            return
+        ydoc = Y.YDoc()
+        store = get_ystore_for_webspace(ws_id)
+        try:
+            await store.start()
+            await store.apply_updates(ydoc)
+            data_map = ydoc.get_map("data")
+            data = data_map.to_json() if hasattr(data_map, "to_json") else {}
+            if isinstance(data, str):
+                data = json.loads(data)
+            nodes = data.get("nodes") if isinstance(data, dict) else {}
+            node_state = nodes.get(local_node_id) if isinstance(nodes, dict) else None
+            if not isinstance(node_state, dict):
+                return
+            msg = {
+                "t": "yjs.node_state",
+                "webspace_id": ws_id,
+                "node_id": local_node_id,
+                "state": node_state,
+                "reason": str(reason or "member_link_snapshot"),
+                "ts": time.time(),
+            }
+            self._out_q.put_nowait(msg)
+            self._yjs_snapshot_queued_total += 1
+            self._yjs_write_queued_total += 1
+            self._yjs_snapshot_bytes += len(json.dumps(node_state, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            self._last_yjs_snapshot_at = time.time()
+            self._last_yjs_snapshot_webspace_id = ws_id
+            self._last_yjs_snapshot_reason = str(reason or "member_link_snapshot")
+            self._last_yjs_queue_size = int(self._out_q.qsize())
+        except Exception:
+            self._yjs_snapshot_failed_total += 1
+            _log.debug("failed to queue member-link Yjs state snapshot webspace=%s", ws_id, exc_info=True)
+        finally:
+            try:
+                store.stop()
+            except Exception:
+                pass
 
     def _ensure_bus_subscription(self) -> None:
         if self._bus_subscribed:
@@ -547,15 +659,26 @@ class MemberLinkClient:
                         )
                     except Exception:
                         pass
+                    for ws_id in self._yjs_snapshot_webspaces():
+                        await self._queue_yjs_node_state(
+                            webspace_id=ws_id,
+                            reason="member_link_connected",
+                        )
 
                     async def _sender() -> None:
                         while True:
                             msg = await self._out_q.get()
                             try:
                                 await ws.send(json.dumps(msg))
+                                if isinstance(msg, dict) and msg.get("t") in {"yjs.update", "yjs.node_state"}:
+                                    self._yjs_sent_total += 1
+                                    self._last_yjs_sent_at = time.time()
+                                    self._last_yjs_queue_size = int(self._out_q.qsize())
                             except asyncio.CancelledError:
                                 raise
                             except Exception:
+                                if isinstance(msg, dict) and msg.get("t") in {"yjs.update", "yjs.node_state"}:
+                                    self._yjs_send_failed_total += 1
                                 return
 
                     async def _receiver() -> None:
@@ -671,6 +794,9 @@ class MemberLinkClient:
             if not b64:
                 return
             upd = base64.b64decode(b64.encode("ascii"), validate=False)
+            self._yjs_received_total += 1
+            self._yjs_received_bytes += len(upd)
+            self._last_yjs_received_at = time.time()
             store = get_ystore_for_webspace(ws_id)
             async with suppress_ystore_write_notifications():
                 await store.write(upd)

@@ -2883,6 +2883,8 @@ def _hub_member_transport_evidence_snapshot(
         evidence["yws"].update(
             {
                 "available": int(yws_entry.get("active_connections") or 0) > 0,
+                "browser_hub_only": True,
+                "runtime_bound": False,
                 "active_connections": int(yws_entry.get("active_connections") or 0),
                 "last_open_ago_s": yws_entry.get("last_open_ago_s"),
                 "recent_open_10s": int(yws_entry.get("recent_open_10s") or 0),
@@ -2912,8 +2914,31 @@ def _hub_member_transport_evidence_snapshot(
         evidence["webrtc_data:yjs"].update(
             {
                 "available": int(webrtc.get("open_yjs_channels") or 0) > 0,
+                "browser_hub_only": True,
+                "runtime_bound": False,
                 "peer_total": int(webrtc.get("peer_total") or 0),
                 "open_channels": int(webrtc.get("open_yjs_channels") or 0),
+            }
+        )
+        try:
+            from adaos.services.subnet.link_manager import hub_link_manager_snapshot
+
+            hub_links = hub_link_manager_snapshot()
+        except Exception:
+            hub_links = {}
+        connected_member_total = int(hub_links.get("connected_total") or hub_links.get("member_total") or 0)
+        yjs_replication = (
+            hub_links.get("yjs_replication")
+            if isinstance(hub_links.get("yjs_replication"), dict)
+            else {}
+        )
+        evidence["member_link_ws"].update(
+            {
+                "available": connected_member_total > 0,
+                "source": "subnet.link_manager",
+                "connected_total": connected_member_total,
+                "member_total": int(hub_links.get("member_total") or connected_member_total),
+                "yjs_replication": yjs_replication,
             }
         )
         evidence["webrtc_media"].update(
@@ -3149,7 +3174,34 @@ def hub_member_semantic_channels_snapshot(
                 for path in spec.candidate_paths
                 if isinstance(evidence.get(path), dict) and bool(evidence.get(path, {}).get("available"))
             ]
-            preferred_path = next((path for path in spec.failover_order if path in available_paths), None)
+            if spec.channel_id == "hub_member.sync":
+                # Browser-hub Yjs transports prove that the browser can sync
+                # with the hub YRoom. They do not, by themselves, prove that
+                # member-runtime YStore writes are bridged into that shared
+                # document. Keep them visible as candidate evidence, but do
+                # not select them as the hub-member sync authority until a
+                # runtime-bound bridge is present.
+                available_paths = [
+                    path
+                    for path in available_paths
+                    if not (
+                        bool((evidence.get(path) or {}).get("browser_hub_only"))
+                        and not bool((evidence.get(path) or {}).get("runtime_bound"))
+                    )
+                ]
+                if "member_link_ws" in available_paths:
+                    # The member-link websocket is the only currently
+                    # implemented runtime-bound member YStore replication path.
+                    # Prefer it over generic route relays until those relays
+                    # expose their own Yjs replication counters.
+                    available_paths = [
+                        "member_link_ws",
+                        *[path for path in available_paths if path != "member_link_ws"],
+                    ]
+            if spec.channel_id == "hub_member.sync" and "member_link_ws" in available_paths:
+                preferred_path = "member_link_ws"
+            else:
+                preferred_path = next((path for path in spec.failover_order if path in available_paths), None)
             current_path = str(runtime_entry.get("active_path") or "").strip() or None
             freeze_remaining_s = 0.0
             active_path = preferred_path

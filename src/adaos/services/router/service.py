@@ -100,6 +100,21 @@ class RouterService:
             local_node_id = ""
         return not local_node_id or target_node_id == local_node_id
 
+    def _event_originates_from_remote_member(self, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+        origin_node_id = str(meta.get("subnet_origin_node_id") or "").strip()
+        if not origin_node_id:
+            return False
+        try:
+            local_node_id = str(get_ctx().config.node_id or "").strip()
+        except Exception:
+            local_node_id = ""
+        if local_node_id and origin_node_id == local_node_id:
+            return False
+        return not self._event_targets_local_node(payload)
+
     async def _on_event(self, ev: Event) -> None:
         try:
             task = asyncio.create_task(self._handle_notify_event(ev), name=f"router-ui-notify:{str(ev.type or 'ui.notify')}")
@@ -1140,6 +1155,8 @@ class RouterService:
 
         async def _on_voice_open(ev: Event) -> None:
             payload = ev.payload or {}
+            if self._event_originates_from_remote_member(payload):
+                return
             if not self._event_targets_local_node(payload):
                 return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
@@ -1153,6 +1170,16 @@ class RouterService:
             if not isinstance(payload, dict):
                 return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            if self._event_originates_from_remote_member(payload):
+                try:
+                    self._vlog.debug(
+                        "skip mirrored remote member chat append origin=%s target=%s",
+                        meta.get("subnet_origin_node_id"),
+                        meta.get("target_node_id") or payload.get("target_node_id"),
+                    )
+                except Exception:
+                    pass
+                return
             if isinstance(meta, dict) and meta.get("skip_voice_chat") is True:
                 return
             text = payload.get("text")
@@ -1236,6 +1263,8 @@ class RouterService:
         async def _on_io_out_say(ev: Event) -> None:
             payload = ev.payload or {}
             if not isinstance(payload, dict):
+                return
+            if self._event_originates_from_remote_member(payload):
                 return
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
@@ -1377,6 +1406,8 @@ class RouterService:
 
         async def _on_voice_user(ev: Event) -> None:
             payload = ev.payload or {}
+            if self._event_originates_from_remote_member(payload):
+                return
             if not self._event_targets_local_node(payload):
                 return
             try:
@@ -1480,6 +1511,8 @@ class RouterService:
         async def _on_nlp_intent_not_obtained(ev: Event) -> None:
             payload = ev.payload or {}
             if not isinstance(payload, dict):
+                return
+            if self._event_originates_from_remote_member(payload):
                 return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
             route_id = meta.get("route_id") or meta.get("route")

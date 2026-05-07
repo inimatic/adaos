@@ -1,6 +1,8 @@
 # src\adaos\api\tool_bridge.py
 import logging
 import os
+import copy
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -28,6 +30,9 @@ _log = logging.getLogger("adaos.api.tool_bridge")
 _HUB_LOCAL_TOOL_PREFIXES: tuple[str, ...] = (
     "browsers_skill:",
 )
+_SNAPSHOT_UNAVAILABLE_TTL_S = max(0.0, float(os.getenv("ADAOS_TOOL_BRIDGE_SNAPSHOT_UNAVAILABLE_TTL_S") or "20"))
+_SNAPSHOT_UNAVAILABLE_CACHE_LOCK = threading.RLock()
+_SNAPSHOT_UNAVAILABLE_CACHE: dict[str, tuple[float, Dict[str, Any]]] = {}
 
 
 def _debug_autosync_enabled() -> bool:
@@ -107,6 +112,9 @@ def _target_snapshot_unavailable_response(
     tool_name: str,
     target_node_id: str,
     reason: str,
+    retryable: bool = True,
+    retry_after_s: float | None = None,
+    cached: bool = False,
 ) -> Dict[str, Any]:
     payload = {
         "ok": False,
@@ -117,7 +125,7 @@ def _target_snapshot_unavailable_response(
         "reason": reason,
         "tool": str(tool_name or ""),
         "target_node_id": str(target_node_id or ""),
-        "retryable": True,
+        "retryable": bool(retryable),
         "updated_at": time.time(),
         "summary": {
             "value": "unavailable",
@@ -127,7 +135,96 @@ def _target_snapshot_unavailable_response(
             "selected_node_id": str(target_node_id or ""),
         },
     }
+    if retry_after_s is not None:
+        payload["retry_after_s"] = max(0.0, float(retry_after_s))
+    if cached:
+        payload["cached"] = True
     return {"ok": True, "degraded": True, "result": payload}
+
+
+def _snapshot_unavailable_cache_key(*, tool_name: str, target_node_id: str, webspace_id: str) -> str:
+    return "\0".join([str(tool_name or ""), str(target_node_id or ""), str(webspace_id or "")])
+
+
+def _snapshot_unavailable_cache_get(*, tool_name: str, target_node_id: str, webspace_id: str) -> Dict[str, Any] | None:
+    if _SNAPSHOT_UNAVAILABLE_TTL_S <= 0.0:
+        return None
+    key = _snapshot_unavailable_cache_key(
+        tool_name=tool_name,
+        target_node_id=target_node_id,
+        webspace_id=webspace_id,
+    )
+    now = time.time()
+    with _SNAPSHOT_UNAVAILABLE_CACHE_LOCK:
+        item = _SNAPSHOT_UNAVAILABLE_CACHE.get(key)
+        if not item:
+            return None
+        expires_at, payload = item
+        if expires_at <= now:
+            _SNAPSHOT_UNAVAILABLE_CACHE.pop(key, None)
+            return None
+        cached_payload = copy.deepcopy(payload)
+    result = cached_payload.get("result") if isinstance(cached_payload.get("result"), dict) else {}
+    result["cached"] = True
+    result["retry_after_s"] = round(max(0.0, float(expires_at) - now), 3)
+    cached_payload["result"] = result
+    cached_payload["degraded"] = True
+    return cached_payload
+
+
+def _snapshot_unavailable_cache_set(
+    payload: Dict[str, Any],
+    *,
+    tool_name: str,
+    target_node_id: str,
+    webspace_id: str,
+) -> Dict[str, Any]:
+    if _SNAPSHOT_UNAVAILABLE_TTL_S <= 0.0:
+        return payload
+    key = _snapshot_unavailable_cache_key(
+        tool_name=tool_name,
+        target_node_id=target_node_id,
+        webspace_id=webspace_id,
+    )
+    with _SNAPSHOT_UNAVAILABLE_CACHE_LOCK:
+        _SNAPSHOT_UNAVAILABLE_CACHE[key] = (
+            time.time() + _SNAPSHOT_UNAVAILABLE_TTL_S,
+            copy.deepcopy(payload),
+        )
+    return payload
+
+
+def _snapshot_unavailable_cache_clear(*, tool_name: str, target_node_id: str, webspace_id: str) -> None:
+    key = _snapshot_unavailable_cache_key(
+        tool_name=tool_name,
+        target_node_id=target_node_id,
+        webspace_id=webspace_id,
+    )
+    with _SNAPSHOT_UNAVAILABLE_CACHE_LOCK:
+        _SNAPSHOT_UNAVAILABLE_CACHE.pop(key, None)
+
+
+def _snapshot_unavailable_response_cached(
+    *,
+    tool_name: str,
+    target_node_id: str,
+    webspace_id: str,
+    reason: str,
+    retryable: bool = True,
+) -> Dict[str, Any]:
+    payload = _target_snapshot_unavailable_response(
+        tool_name=tool_name,
+        target_node_id=target_node_id,
+        reason=reason,
+        retryable=retryable,
+        retry_after_s=_SNAPSHOT_UNAVAILABLE_TTL_S if _SNAPSHOT_UNAVAILABLE_TTL_S > 0.0 else None,
+    )
+    return _snapshot_unavailable_cache_set(
+        payload,
+        tool_name=tool_name,
+        target_node_id=target_node_id,
+        webspace_id=webspace_id,
+    )
 
 
 def _should_proxy_tool_call_to_target(
@@ -160,8 +257,19 @@ async def _proxy_tool_call_to_node(
 ) -> Dict[str, Any]:
     directory = get_directory()
     link_manager = get_hub_link_manager()
+    webspace_id = _resolve_tool_webspace_id(payload)
+    readonly_snapshot = _is_readonly_snapshot_tool(body.tool)
+    link_connected = bool(target_node_id and link_manager.is_connected(target_node_id))
+    if readonly_snapshot and not link_connected:
+        cached = _snapshot_unavailable_cache_get(
+            tool_name=body.tool,
+            target_node_id=target_node_id,
+            webspace_id=webspace_id,
+        )
+        if cached is not None:
+            return cached
     rpc_error: Exception | None = None
-    if target_node_id and link_manager.is_connected(target_node_id):
+    if link_connected:
         try:
             res = await link_manager.rpc_tools_call(
                 target_node_id,
@@ -170,30 +278,48 @@ async def _proxy_tool_call_to_node(
                 timeout=body.timeout,
                 dev=body.dev,
             )
+            if readonly_snapshot:
+                _snapshot_unavailable_cache_clear(
+                    tool_name=body.tool,
+                    target_node_id=target_node_id,
+                    webspace_id=webspace_id,
+                )
             return {"ok": True, "result": res}
         except Exception as exc:
             rpc_error = exc
             _log.debug("rpc tool proxy failed target_node_id=%s tool=%s", target_node_id, body.tool, exc_info=True)
     base_url = directory.get_node_base_url(target_node_id)
     if _is_loopback_base_url(base_url):
-        if rpc_error is not None:
-            raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
-        if _is_readonly_snapshot_tool(body.tool):
-            return _target_snapshot_unavailable_response(
+        if readonly_snapshot:
+            reason = (
+                f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}"
+                if rpc_error is not None
+                else "member base_url is loopback-only and the live member link is unavailable"
+            )
+            return _snapshot_unavailable_response_cached(
                 tool_name=body.tool,
                 target_node_id=target_node_id,
-                reason="member base_url is loopback-only and the live member link is unavailable",
+                webspace_id=webspace_id,
+                reason=reason,
             )
+        if rpc_error is not None:
+            raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
         raise HTTPException(status_code=503, detail="member base_url is loopback-only and the live member link is unavailable")
     if not base_url:
-        if rpc_error is not None:
-            raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
-        if _is_readonly_snapshot_tool(body.tool):
-            return _target_snapshot_unavailable_response(
+        if readonly_snapshot:
+            reason = (
+                f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}"
+                if rpc_error is not None
+                else "no base_url or p2p link for target node"
+            )
+            return _snapshot_unavailable_response_cached(
                 tool_name=body.tool,
                 target_node_id=target_node_id,
-                reason="no base_url or p2p link for target node",
+                webspace_id=webspace_id,
+                reason=reason,
             )
+        if rpc_error is not None:
+            raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
         raise HTTPException(status_code=503, detail="no base_url or p2p link for target node")
     forward = {"tool": body.tool, "arguments": payload}
     if body.timeout is not None:
@@ -211,8 +337,22 @@ async def _proxy_tool_call_to_node(
             )
         )
     except Exception as pe:
+        if readonly_snapshot:
+            return _snapshot_unavailable_response_cached(
+                tool_name=body.tool,
+                target_node_id=target_node_id,
+                webspace_id=webspace_id,
+                reason=f"proxy failed: {pe}",
+            )
         raise HTTPException(status_code=502, detail=f"proxy failed: {pe}")
     if r.status_code != 200:
+        if readonly_snapshot:
+            return _snapshot_unavailable_response_cached(
+                tool_name=body.tool,
+                target_node_id=target_node_id,
+                webspace_id=webspace_id,
+                reason=f"proxy returned HTTP {r.status_code}: {r.text[:300]}",
+            )
         raise HTTPException(status_code=r.status_code, detail=r.text)
     try:
         return r.json()
