@@ -50,6 +50,8 @@ _MEMBER_SNAPSHOT_REBUILD_DIRTY: dict[str, Dict[str, Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
 _RESOLVED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 64
+_DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
+_DESKTOP_SCENARIOS_CACHE: dict[str, tuple[float, tuple[tuple[str, int, int], ...], list[Tuple[str, str]]]] = {}
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
 _LOCAL_NODE_DISPLAY_CACHE: tuple[float, dict[str, Any]] = (0.0, {})
 _EFFECTIVE_BRANCH_PATHS = (
@@ -1712,6 +1714,28 @@ def _env_flag_enabled(name: str) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_flag_default_enabled(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return True
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _trim_allocator_after_yjs_rebuild() -> bool:
+    if not _env_flag_default_enabled("ADAOS_WEBSPACE_REBUILD_MALLOC_TRIM"):
+        return False
+    try:
+        import ctypes  # pylint: disable=import-outside-toplevel
+
+        libc = ctypes.CDLL("libc.so.6")
+        trim = getattr(libc, "malloc_trim", None)
+        if not callable(trim):
+            return False
+        return bool(trim(0))
+    except Exception:
+        return False
+
+
 def _pointer_first_scenario_switch_enabled() -> bool:
     return _env_flag_enabled("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH")
 
@@ -2345,9 +2369,26 @@ class WebspaceScenarioRuntime:
         entries: List[Tuple[str, str]] = []
         try:
             root = self.ctx.paths.scenarios_dir()
-            for child in root.iterdir():
-                if not child.is_dir():
-                    continue
+            now = time.monotonic()
+            cache_key = f"{space}:{root}"
+            cached = _DESKTOP_SCENARIOS_CACHE.get(cache_key)
+            if cached is not None and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S:
+                return list(cached[2])
+            children = [child for child in root.iterdir() if child.is_dir()]
+            stamp = tuple(
+                sorted(
+                    (
+                        str(child),
+                        int((child / "scenario.yaml").stat().st_mtime_ns if (child / "scenario.yaml").exists() else 0),
+                        int((child / "scenario.json").stat().st_mtime_ns if (child / "scenario.json").exists() else 0),
+                    )
+                    for child in children
+                )
+            )
+            if cached is not None and cached[1] == stamp:
+                _DESKTOP_SCENARIOS_CACHE[cache_key] = (now, stamp, list(cached[2]))
+                return list(cached[2])
+            for child in children:
                 scenario_id = child.name
                 if scenario_id == "web_desktop":
                     continue
@@ -2363,6 +2404,7 @@ class WebspaceScenarioRuntime:
                     continue
                 title = str(manifest.get("title") or manifest.get("name") or scenario_id)
                 entries.append((scenario_id, title))
+            _DESKTOP_SCENARIOS_CACHE[cache_key] = (now, stamp, list(entries))
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)
         return entries
@@ -3991,6 +4033,8 @@ def _open_rebuild_ydoc_session(
             webspace_id,
             prefer_live_room=True,
             timings=timings,
+            load_mark_roots=["ui", "data", "registry"],
+            governed=True,
         )
     except TypeError:
         return async_get_ydoc(webspace_id)
@@ -4841,6 +4885,9 @@ async def rebuild_webspace_from_sources(
         else:
             entry = await runtime.rebuild_webspace_async(webspace_id)
         _record_timing(timings_ms, "semantic_rebuild", stage_started)
+        stage_started = time.perf_counter()
+        _trim_allocator_after_yjs_rebuild()
+        _record_timing(timings_ms, "malloc_trim", stage_started)
     except _StaleRebuildRequestError:
         finalized_timings = _finalize_timing_map(timings_ms, started_at=rebuild_started)
         semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
