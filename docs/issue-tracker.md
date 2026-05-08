@@ -378,7 +378,7 @@ Roadmap:
   projection targets.
 - [ ] Make direct skill-owned primary-doc writes deny-by-default outside
   declared capabilities.
-- [ ] Teach `web_desktop` and the client shell to consume `data.yjs_qrnt` and
+- [x] Teach `web_desktop` and the client shell to consume `data.yjs_qrnt` and
   render quarantined apps/widgets as disabled with a visible reason and
   retry-after, rather than silently hiding or retry-spamming them.
 - [ ] Add app/widget manifest metadata mapping UI entries to owning skill IDs so
