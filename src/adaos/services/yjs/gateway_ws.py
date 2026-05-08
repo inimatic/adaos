@@ -3303,12 +3303,46 @@ async def process_events_command(
         return None
 
     if kind == "desktop.scenario.set":
-        target = (payload or {}).get("scenario_id")
+        payload = dict(payload or {})
+        target = payload.get("scenario_id")
         if not target:
             await _ack(False, error="scenario_id required")
         else:
-            _publish_bus("desktop.scenario.set", payload)
-            await _ack()
+            try:
+                from adaos.services.scenario.webspace_runtime import switch_webspace_scenario
+
+                target_webspace = str(
+                    payload.get("webspace_id")
+                    or payload.get("workspace_id")
+                    or webspace_id
+                    or "default"
+                ).strip() or "default"
+                if "set_home" in payload:
+                    set_home = bool(payload.get("set_home"))
+                elif "persist_home" in payload:
+                    set_home = bool(payload.get("persist_home"))
+                else:
+                    set_home = None
+                wait_for_rebuild = (
+                    bool(payload.get("wait_for_rebuild"))
+                    if "wait_for_rebuild" in payload
+                    else True
+                )
+                result = await switch_webspace_scenario(
+                    target_webspace,
+                    str(target),
+                    set_home=set_home,
+                    wait_for_rebuild=wait_for_rebuild,
+                )
+                await _ack(bool(result.get("accepted", result.get("ok", True))), data=result)
+            except Exception as exc:
+                _log.warning(
+                    "desktop.scenario.set direct switch failed webspace=%s scenario=%s",
+                    webspace_id,
+                    target,
+                    exc_info=True,
+                )
+                await _ack(False, error=f"{type(exc).__name__}: {exc}")
         return None
 
     if kind == "skills.update":
