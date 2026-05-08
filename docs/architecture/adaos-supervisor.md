@@ -675,6 +675,8 @@ Target behavior:
 
 The important rule is that profiling is an escalated diagnostic mode under supervisor policy, not a permanent runtime tax.
 
+Restart-into-profile is also an availability-affecting action. The automatic policy path must therefore defer profiling restarts while a recent browser session or live member link is observed; critical low-memory restart policy remains the separate last-resort recovery path. A profiling window starts only after the restarted runtime API is ready, so slow bootstrap time is not counted as useful sampled-profile time and cannot prematurely stop the profiler before final artifacts are materialized.
+
 ### Signals and admission rules
 
 Supervisor should avoid triggering profiling from one instantaneous RSS sample.
