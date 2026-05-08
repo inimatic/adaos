@@ -436,6 +436,8 @@ Status note:
   JSON fallback
 - the first Taiga-specific renderer slice is now live for `collection_grid`
 - the browser client baseline now builds on Angular 19 with Taiga UI v5
+- production client builds now use a modern browser baseline compatible with
+  Angular 19 optimization
 
 Current pre-stand milestone:
 
@@ -533,6 +535,7 @@ Recommended identifiers:
 - [x] compatibility rendering remains available if semantic rendering is
   bypassed
 - [x] semantic `collection_grid` is rendered through a Taiga-backed surface
+- [x] production browser build passes with the upgraded Angular/Taiga baseline
 - [ ] manual verification on the target stand
 
 Recommended demo data shape:

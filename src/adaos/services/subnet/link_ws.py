@@ -48,6 +48,15 @@ async def _accept_websocket(websocket: WebSocket) -> bool:
         raise
 
 
+def _is_websocket_disconnect(exc: BaseException) -> bool:
+    if isinstance(exc, WebSocketDisconnect):
+        return True
+    # Starlette/FastAPI have moved this exception across import paths between
+    # versions; normal close frames must not bubble as ASGI errors just because
+    # the concrete class came from a sibling module.
+    return exc.__class__.__name__ == "WebSocketDisconnect"
+
+
 @router.websocket("/ws/subnet")
 async def subnet_ws(websocket: WebSocket) -> None:
     """
@@ -75,7 +84,12 @@ async def subnet_ws(websocket: WebSocket) -> None:
     mgr = get_hub_link_manager()
     node_id: str | None = None
     try:
-        raw = await websocket.receive_json()
+        try:
+            raw = await websocket.receive_json()
+        except Exception as exc:
+            if _is_websocket_disconnect(exc):
+                return
+            raise
         if not isinstance(raw, dict) or raw.get("t") != "hello":
             await websocket.send_json({"t": "hello.ack", "ok": False, "error": "hello_required"})
             await websocket.close(code=1002)
@@ -129,9 +143,9 @@ async def subnet_ws(websocket: WebSocket) -> None:
         while True:
             try:
                 msg: Any = await websocket.receive_json()
-            except WebSocketDisconnect:
-                break
-            except Exception:
+            except Exception as exc:
+                if _is_websocket_disconnect(exc):
+                    break
                 continue
             if not isinstance(msg, dict):
                 continue
@@ -196,12 +210,22 @@ async def subnet_ws(websocket: WebSocket) -> None:
                     webspace_id = str(msg.get("webspace_id") or "default")
                     state = msg.get("state")
                     if isinstance(state, dict):
+                        try:
+                            _log.info(
+                                "received member yjs.node_state node_id=%s webspace=%s bytes=%d",
+                                node_id,
+                                webspace_id,
+                                len(json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode("utf-8")),
+                            )
+                        except Exception:
+                            pass
                         await mgr.ingest_member_node_state(
                             node_id=node_id,
                             webspace_id=webspace_id,
                             state=state,
                         )
                 except Exception:
+                    _log.warning("failed to handle member yjs.node_state node_id=%s", node_id, exc_info=True)
                     continue
                 continue
 

@@ -337,19 +337,47 @@ class MemberLinkClient:
         except Exception:
             return
 
-    def _queue_node_snapshot_from_yjs_write(self, *, webspace_id: str | None) -> None:
+    @staticmethod
+    def _yjs_write_needs_full_node_snapshot(meta: dict[str, Any] | None) -> bool:
+        metadata = dict(meta or {})
+        source = str(metadata.get("source") or "").strip().lower()
+        channel = str(metadata.get("channel") or "").strip().lower()
+        # Skill/subnet data projections are already replicated through the
+        # lightweight yjs.node_state message below. Forcing a full node snapshot
+        # for every such write creates an infrastate/catalog rebuild loop on the
+        # hub and can starve the member link under pressure.
+        if source in {"projection_service", "async_get_ydoc", "yjs.gateway_ws"}:
+            return False
+        if source.startswith("projection_service") or channel.startswith("projection."):
+            return False
+        # Catalog/scenario mutations are structural desktop changes; a bounded
+        # full snapshot is still useful so the hub can rebuild app/widget
+        # listings without waiting for the periodic snapshot loop.
+        structural_tokens = (
+            "catalog",
+            "desktop_catalog",
+            "scenario",
+            "webspace_runtime",
+            "webui",
+            "installed",
+        )
+        return any(token in source or token in channel for token in structural_tokens)
+
+    def _queue_node_snapshot_from_yjs_write(self, *, webspace_id: str | None, meta: dict[str, Any] | None = None) -> None:
         token = str(webspace_id or "").strip() or "default"
         # Keep desktop/subnet projections warm without turning every Yjs write
         # into a snapshot storm. The shared desktop only needs a quick bounded
         # pulse after the first write in a short burst.
         if token not in {"default", "desktop"}:
             return
+        if not self._yjs_write_needs_full_node_snapshot(meta):
+            return
         now = time.time()
-        min_interval = 1.5
+        min_interval = 15.0
         if now - float(self._last_yjs_write_snapshot_at or 0.0) < min_interval:
             return
         self._last_yjs_write_snapshot_at = now
-        self._request_local_snapshot_sync(webspace_id=token, reason="yjs.write")
+        self._queue_node_snapshot()
 
     def _ensure_snapshot_task(self) -> None:
         if self._snapshot_task is not None and not self._snapshot_task.done():
@@ -447,7 +475,7 @@ class MemberLinkClient:
         if self._remove_ystore_listener:
             return
 
-        def _on_write(webspace_id: str, update: bytes) -> None:
+        def _on_write(webspace_id: str, update: bytes, meta: dict[str, Any] | None = None) -> None:
             if not update:
                 return
             self._yjs_write_seen_total += 1
@@ -474,7 +502,7 @@ class MemberLinkClient:
             except Exception:
                 self._yjs_write_drop_queue_total += 1
                 return
-            self._queue_node_snapshot_from_yjs_write(webspace_id=webspace_id)
+            self._queue_node_snapshot_from_yjs_write(webspace_id=webspace_id, meta=meta if isinstance(meta, dict) else None)
 
         self._remove_ystore_listener = add_ystore_write_listener(_on_write)
 
