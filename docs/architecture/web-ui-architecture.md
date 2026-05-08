@@ -432,6 +432,8 @@ Status note:
   compatibility bridge
 - `collection_grid`, `metric_chart`, and `event_log` already materialize into
   browser renderers
+- `chat_panel` now materializes into the shared browser chat surface through
+  the semantic adapter
 - `metric_chart` now has a Taiga-specific semantic renderer path, while the
   earlier temporary widget remains available as a compatibility renderer
 - the first Taiga-specific renderer slice is now live for `collection_grid`
@@ -447,7 +449,8 @@ Current pre-stand milestone:
 
 - the demo skill and demo scenario are now ready for first-environment manual
   verification
-- both semantic and compatibility paths render a table, chart, and event log
+- both semantic and compatibility paths render a table, chart, event log, and
+  chat surface
 - table selection now drives the linked chart series through shared `view:`
   state
 - semantic `collection_grid` now renders through a Taiga-backed surface instead
@@ -478,7 +481,7 @@ Current pre-stand milestone:
 
 ### 3. Web UI Priority Slice
 
-- [ ] implement the first four semantic view kinds:
+- [x] implement the first four semantic view kinds:
   `collection_grid`, `metric_chart`, `event_log`, `chat_panel`
 - [ ] implement the first typed action kinds:
   `emit`, `open_modal`, `set_view_state`, `call_host`,
@@ -542,6 +545,7 @@ Recommended identifiers:
   bypassed
 - [x] semantic `collection_grid` is rendered through a Taiga-backed surface
 - [x] semantic `metric_chart` is rendered through a Taiga-backed surface
+- [x] semantic `chat_panel` is rendered through the browser chat surface
 - [x] production browser build passes with the upgraded Angular/Taiga baseline
 - [ ] manual verification on the target stand
 
