@@ -391,7 +391,11 @@ class ProjectionService:
             return
         root_name = segments[0]
         owner = _projection_write_owner()
-        prefer_live_room = owner == "core"
+        # ProjectionService is the authority boundary for skill-visible Yjs
+        # writes. Prefer the active live room for every governed projection so
+        # browser sessions observe skill state changes immediately; detached
+        # YStore writes remain the fallback when no room is active.
+        prefer_live_room = True
         policy = _yjs_primary_doc_policy_state(webspace_id=ws_id, owner=owner, root_name=root_name)
         if not await _govern_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner):
             return

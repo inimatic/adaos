@@ -124,6 +124,10 @@ class SubnetRepo:
 
     def __init__(self, sql: SQLite) -> None:
         self.sql = sql
+        self._runtime_projection_cache: dict[str, tuple[tuple[Any, ...], Dict[str, Any]]] = {}
+        self._io_capacity_cache: dict[str, List[Dict[str, Any]]] = {}
+        self._skill_capacity_cache: dict[str, List[Dict[str, Any]]] = {}
+        self._scenario_capacity_cache: dict[str, List[Dict[str, Any]]] = {}
         self._ensure_schema()
 
     # -------------------- schema --------------------
@@ -460,6 +464,7 @@ class SubnetRepo:
                 ),
             )
             con.commit()
+        self._runtime_projection_cache.pop(node_id, None)
 
     def touch_runtime_projection(self, node_id: str, *, captured_at: float | None = None, node_state: str | None = None) -> None:
         fields: list[str] = []
@@ -482,6 +487,7 @@ class SubnetRepo:
                 tuple(params),
             )
             con.commit()
+        self._runtime_projection_cache.pop(node_id, None)
 
     def runtime_projection_for_node(self, node_id: str) -> Dict[str, Any]:
         with self.sql.connect() as con:
@@ -508,8 +514,13 @@ class SubnetRepo:
             )
             row = cur.fetchone()
         if not row:
+            self._runtime_projection_cache.pop(node_id, None)
             return {}
-        return {
+        cache_key = tuple(row)
+        cached = self._runtime_projection_cache.get(node_id)
+        if cached is not None and cached[0] == cache_key:
+            return dict(cached[1])
+        result = {
             "captured_at": row[0],
             "node_names": json.loads(row[1] or "[]"),
             "primary_node_name": row[2] or "",
@@ -525,6 +536,10 @@ class SubnetRepo:
             "snapshot": json.loads(row[11] or "{}"),
             "updated_at": row[12],
         }
+        if len(self._runtime_projection_cache) > 512:
+            self._runtime_projection_cache.clear()
+        self._runtime_projection_cache[node_id] = (cache_key, result)
+        return dict(result)
 
     # -------------------- capacity --------------------
     def replace_io_capacity(self, node_id: str, io_list: List[Dict[str, Any]]) -> None:
@@ -544,6 +559,7 @@ class SubnetRepo:
                     (node_id, io_type, caps, prio, id_hint, now),
                 )
             con.commit()
+        self._io_capacity_cache.pop(node_id, None)
 
     def replace_skill_capacity(self, node_id: str, skills: List[Dict[str, Any]]) -> None:
         now = _now()
@@ -564,6 +580,7 @@ class SubnetRepo:
                     (node_id, name, version, active, now, dev),
                 )
             con.commit()
+        self._skill_capacity_cache.pop(node_id, None)
 
     def nodes_with_skill(self, name: str) -> List[Dict[str, Any]]:
         q = (
@@ -599,8 +616,15 @@ class SubnetRepo:
             con.execute("DELETE FROM subnet_runtime_projection")
             con.execute("DELETE FROM subnet_nodes")
             con.commit()
+        self._runtime_projection_cache.clear()
+        self._io_capacity_cache.clear()
+        self._skill_capacity_cache.clear()
+        self._scenario_capacity_cache.clear()
 
     def io_for_node(self, node_id: str) -> List[Dict[str, Any]]:
+        cached = self._io_capacity_cache.get(node_id)
+        if cached is not None:
+            return [dict(item) for item in cached]
         with self.sql.connect() as con:
             cur = con.execute(
                 "SELECT io_type, capabilities_json, priority, id_hint, updated_at FROM subnet_capacity_io WHERE node_id=?",
@@ -617,9 +641,15 @@ class SubnetRepo:
                         "updated_at": r[4],
                     }
                 )
+            if len(self._io_capacity_cache) > 512:
+                self._io_capacity_cache.clear()
+            self._io_capacity_cache[node_id] = [dict(item) for item in out]
             return out
 
     def skills_for_node(self, node_id: str) -> List[Dict[str, Any]]:
+        cached = self._skill_capacity_cache.get(node_id)
+        if cached is not None:
+            return [dict(item) for item in cached]
         with self.sql.connect() as con:
             cur = con.execute(
                 "SELECT name, version, active, updated_at, dev FROM subnet_capacity_skills WHERE node_id=?",
@@ -636,6 +666,9 @@ class SubnetRepo:
                         "dev": bool(r[4]) if len(r) > 4 else False,
                     }
                 )
+            if len(self._skill_capacity_cache) > 512:
+                self._skill_capacity_cache.clear()
+            self._skill_capacity_cache[node_id] = [dict(item) for item in out]
             return out
 
     def replace_scenario_capacity(self, node_id: str, scenarios: List[Dict[str, Any]]) -> None:
@@ -657,8 +690,12 @@ class SubnetRepo:
                     (node_id, name, version, active, now, dev),
                 )
             con.commit()
+        self._scenario_capacity_cache.pop(node_id, None)
 
     def scenarios_for_node(self, node_id: str) -> List[Dict[str, Any]]:
+        cached = self._scenario_capacity_cache.get(node_id)
+        if cached is not None:
+            return [dict(item) for item in cached]
         with self.sql.connect() as con:
             cur = con.execute(
                 "SELECT name, version, active, updated_at, dev FROM subnet_capacity_scenarios WHERE node_id=?",
@@ -675,4 +712,7 @@ class SubnetRepo:
                         "dev": bool(r[4]) if len(r) > 4 else False,
                     }
                 )
+            if len(self._scenario_capacity_cache) > 512:
+                self._scenario_capacity_cache.clear()
+            self._scenario_capacity_cache[node_id] = [dict(item) for item in out]
             return out
