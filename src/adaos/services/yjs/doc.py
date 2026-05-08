@@ -16,9 +16,12 @@ from adaos.services.yjs.update_origin import mark_backend_room_update
 
 T = TypeVar("T")
 _log = logging.getLogger("adaos.yjs.doc")
-_LIVE_MAP_VALUE_CACHE_TTL_S = 1.0
+_LIVE_MAP_VALUE_CACHE_TTL_S = 10.0
 _LIVE_MAP_VALUE_CACHE_MAX = 128
 _LIVE_MAP_VALUE_CACHE: dict[tuple[str, str, str], tuple[float, Any]] = {}
+_LIVE_MAP_VALUE_SAFE_KEYS = {
+    ("ui", "current_scenario"),
+}
 
 
 def _cacheable_live_map_value(value: Any) -> bool:
@@ -142,6 +145,9 @@ def try_read_live_map_value(webspace_id: str, map_name: str, key: str) -> tuple[
     cached = _LIVE_MAP_VALUE_CACHE.get(cache_key)
     if cached is not None and (now - cached[0]) <= _LIVE_MAP_VALUE_CACHE_TTL_S:
         return True, cached[1]
+    safe_key = (cache_key[1], cache_key[2])
+    if safe_key not in _LIVE_MAP_VALUE_SAFE_KEYS:
+        return False, None
 
     room = _resolve_live_room(cache_key[0])
     if not _can_access_live_room_directly(room):
@@ -199,6 +205,8 @@ def _schedule_room_update(
                     source=source,
                     owner=owner,
                     channel=channel,
+                    already_persisted=True,
+                    governed=True,
                 )
             Y.apply_update(room.ydoc, update)
         except Exception:
@@ -432,14 +440,14 @@ async def async_get_ydoc(
     ystore = get_ystore_for_webspace(webspace_id)
     room = _resolve_live_room(webspace_id) if prefer_live_room else None
     use_live_room = _can_access_live_room_directly(room)
+    owner_for_session = _resolve_yjs_write_owner() if use_live_room and not read_only else ""
     if use_live_room and not read_only and not governed:
-        owner = _resolve_yjs_write_owner()
         try:
             from adaos.services.yjs.governance import govern_primary_doc_write
 
             if not await govern_primary_doc_write(
                 webspace_id=webspace_id,
-                owner=owner,
+                owner=owner_for_session,
                 root_names=[str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()],
                 path=",".join(str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()) or "primary_shared_doc",
                 source="async_get_ydoc.live_room",
@@ -470,23 +478,44 @@ async def async_get_ydoc(
         tracked_load_mark_roots = [str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()]
         if not read_only:
             stage_started = time.perf_counter()
-            before = await ystore.current_state_vector()
-            if before is not None:
-                _set_doc_timing(timings, "encode_state_vector", 0.0, prefix=timing_prefix)
-            else:
+            if use_live_room:
                 try:
                     before = Y.encode_state_vector(ydoc)
                     _record_doc_timing(timings, "encode_state_vector", stage_started, prefix=timing_prefix)
                 except Exception:
                     _record_doc_timing(timings, "encode_state_vector", stage_started, prefix=timing_prefix)
                     before = None
+            else:
+                before = await ystore.current_state_vector()
+                if before is not None:
+                    _set_doc_timing(timings, "encode_state_vector", 0.0, prefix=timing_prefix)
+                else:
+                    try:
+                        before = Y.encode_state_vector(ydoc)
+                        _record_doc_timing(timings, "encode_state_vector", stage_started, prefix=timing_prefix)
+                    except Exception:
+                        _record_doc_timing(timings, "encode_state_vector", stage_started, prefix=timing_prefix)
+                        before = None
         yield ydoc
         if not read_only:
             if _state_changed(ydoc, before, timings, prefix=timing_prefix):
                 if use_live_room:
                     # Active YRoom instances already fan backend mutations into
                     # websocket broadcast and YStore persistence.
-                    _set_doc_timing(timings, "encode_diff", 0.0, prefix=timing_prefix)
+                    stage_started = time.perf_counter()
+                    update = _encode_diff(ydoc, before)
+                    _record_doc_timing(timings, "encode_diff", stage_started, prefix=timing_prefix)
+                    if update:
+                        mark_backend_room_update(
+                            webspace_id,
+                            update,
+                            source="async_get_ydoc.live_room",
+                            owner=owner_for_session or _resolve_yjs_write_owner(),
+                            channel="yjs.doc.async.live_room",
+                            root_names=tracked_load_mark_roots,
+                            already_persisted=False,
+                            governed=True,
+                        )
                     _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
                     _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
                 else:
@@ -594,6 +623,7 @@ def mutate_live_room(
 
     def _apply() -> None:
         owner_token = owner or _resolve_yjs_write_owner()
+        before: bytes | None = None
         try:
             from adaos.services.yjs.governance import govern_primary_doc_write_sync
 
@@ -609,6 +639,10 @@ def mutate_live_room(
         except Exception:
             _log.debug("failed to apply live-room YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
         try:
+            try:
+                before = Y.encode_state_vector(room.ydoc)
+            except Exception:
+                before = None
             with ystore_write_metadata_sync(
                 root_names=list(root_names or []),
                 source=source,
@@ -618,6 +652,18 @@ def mutate_live_room(
             ):
                 with room.ydoc.begin_transaction() as txn:
                     mutator(room.ydoc, txn)
+            update = _encode_diff(room.ydoc, before)
+            if update:
+                mark_backend_room_update(
+                    webspace_id,
+                    update,
+                    source=source,
+                    owner=owner_token,
+                    channel=channel,
+                    root_names=list(root_names or []),
+                    already_persisted=False,
+                    governed=True,
+                )
         except Exception:
             pass
 
@@ -645,13 +691,24 @@ def apply_update_to_live_room(
 
     def _apply() -> None:
         try:
+            owner_token = owner or _resolve_yjs_write_owner()
             with ystore_write_metadata_sync(
                 root_names=list(root_names or []),
                 source=source,
-                owner=(owner or _resolve_yjs_write_owner()),
+                owner=owner_token,
                 channel=channel,
             ):
                 Y.apply_update(room.ydoc, update)
+            mark_backend_room_update(
+                webspace_id,
+                update,
+                source=source,
+                owner=owner_token,
+                channel=channel,
+                root_names=list(root_names or []),
+                already_persisted=False,
+                governed=False,
+            )
         except Exception:
             pass
 

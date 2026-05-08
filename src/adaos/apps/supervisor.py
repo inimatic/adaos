@@ -176,26 +176,36 @@ def _memory_telemetry_window_sec() -> float:
 
 def _memory_suspicion_growth_threshold_bytes() -> int:
     try:
-        return max(32 * 1024 * 1024, int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES") or str(192 * 1024 * 1024)).strip()))
+        return max(
+            32 * 1024 * 1024,
+            int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES") or str(4 * 1024 * 1024 * 1024)).strip()),
+        )
     except Exception:
-        return 192 * 1024 * 1024
+        return 4 * 1024 * 1024 * 1024
 
 
 def _memory_suspicion_slope_threshold_bytes_per_min() -> float:
     try:
         return max(
             float(8 * 1024 * 1024),
-            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN") or str(48 * 1024 * 1024)).strip()),
+            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN") or str(1024 * 1024 * 1024)).strip()),
         )
     except Exception:
-        return float(48 * 1024 * 1024)
+        return float(1024 * 1024 * 1024)
 
 
 def _memory_auto_profile_cooldown_sec() -> float:
     try:
-        return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_COOLDOWN_SEC") or "600").strip()))
+        return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_COOLDOWN_SEC") or "86400").strip()))
     except Exception:
-        return 600.0
+        return 86400.0
+
+
+def _memory_policy_profile_restarts_enabled() -> bool:
+    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_POLICY_PROFILE_RESTARTS")
+    if raw is None:
+        return False
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _memory_auto_profile_min_uptime_sec() -> float:
@@ -2098,11 +2108,19 @@ class SupervisorManager:
     def _memory_profile_restart_guard(self, *, desired_mode: str, now: float | None = None) -> tuple[bool, str | None]:
         normalized_mode = str(desired_mode or "").strip().lower()
         if normalized_mode == "normal":
+            if (
+                self._memory_profile_mode != "normal"
+                and str(self._memory_profile_current_trigger_source or "").strip().lower() == "policy"
+                and not _memory_policy_profile_restarts_enabled()
+            ):
+                return False, "policy_profile_restart_disabled"
             if self._memory_profile_mode != "normal" and str(self._memory_profile_current_trigger_source or "").strip().lower() == "policy":
                 return self._memory_profile_subnet_guard()
             return True, None
         if self._active_memory_profile_trigger_source() != "policy":
             return True, None
+        if not _memory_policy_profile_restarts_enabled():
+            return False, "policy_profile_restart_disabled"
         min_uptime_sec = _memory_auto_profile_min_uptime_sec()
         if min_uptime_sec <= 0:
             return self._memory_profile_subnet_guard()
@@ -2388,17 +2406,20 @@ class SupervisorManager:
         ):
             auto_allowed, auto_block_reason = self._memory_policy_auto_profile_guard(now=now)
             if auto_allowed:
-                try:
-                    self._request_memory_profile_session(
-                        profile_mode="sampled_profile",
-                        reason=f"memory.{suspicion_reason or 'threshold'}",
-                        trigger_source="policy",
-                        trigger_threshold=(
-                            f"growth>={growth_threshold}; slope>={int(slope_threshold)}"
-                        ),
-                    )
-                except HTTPException:
-                    pass
+                if not _memory_policy_profile_restarts_enabled() and self._memory_profile_mode != "sampled_profile":
+                    self._record_memory_auto_profile_block("policy_profile_restart_disabled", now=now)
+                else:
+                    try:
+                        self._request_memory_profile_session(
+                            profile_mode="sampled_profile",
+                            reason=f"memory.{suspicion_reason or 'threshold'}",
+                            trigger_source="policy",
+                            trigger_threshold=(
+                                f"growth>={growth_threshold}; slope>={int(slope_threshold)}"
+                            ),
+                        )
+                    except HTTPException:
+                        pass
             else:
                 self._record_memory_auto_profile_block(auto_block_reason, now=now)
         self._persist_runtime_state()
@@ -3839,6 +3860,7 @@ class SupervisorManager:
             "rss_growth_bytes_per_min": self._memory_last_growth_bytes_per_min,
             "suspicion_growth_threshold_bytes": _memory_suspicion_growth_threshold_bytes(),
             "suspicion_slope_threshold_bytes_per_min": _memory_suspicion_slope_threshold_bytes_per_min(),
+            "policy_profile_restarts_enabled": _memory_policy_profile_restarts_enabled(),
             "auto_profile_min_uptime_sec": _memory_auto_profile_min_uptime_sec(),
             "auto_profile_browser_live_ttl_sec": _memory_auto_profile_browser_live_ttl_sec(),
             "auto_profile_last_block_reason": self._memory_auto_profile_last_block_reason,

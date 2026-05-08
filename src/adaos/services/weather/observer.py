@@ -124,11 +124,20 @@ def _coerce_weather_mapping(value) -> dict:
 def _current_city_from_doc(ydoc) -> Optional[str]:
     data = ydoc.get_map("data")
     weather = data.get("weather")
-    mapping = _coerce_weather_mapping(weather)
-    current = mapping.get("current") or {}
-    if isinstance(current, dict):
+    if isinstance(weather, Y.YMap):
+        current = weather.get("current")
+    elif isinstance(weather, dict):
+        current = weather.get("current")
+    else:
+        current = _coerce_weather_mapping(weather).get("current")
+    if isinstance(current, Y.YMap):
         city = current.get("city")
-        return str(city) if city else None
+    elif isinstance(current, dict):
+        city = current.get("city")
+    else:
+        city = None
+    if city:
+        return str(city)
     return None
 
 

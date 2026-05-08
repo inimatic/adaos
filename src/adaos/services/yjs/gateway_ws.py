@@ -127,6 +127,8 @@ _YROOM_DIAG_BUFFER_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_BUFFER_WARN", 32, minimu
 _YROOM_DIAG_PENDING_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_PENDING_WARN", 32, minimum=1)
 _YROOM_DIAG_UPDATE_WARN_BYTES = _env_int("ADAOS_YJS_ROOM_DIAG_UPDATE_WARN_BYTES", 256 * 1024, minimum=1)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
+_YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 10.0, minimum=0.0)
+_YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 256 * 1024, minimum=1)
 _EMPTY_Y_UPDATE = b"\x00\x00"
 
 
@@ -270,6 +272,7 @@ class DiagnosticYRoom(YRoom):
         self._diag_effective_repair_total = 0
         self._diag_effective_repair_bytes = 0
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
+        self._diag_effective_last_full_check_mono = 0.0
         self._diag_last_log_mono = 0.0
         self._diag_pressure_active = False
         self._diag_pressure_reason = ""
@@ -516,15 +519,36 @@ class DiagnosticYRoom(YRoom):
             persisted = consume_backend_room_update(self._diag_room_id(), update)
             if persisted is not None:
                 update_len = len(update or b"")
-                self._diag_backend_persist_skip_total += 1
-                self._diag_backend_persist_skip_bytes += update_len
-                self.log.debug(
-                    "Skipping duplicate backend-origin YStore write for webspace=%s bytes=%s source=%s owner=%s",
-                    self._diag_room_id(),
-                    update_len,
-                    persisted.get("source"),
-                    persisted.get("owner"),
-                )
+                if bool(persisted.get("already_persisted", True)):
+                    self._diag_backend_persist_skip_total += 1
+                    self._diag_backend_persist_skip_bytes += update_len
+                    self.log.debug(
+                        "Skipping duplicate backend-origin YStore write for webspace=%s bytes=%s source=%s owner=%s",
+                        self._diag_room_id(),
+                        update_len,
+                        persisted.get("source"),
+                        persisted.get("owner"),
+                    )
+                    return
+                root_names = persisted.get("root_names")
+                if not isinstance(root_names, (list, tuple)):
+                    root_names = []
+                source = str(persisted.get("source") or "yjs.gateway_ws.backend_live_room")
+                owner = str(persisted.get("owner") or "").strip() or "gateway_ws"
+                channel = str(persisted.get("channel") or "core.yjs.gateway.live_room.persist")
+                self._diag_log_pressure("ystore.write.backend_live_room", update_bytes=update_len)
+                async with ystore_write_metadata(
+                    root_names=[
+                        str(item or "").strip()
+                        for item in list(root_names or ())
+                        if str(item or "").strip()
+                    ],
+                    source=source,
+                    owner=owner,
+                    channel=channel,
+                    governed=bool(persisted.get("governed", False)),
+                ):
+                    await ystore.write(update)
                 return
             self._diag_log_pressure("ystore.write.scheduled", update_bytes=len(update))
             async with ystore_write_metadata(
@@ -589,16 +613,32 @@ class DiagnosticYRoom(YRoom):
                     isinstance(self._diag_effective_branch_snapshot, dict)
                     and self._diag_effective_branch_snapshot.get("ready")
                 )
-                effective_snapshot: dict[str, Any] = {}
+                effective_ready = previous_effective_ready
+                effective_snapshot: dict[str, Any] = {"ready": effective_ready}
                 try:
-                    effective_snapshot = _room_effective_branch_snapshot(self.ydoc)
+                    effective_ready = _room_effective_top_level_ready(self.ydoc)
+                    full_check_due = (
+                        update_len >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES
+                        or (
+                            _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC > 0.0
+                            and time.monotonic() - float(self._diag_effective_last_full_check_mono or 0.0)
+                            >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC
+                        )
+                    )
+                    if not effective_ready or full_check_due:
+                        self._diag_effective_last_full_check_mono = time.monotonic()
+                        effective_snapshot = _room_effective_branch_snapshot(self.ydoc)
+                        effective_ready = bool(effective_snapshot.get("ready"))
+                    else:
+                        effective_snapshot = {"ready": effective_ready, "mode": "top_level"}
                     self._diag_effective_branch_snapshot = effective_snapshot
                 except Exception as exc:
                     effective_snapshot = {
                         "ready": previous_effective_ready,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
-                if previous_effective_ready and not bool(effective_snapshot.get("ready")):
+                    effective_ready = previous_effective_ready
+                if previous_effective_ready and not effective_ready:
                     repair_update = await self._repair_effective_branches_after_destructive_update(
                         destructive_update_bytes=update_len,
                         snapshot=effective_snapshot,
@@ -2216,6 +2256,34 @@ def _room_effective_branches_ready(ydoc: Any) -> bool:
         if not isinstance(data_map.get("desktop"), dict):
             return False
         return True
+    except Exception:
+        return False
+
+
+def _room_effective_top_level_ready(ydoc: Any) -> bool:
+    """
+    Cheap hot-path invariant check for the shared desktop document.
+
+    The full effective snapshot intentionally materializes several large Yjs
+    branches and is too expensive to run for every update. This top-level check
+    catches the destructive class that removes required roots/branches while
+    keeping ordinary Yjs fanout cheap.
+    """
+    try:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        registry_map = ydoc.get_map("registry")
+        ui_keys = {str(key) for key in list(ui_map.keys())}
+        data_keys = {str(key) for key in list(data_map.keys())}
+        # Touch registry keys too: a broken registry root should be observable,
+        # but an empty registry is valid for some scenarios.
+        list(registry_map.keys())
+        return (
+            "application" in ui_keys
+            and "catalog" in data_keys
+            and "installed" in data_keys
+            and "desktop" in data_keys
+        )
     except Exception:
         return False
 
