@@ -15,7 +15,7 @@ from fastapi import WebSocket
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_display import node_display_from_directory_node
-from adaos.services.yjs.doc import apply_update_to_live_room, async_get_ydoc
+from adaos.services.yjs.doc import apply_update_to_live_room, async_get_ydoc, mutate_live_room
 from adaos.services.yjs.store import get_ystore_for_webspace, suppress_ystore_write_notifications, ystore_write_metadata
 
 _log = logging.getLogger("adaos.subnet.link")
@@ -95,6 +95,27 @@ def _snapshot_has_desktop_material(snapshot: dict[str, Any]) -> bool:
     webio = catalog.get("webio") if isinstance(catalog.get("webio"), list) else []
     ydoc_defaults = catalog.get("ydoc_defaults") if isinstance(catalog.get("ydoc_defaults"), dict) else {}
     return bool(apps or widgets or modals or webio or ydoc_defaults)
+
+
+def _coerce_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            return dict(decoded) if isinstance(decoded, dict) else {}
+        except Exception:
+            return {}
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        try:
+            decoded = to_json()
+            if isinstance(decoded, str):
+                decoded = json.loads(decoded)
+            return dict(decoded) if isinstance(decoded, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> str:
@@ -823,6 +844,35 @@ class HubLinkManager:
         self._last_yjs_ingest_node_id = node_key
         self._last_yjs_ingest_webspace_id = ws_id
         self._last_yjs_ingest_bytes = int(encoded_size)
+        state_copy = json.loads(json.dumps(state))
+
+        def _merge_node_state(ydoc: Any, txn: Any) -> None:
+            data_map = ydoc.get_map("data")
+            nodes = _coerce_json_dict(data_map.get("nodes"))
+            if nodes.get(node_key) == state_copy:
+                return
+            nodes[node_key] = state_copy
+            data_map.set(txn, "nodes", nodes)
+
+        live_scheduled = mutate_live_room(
+            ws_id,
+            _merge_node_state,
+            root_names=["data"],
+            source="subnet.link_manager.node_state",
+            owner="core:subnet_link_manager",
+            channel="core.subnet.link.node_state",
+            governed=True,
+        )
+        if live_scheduled:
+            self._yjs_live_apply_total += 1
+            _log.info(
+                "ingested member node state via live room node_id=%s webspace=%s bytes=%d",
+                node_key,
+                ws_id,
+                int(encoded_size),
+            )
+            return
+
         try:
             async with ystore_write_metadata(
                 root_names=["data"],
@@ -833,14 +883,19 @@ class HubLinkManager:
             ):
                 async with async_get_ydoc(ws_id, load_mark_roots=["data"], governed=True) as ydoc:
                     data_map = ydoc.get_map("data")
-                    current = data_map.get("nodes")
-                    nodes = dict(current) if isinstance(current, dict) else {}
-                    if nodes.get(node_key) == state:
+                    nodes = _coerce_json_dict(data_map.get("nodes"))
+                    if nodes.get(node_key) == state_copy:
                         return
-                    nodes[node_key] = json.loads(json.dumps(state))
+                    nodes[node_key] = state_copy
                     with ydoc.begin_transaction() as txn:
                         data_map.set(txn, "nodes", nodes)
             self._yjs_live_apply_total += 1
+            _log.info(
+                "ingested member node state via store node_id=%s webspace=%s bytes=%d",
+                node_key,
+                ws_id,
+                int(encoded_size),
+            )
         except Exception:
             self._yjs_live_apply_failed_total += 1
             _log.warning("failed to ingest member node state node_id=%s webspace=%s", node_key, ws_id, exc_info=True)
