@@ -345,6 +345,8 @@ Status note:
   during compatibility rendering
 - the first Taiga-backed `collection_grid` renderer consumes the same `y:` and
   `view:` refs without introducing renderer-specific addressing
+- the Taiga-backed `metric_chart` renderer consumes the same `y:` and `view:`
+  refs without introducing chart-specific addressing
 - broader cross-document harmonization is still in progress
 - the demo metrics table and chart now share the same `view:` selection ref on
   both semantic and compatibility paths
