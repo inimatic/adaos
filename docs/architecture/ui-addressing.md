@@ -347,6 +347,8 @@ Status note:
   `view:` refs without introducing renderer-specific addressing
 - the Taiga-backed `metric_chart` renderer consumes the same `y:` and `view:`
   refs without introducing chart-specific addressing
+- the semantic `chat_panel` now consumes the same typed `y:` bindings without
+  introducing a separate chat-only addressing model
 - the widget host now resolves Taiga-backed semantic renderers through lazy
   registry entries, while keeping the same typed binding refs on the manifest
   side
