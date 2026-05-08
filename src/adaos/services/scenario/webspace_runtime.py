@@ -2661,28 +2661,44 @@ class WebspaceScenarioRuntime:
                 # Preserve first writer semantics for conflicting defaults.
                 spec.setdefault(path, default)
 
+        current_top_cache: Dict[tuple[str, str], Any] = {}
+        missing = object()
         for path, default in spec.items():
             segments = [s for s in path.split("/") if s]
             if len(segments) < 2:
                 continue
             root_name, key = segments[0], segments[1]
             root = ydoc.get_map(root_name)
+            cache_key = (root_name, key)
+            if len(segments) == 2:
+                current_top = current_top_cache.get(cache_key, missing)
+                if current_top is missing:
+                    current_top = root.get(key)
+                    current_top_cache[cache_key] = current_top
+                if current_top is not None:
+                    continue
+                try:
+                    value = json.loads(json.dumps(default))
+                except Exception:
+                    value = default
+                root.set(txn, key, value)
+                current_top_cache[cache_key] = value
+                continue
+            current_top = current_top_cache.get(cache_key, missing)
+            if current_top is missing:
+                current_top = root.get(key)
+                current_top_cache[cache_key] = current_top
+            tail = segments[2:]
+            if _nested_json_path_exists(current_top, tail):
+                continue
             try:
                 value = json.loads(json.dumps(default))
             except Exception:
                 value = default
-            if len(segments) == 2:
-                if root.get(key) is not None:
-                    continue
-                root.set(txn, key, value)
-                continue
-            current_top = root.get(key)
-            tail = segments[2:]
-            if _nested_json_path_exists(current_top, tail):
-                continue
             changed, merged = _merge_nested_json_path(current_top, tail, value)
             if changed:
                 root.set(txn, key, merged)
+                current_top_cache[cache_key] = merged
 
     def _collect_resolver_inputs_in_doc(self, ydoc: Y.YDoc, webspace_id: str) -> WebspaceResolverInputs:
         ui_map = ydoc.get_map("ui")
@@ -3210,10 +3226,8 @@ class WebspaceScenarioRuntime:
             ignore_errors: bool = False,
         ) -> None:
             fingerprint = str(resolved_branch_fingerprints.get(path) or "").strip()
-            branch_present = _has_effective_branch_value(y_map, key)
             if (
                 fingerprint
-                and branch_present
                 and str(effective_branch_fingerprints.get(path) or "").strip() == fingerprint
             ):
                 fingerprint_unchanged_paths.append(path)

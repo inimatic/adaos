@@ -127,8 +127,8 @@ _YROOM_DIAG_BUFFER_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_BUFFER_WARN", 32, minimu
 _YROOM_DIAG_PENDING_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_PENDING_WARN", 32, minimum=1)
 _YROOM_DIAG_UPDATE_WARN_BYTES = _env_int("ADAOS_YJS_ROOM_DIAG_UPDATE_WARN_BYTES", 256 * 1024, minimum=1)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
-_YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 10.0, minimum=0.0)
-_YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 256 * 1024, minimum=1)
+_YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
+_YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 1024 * 1024, minimum=1)
 _EMPTY_Y_UPDATE = b"\x00\x00"
 
 
@@ -616,7 +616,6 @@ class DiagnosticYRoom(YRoom):
                 effective_ready = previous_effective_ready
                 effective_snapshot: dict[str, Any] = {"ready": effective_ready}
                 try:
-                    effective_ready = _room_effective_top_level_ready(self.ydoc)
                     full_check_due = (
                         update_len >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES
                         or (
@@ -625,11 +624,18 @@ class DiagnosticYRoom(YRoom):
                             >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC
                         )
                     )
+                    if previous_effective_ready and not full_check_due:
+                        effective_ready = True
+                        effective_snapshot = {"ready": True, "mode": "cached"}
+                    elif full_check_due:
+                        effective_ready = previous_effective_ready
+                    else:
+                        effective_ready = _room_effective_top_level_ready(self.ydoc)
                     if not effective_ready or full_check_due:
                         self._diag_effective_last_full_check_mono = time.monotonic()
                         effective_snapshot = _room_effective_branch_snapshot(self.ydoc)
                         effective_ready = bool(effective_snapshot.get("ready"))
-                    else:
+                    elif not previous_effective_ready:
                         effective_snapshot = {"ready": effective_ready, "mode": "top_level"}
                     self._diag_effective_branch_snapshot = effective_snapshot
                 except Exception as exc:
@@ -2260,6 +2266,16 @@ def _room_effective_branches_ready(ydoc: Any) -> bool:
         return False
 
 
+def _ymap_contains_key(y_map: Any, key: str) -> bool:
+    try:
+        return str(key or "") in y_map
+    except Exception:
+        try:
+            return y_map.get(key) is not None
+        except Exception:
+            return False
+
+
 def _room_effective_top_level_ready(ydoc: Any) -> bool:
     """
     Cheap hot-path invariant check for the shared desktop document.
@@ -2272,17 +2288,12 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
     try:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
-        registry_map = ydoc.get_map("registry")
-        ui_keys = {str(key) for key in list(ui_map.keys())}
-        data_keys = {str(key) for key in list(data_map.keys())}
-        # Touch registry keys too: a broken registry root should be observable,
-        # but an empty registry is valid for some scenarios.
-        list(registry_map.keys())
+        ydoc.get_map("registry")
         return (
-            "application" in ui_keys
-            and "catalog" in data_keys
-            and "installed" in data_keys
-            and "desktop" in data_keys
+            _ymap_contains_key(ui_map, "application")
+            and _ymap_contains_key(data_map, "catalog")
+            and _ymap_contains_key(data_map, "installed")
+            and _ymap_contains_key(data_map, "desktop")
         )
     except Exception:
         return False
