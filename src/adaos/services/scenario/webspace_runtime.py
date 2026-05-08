@@ -4923,6 +4923,7 @@ async def rebuild_webspace_from_sources(
                 reset_room_result = await reset_live_webspace_room(
                     webspace_id,
                     close_reason="scenario_switch_fresh_doc",
+                    reset_route_runtime=False,
                 )
             except Exception:
                 pass
@@ -5448,6 +5449,7 @@ asyncio.run(_main())
             webspace_id,
             close_reason="scenario_switch_worker_done",
             persist_ystore_snapshot=False,
+            reset_route_runtime=False,
         )
     except Exception as exc:
         parsed["live_room_refresh"] = {
@@ -6511,7 +6513,7 @@ async def _on_webspace_go_home(evt: Dict[str, Any]) -> None:
     webspace_id = _webspace_id(payload)
     if not webspace_id:
         return
-    wait_for_rebuild = bool(payload.get("wait_for_rebuild")) if "wait_for_rebuild" in payload else False
+    wait_for_rebuild = bool(payload.get("wait_for_rebuild")) if "wait_for_rebuild" in payload else True
     await go_home_webspace(webspace_id, wait_for_rebuild=wait_for_rebuild)
 
 
