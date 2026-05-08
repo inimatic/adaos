@@ -454,7 +454,8 @@ Done:
 - Normal diagnostic thresholds are relaxed out of deep-debug mode: loop-lag warnings now default to 1000ms and eventbus slow async warnings default to 250ms.
 - Backend-origin Yjs updates are marked so the live room can fan them out to browsers without persisting the same detached diff again as `gateway_ws`.
 - `infrastate_skill.get_snapshot` is read-only for HTTP callers by default and returns a compact client snapshot instead of projecting multi-megabyte diagnostic payloads into Yjs on every root-routed fallback probe.
-- Supervisor memory telemetry still records growth, but automatic policy-triggered sampled-profile restarts are delayed for the first 300 seconds by default so diagnostics cannot break the first browser attach window.
+- Supervisor memory telemetry still records growth, but automatic policy-triggered sampled-profile restarts are delayed for the first 300 seconds by default and are deferred while recent browser sessions are live, so diagnostics cannot break the first browser attach/interaction window.
+- Supervisor sampled-profile timing now starts after the profiled runtime API becomes ready, preventing slow bootstrap from consuming the whole profiling window and producing empty start-only artifacts.
 - `infrascope_skill`, `infrastate_skill`, and core Yjs load-mark streams now publish only active subscribed receivers, deduplicate unchanged payloads, and rate-limit high-churn diagnostics under browser load.
 
 In progress:
