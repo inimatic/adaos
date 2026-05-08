@@ -290,7 +290,11 @@ suppression does not hide the original incoming pressure. Wave 9 adds the
 missing containment layer: write pressure can now promote from a local
 write-boundary decision to a short-lived owner quarantine, so the same skill
 cannot keep launching expensive tools while the primary Yjs document is already
-in `block` or sustained `throttle`.
+in `block` or sustained `throttle`. Wave 10 fixes the first live regression in
+that containment layer: implicit webspace events now publish quarantine service
+state to the configured desktop webspace, and hot browser stream events are
+coalesced by handler so stale queued subscription work cannot keep growing
+after pressure has already been detected.
 
 Principle:
 
@@ -340,6 +344,13 @@ Actions:
 - [x] Surface active quarantine state in reliability and `adaos node
   reliability` output (`quarantine=active`, reason, trigger, retry-after, tool,
   path).
+- [x] Normalize implicit Yjs owner-guard webspaces through runtime webspace
+  policy instead of hard-coding `default`, so `data.yjs_qrnt` appears in the
+  same webspace the browser is rendering.
+- [x] Bound `webio.stream.subscription.changed` in the eventbus hot-topic queue
+  and supersede stale queued `webio.stream.snapshot.requested` /
+  `webio.stream.subscription.changed` work by handler before it can accumulate
+  into memory pressure.
 - [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,
   rebuild, route, and Yjs stages.
   First wave landed for member snapshot rebuild pressure and incident summary;
@@ -831,6 +842,13 @@ Evidence:
 - `yjs_load_mark.jsonl` grew to hundreds of MB; recent load-mark rows showed both `_by_owner/skill_infrastate_skill` and `_by_owner/gateway_ws` carrying large sustained byte rates.
 - This pattern indicates backend-originated detached Yjs diffs are persisted once by `async_get_ydoc` and then persisted again by the live room while being fanned out to browsers.
 - 2026-05-08 regression pass: memory still climbed under destructive `infrastate` load even though tool-call quarantine fired. Hub logs showed `skill:infrastate_skill` quarantined via `infrastate_skill:get_snapshot`, while slow `webio.stream.snapshot.requested` subscription handlers kept running outside `SkillManager`.
+- 2026-05-08 follow-up regression pass on slot A / `2ec14c5`: after browser
+  click activity, the hub reached about 1.16GB RSS. Logs showed more than 1000
+  `webio.stream.snapshot.requested` and about 1900
+  `webio.stream.subscription.changed` events since restart, while quarantine
+  service state was written under `default` for events without explicit
+  `webspace_id`; the desktop browser therefore missed the visible
+  `data.yjs_qrnt` signal.
 - Browser symptom was only `Action failed: skill_owner_quarantined`; the response already carried owner/tool/reason, but the client collapsed it to the error code. Skill-local quarantine logging also failed when `ADAOS_SKILL_MEMORY_PATH` pointed at `data/db/skill_env.json` instead of a directory.
 - Scenario shortcut icons were present in the effective catalog as node-attributed scenario apps, but the client-side app filter treated every scenario app with a real `node_id` as remote/non-desktop and hid it.
 
@@ -865,6 +883,13 @@ Actions:
 - [x] Fix skill quarantine JSONL logging when the skill memory path resolves to `data/db/skill_env.json`.
 - [x] Keep scenario shortcut apps visible on the desktop even when the effective catalog tags them with the local hub `node_id`.
 - [x] Hotpatch the Linux hub active slot B with backend subscription/logging changes and restart the runtime under supervisor.
+- [x] Fix owner-guard implicit webspace normalization so desktop browsers can
+  see `data.yjs_qrnt` for subscription-triggered quarantines.
+- [x] Add bounded/coalesced eventbus handling for
+  `webio.stream.subscription.changed` and stale queued stream handlers.
+- [x] Hotpatch Linux hub active slot A and Mediapoint/member active slot B with
+  Wave 10 owner-guard/eventbus containment changes, then restart runtimes under
+  supervisor.
 - [ ] Rebuild/redeploy the client bundle so quarantine diagnostics and scenario shortcut filtering changes are visible in the browser.
 - [ ] Run a destructive `infrastate` browser-load soak after the client deploy and confirm skill subscription quarantine stops the memory climb.
 - [ ] Design safe off-hot-path YStore replay compaction for live browser load; direct live backup can exceed a 60s request window.

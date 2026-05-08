@@ -70,7 +70,19 @@ def _bounded_event_topics() -> tuple[str, ...]:
     raw = str(
         os.getenv(
             "ADAOS_EVENTBUS_BOUNDED_TOPICS",
-            "webio.stream.snapshot.requested,subnet.member.snapshot.changed",
+            "webio.stream.snapshot.requested,webio.stream.subscription.changed,subnet.member.snapshot.changed",
+        )
+        or ""
+    ).strip()
+    items = [str(item or "").strip() for item in raw.split(",") if str(item or "").strip()]
+    return tuple(items)
+
+
+def _bounded_supersede_by_handler_topics() -> tuple[str, ...]:
+    raw = str(
+        os.getenv(
+            "ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS",
+            "webio.stream.snapshot.requested,webio.stream.subscription.changed",
         )
         or ""
     ).strip()
@@ -146,6 +158,7 @@ class LocalEventBus(EventBus):
         self._incoming_total = 0
         self._incoming_by_type: DefaultDict[str, int] = defaultdict(int)
         self._bounded_topics = _bounded_event_topics()
+        self._bounded_supersede_by_handler_topics = _bounded_supersede_by_handler_topics()
         self._bounded_concurrency = _bounded_event_concurrency()
         self._bounded_queue_limit = _bounded_event_queue_limit()
         self._bounded_queues: DefaultDict[str, deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]]] = defaultdict(deque)
@@ -169,6 +182,16 @@ class LocalEventBus(EventBus):
             elif event_type == spec:
                 return spec
         return None
+
+    def _bounded_supersede_by_handler_enabled(self, event_type: str) -> bool:
+        for spec in self._bounded_supersede_by_handler_topics:
+            if spec.endswith("*"):
+                prefix = spec[:-1]
+                if prefix and event_type.startswith(prefix):
+                    return True
+            elif event_type == spec:
+                return True
+        return False
 
     def _event_field(self, event: Any, *names: str) -> Any:
         payload = getattr(event, "payload", None)
@@ -227,17 +250,51 @@ class LocalEventBus(EventBus):
         self._bounded_queues[topic_key] = kept
         if removed is None:
             return None
-        removed_type = str(removed[3] or "")
-        self._bounded_queued_by_type[removed_type] = max(0, int(self._bounded_queued_by_type.get(removed_type, 0)) - 1)
-        if self._bounded_queued_by_type[removed_type] <= 0:
-            self._bounded_queued_by_type.pop(removed_type, None)
-        handler_name = str(removed[4] or "")
-        self._bounded_queued_by_handler[handler_name] = max(0, int(self._bounded_queued_by_handler.get(handler_name, 0)) - 1)
-        if self._bounded_queued_by_handler[handler_name] <= 0:
-            self._bounded_queued_by_handler.pop(handler_name, None)
+        removed_type = self._bounded_decrement_queued_locked(removed)
         self._bounded_superseded_by_topic[topic_key] += 1
         self._bounded_superseded_by_type[removed_type] += 1
         return removed[0]
+
+    def _bounded_decrement_queued_locked(
+        self,
+        item: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None],
+    ) -> str:
+        removed_type = str(item[3] or "")
+        self._bounded_queued_by_type[removed_type] = max(0, int(self._bounded_queued_by_type.get(removed_type, 0)) - 1)
+        if self._bounded_queued_by_type[removed_type] <= 0:
+            self._bounded_queued_by_type.pop(removed_type, None)
+        handler_name = str(item[4] or "")
+        self._bounded_queued_by_handler[handler_name] = max(0, int(self._bounded_queued_by_handler.get(handler_name, 0)) - 1)
+        if self._bounded_queued_by_handler[handler_name] <= 0:
+            self._bounded_queued_by_handler.pop(handler_name, None)
+        return removed_type
+
+    def _bounded_remove_handler_superseded_locked(
+        self,
+        topic_key: str,
+        event_type: str,
+        handler_name: str,
+        supersede_key: tuple[Any, ...] | None,
+    ) -> list[Awaitable[Any]]:
+        if not handler_name or not self._bounded_supersede_by_handler_enabled(event_type):
+            return []
+        queue = self._bounded_queues.get(topic_key)
+        if not queue:
+            return []
+        kept: deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = deque()
+        removed: list[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = []
+        while queue:
+            item = queue.popleft()
+            if item[3] == event_type and item[4] == handler_name:
+                removed.append(item)
+                continue
+            kept.append(item)
+        self._bounded_queues[topic_key] = kept
+        for item in removed:
+            removed_type = self._bounded_decrement_queued_locked(item)
+            self._bounded_superseded_by_topic[topic_key] += 1
+            self._bounded_superseded_by_type[removed_type] += 1
+        return [item[0] for item in removed]
 
     def _pending_backlog_snapshot_locked(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -497,11 +554,21 @@ class LocalEventBus(EventBus):
                         if topic_key:
                             handler_name = _handler_label(h)
                             dropped_total = 0
-                            superseded_coro = None
+                            superseded_coros: list[Awaitable[Any]] = []
                             supersede_key = self._bounded_supersede_key(event_type, event)
                             with self._lock:
                                 queue = self._bounded_queues[topic_key]
                                 superseded_coro = self._bounded_remove_superseded_locked(topic_key, supersede_key)
+                                if superseded_coro is not None:
+                                    superseded_coros.append(superseded_coro)
+                                superseded_coros.extend(
+                                    self._bounded_remove_handler_superseded_locked(
+                                        topic_key,
+                                        event_type,
+                                        handler_name,
+                                        supersede_key,
+                                    )
+                                )
                                 queue = self._bounded_queues[topic_key]
                                 if len(queue) >= self._bounded_queue_limit:
                                     self._bounded_dropped_by_topic[topic_key] += 1
@@ -516,7 +583,7 @@ class LocalEventBus(EventBus):
                                         self._bounded_queue_peak = bounded_total
                                     self._ensure_bounded_workers_locked(loop, topic_key)
                                     self._maybe_log_pending_backlog_locked()
-                            if superseded_coro is not None:
+                            for superseded_coro in superseded_coros:
                                 try:
                                     superseded_coro.close()
                                 except Exception:
