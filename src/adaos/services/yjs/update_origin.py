@@ -63,15 +63,21 @@ def mark_backend_room_update(
     source: str = "yjs.doc.room_update",
     owner: str | None = None,
     channel: str | None = None,
+    root_names: list[str] | tuple[str, ...] | None = None,
+    already_persisted: bool = True,
+    governed: bool = True,
 ) -> None:
     """
-    Mark a live-room update that was already persisted before being fanout-applied.
+    Mark a backend-origin live-room update before the YRoom broadcast loop sees it.
 
     Detached backend mutations first write their diff to YStore, then apply that
-    diff to the active YRoom so browsers receive it immediately. The YRoom also
-    persists every update it broadcasts. This short-lived, exact-update marker
-    lets the YRoom skip only that duplicate persistence while preserving client
-    fanout and normal browser-originated durability.
+    diff to the active YRoom so browsers receive it immediately. Live-room
+    backend mutations apply directly to the active YDoc and rely on YRoom
+    persistence. This short-lived, exact-update marker lets the YRoom distinguish
+    those cases:
+
+    - already_persisted=True: skip duplicate YStore persistence
+    - already_persisted=False: persist with the original source/owner metadata
     """
     if not update:
         return
@@ -89,9 +95,26 @@ def mark_backend_room_update(
                 "source": str(source or "").strip() or "yjs.doc.room_update",
                 "owner": str(owner or "").strip() or None,
                 "channel": str(channel or "").strip() or None,
+                "root_names": [
+                    str(item or "").strip()
+                    for item in list(root_names or ())
+                    if str(item or "").strip()
+                ],
+                "already_persisted": bool(already_persisted),
+                "governed": bool(governed),
                 "count": 0,
             }
         existing["marked_at"] = now
+        existing["source"] = str(source or "").strip() or "yjs.doc.room_update"
+        existing["owner"] = str(owner or "").strip() or None
+        existing["channel"] = str(channel or "").strip() or None
+        existing["root_names"] = [
+            str(item or "").strip()
+            for item in list(root_names or ())
+            if str(item or "").strip()
+        ]
+        existing["already_persisted"] = bool(already_persisted)
+        existing["governed"] = bool(governed)
         existing["count"] = int(existing.get("count") or 0) + 1
         _PENDING[key] = existing
         _PENDING.move_to_end(key)
