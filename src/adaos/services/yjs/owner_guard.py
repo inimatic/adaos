@@ -45,7 +45,13 @@ _SERVICE_NODE_NAME = "yjs_qrnt"
 
 
 def _normalize_webspace(webspace_id: Any) -> str:
-    return str(webspace_id or "").strip() or "default"
+    token = str(webspace_id or "").strip()
+    try:
+        from adaos.services.yjs.webspace import coerce_webspace_id
+
+        return coerce_webspace_id(token or None, fallback=_default_webspace_id())
+    except Exception:
+        return token or _default_webspace_id()
 
 
 def _default_webspace_id() -> str:
