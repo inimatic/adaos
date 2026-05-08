@@ -138,6 +138,32 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
 
 async def _govern_primary_doc_write(*, policy: dict[str, Any], webspace_id: str, path: str, owner: str) -> bool:
     try:
+        from adaos.services.yjs.owner_guard import admit_owner_work
+
+        root_name = path.split("/", 1)[0] if path else ""
+        admission = admit_owner_work(
+            webspace_id=webspace_id,
+            owner=owner,
+            root_names=[root_name] if root_name else [],
+            path=path,
+            source="projection_service",
+            channel="projection.yjs",
+            work_kind="projection",
+            policy=policy,
+        )
+        if not bool(admission.get("allowed", True)):
+            _log.warning(
+                "YJS projection denied by owner guard webspace=%s owner=%s path=%s reason=%s retry_after_s=%s",
+                webspace_id,
+                owner,
+                path or "-",
+                admission.get("reason") or "owner_quarantined",
+                admission.get("retry_after_s") or 0,
+            )
+            return False
+    except Exception:
+        _log.debug("failed to apply YJS owner guard for projection webspace=%s owner=%s path=%s", webspace_id, owner, path, exc_info=True)
+    try:
         from adaos.services.yjs.governance import govern_primary_doc_write
 
         root_name = path.split("/", 1)[0] if path else ""

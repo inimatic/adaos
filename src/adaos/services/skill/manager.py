@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,221 @@ def _default_webspace_id() -> str:
     from adaos.services.yjs.webspace import default_webspace_id
 
     return default_webspace_id()
+
+
+def _payload_webspace_id(payload: Mapping[str, Any] | None) -> str:
+    if isinstance(payload, Mapping):
+        token = str(payload.get("webspace_id") or "").strip()
+        if token:
+            return token
+    return _default_webspace_id()
+
+
+def _admit_skill_tool_yjs_work(name: str, tool: str, payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    try:
+        from adaos.services.yjs.owner_guard import admit_skill_tool
+
+        return admit_skill_tool(skill_name=name, tool=tool, payload=payload)
+    except Exception:
+        _log.debug("failed to apply YJS owner guard for skill=%s tool=%s", name, tool, exc_info=True)
+        return {"allowed": True, "governed": False, "reason": "owner_guard_unavailable"}
+
+
+def _skill_tool_yjs_denied_result(
+    *,
+    name: str,
+    tool: str,
+    payload: Mapping[str, Any] | None,
+    admission: Mapping[str, Any],
+) -> dict[str, Any]:
+    retry_after_s = max(0.0, float(admission.get("retry_after_s") or 0.0))
+    reason = str(admission.get("reason") or "owner_quarantined").strip() or "owner_quarantined"
+    webspace_id = str(admission.get("webspace_id") or _payload_webspace_id(payload)).strip() or "default"
+    owner = str(admission.get("owner") or f"skill:{name}").strip()
+    target_node_id = ""
+    if isinstance(payload, Mapping):
+        target_node_id = str(payload.get("target_node_id") or "").strip()
+    return {
+        "ok": False,
+        "degraded": True,
+        "unavailable": True,
+        "source": "yjs_owner_guard",
+        "error": "skill_owner_quarantined",
+        "reason": reason,
+        "retryable": True,
+        "retry_after_s": retry_after_s,
+        "webspace_id": webspace_id,
+        "owner": owner,
+        "tool": f"{name}:{tool}",
+        "target_node_id": target_node_id or None,
+        "quarantine": admission.get("quarantine") if isinstance(admission.get("quarantine"), Mapping) else None,
+        "summary": {
+            "value": "quarantined",
+            "status": "degraded",
+            "label": "Skill owner quarantined",
+            "description": reason,
+            "selected_node_id": target_node_id or None,
+        },
+    }
+
+
+def _skill_quarantine_event(
+    *,
+    name: str,
+    tool: str,
+    payload: Mapping[str, Any] | None,
+    admission: Mapping[str, Any],
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    webspace_id = str(admission.get("webspace_id") or _payload_webspace_id(payload)).strip() or "default"
+    owner = str(admission.get("owner") or f"skill:{name}").strip()
+    reason = str(admission.get("reason") or "owner_quarantined").strip() or "owner_quarantined"
+    retry_after_s = max(0.0, float(admission.get("retry_after_s") or 0.0))
+    quarantine = admission.get("quarantine") if isinstance(admission.get("quarantine"), Mapping) else {}
+    target_node_id = ""
+    if isinstance(payload, Mapping):
+        target_node_id = str(payload.get("target_node_id") or "").strip()
+    return {
+        "event": "skill.quarantine",
+        "schema": "adaos.skill_quarantine.v1",
+        "ts": now,
+        "updated_at": time.time(),
+        "skill": name,
+        "owner": owner,
+        "blocked_tool": tool,
+        "webspace_id": webspace_id,
+        "target_node_id": target_node_id or None,
+        "reason": reason,
+        "retry_after_s": retry_after_s,
+        "ttl_s": retry_after_s,
+        "policy_state": str(admission.get("policy_state") or quarantine.get("policy_state") or "block").strip() or "block",
+        "trigger": str(quarantine.get("trigger") or "").strip() or None,
+        "path": str(quarantine.get("path") or "").strip() or None,
+        "source": str(quarantine.get("source") or "").strip() or None,
+        "channel": str(quarantine.get("channel") or "").strip() or None,
+        "quarantine_until": float(quarantine.get("quarantine_until") or 0.0) or None,
+    }
+
+
+def _append_skill_quarantine_log(skill_memory_path: Path, event: Mapping[str, Any]) -> None:
+    try:
+        log_dir = Path(skill_memory_path) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / "quarantine.jsonl"
+        payload = dict(event)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)[:32768] + "\n")
+    except Exception:
+        _log.debug("failed to append skill quarantine log skill_memory=%s", skill_memory_path, exc_info=True)
+
+
+def _quarantine_hook_tool_name(tools: Mapping[str, Any], blocked_tool: str) -> str | None:
+    if str(blocked_tool or "").strip() in {"onQuarantine", "on_quarantine"}:
+        return None
+    for candidate in ("onQuarantine", "on_quarantine"):
+        if candidate in tools:
+            return candidate
+    return None
+
+
+def _quarantine_hook_timeout(tool_spec: Mapping[str, Any]) -> float:
+    raw = tool_spec.get("timeout_seconds")
+    try:
+        if raw is not None:
+            return max(0.5, min(10.0, float(raw)))
+    except Exception:
+        pass
+    try:
+        return max(0.5, min(10.0, float(os.getenv("ADAOS_YJS_OWNER_QUARANTINE_HOOK_TIMEOUT_S") or "5")))
+    except Exception:
+        return 5.0
+
+
+def _invoke_skill_quarantine_hook(
+    *,
+    ctx: AgentContext,
+    name: str,
+    tools: Mapping[str, Any],
+    blocked_tool: str,
+    skill_dir: Path,
+    skill_env_path: Path,
+    skill_memory_path: Path,
+    secrets_path: Path,
+    extra_paths: list[Path],
+    event: Mapping[str, Any],
+    admission: Mapping[str, Any],
+) -> dict[str, Any]:
+    hook_name = _quarantine_hook_tool_name(tools, blocked_tool)
+    if not hook_name:
+        return {"called": False, "reason": "hook_not_declared"}
+    hook_spec = tools.get(hook_name)
+    if not isinstance(hook_spec, Mapping):
+        return {"called": False, "reason": "hook_spec_invalid"}
+    module = hook_spec.get("module")
+    attr = hook_spec.get("callable") or hook_name
+    hook_payload = {
+        "event": dict(event),
+        "ttl_s": event.get("ttl_s"),
+        "retry_after_s": event.get("retry_after_s"),
+        "reason": event.get("reason"),
+        "blocked_tool": blocked_tool,
+        "skill": name,
+        "webspace_id": event.get("webspace_id"),
+        "owner": event.get("owner"),
+        "quarantine": admission.get("quarantine") if isinstance(admission.get("quarantine"), Mapping) else None,
+    }
+    previous = ctx.skill_ctx.get()
+    prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
+    prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
+    prev_secrets = ctx.secrets
+    timeout_s = _quarantine_hook_timeout(hook_spec)
+
+    def _call_hook() -> Any:
+        with use_ctx(ctx):
+            return execute_tool(
+                skill_dir,
+                module=module,
+                attr=attr,
+                payload=hook_payload,
+                extra_paths=extra_paths,
+            )
+
+    try:
+        if not ctx.skill_ctx.set(name, skill_dir):
+            return {"called": False, "reason": "skill_context_unavailable"}
+        ctx.secrets = SecretsService(SkillSecretsBackend(secrets_path), ctx.caps)
+        os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
+        os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
+
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+        from contextvars import copy_context
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            ctxvars = copy_context()
+            future = pool.submit(lambda: ctxvars.run(_call_hook))
+            try:
+                result = future.result(timeout=timeout_s)
+            except FuturesTimeoutError as exc:
+                future.cancel()
+                raise TimeoutError(f"quarantine hook '{hook_name}' timed out after {timeout_s} seconds") from exc
+        return {"called": True, "ok": True, "hook": hook_name, "result": result}
+    except Exception as exc:
+        _log.warning("skill quarantine hook failed skill=%s hook=%s: %s", name, hook_name, exc)
+        return {"called": True, "ok": False, "hook": hook_name, "error": str(exc)}
+    finally:
+        ctx.secrets = prev_secrets
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, Path(previous.path))
+        if prev_env is None:
+            os.environ.pop("ADAOS_SKILL_ENV_PATH", None)
+        else:
+            os.environ["ADAOS_SKILL_ENV_PATH"] = prev_env
+        if prev_memory is None:
+            os.environ.pop("ADAOS_SKILL_MEMORY_PATH", None)
+        else:
+            os.environ["ADAOS_SKILL_MEMORY_PATH"] = prev_memory
 
 
 @dataclass(slots=True)
@@ -1825,8 +2041,52 @@ class SkillManager:
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
         prev_secrets = ctx.secrets
-        ctx.secrets = SecretsService(SkillSecretsBackend(env.data_root() / "files" / "secrets.json"), ctx.caps)
         execution_timeout = timeout or tool_spec.get("timeout_seconds")
+        admission = _admit_skill_tool_yjs_work(name, target_tool, payload)
+        if not bool(admission.get("allowed", True)):
+            event = _skill_quarantine_event(name=name, tool=target_tool, payload=payload, admission=admission)
+            _append_skill_quarantine_log(skill_memory_path, event)
+            hook_status = _invoke_skill_quarantine_hook(
+                ctx=ctx,
+                name=name,
+                tools=tools,
+                blocked_tool=target_tool,
+                skill_dir=skill_dir,
+                skill_env_path=skill_env_path,
+                skill_memory_path=skill_memory_path,
+                secrets_path=env.data_root() / "files" / "secrets.json",
+                extra_paths=extra_paths,
+                event=event,
+                admission=admission,
+            )
+            if bool(hook_status.get("called")):
+                _append_skill_quarantine_log(
+                    skill_memory_path,
+                    {
+                        "event": "skill.quarantine_hook",
+                        "schema": "adaos.skill_quarantine_hook.v1",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": time.time(),
+                        "skill": name,
+                        "blocked_tool": target_tool,
+                        "hook": hook_status.get("hook"),
+                        "ok": bool(hook_status.get("ok")),
+                        "error": hook_status.get("error"),
+                    },
+                )
+            denied = _skill_tool_yjs_denied_result(
+                name=name,
+                tool=target_tool,
+                payload=payload,
+                admission=admission,
+            )
+            denied["quarantine_hook"] = {
+                key: hook_status.get(key)
+                for key in ("called", "ok", "hook", "reason", "error")
+                if key in hook_status
+            }
+            return denied
+        ctx.secrets = SecretsService(SkillSecretsBackend(env.data_root() / "files" / "secrets.json"), ctx.caps)
 
         def _call_tool() -> Any:
             with use_ctx(ctx):
@@ -1952,8 +2212,52 @@ class SkillManager:
         prev_env = os.environ.get("ADAOS_SKILL_ENV_PATH")
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
         prev_secrets = ctx.secrets
-        ctx.secrets = SecretsService(SkillSecretsBackend(env.data_root() / "files" / "secrets.json"), ctx.caps)
         execution_timeout = timeout or tool_spec.get("timeout_seconds")
+        admission = _admit_skill_tool_yjs_work(name, target_tool, payload)
+        if not bool(admission.get("allowed", True)):
+            event = _skill_quarantine_event(name=name, tool=target_tool, payload=payload, admission=admission)
+            _append_skill_quarantine_log(skill_memory_path, event)
+            hook_status = _invoke_skill_quarantine_hook(
+                ctx=ctx,
+                name=name,
+                tools=tools,
+                blocked_tool=target_tool,
+                skill_dir=skill_dir,
+                skill_env_path=skill_env_path,
+                skill_memory_path=skill_memory_path,
+                secrets_path=env.data_root() / "files" / "secrets.json",
+                extra_paths=extra_paths,
+                event=event,
+                admission=admission,
+            )
+            if bool(hook_status.get("called")):
+                _append_skill_quarantine_log(
+                    skill_memory_path,
+                    {
+                        "event": "skill.quarantine_hook",
+                        "schema": "adaos.skill_quarantine_hook.v1",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": time.time(),
+                        "skill": name,
+                        "blocked_tool": target_tool,
+                        "hook": hook_status.get("hook"),
+                        "ok": bool(hook_status.get("ok")),
+                        "error": hook_status.get("error"),
+                    },
+                )
+            denied = _skill_tool_yjs_denied_result(
+                name=name,
+                tool=target_tool,
+                payload=payload,
+                admission=admission,
+            )
+            denied["quarantine_hook"] = {
+                key: hook_status.get(key)
+                for key in ("called", "ok", "hook", "reason", "error")
+                if key in hook_status
+            }
+            return denied
+        ctx.secrets = SecretsService(SkillSecretsBackend(env.data_root() / "files" / "secrets.json"), ctx.caps)
 
         def _call_tool() -> Any:
             with use_ctx(ctx):
@@ -1988,6 +2292,7 @@ class SkillManager:
             else:
                 result = _call_tool()
         finally:
+            ctx.secrets = prev_secrets
             if previous is None:
                 ctx.skill_ctx.clear()
             else:

@@ -18,7 +18,7 @@ The goal is to define one coherent vocabulary so that:
 This is a target-state architecture document.
 Current implementation details remain documented in:
 
-- [Web IO](../io/webio.md)
+- the repository note `docs/io/webio.md`
 - [Operational Event Model](operational-event-model.md)
 - [Webspace Evolution Roadmap](webspace-evolution-roadmap.md)
 - [Device Access and Browsers](device-access-and-browsers.md)

@@ -242,7 +242,13 @@ Actions:
 Status: in progress. Wave 1 landed in skills: duplicate
 `webio.stream.snapshot.requested` bursts are now debounced in
 `infrastate_skill` and `infrascope_skill` before they can multiply into
-repeated full publishes.
+repeated full publishes. Wave 8 hotfix extends the same policy for
+`infrastate_skill`: noncritical streams are no longer eager-published on every
+snapshot refresh, active pressure skips heavy detail snapshot construction, and
+pressure-mode snapshot cache TTL expands to keep the hub responsive during a
+burst. This is not the primary safety mechanism: the deliberately heavy
+`infrastate` path remains a useful crash-test for kernel-level containment, and
+the owner-quarantine work is tracked under HMG-007.
 
 Evidence:
 
@@ -262,6 +268,14 @@ Actions:
 - [x] Add first-wave suppression for noncritical skill-triggered
   `webio.stream.*` fanout under active Yjs pressure; extend the same policy to
   degraded route and additional cosmetic receivers.
+- [x] Extend `infrastate_skill` suppression from `events.recent` to all
+  noncritical diagnostic/detail receivers while preserving `operations.active`
+  as the small eager status stream.
+- [x] Avoid constructing a full `infrastate` snapshot for detail stream requests
+  when Yjs/route guardrails are already active; record suppression counters
+  instead of hiding the dropped work.
+- [x] Increase `infrastate` snapshot cache TTL under active primary-doc pressure
+  so repeated browser refreshes and member snapshot flaps reuse bounded work.
 - [ ] Fix the `browsers_skill` `current_device_id` bug and ensure background
   snapshot tasks fail noisily but safely, without leaving orphan churn behind.
 - [ ] Review all skills subscribed to `subnet.member.snapshot.changed` and
@@ -272,7 +286,11 @@ Actions:
 
 Status: in progress. Wave 1, Wave 2, Wave 5, Wave 6, and Wave 7 guardrails were
 implemented with preserved evidence at the same logical boundary so
-suppression does not hide the original incoming pressure.
+suppression does not hide the original incoming pressure. Wave 9 adds the
+missing containment layer: write pressure can now promote from a local
+write-boundary decision to a short-lived owner quarantine, so the same skill
+cannot keep launching expensive tools while the primary Yjs document is already
+in `block` or sustained `throttle`.
 
 Principle:
 
@@ -300,6 +318,28 @@ Actions:
 - [x] Attach explicit SDK Yjs ownership metadata for sync and async skill
   wrappers so LLM-generated skills are attributable even when they use the
   supported SDK facade.
+- [x] Add owner-level Yjs pressure quarantine with TTL, visible deny counters,
+  and structured `skill_owner_quarantined` tool results instead of silent
+  fallback.
+- [x] Run skill tool admission through the Yjs owner guard before skill runtime
+  context is established, so an overloaded owner is stopped before it can build
+  another full snapshot payload.
+- [x] Notify quarantined skills through optional `onQuarantine` /
+  `on_quarantine` tools with `ttl_s`, `reason`, blocked tool, owner, webspace,
+  and quarantine metadata; this hook bypasses skill admission but remains
+  subject to Yjs write governance.
+- [x] Persist skill-local quarantine incidents to
+  `ADAOS_SKILL_MEMORY_PATH/logs/quarantine.jsonl` so later LLM-assisted skill
+  repair can recover the exact pressure event from the skill context.
+- [x] Publish active Yjs owner quarantines into the primary doc service branch
+  `data.yjs_qrnt` with `items`, `by_owner`, and `by_skill`, allowing web UI
+  consumers to disable affected apps/widgets explicitly.
+- [x] Run projection admission through the same owner guard before payload
+  compaction and primary-doc mutation, preserving evidence while skipping
+  avoidable work.
+- [x] Surface active quarantine state in reliability and `adaos node
+  reliability` output (`quarantine=active`, reason, trigger, retry-after, tool,
+  path).
 - [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,
   rebuild, route, and Yjs stages.
   First wave landed for member snapshot rebuild pressure and incident summary;
@@ -325,6 +365,9 @@ Roadmap:
 
 - [ ] Observe and count direct skill-owned Yjs writes with owner, source,
   channel, root, path, and update size.
+- [x] Ensure `infrastate_skill` projections preserve skill identity when calling
+  `ProjectionService`, preventing background refresh tasks from being
+  mis-attributed as `_by_owner/core`.
 - [ ] Emit `deprecated_direct_skill_yjs_write` warnings for skill paths that
   bypass `ProjectionService`.
 - [ ] Apply stricter budgets to direct skill writes than to governed projection
@@ -335,6 +378,12 @@ Roadmap:
   projection targets.
 - [ ] Make direct skill-owned primary-doc writes deny-by-default outside
   declared capabilities.
+- [ ] Teach `web_desktop` and the client shell to consume `data.yjs_qrnt` and
+  render quarantined apps/widgets as disabled with a visible reason and
+  retry-after, rather than silently hiding or retry-spamming them.
+- [ ] Add app/widget manifest metadata mapping UI entries to owning skill IDs so
+  `data.yjs_qrnt.by_skill[skill_id]` can be applied consistently across desktop
+  icons, widgets, modals, and details panes.
 - [ ] Add migration tooling/reporting for skills that still depend on direct
   Yjs access.
 - [ ] Update LLM skill templates and prompts so generated skills use
