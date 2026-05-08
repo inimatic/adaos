@@ -1835,6 +1835,7 @@ async def reset_live_webspace_room(
     webspace_id: str,
     *,
     close_reason: str = "webspace_reload",
+    persist_ystore_snapshot: bool = True,
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or "default"
     _cancel_idle_room_reset(key)
@@ -1905,7 +1906,7 @@ async def reset_live_webspace_room(
                 eviction = await evict_ystore_for_webspace(
                     key,
                     store=ystore,
-                    persist_snapshot=True,
+                    persist_snapshot=bool(persist_ystore_snapshot),
                     compact_runtime=True,
                     backup_kind=f"room_reset:{close_reason}",
                 )
@@ -1937,7 +1938,7 @@ async def reset_live_webspace_room(
         try:
             eviction = await evict_ystore_for_webspace(
                 key,
-                persist_snapshot=True,
+                persist_snapshot=bool(persist_ystore_snapshot),
                 compact_runtime=True,
                 backup_kind=f"room_reset:{close_reason}",
             )
@@ -1967,6 +1968,7 @@ async def reset_live_webspace_room(
         "closed_webrtc_peers": closed_webrtc_peers,
         "closed_connections": closed_connections,
         "room_dropped": room is not None,
+        "persist_ystore_snapshot": bool(persist_ystore_snapshot),
         "room_stopped": room_stopped,
         "ystore_stopped": ystore_stopped,
         "ystore_evicted": ystore_evicted,

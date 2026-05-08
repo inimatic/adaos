@@ -427,6 +427,7 @@ async def async_get_ydoc(
     *,
     read_only: bool = False,
     prefer_live_room: bool = False,
+    publish_live_room: bool = True,
     timings: dict[str, float] | None = None,
     timing_prefix: str = "",
     load_mark_roots: list[str] | tuple[str, ...] | None = None,
@@ -559,16 +560,19 @@ async def async_get_ydoc(
                     except Exception as exc:
                         _record_doc_timing(timings, "ystore_write_update", stage_started, prefix=timing_prefix)
                         _log.warning("async_get_ydoc write_update failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
-                    stage_started = time.perf_counter()
-                    _schedule_room_update(
-                        webspace_id,
-                        update,
-                        already_persisted=persisted,
-                        source="async_get_ydoc",
-                        owner=owner,
-                        channel="yjs.doc.async",
-                    )
-                    _record_doc_timing(timings, "room_update", stage_started, prefix=timing_prefix)
+                    if publish_live_room:
+                        stage_started = time.perf_counter()
+                        _schedule_room_update(
+                            webspace_id,
+                            update,
+                            already_persisted=persisted,
+                            source="async_get_ydoc",
+                            owner=owner,
+                            channel="yjs.doc.async",
+                        )
+                        _record_doc_timing(timings, "room_update", stage_started, prefix=timing_prefix)
+                    else:
+                        _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
             else:
                 _set_doc_timing(timings, "encode_diff", 0.0, prefix=timing_prefix)
                 _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
