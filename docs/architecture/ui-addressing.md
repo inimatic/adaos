@@ -347,6 +347,9 @@ Status note:
   `view:` refs without introducing renderer-specific addressing
 - the Taiga-backed `metric_chart` renderer consumes the same `y:` and `view:`
   refs without introducing chart-specific addressing
+- the widget host now resolves Taiga-backed semantic renderers through lazy
+  registry entries, while keeping the same typed binding refs on the manifest
+  side
 - broader cross-document harmonization is still in progress
 - the demo metrics table and chart now share the same `view:` selection ref on
   both semantic and compatibility paths
