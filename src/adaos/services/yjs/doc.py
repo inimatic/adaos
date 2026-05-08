@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -179,6 +180,19 @@ def _schedule_room_update(
     def _apply() -> None:
         try:
             if already_persisted:
+                blocked, snapshot = _backend_update_breaks_effective_contract(room, update)
+                if blocked:
+                    _log.warning(
+                        "blocked backend YRoom update that would break effective contract webspace=%s bytes=%s source=%s owner=%s channel=%s snapshot=%s",
+                        webspace_id,
+                        len(update or b""),
+                        source,
+                        owner,
+                        channel,
+                        json.dumps(snapshot, ensure_ascii=True, sort_keys=True)[:1000],
+                    )
+                    return
+            if already_persisted:
                 mark_backend_room_update(
                     webspace_id,
                     update,
@@ -223,6 +237,36 @@ def _encode_diff(ydoc: Y.YDoc, before: bytes | None) -> bytes | None:
         return Y.encode_state_as_update(ydoc)
     except Exception:
         return None
+
+
+def _backend_update_breaks_effective_contract(room: Any, update: bytes) -> tuple[bool, dict[str, Any]]:
+    """
+    Preflight a detached backend diff before it is applied to a live shared room.
+
+    A detached writer may be working from a stale/partial YStore state. If its
+    diff would turn an already materialized/effective room into a non-ready one,
+    applying it to the live room makes browsers briefly lose required state
+    before the room repair loop can publish a corrective update. Blocking that
+    destructive diff at the live-room boundary keeps the browser doc stable
+    while still allowing normal narrow backend updates through.
+    """
+    if not update:
+        return False, {}
+    try:
+        from adaos.services.yjs.gateway_ws import _room_effective_branch_snapshot  # pylint: disable=import-outside-toplevel
+
+        before = _room_effective_branch_snapshot(room.ydoc)
+        if not bool(before.get("ready")):
+            return False, before
+        probe = Y.YDoc()
+        current = Y.encode_state_as_update(room.ydoc)
+        if current:
+            Y.apply_update(probe, current)
+        Y.apply_update(probe, update)
+        after = _room_effective_branch_snapshot(probe)
+        return not bool(after.get("ready")), after
+    except Exception as exc:
+        return False, {"ready": True, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _state_changed(
