@@ -436,6 +436,9 @@ Status note:
   earlier temporary widget remains available as a compatibility renderer
 - the first Taiga-specific renderer slice is now live for `collection_grid`
 - the second Taiga-specific renderer slice is now live for `metric_chart`
+- the browser widget host now resolves semantic renderers through a dedicated
+  registry service with cached lazy `import()` loading for Taiga-backed
+  renderer entries
 - the browser client baseline now builds on Angular 19 with Taiga UI v5
 - production client builds now use a modern browser baseline compatible with
   Angular 19 optimization
@@ -500,7 +503,7 @@ Recommended identifiers:
 
 ### 4. Renderer Registry
 
-- [ ] add a semantic renderer registry with lazy `import()` support
+- [x] add a semantic renderer registry with lazy `import()` support
 - [x] bridge semantic view kinds to current browser widget infrastructure
 - [x] add the first Taiga-backed renderer entries without forcing a same-day
   rewrite of the whole browser client
