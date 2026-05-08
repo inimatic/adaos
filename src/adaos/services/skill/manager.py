@@ -151,7 +151,12 @@ def _skill_quarantine_event(
 
 def _append_skill_quarantine_log(skill_memory_path: Path, event: Mapping[str, Any]) -> None:
     try:
-        log_dir = Path(skill_memory_path) / "logs"
+        base = Path(skill_memory_path)
+        if base.name == "skill_env.json" and base.parent.name == "db":
+            base = base.parent.parent
+        elif base.suffix:
+            base = base.parent
+        log_dir = base / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         path = log_dir / "quarantine.jsonl"
         payload = dict(event)

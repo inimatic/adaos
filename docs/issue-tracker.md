@@ -830,6 +830,9 @@ Evidence:
 - Supervisor memory telemetry showed RSS growth around 1.8GB in the active runtime and growth slope above 800MB/min.
 - `yjs_load_mark.jsonl` grew to hundreds of MB; recent load-mark rows showed both `_by_owner/skill_infrastate_skill` and `_by_owner/gateway_ws` carrying large sustained byte rates.
 - This pattern indicates backend-originated detached Yjs diffs are persisted once by `async_get_ydoc` and then persisted again by the live room while being fanned out to browsers.
+- 2026-05-08 regression pass: memory still climbed under destructive `infrastate` load even though tool-call quarantine fired. Hub logs showed `skill:infrastate_skill` quarantined via `infrastate_skill:get_snapshot`, while slow `webio.stream.snapshot.requested` subscription handlers kept running outside `SkillManager`.
+- Browser symptom was only `Action failed: skill_owner_quarantined`; the response already carried owner/tool/reason, but the client collapsed it to the error code. Skill-local quarantine logging also failed when `ADAOS_SKILL_MEMORY_PATH` pointed at `data/db/skill_env.json` instead of a directory.
+- Scenario shortcut icons were present in the effective catalog as node-attributed scenario apps, but the client-side app filter treated every scenario app with a real `node_id` as remote/non-desktop and hid it.
 
 Working hypothesis:
 
@@ -838,6 +841,7 @@ Working hypothesis:
 - Under two remote browsers and active infrastate streams, duplicate YStore writes plus unbounded load-mark history amplify memory, disk, and diagnostic pressure.
 - A second amplifier was `/api/node/infrastate/snapshot`: root-routed browser fallback probes called `get_snapshot`, which projected the full diagnostic snapshot into Yjs and returned multi-megabyte payloads.
 - A third amplifier was supervisor policy profiling: the memory detector could restart the runtime into `sampled_profile` during the first browser attach, causing recovery/degraded oscillation even after transport was healthy.
+- A fourth amplifier is any skill `@subscribe(...)` path that writes to Yjs without passing through `SkillManager.run_tool`; owner quarantine must gate skill event handlers as well as public tools.
 
 Actions:
 
@@ -856,6 +860,13 @@ Actions:
 - [x] Confirm memory no longer grows toward the previous 3GB supervisor restart pattern during the first acceptance window.
 - [x] Run a longer 10-15 minute Linux two-browser soak and confirm RSS reaches a bounded plateau.
 - [x] Confirm load-mark no longer reports simultaneous sustained high byte rates for the same backend diff under both `skill_infrastate_skill` and `gateway_ws`.
+- [x] Add Yjs owner-guard admission to SDK skill subscription wrappers before executing `@subscribe` handlers.
+- [x] Make browser skill-action quarantine warnings include owner/tool/reason/retry instead of only `skill_owner_quarantined`.
+- [x] Fix skill quarantine JSONL logging when the skill memory path resolves to `data/db/skill_env.json`.
+- [x] Keep scenario shortcut apps visible on the desktop even when the effective catalog tags them with the local hub `node_id`.
+- [x] Hotpatch the Linux hub active slot B with backend subscription/logging changes and restart the runtime under supervisor.
+- [ ] Rebuild/redeploy the client bundle so quarantine diagnostics and scenario shortcut filtering changes are visible in the browser.
+- [ ] Run a destructive `infrastate` browser-load soak after the client deploy and confirm skill subscription quarantine stops the memory climb.
 - [ ] Design safe off-hot-path YStore replay compaction for live browser load; direct live backup can exceed a 60s request window.
 - [ ] Tune YStore replay defaults or background compaction so `sync_runtime` leaves `pressure` after browser warm-up.
 

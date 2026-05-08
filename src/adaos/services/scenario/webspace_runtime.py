@@ -2887,12 +2887,16 @@ class WebspaceScenarioRuntime:
             app_id = f"scenario:{sid}"
             extra_apps.append(
                 _apply_node_display_to_entry(
-                    {
-                    "id": app_id,
-                    "title": title,
-                    "icon": "apps-outline",
-                    "scenario_id": sid,
-                    },
+                    _mark_entry(
+                        {
+                            "id": app_id,
+                            "title": title,
+                            "icon": "apps-outline",
+                            "scenario_id": sid,
+                        },
+                        source=f"scenario:{sid}",
+                        dev=False,
+                    ),
                     local_display,
                     node_id=_local_node_id(),
                 )

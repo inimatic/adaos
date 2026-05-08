@@ -1,9 +1,10 @@
 from __future__ import annotations
-from typing import Callable, Dict, List, Tuple, Optional
+from typing import Any, Callable, Dict, List, Tuple, Optional
 import asyncio
 import inspect
 import logging
 import os
+import time
 from pathlib import Path
 from adaos.sdk.data.bus import on, emit
 from adaos.sdk.data.context import set_current_skill, clear_current_skill
@@ -23,6 +24,8 @@ _registered: bool = False  # внутренняя защита от двойно
 _SUBSCRIPTIONS = subscriptions
 _TOOLS = tools_registry
 _LOG = logging.getLogger("adaos.sdk.subscriptions")
+_SUBSCRIPTION_DENY_LOG_AT: Dict[str, float] = {}
+_SUBSCRIPTION_DENY_LOG_INTERVAL_S = 5.0
 
 
 def _topic_matches_any(topic: str, patterns: str) -> bool:
@@ -75,8 +78,20 @@ def _local_node_id() -> str:
     return ""
 
 
-def _target_node_id_from_event(evt: object) -> str:
+def _event_payload_dict(evt: object) -> dict[str, Any]:
+    if isinstance(evt, dict):
+        nested = evt.get("payload") if "payload" in evt and "type" in evt else None
+        if isinstance(nested, dict):
+            return nested
+        return evt
     payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _target_node_id_from_event(evt: object) -> str:
+    payload = _event_payload_dict(evt)
     if not isinstance(payload, dict):
         return ""
     meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
@@ -94,6 +109,63 @@ def _skill_event_targets_this_node(evt: object) -> bool:
     if not target_node_id:
         return True
     return target_node_id == _local_node_id()
+
+
+def _webspace_id_from_event(evt: object) -> str:
+    payload = _event_payload_dict(evt)
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    return str(
+        payload.get("webspace_id")
+        or payload.get("workspace_id")
+        or meta.get("webspace_id")
+        or meta.get("workspace_id")
+        or ""
+    ).strip()
+
+
+def _admit_skill_subscription_yjs_work(skill_name: str | None, topic: str, evt: object) -> dict[str, Any]:
+    if not skill_name:
+        return {"allowed": True, "governed": False, "reason": "not_a_skill_subscription"}
+    try:
+        from adaos.services.yjs.owner_guard import admit_owner_work, skill_owner
+
+        return admit_owner_work(
+            webspace_id=_webspace_id_from_event(evt) or None,
+            owner=skill_owner(skill_name),
+            root_names=["data"],
+            path=f"event/{topic}",
+            source="sdk.subscription",
+            channel="skill.subscription",
+            work_kind="skill_subscription",
+            tool=f"{skill_name}:subscribe:{topic}",
+        )
+    except Exception:
+        _LOG.debug(
+            "failed to apply YJS owner guard for skill subscription skill=%s topic=%s",
+            skill_name,
+            topic,
+            exc_info=True,
+        )
+        return {"allowed": True, "governed": False, "reason": "owner_guard_unavailable"}
+
+
+def _log_subscription_denied(skill_name: str, topic: str, admission: dict[str, Any]) -> None:
+    key = f"{admission.get('webspace_id') or '-'}:{skill_name}:{topic}"
+    now = time.monotonic()
+    last = float(_SUBSCRIPTION_DENY_LOG_AT.get(key) or 0.0)
+    if now - last < _SUBSCRIPTION_DENY_LOG_INTERVAL_S:
+        return
+    _SUBSCRIPTION_DENY_LOG_AT[key] = now
+    quarantine = admission.get("quarantine") if isinstance(admission.get("quarantine"), dict) else {}
+    _LOG.warning(
+        "skill subscription skipped by YJS owner guard skill=%s topic=%s owner=%s reason=%s retry_after_s=%.1f trigger=%s",
+        skill_name,
+        topic,
+        admission.get("owner") or f"skill:{skill_name}",
+        admission.get("reason") or "owner_quarantined",
+        float(admission.get("retry_after_s") or 0.0),
+        quarantine.get("trigger") or admission.get("policy_state") or "-",
+    )
 
 
 def subscribe(topic: str):
@@ -135,6 +207,11 @@ async def register_subscriptions():
             async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic):
                 if _skill and not _skill_event_targets_this_node(evt):
                     return None
+                admission = _admit_skill_subscription_yjs_work(_skill, _topic, evt)
+                if not admission.get("allowed", True):
+                    if _skill:
+                        _log_subscription_denied(_skill, _topic, admission)
+                    return None
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
                     payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
@@ -151,6 +228,11 @@ async def register_subscriptions():
 
             async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic):
                 if _skill and not _skill_event_targets_this_node(evt):
+                    return None
+                admission = _admit_skill_subscription_yjs_work(_skill, _topic, evt)
+                if not admission.get("allowed", True):
+                    if _skill:
+                        _log_subscription_denied(_skill, _topic, admission)
                     return None
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
