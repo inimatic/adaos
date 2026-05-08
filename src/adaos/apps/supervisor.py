@@ -208,6 +208,16 @@ def _memory_auto_profile_min_uptime_sec() -> float:
         return 300.0
 
 
+def _memory_auto_profile_browser_live_ttl_sec() -> float:
+    try:
+        return max(
+            5.0,
+            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BROWSER_LIVE_TTL_SEC") or "45").strip()),
+        )
+    except Exception:
+        return 45.0
+
+
 def _memory_auto_profile_circuit_window_sec() -> float:
     try:
         return max(300.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_WINDOW_SEC") or "1800").strip()))
@@ -2023,7 +2033,32 @@ class SupervisorManager:
         *,
         runtime: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None]:
+        browser_total = 0
+        browser_latest_age: float | None = None
+        now = time.time()
+        try:
+            from adaos.services.access_links import browser_snapshot
+
+            ttl_sec = _memory_auto_profile_browser_live_ttl_sec()
+            for entry in browser_snapshot():
+                if not isinstance(entry, dict):
+                    continue
+                last_seen_at = float(entry.get("last_seen_at") or 0.0)
+                if last_seen_at <= 0.0:
+                    continue
+                age = max(0.0, now - last_seen_at)
+                state = str(entry.get("connection_state") or "").strip().lower()
+                online = bool(entry.get("online"))
+                if age <= ttl_sec and (online or state in {"connected", "open", "ready"}):
+                    browser_total += 1
+                    browser_latest_age = age if browser_latest_age is None else min(browser_latest_age, age)
+        except Exception:
+            browser_total = 0
+            browser_latest_age = None
         runtime_payload = runtime if isinstance(runtime, dict) else self._runtime_reliability_payload(timeout=1.0)
+        if browser_total > 0:
+            age_text = "-" if browser_latest_age is None else f"{browser_latest_age:.1f}s"
+            return True, f"browser_sessions_connected:{browser_total}:last_seen={age_text}"
         if not runtime_payload:
             return False, None
         node = runtime_payload.get("node") if isinstance(runtime_payload.get("node"), dict) else {}
@@ -2166,7 +2201,34 @@ class SupervisorManager:
         if started_at <= 0:
             return None
         current_time = time.time() if now is None else float(now)
-        elapsed_sec = max(0.0, current_time - started_at)
+        window_started_at = float(summary.get("profile_window_started_at") or 0.0)
+        if window_started_at <= 0.0:
+            runtime_snapshot = self.status()
+            if not bool(runtime_snapshot.get("runtime_api_ready")):
+                return None
+            window_started_at = current_time
+            summary["profile_window_started_at"] = window_started_at
+            summary["profile_window_started_reason"] = "runtime_api_ready"
+            updated_window = summary.get("operation_window") if isinstance(summary.get("operation_window"), dict) else {}
+            updated_window = dict(updated_window)
+            updated_window["profile_window_started_at"] = window_started_at
+            updated_window["profile_window_started_reason"] = "runtime_api_ready"
+            summary["operation_window"] = updated_window
+            self._upsert_memory_session_summary(summary)
+            self._append_memory_operation(
+                session_id=session_id,
+                event="slot_started",
+                profile_mode=profile_mode,
+                details={
+                    "action": "profile_window_started",
+                    "control_mode": IMPLEMENTED_PROFILE_CONTROL_MODE,
+                    "reason": "runtime_api_ready",
+                    "runtime_instance_id": self._managed_runtime_instance_id,
+                    "transition_role": self._managed_transition_role,
+                },
+            )
+            return None
+        elapsed_sec = max(0.0, current_time - window_started_at)
         if elapsed_sec < max_runtime_sec:
             return None
         return {
@@ -3778,6 +3840,7 @@ class SupervisorManager:
             "suspicion_growth_threshold_bytes": _memory_suspicion_growth_threshold_bytes(),
             "suspicion_slope_threshold_bytes_per_min": _memory_suspicion_slope_threshold_bytes_per_min(),
             "auto_profile_min_uptime_sec": _memory_auto_profile_min_uptime_sec(),
+            "auto_profile_browser_live_ttl_sec": _memory_auto_profile_browser_live_ttl_sec(),
             "auto_profile_last_block_reason": self._memory_auto_profile_last_block_reason,
             "auto_profile_last_block_at": self._memory_auto_profile_last_block_at,
             "critical_available_percent_threshold": _memory_critical_available_percent_threshold(),
