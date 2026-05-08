@@ -2848,12 +2848,52 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
             )
             await asyncio.sleep(min(poll_s, remaining_for_wait))
     except asyncio.TimeoutError:
+        room = getattr(y_server, "rooms", {}).get(webspace)
+        if room is not None:
+            _ylog.info(
+                "yws room cache hit at final timeout webspace=%s dev=%s waited_s=%.3f",
+                webspace,
+                dev_id,
+                time.perf_counter() - started,
+            )
+            return room
         if wait_task.done():
             try:
                 room = wait_task.result()
             except Exception:
                 raise
             return room
+        wait_task.cancel()
+        try:
+            await wait_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            _ylog.warning(
+                "yws room bootstrap task failed after timeout webspace=%s dev=%s",
+                webspace,
+                dev_id,
+                exc_info=True,
+            )
+        room = getattr(y_server, "rooms", {}).get(webspace)
+        if room is not None:
+            _ylog.info(
+                "yws room cache hit after cancelling timeout task webspace=%s dev=%s waited_s=%.3f",
+                webspace,
+                dev_id,
+                time.perf_counter() - started,
+            )
+            return room
+        lock = _room_locks.get(webspace)
+        if lock is not None and not lock.locked():
+            _room_locks.pop(webspace, None)
+        elif lock is not None:
+            _ylog.warning(
+                "yws room lock remains locked after bootstrap timeout webspace=%s dev=%s waited_s=%.3f",
+                webspace,
+                dev_id,
+                time.perf_counter() - started,
+            )
         raise
 
 
