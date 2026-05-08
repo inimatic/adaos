@@ -12,6 +12,8 @@ import logging
 import os
 import re
 import secrets
+import subprocess
+import sys
 import time
 
 import y_py as Y
@@ -1020,6 +1022,42 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _mapping_get(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key, default)
+    getter = getattr(value, "get", None)
+    if callable(getter):
+        try:
+            result = getter(key)
+            return default if result is None else result
+        except Exception:
+            return default
+    return default
+
+
+def _coerce_live_branch_subset(value: Any, keys: tuple[str, ...]) -> Dict[str, Any]:
+    """
+    Read only the live YMap branches the resolver actually needs.
+
+    Full ``dict(y_map.items())`` materialization is expensive on large Yjs
+    maps and used to dominate scenario-switch allocation profiles. The
+    resolver only needs a few preservation inputs from live state, so keep this
+    intentionally shallow and explicit.
+    """
+    out: Dict[str, Any] = {}
+    for key in keys:
+        item = _mapping_get(value, key)
+        if item is None:
+            continue
+        if key in {"modals", "installed", "pageSchema", "routes"}:
+            out[key] = _coerce_dict(item)
+        elif isinstance(item, (list, tuple)):
+            out[key] = list(item)
+        else:
+            out[key] = item
+    return out
+
+
 def _normalize_webui_load_hint(value: Any) -> Dict[str, str]:
     if not isinstance(value, Mapping):
         return {}
@@ -1339,17 +1377,16 @@ def _read_node_scoped_scenario_entry(
     *,
     node_id: str | None = None,
 ) -> Dict[str, Any]:
-    root = _coerce_dict(scenarios_root or {})
     target_node_id = str(node_id or "").strip() or _local_node_id()
 
-    local_bucket = _coerce_dict(root.get(target_node_id) or {})
-    local_entry = _coerce_dict(local_bucket.get(scenario_id) or {})
+    local_bucket = _mapping_get(scenarios_root or {}, target_node_id) or {}
+    local_entry = _coerce_dict(_mapping_get(local_bucket, scenario_id) or {})
     if local_entry:
         return local_entry
 
-    for maybe_bucket in root.values():
-        bucket = _coerce_dict(maybe_bucket or {})
-        entry = _coerce_dict(bucket.get(scenario_id) or {})
+    root_items = _mapping_items(scenarios_root or {}) or []
+    for _bucket_key, maybe_bucket in root_items:
+        entry = _coerce_dict(_mapping_get(maybe_bucket or {}, scenario_id) or {})
         if entry:
             return entry
     return {}
@@ -1740,6 +1777,35 @@ def _pointer_first_scenario_switch_enabled() -> bool:
     return _env_flag_enabled("ADAOS_WEBSPACE_POINTER_SCENARIO_SWITCH")
 
 
+def _preserve_live_state_on_rebuild_enabled() -> bool:
+    return _env_flag_enabled("ADAOS_WEBSPACE_REBUILD_PRESERVE_LIVE_STATE")
+
+
+def _publish_live_room_during_rebuild_enabled() -> bool:
+    return _env_flag_enabled("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES")
+
+
+def _refresh_live_room_after_rebuild_enabled() -> bool:
+    return _env_flag_default_enabled("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM")
+
+
+def _fresh_doc_on_scenario_switch_enabled() -> bool:
+    return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC")
+
+
+def _scenario_switch_subprocess_enabled() -> bool:
+    return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS")
+
+
+def _scenario_switch_subprocess_timeout_s() -> float:
+    raw = os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS_TIMEOUT_S")
+    try:
+        value = float(str(raw or "").strip())
+    except Exception:
+        value = 180.0
+    return max(30.0, value)
+
+
 def _scenario_switch_mode() -> str:
     if _pointer_first_scenario_switch_enabled():
         return "pointer_first"
@@ -1760,15 +1826,15 @@ def _read_legacy_materialized_scenario_sections(
     registry_map: Any,
     scenario_id: str,
 ) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
-    scenarios_ui = _coerce_dict(ui_map.get("scenarios") or {})
+    scenarios_ui = _mapping_get(ui_map, "scenarios") or {}
     scenario_ui_entry = _read_node_scoped_scenario_entry(scenarios_ui, scenario_id)
     scenario_app_ui = _coerce_dict(scenario_ui_entry.get("application") or {})
 
-    scenarios_data = _coerce_dict(data_map.get("scenarios") or {})
+    scenarios_data = _mapping_get(data_map, "scenarios") or {}
     scenario_entry = _read_node_scoped_scenario_entry(scenarios_data, scenario_id)
     base_catalog = _coerce_dict(scenario_entry.get("catalog") or {})
 
-    scenario_registry_map = _coerce_dict(registry_map.get("scenarios") or {})
+    scenario_registry_map = _mapping_get(registry_map, "scenarios") or {}
     registry_entry = _read_node_scoped_scenario_entry(scenario_registry_map, scenario_id)
     return scenario_app_ui, base_catalog, registry_entry
 
@@ -2748,13 +2814,13 @@ class WebspaceScenarioRuntime:
         registry_map = ydoc.get_map("registry")
 
         scenario_id = str(ui_map.get("current_scenario") or "web_desktop").strip() or "web_desktop"
-        scenarios_ui = _coerce_dict(ui_map.get("scenarios") or {})
-        scenario_ui_entry = _coerce_dict(scenarios_ui.get(scenario_id) or {})
+        scenarios_ui = _mapping_get(ui_map, "scenarios") or {}
+        scenario_ui_entry = _read_node_scoped_scenario_entry(scenarios_ui, scenario_id)
         scenario_ui_application = _coerce_dict(scenario_ui_entry.get("application") or {})
-        scenario_registry_map = _coerce_dict(registry_map.get("scenarios") or {})
-        scenario_registry_entry = _coerce_dict(scenario_registry_map.get(scenario_id) or {})
-        scenario_data_map = _coerce_dict(data_map.get("scenarios") or {})
-        scenario_data_entry = _coerce_dict(scenario_data_map.get(scenario_id) or {})
+        scenario_registry_map = _mapping_get(registry_map, "scenarios") or {}
+        scenario_registry_entry = _read_node_scoped_scenario_entry(scenario_registry_map, scenario_id)
+        scenario_data_map = _mapping_get(data_map, "scenarios") or {}
+        scenario_data_entry = _read_node_scoped_scenario_entry(scenario_data_map, scenario_id)
         scenario_catalog = _coerce_dict(scenario_data_entry.get("catalog") or {})
 
         mode = "mixed"
@@ -2799,6 +2865,35 @@ class WebspaceScenarioRuntime:
         metadata["scenario_source"] = scenario_source
         metadata["legacy_scenario_fallback"] = legacy_fallback
 
+        preserve_live_state = _preserve_live_state_on_rebuild_enabled()
+        if preserve_live_state:
+            live_application = _coerce_live_branch_subset(
+                _mapping_get(ui_map, "application") or {},
+                ("modals",),
+            )
+            live_catalog = _coerce_live_branch_subset(
+                _mapping_get(data_map, "catalog") or {},
+                ("apps", "widgets"),
+            )
+            live_registry = _coerce_live_branch_subset(
+                _mapping_get(registry_map, "merged") or {},
+                ("modals", "widgets"),
+            )
+            live_desktop = _coerce_live_branch_subset(
+                _mapping_get(data_map, "desktop") or {},
+                ("installed", "topbar", "pageSchema", "pinnedWidgets", "iconOrder", "widgetOrder", "hiddenSections"),
+            )
+            live_routing = _coerce_live_branch_subset(
+                _mapping_get(data_map, "routing") or {},
+                ("routes",),
+            )
+        else:
+            live_application = {}
+            live_catalog = {}
+            live_registry = {}
+            live_desktop = {}
+            live_routing = {}
+
         return WebspaceResolverInputs(
             webspace_id=webspace_id,
             scenario_id=str(scenario_id),
@@ -2809,11 +2904,11 @@ class WebspaceScenarioRuntime:
             scenario_registry=registry_entry,
             overlay_snapshot=overlay_snapshot,
             live_state={
-                "application": _coerce_dict(ui_map.get("application") or {}),
-                "catalog": _coerce_dict(data_map.get("catalog") or {}),
-                "registry": _coerce_dict(registry_map.get("merged") or {}),
-                "desktop": _coerce_dict(data_map.get("desktop") or {}),
-                "routing": _coerce_dict(data_map.get("routing") or {}),
+                "application": live_application,
+                "catalog": live_catalog,
+                "registry": live_registry,
+                "desktop": live_desktop,
+                "routing": live_routing,
             },
             compatibility_cache_presence={
                 "scenario_ui_application": bool(scenario_ui_application),
@@ -3506,6 +3601,8 @@ class WebspaceScenarioRuntime:
         webspace_id: str,
         *,
         request_id: str | None = None,
+        publish_live_room: bool = True,
+        initial_scenario_id: str | None = None,
     ) -> WebUIRegistryEntry:
         """
         Async counterpart of :meth:`compute_registry_for_webspace` for use
@@ -3518,7 +3615,15 @@ class WebspaceScenarioRuntime:
             async with _open_rebuild_ydoc_session(
                 webspace_id,
                 timings=ydoc_timings,
+                publish_live_room=publish_live_room,
             ) as ydoc:
+                seed_scenario = str(initial_scenario_id or "").strip()
+                if seed_scenario:
+                    stage_started = time.perf_counter()
+                    ui_map = ydoc.get_map("ui")
+                    with ydoc.begin_transaction() as txn:
+                        _set_map_value_if_changed(ui_map, txn, "current_scenario", seed_scenario)
+                    _record_timing(ydoc_timings, "seed_initial_scenario", stage_started)
                 stage_started = time.perf_counter()
                 entry = self._rebuild_in_doc(
                     ydoc,
@@ -4020,6 +4125,7 @@ def _open_rebuild_ydoc_session(
     webspace_id: str,
     *,
     timings: dict[str, float] | None = None,
+    publish_live_room: bool = True,
 ):
     """
     Open a writable YDoc session for semantic rebuild.
@@ -4031,7 +4137,8 @@ def _open_rebuild_ydoc_session(
     try:
         return async_get_ydoc(
             webspace_id,
-            prefer_live_room=True,
+            prefer_live_room=bool(publish_live_room),
+            publish_live_room=bool(publish_live_room),
             timings=timings,
             load_mark_roots=["ui", "data", "registry"],
             governed=True,
@@ -4800,6 +4907,42 @@ async def rebuild_webspace_from_sources(
 
     reset_room_result: dict[str, Any] | None = None
     ystore_reset = False
+    fresh_doc_rebuild = False
+
+    if requested_action == "scenario_switch_rebuild" and _fresh_doc_on_scenario_switch_enabled():
+        if not target_scenario:
+            raise ValueError("scenario_id is required for scenario switch rebuild")
+
+        fresh_doc_rebuild = True
+        stage_started = time.perf_counter()
+        try:
+            from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
+            from adaos.services.yjs.store import reset_ystore_for_webspace  # pylint: disable=import-outside-toplevel
+
+            try:
+                reset_room_result = await reset_live_webspace_room(
+                    webspace_id,
+                    close_reason="scenario_switch_fresh_doc",
+                )
+            except Exception:
+                pass
+            try:
+                reset_ystore_for_webspace(webspace_id)
+                ystore_reset = True
+            except Exception:
+                pass
+        except Exception:
+            _log.warning(
+                "failed to reset runtime state for fresh scenario switch webspace=%s scenario=%s",
+                webspace_id,
+                target_scenario,
+                exc_info=True,
+            )
+        _record_timing(timings_ms, "fresh_doc_reset_runtime_state", stage_started)
+
+        stage_started = time.perf_counter()
+        await _sync_webspace_listing()
+        _record_timing(timings_ms, "fresh_doc_sync_listing", stage_started)
 
     if reseed_from_scenario:
         if not target_scenario:
@@ -4878,12 +5021,22 @@ async def rebuild_webspace_from_sources(
     )
     _record_timing(timings_ms, "projection_refresh", stage_started)
     runtime = WebspaceScenarioRuntime(ctx)
+    publish_live_room = _publish_live_room_during_rebuild_enabled()
     try:
         stage_started = time.perf_counter()
         if str(request_id or "").strip():
-            entry = await runtime.rebuild_webspace_async(webspace_id, request_id=request_id)
+            entry = await runtime.rebuild_webspace_async(
+                webspace_id,
+                request_id=request_id,
+                publish_live_room=publish_live_room,
+                initial_scenario_id=target_scenario if fresh_doc_rebuild else None,
+            )
         else:
-            entry = await runtime.rebuild_webspace_async(webspace_id)
+            entry = await runtime.rebuild_webspace_async(
+                webspace_id,
+                publish_live_room=publish_live_room,
+                initial_scenario_id=target_scenario if fresh_doc_rebuild else None,
+            )
         _record_timing(timings_ms, "semantic_rebuild", stage_started)
         stage_started = time.perf_counter()
         _trim_allocator_after_yjs_rebuild()
@@ -5009,6 +5162,40 @@ async def rebuild_webspace_from_sources(
     ydoc_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None))
     resolver_debug = dict(getattr(runtime, "_last_resolver_debug", None) or {})
     apply_summary = dict(getattr(runtime, "_last_apply_summary", None) or {})
+    live_room_refresh_result: dict[str, Any] | None = None
+
+    should_refresh_live_room = (
+        not publish_live_room
+        and _refresh_live_room_after_rebuild_enabled()
+        and requested_action
+        in {
+            "scenario_switch_rebuild",
+            "reload",
+            "reset",
+            "restore",
+        }
+    )
+    if should_refresh_live_room:
+        stage_started = time.perf_counter()
+        try:
+            from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
+
+            live_room_refresh_result = await reset_live_webspace_room(
+                webspace_id,
+                close_reason=f"semantic_rebuild:{requested_action}",
+            )
+        except Exception as exc:
+            live_room_refresh_result = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            _log.warning(
+                "failed to refresh live YRoom after detached semantic rebuild webspace=%s action=%s",
+                webspace_id,
+                requested_action,
+                exc_info=True,
+            )
+        _record_timing(timings_ms, "live_room_refresh", stage_started)
 
     if not target_scenario or not resolved_scenario_resolution:
         stage_started = time.perf_counter()
@@ -5094,8 +5281,11 @@ async def rebuild_webspace_from_sources(
         "semantic_rebuild_timings_ms": semantic_timings,
         "ydoc_timings_ms": ydoc_timings,
         "phase_timings_ms": phase_timings,
+        "live_room_publish": bool(publish_live_room),
+        "live_room_refresh": live_room_refresh_result,
+        "fresh_doc_rebuild": bool(fresh_doc_rebuild),
     }
-    if requested_action == "reset":
+    if requested_action == "reset" or reset_room_result is not None:
         result["reset_room"] = reset_room_result or {
             "webspace_id": webspace_id,
             "room_dropped": False,
@@ -5132,6 +5322,174 @@ async def rebuild_webspace_from_sources(
     return result
 
 
+async def _complete_scenario_switch_rebuild_in_subprocess(
+    webspace_id: str,
+    *,
+    scenario_id: str,
+    scenario_resolution: str | None,
+    request_id: str | None = None,
+    switch_mode: str | None = None,
+    switch_timings_ms: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    worker_code = r"""
+import asyncio
+import json
+import os
+import sys
+
+os.environ["ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS"] = "0"
+os.environ.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC", "1")
+os.environ.setdefault("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
+os.environ.setdefault("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "0")
+
+from adaos.apps.bootstrap import init_ctx
+
+init_ctx()
+
+from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+
+
+async def _main() -> None:
+    result = await rebuild_webspace_from_sources(
+        sys.argv[1],
+        action="scenario_switch_rebuild",
+        scenario_id=sys.argv[2],
+        scenario_resolution=(sys.argv[3] or None),
+        source_of_truth="scenario_switch_worker",
+        reseed_from_scenario=False,
+        request_id=(sys.argv[4] or None),
+        switch_mode=(sys.argv[5] or None),
+    )
+    print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+
+
+asyncio.run(_main())
+"""
+    cmd = [
+        sys.executable,
+        "-c",
+        worker_code,
+        str(webspace_id or "").strip(),
+        str(scenario_id or "").strip(),
+        str(scenario_resolution or ""),
+        str(request_id or ""),
+        str(switch_mode or ""),
+    ]
+    env = os.environ.copy()
+    env["ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS"] = "0"
+    env.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC", "1")
+    env.setdefault("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
+    env.setdefault("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "0")
+    started = time.perf_counter()
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            cmd,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=_scenario_switch_subprocess_timeout_s(),
+            check=False,
+        )
+
+    try:
+        proc = await asyncio.to_thread(_run)
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": webspace_id,
+            "scenario_id": scenario_id,
+            "scenario_resolution": scenario_resolution,
+            "request_id": request_id,
+            "switch_mode": switch_mode,
+            "error": "scenario_switch_worker_timeout",
+            "worker_elapsed_ms": _elapsed_ms(started),
+            "worker_stdout": str(getattr(exc, "stdout", "") or "")[-2000:],
+            "worker_stderr": str(getattr(exc, "stderr", "") or "")[-2000:],
+        }
+
+    parsed: dict[str, Any] | None = None
+    for line in reversed((proc.stdout or "").splitlines()):
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            raw = json.loads(text)
+            if isinstance(raw, dict):
+                parsed = raw
+                break
+        except Exception:
+            continue
+    if proc.returncode != 0 or parsed is None:
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": webspace_id,
+            "scenario_id": scenario_id,
+            "scenario_resolution": scenario_resolution,
+            "request_id": request_id,
+            "switch_mode": switch_mode,
+            "error": "scenario_switch_worker_failed",
+            "worker_returncode": int(proc.returncode),
+            "worker_elapsed_ms": _elapsed_ms(started),
+            "worker_stdout": str(proc.stdout or "")[-2000:],
+            "worker_stderr": str(proc.stderr or "")[-4000:],
+        }
+
+    parsed["scenario_switch_worker"] = True
+    parsed["worker_elapsed_ms"] = _elapsed_ms(started)
+    parsed["switch_timings_ms"] = _copy_timing_map(switch_timings_ms)
+
+    try:
+        from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
+
+        parsed["live_room_refresh"] = await reset_live_webspace_room(
+            webspace_id,
+            close_reason="scenario_switch_worker_done",
+            persist_ystore_snapshot=False,
+        )
+    except Exception as exc:
+        parsed["live_room_refresh"] = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    try:
+        _trim_allocator_after_yjs_rebuild()
+    except Exception:
+        pass
+    try:
+        _set_webspace_rebuild_status(
+            webspace_id,
+            status="ready" if bool(parsed.get("accepted")) else "failed",
+            pending=False,
+            background=False,
+            request_id=request_id,
+            action="scenario_switch_rebuild",
+            source_of_truth="scenario_switch_worker",
+            scenario_id=scenario_id,
+            scenario_resolution=scenario_resolution,
+            switch_mode=str(switch_mode or "") or None,
+            requested_at=time.time(),
+            started_at=None,
+            finished_at=time.time(),
+            error=None if bool(parsed.get("accepted")) else str(parsed.get("error") or "scenario_switch_worker_failed"),
+            projection_refresh=parsed.get("projection_refresh"),
+            registry_summary=parsed.get("registry_summary"),
+            resolver=parsed.get("resolver"),
+            apply_summary=parsed.get("apply_summary"),
+            timings_ms=parsed.get("timings_ms"),
+            switch_timings_ms=_copy_timing_map(switch_timings_ms),
+            semantic_rebuild_timings_ms=parsed.get("semantic_rebuild_timings_ms"),
+            ydoc_timings_ms=parsed.get("ydoc_timings_ms"),
+            phase_timings_ms=parsed.get("phase_timings_ms"),
+        )
+    except Exception:
+        _log.debug("failed to publish parent rebuild status for scenario switch worker", exc_info=True)
+    return parsed
+
+
 async def _complete_scenario_switch_rebuild(
     webspace_id: str,
     *,
@@ -5141,6 +5499,15 @@ async def _complete_scenario_switch_rebuild(
     switch_mode: str | None = None,
     switch_timings_ms: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if _scenario_switch_subprocess_enabled():
+        return await _complete_scenario_switch_rebuild_in_subprocess(
+            webspace_id,
+            scenario_id=scenario_id,
+            scenario_resolution=scenario_resolution,
+            request_id=request_id,
+            switch_mode=switch_mode,
+            switch_timings_ms=switch_timings_ms,
+        )
     return await rebuild_webspace_from_sources(
         webspace_id,
         action="scenario_switch_rebuild",
@@ -5898,6 +6265,11 @@ async def switch_webspace_scenario(
         "timings_ms": finalized_timings,
         "rebuild_timings_ms": _copy_timing_map(rebuild_result.get("timings_ms")),
         "semantic_rebuild_timings_ms": _copy_timing_map(rebuild_result.get("semantic_rebuild_timings_ms")),
+        "scenario_switch_worker": bool(rebuild_result.get("scenario_switch_worker")),
+        "worker_elapsed_ms": rebuild_result.get("worker_elapsed_ms"),
+        "live_room_publish": rebuild_result.get("live_room_publish"),
+        "live_room_refresh": rebuild_result.get("live_room_refresh"),
+        "fresh_doc_rebuild": rebuild_result.get("fresh_doc_rebuild"),
         "resolver": dict(rebuild_result.get("resolver") or {})
         if isinstance(rebuild_result.get("resolver"), Mapping)
         else None,
