@@ -194,6 +194,38 @@ async def govern_primary_doc_write(
     roots = _normalize_roots(root_names)
     payload = dict(policy or _policy_snapshot(webspace_id=token_ws, owner=token_owner, root_names=roots))
     policy_state = str(payload.get("policy_state") or "ok").strip().lower() or "ok"
+    try:
+        from adaos.services.yjs.owner_guard import admit_owner_work
+
+        admission = admit_owner_work(
+            webspace_id=token_ws,
+            owner=token_owner,
+            root_names=roots,
+            path=path,
+            source=source,
+            channel=channel,
+            work_kind="yjs_write",
+            policy=payload,
+        )
+        if not bool(admission.get("allowed", True)):
+            deny_policy = dict(payload)
+            deny_policy["policy_state"] = "block"
+            deny_policy["reason"] = str(admission.get("reason") or deny_policy.get("reason") or "owner_quarantined")
+            stats = _record_event(
+                webspace_id=token_ws,
+                owner=token_owner,
+                root_names=roots,
+                path=path,
+                source=source,
+                channel=channel,
+                policy=deny_policy,
+                decision="block",
+                update_bytes=update_bytes,
+            )
+            _maybe_log_decision(stats, policy=deny_policy, decision="block")
+            return False
+    except Exception:
+        _log.debug("failed to apply YJS owner guard webspace=%s owner=%s", token_ws, token_owner, exc_info=True)
     if policy_state == "block":
         stats = _record_event(
             webspace_id=token_ws,
@@ -257,6 +289,38 @@ def govern_primary_doc_write_sync(
     roots = _normalize_roots(root_names)
     payload = dict(policy or _policy_snapshot(webspace_id=token_ws, owner=token_owner, root_names=roots))
     policy_state = str(payload.get("policy_state") or "ok").strip().lower() or "ok"
+    try:
+        from adaos.services.yjs.owner_guard import admit_owner_work
+
+        admission = admit_owner_work(
+            webspace_id=token_ws,
+            owner=token_owner,
+            root_names=roots,
+            path=path,
+            source=source,
+            channel=channel,
+            work_kind="yjs_write",
+            policy=payload,
+        )
+        if not bool(admission.get("allowed", True)):
+            deny_policy = dict(payload)
+            deny_policy["policy_state"] = "block"
+            deny_policy["reason"] = str(admission.get("reason") or deny_policy.get("reason") or "owner_quarantined")
+            stats = _record_event(
+                webspace_id=token_ws,
+                owner=token_owner,
+                root_names=roots,
+                path=path,
+                source=source,
+                channel=channel,
+                policy=deny_policy,
+                decision="block",
+                update_bytes=update_bytes,
+            )
+            _maybe_log_decision(stats, policy=deny_policy, decision="block")
+            return False
+    except Exception:
+        _log.debug("failed to apply YJS owner guard webspace=%s owner=%s", token_ws, token_owner, exc_info=True)
     if policy_state == "block":
         stats = _record_event(
             webspace_id=token_ws,
@@ -319,6 +383,15 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
     rows = [row for row in rows if row]
     rows.sort(key=lambda item: float(item.get("last_at") or 0.0), reverse=True)
     selected = rows[0] if rows else {}
+    try:
+        from adaos.services.yjs.owner_guard import owner_guard_snapshot
+
+        owner_guard = owner_guard_snapshot(
+            webspace_id=token_ws or None,
+            owner=token_owner or None,
+        )
+    except Exception:
+        owner_guard = {}
     return {
         "enabled": bool(_ENABLED),
         "throttle_sec": float(_THROTTLE_SEC),
@@ -340,6 +413,17 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
         "last_blocked_roots": list(selected.get("last_blocked_roots") or []),
         "last_throttled_roots": list(selected.get("last_throttled_roots") or []),
         "last_affected_roots": list(selected.get("last_affected_roots") or []),
+        "quarantined": bool(owner_guard.get("active")),
+        "quarantine_enabled": bool(owner_guard.get("quarantine_enabled", False)),
+        "quarantine_total": int(owner_guard.get("quarantine_total") or 0),
+        "quarantine_denied_total": int(owner_guard.get("denied_total") or 0),
+        "quarantine_remaining_s": float(owner_guard.get("quarantine_remaining_s") or 0.0) or None,
+        "quarantine_until": float(owner_guard.get("quarantine_until") or 0.0) or None,
+        "quarantine_reason": str(owner_guard.get("quarantine_reason") or "").strip() or None,
+        "quarantine_trigger": str(owner_guard.get("quarantine_trigger") or "").strip() or None,
+        "quarantine_path": str(owner_guard.get("quarantine_path") or "").strip() or None,
+        "quarantine_tool": str(owner_guard.get("quarantine_tool") or "").strip() or None,
+        "owner_guard": owner_guard,
         "rows": rows[:50],
     }
 

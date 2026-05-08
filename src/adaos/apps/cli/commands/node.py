@@ -738,8 +738,18 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             f"peak={yjs_pressure.get('peak_bps') or 0}/{yjs_pressure.get('peak_wps') or 0} "
             f"reason={yjs_pressure.get('reason') or '-'} "
             f"throttled={yjs_pressure.get('throttled_total') or 0} "
-            f"blocked={yjs_pressure.get('blocked_total') or 0}"
+            f"blocked={yjs_pressure.get('blocked_total') or 0} "
+            f"quarantine={'active' if yjs_pressure.get('quarantined') else 'off'}"
         )
+        if yjs_pressure.get("quarantined"):
+            typer.echo(
+                "yjs_pressure.quarantine: "
+                f"reason={yjs_pressure.get('quarantine_reason') or '-'} "
+                f"trigger={yjs_pressure.get('quarantine_trigger') or '-'} "
+                f"retry_after_s={yjs_pressure.get('quarantine_remaining_s') or 0} "
+                f"tool={yjs_pressure.get('quarantine_tool') or '-'} "
+                f"path={yjs_pressure.get('quarantine_path') or '-'}"
+            )
         if yjs_pressure.get("last_reason") or yjs_pressure.get("last_path"):
             typer.echo(
                 "yjs_pressure.last: "
