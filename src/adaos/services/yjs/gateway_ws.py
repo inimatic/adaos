@@ -1836,13 +1836,22 @@ async def reset_live_webspace_room(
     *,
     close_reason: str = "webspace_reload",
     persist_ystore_snapshot: bool = True,
+    reset_route_runtime: bool = True,
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or "default"
     _cancel_idle_room_reset(key)
-    route_reset = await reset_hub_route_runtime(
-        reason=f"yjs:{close_reason}",
-        notify_browser=True,
-    )
+    if reset_route_runtime:
+        route_reset = await reset_hub_route_runtime(
+            reason=f"yjs:{close_reason}",
+            notify_browser=True,
+        )
+    else:
+        route_reset = {
+            "ok": True,
+            "reason": f"yjs:{close_reason}",
+            "notify_browser": False,
+            "skipped": "route_reset_disabled",
+        }
     closed_webrtc_peers = await close_webspace_webrtc_peers(
         key,
         reason=close_reason,
@@ -1969,6 +1978,7 @@ async def reset_live_webspace_room(
         "closed_connections": closed_connections,
         "room_dropped": room is not None,
         "persist_ystore_snapshot": bool(persist_ystore_snapshot),
+        "reset_route_runtime": bool(reset_route_runtime),
         "room_stopped": room_stopped,
         "ystore_stopped": ystore_stopped,
         "ystore_evicted": ystore_evicted,
