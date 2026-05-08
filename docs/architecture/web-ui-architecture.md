@@ -432,9 +432,10 @@ Status note:
   compatibility bridge
 - `collection_grid`, `metric_chart`, and `event_log` already materialize into
   browser renderers
-- `metric_chart` now has a dedicated temporary browser widget rather than a raw
-  JSON fallback
+- `metric_chart` now has a Taiga-specific semantic renderer path, while the
+  earlier temporary widget remains available as a compatibility renderer
 - the first Taiga-specific renderer slice is now live for `collection_grid`
+- the second Taiga-specific renderer slice is now live for `metric_chart`
 - the browser client baseline now builds on Angular 19 with Taiga UI v5
 - production client builds now use a modern browser baseline compatible with
   Angular 19 optimization
@@ -448,6 +449,8 @@ Current pre-stand milestone:
   state
 - semantic `collection_grid` now renders through a Taiga-backed surface instead
   of the legacy compatibility table
+- semantic `metric_chart` now renders through a Taiga-backed surface instead of
+  the temporary compatibility chart
 
 ### 0. Architecture Fixation
 
@@ -535,6 +538,7 @@ Recommended identifiers:
 - [x] compatibility rendering remains available if semantic rendering is
   bypassed
 - [x] semantic `collection_grid` is rendered through a Taiga-backed surface
+- [x] semantic `metric_chart` is rendered through a Taiga-backed surface
 - [x] production browser build passes with the upgraded Angular/Taiga baseline
 - [ ] manual verification on the target stand
 
