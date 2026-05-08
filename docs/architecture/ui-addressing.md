@@ -343,6 +343,8 @@ Status note:
   `action:` refs
 - desktop and modal runtime adapters now preserve the same binding vocabulary
   during compatibility rendering
+- the first Taiga-backed `collection_grid` renderer consumes the same `y:` and
+  `view:` refs without introducing renderer-specific addressing
 - broader cross-document harmonization is still in progress
 - the demo metrics table and chart now share the same `view:` selection ref on
   both semantic and compatibility paths
