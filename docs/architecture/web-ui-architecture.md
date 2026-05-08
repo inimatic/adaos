@@ -431,10 +431,11 @@ Status note:
 - semantic desktop and modal surfaces already pass through a runtime
   compatibility bridge
 - `collection_grid`, `metric_chart`, and `event_log` already materialize into
-  current browser widgets
+  browser renderers
 - `metric_chart` now has a dedicated temporary browser widget rather than a raw
   JSON fallback
-- Taiga-specific renderers are not implemented yet
+- the first Taiga-specific renderer slice is now live for `collection_grid`
+- the browser client baseline now builds on Angular 19 with Taiga UI v5
 
 Current pre-stand milestone:
 
@@ -443,6 +444,8 @@ Current pre-stand milestone:
 - both semantic and compatibility paths render a table, chart, and event log
 - table selection now drives the linked chart series through shared `view:`
   state
+- semantic `collection_grid` now renders through a Taiga-backed surface instead
+  of the legacy compatibility table
 
 ### 0. Architecture Fixation
 
@@ -494,7 +497,7 @@ Recommended identifiers:
 
 - [ ] add a semantic renderer registry with lazy `import()` support
 - [x] bridge semantic view kinds to current browser widget infrastructure
-- [ ] add the first Taiga-backed renderer entries without forcing a same-day
+- [x] add the first Taiga-backed renderer entries without forcing a same-day
   rewrite of the whole browser client
 - [x] keep Ionic focused on shell/navigation/mobile interaction
 
@@ -529,6 +532,7 @@ Recommended identifiers:
 - [x] the event surface is present through `stream:demo_metrics.events`
 - [x] compatibility rendering remains available if semantic rendering is
   bypassed
+- [x] semantic `collection_grid` is rendered through a Taiga-backed surface
 - [ ] manual verification on the target stand
 
 Recommended demo data shape:
