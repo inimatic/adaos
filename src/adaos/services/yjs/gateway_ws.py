@@ -128,7 +128,12 @@ _YROOM_DIAG_PENDING_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_PENDING_WARN", 32, mini
 _YROOM_DIAG_UPDATE_WARN_BYTES = _env_int("ADAOS_YJS_ROOM_DIAG_UPDATE_WARN_BYTES", 256 * 1024, minimum=1)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
-_YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 1024 * 1024, minimum=1)
+_YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 64 * 1024 * 1024, minimum=1)
+_YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC", 1.0, minimum=0.0)
+_YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", False)
+_YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
+_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
+_YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_STRICT_FULL_CHECKS", False)
 _EMPTY_Y_UPDATE = b"\x00\x00"
 
 
@@ -272,7 +277,7 @@ class DiagnosticYRoom(YRoom):
         self._diag_effective_repair_total = 0
         self._diag_effective_repair_bytes = 0
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
-        self._diag_effective_last_full_check_mono = 0.0
+        self._diag_effective_last_full_check_mono = time.monotonic()
         self._diag_last_log_mono = 0.0
         self._diag_pressure_active = False
         self._diag_pressure_reason = ""
@@ -616,25 +621,41 @@ class DiagnosticYRoom(YRoom):
                 effective_ready = previous_effective_ready
                 effective_snapshot: dict[str, Any] = {"ready": effective_ready}
                 try:
-                    full_check_due = (
+                    now_mono = time.monotonic()
+                    check_age = now_mono - float(self._diag_effective_last_full_check_mono or 0.0)
+                    min_check_elapsed = (
+                        _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC <= 0.0
+                        or check_age >= _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC
+                    )
+                    full_check_due = min_check_elapsed and (
                         update_len >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES
                         or (
                             _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC > 0.0
-                            and time.monotonic() - float(self._diag_effective_last_full_check_mono or 0.0)
-                            >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC
+                            and check_age >= _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC
                         )
                     )
+                    force_initial_check = not previous_effective_ready and self._diag_update_total <= 1
+                    checked_effective = False
                     if previous_effective_ready and not full_check_due:
                         effective_ready = True
                         effective_snapshot = {"ready": True, "mode": "cached"}
-                    elif full_check_due:
-                        effective_ready = previous_effective_ready
+                    elif full_check_due or force_initial_check:
+                        self._diag_effective_last_full_check_mono = now_mono
+                        checked_effective = True
+                        if previous_effective_ready and _YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS:
+                            effective_snapshot = _room_effective_branch_snapshot(self.ydoc)
+                            effective_ready = bool(effective_snapshot.get("ready"))
+                        else:
+                            effective_ready = _room_effective_top_level_ready(self.ydoc)
+                            effective_snapshot = {
+                                "ready": effective_ready,
+                                "mode": "top_level_periodic" if previous_effective_ready else "top_level",
+                            }
                     else:
-                        effective_ready = _room_effective_top_level_ready(self.ydoc)
-                    if not effective_ready or full_check_due:
-                        self._diag_effective_last_full_check_mono = time.monotonic()
-                        effective_snapshot = _room_effective_branch_snapshot(self.ydoc)
-                        effective_ready = bool(effective_snapshot.get("ready"))
+                        effective_snapshot = {"ready": effective_ready, "mode": "cached_missing"}
+                    if checked_effective and not effective_ready:
+                        self._diag_effective_last_full_check_mono = now_mono
+                        effective_snapshot = {"ready": False, "mode": "top_level_missing"}
                     elif not previous_effective_ready:
                         effective_snapshot = {"ready": effective_ready, "mode": "top_level"}
                     self._diag_effective_branch_snapshot = effective_snapshot
@@ -2221,7 +2242,10 @@ class WorkspaceWebsocketServer(WebsocketServer):
             try:
                 ui_map = room.ydoc.get_map("ui")
                 data_map = room.ydoc.get_map("data")
-                room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(room.ydoc)
+                room._diag_effective_branch_snapshot = {
+                    "ready": _room_effective_top_level_ready(room.ydoc),
+                    "mode": "top_level_debug",
+                }
                 _ylog.debug(
                     "YRoom ready webspace=%s ui keys=%s data keys=%s",
                     webspace_id,
@@ -2285,6 +2309,8 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
     catches the destructive class that removes required roots/branches while
     keeping ordinary Yjs fanout cheap.
     """
+    if not _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS:
+        return True
     try:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
@@ -2338,20 +2364,26 @@ def _branch_hash(value: Any) -> str | None:
 def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
     if ydoc is None:
         return {"ready": False, "error": "missing_ydoc"}
+    if not _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS:
+        return {
+            "ready": _room_effective_top_level_ready(ydoc),
+            "mode": "top_level_snapshot",
+            "details": "disabled",
+        }
     try:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         registry_map = ydoc.get_map("registry")
-        ui_keys = [str(key) for key in list(ui_map.keys())]
-        data_keys = [str(key) for key in list(data_map.keys())]
-        registry_keys = [str(key) for key in list(registry_map.keys())]
+        ui_keys = [str(key) for key in list(ui_map.keys())[:40]]
+        data_keys = [str(key) for key in list(data_map.keys())[:80]]
+        registry_keys = [str(key) for key in list(registry_map.keys())[:40]]
         application = ui_map.get("application")
         application_desktop = application.get("desktop") if isinstance(application, dict) else None
         modals = application.get("modals") if isinstance(application, dict) else None
         catalog = data_map.get("catalog")
         installed = data_map.get("installed")
         desktop = data_map.get("desktop")
-        return {
+        snapshot = {
             "ready": _room_effective_branches_ready(ydoc),
             "ui_keys": ui_keys,
             "data_keys": data_keys,
@@ -2368,11 +2400,17 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
             "installed_widget_count": _branch_collection_count(installed.get("widgets") if isinstance(installed, dict) else None),
             "desktop_key_count": _branch_collection_count(desktop),
             "desktop_widget_count": _branch_collection_count(desktop.get("widgets") if isinstance(desktop, dict) else None),
-            "application_hash": _branch_hash(application),
-            "catalog_hash": _branch_hash(catalog),
-            "installed_hash": _branch_hash(installed),
-            "desktop_hash": _branch_hash(desktop),
         }
+        if _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES:
+            snapshot.update(
+                {
+                    "application_hash": _branch_hash(application),
+                    "catalog_hash": _branch_hash(catalog),
+                    "installed_hash": _branch_hash(installed),
+                    "desktop_hash": _branch_hash(desktop),
+                }
+            )
+        return snapshot
     except Exception as exc:
         return {
             "ready": False,

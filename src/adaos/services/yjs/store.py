@@ -301,12 +301,18 @@ class AdaosMemoryYStore(BaseYStore):
         self.path = path
         self.metadata_callback = None
         self.document_ttl = document_ttl
-        self.max_updates = _env_int("ADAOS_YSTORE_MAX_UPDATES", 128, minimum=8)
+        self.max_updates = _env_int("ADAOS_YSTORE_MAX_UPDATES", 33, minimum=8)
         self.replay_window = min(
             self.max_updates - 1,
             _env_int("ADAOS_YSTORE_REPLAY_WINDOW", 32, minimum=0),
         )
-        self.max_replay_bytes = _env_int("ADAOS_YSTORE_MAX_REPLAY_BYTES", 512 * 1024, minimum=0)
+        self.max_replay_bytes = _env_int("ADAOS_YSTORE_MAX_REPLAY_BYTES", 8 * 1024 * 1024, minimum=0)
+        default_compact_target = int(self.max_replay_bytes // 2) if self.max_replay_bytes > 0 else 0
+        self.compact_target_replay_bytes = _env_int(
+            "ADAOS_YSTORE_COMPACT_TARGET_REPLAY_BYTES",
+            default_compact_target,
+            minimum=0,
+        )
         self.auto_backup_after_compact = _env_flag("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", True)
         self.auto_backup_cooldown_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", 30.0, minimum=0.0)
         self.auto_backup_debounce_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", 0.5, minimum=0.0)
@@ -593,6 +599,8 @@ class AdaosMemoryYStore(BaseYStore):
         tail_count = self.replay_window if keep_tail is None else int(keep_tail)
         tail_count = max(0, min(tail_count, max(0, total - 1)))
         tail_byte_limit = int(self.max_replay_bytes) if self.max_replay_bytes > 0 else 0
+        if str(reason or "").strip() == "byte_limit" and int(self.compact_target_replay_bytes or 0) > 0:
+            tail_byte_limit = min(tail_byte_limit, int(self.compact_target_replay_bytes))
         keep_from = total
         kept_total = 0
         kept_bytes = 0
