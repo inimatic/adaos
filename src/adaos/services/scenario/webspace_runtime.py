@@ -3306,6 +3306,7 @@ class WebspaceScenarioRuntime:
         replaced_paths: List[str] = []
         failed_paths: List[str] = []
         fingerprint_unchanged_paths: List[str] = []
+        stale_fingerprint_paths: List[str] = []
         defaults_failed = False
         phase_summaries: Dict[str, Dict[str, Any]] = {}
         phase_timings_ms: Dict[str, float] = {}
@@ -3367,10 +3368,16 @@ class WebspaceScenarioRuntime:
                 fingerprint
                 and str(effective_branch_fingerprints.get(path) or "").strip() == fingerprint
             ):
-                fingerprint_unchanged_paths.append(path)
-                fingerprint_updates[path] = fingerprint
-                pending_fingerprint_updates[path] = fingerprint
-                return
+                try:
+                    actual_fingerprint = _fingerprint_json_like(y_map.get(key))
+                except Exception:
+                    actual_fingerprint = ""
+                if actual_fingerprint == fingerprint:
+                    fingerprint_unchanged_paths.append(path)
+                    fingerprint_updates[path] = fingerprint
+                    pending_fingerprint_updates[path] = fingerprint
+                    return
+                stale_fingerprint_paths.append(path)
             try:
                 if path in _WHOLE_BRANCH_REPLACE_PATHS:
                     changed, apply_mode = _replace_map_value(y_map, txn, key, value)
@@ -3408,6 +3415,7 @@ class WebspaceScenarioRuntime:
             phase_replaced_before = len(replaced_paths)
             phase_failed_before = len(failed_paths)
             phase_fingerprint_unchanged_before = len(fingerprint_unchanged_paths)
+            phase_stale_fingerprint_before = len(stale_fingerprint_paths)
             phase_defaults_failed = False
 
             with ydoc.begin_transaction() as txn:
@@ -3444,6 +3452,7 @@ class WebspaceScenarioRuntime:
             phase_replaced_paths = list(replaced_paths[phase_replaced_before:])
             phase_failed_paths = list(failed_paths[phase_failed_before:])
             phase_fingerprint_unchanged_paths = list(fingerprint_unchanged_paths[phase_fingerprint_unchanged_before:])
+            phase_stale_fingerprint_paths = list(stale_fingerprint_paths[phase_stale_fingerprint_before:])
             branch_count = len(branch_specs)
             phase_summary: Dict[str, Any] = {
                 "branch_count": branch_count,
@@ -3461,6 +3470,9 @@ class WebspaceScenarioRuntime:
             if phase_fingerprint_unchanged_paths:
                 phase_summary["fingerprint_unchanged_branches"] = len(phase_fingerprint_unchanged_paths)
                 phase_summary["fingerprint_unchanged_paths"] = phase_fingerprint_unchanged_paths
+            if phase_stale_fingerprint_paths:
+                phase_summary["stale_fingerprint_branches"] = len(phase_stale_fingerprint_paths)
+                phase_summary["stale_fingerprint_paths"] = phase_stale_fingerprint_paths
             if phase_failed_paths:
                 phase_summary["failed_paths"] = phase_failed_paths
             if phase_defaults_failed:
@@ -3509,6 +3521,9 @@ class WebspaceScenarioRuntime:
         if fingerprint_unchanged_paths:
             self._last_apply_summary["fingerprint_unchanged_branches"] = len(fingerprint_unchanged_paths)
             self._last_apply_summary["fingerprint_unchanged_paths"] = list(fingerprint_unchanged_paths)
+        if stale_fingerprint_paths:
+            self._last_apply_summary["stale_fingerprint_branches"] = len(stale_fingerprint_paths)
+            self._last_apply_summary["stale_fingerprint_paths"] = list(stale_fingerprint_paths)
         if failed_paths:
             self._last_apply_summary["failed_paths"] = list(failed_paths)
         self._last_apply_phase_timings_ms = phase_timings_ms or None
@@ -5348,6 +5363,7 @@ from adaos.apps.bootstrap import init_ctx
 init_ctx()
 
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+from adaos.services.yjs.store import get_ystore_for_webspace
 
 
 async def _main() -> None:
@@ -5361,6 +5377,41 @@ async def _main() -> None:
         request_id=(sys.argv[4] or None),
         switch_mode=(sys.argv[5] or None),
     )
+    ystore_persist = {"attempted": False, "reason": "worker_result_not_accepted"}
+    if bool(result.get("accepted")):
+        ystore_persist = {"attempted": True}
+        try:
+            store = get_ystore_for_webspace(sys.argv[1])
+            await store.backup_to_disk(
+                compact_runtime=True,
+                backup_kind="scenario_switch_worker",
+            )
+            snapshot = store.runtime_snapshot()
+            snapshot_size = int(snapshot.get("snapshot_file_size") or 0)
+            persisted = bool(snapshot.get("snapshot_file_exists")) and snapshot_size > 0
+            ystore_persist = {
+                "attempted": True,
+                "ok": persisted,
+                "snapshot_file_exists": bool(snapshot.get("snapshot_file_exists")),
+                "snapshot_file_size": snapshot_size,
+                "persisted_up_to_date": bool(snapshot.get("persisted_up_to_date")),
+                "update_log_entries": int(snapshot.get("update_log_entries") or 0),
+                "last_backup_mode": snapshot.get("last_backup_mode"),
+            }
+            if not persisted:
+                result["ok"] = False
+                result["accepted"] = False
+                result["error"] = "scenario_switch_worker_persist_failed"
+        except Exception as exc:
+            ystore_persist = {
+                "attempted": True,
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            result["ok"] = False
+            result["accepted"] = False
+            result["error"] = "scenario_switch_worker_persist_failed"
+    result["ystore_persist"] = ystore_persist
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
 
 
@@ -5442,19 +5493,26 @@ asyncio.run(_main())
     parsed["worker_elapsed_ms"] = _elapsed_ms(started)
     parsed["switch_timings_ms"] = _copy_timing_map(switch_timings_ms)
 
-    try:
-        from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
+    if bool(parsed.get("accepted")):
+        try:
+            from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
 
-        parsed["live_room_refresh"] = await reset_live_webspace_room(
-            webspace_id,
-            close_reason="scenario_switch_worker_done",
-            persist_ystore_snapshot=False,
-            reset_route_runtime=False,
-        )
-    except Exception as exc:
+            parsed["live_room_refresh"] = await reset_live_webspace_room(
+                webspace_id,
+                close_reason="scenario_switch_worker_done",
+                persist_ystore_snapshot=False,
+                reset_route_runtime=True,
+            )
+        except Exception as exc:
+            parsed["live_room_refresh"] = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    else:
         parsed["live_room_refresh"] = {
             "ok": False,
-            "error": f"{type(exc).__name__}: {exc}",
+            "skipped": True,
+            "reason": "scenario_switch_worker_not_accepted",
         }
 
     try:
@@ -6153,6 +6211,19 @@ async def switch_webspace_scenario(
             ),
         }
 
+    try:
+        from adaos.services.yjs.gateway_ws import (  # pylint: disable=import-outside-toplevel
+            note_authoritative_current_scenario,
+        )
+
+        note_authoritative_current_scenario(
+            webspace_id,
+            scenario_id,
+            reason="scenario_switch",
+        )
+    except Exception:
+        _log.debug("failed to publish authoritative current_scenario lease", exc_info=True)
+
     stage_started = time.perf_counter()
     row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
     _record_timing(timings_ms, "refresh_manifest_row", stage_started)
@@ -6269,6 +6340,7 @@ async def switch_webspace_scenario(
         "semantic_rebuild_timings_ms": _copy_timing_map(rebuild_result.get("semantic_rebuild_timings_ms")),
         "scenario_switch_worker": bool(rebuild_result.get("scenario_switch_worker")),
         "worker_elapsed_ms": rebuild_result.get("worker_elapsed_ms"),
+        "ystore_persist": rebuild_result.get("ystore_persist"),
         "live_room_publish": rebuild_result.get("live_room_publish"),
         "live_room_refresh": rebuild_result.get("live_room_refresh"),
         "fresh_doc_rebuild": rebuild_result.get("fresh_doc_rebuild"),
