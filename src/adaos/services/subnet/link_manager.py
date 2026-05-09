@@ -47,11 +47,57 @@ def _normalize_snapshot_material(value: Any, *, path: tuple[str, ...] = ()) -> A
 def _snapshot_fingerprint(snapshot: dict[str, Any]) -> str:
     if not isinstance(snapshot, dict):
         return ""
-    material = _normalize_snapshot_material(snapshot)
+    capacity = snapshot.get("capacity") if isinstance(snapshot.get("capacity"), dict) else {}
+    desktop_catalog = snapshot.get("desktop_catalog") if isinstance(snapshot.get("desktop_catalog"), dict) else {}
+    material = {
+        "role": snapshot.get("role"),
+        "ready": snapshot.get("ready"),
+        "node_state": snapshot.get("node_state"),
+        "route_mode": snapshot.get("route_mode"),
+        "connected_to_subnet": snapshot.get("connected_to_subnet"),
+        "connected_to_hub": snapshot.get("connected_to_hub"),
+        "node_names": snapshot.get("node_names") if isinstance(snapshot.get("node_names"), list) else [],
+        "build": snapshot.get("build") if isinstance(snapshot.get("build"), dict) else {},
+        "update_status": snapshot.get("update_status") if isinstance(snapshot.get("update_status"), dict) else {},
+        "capacity": _compact_snapshot_catalog(capacity, ("io", "skills", "scenarios")),
+        "desktop_catalog": _compact_snapshot_catalog(
+            desktop_catalog,
+            ("apps", "widgets", "modals", "webio", "ydoc_defaults"),
+        ),
+    }
     try:
         return json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     except Exception:
         return repr(material)
+
+
+def _compact_snapshot_catalog(value: Any, keys: tuple[str, ...]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in keys:
+        item = value.get(key)
+        if isinstance(item, list):
+            tokens = []
+            for entry in item:
+                if isinstance(entry, dict):
+                    tokens.append(
+                        str(
+                            entry.get("id")
+                            or entry.get("name")
+                            or entry.get("path")
+                            or entry.get("kind")
+                            or ""
+                        ).strip()
+                    )
+                else:
+                    tokens.append(str(entry or "").strip())
+            out[key] = sorted(token for token in tokens if token)
+        elif isinstance(item, dict):
+            out[key] = sorted(str(token) for token in item.keys())
+        elif item is not None:
+            out[key] = str(item)
+    return out
 
 
 def _snapshot_event_payload(node_id: str, *, node_names: list[str], snapshot: dict[str, Any], captured_at: float) -> dict[str, Any]:
