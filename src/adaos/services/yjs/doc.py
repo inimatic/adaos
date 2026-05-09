@@ -594,13 +594,14 @@ async def async_get_ydoc(
 async def async_read_ydoc(
     webspace_id: str,
     *,
+    prefer_live_room: bool = True,
     timings: dict[str, float] | None = None,
     timing_prefix: str = "",
 ) -> AsyncIterator[Y.YDoc]:
     async with async_get_ydoc(
         webspace_id,
         read_only=True,
-        prefer_live_room=True,
+        prefer_live_room=prefer_live_room,
         timings=timings,
         timing_prefix=timing_prefix,
     ) as ydoc:

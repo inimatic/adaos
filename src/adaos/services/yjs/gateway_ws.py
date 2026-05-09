@@ -121,6 +121,8 @@ _YROOM_DIAG_ENABLED = _env_flag("ADAOS_YJS_ROOM_DIAG_ENABLED", True)
 _YWS_ROOM_READY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_READY_TIMEOUT_S", 12.0, minimum=0.0)
 _YWS_ROOM_READY_MAX_S = _env_float("ADAOS_YWS_ROOM_READY_MAX_S", 45.0, minimum=0.0)
 _YWS_ROOM_READY_POLL_S = _env_float("ADAOS_YWS_ROOM_READY_POLL_S", 1.0, minimum=0.25)
+_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S", 20.0, minimum=0.0)
+_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S", 3.0, minimum=0.25)
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
 _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC", 5.0, minimum=0.0)
 _YROOM_DIAG_BUFFER_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_BUFFER_WARN", 32, minimum=1)
@@ -134,6 +136,21 @@ _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_T
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
 _YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_STRICT_FULL_CHECKS", False)
+_YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES = _env_int(
+    "ADAOS_YJS_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES",
+    8,
+    minimum=0,
+)
+_YROOM_EFFECTIVE_GUARD_REPAIR_COOLDOWN_SEC = _env_float(
+    "ADAOS_YJS_EFFECTIVE_GUARD_REPAIR_COOLDOWN_SEC",
+    0.25,
+    minimum=0.0,
+)
+_YROOM_AUTHORITATIVE_SELECTOR_LEASE_SEC = _env_float(
+    "ADAOS_YJS_AUTHORITATIVE_SELECTOR_LEASE_SEC",
+    30.0,
+    minimum=0.0,
+)
 _EMPTY_Y_UPDATE = b"\x00\x00"
 
 
@@ -208,6 +225,34 @@ def _memory_stream_statistics(stream: Any) -> dict[str, Any]:
 
 
 _YROOM_PRESSURE_STATE: dict[str, dict[str, Any]] = {}
+_AUTHORITATIVE_SCENARIO_LEASES: dict[str, dict[str, Any]] = {}
+
+
+def note_authoritative_current_scenario(webspace_id: str, scenario_id: str, *, reason: str = "scenario_switch") -> None:
+    key = _coerce_gateway_webspace_id(webspace_id)
+    scenario = str(scenario_id or "").strip()
+    if not key or not scenario or _YROOM_AUTHORITATIVE_SELECTOR_LEASE_SEC <= 0.0:
+        return
+    _AUTHORITATIVE_SCENARIO_LEASES[key] = {
+        "scenario_id": scenario,
+        "reason": str(reason or "").strip() or "scenario_switch",
+        "expires_mono": time.monotonic() + float(_YROOM_AUTHORITATIVE_SELECTOR_LEASE_SEC),
+        "updated_at": time.time(),
+    }
+
+
+def _authoritative_current_scenario(webspace_id: str) -> str | None:
+    key = _coerce_gateway_webspace_id(webspace_id)
+    lease = dict(_AUTHORITATIVE_SCENARIO_LEASES.get(key) or {})
+    scenario = str(lease.get("scenario_id") or "").strip()
+    expires_mono = float(lease.get("expires_mono") or 0.0)
+    if not scenario or expires_mono <= 0.0:
+        _AUTHORITATIVE_SCENARIO_LEASES.pop(key, None)
+        return None
+    if time.monotonic() > expires_mono:
+        _AUTHORITATIVE_SCENARIO_LEASES.pop(key, None)
+        return None
+    return scenario
 
 
 def yjs_pressure_snapshot(webspace_id: str | None = None) -> dict[str, Any]:
@@ -278,6 +323,7 @@ class DiagnosticYRoom(YRoom):
         self._diag_effective_repair_bytes = 0
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
         self._diag_effective_last_full_check_mono = time.monotonic()
+        self._diag_effective_last_repair_mono = 0.0
         self._diag_last_log_mono = 0.0
         self._diag_pressure_active = False
         self._diag_pressure_reason = ""
@@ -598,6 +644,38 @@ class DiagnosticYRoom(YRoom):
                 }
         return repair_update
 
+    async def _repair_effective_branches_after_client_update(
+        self,
+        *,
+        update_bytes: int,
+        reason: str,
+    ) -> bytes:
+        repair_update = await _repair_room_effective_branches(
+            self._diag_room_id(),
+            getattr(self, "ystore", None),
+            self,
+            reason=reason,
+        )
+        if repair_update:
+            self._diag_effective_repair_total += 1
+            self._diag_effective_repair_bytes += len(repair_update)
+            try:
+                self._diag_effective_branch_snapshot = _room_effective_branch_snapshot(self.ydoc)
+            except Exception as exc:
+                self._diag_effective_branch_snapshot = {
+                    "ready": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            self.log.warning(
+                "repaired YRoom effective branches after client update webspace=%s reason=%s update_bytes=%s repair_bytes=%s repairs=%s",
+                self._diag_room_id(),
+                reason,
+                int(update_bytes or 0),
+                len(repair_update),
+                int(self._diag_effective_repair_total),
+            )
+        return repair_update
+
     async def _broadcast_updates(self):
         if self.ystore is not None and not self.ystore.started.is_set():
             self._task_group.start_soon(self.ystore.start)
@@ -665,6 +743,32 @@ class DiagnosticYRoom(YRoom):
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                     effective_ready = previous_effective_ready
+                initial_repair_due = bool(
+                    _YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES > 0
+                    and self._diag_update_total <= _YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES
+                )
+                repair_cooldown_due = bool(
+                    _YROOM_EFFECTIVE_GUARD_REPAIR_COOLDOWN_SEC <= 0.0
+                    or time.monotonic() - float(self._diag_effective_last_repair_mono or 0.0)
+                    >= _YROOM_EFFECTIVE_GUARD_REPAIR_COOLDOWN_SEC
+                )
+                if effective_ready and initial_repair_due and repair_cooldown_due:
+                    self._diag_effective_last_repair_mono = time.monotonic()
+                    repair_update = await self._repair_effective_branches_after_client_update(
+                        update_bytes=update_len,
+                        reason="initial_client_update_reconcile",
+                    )
+                    if repair_update:
+                        repair_message = create_update_message(repair_update)
+                        for client in self.clients:
+                            self.log.debug("Sending Y repair update to client with endpoint: %s", client.path)
+                            self._task_group.start_soon(
+                                self._tracked_client_send,
+                                client,
+                                repair_message,
+                                len(repair_update),
+                            )
+                        continue
                 if previous_effective_ready and not effective_ready:
                     repair_update = await self._repair_effective_branches_after_destructive_update(
                         destructive_update_bytes=update_len,
@@ -2191,49 +2295,97 @@ class WorkspaceWebsocketServer(WebsocketServer):
         if name not in self.rooms:
             lock = _room_locks.setdefault(webspace_id, asyncio.Lock())
             async with lock:
+                async def _await_bootstrap_step(label: str, awaitable: Any) -> Any:
+                    timeout_s = max(float(_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S), 0.0)
+                    if timeout_s <= 0.0:
+                        return await awaitable
+                    try:
+                        return await asyncio.wait_for(awaitable, timeout=timeout_s)
+                    except asyncio.TimeoutError:
+                        _ylog.warning(
+                            "yws room bootstrap step timeout webspace=%s step=%s timeout_s=%.3f",
+                            webspace_id,
+                            label,
+                            timeout_s,
+                        )
+                        raise
+
                 # Second check after acquiring lock - another coroutine may
                 # have already created the room while we were waiting.
                 if name not in self.rooms:
                     _ylog.info("creating YRoom for webspace=%s", webspace_id)
-                    ensure_workspace(webspace_id)
-                    ystore = get_ystore_for_webspace(webspace_id)
-                    row = get_workspace(webspace_id)
-                    space = _space_mode(webspace_id)
-                    room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
-                    room._webspace_id = webspace_id
-                    room._thread_id = threading.get_ident()
-                    room._loop = asyncio.get_running_loop()
-                    # Ensure periodic in-memory snapshotting for this webspace.
+                    room: DiagnosticYRoom | None = None
+                    ystore = None
                     try:
-                        sched = get_scheduler()
-                        await sched.ensure_every(
-                            name=f"ystores.backup.{webspace_id}",
-                            interval=6000.0,
-                            topic="sys.ystore.backup",
-                            payload={"webspace_id": webspace_id},
+                        ensure_workspace(webspace_id)
+                        ystore = get_ystore_for_webspace(webspace_id)
+                        row = get_workspace(webspace_id)
+                        space = _space_mode(webspace_id)
+                        room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
+                        room._webspace_id = webspace_id
+                        room._thread_id = threading.get_ident()
+                        room._loop = asyncio.get_running_loop()
+                        # Ensure periodic in-memory snapshotting for this webspace.
+                        try:
+                            sched = get_scheduler()
+                            await _await_bootstrap_step(
+                                "schedule_backup",
+                                sched.ensure_every(
+                                    name=f"ystores.backup.{webspace_id}",
+                                    interval=6000.0,
+                                    topic="sys.ystore.backup",
+                                    payload={"webspace_id": webspace_id},
+                                ),
+                            )
+                        except Exception:
+                            _ylog.warning("failed to register YStore backup job for webspace=%s", webspace_id, exc_info=True)
+                        created_room = True
+                        seed_result = await _await_bootstrap_step(
+                            "seed_from_scenario",
+                            ensure_webspace_seeded_from_scenario(
+                                ystore,
+                                webspace_id=webspace_id,
+                                default_scenario_id=(row.effective_home_scenario if row and row.home_scenario else "web_desktop"),
+                                space=space,
+                                ydoc=room.ydoc,
+                            ),
                         )
-                    except Exception:
-                        _ylog.warning("failed to register YStore backup job for webspace=%s", webspace_id, exc_info=True)
-                    created_room = True
-                    seed_result = await ensure_webspace_seeded_from_scenario(
-                        ystore,
-                        webspace_id=webspace_id,
-                        default_scenario_id=(row.effective_home_scenario if row and row.home_scenario else "web_desktop"),
-                        space=space,
-                        ydoc=room.ydoc,
-                    )
-                    await _ensure_room_effective_materialized(
-                        webspace_id,
-                        ystore,
-                        room,
-                        seed_result=seed_result,
-                    )
-                    await _finalize_room_bootstrap_rebuild_status(
-                        webspace_id,
-                        seed_result=seed_result,
-                    )
-                    self.rooms[name] = room
-                    _mark_room_created(webspace_id, room)
+                        await _await_bootstrap_step(
+                            "effective_materialized",
+                            _ensure_room_effective_materialized(
+                                webspace_id,
+                                ystore,
+                                room,
+                                seed_result=seed_result,
+                            ),
+                        )
+                        await _await_bootstrap_step(
+                            "finalize_rebuild_status",
+                            _finalize_room_bootstrap_rebuild_status(
+                                webspace_id,
+                                seed_result=seed_result,
+                            ),
+                        )
+                        self.rooms[name] = room
+                        _mark_room_created(webspace_id, room)
+                    except BaseException:
+                        self.rooms.pop(name, None)
+                        _room_locks.pop(webspace_id, None)
+                        if ystore is not None:
+                            try:
+                                await asyncio.wait_for(
+                                    evict_ystore_for_webspace(
+                                        webspace_id,
+                                        store=ystore,
+                                        persist_snapshot=False,
+                                        compact_runtime=False,
+                                        backup_kind="room_bootstrap_failed",
+                                    ),
+                                    timeout=max(float(_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S), 0.25),
+                                )
+                            except Exception:
+                                _ylog.warning("failed to evict YStore after room bootstrap failure webspace=%s", webspace_id, exc_info=True)
+                        raise
         room = self.rooms[name]
         room._webspace_id = webspace_id
         room._thread_id = getattr(room, "_thread_id", threading.get_ident())
@@ -2273,6 +2425,50 @@ y_server = WorkspaceWebsocketServer(auto_clean_rooms=False)
 _y_server_started = False
 _y_server_task: asyncio.Task[None] | None = None
 _room_locks: dict[str, asyncio.Lock] = {}
+
+
+def _task_exception_summary(task: asyncio.Task[Any] | None) -> str | None:
+    if task is None or not task.done() or task.cancelled():
+        return None
+    try:
+        exc = task.exception()
+    except BaseException as exc:  # pragma: no cover - defensive diagnostics
+        return f"{type(exc).__name__}: {exc}"
+    if exc is None:
+        return None
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _on_y_server_task_done(task: asyncio.Task[None]) -> None:
+    summary = _task_exception_summary(task)
+    if summary:
+        _ylog.error("Yjs websocket server background task stopped unexpectedly: %s", summary)
+
+
+def _recreate_y_server_after_failure(reason: str) -> None:
+    global y_server, _y_server_started, _y_server_task
+    old_server = y_server
+    try:
+        for room in list(getattr(old_server, "rooms", {}).values()):
+            try:
+                stop_room = getattr(room, "stop", None)
+                if callable(stop_room):
+                    stop_room()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        stop_server = getattr(old_server, "stop", None)
+        if callable(stop_server):
+            stop_server()
+    except Exception:
+        pass
+    y_server = WorkspaceWebsocketServer(auto_clean_rooms=False)
+    _room_locks.clear()
+    _y_server_started = False
+    _y_server_task = None
+    _ylog.warning("Yjs websocket server runtime recreated after failure reason=%s", reason)
 
 
 def _room_effective_branches_ready(ydoc: Any) -> bool:
@@ -2453,6 +2649,11 @@ async def _repair_room_effective_branches(
             channel="core.yjs.gateway.repair",
             governed=True,
         ):
+            authoritative_scenario = _authoritative_current_scenario(webspace_id)
+            if authoritative_scenario:
+                ui_map = ydoc.get_map("ui")
+                with ydoc.begin_transaction() as txn:
+                    ui_map.set(txn, "current_scenario", authoritative_scenario)
             runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - invariant repair needs in-doc materialization
         if not _room_effective_branches_ready(ydoc):
             _ylog.warning(
@@ -2509,7 +2710,10 @@ async def _ensure_room_effective_materialized(
     and persist just the resulting diff before exposing the room.
     """
     ydoc = getattr(room, "ydoc", None)
-    if ydoc is None or _room_effective_branches_ready(ydoc):
+    authoritative_scenario = _authoritative_current_scenario(webspace_id)
+    if ydoc is None:
+        return False
+    if _room_effective_branches_ready(ydoc) and not authoritative_scenario:
         return False
 
     try:
@@ -2525,6 +2729,10 @@ async def _ensure_room_effective_materialized(
             channel="core.yjs.gateway.bootstrap",
             governed=True,
         ):
+            if authoritative_scenario:
+                ui_map = ydoc.get_map("ui")
+                with ydoc.begin_transaction() as txn:
+                    ui_map.set(txn, "current_scenario", authoritative_scenario)
             runtime._rebuild_in_doc(ydoc, webspace_id)  # noqa: SLF001 - room bootstrap needs in-doc materialization
 
         if not _room_effective_branches_ready(ydoc):
@@ -2617,13 +2825,18 @@ async def start_y_server() -> None:
     """
     global _y_server_started, _y_server_task
     if _y_server_started:
-        return
+        task = _y_server_task
+        if task is not None and task.done():
+            _recreate_y_server_after_failure(_task_exception_summary(task) or "task_done")
+        else:
+            return
     _y_server_started = True
 
     async def _runner() -> None:
         await y_server.start()
 
     _y_server_task = asyncio.create_task(_runner(), name="adaos-yjs-websocket-server")
+    _y_server_task.add_done_callback(_on_y_server_task_done)
     await y_server.started.wait()
 
 
@@ -2715,7 +2928,11 @@ class FastAPIWebsocketAdapter:
         try:
             await self._ws.send_bytes(message)
         except (WebSocketDisconnect, RuntimeError):
-            # клиент уже ушёл – тихо выходим
+            # Client is already gone; ypy-websocket treats send failures inside
+            # its room task group as fatal unless the adapter absorbs them.
+            return
+        except Exception:
+            _ylog.debug("yws send ignored after client disconnect path=%s", self._path, exc_info=True)
             return
 
     async def recv(self) -> bytes:
@@ -2783,6 +3000,50 @@ async def _update_device_presence(webspace_id: str, device_id: str) -> None:
             node["presence"] = presence
 
             devices.set(txn, device_id, node)
+
+
+async def _recover_stale_yws_room_bootstrap(webspace: str, dev_id: str, *, waited_s: float, reason: str) -> None:
+    """
+    Break a stale room bootstrap so reconnect loops do not keep piling onto the
+    same locked YWS room creation path.
+
+    This is deliberately scoped to runtime objects only. The persisted snapshot
+    remains the source of truth; the next browser connection can create a fresh
+    room and replay from disk.
+    """
+    _ylog.warning(
+        "recovering stale yws room bootstrap webspace=%s dev=%s waited_s=%.3f reason=%s",
+        webspace,
+        dev_id,
+        waited_s,
+        reason,
+    )
+    _room_locks.pop(webspace, None)
+    room = getattr(y_server, "rooms", {}).pop(webspace, None)
+    try:
+        _mark_room_reset(
+            webspace,
+            close_reason=reason,
+            room=room,
+            room_dropped=room is not None,
+            closed_connections=0,
+            closed_webrtc_peers=0,
+        )
+    except Exception:
+        _ylog.debug("failed to mark stale yws room bootstrap reset webspace=%s", webspace, exc_info=True)
+    try:
+        await asyncio.wait_for(
+            evict_ystore_for_webspace(
+                webspace,
+                store=getattr(room, "ystore", None) if room is not None else None,
+                persist_snapshot=False,
+                compact_runtime=False,
+                backup_kind=reason,
+            ),
+            timeout=max(float(_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S), 0.25),
+        )
+    except Exception:
+        _ylog.warning("failed to evict YStore during stale yws room bootstrap recovery webspace=%s", webspace, exc_info=True)
 
 
 async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
@@ -2888,11 +3149,18 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
         if lock is not None and not lock.locked():
             _room_locks.pop(webspace, None)
         elif lock is not None:
+            waited_s = time.perf_counter() - started
             _ylog.warning(
                 "yws room lock remains locked after bootstrap timeout webspace=%s dev=%s waited_s=%.3f",
                 webspace,
                 dev_id,
-                time.perf_counter() - started,
+                waited_s,
+            )
+            await _recover_stale_yws_room_bootstrap(
+                webspace,
+                dev_id,
+                waited_s=waited_s,
+                reason="room_bootstrap_timeout",
             )
         raise
 
@@ -2983,6 +3251,14 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     try:
         await room_ref.serve(adapter)
     except RuntimeError:
+        return
+    except Exception:
+        _ylog.debug(
+            "yws room serve ended with error webspace=%s dev=%s",
+            webspace_id,
+            dev_id,
+            exc_info=True,
+        )
         return
     finally:
         _untrack_yws_connection(webspace_id, websocket)

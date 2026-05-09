@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from aiortc import RTCDataChannel
 
-from adaos.services.yjs.gateway_ws import y_server, start_y_server
+from adaos.services.yjs import gateway_ws as yjs_gateway
 
 _log = logging.getLogger("adaos.webrtc.yjs")
 
@@ -80,10 +80,12 @@ class DataChannelYjsAdapter:
 
     async def serve(self) -> None:
         """Start serving Yjs sync on this DataChannel."""
-        await start_y_server()
+        await yjs_gateway.start_y_server()
         try:
-            await y_server.serve(self)  # type: ignore[arg-type]
+            await yjs_gateway.y_server.serve(self)  # type: ignore[arg-type]
         except RuntimeError:
             pass
+        except Exception:
+            _log.debug("yjs datachannel serve ended with error webspace=%s", self._path, exc_info=True)
         finally:
             _log.info("yjs datachannel closed webspace=%s", self._path)
