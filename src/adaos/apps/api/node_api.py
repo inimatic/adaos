@@ -546,6 +546,27 @@ def _attach_runtime_and_rebuild(
     return result
 
 
+def _attach_wait_for_rebuild_guard(
+    result: dict[str, Any],
+    *,
+    requested: bool,
+    effective: bool,
+    reason: str,
+) -> dict[str, Any]:
+    if requested == effective:
+        return result
+    guards = result.get("guards")
+    if not isinstance(guards, dict):
+        guards = {}
+        result["guards"] = guards
+    guards["wait_for_rebuild"] = {
+        "requested": requested,
+        "effective": effective,
+        "reason": reason,
+    }
+    return result
+
+
 def _runtime_debug_slice(runtime: Mapping[str, Any] | None) -> dict[str, Any]:
     runtime_map = dict(runtime) if isinstance(runtime, Mapping) else {}
     transport = runtime_map.get("transport") if isinstance(runtime_map.get("transport"), Mapping) else {}
@@ -754,7 +775,7 @@ async def _describe_yjs_materialization(
     if cached:
         return cached
     try:
-        async with async_read_ydoc(target_webspace_id) as ydoc:
+        async with async_read_ydoc(target_webspace_id, prefer_live_room=False) as ydoc:
             ui_map = ydoc.get_map("ui")
             data_map = ydoc.get_map("data")
             registry_map = ydoc.get_map("registry")
@@ -2254,11 +2275,19 @@ async def node_yjs_switch_scenario(webspace_id: str, payload: WebspaceYjsActionR
             "webspace_id": target_webspace_id,
             "error": "scenario_id_required",
         }
+    requested_wait_for_rebuild = bool(payload.wait_for_rebuild) if payload.wait_for_rebuild is not None else False
+    effective_wait_for_rebuild = False
     result = await switch_webspace_scenario(
         target_webspace_id,
         scenario_id,
         set_home=payload.set_home,
-        wait_for_rebuild=bool(payload.wait_for_rebuild),
+        wait_for_rebuild=effective_wait_for_rebuild,
+    )
+    result = _attach_wait_for_rebuild_guard(
+        result,
+        requested=requested_wait_for_rebuild,
+        effective=effective_wait_for_rebuild,
+        reason="scenario_switch_rebuild_runs_in_background_to_protect_route_budget",
     )
     result = _attach_runtime_and_rebuild(
         result,
@@ -2289,9 +2318,17 @@ async def node_yjs_go_home(
             "webspace_id": target_webspace_id,
             "error": "hub_role_required",
         }
+    requested_wait_for_rebuild = bool(payload.wait_for_rebuild) if payload and payload.wait_for_rebuild is not None else False
+    effective_wait_for_rebuild = False
     result = await go_home_webspace(
         target_webspace_id,
-        wait_for_rebuild=bool(payload.wait_for_rebuild) if payload and payload.wait_for_rebuild is not None else False,
+        wait_for_rebuild=effective_wait_for_rebuild,
+    )
+    result = _attach_wait_for_rebuild_guard(
+        result,
+        requested=requested_wait_for_rebuild,
+        effective=effective_wait_for_rebuild,
+        reason="go_home_rebuild_runs_in_background_to_protect_route_budget",
     )
     result = _attach_runtime_and_rebuild(
         result,
