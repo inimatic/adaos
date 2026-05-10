@@ -476,6 +476,101 @@ def test_run_boot_sequence_deduplicates_concurrent_starts(monkeypatch) -> None:
     asyncio.run(_exercise())
 
 
+def test_switch_role_to_hub_runs_root_bootstrap_before_boot(monkeypatch) -> None:
+    current = SimpleNamespace(role="member", hub_url="https://ru.api.inimatic.com/hubs/sn_member", subnet_id="sn_member")
+    provisional = SimpleNamespace(role="hub", hub_url=None, subnet_id="sn_provisional")
+    rooted = SimpleNamespace(role="hub", hub_url=None, subnet_id="sn_rooted")
+    calls: list[tuple[str, object]] = []
+
+    class _RootResult:
+        subnet_id = "sn_rooted"
+        reused = False
+        hub_key_path = "/tmp/hub_private.pem"
+        hub_cert_path = "/tmp/hub_cert.pem"
+        ca_cert_path = "/tmp/ca.cert"
+        workspace_path = "/tmp/sn_rooted"
+
+    class _RootDeveloperService:
+        def init(self, *, preferred_subnet_id=None):
+            calls.append(("root_init", preferred_subnet_id))
+            current.role = rooted.role
+            current.hub_url = rooted.hub_url
+            current.subnet_id = rooted.subnet_id
+            return _RootResult()
+
+    async def _shutdown(self) -> None:
+        calls.append(("shutdown", current.role))
+
+    async def _run_boot_sequence(self, app) -> None:
+        calls.append(("boot", current.subnet_id))
+
+    monkeypatch.setattr(bootstrap_mod.BootstrapService, "shutdown", _shutdown)
+    monkeypatch.setattr(bootstrap_mod.BootstrapService, "run_boot_sequence", _run_boot_sequence)
+    monkeypatch.setattr(bootstrap_mod, "load_config", lambda ctx=None: current)
+    monkeypatch.setattr(bootstrap_mod, "generate_provisional_subnet_id", lambda: "sn_provisional")
+    monkeypatch.setattr(bootstrap_mod, "cfg_set_role", lambda role, hub_url=None, subnet_id=None, ctx=None: provisional)
+    monkeypatch.setitem(sys.modules, "adaos.services.root.service", SimpleNamespace(RootDeveloperService=_RootDeveloperService))
+
+    svc = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=current),
+        heartbeat=SimpleNamespace(deregister=lambda *args, **kwargs: None),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+
+    result = asyncio.run(svc.switch_role(object(), "hub"))
+
+    assert result.subnet_id == "sn_rooted"
+    assert calls == [
+        ("shutdown", "member"),
+        ("root_init", "sn_provisional"),
+        ("boot", "sn_rooted"),
+    ]
+    assert svc._last_role_switch_root_init["ok"] is True
+    assert svc._last_role_switch_root_init["subnet_id"] == "sn_rooted"
+
+
+def test_switch_role_to_hub_fails_when_root_bootstrap_fails(monkeypatch) -> None:
+    current = SimpleNamespace(role="member", hub_url="https://ru.api.inimatic.com/hubs/sn_member", subnet_id="sn_member")
+    provisional = SimpleNamespace(role="hub", hub_url=None, subnet_id="sn_provisional")
+    boot_called = False
+
+    class _RootDeveloperService:
+        def init(self, **kwargs):
+            raise RuntimeError("no certs today")
+
+    async def _shutdown(self) -> None:
+        return None
+
+    async def _run_boot_sequence(self, app) -> None:
+        nonlocal boot_called
+        boot_called = True
+
+    monkeypatch.setattr(bootstrap_mod.BootstrapService, "shutdown", _shutdown)
+    monkeypatch.setattr(bootstrap_mod.BootstrapService, "run_boot_sequence", _run_boot_sequence)
+    monkeypatch.setattr(bootstrap_mod, "load_config", lambda ctx=None: current)
+    monkeypatch.setattr(bootstrap_mod, "generate_provisional_subnet_id", lambda: "sn_provisional")
+    monkeypatch.setattr(bootstrap_mod, "cfg_set_role", lambda role, hub_url=None, subnet_id=None, ctx=None: provisional)
+    monkeypatch.setitem(sys.modules, "adaos.services.root.service", SimpleNamespace(RootDeveloperService=_RootDeveloperService))
+
+    svc = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=current),
+        heartbeat=SimpleNamespace(deregister=lambda *args, **kwargs: None),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+
+    try:
+        asyncio.run(svc.switch_role(object(), "hub"))
+    except RuntimeError as exc:
+        assert "no certs today" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("switch_role should fail when Root bootstrap fails")
+
+    assert boot_called is False
+    assert svc._last_role_switch_root_init["ok"] is False
+
+
 def test_runtime_candidate_mode_follows_transition_role(monkeypatch) -> None:
     monkeypatch.setattr(bootstrap_mod, "runtime_transition_role", lambda: "candidate")
     assert bootstrap_mod._runtime_candidate_mode() is True

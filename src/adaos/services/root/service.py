@@ -679,7 +679,13 @@ class RootDeveloperService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def init(self, *, root_token: str | None = None, metadata: Mapping[str, Any] | None = None) -> RootInitResult:
+    def init(
+        self,
+        *,
+        root_token: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        preferred_subnet_id: str | None = None,
+    ) -> RootInitResult:
         cfg = self._load_config()
         node_id = cfg.node_settings.id or cfg.node_id
         emit(self.ctx.bus, "root.dev.init.start", {"node_id": node_id}, "root.dev")
@@ -689,10 +695,12 @@ class RootDeveloperService:
             if not token:
                 raise RootServiceError("ROOT_TOKEN is not configured; set ROOT_TOKEN or pass --token")
 
-            existing_subnet = cfg.subnet_settings.id or cfg.subnet_id
+            preferred_subnet = str(preferred_subnet_id or "").strip() or None
+            existing_subnet = preferred_subnet or cfg.subnet_settings.id or cfg.subnet_id
             key_path = cfg.hub_key_path()
             cert_path = cfg.hub_cert_path()
             ca_path = cfg.ca_cert_path()
+            force_new_keypair = bool(preferred_subnet and key_path.exists())
 
             if existing_subnet and key_path.exists() and cert_path.exists() and ca_path.exists():
                 try:
@@ -726,8 +734,7 @@ class RootDeveloperService:
                         ca_cert_path=ca_path,
                         workspace_path=workspace,
                     )
-
-            key_path, private_key = self._ensure_hub_keypair(cfg)
+            key_path, private_key = self._ensure_hub_keypair(cfg, force_new=force_new_keypair)
 
             verify = self._plain_verify(cfg)
             client = self._client(cfg)
@@ -739,6 +746,7 @@ class RootDeveloperService:
                 verify=verify,
                 private_key=private_key,
                 metadata=metadata,
+                subnet_id=preferred_subnet or cfg.subnet_id,
             )
             reused_flag = bool(registration.get("reused"))
             forge_info = registration.get("forge") if isinstance(registration, Mapping) else None
@@ -754,6 +762,11 @@ class RootDeveloperService:
             ca_pem = registration.get("ca_pem")
             if not isinstance(subnet_id, str) or not subnet_id:
                 raise RootServiceError("Root response missing subnet_id")
+            if preferred_subnet and subnet_id != preferred_subnet:
+                raise RootServiceError(
+                    f"Root returned subnet_id {subnet_id} instead of requested {preferred_subnet}; "
+                    "the requested subnet may not be claimable with the current Root registration flow"
+                )
             if not isinstance(cert_pem, str) or not cert_pem.strip():
                 raise RootServiceError("Root response missing hub certificate")
 
