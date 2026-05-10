@@ -28,6 +28,11 @@ adaos skill gc
 
 For runtime slot layout, rollback semantics, and the optional `data/internal/a|b` plus `data_migration_tool` flow, see [Skill Runtime Lifecycle](skill_runtime.md).
 
+For browser-facing or LLM-authored skills, follow
+[LLM-Safe Skill Development Guide](guides/llm-skill-development.md). That guide
+defines the current Yjs, stream, projection, details, and guard/quarantine
+contracts for skills.
+
 ## Service-type skills
 
 Some skills are exposed through the service supervisor:

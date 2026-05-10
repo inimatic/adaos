@@ -323,6 +323,9 @@ second addressing model for time-series data.
 
 ## LLM Authoring Guidance
 
+For the current skill-level implementation checklist, use
+[LLM-Safe Skill Development Guide](../guides/llm-skill-development.md).
+
 LLM-authored skills and scenarios should follow these rules:
 
 - prefer declared logical paths and typed refs over inventing new branches

@@ -57,10 +57,12 @@ UI architecture.
    ownership through the Yjs/runtime bridge.
 4. **Event mesh** - UI commands travel over `/ws` (`events_ws`). Each command
    becomes a domain event (`desktop.*`) with metadata containing the current
-   `webspace_id`. Skills subscribe to these events and mutate the associated
-   YDoc. The same semantic event channel now also carries lightweight runtime
-   pushes such as `node.status`, `core.update.status`,
-   `supervisor.update.status.raw`, and `webio.stream.*`.
+   `webspace_id`. Skills subscribe to these events and publish results through
+   governed projection or stream helpers; the runtime owns the normal YDoc
+   mutation boundary. Legacy direct skill YDoc mutation is deprecated and
+   should be explicit-capability-gated. The same semantic event channel now
+   also carries lightweight runtime pushes such as `node.status`,
+   `core.update.status`, `supervisor.update.status.raw`, and `webio.stream.*`.
 5. **Frontend** - the Angular/Ionic runtime consumes shared state through
    `YDocService` and transport-independent stream receivers through
    `WebIoStreamService`. It renders apps/widgets from the merged runtime state
@@ -483,8 +485,9 @@ listens for the same event type and resolves the destination webspace from
 either `payload.webspace_id` or `payload._meta.webspace_id`. This ensures:
 
 * multiple browsers in different webspaces can change the city independently
-* all writes go through `async_get_ydoc(webspace_id)`, so only the intended
-  YDoc is mutated
+* browser-visible writes go through governed projection helpers such as
+  `ctx_subnet` / `ProjectionService`, so only declared slots in the intended
+  webspace are updated
 * when `target_node_id` is present, only the matching node applies the change
 
 `RouterService` follows the same pattern: when emitting runtime events
@@ -538,8 +541,8 @@ while member snapshots should prefer local state and local workspace scans.
   `desktop.webspace.use` and reloads the UI after the hub acknowledges.
 * The merged catalog already exposes DEV badges, so no additional filtering
   happens on the client.
-* The weather modal directly edits `data.weather.current.city`; the hub updates
-  the rest of the fields asynchronously.
+* The weather modal sends a small city-change command; the skill projects the
+  resulting compact weather state asynchronously.
 
 ## Materialization and Readiness
 
@@ -785,6 +788,7 @@ granularity rather than annotating every leaf control.
   Production deployments should harden these surfaces.
 
 Despite the shortcuts, this architecture already models how declarative
-scenarios, runtime skills, and the browser cooperate via Yjs. Extending it to
-additional scenarios or skills only requires publishing the right events with
-`webspace_id` metadata and updating the target YDoc accordingly.
+scenarios, runtime skills, and the browser cooperate via Yjs and streams.
+Extending it to additional scenarios or skills requires declaring the right
+projection or stream contracts, publishing events with `webspace_id` metadata,
+and letting governed runtime helpers update the browser-visible state.
