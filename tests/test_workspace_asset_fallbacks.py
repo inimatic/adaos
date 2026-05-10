@@ -147,6 +147,36 @@ def test_webspace_runtime_load_webui_falls_back_to_repo_workspace(tmp_path: Path
     assert "prompt_ide_modal" in payload["registry"]["modals"]
 
 
+def test_webspace_runtime_load_webui_reads_shared_ui_owner_from_skill_manifest(tmp_path: Path, monkeypatch) -> None:
+    runtime_base = tmp_path / "runtime"
+    repo_root = tmp_path / "repo"
+    repo_skill = repo_root / ".adaos" / "workspace" / "skills" / "demo_metrics_skill"
+    repo_skill.mkdir(parents=True, exist_ok=True)
+    (repo_skill / "skill.yaml").write_text(
+        "name: demo_metrics_skill\nwebui_owner: shared\n",
+        encoding="utf-8",
+    )
+    (repo_skill / "webui.json").write_text(
+        json.dumps(
+            {
+                "ydoc_defaults": {
+                    "data/demo_metrics/table": {"items": [{"id": "cpu"}]},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fake_ctx = SimpleNamespace(paths=_PathsStub(base_dir=runtime_base, repo_root=repo_root))
+    runtime = WebspaceScenarioRuntime(fake_ctx)
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
+
+    payload = runtime._load_webui("demo_metrics_skill", "default")
+
+    assert payload["ui_owner"] == "shared"
+    assert payload["ydoc_defaults"]["data/demo_metrics/table"] == {"items": [{"id": "cpu"}]}
+
+
 def test_webspace_runtime_load_webui_cache_refreshes_when_file_changes(tmp_path: Path) -> None:
     runtime_base = tmp_path / "runtime"
     repo_root = tmp_path / "repo"
