@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
+import threading
 from types import SimpleNamespace
 import types
 
@@ -25,6 +27,7 @@ from adaos.services.reliability import (
     _event_model_phase0_communication_checkpoint,
     _hub_member_transport_evidence_snapshot,
     _enrich_required_upstream_link_with_sidecar,
+    _request_yjs_replay_pressure_compaction,
     _state_sync_snapshot,
     assess_transport_diagnostics,
     hub_member_connection_state_snapshot,
@@ -1788,6 +1791,110 @@ def test_state_sync_keeps_ready_semantics_for_bounded_replay_maintenance_pressur
     assert snapshot["freshness_state"] == "fresh"
     assert snapshot["replay"]["cursor"] == "32/32"
     assert snapshot["blockers"] == ["bounded_replay_window_near_limit"]
+
+
+def test_replay_pressure_compaction_request_schedules_background_task(monkeypatch) -> None:
+    async def _run() -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        class _Store:
+            async def request_runtime_compaction(self, **kwargs):
+                calls.append(("desktop", dict(kwargs)))
+                return True
+
+        monkeypatch.setenv("ADAOS_YSTORE_AUTOCOMPACT_REPLAY_PRESSURE_QUIET_SEC", "0.25")
+        monkeypatch.setitem(
+            sys.modules,
+            "adaos.services.yjs.store",
+            SimpleNamespace(get_ystore_for_webspace=lambda webspace_id: _Store()),
+        )
+
+        requested = _request_yjs_replay_pressure_compaction(
+            "desktop",
+            {
+                "runtime_compaction_eligible": True,
+                "replay_window_entries": 32,
+                "replay_window_limit": 32,
+            },
+            assessment_state="pressure",
+            reasons=["bounded_replay_window_near_limit"],
+        )
+
+        assert requested is True
+        await asyncio.sleep(0)
+        assert calls == [
+            (
+                "desktop",
+                {
+                    "reason": "replay_pressure",
+                    "min_quiet_sec": 0.25,
+                },
+            )
+        ]
+
+    asyncio.run(_run())
+
+
+def test_replay_pressure_compaction_request_runs_without_event_loop(monkeypatch) -> None:
+    done = threading.Event()
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class _Store:
+        async def request_runtime_compaction(self, **kwargs):
+            calls.append(("desktop", dict(kwargs)))
+            done.set()
+            return True
+
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOCOMPACT_REPLAY_PRESSURE_QUIET_SEC", "0.25")
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.store",
+        SimpleNamespace(get_ystore_for_webspace=lambda webspace_id: _Store()),
+    )
+
+    requested = _request_yjs_replay_pressure_compaction(
+        "desktop",
+        {
+            "runtime_compaction_eligible": True,
+            "replay_window_entries": 32,
+            "replay_window_limit": 32,
+            "last_write_ago_s": 10.0,
+            "auto_backup_inflight": False,
+        },
+        assessment_state="pressure",
+        reasons=["bounded_replay_window_near_limit"],
+    )
+
+    assert requested is True
+    assert done.wait(timeout=2.0)
+    assert calls == [
+        (
+            "desktop",
+            {
+                "reason": "replay_pressure",
+                "min_quiet_sec": 0.25,
+            },
+        )
+    ]
+
+
+def test_replay_pressure_compaction_request_respects_snapshot_quiet_gate(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOCOMPACT_REPLAY_PRESSURE_QUIET_SEC", "2.0")
+
+    requested = _request_yjs_replay_pressure_compaction(
+        "desktop",
+        {
+            "runtime_compaction_eligible": True,
+            "replay_window_entries": 32,
+            "replay_window_limit": 32,
+            "last_write_ago_s": 0.25,
+            "auto_backup_inflight": False,
+        },
+        assessment_state="pressure",
+        reasons=["bounded_replay_window_near_limit"],
+    )
+
+    assert requested is False
 
 
 def test_node_members_endpoint_returns_hub_member_connection_state(monkeypatch) -> None:
