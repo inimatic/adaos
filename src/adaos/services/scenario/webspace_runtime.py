@@ -4973,17 +4973,16 @@ async def rebuild_webspace_from_sources(
         fresh_doc_rebuild = True
         stage_started = time.perf_counter()
         try:
-            from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
             from adaos.services.yjs.store import reset_ystore_for_webspace  # pylint: disable=import-outside-toplevel
 
-            try:
-                reset_room_result = await reset_live_webspace_room(
-                    webspace_id,
-                    close_reason="scenario_switch_fresh_doc",
-                    reset_route_runtime=False,
-                )
-            except Exception:
-                pass
+            reset_room_result = {
+                "ok": True,
+                "skipped": "live_transport_preserved",
+                "close_reason": "scenario_switch_fresh_doc",
+                "reset_route_runtime": False,
+                "closed_connections": 0,
+                "closed_webrtc_peers": 0,
+            }
             try:
                 reset_ystore_for_webspace(webspace_id)
                 ystore_reset = True
@@ -5236,12 +5235,20 @@ async def rebuild_webspace_from_sources(
     if should_refresh_live_room:
         stage_started = time.perf_counter()
         try:
-            from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
+            if requested_action in {"scenario_switch_rebuild", "reload"}:
+                from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
 
-            live_room_refresh_result = await reset_live_webspace_room(
-                webspace_id,
-                close_reason=f"semantic_rebuild:{requested_action}",
-            )
+                live_room_refresh_result = await refresh_live_webspace_effective_branches(
+                    webspace_id,
+                    reason=f"semantic_rebuild:{requested_action}",
+                )
+            else:
+                from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
+
+                live_room_refresh_result = await reset_live_webspace_room(
+                    webspace_id,
+                    close_reason=f"semantic_rebuild:{requested_action}",
+                )
         except Exception as exc:
             live_room_refresh_result = {
                 "ok": False,
