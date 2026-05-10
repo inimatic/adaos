@@ -776,6 +776,97 @@ def test_infrastate_summary_exposes_semantic_state_plane_contracts(monkeypatch):
     assert summary["semantic_yjs_pressure"]["policy_state"] == "block"
 
 
+def test_infrastate_summary_uses_dev_slot_for_local_root_runtime(monkeypatch):
+    mod = _load_infrastate_module()
+    memory: dict[str, object] = {}
+
+    monkeypatch.setattr(mod, "skill_memory_get", lambda key, default=None: memory.get(key, default))
+    monkeypatch.setattr(mod, "skill_memory_set", lambda key, value: memory.__setitem__(key, value))
+    monkeypatch.setattr(mod, "_node_tabs", lambda conf, ui_state, reliability: ([], {"kind": "local", "node_id": "hub-1", "label": "hub"}))
+    monkeypatch.setattr(mod, "_skill_runtime_migration_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_runtime_migration_note", lambda report: "")
+    monkeypatch.setattr(mod, "_skill_runtime_rollback_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_runtime_rollback_note", lambda report: "")
+    monkeypatch.setattr(mod, "_skill_post_commit_checks_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_post_commit_checks_note", lambda report: "")
+    monkeypatch.setattr(mod, "_supervisor_transition_note", lambda status: {})
+    monkeypatch.setattr(mod, "_reliability_summary_note", lambda reliability, transport_diag: "")
+    monkeypatch.setattr(mod, "_hub_root_strategy", lambda reliability, transport_diag: {})
+    monkeypatch.setattr(mod, "_effective_channel_view", lambda *args, **kwargs: ("ready", "stable", {}))
+    monkeypatch.setattr(mod, "_selected_yjs_webspace_id", lambda ui_state, reliability: "default")
+    monkeypatch.setattr(mod, "_repo_root", lambda: Path("D:/git/adaos"))
+    monkeypatch.setattr(mod.os, "getenv", lambda key, default=None: "dev" if key == "ENV_TYPE" else "")
+
+    summary = mod._summary(
+        status={"state": "ready", "message": "ok", "phase": "validate"},
+        last_result={},
+        slots_payload={},
+        lifecycle={},
+        conf=SimpleNamespace(role="hub", node_id="hub-1"),
+        build={"runtime_git_short_commit": "77fab7d"},
+        ui_state={},
+        reliability={"runtime": {}},
+        transport_diag={},
+        selected_member=None,
+    )
+
+    assert summary["subtitle"] == "slot dev | 77fab7d"
+
+
+def test_infrastate_summary_marks_disconnected_remote_node_offline(monkeypatch):
+    mod = _load_infrastate_module()
+    memory: dict[str, object] = {}
+
+    monkeypatch.setattr(mod, "skill_memory_get", lambda key, default=None: memory.get(key, default))
+    monkeypatch.setattr(mod, "skill_memory_set", lambda key, value: memory.__setitem__(key, value))
+    monkeypatch.setattr(
+        mod,
+        "_node_tabs",
+        lambda conf, ui_state, reliability: (
+            [],
+            {
+                "kind": "member",
+                "node_id": "member-1",
+                "label": "Edge One",
+                "node_compact_label": "E1",
+            },
+        ),
+    )
+    monkeypatch.setattr(mod, "_skill_runtime_migration_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_runtime_migration_note", lambda report: "")
+    monkeypatch.setattr(mod, "_skill_runtime_rollback_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_runtime_rollback_note", lambda report: "")
+    monkeypatch.setattr(mod, "_skill_post_commit_checks_report", lambda status, last_result: {})
+    monkeypatch.setattr(mod, "_skill_post_commit_checks_note", lambda report: "")
+    monkeypatch.setattr(mod, "_supervisor_transition_note", lambda status: {})
+    monkeypatch.setattr(mod, "_reliability_summary_note", lambda reliability, transport_diag: "")
+    monkeypatch.setattr(mod, "_hub_root_strategy", lambda reliability, transport_diag: {})
+    monkeypatch.setattr(mod, "_effective_channel_view", lambda *args, **kwargs: ("ready", "stable", {}))
+    monkeypatch.setattr(mod, "_selected_yjs_webspace_id", lambda ui_state, reliability: "default")
+    monkeypatch.setattr(mod, "_remote_control_payload", lambda snapshot, member: {})
+
+    summary = mod._summary(
+        status={"state": "countdown", "message": "countdown active", "phase": "countdown"},
+        last_result={},
+        slots_payload={"active_slot": "A"},
+        lifecycle={"node_state": "offline"},
+        conf=SimpleNamespace(role="hub", node_id="hub-1"),
+        build={"runtime_git_short_commit": "77fab7d"},
+        ui_state={},
+        reliability={"runtime": {}},
+        transport_diag={},
+        selected_member={
+            "connected": False,
+            "state": "offline",
+            "snapshot_state": "stale",
+            "last_message_ago_s": 42,
+            "last_seen_ago_s": 60,
+        },
+    )
+
+    assert summary["value"] == "Offline"
+
+
 def test_infrastate_summary_buttons_offer_defer_during_countdown():
     mod = _load_infrastate_module()
 

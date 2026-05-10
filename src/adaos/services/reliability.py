@@ -4691,7 +4691,10 @@ def yjs_sync_runtime_snapshot(
         elif webspaces:
             selected_webspace_id = sorted(str(key) for key in webspaces.keys())[0]
     selected_entry = webspaces.get(selected_webspace_id) if isinstance(webspaces.get(selected_webspace_id), dict) else {}
-    selected_webspace = _build_yjs_selected_webspace_snapshot(selected_webspace_id)
+    selected_webspace = _with_live_yjs_materialization_snapshot(
+        selected_webspace_id,
+        _build_yjs_selected_webspace_snapshot(selected_webspace_id),
+    )
     selected_load_mark = load_mark.get("selected_webspace") if isinstance(load_mark.get("selected_webspace"), dict) else {}
     last_reload = (
         dict(gateway_commands.get("last_reload") or {})
@@ -6036,6 +6039,103 @@ def _build_yjs_selected_webspace_snapshot(webspace_id: str | None) -> dict[str, 
             "rebuild": {"status": "unknown", "error": f"{type(exc).__name__}: {exc}"},
             "error": f"{type(exc).__name__}: {exc}",
         }
+
+
+def _as_runtime_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _as_runtime_list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _live_yjs_materialization_snapshot(webspace_id: str | None) -> dict[str, Any] | None:
+    target_webspace_id = str(webspace_id or "").strip()
+    if not target_webspace_id:
+        return None
+    try:
+        from adaos.services.yjs.doc import _can_access_live_room_directly, _resolve_live_room  # noqa: PLC2701
+
+        room = _resolve_live_room(target_webspace_id)
+        if not _can_access_live_room_directly(room):
+            return None
+        ui_map = room.ydoc.get_map("ui")
+        data_map = room.ydoc.get_map("data")
+        registry_map = room.ydoc.get_map("registry")
+        application = _as_runtime_dict(ui_map.get("application") or {})
+        desktop = _as_runtime_dict(application.get("desktop") or {})
+        modals = _as_runtime_dict(application.get("modals") or {})
+        catalog = _as_runtime_dict(data_map.get("catalog") or {})
+        apps = _as_runtime_list(catalog.get("apps"))
+        widgets = _as_runtime_list(catalog.get("widgets"))
+        page_schema = _as_runtime_dict(desktop.get("pageSchema") or {})
+        page_widgets = _as_runtime_list(page_schema.get("widgets"))
+        topbar = _as_runtime_list(desktop.get("topbar"))
+        current_scenario = str(ui_map.get("current_scenario") or "").strip() or None
+        has_ui_application = bool(application)
+        has_desktop_config = bool(desktop)
+        has_desktop_page_schema = bool(page_schema)
+        has_apps_catalog_modal = "apps_catalog" in modals
+        has_widgets_catalog_modal = "widgets_catalog" in modals
+        has_catalog_apps = isinstance(catalog.get("apps"), list)
+        has_catalog_widgets = isinstance(catalog.get("widgets"), list)
+        missing_branches: list[str] = []
+        if not has_ui_application:
+            missing_branches.append("ui.application")
+        if not has_desktop_config:
+            missing_branches.append("ui.application.desktop")
+        if not has_desktop_page_schema:
+            missing_branches.append("ui.application.desktop.pageSchema")
+        if not has_apps_catalog_modal:
+            missing_branches.append("ui.application.modals.apps_catalog")
+        if not has_widgets_catalog_modal:
+            missing_branches.append("ui.application.modals.widgets_catalog")
+        if not has_catalog_apps:
+            missing_branches.append("data.catalog.apps")
+        if not has_catalog_widgets:
+            missing_branches.append("data.catalog.widgets")
+        ready = not missing_branches
+        return {
+            "ready": ready,
+            "readiness_state": "ready" if ready else "pending_structure",
+            "missing_branches": missing_branches,
+            "webspace_id": target_webspace_id,
+            "current_scenario": current_scenario,
+            "has_ui_application": has_ui_application,
+            "has_desktop_config": has_desktop_config,
+            "has_desktop_page_schema": has_desktop_page_schema,
+            "has_apps_catalog_modal": has_apps_catalog_modal,
+            "has_widgets_catalog_modal": has_widgets_catalog_modal,
+            "has_catalog_apps": has_catalog_apps,
+            "has_catalog_widgets": has_catalog_widgets,
+            "catalog_counts": {
+                "apps": len(apps),
+                "widgets": len(widgets),
+            },
+            "topbar_count": len(topbar),
+            "page_widget_count": len(page_widgets),
+            "snapshot_source": "live_yjs_runtime",
+            "observed_at": time.time(),
+            "stale": False,
+        }
+    except Exception:
+        return None
+
+
+def _with_live_yjs_materialization_snapshot(webspace_id: str | None, selected_webspace: dict[str, Any] | None) -> dict[str, Any]:
+    selected = dict(selected_webspace or {})
+    rebuild = dict(selected.get("rebuild") or {})
+    cached = rebuild.get("materialization") if isinstance(rebuild.get("materialization"), dict) else {}
+    if cached and bool(cached.get("ready")) and not bool(cached.get("stale")):
+        return selected
+    live = _live_yjs_materialization_snapshot(webspace_id)
+    if not live:
+        return selected
+    if bool(live.get("ready")) or not cached:
+        rebuild["materialization"] = live
+        selected["rebuild"] = rebuild
+        selected["live_materialization_observed"] = True
+    return selected
 
 
 def _build_yjs_recovery_policy(
