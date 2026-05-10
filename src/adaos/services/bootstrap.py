@@ -4746,22 +4746,22 @@ class BootstrapService:
                             _route_starvation_warn_s = 0.05
                         try:
                             _route_pending_data_warn_bytes = int(
-                                os.getenv("HUB_ROUTE_PENDING_DATA_WARN_BYTES", str(256 * 1024)) or str(256 * 1024)
+                                os.getenv("HUB_ROUTE_PENDING_DATA_WARN_BYTES", str(2 * 1024 * 1024)) or str(2 * 1024 * 1024)
                             )
                         except Exception:
-                            _route_pending_data_warn_bytes = 256 * 1024
+                            _route_pending_data_warn_bytes = 2 * 1024 * 1024
                         if _route_pending_data_warn_bytes < 0:
                             _route_pending_data_warn_bytes = 0
                         try:
                             _route_guard_pending_data_bytes = int(
                                 os.getenv(
                                     "HUB_ROUTE_GUARD_PENDING_DATA_BYTES",
-                                    str(max(_route_pending_data_warn_bytes, 512 * 1024)),
+                                    str(max(_route_pending_data_warn_bytes, 4 * 1024 * 1024)),
                                 )
-                                or str(max(_route_pending_data_warn_bytes, 512 * 1024))
+                                or str(max(_route_pending_data_warn_bytes, 4 * 1024 * 1024))
                             )
                         except Exception:
-                            _route_guard_pending_data_bytes = max(_route_pending_data_warn_bytes, 512 * 1024)
+                            _route_guard_pending_data_bytes = max(_route_pending_data_warn_bytes, 4 * 1024 * 1024)
                         if _route_guard_pending_data_bytes < 0:
                             _route_guard_pending_data_bytes = 0
                         try:

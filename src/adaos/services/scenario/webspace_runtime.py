@@ -5543,7 +5543,7 @@ asyncio.run(_main())
                 webspace_id,
                 close_reason="scenario_switch_worker_done",
                 persist_ystore_snapshot=False,
-                reset_route_runtime=True,
+                reset_route_runtime=False,
             )
         except Exception as exc:
             parsed["live_room_refresh"] = {
