@@ -8558,8 +8558,50 @@ class BootstrapService:
                 pass
             subnet_id = subnet_id or generate_provisional_subnet_id()
         conf = cfg_set_role(role, hub_url=hub_url, subnet_id=subnet_id, ctx=self.ctx)
+        if str(role or "").strip().lower() == "hub":
+            self._last_role_switch_root_init = self._ensure_hub_root_bootstrap_for_role_switch(conf)
+            if not bool(self._last_role_switch_root_init.get("ok")):
+                raise RuntimeError(str(self._last_role_switch_root_init.get("error") or "hub Root bootstrap failed"))
+            conf = load_config(ctx=self.ctx)
+        else:
+            self._last_role_switch_root_init = {"attempted": False, "reason": "role_not_hub"}
         await self.run_boot_sequence(app or self._app)
         return conf
+
+    def _ensure_hub_root_bootstrap_for_role_switch(self, conf: NodeConfig) -> dict[str, Any]:
+        """
+        Ensure a switched hub has Root-issued mTLS material before booting.
+
+        `node role switch --role hub` can be called from a member runtime. In that
+        path the config role changes immediately, but the hub still needs
+        Root-issued hub cert/key/CA before the hub-root NATS tunnel can obtain
+        credentials and become visible to routed browsers.
+        """
+        if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+            return {"attempted": False, "reason": "role_not_hub"}
+        if str(os.getenv("ADAOS_ROLE_SWITCH_HUB_ROOT_INIT", "1") or "1").strip().lower() in {"0", "false", "no", "off"}:
+            return {"attempted": False, "ok": True, "reason": "disabled_by_env"}
+        try:
+            from adaos.services.root.service import RootDeveloperService
+
+            result = RootDeveloperService().init(preferred_subnet_id=str(getattr(conf, "subnet_id", "") or "").strip() or None)
+            return {
+                "attempted": True,
+                "ok": True,
+                "subnet_id": result.subnet_id,
+                "reused": bool(result.reused),
+                "hub_key_path": str(result.hub_key_path),
+                "hub_cert_path": str(result.hub_cert_path),
+                "ca_cert_path": str(result.ca_cert_path) if result.ca_cert_path else None,
+                "workspace_path": str(result.workspace_path),
+            }
+        except Exception as exc:
+            return {
+                "attempted": True,
+                "ok": False,
+                "subnet_id": str(getattr(conf, "subnet_id", "") or "") or None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
 
 # --- модульные фасады (синглтон) ---
