@@ -362,6 +362,9 @@ Status note:
   binding behavior for the demo slice
 - the demo package now reuses the same typed refs across both `workspace` and
   `operations` surface classes
+- semantic workspace metadata is now mirrored into `runtime.surface.*` browser
+  state so typed actions can carry stable surface context without inventing a
+  second addressing model
 
 ### 0. Vocabulary Fixation
 
@@ -421,6 +424,8 @@ Status note:
   consistently for the same demo bindings
 - [x] repository demo manifests reuse the same typed refs across both
   `workspace` and `operations` surface classes
+- [x] typed host and skill action envelopes now inherit `runtime.surface.*`
+  context from semantic workspace metadata
 - [ ] manual verification on the target stand
 
 ### 5. Deferred Generalization
