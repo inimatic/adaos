@@ -457,6 +457,8 @@ Current pre-stand milestone:
   of the legacy compatibility table
 - semantic `metric_chart` now renders through a Taiga-backed surface instead of
   the temporary compatibility chart
+- demo action surfaces now exercise `open_modal`, `call_host`, and
+  `invoke_skill_action` against the live event surface
 
 ### 0. Architecture Fixation
 
@@ -530,7 +532,7 @@ Recommended identifiers:
 - [x] create one demo scenario that exercises workspace composition
 - [ ] cover simple grid, sortable/filterable grid, one chart-oriented surface,
   event stream, and chat panel
-- [ ] include examples of shared state, node-scoped state, stream-driven state,
+- [x] include examples of shared state, node-scoped state, stream-driven state,
   and local view state
 - [x] include one shared table-plus-chart drill-down flow suitable for Taiga
   renderer validation
@@ -547,6 +549,8 @@ Recommended identifiers:
 - [x] semantic `metric_chart` is rendered through a Taiga-backed surface
 - [x] semantic `chat_panel` is rendered through the browser chat surface
 - [x] production browser build passes with the upgraded Angular/Taiga baseline
+- [x] demo action paths exercise `open_modal`, `call_host`, and
+  `invoke_skill_action`
 - [ ] manual verification on the target stand
 
 Recommended demo data shape:
