@@ -29,8 +29,11 @@ Current implementation details remain documented in:
 2. Keep logical authoring addresses separate from runtime materialization refs.
 3. Keep domain identity refs separate from state refs and action refs.
 4. Keep scope explicit whenever state may be shared, node-owned, or local.
-5. Prefer deterministic, typed refs over ad hoc string conventions.
-6. LLM-oriented authoring should use a compact, repetitive vocabulary.
+5. When skill-owned browser state must stay shared, declare ownership
+   explicitly in the skill manifest rather than relying on client-side
+   exceptions.
+6. Prefer deterministic, typed refs over ad hoc string conventions.
+7. LLM-oriented authoring should use a compact, repetitive vocabulary.
 
 ## Non-Goals
 

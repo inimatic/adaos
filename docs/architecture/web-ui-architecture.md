@@ -561,6 +561,8 @@ Recommended identifiers:
   and local view state
 - [x] include one shared table-plus-chart drill-down flow suitable for Taiga
   renderer validation
+- [x] support an explicit shared browser-ownership contract for skill Web UI
+  declarations when a skill should not be node-scoped
 
 ### 7a. Stand Verification
 
@@ -577,8 +579,8 @@ Recommended identifiers:
 - [x] demo action paths exercise `open_modal`, `call_host`, and
   `invoke_skill_action`
 - [x] `open_workspace` is wired end-to-end through a typed runtime bridge
-- [x] desktop and modal demo surfaces both resolve node-owned data through the
-  same runtime scoping rules
+- [x] desktop and modal demo surfaces both resolve the same data branches under
+  an explicit ownership contract instead of relying on accidental scoping
 - [x] the demo now exposes one `operations`-class surface in addition to the
   primary `workspace`-class surface
 - [ ] manual verification on the target stand

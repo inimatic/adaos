@@ -777,6 +777,32 @@ def test_ydoc_defaults_create_node_scoped_nested_skill_state() -> None:
     assert weather["cities"] == ["Moscow", "Paris"]
 
 
+def test_ydoc_defaults_keep_shared_skill_state_when_ui_owner_is_shared() -> None:
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    fake_state = {
+        "data": _FakeMap({})
+    }
+    fake_doc = _FakeDoc(fake_state)
+
+    runtime._apply_ydoc_defaults_in_txn(
+        fake_doc,
+        _FakeTxn(),
+        [
+            {
+                "skill": "demo_metrics_skill",
+                "node_id": "member-1",
+                "ui_owner": "shared",
+                "ydoc_defaults": {
+                    "data/demo_metrics/table": {"items": [{"id": "cpu"}]},
+                },
+            }
+        ],
+    )
+
+    assert fake_state["data"]["demo_metrics"]["table"] == {"items": [{"id": "cpu"}]}
+    assert "nodes" not in fake_state["data"] or "demo_metrics" not in fake_state["data"].get("nodes", {})
+
+
 def test_describe_webspace_operational_state_exposes_manifest_and_current_scenario(monkeypatch) -> None:
     webspace_id = "phase2-describe"
     ensure_workspace(webspace_id)

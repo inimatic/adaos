@@ -17,6 +17,7 @@ import sys
 import time
 
 import y_py as Y
+import yaml
 
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.capacity import get_local_capacity
@@ -724,6 +725,17 @@ def _is_node_owned_skill(skill_name: str) -> bool:
     return bool(token) and token != "web_desktop_skill"
 
 
+def _decl_is_node_owned(decl: Mapping[str, Any] | None) -> bool:
+    if not isinstance(decl, Mapping):
+        return False
+    owner = str(decl.get("ui_owner") or "").strip().lower()
+    if owner == "shared":
+        return False
+    if owner == "node":
+        return True
+    return _is_node_owned_skill(str(decl.get("skill") or ""))
+
+
 def _scope_node_data_source(data_source: Any, *, node_id: str) -> Any:
     if not isinstance(data_source, Mapping):
         return data_source
@@ -815,7 +827,7 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
         skill_name = str(decl.get("skill") or "").strip()
         source = f"skill:{skill_name}" if skill_name else "skill:unknown"
         dev_flag = str(decl.get("space") or "default").strip().lower() == "dev"
-        node_owned = _is_node_owned_skill(skill_name)
+        node_owned = _decl_is_node_owned(decl)
         reg = decl.get("registry") if isinstance(decl.get("registry"), Mapping) else {}
         modal_id_map = _node_scoped_modal_ids(reg, node_id=node_id) if node_owned else {}
         for app in decl.get("apps") or []:
@@ -2646,17 +2658,21 @@ class WebspaceScenarioRuntime:
     def _load_webui(self, skill_name: str, space: str) -> Dict[str, Any]:
         paths = self.ctx.paths
         base = paths.dev_skills_dir() if space == "dev" else paths.skills_dir()
-        path = Path(base) / skill_name / "webui.json"
+        skill_dir = Path(base) / skill_name
+        path = skill_dir / "webui.json"
+        manifest_path = skill_dir / "skill.yaml"
         if not path.exists():
             try:
                 repo_root_attr = getattr(paths, "repo_root", None)
                 repo_root = repo_root_attr() if callable(repo_root_attr) else repo_root_attr
                 if repo_root:
-                    fallback = (
-                        Path(repo_root).expanduser().resolve() / ".adaos" / "workspace" / "skills" / skill_name / "webui.json"
+                    fallback_dir = (
+                        Path(repo_root).expanduser().resolve() / ".adaos" / "workspace" / "skills" / skill_name
                     )
+                    fallback = fallback_dir / "webui.json"
                     if fallback.exists():
                         path = fallback
+                        manifest_path = fallback_dir / "skill.yaml"
             except Exception:
                 pass
         if not path.exists():
@@ -2666,7 +2682,17 @@ class WebspaceScenarioRuntime:
         cache_key = str(path.resolve())
         try:
             stat = path.stat()
-            stamp = (cache_key, int(stat.st_mtime_ns), int(stat.st_size))
+            stamp_parts: list[Any] = [cache_key, int(stat.st_mtime_ns), int(stat.st_size)]
+            if manifest_path.exists():
+                manifest_stat = manifest_path.stat()
+                stamp_parts.extend(
+                    [
+                        str(manifest_path.resolve()),
+                        int(manifest_stat.st_mtime_ns),
+                        int(manifest_stat.st_size),
+                    ]
+                )
+            stamp = tuple(stamp_parts)
         except Exception:
             stamp = None
         if stamp is not None:
@@ -2698,11 +2724,22 @@ class WebspaceScenarioRuntime:
         contributions = [c for c in raw_contrib if isinstance(c, dict)]
         webio_raw = raw.get("webio") or {}
         webio_receivers_raw = webio_raw.get("receivers") if isinstance(webio_raw, dict) else {}
+        ui_owner = "shared" if skill_name == "web_desktop_skill" else "node"
+        try:
+            if manifest_path.exists():
+                manifest_raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+                if isinstance(manifest_raw, dict):
+                    owner_token = str(manifest_raw.get("webui_owner") or manifest_raw.get("ui_owner") or "").strip().lower()
+                    if owner_token in {"shared", "node"}:
+                        ui_owner = owner_token
+        except Exception:
+            _log.debug("failed to read skill manifest ownership for %s", skill_name, exc_info=True)
 
         payload = {
             "skill": skill_name,
             "space": space,
             "node_id": _local_node_id(),
+            "ui_owner": ui_owner,
             "apps": [_apply_webui_load_hint(it) for it in apps if isinstance(it, dict)],
             "widgets": [_apply_webui_load_hint(it) for it in widgets if isinstance(it, dict)],
             "registry": {
@@ -2930,7 +2967,7 @@ class WebspaceScenarioRuntime:
             for path, default in raw.items():
                 if not isinstance(path, str):
                     continue
-                if _is_node_owned_skill(skill_name) and node_id:
+                if _decl_is_node_owned(decl) and node_id:
                     path = node_scope_data_path(path, node_id)
                 # Preserve first writer semantics for conflicting defaults.
                 spec.setdefault(path, default)
@@ -3128,7 +3165,7 @@ class WebspaceScenarioRuntime:
             skill_name = decl.get("skill") or ""
             space = decl.get("space") or "default"
             node_id = str(decl.get("node_id") or "").strip()
-            node_owned = _is_node_owned_skill(str(skill_name or ""))
+            node_owned = _decl_is_node_owned(decl)
             if node_id and str(skill_name or "").strip().startswith("subnet.member."):
                 active_remote_node_ids.add(node_id)
             decl_display = {
@@ -3276,7 +3313,7 @@ class WebspaceScenarioRuntime:
                 continue
             skill_name = str(decl.get("skill") or "").strip()
             node_id = str(decl.get("node_id") or "").strip()
-            node_owned = _is_node_owned_skill(skill_name)
+            node_owned = _decl_is_node_owned(decl)
             decl_display = {
                 "node_label": str(decl.get("node_label") or "").strip(),
                 "node_compact_label": str(decl.get("node_compact_label") or "").strip(),
