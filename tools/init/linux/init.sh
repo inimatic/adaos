@@ -77,7 +77,7 @@ fetch_to_file() {
 
 usage() {
   cat <<EOF
-Usage: init.sh [--dest DIR] [--rev REV] [--use-git] [--use-git-from URL] [--codespaces] [--] [bootstrap args...]
+Usage: init.sh [--dest DIR] [--rev REV] [--use-git] [--use-git-from URL] [--workspace-registry-repo URL] [--codespaces] [--] [bootstrap args...]
 
 Defaults:
   --rev  ${REV_DEFAULT}
@@ -89,6 +89,7 @@ Examples:
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --role hub --install-service auto --zone ru
   curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+  curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
 EOF
 }
 
@@ -130,6 +131,7 @@ REV="$REV_DEFAULT"
 USE_GIT="${ADAOS_INIT_USE_GIT:-0}"
 REPO_URL="$REPO_URL_DEFAULT"
 CODESPACES_MODE="${ADAOS_INIT_CODESPACES:-0}"
+WORKSPACE_REGISTRY_URL="${ADAOS_WORKSPACE_REGISTRY_REPO:-}"
 BOOTSTRAP_ARGS=()
 
 if [[ -n "${REPO_URL:-}" ]]; then
@@ -143,6 +145,7 @@ while [[ $# -gt 0 ]]; do
     --rev) REV="${2:-}"; shift 2 ;;
     --use-git) USE_GIT="1"; shift ;;
     --use-git-from) REPO_URL="${2:-}"; USE_GIT="1"; shift 2 ;;
+    --workspace-registry-repo|--use-workspace-registry-from) WORKSPACE_REGISTRY_URL="${2:-}"; shift 2 ;;
     --codespaces) CODESPACES_MODE="1"; shift ;;
     --) shift; BOOTSTRAP_ARGS+=("$@"); break ;;
     *) BOOTSTRAP_ARGS+=("$1"); shift ;;
@@ -158,6 +161,10 @@ fi
 if [[ -n "${REPO_URL:-}" ]]; then
   REPO_URL="$(printf '%s' "$REPO_URL" | xargs)"
   [[ -n "${REPO_URL:-}" ]] || die "--use-git-from requires a non-empty URL"
+fi
+if [[ -n "${WORKSPACE_REGISTRY_URL:-}" ]]; then
+  WORKSPACE_REGISTRY_URL="$(printf '%s' "$WORKSPACE_REGISTRY_URL" | xargs)"
+  [[ -n "${WORKSPACE_REGISTRY_URL:-}" ]] || die "--workspace-registry-repo requires a non-empty URL"
 fi
 
 REPO_DIR="$DEST"
@@ -251,6 +258,10 @@ fi
 if [[ -n "${CORE_UPDATE_REPO_URL:-}" ]]; then
   log "Core update repo URL: ${CORE_UPDATE_REPO_URL}"
   export ADAOS_CORE_UPDATE_REPO_URL="$CORE_UPDATE_REPO_URL"
+fi
+if [[ -n "${WORKSPACE_REGISTRY_URL:-}" ]]; then
+  log "Workspace registry repo URL: ${WORKSPACE_REGISTRY_URL}"
+  export ADAOS_WORKSPACE_REGISTRY_REPO="$WORKSPACE_REGISTRY_URL"
 fi
 
 # Ensure bootstrap gets a --rev unless caller already passed one.
