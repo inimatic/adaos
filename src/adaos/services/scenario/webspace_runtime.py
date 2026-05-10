@@ -310,6 +310,36 @@ def _reload_dedupe_window_s() -> float:
     return value
 
 
+def _reload_pending_stale_after_s() -> float:
+    raw = str(os.getenv("ADAOS_WEBSPACE_RECOVERY_PENDING_STALE_AFTER_S") or "").strip()
+    if not raw:
+        return 10.0
+    try:
+        value = float(raw)
+    except Exception:
+        return 10.0
+    if value < 0.0:
+        return 0.0
+    if value > 300.0:
+        return 300.0
+    return value
+
+
+def _project_scenario_timeout_s() -> float:
+    raw = str(os.getenv("ADAOS_WEBSPACE_PROJECT_SCENARIO_TIMEOUT_S") or "").strip()
+    if not raw:
+        return 6.0
+    try:
+        value = float(raw)
+    except Exception:
+        return 6.0
+    if value < 0.0:
+        return 0.0
+    if value > 120.0:
+        return 120.0
+    return value
+
+
 def _normalize_optional_token(value: Any) -> str | None:
     if value is None:
         return None
@@ -4474,11 +4504,23 @@ async def _project_webspace_from_scenario(
     )
     try:
         mgr = _build_scenario_manager()
-        await mgr.sync_to_yjs_async(
+        timeout_s = _project_scenario_timeout_s()
+        projection = mgr.sync_to_yjs_async(
             scenario_id or "web_desktop",
             webspace_id,
             space=source_mode,
             emit_event=emit_event,
+        )
+        if timeout_s > 0.0:
+            await asyncio.wait_for(projection, timeout=timeout_s)
+        else:
+            await projection
+    except asyncio.TimeoutError:
+        _log.warning(
+            "timed out projecting webspace=%s from scenario=%s timeout_s=%s",
+            webspace_id,
+            scenario_id,
+            _project_scenario_timeout_s(),
         )
     except Exception:
         _log.warning(
@@ -5792,6 +5834,13 @@ async def reload_webspace_from_scenario(
             previous_age_s = round(max(0.0, time.time() - float(previous_updated_at)), 3)
     except Exception:
         previous_age_s = None
+    pending_stale_after_s = _reload_pending_stale_after_s()
+    previous_pending_stale = bool(
+        previous_pending
+        and pending_stale_after_s > 0.0
+        and previous_age_s is not None
+        and previous_age_s >= pending_stale_after_s
+    )
 
     duplicate_reason: str | None = None
     if (
@@ -5800,7 +5849,7 @@ async def reload_webspace_from_scenario(
         and previous_fingerprint
         and previous_fingerprint == recovery_fingerprint
     ):
-        if previous_pending:
+        if previous_pending and not previous_pending_stale:
             duplicate_reason = "already_pending_recovery"
         elif (
             duplicate_window_s > 0.0
@@ -5809,6 +5858,18 @@ async def reload_webspace_from_scenario(
             and previous_status in {"running", "ready", "scheduled"}
         ):
             duplicate_reason = "duplicate_recovery_request"
+
+    if previous_pending_stale:
+        _log.warning(
+            "stale pending webspace recovery will be superseded webspace=%s action=%s scenario=%s prev_status=%s age_s=%s stale_after_s=%s fp=%s",
+            webspace_id,
+            requested_action,
+            scenario_id,
+            previous_status or "-",
+            previous_age_s if previous_age_s is not None else "-",
+            pending_stale_after_s,
+            previous_fingerprint or "-",
+        )
 
     if duplicate_reason:
         duplicate_total = int(rebuild_state_before.get("recovery_duplicate_total") or 0) + 1

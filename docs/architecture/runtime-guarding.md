@@ -189,6 +189,10 @@ The target split is:
 - close the affected YWS room with a specific reason, for example
   `inbound_yws_update_payload_blocked`
 - avoid persisting the rejected update into the room store
+- keep the default block threshold at a truly critical single-update size
+  (`ADAOS_YJS_ROOM_INBOUND_GUARD_BLOCK_BYTES`, default 4 MiB); lower values are
+  useful for stress tests, but can turn legitimate first-sync/recovery updates
+  into a reset loop.
 
 The browser must treat `inbound_yws_update_payload_blocked` as a hard local
 document reset signal. A normal provider reconnect can resend the same poisoned
