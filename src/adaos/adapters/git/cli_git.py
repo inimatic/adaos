@@ -162,6 +162,25 @@ def _append_exclude(dir: str, lines: list[str]) -> None:
     p.write_text("\n".join(sorted(merged)) + "\n", encoding="utf-8")
 
 
+def _sanitize_sparse_checkout_file(dir: StrOrPath) -> bool:
+    sp = Path(dir) / ".git" / "info" / "sparse-checkout"
+    if not sp.exists():
+        return False
+    try:
+        lines = sp.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return False
+    cleaned = [line for line in lines if not line.strip().startswith("--")]
+    if cleaned == lines:
+        return False
+    content = "\n".join(cleaned)
+    if content:
+        content += "\n"
+    sp.write_text(content, encoding="utf-8")
+    _log.warning("git sparse-checkout patterns sanitized repo=%s removed_cli_flags=%s", str(Path(dir)), len(lines) - len(cleaned))
+    return True
+
+
 class CliGitClient(GitClient):
     def __init__(self, depth: int = 1) -> None:
         self._depth: Final[int] = depth
@@ -286,6 +305,26 @@ class CliGitClient(GitClient):
         args = ["sparse-checkout", "init"]
         if cone:
             args.append("--cone")
+        if _is_adaos_workspace_repo(dir):
+            env_type = str(os.getenv("ENV_TYPE", "prod") or "prod").strip().lower()
+            if env_type != "dev":
+                dirty = self.changed_files(dir)
+                if dirty:
+                    repo_path = str(Path(dir))
+                    _log.warning(
+                        "git sparse-checkout init with dirty worktree; auto-stashing repo=%s env_type=%s files=%s",
+                        repo_path,
+                        env_type,
+                        len(dirty),
+                    )
+                    _log_git_snapshot(dir)
+                    stash_ref = self.stash_push(
+                        str(dir),
+                        "adaos:auto-stash sparse-checkout init",
+                        include_untracked=True,
+                    )
+                    if stash_ref:
+                        _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
         _run_git(args, cwd=dir)
 
     def sparse_set(self, dir: StrOrPath, paths: Sequence[str], no_cone: bool = True) -> None:
@@ -307,6 +346,8 @@ class CliGitClient(GitClient):
                     _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
         try:
             _run_git([*args, *paths], cwd=dir)
+            if _sanitize_sparse_checkout_file(dir):
+                self.sparse_reapply(dir)
         except GitError as exc:
             lowered = str(exc).lower()
             if _is_adaos_workspace_repo(dir) and "unstaged changes" in lowered and "sparse-checkout" in lowered:
@@ -317,6 +358,8 @@ class CliGitClient(GitClient):
                 if stash_ref:
                     _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
                 _run_git([*args, *paths], cwd=dir)
+                if _sanitize_sparse_checkout_file(dir):
+                    self.sparse_reapply(dir)
                 return
             raise
 
