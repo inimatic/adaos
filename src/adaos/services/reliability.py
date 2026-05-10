@@ -6041,12 +6041,39 @@ def _build_yjs_selected_webspace_snapshot(webspace_id: str | None) -> dict[str, 
         }
 
 
+def _as_runtime_plain(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _as_runtime_plain(nested) for key, nested in value.items()}
+    if isinstance(value, list):
+        return [_as_runtime_plain(item) for item in value]
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        try:
+            raw = to_json()
+            if isinstance(raw, str):
+                return json.loads(raw)
+            return _as_runtime_plain(raw)
+        except Exception:
+            pass
+    items = getattr(value, "items", None)
+    if callable(items):
+        try:
+            return {key: _as_runtime_plain(nested) for key, nested in items()}
+        except Exception:
+            pass
+    if isinstance(value, tuple):
+        return [_as_runtime_plain(item) for item in value]
+    return value
+
+
 def _as_runtime_dict(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
+    plain = _as_runtime_plain(value)
+    return dict(plain) if isinstance(plain, dict) else {}
 
 
 def _as_runtime_list(value: Any) -> list[Any]:
-    return list(value) if isinstance(value, list) else []
+    plain = _as_runtime_plain(value)
+    return list(plain) if isinstance(plain, list) else []
 
 
 def _live_yjs_materialization_snapshot(webspace_id: str | None) -> dict[str, Any] | None:

@@ -5536,20 +5536,13 @@ asyncio.run(_main())
     parsed["switch_timings_ms"] = _copy_timing_map(switch_timings_ms)
 
     if bool(parsed.get("accepted")):
-        try:
-            from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
-
-            parsed["live_room_refresh"] = await reset_live_webspace_room(
-                webspace_id,
-                close_reason="scenario_switch_worker_done",
-                persist_ystore_snapshot=False,
-                reset_route_runtime=False,
-            )
-        except Exception as exc:
-            parsed["live_room_refresh"] = {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+        parsed["live_room_refresh"] = {
+            "ok": True,
+            "skipped": "scenario_switch_worker_done_transport_preserved",
+            "reset_route_runtime": False,
+            "closed_connections": 0,
+            "closed_webrtc_peers": 0,
+        }
     else:
         parsed["live_room_refresh"] = {
             "ok": False,
