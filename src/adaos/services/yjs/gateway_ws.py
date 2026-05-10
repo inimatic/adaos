@@ -134,7 +134,7 @@ _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", Fal
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 64 * 1024 * 1024, minimum=1)
 _YROOM_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_MIN_CHECK_INTERVAL_SEC", 1.0, minimum=0.0)
-_YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", False)
+_YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS", True)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_HASHES = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_HASHES", False)
 _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", False)
 _YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_STRICT_FULL_CHECKS", False)
@@ -770,8 +770,16 @@ class DiagnosticYRoom(YRoom):
                     force_initial_check = not previous_effective_ready and self._diag_update_total <= 1
                     checked_effective = False
                     if previous_effective_ready and not full_check_due:
-                        effective_ready = True
-                        effective_snapshot = {"ready": True, "mode": "cached"}
+                        if _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS:
+                            effective_ready = _room_effective_top_level_ready(self.ydoc)
+                            effective_snapshot = {
+                                "ready": effective_ready,
+                                "mode": "top_level_hot",
+                            }
+                            checked_effective = True
+                        else:
+                            effective_ready = True
+                            effective_snapshot = {"ready": True, "mode": "cached"}
                     elif full_check_due or force_initial_check:
                         self._diag_effective_last_full_check_mono = now_mono
                         checked_effective = True
@@ -2475,6 +2483,25 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 _ylog.warning("failed to evict YStore after room bootstrap failure webspace=%s", webspace_id, exc_info=True)
                         raise
         room = self.rooms[name]
+        if not _room_effective_top_level_ready(getattr(room, "ydoc", None)):
+            repair_update = await _repair_room_effective_branches(
+                webspace_id,
+                getattr(room, "ystore", None),
+                room,
+                reason="room_open_missing_effective_branches",
+            )
+            if repair_update:
+                try:
+                    room._diag_effective_repair_total += 1
+                    room._diag_effective_repair_bytes += len(repair_update)
+                    room._diag_effective_branch_snapshot = _room_effective_branch_snapshot(room.ydoc)
+                except Exception:
+                    pass
+                self.log.warning(
+                    "repaired missing YRoom effective branches before open webspace=%s repair_bytes=%s",
+                    webspace_id,
+                    len(repair_update),
+                )
         room._webspace_id = webspace_id
         room._thread_id = getattr(room, "_thread_id", threading.get_ident())
         room._loop = getattr(room, "_loop", asyncio.get_running_loop())
