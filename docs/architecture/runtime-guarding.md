@@ -481,3 +481,23 @@ Production defaults should be conservative:
 
 Debug and stress profiles may lower thresholds through explicit `.env`
 overrides, but those overrides must be visible in reliability output.
+## Browser Yjs data-plane versus diagnostic HTTP
+
+Target contract:
+
+- Browser-rendered desktop data is delivered through the live Yjs document.
+- Scenario switch commands are control-plane acknowledgements. The default response must stay small: accepted state, webspace id, scenario id, timing guard, and no embedded runtime dump.
+- Heavy runtime/materialization payloads are diagnostic details only. They are requested explicitly with debug/detail flags or by operator tools, not on the happy path.
+- Readiness signals that drive browser chrome, such as YJS red/green state, must be derived from the same effective Yjs materialization contract that renders the UI.
+- HTTP diagnostics must not become a second source of truth for rendered desktop state. If HTTP diagnostics disagree with live Yjs materialization, the mismatch is an observability defect.
+
+Roadmap:
+
+- [x] Keep routine scenario switch from resetting the live Yws/WebRTC sync room.
+- [x] Make `YRoom already running` start races idempotent instead of fatal.
+- [x] Read live Yjs nested maps/arrays correctly in reliability materialization checks.
+- [x] Stop polling heavy `materialization?include_runtime=1` from the scenario-switch happy path.
+- [x] Make `/api/node/yjs/webspaces/{id}/scenario` return a minimal ack by default.
+- [ ] Add an explicit small Yjs service/status node for browser-visible materialization health.
+- [ ] Move large materialization/runtime diagnostics behind a details/debug interaction in the UI.
+- [ ] Add regression coverage that scenario switching does not close `/yws/{webspace}`.

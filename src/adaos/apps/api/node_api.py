@@ -1045,6 +1045,8 @@ class WebspaceYjsActionRequest(BaseModel):
     home_scenario_ref: dict[str, Any] | None = None
     set_home: bool | None = None
     wait_for_rebuild: bool | None = None
+    include_runtime: bool | None = None
+    include_rebuild: bool | None = None
     recreate_room: bool | None = None
     requested_id: str | None = None
     title: str | None = None
@@ -2289,12 +2291,13 @@ async def node_yjs_switch_scenario(webspace_id: str, payload: WebspaceYjsActionR
         effective=effective_wait_for_rebuild,
         reason="scenario_switch_rebuild_runs_in_background_to_protect_route_budget",
     )
-    result = _attach_runtime_and_rebuild(
-        result,
-        role=conf.role,
-        webspace_id=target_webspace_id,
-        include_rebuild=True,
-    )
+    if bool(payload.include_runtime) or bool(payload.include_rebuild):
+        result = _attach_runtime_and_rebuild(
+            result,
+            role=conf.role,
+            webspace_id=target_webspace_id,
+            include_rebuild=bool(payload.include_rebuild),
+        )
     _publish_yjs_control_event(
         action="scenario",
         webspace_id=target_webspace_id,
@@ -2330,12 +2333,13 @@ async def node_yjs_go_home(
         effective=effective_wait_for_rebuild,
         reason="go_home_rebuild_runs_in_background_to_protect_route_budget",
     )
-    result = _attach_runtime_and_rebuild(
-        result,
-        role=conf.role,
-        webspace_id=target_webspace_id,
-        include_rebuild=True,
-    )
+    if payload and (bool(payload.include_runtime) or bool(payload.include_rebuild)):
+        result = _attach_runtime_and_rebuild(
+            result,
+            role=conf.role,
+            webspace_id=target_webspace_id,
+            include_rebuild=bool(payload.include_rebuild),
+        )
     _publish_yjs_control_event(
         action="go_home",
         webspace_id=target_webspace_id,
