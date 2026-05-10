@@ -469,6 +469,9 @@ Current pre-stand milestone:
 - runtime page materialization now preserves `surfaceClass` and `objectKind`
   from semantic workspace metadata so shell and modal layout layers can react
   differently to `workspace` versus `operations` surfaces
+- semantic workspace metadata is now also projected into `runtime.surface.*`
+  page state so typed host and skill actions can observe the current surface
+  class, object kind, entity ref, lifecycle stage, and capabilities
 - modal page schemas now respect declared layout areas instead of stacking every
   widget linearly, which makes capability-composed `operations` surfaces
   inspectable on the stand
@@ -533,6 +536,8 @@ Recommended identifiers:
 - [x] materialize semantic `surfaceClass` into runtime page metadata
 - [x] exercise both `workspace` and `operations` surface classes in the demo
   package
+- [x] project semantic workspace context into runtime page state for typed
+  action flows
 - [ ] add desktop/workspace/operations as explicit top-level shell surfaces
 - [ ] keep capability composition separate from business-domain ownership
 
