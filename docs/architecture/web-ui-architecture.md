@@ -463,6 +463,15 @@ Current pre-stand milestone:
   for semantic and compatibility bindings
 - a first capability-aware workspace composer now filters semantic views by
   declared capabilities, lifecycle stage, object kind, and surface class
+- `open_workspace` now has a typed browser runtime bridge that can open a
+  workspace-oriented modal surface or switch webspaces without falling back to
+  untyped host wiring
+- runtime page materialization now preserves `surfaceClass` and `objectKind`
+  from semantic workspace metadata so shell and modal layout layers can react
+  differently to `workspace` versus `operations` surfaces
+- modal page schemas now respect declared layout areas instead of stacking every
+  widget linearly, which makes capability-composed `operations` surfaces
+  inspectable on the stand
 
 ### 0. Architecture Fixation
 
@@ -521,6 +530,9 @@ Recommended identifiers:
 ### 5. Workspace Composition
 
 - [x] define capability-aware workspace composition rules
+- [x] materialize semantic `surfaceClass` into runtime page metadata
+- [x] exercise both `workspace` and `operations` surface classes in the demo
+  package
 - [ ] add desktop/workspace/operations as explicit top-level shell surfaces
 - [ ] keep capability composition separate from business-domain ownership
 
@@ -555,8 +567,11 @@ Recommended identifiers:
 - [x] production browser build passes with the upgraded Angular/Taiga baseline
 - [x] demo action paths exercise `open_modal`, `call_host`, and
   `invoke_skill_action`
+- [x] `open_workspace` is wired end-to-end through a typed runtime bridge
 - [x] desktop and modal demo surfaces both resolve node-owned data through the
   same runtime scoping rules
+- [x] the demo now exposes one `operations`-class surface in addition to the
+  primary `workspace`-class surface
 - [ ] manual verification on the target stand
 
 Recommended demo data shape:
