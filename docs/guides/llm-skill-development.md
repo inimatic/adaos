@@ -9,7 +9,7 @@ governance.
 
 Read this together with:
 
-- [Web IO](../io/webio.md)
+- the repository note `docs/io/webio.md`
 - [UI Addressing](../architecture/ui-addressing.md)
 - [Semantic State Plane](../architecture/semantic-state-plane.md)
 - [Runtime Guarding](../architecture/runtime-guarding.md)
@@ -348,4 +348,3 @@ The current workspace audit suggests this priority order:
 4. split `infrascope_skill` into demanded projection families
 5. decide whether `mediaserver` and `prompt_engineer_skill` should remain
    tool-driven or adopt browser-facing projection contracts
-
