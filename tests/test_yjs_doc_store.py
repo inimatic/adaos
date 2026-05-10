@@ -10,7 +10,7 @@ import y_py as Y
 from adaos.services.yjs import doc as ydoc_module
 from adaos.services.yjs import store as ystore_module
 from adaos.services.yjs.doc import async_get_ydoc, async_read_ydoc, get_ydoc
-from adaos.services.yjs.store import get_ystore_for_webspace, reset_ystore_for_webspace
+from adaos.services.yjs.store import get_ystore_for_webspace, reset_ystore_for_webspace, ystore_write_metadata
 
 pytestmark = pytest.mark.anyio
 
@@ -101,7 +101,12 @@ async def test_async_get_ydoc_byte_budget_compacts_replay_window(monkeypatch) ->
                     ydoc.get_map("data").set(txn, f"key_{idx}", value)
 
         snapshot = store.runtime_snapshot()
-        assert snapshot["compact_total"] >= 1
+        assert snapshot["compact_total"] >= 1, (
+            snapshot["max_update_log_entries"],
+            snapshot["update_log_entries"],
+            snapshot["write_total"],
+            snapshot["write_skipped_total"],
+        )
         assert snapshot["last_compact_reason"] == "byte_limit"
         assert snapshot["base_snapshot_present"] is True
         assert snapshot["update_log_entries"] < 6
@@ -131,6 +136,37 @@ async def test_ystore_runtime_snapshot_reports_replay_byte_budget(monkeypatch) -
         assert "last_compact_reason" in snapshot
         assert "auto_backup_total" in snapshot
         assert "last_auto_backup_reason" in snapshot
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_async_get_ydoc_entry_limit_compacts_below_replay_ceiling(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_MAX_UPDATES", "8")
+    monkeypatch.setenv("ADAOS_YSTORE_REPLAY_WINDOW", "7")
+    monkeypatch.setenv("ADAOS_YSTORE_COMPACT_TARGET_REPLAY_ENTRIES", "3")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
+    webspace_id = _webspace_id("entry-target")
+    store = get_ystore_for_webspace(webspace_id)
+    ydoc = Y.YDoc()
+    try:
+        for idx in range(9):
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("data").set(txn, f"item_{idx}", idx)
+            async with ystore_write_metadata(governed=True, source="test", owner="test"):
+                await store.write_update(Y.encode_state_as_update(ydoc), update_kind="diff")
+
+        snapshot = store.runtime_snapshot()
+        assert snapshot["compact_total"] >= 1
+        assert snapshot["last_compact_reason"] == "entry_limit"
+        assert snapshot["compact_target_replay_entries"] == 3
+        assert snapshot["replay_window_entries"] == 3
+        assert snapshot["replay_window_limit"] == 7
+        assert snapshot["update_log_entries"] == 4
+
+        async with async_read_ydoc(webspace_id) as ydoc:
+            data_map = ydoc.get_map("data")
+            for idx in range(9):
+                assert data_map.get(f"item_{idx}") == idx
     finally:
         reset_ystore_for_webspace(webspace_id)
 
