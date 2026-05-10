@@ -3705,6 +3705,24 @@ async def process_events_command(
             trace.get("duplicate_count_10s") or 0,
             trace.get("fingerprint") or "-",
         )
+        if bool(trace.get("duplicate_recent")):
+            _ylog.warning(
+                "desktop.webspace.reload duplicate suppressed webspace=%s cmd_id=%s seq=%s fp=%s dup10s=%s",
+                webspace_id,
+                cmd_id or "-",
+                trace.get("seq") or 0,
+                trace.get("fingerprint") or "-",
+                trace.get("duplicate_count_10s") or 0,
+            )
+            await _ack(
+                data={
+                    "duplicate": True,
+                    "suppressed": True,
+                    "gateway_command_seq": int(trace.get("seq") or 0),
+                    "gateway_command_fingerprint": str(trace.get("fingerprint") or ""),
+                }
+            )
+            return None
         _publish_bus("desktop.webspace.reload", payload)
         await _ack()
         return None

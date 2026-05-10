@@ -5316,6 +5316,10 @@ async def rebuild_webspace_from_sources(
         semantic_rebuild_timings_ms=semantic_timings,
         switch_mode=effective_switch_mode,
     )
+    final_rebuild_state = describe_webspace_rebuild_state(webspace_id)
+    final_materialization = _copy_materialization_snapshot(
+        final_rebuild_state.get("materialization") if isinstance(final_rebuild_state, Mapping) else None
+    )
     result = {
         "ok": True,
         "accepted": True,
@@ -5339,6 +5343,7 @@ async def rebuild_webspace_from_sources(
         "semantic_rebuild_timings_ms": semantic_timings,
         "ydoc_timings_ms": ydoc_timings,
         "phase_timings_ms": phase_timings,
+        "materialization": final_materialization,
         "live_room_publish": bool(publish_live_room),
         "live_room_refresh": live_room_refresh_result,
         "fresh_doc_rebuild": bool(fresh_doc_rebuild),
@@ -5368,6 +5373,7 @@ async def rebuild_webspace_from_sources(
         semantic_rebuild_timings_ms=semantic_timings,
         ydoc_timings_ms=ydoc_timings,
         phase_timings_ms=phase_timings,
+        materialization=final_materialization,
     )
     _log.info(
         "semantic rebuild completed webspace=%s action=%s scenario=%s timings_ms=%s semantic_timings_ms=%s",
@@ -5579,6 +5585,7 @@ asyncio.run(_main())
             semantic_rebuild_timings_ms=parsed.get("semantic_rebuild_timings_ms"),
             ydoc_timings_ms=parsed.get("ydoc_timings_ms"),
             phase_timings_ms=parsed.get("phase_timings_ms"),
+            materialization=_copy_materialization_snapshot(parsed.get("materialization")),
         )
     except Exception:
         _log.debug("failed to publish parent rebuild status for scenario switch worker", exc_info=True)
