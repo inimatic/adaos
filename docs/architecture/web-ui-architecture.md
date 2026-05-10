@@ -459,6 +459,8 @@ Current pre-stand milestone:
   the temporary compatibility chart
 - demo action surfaces now exercise `open_modal`, `call_host`, and
   `invoke_skill_action` against the live event surface
+- desktop and modal runtime paths now apply the same node-aware data scoping
+  for semantic and compatibility bindings
 
 ### 0. Architecture Fixation
 
@@ -551,6 +553,8 @@ Recommended identifiers:
 - [x] production browser build passes with the upgraded Angular/Taiga baseline
 - [x] demo action paths exercise `open_modal`, `call_host`, and
   `invoke_skill_action`
+- [x] desktop and modal demo surfaces both resolve node-owned data through the
+  same runtime scoping rules
 - [ ] manual verification on the target stand
 
 Recommended demo data shape:
