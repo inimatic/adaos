@@ -358,6 +358,8 @@ Status note:
 - broader cross-document harmonization is still in progress
 - the demo metrics table and chart now share the same `view:` selection ref on
   both semantic and compatibility paths
+- desktop and modal runtime adapters now preserve the same node-scoped `y:`
+  binding behavior for the demo slice
 
 ### 0. Vocabulary Fixation
 
@@ -413,6 +415,8 @@ Status note:
   refs together
 - [x] one shared `view:` ref links table selection to chart rendering
 - [x] the same addressing slice is used in both desktop and modal demo surfaces
+- [x] desktop and modal runtime adapters scope node-owned `y:` refs
+  consistently for the same demo bindings
 - [ ] manual verification on the target stand
 
 ### 5. Deferred Generalization
