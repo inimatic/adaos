@@ -387,6 +387,7 @@ def get_ydoc(
     ystore = get_ystore_for_webspace(webspace_id)
     ydoc = Y.YDoc()
     operation_timeout_s = _sync_get_ydoc_operation_timeout_s()
+    owner_for_session = _resolve_yjs_write_owner()
 
     async def _load() -> bytes | None:
         stage_started = time.perf_counter()

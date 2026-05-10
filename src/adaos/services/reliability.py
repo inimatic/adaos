@@ -5487,6 +5487,16 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     )
 
     assessment_state = str(assessment.get("state") or "").strip().lower() or "unknown"
+    assessment_reasons = [
+        item.strip()
+        for item in str(assessment.get("reason") or "").split(";")
+        if item.strip()
+    ]
+    maintenance_pressure_only = bool(
+        assessment_state == "pressure"
+        and assessment_reasons
+        and all(item == "bounded_replay_window_near_limit" for item in assessment_reasons)
+    )
     if not bool(runtime.get("available")) and assessment_state == "not_applicable":
         transport_state = "not_applicable"
     elif bool(transport.get("server_ready")) or bool(gateway_room.get("ready")):
@@ -5512,7 +5522,7 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     materialization_ready = bool(materialization.get("ready"))
     if transport_state == "not_applicable":
         semantic_state = "not_applicable"
-    elif materialization_ready and assessment_state in {"nominal", "idle"}:
+    elif materialization_ready and (assessment_state in {"nominal", "idle"} or maintenance_pressure_only):
         semantic_state = "ready"
     elif materialization_ready and assessment_state in {"pressure", "degraded"}:
         semantic_state = "degraded"

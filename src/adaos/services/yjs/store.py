@@ -313,6 +313,11 @@ class AdaosMemoryYStore(BaseYStore):
             default_compact_target,
             minimum=0,
         )
+        self.compact_target_replay_entries = _env_int(
+            "ADAOS_YSTORE_COMPACT_TARGET_REPLAY_ENTRIES",
+            max(0, int(self.replay_window) // 2),
+            minimum=0,
+        )
         self.auto_backup_after_compact = _env_flag("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", True)
         self.auto_backup_cooldown_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", 30.0, minimum=0.0)
         self.auto_backup_debounce_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", 0.5, minimum=0.0)
@@ -598,8 +603,11 @@ class AdaosMemoryYStore(BaseYStore):
         total = len(updates)
         tail_count = self.replay_window if keep_tail is None else int(keep_tail)
         tail_count = max(0, min(tail_count, max(0, total - 1)))
+        reason_token = str(reason or "").strip()
+        if reason_token == "entry_limit" and int(self.compact_target_replay_entries or 0) >= 0:
+            tail_count = min(tail_count, int(self.compact_target_replay_entries or 0))
         tail_byte_limit = int(self.max_replay_bytes) if self.max_replay_bytes > 0 else 0
-        if str(reason or "").strip() == "byte_limit" and int(self.compact_target_replay_bytes or 0) > 0:
+        if reason_token == "byte_limit" and int(self.compact_target_replay_bytes or 0) > 0:
             tail_byte_limit = min(tail_byte_limit, int(self.compact_target_replay_bytes))
         keep_from = total
         kept_total = 0
@@ -897,6 +905,7 @@ class AdaosMemoryYStore(BaseYStore):
             "base_snapshot_present": bool(base_snapshot_present),
             "replay_window_entries": replay_window_entries,
             "replay_window_limit": int(self.replay_window),
+            "compact_target_replay_entries": int(self.compact_target_replay_entries),
             "replay_window_bytes": int(replay_window_bytes),
             "replay_window_byte_limit": int(self.max_replay_bytes),
             "runtime_compaction_eligible": runtime_compaction_eligible,
