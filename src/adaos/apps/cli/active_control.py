@@ -278,14 +278,24 @@ def resolve_control_base_url(
     _append_candidate(candidates, seen, _autostart_control_url())
     for raw in _pidfile_control_urls():
         _append_candidate(candidates, seen, raw)
-    for raw in (
+    fallback_bases = (
         "http://127.0.0.1:8777",
         "http://127.0.0.1:8778",
         "http://127.0.0.1:8779",
         "http://localhost:8777",
         "http://localhost:8778",
         "http://localhost:8779",
-    ):
+    )
+    if role == "member" and prefer_local:
+        fallback_bases = (
+            "http://127.0.0.1:8778",
+            "http://localhost:8778",
+            "http://127.0.0.1:8777",
+            "http://localhost:8777",
+            "http://127.0.0.1:8779",
+            "http://localhost:8779",
+        )
+    for raw in fallback_bases:
         _append_candidate(candidates, seen, raw)
 
     token = resolve_control_token()
@@ -294,6 +304,10 @@ def resolve_control_base_url(
         if _looks_like_control_api_response(code, payload):
             return candidate
     if candidates:
+        if role == "member" and prefer_local:
+            for candidate in candidates:
+                if ":8778" in str(candidate):
+                    return candidate
         return candidates[0]
     return "http://127.0.0.1:8777"
 
