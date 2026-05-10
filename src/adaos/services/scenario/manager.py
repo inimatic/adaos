@@ -39,6 +39,10 @@ _RUNTIME_OWNED_DATA_KEYS = {"catalog", "installed", "desktop", "routing"}
 _SCENARIO_MANIFEST_NAMES = ("scenario.yaml", "scenario.yml", "scenario.json")
 
 
+def _env_type() -> str:
+    return str(os.getenv("ENV_TYPE", "prod") or "prod").strip().lower()
+
+
 def _local_node_id() -> str:
     try:
         conf = load_config()
@@ -126,7 +130,7 @@ class ScenarioManager:
         self.repo.ensure()
         return self.ctx.scenarios_repo.list()  # .repo.list()
 
-    def sync(self) -> None:
+    def sync(self, *, force: bool | None = None) -> None:
         self.caps.require("core", "scenarios.manage", "net.git")
         self.repo.ensure()
         root = self.ctx.paths.workspace_dir()
@@ -151,7 +155,21 @@ class ScenarioManager:
         ]
         from adaos.services.git.workspace_guard import ensure_clean
 
-        ensure_clean(self.git, str(root), prefixed)
+        effective_force = (_env_type() != "dev") if force is None else bool(force)
+        if effective_force:
+            stash_ref = self.git.stash_push(
+                str(root),
+                "adaos:auto-stash forced scenario sync",
+                include_untracked=True,
+            )
+            _log.warning(
+                "forced scenario sync requested env_type=%s repo=%s stash=%s",
+                _env_type(),
+                str(root),
+                str(stash_ref or "-"),
+            )
+        else:
+            ensure_clean(self.git, str(root), prefixed)
         self.git.sparse_init(str(root), cone=False)
         if prefixed:
             self.git.sparse_set(str(root), prefixed, no_cone=True)
