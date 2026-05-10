@@ -432,7 +432,7 @@ def get_ydoc(
                     stage_started = time.perf_counter()
                     update = _encode_diff(ydoc, before)
                     _record_doc_timing(timings, "encode_diff", stage_started, prefix=timing_prefix)
-                    owner = _resolve_yjs_write_owner()
+                    owner = owner_for_session or _resolve_yjs_write_owner()
                     try:
                         from adaos.services.yjs.governance import govern_primary_doc_write_sync
 
@@ -513,6 +513,9 @@ async def async_get_ydoc(
     timing_prefix: str = "",
     load_mark_roots: list[str] | tuple[str, ...] | None = None,
     governed: bool = False,
+    write_source: str | None = None,
+    write_owner: str | None = None,
+    write_channel: str | None = None,
 ) -> AsyncIterator[Y.YDoc]:
     """
     Async counterpart of :func:`get_ydoc` for use inside running event loops.
@@ -522,7 +525,21 @@ async def async_get_ydoc(
     ystore = get_ystore_for_webspace(webspace_id)
     room = _resolve_live_room(webspace_id) if prefer_live_room else None
     use_live_room = _can_access_live_room_directly(room)
-    owner_for_session = _resolve_yjs_write_owner() if use_live_room and not read_only else ""
+    source_for_session = str(write_source or "").strip() or "async_get_ydoc"
+    owner_for_session = str(write_owner or "").strip() or _resolve_yjs_write_owner()
+    channel_for_session = str(write_channel or "").strip() or "yjs.doc.async"
+    live_source_for_session = (
+        source_for_session
+        if source_for_session.endswith(".live_room")
+        else f"{source_for_session}.live_room"
+    )
+    live_channel_for_session = (
+        channel_for_session
+        if channel_for_session.endswith(".live_room")
+        else f"{channel_for_session}.live_room"
+    )
+    if read_only:
+        owner_for_session = ""
     if use_live_room and not read_only and not governed:
         try:
             from adaos.services.yjs.governance import govern_primary_doc_write
@@ -532,8 +549,8 @@ async def async_get_ydoc(
                 owner=owner_for_session,
                 root_names=[str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()],
                 path=",".join(str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()) or "primary_shared_doc",
-                source="async_get_ydoc.live_room",
-                channel="yjs.doc.async.live_room",
+                source=live_source_for_session,
+                channel=live_channel_for_session,
             ):
                 use_live_room = False
         except Exception:
@@ -591,9 +608,9 @@ async def async_get_ydoc(
                         mark_backend_room_update(
                             webspace_id,
                             update,
-                            source="async_get_ydoc.live_room",
+                            source=live_source_for_session,
                             owner=owner_for_session or _resolve_yjs_write_owner(),
-                            channel="yjs.doc.async.live_room",
+                            channel=live_channel_for_session,
                             root_names=tracked_load_mark_roots,
                             already_persisted=False,
                             governed=True,
@@ -613,8 +630,8 @@ async def async_get_ydoc(
                             owner=owner,
                             root_names=tracked_load_mark_roots,
                             path=",".join(tracked_load_mark_roots) or "primary_shared_doc",
-                            source="async_get_ydoc",
-                            channel="yjs.doc.async",
+                            source=source_for_session,
+                            channel=channel_for_session,
                             update_bytes=len(update or b""),
                         ):
                             _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
@@ -627,9 +644,9 @@ async def async_get_ydoc(
                         stage_started = time.perf_counter()
                         async with ystore_write_metadata(
                             root_names=tracked_load_mark_roots,
-                            source="async_get_ydoc",
+                            source=source_for_session,
                             owner=owner,
-                            channel="yjs.doc.async",
+                            channel=channel_for_session,
                             governed=True,
                         ):
                             if update:
@@ -647,9 +664,9 @@ async def async_get_ydoc(
                             webspace_id,
                             update,
                             already_persisted=persisted,
-                            source="async_get_ydoc",
+                            source=source_for_session,
                             owner=owner,
-                            channel="yjs.doc.async",
+                            channel=channel_for_session,
                         )
                         _record_doc_timing(timings, "room_update", stage_started, prefix=timing_prefix)
                     else:
