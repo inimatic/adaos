@@ -2749,6 +2749,74 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
         }
 
 
+async def refresh_live_webspace_effective_branches(
+    webspace_id: str,
+    *,
+    reason: str = "live_room_refresh",
+) -> dict[str, Any]:
+    """Refresh effective scenario branches without tearing down live transports.
+
+    A scenario materialization refresh should update the active YDoc contents,
+    not close the browser's YWS/WebRTC datachannel path. Hard room resets remain
+    available for explicit recovery paths.
+    """
+
+    key = str(webspace_id or "").strip() or "default"
+    room_created = False
+    room = y_server.rooms.get(key)
+    if room is None:
+        try:
+            room = await y_server.get_room(key)
+            room_created = True
+        except Exception as exc:
+            _ylog.warning(
+                "failed to refresh live Yjs room effective branches webspace=%s reason=%s",
+                key,
+                reason,
+                exc_info=True,
+            )
+            return {
+                "ok": False,
+                "webspace_id": key,
+                "reason": reason,
+                "error": f"{type(exc).__name__}: {exc}",
+                "room_present": False,
+                "room_created": False,
+                "room_dropped": False,
+                "closed_connections": 0,
+                "closed_webrtc_peers": 0,
+                "reset_route_runtime": False,
+            }
+
+    update = await _repair_room_effective_branches(
+        key,
+        getattr(room, "ystore", None),
+        room,
+        reason=reason,
+    )
+    update_size = len(update or b"")
+    _ylog.info(
+        "refreshed live Yjs room effective branches webspace=%s reason=%s room_created=%s update_bytes=%s",
+        key,
+        reason,
+        room_created,
+        update_size,
+    )
+    return {
+        "ok": True,
+        "webspace_id": key,
+        "reason": reason,
+        "room_present": True,
+        "room_created": room_created,
+        "room_dropped": False,
+        "room_repaired": update_size > 0,
+        "repair_bytes": update_size,
+        "closed_connections": 0,
+        "closed_webrtc_peers": 0,
+        "reset_route_runtime": False,
+    }
+
+
 async def _repair_room_effective_branches(
     webspace_id: str,
     ystore: Any,
