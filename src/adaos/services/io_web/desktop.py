@@ -80,9 +80,16 @@ def _iter_ids(value: Any) -> List[str]:
 class WebDesktopInstalled:
     apps: List[str]
     widgets: List[str]
+    removed_apps: List[str] = field(default_factory=list)
+    removed_widgets: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, List[str]]:
-        return {"apps": list(self.apps), "widgets": list(self.widgets)}
+        return {
+            "apps": list(self.apps),
+            "widgets": list(self.widgets),
+            "removedApps": list(self.removed_apps),
+            "removedWidgets": list(self.removed_widgets),
+        }
 
 
 @dataclass(slots=True)
@@ -186,17 +193,28 @@ class WebDesktopService:
     ) -> WebDesktopInstalled:
         apps = set(installed.apps)
         widgets = set(installed.widgets)
+        removed_apps = set(installed.removed_apps)
+        removed_widgets = set(installed.removed_widgets)
         if item_type == "app":
             if target_id in apps:
                 apps.remove(target_id)
+                removed_apps.add(target_id)
             else:
                 apps.add(target_id)
+                removed_apps.discard(target_id)
         else:
             if target_id in widgets:
                 widgets.remove(target_id)
+                removed_widgets.add(target_id)
             else:
                 widgets.add(target_id)
-        return WebDesktopInstalled(apps=sorted(apps), widgets=sorted(widgets))
+                removed_widgets.discard(target_id)
+        return WebDesktopInstalled(
+            apps=sorted(apps),
+            widgets=sorted(widgets),
+            removed_apps=sorted(removed_apps),
+            removed_widgets=sorted(removed_widgets),
+        )
 
     @staticmethod
     def _apply_installed_state(ydoc: Any, txn: Any, installed: WebDesktopInstalled) -> None:
@@ -225,6 +243,8 @@ class WebDesktopService:
             WebDesktopInstalled(
                 apps=_iter_ids(installed.get("apps")),
                 widgets=_iter_ids(installed.get("widgets")),
+                removed_apps=_iter_ids(installed.get("removedApps")),
+                removed_widgets=_iter_ids(installed.get("removedWidgets")),
             ),
             True,
         )
@@ -409,6 +429,8 @@ class WebDesktopService:
         installed_next = WebDesktopInstalled(
             apps=_iter_ids(installed_raw.get("apps")) or list(installed.apps),
             widgets=_iter_ids(installed_raw.get("widgets")) or list(installed.widgets),
+            removed_apps=list(installed.removed_apps),
+            removed_widgets=list(installed.removed_widgets),
         )
 
         desktop_raw = _coerce_dict(data_map.get("desktop") or {})
@@ -634,11 +656,19 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         apps = list(dict.fromkeys(installed.apps))
         widgets = list(dict.fromkeys(installed.widgets))
-        self._persist_overlay_installed(webspace, WebDesktopInstalled(apps=apps, widgets=widgets))
+        removed_apps = list(dict.fromkeys(installed.removed_apps))
+        removed_widgets = list(dict.fromkeys(installed.removed_widgets))
+        next_installed = WebDesktopInstalled(
+            apps=apps,
+            widgets=widgets,
+            removed_apps=removed_apps,
+            removed_widgets=removed_widgets,
+        )
+        self._persist_overlay_installed(webspace, next_installed)
         with _desktop_sync_write_meta():
             with get_ydoc(webspace) as ydoc:
                 with ydoc.begin_transaction() as txn:
-                    self._apply_installed_state(ydoc, txn, WebDesktopInstalled(apps=apps, widgets=widgets))
+                    self._apply_installed_state(ydoc, txn, next_installed)
         _log.debug(
             "set installed webspace=%s apps=%s widgets=%s",
             webspace,
@@ -653,11 +683,19 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         apps = list(dict.fromkeys(installed.apps))
         widgets = list(dict.fromkeys(installed.widgets))
-        self._persist_overlay_installed(webspace, WebDesktopInstalled(apps=apps, widgets=widgets))
+        removed_apps = list(dict.fromkeys(installed.removed_apps))
+        removed_widgets = list(dict.fromkeys(installed.removed_widgets))
+        next_installed = WebDesktopInstalled(
+            apps=apps,
+            widgets=widgets,
+            removed_apps=removed_apps,
+            removed_widgets=removed_widgets,
+        )
+        self._persist_overlay_installed(webspace, next_installed)
         async with _desktop_async_write_meta():
             async with async_get_ydoc(webspace) as ydoc:
                 with ydoc.begin_transaction() as txn:
-                    self._apply_installed_state(ydoc, txn, WebDesktopInstalled(apps=apps, widgets=widgets))
+                    self._apply_installed_state(ydoc, txn, next_installed)
         _log.debug(
             "set installed (async) webspace=%s apps=%s widgets=%s",
             webspace,
@@ -839,8 +877,19 @@ class WebDesktopService:
         callers that do not operate in an async context.
         """
         webspace = self._resolve_webspace(webspace_id)
-        current = self.get_installed(webspace)
+        snapshot = self.get_snapshot(webspace)
+        current = snapshot.installed
         next_installed = self._next_installed_state(current, item_type, target_id)
+        removing_widget = item_type != "app" and str(target_id or "").strip() in set(current.widgets)
+        if removing_widget:
+            self._persist_overlay_pinned_widgets(
+                webspace,
+                [item for item in snapshot.pinned_widgets if str(item.get("id") or "").strip() != target_id],
+            )
+            self._persist_overlay_widget_order(
+                webspace,
+                [item for item in snapshot.widget_order if str(item or "").strip() != target_id],
+            )
         self.set_installed(next_installed, webspace)
 
     async def toggle_install_async(self, item_type: str, target_id: str, webspace_id: Optional[str] = None) -> None:
@@ -849,8 +898,19 @@ class WebDesktopService:
         awaited from async runtimes.
         """
         webspace = self._resolve_webspace(webspace_id)
-        current = await self.get_installed_async(webspace)
+        snapshot = await self.get_snapshot_async(webspace)
+        current = snapshot.installed
         next_installed = self._next_installed_state(current, item_type, target_id)
+        removing_widget = item_type != "app" and str(target_id or "").strip() in set(current.widgets)
+        if removing_widget:
+            self._persist_overlay_pinned_widgets(
+                webspace,
+                [item for item in snapshot.pinned_widgets if str(item.get("id") or "").strip() != target_id],
+            )
+            self._persist_overlay_widget_order(
+                webspace,
+                [item for item in snapshot.widget_order if str(item or "").strip() != target_id],
+            )
         await self.set_installed_async(next_installed, webspace)
 
     def toggle_install_with_live_room(
@@ -867,12 +927,30 @@ class WebDesktopService:
         update, even if the on-disk YStore write happens asynchronously.
         """
         webspace = self._resolve_webspace(webspace_id)
-        current = self.get_installed(webspace)
+        snapshot = self.get_snapshot(webspace)
+        current = snapshot.installed
         next_installed = self._next_installed_state(current, item_type, target_id)
+        removing_widget = item_type != "app" and str(target_id or "").strip() in set(current.widgets)
+        next_pinned_widgets = (
+            [item for item in snapshot.pinned_widgets if str(item.get("id") or "").strip() != target_id]
+            if removing_widget
+            else snapshot.pinned_widgets
+        )
+        next_widget_order = (
+            [item for item in snapshot.widget_order if str(item or "").strip() != target_id]
+            if removing_widget
+            else snapshot.widget_order
+        )
         self._persist_overlay_installed(webspace, next_installed)
+        if removing_widget:
+            self._persist_overlay_pinned_widgets(webspace, next_pinned_widgets)
+            self._persist_overlay_widget_order(webspace, next_widget_order)
 
         def _mutator(doc: Any, txn: Any) -> None:
             self._apply_installed_state(doc, txn, next_installed)
+            if removing_widget:
+                self._apply_pinned_widgets_state(doc, txn, next_pinned_widgets)
+                self._apply_widget_order_state(doc, txn, next_widget_order)
 
         live_applied = mutate_live_room(
             webspace,
@@ -915,7 +993,12 @@ class WebDesktopService:
         webspace = self._resolve_webspace(webspace_id)
         apps = list(dict.fromkeys(installed.apps))
         widgets = list(dict.fromkeys(installed.widgets))
-        next_installed = WebDesktopInstalled(apps=apps, widgets=widgets)
+        next_installed = WebDesktopInstalled(
+            apps=apps,
+            widgets=widgets,
+            removed_apps=list(dict.fromkeys(installed.removed_apps)),
+            removed_widgets=list(dict.fromkeys(installed.removed_widgets)),
+        )
         self._persist_overlay_installed(webspace, next_installed)
 
         def _mutator(doc: Any, txn: Any) -> None:
