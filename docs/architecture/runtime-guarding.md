@@ -42,6 +42,8 @@ The guard sources remain specialized, but the decision vocabulary is shared.
 MemoryGuard
 CpuGuard
 YjsPressureGuard
+InboundYwsUpdateGuard
+BrowserStreamFanoutGuard
 HttpHealthGuard
 SkillExecutionGuard
 SupervisorProcessGuard
@@ -160,6 +162,40 @@ operation later fails, the rebuild/materialization state must expose that
 failure through reliability, 360log, and Web UI details. The route budget guard
 only prevents an interactive request from monopolizing the public route long
 enough to cause browser `502/504` failures or route starvation.
+
+## Yjs transport pressure guards
+
+Yjs pressure has two different overload shapes and both need guards:
+
+- `skill_or_projection_write_pressure`: a skill, SDK stream, projection, or
+  materializer writes too much into the shared document.
+- `transport_replay_pressure`: a browser or gateway provider replays an
+  oversized update after reconnect and repeatedly forces the runtime to process
+  the same large CRDT payload.
+
+The target split is:
+
+- `YjsPressureGuard` attributes durable write pressure to an owner and can
+  throttle or quarantine skill-owned work.
+- `BrowserStreamFanoutGuard` limits browser-facing SDK stream fanout before it
+  becomes repeated Yjs/UI churn.
+- `InboundYwsUpdateGuard` protects the runtime from oversized inbound YWS
+  updates even when owner attribution is `gateway_ws` or `core`.
+
+`InboundYwsUpdateGuard` should be observable before it is clever:
+
+- log `webspace_id`, `update_bytes`, `block_bytes`, and reset decision
+- expose block counters and last block reason in reliability / snapshot data
+- close the affected YWS room with a specific reason, for example
+  `inbound_yws_update_payload_blocked`
+- avoid persisting the rejected update into the room store
+
+The browser must treat `inbound_yws_update_payload_blocked` as a hard local
+document reset signal. A normal provider reconnect can resend the same poisoned
+in-memory `Y.Doc`; the safe first implementation is a throttled page reload
+after clearing optional IndexedDB persistence. A later implementation may
+replace this with an app-level document recreation once every consumer can
+resubscribe safely to a new `Y.Doc` instance.
 
 ## Responsibility split
 
@@ -344,8 +380,10 @@ instead of embedded into Yjs.
 - [ ] Add a `GuardArbiter` service with no hard enforcement by default.
 - [ ] Adapt existing memory guard output into the shared signal contract.
 - [ ] Adapt existing Yjs pressure guard output into the shared signal contract.
-- [ ] Add interactive route budget guard records for browser-facing endpoints
+- [x] Add interactive route budget guard records for browser-facing endpoints
   that coerce unsafe synchronous waits into background work.
+- [ ] Add `BrowserStreamFanoutGuard` and `InboundYwsUpdateGuard` counters to
+  the shared signal contract.
 - [ ] Add compact guard summary to reliability and `adaos node reliability`.
 - [ ] Add guard sections to 360log/snapshot output.
 
@@ -375,8 +413,14 @@ instead of embedded into Yjs.
 ### Phase 4 - Partial enforcement
 
 - [ ] Enable `warn` and `throttle` for noncritical owners.
-- [ ] Enforce background mode for known heavy interactive routes such as
+- [x] Enforce background mode for known heavy interactive routes such as
   scenario switch and go-home rebuilds.
+- [x] Block oversized inbound YWS payloads before they are persisted or
+  rebroadcast.
+- [x] Trigger browser hard local-document recovery on
+  `inbound_yws_update_payload_blocked`.
+- [x] Throttle/drop oversized browser stream fanout before it amplifies into
+  route or Yjs pressure.
 - [ ] Enable quarantine only for high-confidence noncritical skill owners.
 - [ ] Invoke optional `onQuarantine` / `on_quarantine` hook with TTL, reason,
   metrics, blocked operation, webspace, and owner.

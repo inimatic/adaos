@@ -352,6 +352,9 @@ Status note:
 - the widget host now resolves Taiga-backed semantic renderers through lazy
   registry entries, while keeping the same typed binding refs on the manifest
   side
+- the demo slice now uses `action:`-backed `open_modal`, `call_host`, and
+  `invoke_skill_action` flows against the same shared `view:` and `stream:`
+  refs
 - broader cross-document harmonization is still in progress
 - the demo metrics table and chart now share the same `view:` selection ref on
   both semantic and compatibility paths
