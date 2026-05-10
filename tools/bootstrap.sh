@@ -24,6 +24,7 @@ DEV_MODE="0"
 PYTHON_ARG=""
 NODE_NAME=""
 NO_CORE_UPDATE="0"
+WORKSPACE_REGISTRY_REPO="${ADAOS_WORKSPACE_REGISTRY_REPO:-}"
 
 log()  { printf '\033[36m[*] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[+] %s\033[0m\n' "$*"; }
@@ -228,6 +229,7 @@ print_bootstrap_config() {
   echo "  dev_mode:       ${DEV_MODE:-0}"
   echo "  node_name:      ${NODE_NAME:-}"
   echo "  core_update:    $( [[ "${NO_CORE_UPDATE:-0}" == "1" ]] && printf '%s' "disabled" || printf '%s' "enabled" )"
+  echo "  workspace_registry_repo: ${WORKSPACE_REGISTRY_REPO:-}"
   echo
 }
 
@@ -537,6 +539,7 @@ while [[ $# -gt 0 ]]; do
     --zone|--zone-id) ZONE_ID="${2:-}"; shift 2 ;;
     --python) PYTHON_ARG="${2:-}"; shift 2 ;;
     --node-name) NODE_NAME="${2:-}"; shift 2 ;;
+    --workspace-registry-repo) WORKSPACE_REGISTRY_REPO="${2:-}"; shift 2 ;;
     --no-core-update|--no_core_update) NO_CORE_UPDATE="1"; shift ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
@@ -554,6 +557,7 @@ Usage: tools/bootstrap.sh [options]
   --zone ZONE_ID
   --python /path/to/python3.11
   --node-name NAME
+  --workspace-registry-repo URL
   --no-core-update      Disable hub/member core updates from CI/CD signals for this node
   --dev
   --no_voice            Skip voice/NLU deps (Rasa)
@@ -673,6 +677,10 @@ if [[ "${DEV_MODE:-0}" == "1" ]]; then
 fi
 if [[ -n "${ADAOS_CORE_UPDATE_REPO_URL:-}" ]]; then
   write_env_var "ADAOS_CORE_UPDATE_REPO_URL" "${ADAOS_CORE_UPDATE_REPO_URL}" ".env"
+fi
+if [[ -n "${WORKSPACE_REGISTRY_REPO:-}" ]]; then
+  write_env_var "ADAOS_WORKSPACE_REGISTRY_REPO" "${WORKSPACE_REGISTRY_REPO}" ".env"
+  export ADAOS_WORKSPACE_REGISTRY_REPO="${WORKSPACE_REGISTRY_REPO}"
 fi
 
 if [[ -z "${ENV_TYPE:-}" ]]; then
