@@ -2062,6 +2062,8 @@ async def reset_live_webspace_room(
     runtime_compaction_requested = False
     room_refs_released = False
     gc_collected = 0
+    room_prewarmed = False
+    room_prewarm_error = ""
 
     scheduler_job_deleted = await _delete_ystore_backup_job(key)
 
@@ -2142,6 +2144,23 @@ async def reset_live_webspace_room(
             ystore_snapshot_persisted or eviction.get("backup_skipped")
         )
 
+    prewarm_after_reset = str(
+        os.getenv("ADAOS_YJS_PREWARM_ROOM_AFTER_RESET", "1") or "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if prewarm_after_reset:
+        try:
+            await y_server.get_room(key)
+            room_prewarmed = True
+        except Exception as exc:
+            room_prewarmed = False
+            room_prewarm_error = f"{type(exc).__name__}: {exc}"
+            _ylog.debug(
+                "failed to prewarm YRoom after reset webspace=%s reason=%s",
+                key,
+                close_reason,
+                exc_info=True,
+            )
+
     return {
         "webspace_id": key,
         "route_reset": route_reset,
@@ -2158,6 +2177,8 @@ async def reset_live_webspace_room(
         "runtime_compaction_requested": runtime_compaction_requested,
         "room_refs_released": room_refs_released,
         "gc_collected": gc_collected,
+        "room_prewarmed": room_prewarmed,
+        "room_prewarm_error": room_prewarm_error,
     }
 
 

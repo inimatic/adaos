@@ -181,6 +181,8 @@ The target split is:
   becomes repeated Yjs/UI churn.
 - `InboundYwsUpdateGuard` protects the runtime from oversized inbound YWS
   updates even when owner attribution is `gateway_ws` or `core`.
+- `SyncYDocSessionGuard` caps and times out synchronous `get_ydoc()` sessions
+  so skill-owned worker threads cannot pin Yjs storage sessions indefinitely.
 
 `InboundYwsUpdateGuard` should be observable before it is clever:
 
@@ -295,6 +297,12 @@ Rules:
   loops
 - emit detailed evidence only on state transitions
 - cap diagnostic payload size before writing it to Yjs or logs
+- cache and fingerprint heavy UI snapshots before projection; repeated
+  `project=true` reads must skip Yjs projection when the cached projection is
+  already current
+- distinguish normal YRoom bootstrap payloads from route starvation; route
+  pending-data guard defaults should tolerate multi-hundred-KB scenario
+  materialization bursts while still catching multi-MiB stuck queues
 - keep expensive stack/profile collection on-demand and time-bounded
 - give guard loops their own budget; if a guard tick exceeds that budget, reduce
   detail rather than doing more work
@@ -421,10 +429,19 @@ instead of embedded into Yjs.
   scenario switch and go-home rebuilds.
 - [x] Block oversized inbound YWS payloads before they are persisted or
   rebroadcast.
+- [x] Cap and time out synchronous `get_ydoc()` sessions used from skill/helper
+  worker threads.
 - [x] Trigger browser hard local-document recovery on
   `inbound_yws_update_payload_blocked`.
 - [x] Throttle/drop oversized browser stream fanout before it amplifies into
   route or Yjs pressure.
+- [x] Skip redundant infrastate snapshot projection when browser/tool polling
+  asks for `project=true` but the cached projection fingerprint is already
+  current.
+- [x] Prewarm the YRoom after scenario-switch room reset so scenario changes do
+  not need to reset the broader browser route runtime.
+- [x] Raise route pending-data guard defaults so normal YRoom bootstrap payloads
+  do not trigger route guardrail pressure.
 - [ ] Enable quarantine only for high-confidence noncritical skill owners.
 - [ ] Invoke optional `onQuarantine` / `on_quarantine` hook with TTL, reason,
   metrics, blocked operation, webspace, and owner.

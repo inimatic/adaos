@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -96,6 +97,17 @@ def _release_sync_get_ydoc_slot(key: str | None) -> None:
             _SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE[key] = active - 1
 
 
+def _sync_get_ydoc_operation_timeout_s() -> float:
+    raw = str(os.getenv("ADAOS_YJS_SYNC_GET_YDOC_OPERATION_TIMEOUT_S") or "").strip()
+    if not raw:
+        return 8.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 8.0
+    return max(0.0, min(300.0, value))
+
+
 def _record_doc_timing(timings: dict[str, float] | None, key: str, started_at: float, *, prefix: str = "") -> float:
     value = round((time.perf_counter() - started_at) * 1000.0, 3)
     if timings is not None:
@@ -113,15 +125,20 @@ def _set_doc_timing(timings: dict[str, float] | None, key: str, value: float, *,
     return round(float(value), 3)
 
 
-def _run_blocking(coro: Awaitable[T]) -> T:
+def _run_blocking(coro: Awaitable[T], *, timeout_s: float | None = None) -> T:
     """
     Execute an async SQLiteYStore operation from synchronous code.
     Falls back to asyncio.run when no loop is active.
     """
+    async def _await_coro() -> T:
+        if timeout_s is not None and timeout_s > 0:
+            return await asyncio.wait_for(coro, timeout=timeout_s)
+        return await coro
+
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(_await_coro())
     raise RuntimeError("get_ydoc() cannot be used inside an active event loop; use async_get_ydoc().")
 
 
@@ -369,6 +386,7 @@ def get_ydoc(
     session_started = time.perf_counter()
     ystore = get_ystore_for_webspace(webspace_id)
     ydoc = Y.YDoc()
+    operation_timeout_s = _sync_get_ydoc_operation_timeout_s()
 
     async def _load() -> bytes | None:
         stage_started = time.perf_counter()
@@ -399,7 +417,7 @@ def get_ydoc(
 
     sync_slot_key = _acquire_sync_get_ydoc_slot(webspace_id)
     try:
-        before = _run_blocking(_load())
+        before = _run_blocking(_load(), timeout_s=operation_timeout_s)
     except BaseException:
         _release_sync_get_ydoc_slot(sync_slot_key)
         raise
@@ -468,13 +486,15 @@ def get_ydoc(
             return update
 
         try:
-            _run_blocking(_flush())
+            _run_blocking(_flush(), timeout_s=operation_timeout_s)
         except Exception as exc:
             _log.warning("get_ydoc flush failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
         finally:
             stage_started = time.perf_counter()
             try:
-                ystore.stop()
+                stop_result = ystore.stop()
+                if inspect.isawaitable(stop_result):
+                    _run_blocking(stop_result, timeout_s=operation_timeout_s)
             except Exception:
                 pass
             _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
