@@ -25,6 +25,7 @@ from adaos.services.reliability import (
     _event_model_phase0_communication_checkpoint,
     _hub_member_transport_evidence_snapshot,
     _enrich_required_upstream_link_with_sidecar,
+    _state_sync_snapshot,
     assess_transport_diagnostics,
     hub_member_connection_state_snapshot,
     hub_member_semantic_channels_snapshot,
@@ -1743,6 +1744,50 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["stateSync"]["replay"]["cursor"] == "3/32"
     assert payload["yjsPressure"]["policyState"] == "warn"
     assert payload["phase0Communication"]["tasks"]["nodeBrowserReady"]["status"] == "done"
+
+
+def test_state_sync_keeps_ready_semantics_for_bounded_replay_maintenance_pressure() -> None:
+    snapshot = _state_sync_snapshot(
+        {
+            "available": True,
+            "selected_webspace_id": "desktop",
+            "assessment": {
+                "state": "pressure",
+                "reason": "bounded_replay_window_near_limit",
+            },
+            "transport": {
+                "server_ready": True,
+                "active_yws_connections": 1,
+            },
+            "channel_contract": {
+                "recovery_model": "snapshot_plus_diff",
+            },
+            "selected_webspace": {
+                "webspace_id": "desktop",
+                "rebuild": {
+                    "finished_at": 1778055331.0,
+                    "materialization": {
+                        "ready": True,
+                        "readiness_state": "ready",
+                        "missing_branches": [],
+                    },
+                },
+            },
+            "webspaces": {
+                "desktop": {
+                    "replay_window_entries": 32,
+                    "replay_window_limit": 32,
+                },
+            },
+        }
+    )
+
+    assert snapshot["transport_state"] == "attached"
+    assert snapshot["first_sync_state"] == "complete"
+    assert snapshot["semantic_state"] == "ready"
+    assert snapshot["freshness_state"] == "fresh"
+    assert snapshot["replay"]["cursor"] == "32/32"
+    assert snapshot["blockers"] == ["bounded_replay_window_near_limit"]
 
 
 def test_node_members_endpoint_returns_hub_member_connection_state(monkeypatch) -> None:
