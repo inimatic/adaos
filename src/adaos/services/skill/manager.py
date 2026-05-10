@@ -2489,9 +2489,11 @@ class SkillManager:
         shared_cmd = [*base_cmd, *python_args]
         vendor_dir = slot.vendor_dir
         
+        run_cwd = skill_dir if skill_dir.exists() else slot.src_dir
+
         def _run(cmd: list[str]) -> tuple[bool, str]:
             try:
-                p = subprocess.run(cmd, capture_output=True, text=True)
+                p = subprocess.run(cmd, capture_output=True, text=True, cwd=str(run_cwd))
             except FileNotFoundError as e:
                 return False, str(e)
             ok = (p.returncode == 0)
@@ -2551,7 +2553,7 @@ class SkillManager:
             return []
 
         # Try uv with --target vendor
-        uv_vendor = [*uv_base, "--target", str(vendor_dir), "--no-warn-script-location", *python_args]
+        uv_vendor = [*uv_base, "--target", str(vendor_dir), *python_args]
         ok4, out4 = _run(uv_vendor)
         if ok4:
             return [str(vendor_dir)]
