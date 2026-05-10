@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager, asynccontextmanager
@@ -39,6 +40,60 @@ def _resolve_yjs_write_owner() -> str:
     except Exception:
         pass
     return "core"
+
+
+_SYNC_GET_YDOC_GUARD_LOCK = threading.RLock()
+_SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE: dict[str, int] = {}
+
+
+def _sync_get_ydoc_max_active_per_webspace() -> int:
+    raw = str(os.getenv("ADAOS_YJS_SYNC_GET_YDOC_MAX_ACTIVE_PER_WEBSPACE") or "").strip()
+    if not raw:
+        return 4
+    try:
+        value = int(raw)
+    except ValueError:
+        return 4
+    return max(0, min(128, value))
+
+
+def _sync_get_ydoc_owner_label() -> str:
+    owner = _resolve_yjs_write_owner()
+    thread_name = threading.current_thread().name
+    if owner:
+        return f"{owner}/{thread_name}"
+    return thread_name
+
+
+def _acquire_sync_get_ydoc_slot(webspace_id: str) -> str | None:
+    limit = _sync_get_ydoc_max_active_per_webspace()
+    if limit <= 0:
+        return None
+    key = str(webspace_id or "default")
+    with _SYNC_GET_YDOC_GUARD_LOCK:
+        active = int(_SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE.get(key, 0) or 0)
+        if active >= limit:
+            _log.warning(
+                "sync get_ydoc rejected by concurrency guard webspace=%s active=%s limit=%s owner=%s",
+                key,
+                active,
+                limit,
+                _sync_get_ydoc_owner_label(),
+            )
+            raise RuntimeError("sync_get_ydoc_overload")
+        _SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE[key] = active + 1
+    return key
+
+
+def _release_sync_get_ydoc_slot(key: str | None) -> None:
+    if not key:
+        return
+    with _SYNC_GET_YDOC_GUARD_LOCK:
+        active = int(_SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE.get(key, 0) or 0)
+        if active <= 1:
+            _SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE.pop(key, None)
+        else:
+            _SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE[key] = active - 1
 
 
 def _record_doc_timing(timings: dict[str, float] | None, key: str, started_at: float, *, prefix: str = "") -> float:
@@ -342,7 +397,12 @@ def get_ydoc(
             _record_doc_timing(timings, "encode_state_vector", stage_started, prefix=timing_prefix)
             return None
 
-    before = _run_blocking(_load())
+    sync_slot_key = _acquire_sync_get_ydoc_slot(webspace_id)
+    try:
+        before = _run_blocking(_load())
+    except BaseException:
+        _release_sync_get_ydoc_slot(sync_slot_key)
+        raise
     tracked_load_mark_roots = [str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()]
     try:
         yield ydoc
@@ -419,6 +479,7 @@ def get_ydoc(
                 pass
             _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
             _record_doc_timing(timings, "total", session_started, prefix=timing_prefix)
+            _release_sync_get_ydoc_slot(sync_slot_key)
 
 
 @asynccontextmanager
