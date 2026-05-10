@@ -68,6 +68,18 @@ def _schedule_webspace_rebuild(
     source_of_truth: str,
     reason: str,
 ) -> dict[str, Any]:
+    try:
+        from adaos.services.scenario.webspace_runtime import schedule_skill_runtime_rebuild
+
+        return schedule_skill_runtime_rebuild(
+            webspace_id=webspace_id,
+            action=action,
+            source_of_truth=source_of_truth,
+            reason=reason,
+        )
+    except Exception:
+        log.exception("failed to schedule coalesced webspace rebuild reason=%s webspace=%s", reason, webspace_id)
+
     async def _runner() -> None:
         try:
             await rebuild_webspace_projection(

@@ -1114,6 +1114,30 @@ def yjs_primary_doc_policy_snapshot(
     roots = selected.get("roots") if isinstance(selected.get("roots"), dict) else {}
     owner_bucket = _normalize_owner_bucket(owner) if owner else ""
     owner_row = owners.get(owner_bucket) if owner_bucket and isinstance(owners.get(owner_bucket), dict) else {}
+    if owner_bucket and not owner_row:
+        selected_assessment = selected.get("assessment") if isinstance(selected.get("assessment"), dict) else {}
+        overall_assessment = snapshot.get("assessment") if isinstance(snapshot.get("assessment"), dict) else {}
+        observed_state = str(
+            selected_assessment.get("state")
+            or overall_assessment.get("state")
+            or "idle"
+        ).strip().lower() or "idle"
+        policy_state = "warn" if observed_state in {"high", "critical"} else "ok"
+        return {
+            "webspace_id": selected_webspace_id,
+            "owner": owner_bucket,
+            "recent_bytes": 0,
+            "recent_writes": 0,
+            "peak_bps": 0.0,
+            "peak_wps": 0.0,
+            "policy_state": policy_state,
+            "target": "primary_shared_doc",
+            "reason": "owner_no_recent_yjs_writes" if policy_state == "warn" else "healthy",
+            "blocked_roots": [],
+            "throttled_roots": [],
+            "observed_state": observed_state,
+            "owner_missing": True,
+        }
     if not owner_row:
         owner_items = [item for item in list(selected.get("owner_items") or []) if isinstance(item, dict)]
         owner_items.sort(

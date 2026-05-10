@@ -49,6 +49,9 @@ _WEBSPACE_RECOVERY_COMMAND_CACHE: dict[str, Dict[str, Any]] = {}
 _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT = 256
 _SCENARIO_SYNC_REBUILD_AT: dict[str, float] = {}
 _SCENARIO_SYNC_REBUILD_CACHE_LIMIT = 512
+_SKILL_RUNTIME_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
+_SKILL_RUNTIME_REBUILD_PENDING: dict[str, Dict[str, Any]] = {}
+_SKILL_RUNTIME_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
 _WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
 _MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
 _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -90,6 +93,182 @@ def _scenario_sync_rebuild_min_interval_s() -> float:
         except Exception:
             pass
     return 10.0
+
+
+def _skill_runtime_rebuild_debounce_s() -> float:
+    raw = str(os.getenv("ADAOS_SKILL_RUNTIME_REBUILD_DEBOUNCE_S", "") or "").strip()
+    if raw:
+        try:
+            return max(0.0, min(float(raw), 30.0))
+        except Exception:
+            pass
+    return 1.5
+
+
+def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
+    key = str(webspace_id or "").strip() or default_webspace_id()
+    stats = _SKILL_RUNTIME_REBUILD_STATS.get(key)
+    if stats is None:
+        stats = {
+            "requested_total": 0,
+            "scheduled_total": 0,
+            "coalesced_total": 0,
+            "completed_total": 0,
+            "failed_total": 0,
+        }
+        _SKILL_RUNTIME_REBUILD_STATS[key] = stats
+    return stats
+
+
+def _merge_skill_runtime_rebuild_request(
+    *,
+    webspace_id: str,
+    action: str,
+    source_of_truth: str,
+    reason: str,
+) -> Dict[str, Any]:
+    key = str(webspace_id or "").strip() or default_webspace_id()
+    pending = _SKILL_RUNTIME_REBUILD_PENDING.get(key)
+    if pending is None:
+        pending = {
+            "webspace_id": key,
+            "actions": [],
+            "reasons": [],
+            "source_of_truth": str(source_of_truth or "").strip() or "skill_runtime",
+            "requested_at": time.time(),
+            "updated_at": time.time(),
+            "request_count": 0,
+        }
+        _SKILL_RUNTIME_REBUILD_PENDING[key] = pending
+    action_token = str(action or "").strip() or "skill_runtime_sync"
+    reason_token = str(reason or "").strip() or action_token
+    pending["request_count"] = int(pending.get("request_count") or 0) + 1
+    pending["updated_at"] = time.time()
+    if action_token not in list(pending.get("actions") or []):
+        pending.setdefault("actions", []).append(action_token)
+    if reason_token not in list(pending.get("reasons") or []):
+        pending.setdefault("reasons", []).append(reason_token)
+    return pending
+
+
+def _coalesced_skill_runtime_action(actions: list[str]) -> str:
+    normalized = [str(item or "").strip() for item in actions if str(item or "").strip()]
+    unique = list(dict.fromkeys(normalized))
+    if len(unique) == 1:
+        return unique[0]
+    if any(item in unique for item in {"skill_rollback_sync", "skill_uninstall_sync"}):
+        return "skill_runtime_sync"
+    if any(item == "skill_update_sync" for item in unique):
+        return "skill_update_sync"
+    if any(item == "skill_activation_sync" for item in unique):
+        return "skill_activation_sync"
+    return "skill_runtime_sync"
+
+
+def schedule_skill_runtime_rebuild(
+    *,
+    webspace_id: str | None = None,
+    action: str = "skill_runtime_sync",
+    source_of_truth: str = "skill_runtime",
+    reason: str = "",
+) -> Dict[str, Any]:
+    key = str(webspace_id or "").strip() or default_webspace_id()
+    stats = _skill_runtime_rebuild_stats(key)
+    stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
+    pending = _merge_skill_runtime_rebuild_request(
+        webspace_id=key,
+        action=action,
+        source_of_truth=source_of_truth,
+        reason=reason or action,
+    )
+    existing = _SKILL_RUNTIME_REBUILD_TASKS.get(key)
+    if existing is not None and not existing.done():
+        stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
+        return {
+            "scheduled": True,
+            "mode": "coalesced",
+            "webspace_id": key,
+            "action": action,
+            "source_of_truth": source_of_truth,
+            "pending_count": int(pending.get("request_count") or 0),
+            "task": existing.get_name(),
+        }
+    return _start_skill_runtime_rebuild_task(key, stats=stats, pending=pending)
+
+
+def _start_skill_runtime_rebuild_task(
+    webspace_id: str,
+    *,
+    stats: Dict[str, Any] | None = None,
+    pending: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    key = str(webspace_id or "").strip() or default_webspace_id()
+    stats = stats or _skill_runtime_rebuild_stats(key)
+    pending = pending or _SKILL_RUNTIME_REBUILD_PENDING.get(key) or {}
+    stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
+    task = asyncio.create_task(
+        _run_skill_runtime_rebuild_coalesced(key),
+        name=f"skill-runtime-rebuild:{key}",
+    )
+    _SKILL_RUNTIME_REBUILD_TASKS[key] = task
+    return {
+        "scheduled": True,
+        "mode": "coalesced",
+        "webspace_id": key,
+        "action": _coalesced_skill_runtime_action(list(pending.get("actions") or [])),
+        "source_of_truth": str(pending.get("source_of_truth") or "skill_runtime"),
+        "pending_count": int(pending.get("request_count") or 0),
+        "task": task.get_name(),
+    }
+
+
+async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
+    key = str(webspace_id or "").strip() or default_webspace_id()
+    stats = _skill_runtime_rebuild_stats(key)
+    try:
+        while True:
+            delay_s = _skill_runtime_rebuild_debounce_s()
+            if delay_s > 0:
+                await asyncio.sleep(delay_s)
+            pending = _SKILL_RUNTIME_REBUILD_PENDING.pop(key, None)
+            if not pending:
+                return
+            actions = list(pending.get("actions") or [])
+            reasons = list(pending.get("reasons") or [])
+            action = _coalesced_skill_runtime_action(actions)
+            source_of_truth = str(pending.get("source_of_truth") or "skill_runtime").strip() or "skill_runtime"
+            request_count = int(pending.get("request_count") or 0)
+            _log.info(
+                "running coalesced skill runtime rebuild webspace=%s action=%s requests=%s actions=%s reasons=%s",
+                key,
+                action,
+                request_count,
+                ",".join(str(item) for item in actions) or "-",
+                ",".join(str(item) for item in reasons[:8]) or "-",
+            )
+            try:
+                await rebuild_webspace_from_sources(
+                    key,
+                    action=action,
+                    source_of_truth=source_of_truth,
+                )
+                stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
+            except Exception:
+                stats["failed_total"] = int(stats.get("failed_total") or 0) + 1
+                _log.warning(
+                    "coalesced skill runtime rebuild failed webspace=%s action=%s",
+                    key,
+                    action,
+                    exc_info=True,
+                )
+            if key not in _SKILL_RUNTIME_REBUILD_PENDING:
+                return
+    finally:
+        current = asyncio.current_task()
+        if _SKILL_RUNTIME_REBUILD_TASKS.get(key) is current:
+            _SKILL_RUNTIME_REBUILD_TASKS.pop(key, None)
+        if key in _SKILL_RUNTIME_REBUILD_PENDING and key not in _SKILL_RUNTIME_REBUILD_TASKS:
+            _start_skill_runtime_rebuild_task(key)
 
 
 def _should_skip_bootstrap_scenario_sync_rebuild(
@@ -4360,6 +4539,9 @@ def _open_rebuild_ydoc_session(
             timings=timings,
             load_mark_roots=["ui", "data", "registry"],
             governed=True,
+            write_source="webspace_runtime.rebuild_async",
+            write_owner="core:webspace_runtime",
+            write_channel="core.webspace_runtime.async",
         )
     except TypeError:
         return async_get_ydoc(webspace_id)
@@ -4759,10 +4941,24 @@ async def _on_skill_activated(evt: Dict[str, Any]) -> None:
     if bool(evt.get("defer_webspace_rebuild")):
         return
     webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    await rebuild_webspace_from_sources(
-        webspace_id,
+    schedule_skill_runtime_rebuild(
+        webspace_id=webspace_id,
         action="skill_activation_sync",
         source_of_truth="skill_runtime",
+        reason=str(evt.get("skill_name") or evt.get("name") or "skills.activated"),
+    )
+
+
+@subscribe("skills.updated")
+async def _on_skill_updated(evt: Dict[str, Any]) -> None:
+    if bool(evt.get("defer_webspace_rebuild")):
+        return
+    webspace_id = str(evt.get("webspace_id") or default_webspace_id())
+    schedule_skill_runtime_rebuild(
+        webspace_id=webspace_id,
+        action="skill_update_sync",
+        source_of_truth="skill_runtime",
+        reason=str(evt.get("name") or evt.get("skill_name") or "skills.updated"),
     )
 
 
@@ -4773,20 +4969,22 @@ async def _on_skill_rolled_back(evt: Dict[str, Any]) -> None:
     entries and registry contributions are removed from the target webspace.
     """
     webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    await rebuild_webspace_from_sources(
-        webspace_id,
+    schedule_skill_runtime_rebuild(
+        webspace_id=webspace_id,
         action="skill_rollback_sync",
         source_of_truth="skill_runtime",
+        reason=str(evt.get("name") or evt.get("skill_name") or "skills.rolledback"),
     )
 
 
 @subscribe("skill.uninstalled")
 async def _on_skill_uninstalled(evt: Dict[str, Any]) -> None:
     webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    await rebuild_webspace_from_sources(
-        webspace_id,
+    schedule_skill_runtime_rebuild(
+        webspace_id=webspace_id,
         action="skill_uninstall_sync",
         source_of_truth="skill_runtime",
+        reason=str(evt.get("name") or evt.get("skill_name") or "skill.uninstalled"),
     )
 
 
