@@ -14,6 +14,7 @@
     "id": { "$ref": "#/$defs/id" },
     "title": { "type": "string" },
     "description": { "type": "string" },
+    "workspace": { "$ref": "#/$defs/workspace" },
     "layout": { "$ref": "#/$defs/layout" },
     "views": {
       "type": "array",
@@ -105,6 +106,7 @@
         },
         "area": { "$ref": "#/$defs/id" },
         "title": { "type": "string" },
+        "when": { "$ref": "#/$defs/viewAvailability" },
         "variant": { "type": "string" },
         "source": { "$ref": "#/$defs/binding" },
         "selection": { "$ref": "#/$defs/binding" },
@@ -118,6 +120,46 @@
           "items": { "$ref": "#/$defs/action" }
         },
         "load": { "$ref": "#/$defs/loadHint" }
+      }
+    },
+    "surfaceClass": {
+      "type": "string",
+      "enum": ["desktop", "workspace", "operations"]
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "surfaceClass": { "$ref": "#/$defs/surfaceClass" },
+        "objectKind": { "type": "string" },
+        "entityRef": { "type": "string" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "lifecycleStage": { "type": "string" }
+      }
+    },
+    "viewAvailability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredCapabilities": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "lifecycleStages": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "surfaceClasses": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/surfaceClass" }
+        },
+        "objectKinds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "binding": {

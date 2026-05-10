@@ -2509,7 +2509,15 @@ class WorkspaceWebsocketServer(WebsocketServer):
             attach_room_observers(webspace_id, room.ydoc)
         except Exception:
             _ylog.warning("attach_room_observers failed for webspace=%s", webspace_id, exc_info=True)
-        await self.start_room(room)
+        try:
+            await self.start_room(room)
+        except RuntimeError as exc:
+            if "YRoom already running" not in str(exc):
+                raise
+            _ylog.warning(
+                "YRoom start skipped because room is already running webspace=%s",
+                webspace_id,
+            )
         _mark_room_open(
             webspace_id,
             room,

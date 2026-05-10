@@ -461,6 +461,8 @@ Current pre-stand milestone:
   `invoke_skill_action` against the live event surface
 - desktop and modal runtime paths now apply the same node-aware data scoping
   for semantic and compatibility bindings
+- a first capability-aware workspace composer now filters semantic views by
+  declared capabilities, lifecycle stage, object kind, and surface class
 
 ### 0. Architecture Fixation
 
@@ -518,7 +520,7 @@ Recommended identifiers:
 
 ### 5. Workspace Composition
 
-- [ ] define capability-aware workspace composition rules
+- [x] define capability-aware workspace composition rules
 - [ ] add desktop/workspace/operations as explicit top-level shell surfaces
 - [ ] keep capability composition separate from business-domain ownership
 
