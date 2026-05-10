@@ -472,6 +472,9 @@ Current pre-stand milestone:
 - semantic workspace metadata is now also projected into `runtime.surface.*`
   page state so typed host and skill actions can observe the current surface
   class, object kind, entity ref, lifecycle stage, and capabilities
+- the browser shell now has an explicit route-aware `workspace` surface path
+  that loads `ui.application.workspace.pageSchema` before falling back to the
+  legacy desktop schema branch
 - modal page schemas now respect declared layout areas instead of stacking every
   widget linearly, which makes capability-composed `operations` surfaces
   inspectable on the stand
@@ -538,7 +541,8 @@ Recommended identifiers:
   package
 - [x] project semantic workspace context into runtime page state for typed
   action flows
-- [ ] add desktop/workspace/operations as explicit top-level shell surfaces
+- [x] add the first explicit top-level `workspace` shell surface
+- [ ] add desktop/workspace/operations as a complete top-level shell trio
 - [ ] keep capability composition separate from business-domain ownership
 
 ### 6. Load and Responsiveness
