@@ -193,6 +193,11 @@ def root_init(
         "--token",
         help="ROOT_TOKEN used for bootstrap. Falls back to ROOT_TOKEN/ADAOS_ROOT_TOKEN environment variables.",
     ),
+    subnet_id: str | None = typer.Option(
+        None,
+        "--subnet-id",
+        help="Preferred subnet id to request for the hub certificate.",
+    ),
     metadata: List[str] = typer.Option(
         [],
         "--meta",
@@ -202,7 +207,7 @@ def root_init(
     service = _service()
     try:
         meta_payload = _parse_metadata(metadata) if metadata else None
-        result = service.init(root_token=token, metadata=meta_payload)
+        result = service.init(root_token=token, metadata=meta_payload, preferred_subnet_id=subnet_id)
     except RootServiceError as exc:
         _print_error(str(exc))
         raise typer.Exit(1)
