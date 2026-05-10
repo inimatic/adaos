@@ -1922,12 +1922,14 @@ def _merge_installed_with_auto(installed: Dict[str, Any], *, auto_apps: set[str]
     """
     apps = _dedupe_str_list(installed.get("apps"))
     widgets = _dedupe_str_list(installed.get("widgets"))
+    removed_apps = set(_dedupe_str_list(installed.get("removedApps")))
+    removed_widgets = set(_dedupe_str_list(installed.get("removedWidgets")))
 
     for app_id in sorted(auto_apps):
-        if app_id not in apps:
+        if app_id not in removed_apps and app_id not in apps:
             apps.append(app_id)
     for widget_id in sorted(auto_widgets):
-        if widget_id not in widgets:
+        if widget_id not in removed_widgets and widget_id not in widgets:
             widgets.append(widget_id)
 
     return {"apps": apps, "widgets": widgets}

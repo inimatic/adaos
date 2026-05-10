@@ -174,6 +174,12 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
     installed = {
         "apps": _dedupe_text_list(installed_source.get("apps") if isinstance(installed_source, dict) else []),
         "widgets": _dedupe_text_list(installed_source.get("widgets") if isinstance(installed_source, dict) else []),
+        "removedApps": _dedupe_text_list(
+            installed_source.get("removedApps") if isinstance(installed_source, dict) else []
+        ),
+        "removedWidgets": _dedupe_text_list(
+            installed_source.get("removedWidgets") if isinstance(installed_source, dict) else []
+        ),
     }
     pinned_widgets_source = desktop_raw.get("pinnedWidgets") if "pinnedWidgets" in desktop_raw else legacy_pinned_raw
     pinned_widgets = _normalize_overlay_widget_list(pinned_widgets_source)
@@ -200,7 +206,7 @@ def _normalize_ui_overlay_payload(value: Any) -> dict[str, Any]:
         else value.get("homeScenarioRef")
     )
     home_scenario_ref = _normalize_home_scenario_ref(home_scenario_ref_source)
-    if has_installed or installed["apps"] or installed["widgets"]:
+    if has_installed or installed["apps"] or installed["widgets"] or installed["removedApps"] or installed["removedWidgets"]:
         desktop["installed"] = installed
     if has_pinned_widgets or pinned_widgets:
         desktop["pinnedWidgets"] = pinned_widgets
@@ -350,6 +356,8 @@ class WebspaceManifest:
             out["installed"] = {
                 "apps": _dedupe_text_list(installed.get("apps")),
                 "widgets": _dedupe_text_list(installed.get("widgets")),
+                "removedApps": _dedupe_text_list(installed.get("removedApps")),
+                "removedWidgets": _dedupe_text_list(installed.get("removedWidgets")),
             }
         if "pinnedWidgets" in desktop:
             out["pinnedWidgets"] = _normalize_overlay_widget_list(desktop.get("pinnedWidgets"))
@@ -371,6 +379,8 @@ class WebspaceManifest:
         return {
             "apps": _dedupe_text_list(installed.get("apps")),
             "widgets": _dedupe_text_list(installed.get("widgets")),
+            "removedApps": _dedupe_text_list(installed.get("removedApps")),
+            "removedWidgets": _dedupe_text_list(installed.get("removedWidgets")),
         }
 
     @property
@@ -891,6 +901,8 @@ def set_workspace_installed_overlay(workspace_id: str, installed: Any) -> Webspa
     desktop["installed"] = {
         "apps": _dedupe_text_list((installed or {}).get("apps") if isinstance(installed, dict) else []),
         "widgets": _dedupe_text_list((installed or {}).get("widgets") if isinstance(installed, dict) else []),
+        "removedApps": _dedupe_text_list((installed or {}).get("removedApps") if isinstance(installed, dict) else []),
+        "removedWidgets": _dedupe_text_list((installed or {}).get("removedWidgets") if isinstance(installed, dict) else []),
     }
     return set_workspace_desktop_overlay(workspace_id, desktop)
 
