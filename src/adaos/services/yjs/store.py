@@ -739,11 +739,15 @@ class AdaosMemoryYStore(BaseYStore):
         loop.create_task(_runner())
         return True
 
-    async def request_runtime_compaction(self, *, reason: str = "manual") -> bool:
+    async def request_runtime_compaction(self, *, reason: str = "manual", min_quiet_sec: float = 0.0) -> bool:
         token = str(reason or "").strip().lower().replace(" ", "_") or "manual"
+        now = time.time()
         async with self._lock:
             has_replay_tail = len(self._updates) > 1 or self._replay_window_bytes_locked() > 0
             if not has_replay_tail or self._auto_backup_inflight:
+                return False
+            quiet_sec = max(0.0, float(min_quiet_sec or 0.0))
+            if quiet_sec > 0.0 and self._last_write_at > 0.0 and now - self._last_write_at < quiet_sec:
                 return False
             self._auto_backup_inflight = True
         if self._schedule_auto_backup(reason=f"idle_{token}"):

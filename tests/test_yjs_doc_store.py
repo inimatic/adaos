@@ -338,6 +338,28 @@ async def test_ystore_request_runtime_compaction_collapses_runtime_log(monkeypat
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_request_runtime_compaction_respects_quiet_window(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "1")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", "0.05")
+    webspace_id = _webspace_id("quiet-compaction")
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        for idx in range(3):
+            async with async_get_ydoc(webspace_id) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    ydoc.get_map("data").set(txn, f"item_{idx}", idx)
+
+        assert await store.request_runtime_compaction(reason="replay_pressure", min_quiet_sec=999.0) is False
+        quiet_snapshot = store.runtime_snapshot()
+        assert quiet_snapshot["auto_backup_inflight"] is False
+        assert quiet_snapshot["update_log_entries"] == 3
+
+        assert await store.request_runtime_compaction(reason="replay_pressure", min_quiet_sec=0.0) is True
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_evict_ystore_for_webspace_releases_runtime_memory_and_preserves_snapshot() -> None:
     webspace_id = _webspace_id("evict-store")
     store = get_ystore_for_webspace(webspace_id)

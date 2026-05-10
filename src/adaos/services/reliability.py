@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib
 import json
+import logging
 import os
 import threading
 import time
@@ -22,6 +24,8 @@ from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
 )
 from adaos.services.zone_hosts import canonical_zone_id
+
+_log = logging.getLogger("adaos.reliability")
 
 
 class MessageTaxonomy(str, Enum):
@@ -4691,6 +4695,12 @@ def yjs_sync_runtime_snapshot(
         elif webspaces:
             selected_webspace_id = sorted(str(key) for key in webspaces.keys())[0]
     selected_entry = webspaces.get(selected_webspace_id) if isinstance(webspaces.get(selected_webspace_id), dict) else {}
+    replay_pressure_compaction_requested = _request_yjs_replay_pressure_compaction(
+        selected_webspace_id,
+        selected_entry,
+        assessment_state=assessment_state,
+        reasons=reasons,
+    )
     selected_webspace = _with_live_yjs_materialization_snapshot(
         selected_webspace_id,
         _build_yjs_selected_webspace_snapshot(selected_webspace_id),
@@ -4827,8 +4837,72 @@ def yjs_sync_runtime_snapshot(
         "backup_skipped_total": backup_skipped_total,
         "state_vector_fast_path_total": state_vector_fast_path_total,
         "state_vector_compute_total": state_vector_compute_total,
+        "replay_pressure_compaction_requested": replay_pressure_compaction_requested,
         "webspaces": webspaces,
     }
+
+
+def _request_yjs_replay_pressure_compaction(
+    webspace_id: str | None,
+    selected_entry: dict[str, Any] | None,
+    *,
+    assessment_state: str,
+    reasons: list[str],
+) -> bool:
+    if str(os.getenv("ADAOS_YSTORE_AUTOCOMPACT_ON_REPLAY_PRESSURE", "1") or "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return False
+    key = str(webspace_id or "").strip()
+    entry = selected_entry if isinstance(selected_entry, dict) else {}
+    if not key or str(assessment_state or "").strip().lower() != "pressure":
+        return False
+    if "bounded_replay_window_near_limit" not in [str(item or "").strip() for item in reasons]:
+        return False
+    if not bool(entry.get("runtime_compaction_eligible")):
+        return False
+    replay_limit = int(entry.get("replay_window_limit") or 0)
+    replay_entries = int(entry.get("replay_window_entries") or 0)
+    if replay_limit <= 0 or (float(replay_entries) / float(replay_limit)) < 0.9:
+        return False
+    try:
+        quiet_sec = float(str(os.getenv("ADAOS_YSTORE_AUTOCOMPACT_REPLAY_PRESSURE_QUIET_SEC") or "2.0").strip())
+    except Exception:
+        quiet_sec = 2.0
+    quiet_sec = max(0.0, min(300.0, quiet_sec))
+    if bool(entry.get("auto_backup_inflight")):
+        return False
+    last_write_ago = entry.get("last_write_ago_s")
+    if quiet_sec > 0.0 and isinstance(last_write_ago, (int, float)) and float(last_write_ago) < quiet_sec:
+        return False
+
+    async def _runner() -> None:
+        try:
+            from adaos.services.yjs.store import get_ystore_for_webspace
+
+            store = get_ystore_for_webspace(key)
+            await store.request_runtime_compaction(
+                reason="replay_pressure",
+                min_quiet_sec=quiet_sec,
+            )
+        except Exception:
+            _log.debug("failed to request YStore replay-pressure compaction webspace=%s", key, exc_info=True)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        thread = threading.Thread(
+            target=lambda: asyncio.run(_runner()),
+            name=f"adaos-ystore-replay-compact-{key}",
+            daemon=True,
+        )
+        thread.start()
+        return True
+    loop.create_task(_runner())
+    return True
 
 
 def _build_yjs_sync_channel_contract() -> dict[str, Any]:
