@@ -44,6 +44,10 @@ _log = logging.getLogger("adaos.scenario.webspace_runtime")
 _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
 _SCENARIO_SWITCH_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
 _WEBSPACE_REBUILD_STATUS: dict[str, Dict[str, Any]] = {}
+_WEBSPACE_RECOVERY_COMMAND_CACHE: dict[str, Dict[str, Any]] = {}
+_WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT = 256
+_SCENARIO_SYNC_REBUILD_AT: dict[str, float] = {}
+_SCENARIO_SYNC_REBUILD_CACHE_LIMIT = 512
 _WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
 _MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
 _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -75,6 +79,51 @@ def _member_snapshot_rebuild_min_interval_s() -> float:
         except Exception:
             pass
     return 5.0
+
+
+def _scenario_sync_rebuild_min_interval_s() -> float:
+    raw = str(os.getenv("ADAOS_SCENARIO_SYNC_REBUILD_MIN_INTERVAL_S", "") or "").strip()
+    if raw:
+        try:
+            return max(0.0, min(float(raw), 60.0))
+        except Exception:
+            pass
+    return 10.0
+
+
+def _should_skip_bootstrap_scenario_sync_rebuild(
+    evt: Mapping[str, Any],
+    *,
+    webspace_id: str,
+    scenario_id: str | None,
+) -> bool:
+    # Event source is not always preserved by the subscription adapter. Guard
+    # all repeated scenario sync events for the same webspace/scenario, so a
+    # noisy publisher cannot rebuild the desktop in a tight loop. Distinct
+    # scenario ids still pass through immediately.
+    interval_s = _scenario_sync_rebuild_min_interval_s()
+    if interval_s <= 0:
+        return False
+    scenario_token = str(scenario_id or "").strip() or "-"
+    key = f"bootstrap\0{webspace_id}\0{scenario_token}"
+    now = time.monotonic()
+    last_at = float(_SCENARIO_SYNC_REBUILD_AT.get(key) or 0.0)
+    _SCENARIO_SYNC_REBUILD_AT[key] = now
+    if len(_SCENARIO_SYNC_REBUILD_AT) > _SCENARIO_SYNC_REBUILD_CACHE_LIMIT:
+        for old_key, _ in sorted(_SCENARIO_SYNC_REBUILD_AT.items(), key=lambda item: item[1])[
+            : max(1, len(_SCENARIO_SYNC_REBUILD_AT) - _SCENARIO_SYNC_REBUILD_CACHE_LIMIT)
+        ]:
+            _SCENARIO_SYNC_REBUILD_AT.pop(old_key, None)
+    if last_at > 0.0 and now - last_at < interval_s:
+        _log.debug(
+            "deduplicated bootstrap scenario sync rebuild webspace=%s scenario=%s age_s=%.3f min_interval_s=%.3f",
+            webspace_id,
+            scenario_token,
+            now - last_at,
+            interval_s,
+        )
+        return True
+    return False
 
 
 def _member_snapshot_rebuild_request_id(*, webspace_id: str, node_id: str) -> str:
@@ -323,6 +372,93 @@ def _reload_pending_stale_after_s() -> float:
     if value > 300.0:
         return 300.0
     return value
+
+
+def _reload_command_dedupe_ttl_s() -> float:
+    raw = str(os.getenv("ADAOS_WEBSPACE_RECOVERY_COMMAND_DEDUPE_TTL_S") or "").strip()
+    if not raw:
+        return 300.0
+    try:
+        value = float(raw)
+    except Exception:
+        return 300.0
+    if value < 0.0:
+        return 0.0
+    if value > 3600.0:
+        return 3600.0
+    return value
+
+
+def _recovery_command_cache_key(
+    *,
+    webspace_id: str,
+    action: str,
+    scenario_id: str | None,
+    cmd_id: str,
+) -> str:
+    raw = {
+        "webspace_id": str(webspace_id or "").strip() or "default",
+        "action": str(action or "").strip() or "reload",
+        "scenario_id": str(scenario_id or "").strip() or None,
+        "cmd_id": str(cmd_id or "").strip(),
+    }
+    encoded = json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:16]
+
+
+def _claim_recovery_command_once(
+    *,
+    webspace_id: str,
+    action: str,
+    scenario_id: str | None,
+    cmd_id: str | None,
+    fingerprint: str,
+) -> tuple[bool, dict[str, Any] | None]:
+    cmd_id = str(cmd_id or "").strip()
+    ttl_s = _reload_command_dedupe_ttl_s()
+    if not cmd_id or ttl_s <= 0.0:
+        return True, None
+
+    now = time.time()
+    expired = [
+        key
+        for key, entry in _WEBSPACE_RECOVERY_COMMAND_CACHE.items()
+        if now - float(entry.get("ts") or 0.0) > ttl_s
+    ]
+    for key in expired:
+        _WEBSPACE_RECOVERY_COMMAND_CACHE.pop(key, None)
+    while len(_WEBSPACE_RECOVERY_COMMAND_CACHE) >= _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT:
+        oldest_key = min(
+            _WEBSPACE_RECOVERY_COMMAND_CACHE,
+            key=lambda item: float(_WEBSPACE_RECOVERY_COMMAND_CACHE[item].get("ts") or 0.0),
+        )
+        _WEBSPACE_RECOVERY_COMMAND_CACHE.pop(oldest_key, None)
+
+    key = _recovery_command_cache_key(
+        webspace_id=webspace_id,
+        action=action,
+        scenario_id=scenario_id,
+        cmd_id=cmd_id,
+    )
+    existing = _WEBSPACE_RECOVERY_COMMAND_CACHE.get(key)
+    if existing:
+        duplicate = dict(existing)
+        duplicate["age_s"] = round(max(0.0, now - float(existing.get("ts") or now)), 3)
+        duplicate["ttl_s"] = ttl_s
+        duplicate["cmd_id"] = cmd_id
+        duplicate["cache_key"] = key
+        return False, duplicate
+
+    _WEBSPACE_RECOVERY_COMMAND_CACHE[key] = {
+        "ts": now,
+        "webspace_id": str(webspace_id or "").strip() or "default",
+        "action": str(action or "").strip() or "reload",
+        "scenario_id": str(scenario_id or "").strip() or None,
+        "fingerprint": str(fingerprint or "").strip(),
+        "cmd_id": cmd_id,
+        "cache_key": key,
+    }
+    return True, None
 
 
 def _project_scenario_timeout_s() -> float:
@@ -4564,6 +4700,8 @@ async def _on_scenarios_synced(evt: Dict[str, Any]) -> None:
     """
     webspace_id = str(evt.get("webspace_id") or default_webspace_id())
     scenario_id = str(evt.get("scenario_id") or "").strip() or None
+    if _should_skip_bootstrap_scenario_sync_rebuild(evt, webspace_id=webspace_id, scenario_id=scenario_id):
+        return
     await rebuild_webspace_from_sources(
         webspace_id,
         action="scenario_projection_sync",
@@ -5835,6 +5973,58 @@ async def reload_webspace_from_scenario(
         scenario_id=scenario_id,
         command_trace=command_trace,
     )
+    claimed_command, duplicate_command = _claim_recovery_command_once(
+        webspace_id=webspace_id,
+        action=requested_action,
+        scenario_id=scenario_id,
+        cmd_id=command_trace.get("cmd_id"),
+        fingerprint=recovery_fingerprint,
+    )
+    if not claimed_command:
+        duplicate_total = int(describe_webspace_rebuild_state(webspace_id).get("recovery_duplicate_total") or 0) + 1
+        _set_webspace_rebuild_status(
+            webspace_id,
+            recovery_fingerprint=recovery_fingerprint,
+            recovery_duplicate_total=duplicate_total,
+            recovery_last_duplicate_at=time.time(),
+            recovery_last_duplicate_reason="duplicate_recovery_command",
+            recovery_last_duplicate_age_s=duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else None,
+            recovery_last_command_client=command_trace.get("gateway_client"),
+            recovery_last_command_id=command_trace.get("cmd_id"),
+            recovery_last_command_seq=int(command_trace.get("gateway_command_seq") or 0),
+        )
+        _log.warning(
+            "deduplicated webspace recovery command webspace=%s action=%s scenario=%s cmd=%s seq=%s client=%s fp=%s age_s=%s ttl_s=%s dup_total=%s",
+            webspace_id,
+            requested_action,
+            scenario_id,
+            command_trace.get("cmd_id") or "-",
+            command_trace.get("gateway_command_seq") or 0,
+            command_trace.get("gateway_client") or "-",
+            recovery_fingerprint,
+            duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else "-",
+            duplicate_command.get("ttl_s") if isinstance(duplicate_command, dict) else "-",
+            duplicate_total,
+        )
+        return {
+            "ok": True,
+            "accepted": True,
+            "deduplicated": True,
+            "skip_reason": "duplicate_recovery_command",
+            "action": requested_action,
+            "webspace_id": webspace_id,
+            "scenario_id": scenario_id,
+            "scenario_resolution": scenario_resolution,
+            "kind": state.kind,
+            "source_mode": state.source_mode,
+            "home_scenario": state.effective_home_scenario,
+            "current_scenario_before": state.current_scenario,
+            "recovery_fingerprint": recovery_fingerprint,
+            "recovery_duplicate_total": duplicate_total,
+            "duplicate_age_s": duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else None,
+            "rebuild": describe_webspace_rebuild_state(webspace_id),
+        }
+
     rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
     duplicate_window_s = _reload_dedupe_window_s()
     previous_action = str(rebuild_state_before.get("action") or "").strip().lower()
