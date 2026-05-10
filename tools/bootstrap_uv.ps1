@@ -11,7 +11,8 @@ param(
   [int]$ControlPort = 8777,
   [string]$RootUrl = "https://api.inimatic.com",
   [string]$Rev = "rev2026",
-  [string]$ZoneId = ""
+  [string]$ZoneId = "",
+  [string]$WorkspaceRegistryRepo = $env:ADAOS_WORKSPACE_REGISTRY_REPO
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,6 +72,7 @@ function Show-BootstrapConfig {
   Write-Host ("  env_type:       {0}" -f $env:ENV_TYPE)
   Write-Host ("  adaos_base_dir: {0}" -f $env:ADAOS_BASE_DIR)
   Write-Host ("  dev_mode:       {0}" -f $(if ($Dev) { "1" } else { "0" }))
+  Write-Host ("  workspace_registry_repo: {0}" -f $WorkspaceRegistryRepo)
   Write-Host ""
 }
 
@@ -201,6 +203,10 @@ if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
 if ($Dev) {
   Write-EnvVar -Key "ENV_TYPE" -Value "dev" -EnvFile ".env"
   Write-EnvVar -Key "ADAOS_SUPERVISOR_ENABLED" -Value "0" -EnvFile ".env"
+}
+if (-not [string]::IsNullOrWhiteSpace($WorkspaceRegistryRepo)) {
+  Write-EnvVar -Key "ADAOS_WORKSPACE_REGISTRY_REPO" -Value $WorkspaceRegistryRepo -EnvFile ".env"
+  $env:ADAOS_WORKSPACE_REGISTRY_REPO = $WorkspaceRegistryRepo
 }
 
 # 5) Short command: add .venv\Scripts to PATH for current session

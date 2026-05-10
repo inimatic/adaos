@@ -11,6 +11,8 @@ param(
   [string]$RepoOwner = "stipot-com",
   [string]$RepoName = "adaos",
   [string]$UseGitFrom = "",
+  [Alias("UseWorkspaceRegistryFrom")]
+  [string]$WorkspaceRegistryRepo = "",
   [string]$JoinCode = "",
   [string]$Role = "",
   [switch]$Dev,
@@ -55,6 +57,9 @@ if ([string]::IsNullOrWhiteSpace($Dest)) { throw "Dest is empty" }
 if ([string]::IsNullOrWhiteSpace($Rev)) { throw "Rev is empty" }
 if (-not [string]::IsNullOrWhiteSpace($UseGitFrom)) {
   $UseGitFrom = $UseGitFrom.Trim()
+}
+if (-not [string]::IsNullOrWhiteSpace($WorkspaceRegistryRepo)) {
+  $WorkspaceRegistryRepo = $WorkspaceRegistryRepo.Trim()
 }
 
 Write-Info ("Preparing repo at: {0}" -f $Dest)
@@ -136,6 +141,11 @@ finally {
 }
 
 Set-Location -LiteralPath $Dest
+
+if (-not [string]::IsNullOrWhiteSpace($WorkspaceRegistryRepo)) {
+  Write-Info ("Workspace registry repo URL: {0}" -f $WorkspaceRegistryRepo)
+  $env:ADAOS_WORKSPACE_REGISTRY_REPO = $WorkspaceRegistryRepo
+}
 
 $bootstrapPath = Join-Path $Dest "tools\\bootstrap.ps1"
 if (-not (Test-Path -LiteralPath $bootstrapPath)) {
