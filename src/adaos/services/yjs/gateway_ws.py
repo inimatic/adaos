@@ -128,6 +128,8 @@ _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC"
 _YROOM_DIAG_BUFFER_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_BUFFER_WARN", 32, minimum=1)
 _YROOM_DIAG_PENDING_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_PENDING_WARN", 32, minimum=1)
 _YROOM_DIAG_UPDATE_WARN_BYTES = _env_int("ADAOS_YJS_ROOM_DIAG_UPDATE_WARN_BYTES", 256 * 1024, minimum=1)
+_YROOM_INBOUND_GUARD_BLOCK_BYTES = _env_int("ADAOS_YJS_ROOM_INBOUND_GUARD_BLOCK_BYTES", 128 * 1024, minimum=1)
+_YROOM_INBOUND_GUARD_RESET_COOLDOWN_SEC = _env_float("ADAOS_YJS_ROOM_INBOUND_GUARD_RESET_COOLDOWN_SEC", 5.0, minimum=0.0)
 _YROOM_DIAG_INCLUDE_YSTORE = _env_flag("ADAOS_YJS_ROOM_DIAG_INCLUDE_YSTORE", False)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC = _env_float("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_INTERVAL_SEC", 120.0, minimum=0.0)
 _YROOM_EFFECTIVE_GUARD_FULL_CHECK_BYTES = _env_int("ADAOS_YJS_EFFECTIVE_GUARD_FULL_CHECK_BYTES", 64 * 1024 * 1024, minimum=1)
@@ -152,11 +154,22 @@ _YROOM_AUTHORITATIVE_SELECTOR_LEASE_SEC = _env_float(
     minimum=0.0,
 )
 _EMPTY_Y_UPDATE = b"\x00\x00"
+_YROOM_INBOUND_GUARD_RESET_AT: dict[str, float] = {}
 
 
 def _shorten_webspace_id(value: str | None) -> str:
     raw = str(value or "").strip()
     return raw if raw else "default"
+
+
+def _reserve_inbound_guard_reset(webspace_id: str, now_mono: float) -> bool:
+    key = _coerce_gateway_webspace_id(webspace_id)
+    with _YROOM_LIFECYCLE_LOCK:
+        previous = float(_YROOM_INBOUND_GUARD_RESET_AT.get(key) or 0.0)
+        if previous > 0.0 and now_mono - previous < _YROOM_INBOUND_GUARD_RESET_COOLDOWN_SEC:
+            return False
+        _YROOM_INBOUND_GUARD_RESET_AT[key] = now_mono
+        return True
 
 
 def _is_empty_y_update(update: bytes | bytearray | memoryview | None) -> bool:
@@ -319,6 +332,12 @@ class DiagnosticYRoom(YRoom):
         self._diag_backend_persist_skip_bytes = 0
         self._diag_destructive_update_block_total = 0
         self._diag_destructive_update_block_bytes = 0
+        self._diag_inbound_guard_block_total = 0
+        self._diag_inbound_guard_block_bytes = 0
+        self._diag_inbound_guard_last_bytes = 0
+        self._diag_inbound_guard_last_block_bytes = int(_YROOM_INBOUND_GUARD_BLOCK_BYTES)
+        self._diag_inbound_guard_last_at = 0.0
+        self._diag_inbound_guard_last_reset_reserved = False
         self._diag_effective_repair_total = 0
         self._diag_effective_repair_bytes = 0
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
@@ -375,6 +394,16 @@ class DiagnosticYRoom(YRoom):
             "backend_persist_skip_bytes": int(self._diag_backend_persist_skip_bytes),
             "destructive_update_block_total": int(self._diag_destructive_update_block_total),
             "destructive_update_block_bytes": int(self._diag_destructive_update_block_bytes),
+            "inbound_guard_block_total": int(self._diag_inbound_guard_block_total),
+            "inbound_guard_block_bytes": int(self._diag_inbound_guard_block_bytes),
+            "inbound_guard_last_bytes": int(self._diag_inbound_guard_last_bytes),
+            "inbound_guard_last_block_bytes": int(self._diag_inbound_guard_last_block_bytes),
+            "inbound_guard_last_at": float(self._diag_inbound_guard_last_at or 0.0),
+            "inbound_guard_last_ago_s": _seconds_ago(
+                self._diag_inbound_guard_last_at or None,
+                time.time(),
+            ),
+            "inbound_guard_last_reset_reserved": bool(self._diag_inbound_guard_last_reset_reserved),
             "effective_repair_total": int(self._diag_effective_repair_total),
             "effective_repair_bytes": int(self._diag_effective_repair_bytes),
             "peak_buffer_used": int(self._diag_peak_buffer_used),
@@ -692,6 +721,32 @@ class DiagnosticYRoom(YRoom):
                     self._diag_empty_update_skip_bytes += update_len
                     continue
                 self._diag_log_pressure("broadcast.update.received", update_bytes=update_len)
+                if update_len >= _YROOM_INBOUND_GUARD_BLOCK_BYTES:
+                    webspace_id = self._diag_room_id()
+                    reset_reserved = _reserve_inbound_guard_reset(webspace_id, time.monotonic())
+                    self._diag_inbound_guard_block_total += 1
+                    self._diag_inbound_guard_block_bytes += update_len
+                    self._diag_inbound_guard_last_bytes = update_len
+                    self._diag_inbound_guard_last_block_bytes = int(_YROOM_INBOUND_GUARD_BLOCK_BYTES)
+                    self._diag_inbound_guard_last_at = time.time()
+                    self._diag_inbound_guard_last_reset_reserved = bool(reset_reserved)
+                    self.log.warning(
+                        "blocked oversized inbound YWS update webspace=%s update_bytes=%s block_bytes=%s reset_reserved=%s reason=inbound_yws_update_payload_blocked",
+                        webspace_id,
+                        update_len,
+                        _YROOM_INBOUND_GUARD_BLOCK_BYTES,
+                        reset_reserved,
+                    )
+                    if reset_reserved:
+                        asyncio.create_task(
+                            reset_live_webspace_room(
+                                webspace_id,
+                                close_reason="inbound_yws_update_payload_blocked",
+                                persist_ystore_snapshot=False,
+                                reset_route_runtime=True,
+                            )
+                        )
+                    continue
                 previous_effective_ready = bool(
                     isinstance(self._diag_effective_branch_snapshot, dict)
                     and self._diag_effective_branch_snapshot.get("ready")
@@ -1070,6 +1125,13 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
                 "update_bytes_total": int(raw_diag.get("update_bytes_total") or 0),
                 "destructive_update_block_total": int(raw_diag.get("destructive_update_block_total") or 0),
                 "destructive_update_block_bytes": int(raw_diag.get("destructive_update_block_bytes") or 0),
+                "inbound_guard_block_total": int(raw_diag.get("inbound_guard_block_total") or 0),
+                "inbound_guard_block_bytes": int(raw_diag.get("inbound_guard_block_bytes") or 0),
+                "inbound_guard_last_bytes": int(raw_diag.get("inbound_guard_last_bytes") or 0),
+                "inbound_guard_last_block_bytes": int(raw_diag.get("inbound_guard_last_block_bytes") or 0),
+                "inbound_guard_last_at": raw_diag.get("inbound_guard_last_at") or None,
+                "inbound_guard_last_ago_s": raw_diag.get("inbound_guard_last_ago_s"),
+                "inbound_guard_last_reset_reserved": bool(raw_diag.get("inbound_guard_last_reset_reserved")),
                 "effective_repair_total": int(raw_diag.get("effective_repair_total") or 0),
                 "effective_repair_bytes": int(raw_diag.get("effective_repair_bytes") or 0),
                 "send_stream": {
@@ -1164,6 +1226,8 @@ def _room_debug_snapshot_all(now: float) -> tuple[dict[str, Any], dict[str, int]
         "update_stream_buffer_used_total": 0,
         "update_stream_waiting_send_total": 0,
         "update_stream_waiting_receive_total": 0,
+        "inbound_guard_block_total": 0,
+        "inbound_guard_block_bytes": 0,
     }
     for key in sorted(room_keys):
         room = getattr(y_server, "rooms", {}).get(key)
@@ -1182,6 +1246,9 @@ def _room_debug_snapshot_all(now: float) -> tuple[dict[str, Any], dict[str, int]
             int(snapshot.get("generation") or 0),
         )
         send_stream = snapshot.get("update_send_stream") if isinstance(snapshot.get("update_send_stream"), dict) else {}
+        diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), dict) else {}
+        aggregated["inbound_guard_block_total"] += int(diagnostic.get("inbound_guard_block_total") or 0)
+        aggregated["inbound_guard_block_bytes"] += int(diagnostic.get("inbound_guard_block_bytes") or 0)
         aggregated["update_stream_buffer_used_total"] += int(send_stream.get("current_buffer_used") or 0)
         aggregated["update_stream_waiting_send_total"] += int(send_stream.get("tasks_waiting_send") or 0)
         aggregated["update_stream_waiting_receive_total"] += int(send_stream.get("tasks_waiting_receive") or 0)

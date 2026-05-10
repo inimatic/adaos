@@ -11,6 +11,7 @@ import time
 from typing import Any, Mapping
 
 from adaos.sdk.core.decorators import tool
+from adaos.sdk.data.context import get_current_skill
 from adaos.sdk.io.context import get_current_meta
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as _emit
@@ -50,6 +51,14 @@ def _merged_meta(_meta: Mapping[str, Any] | None) -> dict[str, Any]:
     meta = get_current_meta()
     if _meta:
         meta.update(dict(_meta))
+    try:
+        current = get_current_skill()
+        skill_name = str(getattr(current, "name", "") or "").strip()
+    except Exception:
+        skill_name = ""
+    if skill_name:
+        meta.setdefault("skill_name", skill_name)
+        meta.setdefault("owner", f"skill:{skill_name}")
     return _normalize_meta(meta) if meta else meta
 
 
