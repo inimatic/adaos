@@ -360,6 +360,8 @@ Status note:
   both semantic and compatibility paths
 - desktop and modal runtime adapters now preserve the same node-scoped `y:`
   binding behavior for the demo slice
+- the demo package now reuses the same typed refs across both `workspace` and
+  `operations` surface classes
 
 ### 0. Vocabulary Fixation
 
@@ -417,6 +419,8 @@ Status note:
 - [x] the same addressing slice is used in both desktop and modal demo surfaces
 - [x] desktop and modal runtime adapters scope node-owned `y:` refs
   consistently for the same demo bindings
+- [x] repository demo manifests reuse the same typed refs across both
+  `workspace` and `operations` surface classes
 - [ ] manual verification on the target stand
 
 ### 5. Deferred Generalization
