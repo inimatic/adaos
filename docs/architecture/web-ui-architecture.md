@@ -542,7 +542,7 @@ Recommended identifiers:
 - [x] project semantic workspace context into runtime page state for typed
   action flows
 - [x] add the first explicit top-level `workspace` shell surface
-- [ ] add desktop/workspace/operations as a complete top-level shell trio
+- [x] add desktop/workspace/operations as a complete top-level shell trio
 - [ ] keep capability composition separate from business-domain ownership
 
 ### 6. Load and Responsiveness
@@ -587,6 +587,8 @@ Recommended identifiers:
   an explicit ownership contract instead of relying on accidental scoping
 - [x] the demo now exposes one `operations`-class surface in addition to the
   primary `workspace`-class surface
+- [x] the `operations` surface is now available as a dedicated top-level shell
+  route instead of only as a modal/demo variant
 - [ ] manual verification on the target stand
 
 Recommended demo data shape:
