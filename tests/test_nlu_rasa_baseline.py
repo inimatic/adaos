@@ -14,6 +14,14 @@ def _examples_for(payload: dict, intent: str) -> str:
     return ""
 
 
+def _lookup_examples_for(payload: dict, lookup: str) -> str:
+    entries = payload.get("nlu") or []
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("lookup") == lookup:
+            return str(entry.get("examples") or "")
+    return ""
+
+
 def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> None:
     from adaos.services.agent_context import get_ctx
     from adaos.services.interpreter.workspace import InterpreterWorkspace
@@ -34,6 +42,11 @@ def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> Non
     assert "[apps_catalog](modal_id)" in open_modal_examples
     assert "[nlu_teacher_modal](modal_id)" in open_modal_examples
     assert "[member-1](node_ref)" in open_node_modal_examples
+    assert "- apps_catalog" in _lookup_examples_for(dataset, "modal_id")
+    assert "- nlu_teacher_modal" in _lookup_examples_for(dataset, "modal_id")
+    assert "- nlu_teacher_app" in _lookup_examples_for(dataset, "app_id")
+    assert "- web_desktop" in _lookup_examples_for(dataset, "scenario_id")
+    assert (Path(project) / "data" / "lookup_tables.json").exists()
 
     rasa_config = yaml.safe_load((Path(project) / "config.yml").read_text(encoding="utf-8")) or {}
     assert "policies" not in rasa_config
