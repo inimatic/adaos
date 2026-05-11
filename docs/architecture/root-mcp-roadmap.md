@@ -271,6 +271,7 @@ Phase is complete when:
 ### `NLUAuthoring-2`. Descriptor and lookup surfaces
 
 - [ ] publish `nlu.describe_pipeline`
+- [ ] publish `nlu.list_templates` and `nlu.get_template` so LLMs can inspect current template ids before proposing corrections
 - [ ] publish `desktop.registry.lookup`
 - [ ] publish `skill.describe_tools`
 - [ ] publish `nlu.list_training_targets`
@@ -294,6 +295,7 @@ Phase is complete when:
 ### `NLUAuthoring-4`. Safe apply
 
 - [ ] save confirmed Rasa examples into scenario/skill training content
+- [ ] support `nlu.preview_template_patch` and `nlu.apply_template_patch` with `template_id` and `base_fingerprint`
 - [ ] save regex candidates only after explicit confirmation
 - [ ] store neural labels/masked examples as disabled future-training metadata
 - [ ] regenerate lookup tables from the desktop registry instead of hardcoding sample ids

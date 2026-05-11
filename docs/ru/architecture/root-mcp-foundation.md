@@ -104,6 +104,9 @@ template types для фразы пользователя.
 - `NLUTeacherDryRun`: запускать phrase checks и читать trace/ranking/entities/action preview.
 - `NLUTeacherAuthor`: предлагать и сохранять curated examples/templates в разрешенный scenario или skill training content.
 
+Plane должен отдавать current NLU templates со stable identifiers до любого correction flow. LLM-authored изменения должны ссылаться
+на `template_id` и `base_fingerprint`, затем проходить preview diff и operator approval перед apply.
+
 В web-модалке MCP Server должна появиться выдача target-scoped token/session lease для этого профиля. Root остается policy и routing point:
 browser получает bearer token, root восстанавливает subnet/zone/target/capabilities и маршрутизирует NLU authoring calls только через
 опубликованные Root MCP contracts.

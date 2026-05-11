@@ -80,13 +80,90 @@ Required Root MCP surfaces for NLU Teacher:
 
 - `nlu.describe_pipeline`: regex/neural/rasa stages, thresholds, supported template types, and apply capabilities.
 - `nlu.check_phrase`: dry-run phrase interpretation with trace, ranking, entities, and action preview.
+- `nlu.list_templates`: current regex/Rasa/neural/lookup templates with stable ids, owners, fingerprints, and status.
+- `nlu.get_template`: one current template with full editable content and provenance.
 - `nlu.list_training_targets`: scenario and skill locations where examples/rules may be saved.
 - `nlu.propose_templates`: LLM-facing contract for multi-engine template proposals.
+- `nlu.preview_template_patch`: validate a proposed correction and return a diff without writing.
+- `nlu.apply_template_patch`: apply an approved correction with audit and stale-write protection.
 - `desktop.registry.lookup`: current `modal_id`, `node_ref`, `app_id`, `scenario_id`, webspace, and installed desktop objects.
 - `skill.describe_tools`: skill tools, event subscriptions/publications, input schemas, and ownership hints.
 
 This keeps the existing regex model intact: Root MCP supplies descriptors and governed operations, while the current runtime pipeline remains
 `regex-first` and data-owned rules stay in scenario/skill artifacts.
+
+## NLU authoring contract
+
+Keep the implementation split into three layers:
+
+- `Teacher UI`: renders trace, current templates, diffs, and approval controls. It should not decide ownership or write files directly.
+- `NLU authoring service`: validates phrase checks, template patches, training targets, and safe-apply rules.
+- `Root MCP`: provides governed descriptors, current template inventory, token/session resolution, routing, and audit.
+
+The LLM should receive the current template inventory before proposing changes. This prevents duplicate regex rules, repeated Rasa examples,
+and blind rewrites of training content.
+
+Current template inventory response:
+
+```json
+{
+  "templates": [
+    {
+      "template_id": "rx.web_desktop.desktop.open_weather.01HX...",
+      "engine": "regex",
+      "intent": "desktop.open_weather",
+      "owner": {"type": "scenario", "id": "web_desktop"},
+      "status": "active",
+      "fingerprint": "sha256:...",
+      "summary": "RU/EN weather phrase with optional city",
+      "source": {"path": "scenarios/web_desktop/scenario.json", "json_pointer": "/nlu/regex_rules/0"}
+    },
+    {
+      "template_id": "rasa.web_desktop.desktop.open_node_modal.example.4f9c...",
+      "engine": "rasa",
+      "intent": "desktop.open_node_modal",
+      "owner": {"type": "scenario", "id": "web_desktop"},
+      "status": "active",
+      "fingerprint": "sha256:...",
+      "summary": "open [apps_catalog](modal_id) on [member-1](node_ref)"
+    }
+  ],
+  "snapshot_id": "nlu-template-snapshot.2026-05-11T12:00:00Z",
+  "generated_from": ["scenario:web_desktop", "skills:*", "desktop.registry"]
+}
+```
+
+Template ids should be stable enough for correction and audit:
+
+- `regex`: use the rule id when available (`rx.<uuid>`), namespaced by owner/intent when exposed through MCP.
+- `rasa`: derive a deterministic id from owner, intent, example text, and entity annotations.
+- `neural`: derive from owner, intent, masked text, and label.
+- `lookup`: derive from registry namespace, entity name, snapshot id, and value-set fingerprint.
+
+Corrections are patches against existing templates, not raw file writes:
+
+```json
+{
+  "template_id": "rasa.web_desktop.desktop.open_node_modal.example.4f9c...",
+  "base_fingerprint": "sha256:...",
+  "operation": "replace",
+  "patch": {
+    "example": "open [apps_catalog](modal_id) on [kitchen](node_ref)",
+    "reason": "Use real node alias from desktop registry instead of hardcoded member-1"
+  }
+}
+```
+
+Safe apply state machine:
+
+1. `list/get templates`: collect current ids, owners, fingerprints, and editable fields.
+2. `propose patch`: LLM references an existing `template_id` or explicitly asks to create a new template.
+3. `preview diff`: authoring service validates owner, capability, schema, duplicates, and `base_fingerprint`.
+4. `operator approval`: UI shows before/after, affected intent/action, and expected pipeline impact.
+5. `apply`: write through scenario/skill training APIs only, then record audit event and rollback pointer.
+6. `verify`: run `nlu.check_phrase` and optional golden phrase regression checks.
+
+If `base_fingerprint` no longer matches, the patch must be rejected as stale and the UI should refresh template inventory.
 
 ## Multi-engine teacher output
 
@@ -205,17 +282,20 @@ After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 - Add **Issue token** to the MCP Server modal.
 - Issue target-scoped Root MCP session leases with `NLUTeacherAuthor` capability profile.
 - Publish NLU pipeline, skill tool, scenario action, and desktop registry descriptors through Root MCP.
+- Publish current NLU template inventory with `template_id`, owner, status, fingerprint, and provenance.
 
 ### Phase 3 - Useful Teacher UI
 
 - Add Check phrase field.
 - Show intent ranking/entities/action preview.
+- Show existing templates relevant to the phrase/intent and allow selecting one for correction.
 - Add Correct/Fix actions.
 - Save curated examples into scenario/skill training content.
 
 ### Phase 4 - Multi-engine template application
 
 - Accept Teacher template bundles for regex, Rasa, neural, and lookup metadata.
+- Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
 - Apply only the supported subset safely.
 - Keep regex deterministic and data-owned.
 - Feed Rasa from actual desktop registry lookups.
