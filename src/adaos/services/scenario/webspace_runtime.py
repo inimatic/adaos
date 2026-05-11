@@ -15,6 +15,7 @@ import secrets
 import subprocess
 import sys
 import time
+import traceback
 
 import y_py as Y
 import yaml
@@ -2858,7 +2859,12 @@ class WebspaceScenarioRuntime:
                 pass
         if not path.exists():
             _WEBUI_DECL_CACHE.pop(str(path), None)
-            _log.debug("webui.json missing for %s (%s)", skill_name, space)
+            if _log.isEnabledFor(logging.DEBUG):
+                stack = " <- ".join(
+                    f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
+                    for frame in traceback.extract_stack(limit=8)[:-1]
+                )
+                _log.debug("webui.json missing for %s (%s) caller=%s", skill_name, space, stack)
             return {}
         cache_key = str(path.resolve())
         try:
