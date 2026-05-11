@@ -10,3 +10,7 @@
 	path = src/adaos/integrations/infra-inimatic
 	url = https://github.com/stipot-com/infra-inimatic.git
 	branch = main
+[submodule "src/adaos/integrations/rasa-port"]
+	path = src/adaos/integrations/rasa-port
+	url = https://github.com/stipot-com/rasa-port.git
+	branch = main
