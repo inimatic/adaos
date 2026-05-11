@@ -11,9 +11,10 @@ from adaos.services.interpreter.workspace import InterpreterWorkspace
 
 class RasaTrainer:
     """
-    Handles Rasa training using the same Python environment as the main AdaOS
-    process. Rasa and its dependencies are expected to be installed into the
-    root venv.
+    Legacy in-process Rasa trainer.
+
+    Production training goes through `rasa_nlu_service_skill`; this class is
+    kept only for compatibility with older scripts that explicitly call it.
     """
 
     def __init__(self, workspace: InterpreterWorkspace, *, rasa_version: str = "3.6.20"):
@@ -25,7 +26,7 @@ class RasaTrainer:
     # ---------------------------------------------------------------- helpers
     def _python(self) -> Path:
         """
-        Use the current interpreter (root venv) for both pip and rasa.
+        Use the current interpreter for legacy direct `python -m rasa`.
         """
         return Path(sys.executable)
 

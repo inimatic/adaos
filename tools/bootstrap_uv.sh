@@ -350,33 +350,13 @@ print_next_steps() {
   fi
 }
 
-install_voice_deps() {
-  local py="$1"
-  [[ "${NO_VOICE:-0}" == "1" ]] && return 0
-  log "Installing voice deps (Rasa)..."
-  # Rasa 3.6.x does not support Python 3.11+. Avoid noisy pip failures on servers.
-  local py_ver=""
-  py_ver="$("$py" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || true)"
-  case "$py_ver" in
-    3.11|3.12|3.13)
-      warn "Skipping voice NLU deps: rasa==3.6.21 is not available for Python ${py_ver}."
-      warn "If you need voice NLU, use Python 3.10 or run with --no_voice to silence this step."
-      return 0
-      ;;
-  esac
-  if "$py" -c "import rasa; print(getattr(rasa, '__version__', ''))" >/dev/null 2>&1; then
-    ok "Rasa already installed"
+configure_rasa_nlu() {
+  if [[ "${NO_VOICE:-0}" == "1" ]]; then
+    export ADAOS_NLU_RASA=0
+    log "Rasa NLU service disabled by --no_voice"
     return 0
   fi
-  set +e
-  "$py" -m pip install "rasa==3.6.21"
-  local rc=$?
-  set -e
-  if [[ $rc -ne 0 ]]; then
-    warn "Rasa install failed. Continue without voice NLU (use --no_voice to skip)."
-  else
-    ok "Rasa installed"
-  fi
+  log "Rasa NLU will be prepared as an optional AdaOS service-skill"
 }
 
 set_node_name() {
@@ -495,7 +475,7 @@ Usage: tools/bootstrap_uv.sh [options]
   --workspace-registry-repo URL
   --no-core-update      Disable hub/member core updates from CI/CD signals for this node
   --dev
-  --no_voice            Skip voice/NLU deps (Rasa)
+  --no_voice            Disable optional Rasa NLU service/training
 EOF
       exit 0
       ;;
@@ -583,8 +563,6 @@ if [[ ! -x "$ADAOS_PY" ]]; then
   die "Expected venv python at $ADAOS_PY (uv sync should have created .venv)"
 fi
 
-install_voice_deps "$ADAOS_PY"
-
 # 4) .env
 if [[ ! -f .env ]]; then
   if [[ -f .env.example ]]; then
@@ -635,7 +613,12 @@ log "Detecting git availability (adaos git autodetect)..."
 "$ADAOS_PY" -m adaos git autodetect >/dev/null 2>&1 || true
 
 log "Installing default webspace content (adaos install)..."
-if ! "$ADAOS_PY" -m adaos install; then
+install_args=(install)
+if [[ "${NO_VOICE:-0}" == "1" ]]; then
+  install_args+=(--no-rasa-nlu --no-train-nlu)
+fi
+configure_rasa_nlu
+if ! "$ADAOS_PY" -m adaos "${install_args[@]}"; then
   warn "adaos install failed (check output above)"
 fi
 

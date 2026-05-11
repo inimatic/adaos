@@ -3,10 +3,11 @@ from __future__ import annotations
 """
 Runtime helpers for executing the trained interpreter model (Rasa-based).
 
-This module mirrors environment/layout assumptions of RasaTrainer, but prefers
-to load the trained model into the main AdaOS process (using the root venv)
-and only falls back to the dedicated `.rasa-venv` via subprocess when
-in-process loading is not possible.
+Legacy runtime for direct in-process Rasa parsing.
+
+Production parsing goes through `adaos.services.nlu.pipeline` and
+`rasa_nlu_service_skill`. This module is retained for compatibility with
+older scripts that explicitly opt into the legacy interpreter router.
 """
 
 import asyncio
@@ -34,9 +35,8 @@ class RasaNLURuntime:
     def __init__(self, workspace: InterpreterWorkspace, *, python_spec: str = "3.11") -> None:
         self.ws = workspace
         self.python_spec = python_spec
-        # Keep layout consistent with RasaTrainer (used for training and
-        # subprocess-based fallback). The in-process path expects Rasa to be
-        # installed into the root AdaOS venv.
+        # Legacy subprocess fallback layout. The production service-skill owns
+        # its slot-local venv instead.
         self.env_dir = self.ws.root / ".rasa-venv"
         self.models_dir = Path(self.ws.context.paths.models_dir()) / "interpreter"
         self.models_dir.mkdir(parents=True, exist_ok=True)

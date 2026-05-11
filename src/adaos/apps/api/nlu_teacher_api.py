@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.nlu.probe import probe_phrase
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
 
@@ -31,6 +32,12 @@ class ApplyRevisionRequest(BaseModel):
     intent: str = Field(..., min_length=1)
     examples: list[str] = Field(default_factory=list)
     slots: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProbePhraseRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    use_rasa: bool = True
+    emit_trace: bool = True
 
 
 @router.get("/nlu/teacher/{webspace_id}", dependencies=[Depends(require_token)])
@@ -62,4 +69,19 @@ async def apply_revision(webspace_id: str, body: ApplyRevisionRequest):
         raise HTTPException(status_code=500, detail=f"failed to emit apply event: {exc}")
 
     return {"ok": True, "webspace_id": ws, "revision_id": body.revision_id, "intent": body.intent}
+
+
+@router.post("/nlu/teacher/{webspace_id}/probe", dependencies=[Depends(require_token)])
+async def probe(webspace_id: str, body: ProbePhraseRequest):
+    ws = _resolve_webspace_id(webspace_id)
+    try:
+        result = await probe_phrase(
+            body.text,
+            webspace_id=ws,
+            use_rasa=bool(body.use_rasa),
+            emit_trace=bool(body.emit_trace),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to probe phrase: {exc}")
+    return result
 

@@ -8,8 +8,8 @@ from typing import Any, Dict, List
 import yaml
 
 from adaos.services.agent_context import AgentContext, get_ctx
+from adaos.services.eventbus import emit as bus_emit
 from adaos.services.interpreter.workspace import InterpreterWorkspace, IntentMapping
-from adaos.services.interpreter.trainer import RasaTrainer
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.sdk.core.decorators import subscribe
 
@@ -164,20 +164,17 @@ def sync_from_scenarios_and_skills(ctx: AgentContext) -> Dict[str, Any]:
 
 def _maybe_autotrain(ctx: AgentContext) -> None:
     """
-    Optionally trigger Rasa training after NLU data changes.
+    Optionally request service-based Rasa training after NLU data changes.
 
-    Controlled by the ADAOS_INTERPRETER_AUTOTRAIN=1 env flag so that
-    heavy training is opt-in and can be enabled in dev/prod as needed.
+    `ADAOS_INTERPRETER_AUTOTRAIN` is kept as a compatibility alias; the actual
+    trainer now runs through the Rasa service-skill and its slot-local venv.
     """
     if os.getenv("ADAOS_INTERPRETER_AUTOTRAIN") != "1":
         return
     try:
-        ws = InterpreterWorkspace(ctx)
-        trainer = RasaTrainer(ws)
-        meta = trainer.train(note="auto-train")
-        _log.info("interpreter auto-train completed at %s", meta.get("trained_at"))
+        bus_emit(ctx.bus, "nlp.rasa.train", {"reason": "interpreter.registry"}, source="interpreter.registry")
     except Exception:
-        _log.warning("interpreter auto-train failed", exc_info=True)
+        _log.warning("failed to publish interpreter auto-train request", exc_info=True)
 
 
 def _handle_nlu_refresh(reason: str, webspace_id: str | None = None) -> None:

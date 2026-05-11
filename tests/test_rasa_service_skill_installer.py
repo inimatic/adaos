@@ -1,9 +1,12 @@
 from pathlib import Path
 
+import yaml
+
 
 def test_ensure_rasa_service_skill_installed_creates_skill_tree():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
@@ -17,6 +20,17 @@ def test_ensure_rasa_service_skill_installed_creates_skill_tree():
     assert (target / "skill.yaml").exists()
     assert (target / "requirements.in").exists()
     assert (target / "handlers" / "main.py").exists()
+    manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
+    assert manifest["dependencies"][0] == "--no-deps"
+    assert any("rasa-port" in item or "adaos-rasa-nlu" in item for item in manifest["dependencies"])
+
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="rasa_nlu_service_skill")
+    version = env.resolve_active_version()
+    assert version
+    slot = env.read_active_slot(version)
+    slot_skill = env.build_slot_paths(version, slot).src_dir / "skills" / "rasa_nlu_service_skill"
+    assert (slot_skill / "skill.yaml").exists()
+    assert (slot_skill / ".adaos-managed.json").exists()
 
 
 def test_ensure_rasa_service_skill_installed_refreshes_managed_files():
@@ -37,6 +51,31 @@ def test_ensure_rasa_service_skill_installed_refreshes_managed_files():
     assert "AdaOSRasaNLU" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
     assert (target / "requirements.in").exists()
     assert (target / "custom.txt").read_text(encoding="utf-8").strip() == "keep me"
+
+
+def test_ensure_rasa_service_skill_installed_respects_disabled_flag(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
+
+    monkeypatch.setenv("ADAOS_NLU_RASA", "0")
+    ctx = get_ctx()
+    target = Path(ctx.paths.skills_dir()) / "rasa_nlu_service_skill"
+
+    assert ensure_rasa_service_skill_installed() is None
+    assert not target.exists()
+
+
+def test_rasa_port_dependency_falls_back_to_git_requirement(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import rasa_skill_installer as installer
+
+    monkeypatch.setattr(installer, "_local_rasa_port_path", lambda ctx: None)
+    deps = installer._rasa_port_dependency_args(get_ctx())
+
+    assert deps == [
+        "--no-deps",
+        "adaos-rasa-nlu @ git+https://github.com/stipot-com/rasa-port.git@main",
+    ]
 
 
 def test_interpreter_cli_rasa_service_url_bootstraps_template_without_starting(monkeypatch):

@@ -141,6 +141,49 @@ def _clean_slots(values: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _emit_stage(
+    ctx: Any,
+    *,
+    stage: str,
+    status: str,
+    text: str,
+    webspace_id: str,
+    request_id: str,
+    via: str | None = None,
+    intent: str | None = None,
+    confidence: float | None = None,
+    slots: Mapping[str, Any] | None = None,
+    reason: str | None = None,
+    raw: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "stage": stage,
+        "status": status,
+        "text": text,
+        "webspace_id": webspace_id,
+        "request_id": request_id,
+    }
+    if via:
+        payload["via"] = via
+    if intent:
+        payload["intent"] = intent
+    if confidence is not None:
+        payload["confidence"] = float(confidence)
+    if slots:
+        payload["slots"] = dict(slots)
+    if reason:
+        payload["reason"] = reason
+    if raw:
+        payload["raw"] = dict(raw)
+    if meta:
+        payload["_meta"] = dict(meta)
+    try:
+        bus_emit(ctx.bus, "nlu.trace.stage", payload, source="nlu.pipeline")
+    except Exception:
+        pass
+
+
 async def _resolve_current_scenario_id(webspace_id: str) -> str | None:
     try:
         async with async_get_ydoc(webspace_id) as ydoc:
@@ -354,6 +397,20 @@ async def _on_detect_request(evt: Any) -> None:
 
     intent, slots, via, raw = await _try_regex_intent(text, webspace_id=webspace_id)
     if intent:
+        _emit_stage(
+            ctx,
+            stage="regex",
+            status="hit",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via=via,
+            intent=intent,
+            confidence=1.0,
+            slots=slots,
+            raw=raw,
+            meta=meta,
+        )
         bus_emit(
             ctx.bus,
             "nlp.intent.detected",
@@ -372,7 +429,30 @@ async def _on_detect_request(evt: Any) -> None:
         )
         return
 
+    _emit_stage(
+        ctx,
+        stage="regex",
+        status="miss",
+        text=text,
+        webspace_id=webspace_id,
+        request_id=rid,
+        via=via or "regex",
+        reason="no_match",
+        raw=raw,
+        meta=meta,
+    )
     downstream_event = "nlp.intent.detect.neural" if _USE_NEURAL_STAGE else "nlp.intent.detect.rasa"
+    _emit_stage(
+        ctx,
+        stage="pipeline",
+        status="delegate",
+        text=text,
+        webspace_id=webspace_id,
+        request_id=rid,
+        via="neural" if _USE_NEURAL_STAGE else "rasa",
+        reason=downstream_event,
+        meta=meta,
+    )
     bus_emit(
         ctx.bus,
         downstream_event,

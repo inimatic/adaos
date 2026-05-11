@@ -116,6 +116,43 @@ def _emit_not_obtained(
         _log.debug("failed to emit nlp.intent.not_obtained", exc_info=True)
 
 
+def _emit_stage(
+    ctx: AgentContext,
+    *,
+    stage: str,
+    status: str,
+    webspace_id: str,
+    scenario_id: str,
+    payload: Mapping[str, Any],
+    reason: str | None = None,
+    action_target: str | None = None,
+) -> None:
+    out: Dict[str, Any] = {
+        "stage": stage,
+        "status": status,
+        "webspace_id": webspace_id,
+        "reason": reason,
+    }
+    if scenario_id:
+        out["scenario_id"] = scenario_id
+    for key in ("text", "intent", "confidence", "via", "request_id"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            out[key] = value
+    slots = payload.get("slots")
+    if isinstance(slots, Mapping):
+        out["slots"] = dict(slots)
+    meta = payload.get("_meta")
+    if isinstance(meta, Mapping):
+        out["_meta"] = dict(meta)
+    if action_target:
+        out["action_target"] = action_target
+    try:
+        bus_emit(ctx.bus, "nlu.trace.stage", out, source="nlu.dispatcher")
+    except Exception:
+        pass
+
+
 def _resolve_template(value: Any, *, slots: Mapping[str, Any], ctx_vars: Mapping[str, Any], raw: Mapping[str, Any]) -> Any:
     """
     Very small template helper for params:
@@ -259,6 +296,15 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
 
     confidence = payload.get("confidence")
     if isinstance(confidence, (int, float)) and float(confidence) < _CONFIDENCE_MIN:
+        _emit_stage(
+            ctx,
+            stage="dispatcher",
+            status="reject",
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=payload,
+            reason=f"low_confidence<{_CONFIDENCE_MIN}",
+        )
         _emit_not_obtained(
             ctx,
             webspace_id=webspace_id,
@@ -272,23 +318,37 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     intents_cfg = nlu_cfg.get("intents") if isinstance(nlu_cfg, dict) else None
     if not isinstance(intents_cfg, dict):
         _log.debug("nlu.intent %s: scenario=%s has no nlu.intents section", intent, scenario_id)
+        _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intents_config")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intents_config")
         return
 
     intent_cfg = intents_cfg.get(intent)
     if not isinstance(intent_cfg, Mapping):
         _log.debug("nlu.intent %s: no mapping in scenario=%s", intent, scenario_id)
+        _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intent_mapping")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intent_mapping")
         return
 
     actions_cfg = intent_cfg.get("actions") or []
     if not isinstance(actions_cfg, list) or not actions_cfg:
         _log.debug("nlu.intent %s: scenario=%s has no actions", intent, scenario_id)
+        _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_actions")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_actions")
         return
 
     for action in actions_cfg:
         if isinstance(action, Mapping):
+            target = str(action.get("target") or "").strip()
+            _emit_stage(
+                ctx,
+                stage="dispatcher",
+                status="action",
+                webspace_id=webspace_id,
+                scenario_id=scenario_id,
+                payload=payload,
+                reason=str(action.get("type") or "callSkill"),
+                action_target=target or None,
+            )
             _execute_action(
                 ctx,
                 action=action,

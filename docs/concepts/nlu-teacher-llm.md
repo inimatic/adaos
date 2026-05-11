@@ -60,6 +60,46 @@ Target controls:
 The first implementation can be intentionally narrow: support dry-run phrase checks, show ranking/entities for Rasa, and save examples for the
 default desktop modal intents. Broader tool/action authoring should wait until Root MCP descriptors are available.
 
+## Current dry-run API
+
+The first backend slice is available for the Teacher UI check-phrase field:
+
+- `POST /api/nlu/teacher/{webspace_id}/probe`
+- request:
+
+```json
+{
+  "text": "open apps catalog",
+  "use_rasa": true,
+  "emit_trace": true
+}
+```
+
+The endpoint runs a dry check through regex first and optionally Rasa second. It does not emit `nlp.intent.detected`
+and does not dispatch actions, so it is safe to call from a UI preview.
+
+Response shape:
+
+```json
+{
+  "ok": true,
+  "accepted": true,
+  "via": "rasa",
+  "intent": "desktop.open_modal",
+  "confidence": 0.87,
+  "slots": {"modal_id": "apps_catalog"},
+  "entities": [{"entity": "modal_id", "value": "apps_catalog"}],
+  "intent_ranking": [{"name": "desktop.open_modal", "confidence": 0.87}],
+  "stages": [
+    {"stage": "request", "status": "received"},
+    {"stage": "regex", "status": "miss"},
+    {"stage": "rasa", "status": "hit"}
+  ]
+}
+```
+
+When `emit_trace=true`, each stage is also persisted through `nlu.trace.stage` into `data.nlu_trace.items[]`.
+
 ## MCP-assisted teacher context
 
 For the teacher to decide which skill/tool owns a phrase, it needs governed machine-readable context, not only free-form prompt text.

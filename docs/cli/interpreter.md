@@ -1,72 +1,60 @@
-# CLI: Интерпретатор и Rasa
+# CLI: Interpreter and Rasa NLU
 
-## Общая схема
+AdaOS no longer installs upstream `rasa==3.6.x` into the root environment. Rasa NLU is provided by the AdaOS-maintained `rasa-port` package and runs as an optional service-skill in the normal skill runtime slots.
 
-AdaOS поставляет встроенный пакет данных для интерпретатора (`src/adaos/interpreter_data/**`). При первом запуске CLI копирует эти файлы в профиль (`~/.adaos/state/interpreter/datasets`) и формирует рабочий проект для Rasa (`~/.adaos/state/interpreter/rasa_project`). Дополнительно любой установленный skill может описать собственные интенты в `skills/<имя>/interpreter/intents.yml` — генератор автоматически найдёт такие файлы и добавит примеры в датасет `skills_auto`.
+## Install model
 
-Основная команда: `adaos interpreter train --engine rasa`. Она делает следующее:
+`adaos install` prepares the default scenarios/skills, installs `rasa_nlu_service_skill`, stages it into an active skill slot, and trains NLU once by default.
 
-1. Синхронизирует packaged пресет (`adaos interpreter dataset sync --preset moodbot` происходит автоматически).
-2. Собирает YAML с интентами из `config.yaml` и `skills/*/interpreter/intents.yml`.
-3. Разворачивает локальную виртуалку `~/.adaos/state/interpreter/.rasa-venv` (Python 3.11) и ставит `rasa==3.6.20`.
-4. Запускает `rasa train nlu`, результат сохраняет в `~/.adaos/models/interpreter/interpreter_latest.tar.gz`.
-5. Записывает отпечаток состояния в `~/.adaos/state/interpreter/metadata.json`.
+Useful switches:
 
-## Интерпретатор CLI
+- `adaos install --no-rasa-nlu` disables Rasa service-skill preparation.
+- `adaos install --no-train-nlu` prepares the service-skill but skips post-install training.
+- `ADAOS_NLU_RASA=0` disables Rasa in runtime.
+- `ADAOS_NLU_AUTOTRAIN=1` enables event-driven retraining after scenario/skill changes. Keep it off in production unless noisy model churn is acceptable.
 
-```bash
-adaos interpreter status                # проверка актуальности
-adaos interpreter train --engine rasa   # обучение модели
-adaos interpreter intent list|add|remove
-adaos interpreter dataset list|sync
-adaos interpreter init-skill NAME       # scaffold диспетчерского skill'а
-```
-
-`status` показывает количество интентов, файлов датасета, хэш состояния и причины, почему требуется обучение. Если config/dataset/skills_auto меняются, `needs_training` становится true.
-
-## Описание интентов в skill'ах
-
-Любой skill может дополнять интерпретатор, добавив файл `interpreter/intents.yml`. Формат:
-
-```yaml
-intents:
-  - intent: my_skill.greet
-    description: "Приветствие для моего скилла"
-    skill: my_skill
-    tool: on_start
-    examples:
-      - "привет мой скилл"
-      - "покажи my_skill"
-```
-
-Во время `adaos interpreter train` генератор прочитает YAML из всех установленных skill'ов, создаст `datasets/skills_auto/nlu.yml` и включит их в обучение. Никаких ручных шагов не нужно — достаточно иметь `interpreter/intents.yml`.
-
-## Packaged датасет
-
-- `src/adaos/interpreter_data/moodbot/**` — базовый набор YAML (config/domain/nlu/stories/rules).
-- `src/adaos/interpreter_data/config.default.yml` — шаблон `config.yaml`, где указан `dataset.preset: moodbot` и примеры интентов для диспетчерского skill'а.
-- CLI хранит копию в `~/.adaos/state/interpreter/datasets/moodbot`.
-
-При необходимости можно добавить свой пресет: поместите каталог в `src/adaos/interpreter_data/<название>`, после чего `adaos interpreter dataset list` покажет его, а `dataset sync --preset <название>` скопирует в профиль.
-
-## Ручное тестирование модели
-
-После `adaos interpreter train` модель лежит в `~/.adaos/models/interpreter/interpreter_latest.tar.gz`. Можно запустить Rasa shell:
+## Commands
 
 ```bash
-cd ~/.adaos/state/interpreter
-.rasa-venv/Scripts/rasa.exe shell --model ~/.adaos/models/interpreter/interpreter_latest.tar.gz
+adaos interpreter status
+adaos interpreter sync-nlu
+adaos interpreter train --engine rasa
+adaos interpreter parse "open modal nlu_teacher_modal"
+adaos interpreter intent list
 ```
 
-В интерактивном режиме видно JSON результата (`text`, `intent`, `intent_ranking`). Это полезно, чтобы убедиться, что интенты из skill'ов действительно подхватываются.
+The CLI builds the Rasa project from installed skill/scenario training content, then calls `rasa_nlu_service_skill:/train`. The service owns its dependencies and model loading; the hub process stays free of Rasa/TensorFlow dependency conflicts.
 
-## Где искать состояния
+## Runtime locations
 
-- `~/.adaos/state/interpreter/config.yaml` — конфиг интентов (обновляется CLI).
-- `~/.adaos/state/interpreter/datasets/**` — синхронизированные пресеты + `skills_auto`.
-- `~/.adaos/state/interpreter/rasa_project` — рабочий проект, который `rasa train` использует как источник.
-- `~/.adaos/state/interpreter/.rasa-venv` — изолированная среда Python 3.11 с Rasa.
-- `~/.adaos/state/interpreter/metadata.json` — дата последнего обучения и отпечатки (config/datasets/skills_auto).
-- `~/.adaos/models/interpreter/interpreter_latest.tar.gz` — последняя обученная модель.
+- Workspace template copy: `.adaos/workspace/skills/rasa_nlu_service_skill`
+- Active slot source: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/<version>/slots/<A|B>/src/skills/rasa_nlu_service_skill`
+- Slot-local service venv: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/<version>/slots/<A|B>/venv`
+- Generated project: `.adaos/state/interpreter/rasa_project`
+- Model artifact: `.adaos/models/interpreter/interpreter_latest.tar.gz`
+- Service log: `.adaos/logs/service.rasa_nlu_service_skill.log`
 
-Таким образом, другой разработчик после `git pull` и `pip install -e .[dev]` просто запускает `adaos interpreter train` и получает готовую Rasa-модель, построенную из packaged данных и установленных скиллов. Новые интенты добавляются автоматически через YAML в skill'ах.
+## External dependency
+
+If `src/adaos/integrations/rasa-port` exists, AdaOS installs it into the service venv as editable local source. Otherwise the service-skill uses:
+
+```text
+adaos-rasa-nlu @ git+https://github.com/stipot-com/rasa-port.git@main
+```
+
+Override with:
+
+```bash
+ADAOS_RASA_PORT_PATH=/path/to/rasa-port
+ADAOS_RASA_PORT_REQUIREMENT="adaos-rasa-nlu @ git+https://github.com/<fork>/rasa-port.git@branch"
+```
+
+## Manual check
+
+```bash
+adaos interpreter train --engine rasa
+adaos interpreter parse "open modal nlu_teacher_modal"
+adaos skill service status rasa_nlu_service_skill --health
+```
+
+If Rasa is disabled or confidence is low, the runtime emits `nlp.intent.not_obtained` and the teacher/fallback path can collect the phrase.

@@ -325,7 +325,7 @@ class AdaosMemoryYStore(BaseYStore):
         self._updates: List[Tuple[bytes, bytes, float]] = []
         self._base_snapshot_present = False
         self._loaded_from_disk = False
-        self._started: Event | None = None
+        self._started: Event | None = Event()
         self._starting: bool = False
         self._task_group = None
         self._running: bool = False

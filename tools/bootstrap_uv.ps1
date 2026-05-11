@@ -224,32 +224,13 @@ function Invoke-Adaos {
   & .\.venv\Scripts\python.exe -m adaos @Args
 }
 
-function Install-VoiceDeps {
-  if ($NoVoice) { return }
-  Write-Host "Installing voice deps (Rasa)..."
-  $pyVer = ""
-  try {
-    $pyVer = (& .\.venv\Scripts\python.exe -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')" 2>$null).Trim()
-  } catch { }
-  if ($pyVer -in @("3.11", "3.12", "3.13")) {
-    Write-Warning "Skipping voice NLU deps: rasa==3.6.21 is not available for Python $pyVer."
-    Write-Warning "If you need voice NLU, use Python 3.10 or run with -NoVoice to silence this step."
+function Configure-RasaNlu {
+  if ($NoVoice) {
+    $env:ADAOS_NLU_RASA = "0"
+    Write-Host "Rasa NLU service disabled by -NoVoice."
     return
   }
-  try {
-    & .\.venv\Scripts\python.exe -c "import rasa; print(getattr(rasa,'__version__',''))" 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-      Write-Host "Rasa already installed."
-      return
-    }
-  } catch { }
-  try {
-    & .\.venv\Scripts\python.exe -m pip install "rasa==3.6.21"
-    if ($LASTEXITCODE -ne 0) { throw "pip install rasa failed" }
-    Write-Host "Rasa installed."
-  } catch {
-    Write-Warning "Rasa install failed. Continue without voice NLU (use -NoVoice to skip)."
-  }
+  Write-Host "Rasa NLU will be prepared as an optional AdaOS service-skill."
 }
 
 # 6) Default webspace content (scenarios + skills) via built-in `adaos install`
@@ -279,12 +260,16 @@ Show-BootstrapConfig
 Write-Host "Detecting git availability (adaos git autodetect)..."
 try { Invoke-Adaos git autodetect | Out-Null } catch { }
 Write-Host "Installing default webspace content (adaos install)..."
-Invoke-Adaos install
+$installArgs = @("install")
+if ($NoVoice) {
+  $installArgs += "--no-rasa-nlu"
+  $installArgs += "--no-train-nlu"
+}
+Configure-RasaNlu
+Invoke-Adaos @installArgs
 if ($LASTEXITCODE -ne 0) {
   Write-Warning "adaos install failed (check output above)."
 }
-
-Install-VoiceDeps
 
 try {
   .\.venv\Scripts\python.exe -c "import adaos; print('adaos import ok')" | Out-Null
