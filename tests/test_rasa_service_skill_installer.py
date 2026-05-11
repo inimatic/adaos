@@ -17,3 +17,22 @@ def test_ensure_rasa_service_skill_installed_creates_skill_tree():
     assert (target / "skill.yaml").exists()
     assert (target / "handlers" / "main.py").exists()
 
+
+def test_interpreter_cli_rasa_service_url_bootstraps_template_without_starting(monkeypatch):
+    import importlib
+    import sys
+    import types
+
+    from adaos.services.agent_context import get_ctx
+
+    ctx = get_ctx()
+    target = Path(ctx.paths.skills_dir()) / "rasa_nlu_service_skill"
+    assert not target.exists()
+
+    bootstrap_stub = types.ModuleType("adaos.apps.bootstrap")
+    bootstrap_stub.get_ctx = get_ctx
+    monkeypatch.setitem(sys.modules, "adaos.apps.bootstrap", bootstrap_stub)
+    interpreter_cli = importlib.import_module("adaos.apps.cli.commands.interpreter")
+
+    assert interpreter_cli._rasa_service_url(start=False) == "http://127.0.0.1:18092"
+    assert (target / "skill.yaml").exists()
