@@ -432,6 +432,8 @@ class ServiceSkillSupervisor:
         env["ADAOS_SERVICE_HOST"] = spec.host
         env["ADAOS_SERVICE_PORT"] = str(spec.port)
         env.setdefault("ADAOS_BASE_DIR", str(_path_value(self._ctx.paths.base_dir())))
+        env.setdefault("ADAOS_PACKAGE_DIR", str(_path_value(self._ctx.paths.package_path())))
+        env.setdefault("ADAOS_REPO_ROOT", str(_path_value(self._ctx.paths.repo_root())))
         env.setdefault("ADAOS_MODELS_DIR", str(_path_value(self._ctx.paths.models_dir())))
         env.setdefault("ADAOS_STATE_DIR", str(_path_value(self._ctx.paths.state_dir())))
         env.setdefault("ADAOS_LOGS_DIR", str(_path_value(self._ctx.paths.logs_dir())))

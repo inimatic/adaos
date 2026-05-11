@@ -49,6 +49,14 @@ def _ensure_rasa_port_importable() -> None:
     if env_path:
         candidates.append(Path(env_path))
 
+    package_dir = os.getenv("ADAOS_PACKAGE_DIR", "").strip()
+    if package_dir:
+        candidates.append(Path(package_dir).expanduser().resolve() / "integrations" / "rasa-port")
+
+    repo_root = os.getenv("ADAOS_REPO_ROOT", "").strip()
+    if repo_root:
+        candidates.append(Path(repo_root).expanduser().resolve() / "src" / "adaos" / "integrations" / "rasa-port")
+
     try:
         import adaos
 
@@ -203,4 +211,3 @@ if __name__ == "__main__":
     except Exception:
         port = 18092
     ThreadingHTTPServer((host, port), Handler).serve_forever()
-
