@@ -160,6 +160,44 @@ def _collect_from_manifest(
         _add_app_entry(buckets, key, app, source=f"{source}.data.catalog.apps")
 
 
+def _collect_from_live_doc(buckets: dict[str, dict[str, dict[str, Any]]], ydoc: Any, *, source: str) -> None:
+    try:
+        ui = ydoc.get_map("ui")
+        application = _as_mapping(ui.get("application"))
+        for key, modal in _iter_mapping_values(application.get("modals")):
+            _add_modal_entry(buckets, key, modal, source=f"{source}.ui.application.modals")
+        _add(buckets, "scenario_id", ui.get("current_scenario"), source=f"{source}.ui.current_scenario")
+    except Exception:
+        _log.debug("failed to collect live NLU lookups from ui map", exc_info=True)
+
+    try:
+        registry = ydoc.get_map("registry")
+        merged = _as_mapping(registry.get("merged"))
+        for key, modal in _iter_mapping_values(merged.get("modals")):
+            _add_modal_entry(buckets, key, modal, source=f"{source}.registry.merged.modals")
+    except Exception:
+        _log.debug("failed to collect live NLU lookups from registry map", exc_info=True)
+
+    try:
+        data = ydoc.get_map("data")
+        catalog = _as_mapping(data.get("catalog"))
+        for key, app in _iter_mapping_values(catalog.get("apps")):
+            _add_app_entry(buckets, key, app, source=f"{source}.data.catalog.apps")
+
+        installed = _as_mapping(data.get("installed"))
+        for key, app in _iter_mapping_values(installed.get("apps")):
+            app_value = (key or app.get("id")) if isinstance(app, Mapping) else (key or app)
+            _add(buckets, "app_id", app_value, source=f"{source}.data.installed.apps")
+
+        for key, node in _iter_mapping_values(data.get("nodes")):
+            node_map = _as_mapping(node)
+            _add(buckets, "node_ref", key or node_map.get("id"), source=f"{source}.data.nodes")
+            for field in ("node_id", "id", "ref", "name", "label", "display_name"):
+                _add(buckets, "node_ref", node_map.get(field), source=f"{source}.data.nodes.{field}")
+    except Exception:
+        _log.debug("failed to collect live NLU lookups from data map", exc_info=True)
+
+
 def _collect_workspace_manifests(buckets: dict[str, dict[str, dict[str, Any]]], ctx: AgentContext) -> None:
     package_workspace = _package_workspace_dir(ctx)
     skill_roots = _unique_paths(
@@ -238,6 +276,38 @@ def _finalize(buckets: dict[str, dict[str, dict[str, Any]]]) -> dict[str, list[d
     return out
 
 
+def _empty_buckets() -> dict[str, dict[str, dict[str, Any]]]:
+    return {name: {} for name in LOOKUP_NAMES}
+
+
+def _collect_baseline_buckets(ctx: AgentContext, *, webspace_id: str) -> dict[str, dict[str, dict[str, Any]]]:
+    buckets = _empty_buckets()
+    _add(buckets, "webspace_id", webspace_id, source="request.webspace_id")
+    _collect_workspace_manifests(buckets, ctx)
+    _collect_node_refs(buckets, ctx)
+    return buckets
+
+
+def _payload_from_buckets(
+    buckets: dict[str, dict[str, dict[str, Any]]],
+    *,
+    webspace_id: str,
+    live_overlay: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    lookups = _finalize(buckets)
+    summary = summarize_lookup_tables({"lookups": lookups})
+    payload = {
+        "ok": True,
+        "webspace_id": webspace_id,
+        "lookups": lookups,
+        "summary": summary,
+        "fingerprint": _hash_payload(summary),
+    }
+    if live_overlay is not None:
+        payload["live_overlay"] = dict(live_overlay)
+    return payload
+
+
 def lookup_values(payload: Mapping[str, Any], lookup: str) -> list[str]:
     values = []
     lookups = payload.get("lookups") if isinstance(payload, Mapping) else None
@@ -268,22 +338,59 @@ def collect_desktop_lookup_tables(
     ctx: AgentContext | None = None,
     *,
     webspace_id: str | None = None,
+    include_live: bool = False,
 ) -> dict[str, Any]:
     ctx = ctx or get_ctx()
     ws_token = webspace_id if isinstance(webspace_id, str) else None
     ws = (ws_token or DEFAULT_WEBSPACE_ID).strip() or DEFAULT_WEBSPACE_ID
-    buckets: dict[str, dict[str, dict[str, Any]]] = {name: {} for name in LOOKUP_NAMES}
+    buckets = _collect_baseline_buckets(ctx, webspace_id=ws)
 
-    _add(buckets, "webspace_id", ws, source="request.webspace_id")
-    _collect_workspace_manifests(buckets, ctx)
-    _collect_node_refs(buckets, ctx)
+    live_overlay = {"attempted": False, "ok": False}
+    if include_live:
+        live_overlay["attempted"] = True
+        try:
+            from adaos.services.yjs.doc import get_ydoc
 
-    lookups = _finalize(buckets)
-    summary = summarize_lookup_tables({"lookups": lookups})
-    return {
-        "ok": True,
-        "webspace_id": ws,
-        "lookups": lookups,
-        "summary": summary,
-        "fingerprint": _hash_payload(summary),
-    }
+            with get_ydoc(ws, read_only=True, load_mark_roots=["ui", "registry", "data"]) as ydoc:
+                _collect_from_live_doc(buckets, ydoc, source="ydoc")
+            live_overlay["ok"] = True
+        except Exception as exc:
+            live_overlay["error"] = str(exc)
+            _log.debug("failed to collect sync live NLU lookups webspace=%s", ws, exc_info=True)
+
+    return _payload_from_buckets(
+        buckets,
+        webspace_id=ws,
+        live_overlay=live_overlay if include_live else None,
+    )
+
+
+async def collect_desktop_lookup_tables_async(
+    ctx: AgentContext | None = None,
+    *,
+    webspace_id: str | None = None,
+    include_live: bool = True,
+) -> dict[str, Any]:
+    ctx = ctx or get_ctx()
+    ws_token = webspace_id if isinstance(webspace_id, str) else None
+    ws = (ws_token or DEFAULT_WEBSPACE_ID).strip() or DEFAULT_WEBSPACE_ID
+    buckets = _collect_baseline_buckets(ctx, webspace_id=ws)
+
+    live_overlay = {"attempted": False, "ok": False}
+    if include_live:
+        live_overlay["attempted"] = True
+        try:
+            from adaos.services.yjs.doc import async_get_ydoc
+
+            async with async_get_ydoc(ws, read_only=True, load_mark_roots=["ui", "registry", "data"]) as ydoc:
+                _collect_from_live_doc(buckets, ydoc, source="ydoc")
+            live_overlay["ok"] = True
+        except Exception as exc:
+            live_overlay["error"] = str(exc)
+            _log.debug("failed to collect async live NLU lookups webspace=%s", ws, exc_info=True)
+
+    return _payload_from_buckets(
+        buckets,
+        webspace_id=ws,
+        live_overlay=live_overlay if include_live else None,
+    )

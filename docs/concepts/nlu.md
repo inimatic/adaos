@@ -76,8 +76,10 @@ Rasa project export consumes the same snapshot and writes:
 - native Rasa lookup entries into `state/interpreter/rasa_project/data/intents_from_config.yml`
 - the full inspected snapshot into `state/interpreter/rasa_project/data/lookup_tables.json`
 
-The lookup summary participates in the Rasa training fingerprint, so changing available desktop ids can mark the NLU model stale. The next
-step is overlaying live YJS registry state on top of manifest-derived values.
+The Teacher endpoint overlays live read-only YJS registry state on top of manifest-derived values, so runtime desktop objects can be inspected
+without waiting for a training export. Rasa training continues to use the stable manifest snapshot for reproducibility.
+
+The lookup summary participates in the Rasa training fingerprint, so changing available manifest desktop ids can mark the NLU model stale.
 
 ## Rasa as a service-skill
 

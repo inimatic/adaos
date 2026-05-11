@@ -112,10 +112,13 @@ Teacher/LLM can inspect the desktop ids that should be treated as entity candida
   - `scenario_id`
   - `webspace_id`
 
-The current backend slice reads workspace desktop/scenario manifests and falls back to packaged desktop manifests when the test/install
-workspace is still empty. Rasa export consumes the same snapshot as native lookup-table entries and writes the full snapshot to
-`state/interpreter/rasa_project/data/lookup_tables.json`. A live YJS registry overlay is the next refinement, so runtime-created or renamed
-desktop objects can be reflected without relying only on manifest files.
+The backend reads workspace desktop/scenario manifests and falls back to packaged desktop manifests when the test/install workspace is still
+empty. For this API, the manifest snapshot is then overlaid with live read-only YJS values from `ui.application.modals`,
+`registry.merged.modals`, `data.catalog.apps`, `data.installed.apps`, `data.nodes`, and `ui.current_scenario`.
+
+Rasa export intentionally consumes the stable manifest snapshot as native lookup-table entries and writes the full snapshot to
+`state/interpreter/rasa_project/data/lookup_tables.json`. That keeps training reproducible while the Teacher API can still show the current
+desktop registry.
 
 ## MCP-assisted teacher context
 
