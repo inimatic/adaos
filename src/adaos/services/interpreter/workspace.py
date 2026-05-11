@@ -417,30 +417,32 @@ class InterpreterWorkspace:
             else:
                 shutil.copy2(child, dest)
 
+        rasa_pipeline = config.get("rasa_pipeline")
+        if not isinstance(rasa_pipeline, list) or not rasa_pipeline:
+            rasa_pipeline = [
+                {"name": "WhitespaceTokenizer"},
+                {"name": "CountVectorsFeaturizer"},
+                {
+                    "name": "CountVectorsFeaturizer",
+                    "analyzer": "char_wb",
+                    "min_ngram": 3,
+                    "max_ngram": 5,
+                },
+                {"name": "DIETClassifier", "epochs": 80, "constrain_similarities": True},
+            ]
+
         config_target = project / "config.yml"
-        if not config_target.exists():
-            config_target.write_text(
-                yaml.safe_dump(
-                    {
-                        "language": "ru",
-                        "pipeline": [
-                            {"name": "WhitespaceTokenizer"},
-                            {"name": "CountVectorsFeaturizer"},
-                            {
-                                "name": "CountVectorsFeaturizer",
-                                "analyzer": "char_wb",
-                                "min_ngram": 3,
-                                "max_ngram": 5,
-                            },
-                            {"name": "DIETClassifier", "epochs": 80, "constrain_similarities": True},
-                        ],
-                        "policies": [{"name": "RulePolicy", "core_fallback_threshold": 0.4}],
-                    },
-                    allow_unicode=True,
-                    sort_keys=False,
-                ),
-                encoding="utf-8",
-            )
+        config_target.write_text(
+            yaml.safe_dump(
+                {
+                    "language": str(config.get("language") or "ru"),
+                    "pipeline": rasa_pipeline,
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
 
         readme = project / "README.txt"
         readme.write_text(

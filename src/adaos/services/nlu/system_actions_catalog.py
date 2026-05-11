@@ -20,6 +20,16 @@ def describe_system_actions() -> list[dict]:
             "params": {"type": "\"app\"|\"widget\"", "id": "string", "webspace_id": "string"},
         },
         {
+            "action": "desktop.modal.open",
+            "description": "Request opening a registered desktop modal by id, optionally scoped to a node.",
+            "params": {
+                "modal_id": "string",
+                "webspace_id": "string",
+                "node_ref?": "string",
+                "target_node_id?": "string",
+            },
+        },
+        {
             "action": "desktop.webspace.reload",
             "description": "Reload the current webspace UI/data projections.",
             "params": {"webspace_id": "string"},
