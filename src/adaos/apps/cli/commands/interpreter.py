@@ -36,20 +36,7 @@ def _run_blocking(coro):
     raise RuntimeError("cannot run blocking async service operation inside an active event loop")
 
 
-def _rasa_service_url(*, start: bool = True) -> str:
-    ctx = get_ctx()
-    ensure_rasa_service_skill_installed()
-    supervisor = get_service_supervisor()
-    if start:
-        async def _start() -> None:
-            await supervisor.refresh_discovered(force=True)
-            await supervisor.start("rasa_nlu_service_skill")
-
-        _run_blocking(_start())
-        base = supervisor.resolve_base_url("rasa_nlu_service_skill")
-        if base:
-            return base
-
+def _rasa_service_base_from_manifest(ctx) -> str:
     skills_root = Path(ctx.paths.skills_dir())
     manifest_path = skills_root / "rasa_nlu_service_skill" / "skill.yaml"
     if not manifest_path.exists():
@@ -61,6 +48,47 @@ def _rasa_service_url(*, start: bool = True) -> str:
     if port <= 0:
         raise RuntimeError("rasa_nlu_service_skill.service.port is missing")
     return f"http://{host}:{port}"
+
+
+def _http_get_json(url: str, *, timeout_ms: int = 1_000) -> dict | None:
+    req = Request(url, method="GET")
+    try:
+        with urlopen(req, timeout=timeout_ms / 1000.0) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _service_health_ok(base_url: str) -> bool:
+    payload = _http_get_json(f"{base_url}/health", timeout_ms=1_000)
+    return bool(payload and payload.get("ok") is True)
+
+
+def _rasa_service_url(*, start: bool = True) -> str:
+    ctx = get_ctx()
+    ensure_rasa_service_skill_installed()
+    base = _rasa_service_base_from_manifest(ctx)
+    if not start:
+        return base
+    if _service_health_ok(base):
+        return base
+
+    supervisor = get_service_supervisor()
+    async def _start() -> None:
+        await supervisor.refresh_discovered(force=True)
+        await supervisor.start("rasa_nlu_service_skill")
+
+    _run_blocking(_start())
+    resolved_base = supervisor.resolve_base_url("rasa_nlu_service_skill")
+    if resolved_base:
+        return resolved_base
+
+    return base
 
 
 def _http_post_json(url: str, payload: dict, *, timeout_ms: int = 600_000) -> dict:
@@ -142,6 +170,11 @@ def train(
             {"project_dir": str(project_dir), "out_dir": str(models_dir), "fixed_model_name": "interpreter_latest"},
             timeout_ms=600_000,
         )
+        if resp.get("ok"):
+            ws.record_training(
+                note=note or "rasa-service-train",
+                extra={"engine": "rasa_service", "model_path": resp.get("model_path")},
+            )
         typer.echo(json.dumps(resp, ensure_ascii=False, indent=2))
         return
     else:
