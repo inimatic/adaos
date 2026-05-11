@@ -924,13 +924,17 @@ async def lifespan(app: FastAPI):
 
 
 # пересоздаём приложение с lifespan
+_CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+_CORS_ALLOW_HEADERS = ["*"]
+
+
 app = FastAPI(title="AdaOS API", lifespan=lifespan, version=BUILD_INFO.version)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "*"],  # from local web app
-    allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
-    allow_headers=["Content-Type", "X-AdaOS-Token", "Authorization"],
+    allow_origins=["*"],  # from local web app and routed browser shells
+    allow_methods=_CORS_ALLOW_METHODS,
+    allow_headers=_CORS_ALLOW_HEADERS,
     allow_credentials=False,  # токен идёт в заголовке, куки не нужны
 )
 
