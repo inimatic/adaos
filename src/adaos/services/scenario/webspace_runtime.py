@@ -1208,12 +1208,20 @@ def _merge_by_id(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return merged
 
 
+def _strip_node_scoped_catalog_prefix(item_id: str) -> str:
+    item_token = str(item_id or "").strip()
+    while item_token.startswith("node:"):
+        _prefix, _node_id, remainder = item_token.split(":", 2) if item_token.count(":") >= 2 else ("", "", "")
+        if not remainder:
+            break
+        item_token = remainder.strip()
+    return item_token
+
+
 def _node_scoped_catalog_id(node_id: str, item_id: str) -> str:
     node_token = str(node_id or "").strip()
-    item_token = str(item_id or "").strip()
+    item_token = _strip_node_scoped_catalog_prefix(item_id)
     if not node_token or not item_token:
-        return item_token
-    if item_token.startswith(f"node:{node_token}:"):
         return item_token
     return f"node:{node_token}:{item_token}"
 
