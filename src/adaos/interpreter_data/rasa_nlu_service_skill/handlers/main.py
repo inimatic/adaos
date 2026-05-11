@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -201,7 +202,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             _json_response(self, 404, {"ok": False, "error": "not_found"})
         except Exception as exc:
-            _json_response(self, 500, {"ok": False, "error": "internal_error", "detail": str(exc)})
+            traceback.print_exc(file=sys.stderr)
+            _json_response(
+                self,
+                500,
+                {
+                    "ok": False,
+                    "error": "internal_error",
+                    "detail": str(exc),
+                    "traceback": traceback.format_exc(),
+                },
+            )
 
 
 if __name__ == "__main__":
