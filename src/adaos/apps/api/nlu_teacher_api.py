@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
-from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables
+from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
 from adaos.services.nlu.probe import probe_phrase
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
@@ -53,7 +53,7 @@ async def get_teacher_state(webspace_id: str):
 async def get_lookup_tables(webspace_id: str):
     ws = _resolve_webspace_id(webspace_id)
     try:
-        return collect_desktop_lookup_tables(webspace_id=ws)
+        return await collect_desktop_lookup_tables_async(webspace_id=ws, include_live=True)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"failed to collect lookup tables: {exc}")
 
