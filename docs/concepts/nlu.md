@@ -56,6 +56,29 @@ AdaOS records NLU decisions as a stage trace so the UI can explain why a phrase 
 
 The implementation checklist is tracked in [nlu-roadmap.md](./nlu-roadmap.md).
 
+## Dynamic lookup tables
+
+AdaOS now exports baseline NLU lookup tables from workspace desktop/scenario manifests, with packaged desktop manifests as an empty-workspace
+fallback. The lookup sets are:
+
+- `modal_id`
+- `node_ref`
+- `app_id`
+- `scenario_id`
+- `webspace_id`
+
+The Teacher/LLM inspection endpoint is:
+
+- `GET /api/nlu/teacher/{webspace_id}/lookups`
+
+Rasa project export consumes the same snapshot and writes:
+
+- native Rasa lookup entries into `state/interpreter/rasa_project/data/intents_from_config.yml`
+- the full inspected snapshot into `state/interpreter/rasa_project/data/lookup_tables.json`
+
+The lookup summary participates in the Rasa training fingerprint, so changing available desktop ids can mark the NLU model stale. The next
+step is overlaying live YJS registry state on top of manifest-derived values.
+
 ## Rasa as a service-skill
 
 Rasa is treated as a **service-type skill** (separate Python/venv, managed lifecycle) to avoid dependency conflicts with the hub runtime. AdaOS uses the NLU-only `rasa-port` package, not upstream `rasa==3.6.x` in the root venv.

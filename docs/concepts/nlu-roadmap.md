@@ -1,6 +1,6 @@
 # NLU Roadmap Checklist
 
-Current implementation estimate: **40%** for the practical AdaOS NLU roadmap.
+Current implementation estimate: **45%** for the practical AdaOS NLU roadmap.
 
 ## Phase 1: Baseline Runtime
 
@@ -39,13 +39,16 @@ Current implementation estimate: **40%** for the practical AdaOS NLU roadmap.
 
 ## Phase 4: Dynamic Lookups and Template Inventory
 
-- [ ] Export live desktop lookup tables:
+- [x] Export baseline desktop lookup tables from workspace/packaged desktop manifests:
   - `modal_id`
   - `node_ref`
   - `app_id`
   - `scenario_id`
   - `webspace_id`
-- [ ] Feed lookup tables into Rasa training data.
+- [x] Feed lookup tables into Rasa training data.
+- [x] Expose lookup tables for Teacher/LLM inspection:
+  - `GET /api/nlu/teacher/{webspace_id}/lookups`
+- [ ] Overlay live YJS desktop registry values on top of manifest lookups.
 - [ ] Expose stable template ids for regex, Rasa examples, neural labels, and lookup sets.
 - [ ] Implement stale-write protection using template fingerprints.
 
@@ -75,7 +78,7 @@ Current implementation estimate: **40%** for the practical AdaOS NLU roadmap.
 ## Immediate Next Steps
 
 1. Wire Teacher UI to `POST /api/nlu/teacher/{webspace_id}/probe`.
-2. Add live desktop lookup export and Rasa lookup-table generation.
+2. Add live YJS overlay to `GET /api/nlu/teacher/{webspace_id}/lookups`.
 3. Add "save correct example" backend action with scenario/skill target selection.
 4. Add stage latency and golden phrase checks.
 
@@ -83,5 +86,7 @@ Current implementation estimate: **40%** for the practical AdaOS NLU roadmap.
 
 - Rasa is packaged as an optional default-on service-skill and installed into skill runtime slots.
 - NLU Teacher has a dry-run phrase probe API with regex-first and optional Rasa fallback.
+- NLU Teacher exposes baseline desktop lookup tables for `modal_id`, `node_ref`, `app_id`, `scenario_id`, and `webspace_id`.
+- Rasa export writes native lookup tables and `data/lookup_tables.json`; lookup summary is included in the training fingerprint.
 - Runtime emits stage trace events for regex, pipeline delegation, Rasa, and dispatcher actions/rejects.
 - Trace items are persisted to `data.nlu_trace.items[]` for the future UI timeline.

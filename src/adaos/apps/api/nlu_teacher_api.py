@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables
 from adaos.services.nlu.probe import probe_phrase
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
@@ -46,6 +47,15 @@ async def get_teacher_state(webspace_id: str):
     async with async_get_ydoc(ws) as ydoc:
         data_map = ydoc.get_map("data")
         return {"webspace_id": ws, "nlu_teacher": _teacher_obj(data_map)}
+
+
+@router.get("/nlu/teacher/{webspace_id}/lookups", dependencies=[Depends(require_token)])
+async def get_lookup_tables(webspace_id: str):
+    ws = _resolve_webspace_id(webspace_id)
+    try:
+        return collect_desktop_lookup_tables(webspace_id=ws)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to collect lookup tables: {exc}")
 
 
 @router.post("/nlu/teacher/{webspace_id}/revision/apply", dependencies=[Depends(require_token)])

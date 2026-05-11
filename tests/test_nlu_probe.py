@@ -93,3 +93,27 @@ async def test_nlu_teacher_probe_api_delegates_to_probe_phrase(monkeypatch):
     }
     assert result["ok"] is True
     assert result["intent"] == "desktop.open_modal"
+
+
+@pytest.mark.anyio
+async def test_nlu_teacher_lookup_api_returns_lookup_tables(monkeypatch):
+    from adaos.apps.api import nlu_teacher_api as api
+
+    seen = {}
+
+    def _fake_collect(*, webspace_id=None):
+        seen["webspace_id"] = webspace_id
+        return {
+            "ok": True,
+            "webspace_id": webspace_id,
+            "lookups": {"modal_id": [{"value": "nlu_teacher_modal", "sources": ["test"]}]},
+            "summary": [{"lookup": "modal_id", "count": 1, "hash": "hash"}],
+        }
+
+    monkeypatch.setattr(api, "collect_desktop_lookup_tables", _fake_collect)
+
+    result = await api.get_lookup_tables("ws-api")
+
+    assert seen == {"webspace_id": "ws-api"}
+    assert result["ok"] is True
+    assert result["lookups"]["modal_id"][0]["value"] == "nlu_teacher_modal"
