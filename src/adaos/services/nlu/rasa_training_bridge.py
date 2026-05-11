@@ -13,6 +13,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.interpreter.workspace import InterpreterWorkspace
 from adaos.services.nlu.data_registry import sync_from_scenarios_and_skills
 from adaos.services.skill.service_supervisor import get_service_supervisor
+from .rasa_skill_installer import ensure_rasa_service_skill_installed
 
 _log = logging.getLogger("adaos.nlu.rasa.train")
 
@@ -43,6 +44,24 @@ async def _train_if_enabled(reason: str) -> None:
 
     ctx = get_ctx()
     supervisor = get_service_supervisor()
+    try:
+        await supervisor.start("rasa_nlu_service_skill")
+    except KeyError:
+        installed = ensure_rasa_service_skill_installed()
+        if installed is not None:
+            try:
+                await supervisor.refresh_discovered(force=True)
+                await supervisor.start("rasa_nlu_service_skill")
+            except Exception:
+                _log.warning("failed to bootstrap/start rasa_nlu_service_skill; skip train")
+                return
+        else:
+            _log.warning("rasa service is not configured/installed; skip train")
+            return
+    except Exception:
+        _log.warning("failed to start rasa_nlu_service_skill; skip train", exc_info=True)
+        return
+
     base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
     if not base_url:
         _log.warning("rasa service is not configured/installed; skip train")
