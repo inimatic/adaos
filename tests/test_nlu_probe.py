@@ -101,19 +101,21 @@ async def test_nlu_teacher_lookup_api_returns_lookup_tables(monkeypatch):
 
     seen = {}
 
-    def _fake_collect(*, webspace_id=None):
+    async def _fake_collect(*, webspace_id=None, include_live=True):
         seen["webspace_id"] = webspace_id
+        seen["include_live"] = include_live
         return {
             "ok": True,
             "webspace_id": webspace_id,
             "lookups": {"modal_id": [{"value": "nlu_teacher_modal", "sources": ["test"]}]},
             "summary": [{"lookup": "modal_id", "count": 1, "hash": "hash"}],
+            "live_overlay": {"attempted": True, "ok": True},
         }
 
-    monkeypatch.setattr(api, "collect_desktop_lookup_tables", _fake_collect)
+    monkeypatch.setattr(api, "collect_desktop_lookup_tables_async", _fake_collect)
 
     result = await api.get_lookup_tables("ws-api")
 
-    assert seen == {"webspace_id": "ws-api"}
+    assert seen == {"webspace_id": "ws-api", "include_live": True}
     assert result["ok"] is True
     assert result["lookups"]["modal_id"][0]["value"] == "nlu_teacher_modal"
