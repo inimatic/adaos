@@ -258,6 +258,29 @@ def _runtime_identity_public_payload() -> dict[str, Any]:
     }
 
 
+def _compact_public_update_status(status: dict[str, Any] | None) -> dict[str, Any]:
+    source = status if isinstance(status, dict) else {}
+    return {
+        "action": str(source.get("action") or "").strip().lower() or None,
+        "state": str(source.get("state") or "").strip().lower() or "unknown",
+        "phase": str(source.get("phase") or "").strip().lower() or "",
+        "message": str(source.get("message") or "").strip(),
+        "target_rev": str(source.get("target_rev") or "").strip(),
+        "target_version": str(source.get("target_version") or "").strip(),
+        "planned_reason": str(source.get("planned_reason") or "").strip() or None,
+        "min_update_period_sec": source.get("min_update_period_sec"),
+        "scheduled_for": source.get("scheduled_for"),
+        "subsequent_transition": bool(source.get("subsequent_transition")),
+        "subsequent_transition_requested_at": source.get("subsequent_transition_requested_at"),
+        "candidate_prewarm_state": str(source.get("candidate_prewarm_state") or "").strip() or None,
+        "candidate_prewarm_message": str(source.get("candidate_prewarm_message") or "").strip() or None,
+        "candidate_prewarm_ready_at": source.get("candidate_prewarm_ready_at"),
+        "restart_mode": str(source.get("restart_mode") or "").strip() or None,
+        "restart_requested_at": source.get("restart_requested_at"),
+        "updated_at": source.get("updated_at"),
+    }
+
+
 def _supervisor_manages_sidecar() -> bool:
     raw = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
@@ -1358,6 +1381,23 @@ async def admin_update_status():
         "slots": core_slot_status(),
         "active_manifest": active_slot_manifest(),
         "runtime": _runtime_identity_public_payload(),
+    }
+
+
+@app.get("/api/supervisor/public/update-status")
+async def supervisor_public_update_status():
+    try:
+        finalized = finalize_core_update_boot_status()
+    except Exception:
+        finalized = None
+    status_payload = finalized if isinstance(finalized, dict) else read_core_update_status()
+    runtime_payload = _runtime_identity_public_payload()
+    runtime_payload["runtime_state"] = "ready" if is_ready() else "starting"
+    return {
+        "ok": True,
+        "status": _compact_public_update_status(status_payload),
+        "runtime": runtime_payload,
+        "_served_by": "runtime_public_update_status",
     }
 
 

@@ -139,6 +139,10 @@ class MemberLinkClient:
         self._last_yjs_queue_size = 0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._snapshot_task: asyncio.Task | None = None
+        self._last_connect_full_snapshot_at = 0.0
+        self._last_connect_yjs_state_at = 0.0
+        self._link_session_end_total = 0
+        self._last_link_session_end_log_at = 0.0
 
     @staticmethod
     def _pong_stale_after_s() -> float:
@@ -219,7 +223,12 @@ class MemberLinkClient:
             "updated_at": now,
         }
 
-    def _compose_local_node_snapshot(self, *, desktop_catalog: dict[str, Any]) -> dict[str, Any]:
+    def _compose_local_node_snapshot(
+        self,
+        *,
+        desktop_catalog: dict[str, Any] | None = None,
+        include_capacity: bool = True,
+    ) -> dict[str, Any]:
         conf = get_ctx().config
         lifecycle = runtime_lifecycle_snapshot()
         update_status = read_core_update_status() or {}
@@ -230,7 +239,7 @@ class MemberLinkClient:
         node_names = normalize_node_names(getattr(getattr(conf, "node_settings", None), "node_names", []))
         now = time.time()
         node_state = str(lifecycle.get("node_state") or "ready")
-        return {
+        snapshot = {
             "captured_at": now,
             "node_id": str(getattr(conf, "node_id", "") or ""),
             "subnet_id": str(getattr(conf, "subnet_id", "") or ""),
@@ -245,8 +254,6 @@ class MemberLinkClient:
             "connected_to_subnet": bool(self.is_connected()),
             "connected_to_hub": bool(self.is_connected()),
             "member_link_transition": transition,
-            "capacity": get_local_capacity(),
-            "desktop_catalog": desktop_catalog,
             "build": {
                 "version": str(BUILD_INFO.version or ""),
                 "build_date": str(BUILD_INFO.build_date or ""),
@@ -298,6 +305,11 @@ class MemberLinkClient:
                 "completed_at": self._last_control_completed_at or None,
             },
         }
+        if include_capacity:
+            snapshot["capacity"] = get_local_capacity()
+        if desktop_catalog is not None:
+            snapshot["desktop_catalog"] = desktop_catalog
+        return snapshot
 
     def _local_node_snapshot(self) -> dict[str, Any]:
         try:
@@ -316,6 +328,24 @@ class MemberLinkClient:
         except Exception:
             desktop_catalog = {"apps": [], "widgets": []}
         return self._compose_local_node_snapshot(desktop_catalog=desktop_catalog)
+
+    def _local_node_snapshot_heartbeat(self) -> dict[str, Any]:
+        return self._compose_local_node_snapshot(
+            desktop_catalog=None,
+            include_capacity=False,
+        )
+
+    def _queue_node_snapshot_heartbeat(self) -> None:
+        try:
+            self._out_q.put_nowait(
+                {
+                    "t": "node.snapshot.heartbeat",
+                    "snapshot": self._local_node_snapshot_heartbeat(),
+                    "ts": time.time(),
+                }
+            )
+        except Exception:
+            return
 
     def _queue_node_snapshot(self) -> None:
         self._last_forced_snapshot_at = time.time()
@@ -372,6 +402,14 @@ class MemberLinkClient:
             return
         if not self._yjs_write_needs_full_node_snapshot(meta):
             return
+        # Source-side suppression: regular Yjs replication already sends the
+        # lightweight yjs.node_state frame. Rebuilding and publishing a full
+        # node snapshot from the Yjs write callback is too expensive for idle
+        # member runtimes and can become a self-sustaining catalog rebuild loop.
+        # Keep the old path only as an explicit debug escape hatch.
+        raw_enabled = str(os.getenv("ADAOS_SUBNET_FULL_SNAPSHOT_ON_YJS_WRITE") or "").strip().lower()
+        if raw_enabled not in {"1", "true", "yes", "on"}:
+            return
         now = time.time()
         min_interval = 15.0
         if now - float(self._last_yjs_write_snapshot_at or 0.0) < min_interval:
@@ -414,6 +452,24 @@ class MemberLinkClient:
         except Exception:
             value = 5.0
         return max(1.0, min(60.0, value))
+
+    @staticmethod
+    def _connect_full_snapshot_min_interval_s() -> float:
+        raw = str(os.getenv("ADAOS_SUBNET_CONNECT_FULL_SNAPSHOT_MIN_INTERVAL_S") or "").strip()
+        try:
+            value = float(raw or 3600.0)
+        except Exception:
+            value = 3600.0
+        return max(15.0, min(3600.0, value))
+
+    @staticmethod
+    def _connect_yjs_state_min_interval_s() -> float:
+        raw = str(os.getenv("ADAOS_SUBNET_CONNECT_YJS_STATE_MIN_INTERVAL_S") or "").strip()
+        try:
+            value = float(raw or 60.0)
+        except Exception:
+            value = 60.0
+        return max(5.0, min(3600.0, value))
 
     def _request_local_snapshot_sync(self, *, webspace_id: str | None = None, reason: str = "subnet_sync") -> None:
         now = time.time()
@@ -644,7 +700,8 @@ class MemberLinkClient:
                     ws_url,
                     additional_headers=headers,
                     max_size=None,
-                    ping_interval=None,
+                    ping_interval=5.0,
+                    ping_timeout=20.0,
                 ) as ws:
                     self._connected.set()
                     self._connected_at = time.time()
@@ -675,23 +732,42 @@ class MemberLinkClient:
                     except Exception:
                         pass
                     try:
-                        snapshot = await self._local_node_snapshot_async()
+                        now = time.time()
+                        min_full_interval = self._connect_full_snapshot_min_interval_s()
+                        send_full_snapshot = (
+                            self._last_connect_full_snapshot_at <= 0.0
+                            or (now - self._last_connect_full_snapshot_at) >= min_full_interval
+                        )
+                        if send_full_snapshot:
+                            snapshot = await self._local_node_snapshot_async()
+                            self._last_connect_full_snapshot_at = now
+                            msg_type = "node.snapshot"
+                        else:
+                            snapshot = self._local_node_snapshot_heartbeat()
+                            msg_type = "node.snapshot.heartbeat"
                         await ws.send(
                             json.dumps(
                                 {
-                                    "t": "node.snapshot",
+                                    "t": msg_type,
                                     "snapshot": snapshot,
-                                    "ts": time.time(),
+                                    "ts": now,
                                 }
                             )
                         )
                     except Exception:
                         pass
-                    for ws_id in self._yjs_snapshot_webspaces():
-                        await self._queue_yjs_node_state(
-                            webspace_id=ws_id,
-                            reason="member_link_connected",
-                        )
+                    now = time.time()
+                    min_yjs_interval = self._connect_yjs_state_min_interval_s()
+                    if (
+                        self._last_connect_yjs_state_at <= 0.0
+                        or (now - self._last_connect_yjs_state_at) >= min_yjs_interval
+                    ):
+                        self._last_connect_yjs_state_at = now
+                        for ws_id in self._yjs_snapshot_webspaces():
+                            await self._queue_yjs_node_state(
+                                webspace_id=ws_id,
+                                reason="member_link_connected",
+                            )
 
                     async def _sender() -> None:
                         while True:
@@ -761,7 +837,7 @@ class MemberLinkClient:
                             interval = 20.0
                         while True:
                             await asyncio.sleep(interval)
-                            self._queue_node_snapshot()
+                            self._queue_node_snapshot_heartbeat()
 
                     sender_t = asyncio.create_task(_sender(), name="subnet-link-sender")
                     receiver_t = asyncio.create_task(_receiver(), name="subnet-link-receiver")
@@ -773,7 +849,29 @@ class MemberLinkClient:
                         p.cancel()
                     # Ensure task exceptions are retrieved so shutdown doesn't spam logs.
                     _ = await asyncio.gather(*pending, return_exceptions=True)
-                    _ = await asyncio.gather(*done, return_exceptions=True)
+                    done_results = await asyncio.gather(*done, return_exceptions=True)
+                    done_diag: list[str] = []
+                    for task, result in zip(done, done_results):
+                        name = task.get_name() if hasattr(task, "get_name") else str(task)
+                        if isinstance(result, BaseException):
+                            done_diag.append(f"{name}:{type(result).__name__}:{result}")
+                        else:
+                            done_diag.append(f"{name}:ok")
+                    now = time.time()
+                    self._link_session_end_total += 1
+                    log_fn = _log.debug
+                    if now - float(self._last_link_session_end_log_at or 0.0) >= 60.0:
+                        self._last_link_session_end_log_at = now
+                        log_fn = _log.warning
+                    log_fn(
+                        "subnet link session ended ws=%s done=%s connected_for_s=%.3f last_message_ago_s=%.3f last_pong_ago_s=%.3f queue=%d",
+                        ws_url,
+                        ",".join(done_diag) or "-",
+                        max(0.0, now - float(self._connected_at or 0.0)),
+                        max(0.0, now - float(self._last_message_at or 0.0)) if self._last_message_at else -1.0,
+                        max(0.0, now - float(self._last_pong_at or 0.0)) if self._last_pong_at else -1.0,
+                        int(self._out_q.qsize()),
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -795,7 +893,7 @@ class MemberLinkClient:
     async def _ping_loop(self, ws) -> None:
         pong_stale_after_s = self._pong_stale_after_s()
         while True:
-            await asyncio.sleep(10.0)
+            await asyncio.sleep(3.0)
             now = time.time()
             last_activity_at = max(
                 float(self._last_pong_at or 0.0),

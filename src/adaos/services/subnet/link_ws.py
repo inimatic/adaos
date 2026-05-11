@@ -187,6 +187,12 @@ async def subnet_ws(websocket: WebSocket) -> None:
                     await mgr.update_member_snapshot(node_id, snapshot=snapshot)
                 continue
 
+            if t == "node.snapshot.heartbeat":
+                snapshot = msg.get("snapshot")
+                if isinstance(snapshot, dict):
+                    await mgr.update_member_snapshot_heartbeat(node_id, snapshot=snapshot)
+                continue
+
             if t == "core.update.result":
                 result = msg.get("result")
                 if isinstance(result, dict):
