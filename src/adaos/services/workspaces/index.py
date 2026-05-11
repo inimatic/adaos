@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Iterable, List, Any
 import sqlite3
@@ -8,6 +8,7 @@ import json
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
+from adaos.services.webspace_id import coerce_webspace_id
 from adaos.services.yjs.store import ystore_path_for_webspace
 from adaos.services.yjs.webspace import default_webspace_id, dev_webspace_id
 
@@ -23,6 +24,39 @@ _ROW_SELECT = (
 )
 
 _UNSET = object()
+
+
+def _normalize_workspace_id(value: Any) -> str:
+    return coerce_webspace_id(value, fallback=default_webspace_id())
+
+
+def _canonical_manifest(manifest: "WebspaceManifest") -> "WebspaceManifest":
+    workspace_id = _normalize_workspace_id(manifest.workspace_id)
+    if workspace_id == manifest.workspace_id:
+        return manifest
+    return replace(
+        manifest,
+        workspace_id=workspace_id,
+        path=str(ystore_path_for_webspace(workspace_id)),
+    )
+
+
+def _dedupe_manifest_rows(rows: Iterable["WebspaceManifest"]) -> List["WebspaceManifest"]:
+    manifests = list(rows)
+    raw_ids = {str(row.workspace_id or "").strip() for row in manifests}
+    seen: set[str] = set()
+    out: List[WebspaceManifest] = []
+    for row in manifests:
+        raw_id = str(row.workspace_id or "").strip()
+        normalized_id = _normalize_workspace_id(raw_id)
+        if raw_id != normalized_id and normalized_id in raw_ids:
+            continue
+        manifest = _canonical_manifest(row)
+        if manifest.workspace_id in seen:
+            continue
+        seen.add(manifest.workspace_id)
+        out.append(manifest)
+    return out
 
 
 def _workspace_event_payload(row: "WebspaceManifest") -> dict[str, Any]:
@@ -551,6 +585,7 @@ def _ensure_schema(con) -> None:
 
 
 def get_workspace(workspace_id: str) -> Optional[WebspaceManifest]:
+    workspace_id = _normalize_workspace_id(workspace_id)
     sql = get_ctx().sql
     with sql.connect() as con:
         _ensure_schema(con)
@@ -589,7 +624,7 @@ def list_workspaces() -> List[WebspaceManifest]:
             con.commit()
     if not rows:
         rows = [ensure_workspace(default_webspace_id())]
-    return rows
+    return _dedupe_manifest_rows(rows)
 
 
 def normalize_workspaces() -> int:
@@ -620,6 +655,7 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
     Ensure a workspace row exists and return it. The associated Yjs store
     path is derived from the current ctx paths.
     """
+    workspace_id = _normalize_workspace_id(workspace_id)
     sql = get_ctx().sql
     with sql.connect() as con:
         _ensure_schema(con)
@@ -688,6 +724,7 @@ def set_workspace_manifest(
     device_binding: Any = _UNSET,
     ui_overlay_json: Any = _UNSET,
 ) -> WebspaceManifest:
+    workspace_id = _normalize_workspace_id(workspace_id)
     current = ensure_workspace(workspace_id)
     next_display_name = current.display_name if display_name is _UNSET else _normalize_optional_text(display_name)
     next_kind_raw = current.kind if kind is _UNSET else _normalize_kind(kind)
@@ -735,6 +772,7 @@ def set_display_name(workspace_id: str, display_name: Optional[str]) -> Webspace
 
 
 def delete_workspace(workspace_id: str) -> None:
+    workspace_id = _normalize_workspace_id(workspace_id)
     sql = get_ctx().sql
     with sql.connect() as con:
         _ensure_schema(con)

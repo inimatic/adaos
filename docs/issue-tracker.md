@@ -89,6 +89,24 @@ Actions:
 - [ ] Document provider selection and API-key behavior so `401` is actionable
   instead of looking like a modal rendering bug.
 
+#### MRI-005: Keep scenario switching fast without hiding rebuild problems
+
+Status: in progress.
+
+Actions:
+
+- [x] Move scenario-switch worker `data.webspaces` sync out of the ready path;
+  fresh-doc rebuild remains explicit, while listing fanout is post-ready and
+  coalesced.
+- [x] Normalize nested/stringified `webspace_id` values before workspace index
+  reads/writes, and dedupe malformed legacy rows from listing output.
+- [ ] Investigate why `collect_inputs` dominates semantic rebuild time
+  (~300-400ms locally) and make resolver input collection cheaper without
+  weakening projection contracts.
+- [ ] Investigate why fresh-doc switches naturally replace all effective
+  branches; decide whether branch fingerprint reuse can be preserved safely
+  without reintroducing stale Yjs state.
+
 ## Hub Memory Growth Under Snapshot and Webspace Fanout
 
 ### Goal
