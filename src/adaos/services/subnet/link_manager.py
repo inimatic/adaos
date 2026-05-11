@@ -143,6 +143,28 @@ def _snapshot_has_desktop_material(snapshot: dict[str, Any]) -> bool:
     return bool(apps or widgets or modals or webio or ydoc_defaults)
 
 
+def _publish_link_event(event_type: str, payload: dict[str, Any]) -> bool:
+    try:
+        get_ctx().bus.publish(
+            DomainEvent(
+                type=str(event_type),
+                payload=payload,
+                source="subnet.link",
+                ts=time.time(),
+            )
+        )
+        return True
+    except Exception:
+        node_id = payload.get("node_id") if isinstance(payload, dict) else None
+        _log.warning(
+            "failed to publish subnet link event type=%s node_id=%s",
+            event_type,
+            node_id,
+            exc_info=True,
+        )
+        return False
+
+
 def _coerce_json_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
@@ -361,22 +383,15 @@ class HubLinkManager:
                         fut.set_exception(ConnectionError("link_replaced"))
             except Exception:
                 pass
-        try:
-            get_ctx().bus.publish(
-                DomainEvent(
-                    type="subnet.member.link.up",
-                    payload={
-                        "node_id": node_id,
-                        "hostname": hostname,
-                        "roles": list(roles or []),
-                        "node_names": list(node_names or []),
-                    },
-                    source="subnet.link",
-                    ts=time.time(),
-                )
-            )
-        except Exception:
-            pass
+        _publish_link_event(
+            "subnet.member.link.up",
+            {
+                "node_id": node_id,
+                "hostname": hostname,
+                "roles": list(roles or []),
+                "node_names": list(node_names or []),
+            },
+        )
         try:
             await self._push_node_display_assignment(node_id)
         except Exception:
@@ -404,17 +419,7 @@ class HubLinkManager:
                     fut.set_exception(ConnectionError("link_closed"))
         except Exception:
             pass
-        try:
-            get_ctx().bus.publish(
-                DomainEvent(
-                    type="subnet.member.link.down",
-                    payload={"node_id": node_id},
-                    source="subnet.link",
-                    ts=time.time(),
-                )
-            )
-        except Exception:
-            pass
+        _publish_link_event("subnet.member.link.down", {"node_id": node_id})
 
     def is_connected(self, node_id: str) -> bool:
         return node_id in self._links
@@ -440,17 +445,7 @@ class HubLinkManager:
             "node_id": node_id,
             "node_names": list(link.node_names),
         }
-        try:
-            get_ctx().bus.publish(
-                DomainEvent(
-                    type="subnet.member.meta.changed",
-                    payload=payload,
-                    source="subnet.link",
-                    ts=time.time(),
-                )
-            )
-        except Exception:
-            pass
+        _publish_link_event("subnet.member.meta.changed", payload)
         return {"ok": True, **payload}
 
     async def update_member_snapshot(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -504,24 +499,56 @@ class HubLinkManager:
                     node_state=str(snap.get("node_state") or "").strip() or None,
                 )
         except Exception:
-            pass
+            _log.warning("failed to update subnet directory from member snapshot node_id=%s", node_id, exc_info=True)
         try:
             await self._push_node_display_assignment(node_id)
         except Exception:
             _log.debug("failed to push node display assignment after snapshot node_id=%s", node_id, exc_info=True)
         if changed:
+            _publish_link_event("subnet.member.snapshot.changed", payload)
+        return {"ok": True, "changed": changed, **payload}
+
+    async def update_member_snapshot_heartbeat(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
+        link = await self._get_link(node_id)
+        if not link:
+            return {"ok": False, "error": "member_not_connected"}
+        snap = dict(snapshot or {})
+        node_names = snap.get("node_names")
+        if isinstance(node_names, list):
+            link.node_names = [str(item or "").strip() for item in node_names if str(item or "").strip()]
+        link.last_snapshot_at = time.time()
+        link.last_message_at = link.last_snapshot_at
+        update_status = snap.get("update_status")
+        if isinstance(update_status, dict):
+            state = str(update_status.get("state") or "").strip()
+            action = str(update_status.get("action") or "").strip()
+            if state:
+                link.last_hub_core_update_state = state
+            if action:
+                link.last_hub_core_update_action = action
+        try:
+            from adaos.services.registry.subnet_directory import get_directory
+
             try:
-                get_ctx().bus.publish(
-                    DomainEvent(
-                        type="subnet.member.snapshot.changed",
-                        payload=payload,
-                        source="subnet.link",
-                        ts=time.time(),
-                    )
+                projection_captured_at = (
+                    float(snap.get("captured_at"))
+                    if snap.get("captured_at") is not None
+                    else None
                 )
             except Exception:
-                pass
-        return {"ok": True, "changed": changed, **payload}
+                projection_captured_at = None
+            get_directory().on_member_runtime_snapshot_heartbeat(
+                node_id,
+                captured_at=projection_captured_at,
+                node_state=str(snap.get("node_state") or "").strip() or None,
+            )
+        except Exception:
+            _log.warning(
+                "failed to update subnet directory from member snapshot heartbeat node_id=%s",
+                node_id,
+                exc_info=True,
+            )
+        return {"ok": True, "changed": False, "node_id": node_id}
 
     async def set_member_node_names(self, node_id: str, *, node_names: list[str]) -> dict[str, Any]:
         link = await self._get_link(node_id)
@@ -547,17 +574,7 @@ class HubLinkManager:
             "node_id": node_id,
             "reason": str(reason or "manual_refresh"),
         }
-        try:
-            get_ctx().bus.publish(
-                DomainEvent(
-                    type="subnet.member.snapshot.requested",
-                    payload=payload,
-                    source="subnet.link",
-                    ts=time.time(),
-                )
-            )
-        except Exception:
-            pass
+        _publish_link_event("subnet.member.snapshot.requested", payload)
         return {"ok": True, "accepted": True, **payload}
 
     async def request_member_update(
@@ -613,17 +630,7 @@ class HubLinkManager:
             "target_version": str(target_version or ""),
             "reason": str(reason or "hub.member_control"),
         }
-        try:
-            get_ctx().bus.publish(
-                DomainEvent(
-                    type="subnet.member.update.requested",
-                    payload=payload,
-                    source="subnet.link",
-                    ts=time.time(),
-                )
-            )
-        except Exception:
-            pass
+        _publish_link_event("subnet.member.update.requested", payload)
         return {"ok": True, "accepted": True, **payload}
 
     async def update_member_control_result(self, node_id: str, *, result: dict[str, Any]) -> dict[str, Any]:
@@ -644,17 +651,7 @@ class HubLinkManager:
             "result": dict(link.last_control_result),
             "captured_at": link.last_control_result_at,
         }
-        try:
-            get_ctx().bus.publish(
-                DomainEvent(
-                    type="subnet.member.update.result",
-                    payload=outbound,
-                    source="subnet.link",
-                    ts=time.time(),
-                )
-            )
-        except Exception:
-            pass
+        _publish_link_event("subnet.member.update.result", outbound)
         return {"ok": True, **outbound}
 
     async def broadcast_event(self, *, event_type: str, payload: dict[str, Any], source: str = "hub") -> dict[str, Any]:
