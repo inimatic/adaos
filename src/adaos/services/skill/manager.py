@@ -1236,11 +1236,12 @@ class SkillManager:
 
     def _ensure_skill_subpath_materialized(self, root: Path, name: str) -> None:
         skill_dir = root / "skills" / name
-        if any((skill_dir / item).exists() for item in _SKILL_MANIFEST_NAMES):
-            return
+        has_manifest = any((skill_dir / item).exists() for item in _SKILL_MANIFEST_NAMES)
         try:
             self.ctx.git.sparse_add(str(root), f"skills/{name}")
         except Exception:
+            return
+        if has_manifest:
             return
         try:
             self.ctx.git.pull(str(root))
