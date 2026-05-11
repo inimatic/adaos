@@ -72,6 +72,43 @@ def _http_post_json(url: str, payload: dict, *, timeout_ms: int) -> dict:
         return json.loads(raw)
 
 
+def _http_get_json(url: str, *, timeout_ms: int) -> dict | None:
+    req = Request(url, method="GET")
+    try:
+        with urlopen(req, timeout=timeout_ms / 1000.0) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _service_health_ok(base_url: str) -> bool:
+    payload = _http_get_json(f"{base_url}/health", timeout_ms=1_000)
+    return bool(payload and payload.get("ok") is True)
+
+
+async def _ensure_rasa_service_base_url(supervisor: Any) -> str | None:
+    installed = ensure_rasa_service_skill_installed()
+    if installed is None:
+        return None
+
+    await supervisor.refresh_discovered(force=True)
+    base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
+    if base_url and await asyncio.to_thread(_service_health_ok, base_url):
+        return base_url
+
+    async with _START_LOCK:
+        base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
+        if base_url and await asyncio.to_thread(_service_health_ok, base_url):
+            return base_url
+        await supervisor.start("rasa_nlu_service_skill")
+        return supervisor.resolve_base_url("rasa_nlu_service_skill")
+
+
 def _record_failure(kind: str) -> int:
     now = asyncio.get_running_loop().time()
     times = _issue_times.get(kind) or []
@@ -95,46 +132,27 @@ async def _parse_and_emit(
 
     # Best-effort: ensure service is running (and venv exists) before calling /parse.
     try:
-        async with _START_LOCK:
-            await supervisor.start("rasa_nlu_service_skill")
-    except KeyError:
-        installed = ensure_rasa_service_skill_installed()
-        if installed is not None:
-            try:
-                await supervisor.refresh_discovered(force=True)
-                async with _START_LOCK:
-                    await supervisor.start("rasa_nlu_service_skill")
-            except Exception:
-                _log.warning("failed to bootstrap/start rasa_nlu_service_skill from template", exc_info=True)
-                _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_start_failed")
-                return
-        else:
-            _log.debug("rasa service is not configured/installed")
-            _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_not_installed")
-            return
+        base_url = await _ensure_rasa_service_base_url(supervisor)
     except Exception:
         _log.warning("failed to start rasa_nlu_service_skill service", exc_info=True)
         _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_start_failed")
         return
 
-    base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
     if not base_url:
         _log.debug("rasa service base_url unresolved")
         _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_base_url_unresolved")
         return
 
-    loop = asyncio.get_running_loop()
     try:
         async with _SEMAPHORE:
-            future = loop.run_in_executor(
-                None,
+            future = asyncio.to_thread(
                 _http_post_json,
                 f"{base_url}/parse",
                 {"text": text},
-                int(_PARSE_TIMEOUT_S * 1000),
+                timeout_ms=int(_PARSE_TIMEOUT_S * 1000),
             )
             data = await asyncio.wait_for(future, timeout=_PARSE_TIMEOUT_S)
-    except TimeoutError:
+    except asyncio.TimeoutError:
         count = _record_failure("timeout")
         if count >= max(_ISSUE_THRESHOLD, 1):
             _log.warning("rasa service parse timed out (x%d) timeout_s=%.1f", count, _PARSE_TIMEOUT_S)

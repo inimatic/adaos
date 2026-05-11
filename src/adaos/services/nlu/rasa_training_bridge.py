@@ -16,6 +16,7 @@ from adaos.services.skill.service_supervisor import get_service_supervisor
 from .rasa_skill_installer import ensure_rasa_service_skill_installed
 
 _log = logging.getLogger("adaos.nlu.rasa.train")
+_START_LOCK = asyncio.Lock()
 
 
 def _http_post_json(url: str, payload: dict, *, timeout_ms: int = 600_000) -> dict:
@@ -25,6 +26,43 @@ def _http_post_json(url: str, payload: dict, *, timeout_ms: int = 600_000) -> di
     with urlopen(req, timeout=timeout_ms / 1000.0) as resp:
         raw = resp.read().decode("utf-8", errors="ignore")
         return json.loads(raw)
+
+
+def _http_get_json(url: str, *, timeout_ms: int = 1_000) -> dict | None:
+    req = Request(url, method="GET")
+    try:
+        with urlopen(req, timeout=timeout_ms / 1000.0) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _service_health_ok(base_url: str) -> bool:
+    payload = _http_get_json(f"{base_url}/health", timeout_ms=1_000)
+    return bool(payload and payload.get("ok") is True)
+
+
+async def _ensure_rasa_service_base_url(supervisor) -> str | None:
+    installed = ensure_rasa_service_skill_installed()
+    if installed is None:
+        return None
+
+    await supervisor.refresh_discovered(force=True)
+    base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
+    if base_url and await asyncio.to_thread(_service_health_ok, base_url):
+        return base_url
+
+    async with _START_LOCK:
+        base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
+        if base_url and await asyncio.to_thread(_service_health_ok, base_url):
+            return base_url
+        await supervisor.start("rasa_nlu_service_skill")
+        return supervisor.resolve_base_url("rasa_nlu_service_skill")
 
 
 def _train_sync(ctx) -> dict:
@@ -45,24 +83,11 @@ async def _train_if_enabled(reason: str) -> None:
     ctx = get_ctx()
     supervisor = get_service_supervisor()
     try:
-        await supervisor.start("rasa_nlu_service_skill")
-    except KeyError:
-        installed = ensure_rasa_service_skill_installed()
-        if installed is not None:
-            try:
-                await supervisor.refresh_discovered(force=True)
-                await supervisor.start("rasa_nlu_service_skill")
-            except Exception:
-                _log.warning("failed to bootstrap/start rasa_nlu_service_skill; skip train")
-                return
-        else:
-            _log.warning("rasa service is not configured/installed; skip train")
-            return
+        base_url = await _ensure_rasa_service_base_url(supervisor)
     except Exception:
         _log.warning("failed to start rasa_nlu_service_skill; skip train", exc_info=True)
         return
 
-    base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
     if not base_url:
         _log.warning("rasa service is not configured/installed; skip train")
         return
@@ -77,6 +102,13 @@ async def _train_if_enabled(reason: str) -> None:
     if not isinstance(resp, dict) or not resp.get("ok"):
         _log.warning("rasa training failed reason=%s resp=%r", reason, resp)
         return
+    try:
+        InterpreterWorkspace(ctx).record_training(
+            note=f"rasa-auto:{reason}",
+            extra={"engine": "rasa_service", "model_path": resp.get("model_path"), "reason": reason},
+        )
+    except Exception:
+        _log.debug("failed to record rasa training metadata reason=%s", reason, exc_info=True)
     _log.info("rasa trained reason=%s", reason)
 
 
