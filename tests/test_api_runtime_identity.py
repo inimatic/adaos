@@ -6,6 +6,7 @@ import types
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -78,6 +79,55 @@ def test_private_network_access_middleware_allows_cross_origin_loopback_probe() 
     assert response.headers["Access-Control-Allow-Methods"] == "GET"
     assert response.headers["Access-Control-Allow-Private-Network"] == "true"
     assert response.headers["Vary"] == "Origin"
+
+
+@pytest.mark.parametrize(
+    ("path", "method"),
+    [
+        ("/api/node/status", "GET"),
+        ("/api/tools/call", "POST"),
+        ("/api/node/yjs/webspaces/desktop/toggle-install", "POST"),
+    ],
+)
+def test_runtime_cors_preflight_allows_local_browser_headers(path: str, method: str) -> None:
+    client = TestClient(api_server.app)
+
+    response = client.options(
+        path,
+        headers={
+            "Origin": "http://localhost:4200",
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": (
+                "content-type,x-adaos-token,x-adaos-trace-id,"
+                "x-adaos-device-id,authorization"
+            ),
+        },
+    )
+
+    assert response.status_code in {200, 204}
+    assert response.headers["Access-Control-Allow-Origin"] in {"*", "http://localhost:4200"}
+    allowed_headers = response.headers.get("Access-Control-Allow-Headers", "").lower()
+    assert "x-adaos-trace-id" in allowed_headers
+    assert "x-adaos-device-id" in allowed_headers
+
+
+def test_runtime_cors_preflight_allows_private_network_tool_call() -> None:
+    client = TestClient(api_server.app)
+
+    response = client.options(
+        "/api/tools/call",
+        headers={
+            "Origin": "http://localhost:4200",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-adaos-token,x-adaos-trace-id",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Access-Control-Allow-Origin"] == "http://localhost:4200"
+    assert response.headers["Access-Control-Allow-Private-Network"] == "true"
+    assert "x-adaos-trace-id" in response.headers.get("Access-Control-Allow-Headers", "").lower()
 
 
 @pytest.mark.parametrize(
