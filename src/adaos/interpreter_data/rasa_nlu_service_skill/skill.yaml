@@ -4,7 +4,8 @@ description: Local Rasa NLU-only service for AdaOS intent detection
 runtime:
   kind: service
   env:
-    mode: global
+    mode: venv
+    python: "3.11"
 service:
   host: 127.0.0.1
   port: 18092
@@ -20,4 +21,3 @@ events:
     - nlp.rasa.train
   publish:
     - nlp.intent.detected
-

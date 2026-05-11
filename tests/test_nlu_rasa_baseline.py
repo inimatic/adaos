@@ -37,7 +37,10 @@ def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> Non
 
     rasa_config = yaml.safe_load((Path(project) / "config.yml").read_text(encoding="utf-8")) or {}
     assert "policies" not in rasa_config
-    assert any(item.get("name") == "DIETClassifier" for item in rasa_config.get("pipeline", []) if isinstance(item, dict))
+    pipeline_names = [item.get("name") for item in rasa_config.get("pipeline", []) if isinstance(item, dict)]
+    assert "DIETClassifier" not in pipeline_names
+    assert "CRFEntityExtractor" in pipeline_names
+    assert "LogisticRegressionClassifier" in pipeline_names
 
 
 @pytest.mark.anyio

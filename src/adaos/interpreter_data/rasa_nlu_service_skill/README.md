@@ -11,3 +11,6 @@ Endpoints:
 The service intentionally exposes only NLU training and parsing. It does not
 load Rasa Core policies, channels, action servers, Duckling, or ConveRT.
 
+The skill runs in its own service venv. `requirements.in` contains the light
+NLU stack for the default AdaOS pipeline (`CRFEntityExtractor` +
+`LogisticRegressionClassifier`) and intentionally omits TensorFlow.

@@ -15,6 +15,7 @@ def test_ensure_rasa_service_skill_installed_creates_skill_tree():
     assert installed is not None
     assert installed == target
     assert (target / "skill.yaml").exists()
+    assert (target / "requirements.in").exists()
     assert (target / "handlers" / "main.py").exists()
 
 

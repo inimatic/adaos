@@ -421,6 +421,8 @@ class InterpreterWorkspace:
         if not isinstance(rasa_pipeline, list) or not rasa_pipeline:
             rasa_pipeline = [
                 {"name": "WhitespaceTokenizer"},
+                {"name": "RegexFeaturizer"},
+                {"name": "LexicalSyntacticFeaturizer"},
                 {"name": "CountVectorsFeaturizer"},
                 {
                     "name": "CountVectorsFeaturizer",
@@ -428,7 +430,9 @@ class InterpreterWorkspace:
                     "min_ngram": 3,
                     "max_ngram": 5,
                 },
-                {"name": "DIETClassifier", "epochs": 80, "constrain_similarities": True},
+                {"name": "CRFEntityExtractor"},
+                {"name": "EntitySynonymMapper"},
+                {"name": "LogisticRegressionClassifier", "max_iter": 200},
             ]
 
         config_target = project / "config.yml"
