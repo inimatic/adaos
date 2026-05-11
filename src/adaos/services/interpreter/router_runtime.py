@@ -11,6 +11,7 @@ Listens for ``nlp.intent.detect.request`` commands carrying raw user text and em
 from typing import Any, Dict, Mapping
 import asyncio
 import logging
+import os
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
@@ -45,13 +46,19 @@ def _resolve_webspace_id(payload: Mapping[str, Any]) -> str | None:
 @subscribe("nlp.intent.detect.request")
 async def _on_nlp_intent_detect(evt: Any) -> None:
     """
-    Handle generic "detect intent" commands and run them through the
-    Rasa-based interpreter model.
+    Legacy in-process Rasa route.
+
+    The production NLU route is `adaos.services.nlu.pipeline` ->
+    `rasa_nlu_service_skill`. This handler stays import-safe for older
+    deployments but is disabled by default to avoid root-venv Rasa usage.
 
     Expected payload shape:
       - text / utterance: user text
       - webspace_id / workspace_id / _meta.webspace_id: optional routing hint
     """
+    if str(os.getenv("ADAOS_INTERPRETER_LEGACY_ROUTER") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+
     payload = _payload(evt)
     text = payload.get("text") or payload.get("utterance")
     if not isinstance(text, str) or not text.strip():

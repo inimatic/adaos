@@ -13,7 +13,7 @@ import yaml
 from adaos.apps.bootstrap import get_ctx
 from adaos.services.interpreter.workspace import IntentMapping, InterpreterWorkspace
 from adaos.services.nlu.data_registry import sync_from_scenarios_and_skills
-from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
+from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed, is_rasa_nlu_enabled
 from adaos.services.skill.service_supervisor import get_service_supervisor
 
 app = typer.Typer(help="Интерпретатор: конфигурация, датасеты и обучение.")
@@ -71,7 +71,10 @@ def _service_health_ok(base_url: str) -> bool:
 
 def _rasa_service_url(*, start: bool = True) -> str:
     ctx = get_ctx()
-    ensure_rasa_service_skill_installed()
+    if not is_rasa_nlu_enabled():
+        raise RuntimeError("Rasa NLU is disabled (ADAOS_NLU_RASA=0)")
+    if ensure_rasa_service_skill_installed() is None:
+        raise RuntimeError("rasa_nlu_service_skill could not be installed")
     base = _rasa_service_base_from_manifest(ctx)
     if not start:
         return base

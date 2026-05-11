@@ -70,6 +70,45 @@ def _compact_meta(meta: Mapping[str, Any] | None) -> dict:
     return out
 
 
+def _compact_raw(raw: Any) -> Any:
+    if not isinstance(raw, Mapping):
+        return None
+    out: dict[str, Any] = {}
+    for key in ("rule_id", "pattern", "builtin", "intent_ranking", "entities", "service", "reason"):
+        value = raw.get(key)
+        if value is not None:
+            out[key] = value
+    return out or None
+
+
+@subscribe("nlu.trace.stage")
+async def on_stage(evt: Any) -> None:
+    payload = _payload(evt)
+    webspace_id = _resolve_webspace_id(payload)
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    item = {
+        "ts": payload.get("ts") if isinstance(payload.get("ts"), (int, float)) else time.time(),
+        "type": "nlu.trace.stage",
+        "stage": payload.get("stage"),
+        "status": payload.get("status"),
+        "text": payload.get("text") if isinstance(payload.get("text"), str) else "",
+        "intent": payload.get("intent"),
+        "confidence": payload.get("confidence"),
+        "slots": payload.get("slots") if isinstance(payload.get("slots"), dict) else {},
+        "via": payload.get("via"),
+        "reason": payload.get("reason"),
+        "request_id": payload.get("request_id"),
+        "_meta": _compact_meta(meta),
+    }
+    raw = _compact_raw(payload.get("raw") or payload.get("_raw"))
+    if raw is not None:
+        item["raw"] = raw
+    try:
+        await _append_trace_item(webspace_id, item)
+    except Exception:
+        _log.debug("failed to append nlu trace item (stage)", exc_info=True)
+
+
 @subscribe("nlp.intent.detect.request")
 async def on_detect_request(evt: Any) -> None:
     payload = _payload(evt)

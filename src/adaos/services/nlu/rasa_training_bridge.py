@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict
 from urllib.request import Request, urlopen
@@ -13,7 +12,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.interpreter.workspace import InterpreterWorkspace
 from adaos.services.nlu.data_registry import sync_from_scenarios_and_skills
 from adaos.services.skill.service_supervisor import get_service_supervisor
-from .rasa_skill_installer import ensure_rasa_service_skill_installed
+from .rasa_skill_installer import ensure_rasa_service_skill_installed, env_flag, is_rasa_nlu_enabled
 
 _log = logging.getLogger("adaos.nlu.rasa.train")
 _START_LOCK = asyncio.Lock()
@@ -48,6 +47,9 @@ def _service_health_ok(base_url: str) -> bool:
 
 
 async def _ensure_rasa_service_base_url(supervisor) -> str | None:
+    if not is_rasa_nlu_enabled():
+        return None
+
     installed = ensure_rasa_service_skill_installed()
     if installed is None:
         return None
@@ -76,21 +78,21 @@ def _train_sync(ctx) -> dict:
     return {"project_dir": str(project), "out_dir": str(models_dir)}
 
 
-async def _train_if_enabled(reason: str) -> None:
-    if os.getenv("ADAOS_NLU_AUTOTRAIN") != "1":
-        return
-
+async def train_rasa_nlu_once(*, reason: str = "manual", note: str | None = None) -> dict[str, Any]:
     ctx = get_ctx()
+    if not is_rasa_nlu_enabled():
+        return {"ok": False, "skipped": True, "reason": "rasa_disabled"}
+
     supervisor = get_service_supervisor()
     try:
         base_url = await _ensure_rasa_service_base_url(supervisor)
     except Exception:
-        _log.warning("failed to start rasa_nlu_service_skill; skip train", exc_info=True)
-        return
+        _log.warning("failed to start rasa_nlu_service_skill; skip train reason=%s", reason, exc_info=True)
+        return {"ok": False, "skipped": True, "reason": "rasa_start_failed"}
 
     if not base_url:
-        _log.warning("rasa service is not configured/installed; skip train")
-        return
+        _log.warning("rasa service is not configured/installed; skip train reason=%s", reason)
+        return {"ok": False, "skipped": True, "reason": "rasa_base_url_unresolved"}
 
     loop = asyncio.get_running_loop()
     payload = await loop.run_in_executor(None, _train_sync, ctx)
@@ -98,18 +100,25 @@ async def _train_if_enabled(reason: str) -> None:
         resp = await loop.run_in_executor(None, _http_post_json, f"{base_url}/train", payload)
     except Exception:
         _log.warning("rasa training request failed reason=%s", reason, exc_info=True)
-        return
+        return {"ok": False, "reason": "rasa_train_request_failed"}
     if not isinstance(resp, dict) or not resp.get("ok"):
         _log.warning("rasa training failed reason=%s resp=%r", reason, resp)
-        return
+        return {"ok": False, "reason": "rasa_train_failed", "response": resp}
     try:
         InterpreterWorkspace(ctx).record_training(
-            note=f"rasa-auto:{reason}",
+            note=note or f"rasa-auto:{reason}",
             extra={"engine": "rasa_service", "model_path": resp.get("model_path"), "reason": reason},
         )
     except Exception:
         _log.debug("failed to record rasa training metadata reason=%s", reason, exc_info=True)
     _log.info("rasa trained reason=%s", reason)
+    return {"ok": True, "response": resp}
+
+
+async def _train_if_enabled(reason: str) -> None:
+    if not env_flag("ADAOS_NLU_AUTOTRAIN", default=False):
+        return
+    await train_rasa_nlu_once(reason=reason)
 
 
 @subscribe("scenarios.synced")
@@ -134,5 +143,5 @@ async def _on_webspace_reload(_: Dict[str, Any]) -> None:
 
 @subscribe("nlp.rasa.train")
 async def _on_manual_train(_: Any) -> None:
-    await _train_if_enabled("manual")
+    await train_rasa_nlu_once(reason="manual")
 

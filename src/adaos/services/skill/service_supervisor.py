@@ -58,6 +58,56 @@ class ServiceSpec:
         return f"http://{self.host}:{self.port}"
 
 
+def _read_marker(path: Path) -> str | None:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    return value or None
+
+
+def _latest_runtime_version(runtime_root: Path) -> str | None:
+    current = _read_marker(runtime_root / "current_version")
+    if current:
+        return current
+    try:
+        versions = sorted(child.name for child in runtime_root.iterdir() if child.is_dir() and child.name != "data")
+    except Exception:
+        return None
+    return versions[-1] if versions else None
+
+
+def _active_runtime_skill_root(skills_root: Path, skill_name: str) -> Path | None:
+    runtime_root = skills_root / ".runtime" / skill_name
+    version = _latest_runtime_version(runtime_root)
+    if not version:
+        return None
+    version_root = runtime_root / version
+    slot = str(_read_marker(version_root / "active") or "A").strip().upper()
+    if slot not in {"A", "B"}:
+        slot = "A"
+    root = version_root / "slots" / slot / "src" / "skills" / skill_name
+    return root if (root / "skill.yaml").exists() else None
+
+
+def _infer_runtime_slot_root(skill_root: Path, skill_name: str) -> Path | None:
+    try:
+        root = skill_root.expanduser().resolve()
+    except Exception:
+        root = skill_root
+    if root.name != skill_name:
+        return None
+    if root.parent.name != "skills":
+        return None
+    src_dir = root.parent.parent
+    if src_dir.name != "src":
+        return None
+    slot_root = src_dir.parent
+    if slot_root.parent.name != "slots":
+        return None
+    return slot_root
+
+
 def _read_skill_manifest(skill_root: Path) -> dict:
     skill_yaml = skill_root / "skill.yaml"
     if not skill_yaml.exists():
@@ -100,7 +150,12 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     env_mode = str(env_cfg.get("mode") or "global")
     python_selector = env_cfg.get("python") if isinstance(env_cfg.get("python"), str) else None
     venv_dir_raw = env_cfg.get("venv_dir") if isinstance(env_cfg.get("venv_dir"), str) else None
-    venv_dir = Path(venv_dir_raw).resolve() if venv_dir_raw else None
+    if venv_dir_raw:
+        raw_venv_dir = Path(venv_dir_raw).expanduser()
+        venv_dir = (skill_root / raw_venv_dir).resolve() if not raw_venv_dir.is_absolute() else raw_venv_dir.resolve()
+    else:
+        slot_root = _infer_runtime_slot_root(skill_root, skill_name)
+        venv_dir = (slot_root / "venv").resolve() if env_mode == "venv" and slot_root is not None else None
 
     deps: list[str] = []
     dep_list = manifest.get("dependencies") or []
@@ -196,10 +251,30 @@ def _path_value(value: Any) -> Path:
     return Path(resolved).expanduser().resolve()
 
 
+def _optional_path_value(owner: Any, *names: str) -> Path | None:
+    for name in names:
+        try:
+            raw = getattr(owner, name)
+        except Exception:
+            continue
+        try:
+            value = raw() if callable(raw) else raw
+        except Exception:
+            continue
+        if value is None:
+            continue
+        try:
+            return Path(value).expanduser().resolve()
+        except Exception:
+            continue
+    return None
+
+
 class ServiceSkillSupervisor:
     def __init__(self) -> None:
         self._ctx = get_ctx()
         self._procs: dict[str, subprocess.Popen] = {}
+        self._proc_specs: dict[str, tuple[Any, ...]] = {}
         self._specs: dict[str, ServiceSpec] = {}
         self._task: asyncio.Task | None = None
         self._health_task: asyncio.Task | None = None
@@ -213,7 +288,7 @@ class ServiceSkillSupervisor:
         self._doctor_requests_cache: dict[str, list[dict[str, Any]]] = {}
         self._discover_lock = threading.Lock()
         self._discover_last_at = 0.0
-        self._manifest_state: dict[str, tuple[int, int, float]] = {}
+        self._manifest_state: dict[str, tuple[Any, ...]] = {}
 
     # ------------------------------------------------------------------ public
     def ensure_discovered(self, *, force: bool = False) -> None:
@@ -230,33 +305,37 @@ class ServiceSkillSupervisor:
             if not force and (now - self._discover_last_at) < 5.0:
                 return
             next_specs: dict[str, ServiceSpec] = {}
-            next_state: dict[str, tuple[int, int, float]] = {}
+            next_state: dict[str, tuple[Any, ...]] = {}
 
-            for skill_dir in skills_root.iterdir():
+            for workspace_skill_dir in skills_root.iterdir():
+                skill_dir = workspace_skill_dir
                 if not skill_dir.is_dir() or skill_dir.name.startswith((".", "_")):
                     continue
+                runtime_skill_dir = _active_runtime_skill_root(skills_root, skill_dir.name)
+                if runtime_skill_dir is not None:
+                    skill_dir = runtime_skill_dir
                 skill_yaml = skill_dir / "skill.yaml"
                 if skill_yaml.exists():
                     try:
                         st = skill_yaml.stat()
-                        state = (int(st.st_mtime_ns), int(st.st_size), float(st.st_ctime_ns))
+                        state = (str(skill_dir.resolve()), int(st.st_mtime_ns), int(st.st_size), float(st.st_ctime_ns))
                     except Exception:
-                        state = (-1, -1, -1.0)
+                        state = (str(skill_dir), -1, -1, -1.0)
                 else:
-                    state = (0, 0, 0.0)
+                    state = (str(skill_dir), 0, 0, 0.0)
 
-                prev_state = self._manifest_state.get(skill_dir.name)
-                prev_spec = self._specs.get(skill_dir.name)
+                prev_state = self._manifest_state.get(workspace_skill_dir.name)
+                prev_spec = self._specs.get(workspace_skill_dir.name)
                 if not force and prev_spec is not None and prev_state == state:
-                    next_specs[skill_dir.name] = prev_spec
-                    next_state[skill_dir.name] = state
+                    next_specs[workspace_skill_dir.name] = prev_spec
+                    next_state[workspace_skill_dir.name] = state
                     continue
 
                 manifest = _read_skill_manifest(skill_dir)
-                spec = _resolve_service_spec(skill_dir.name, skill_dir, manifest)
+                spec = _resolve_service_spec(workspace_skill_dir.name, skill_dir, manifest)
                 if spec:
-                    next_specs[skill_dir.name] = spec
-                next_state[skill_dir.name] = state
+                    next_specs[workspace_skill_dir.name] = spec
+                next_state[workspace_skill_dir.name] = state
 
             self._specs = next_specs
             self._manifest_state = next_state
@@ -298,6 +377,9 @@ class ServiceSkillSupervisor:
             "base_url": spec.base_url,
             "host": spec.host,
             "port": spec.port,
+            "skill_root": str(spec.skill_root),
+            "workdir": str(spec.workdir),
+            "command": spec.command,
             "env_mode": spec.env_mode,
             "python_selector": spec.python_selector,
             "venv_dir": str(spec.venv_dir) if spec.venv_dir else None,
@@ -363,6 +445,7 @@ class ServiceSkillSupervisor:
                     pass
 
         self._procs.pop(name, None)
+        self._proc_specs.pop(name, None)
         emit(self._ctx.bus, "skill.service.stopped", {"skill": name, "pid": proc.pid}, source="skill.service")
 
     async def restart(self, name: str) -> None:
@@ -418,8 +501,11 @@ class ServiceSkillSupervisor:
 
     async def ensure_started(self, name: str, spec: ServiceSpec, *, force: bool) -> None:
         proc = self._procs.get(name)
+        spec_key = self._spec_key(spec)
         if proc and proc.poll() is None:
-            return
+            if self._proc_specs.get(name) == spec_key:
+                return
+            await self.stop(name, timeout_s=3.0)
 
         now = time.time()
         cooloff_until = float(self._cooloff_until.get(name) or 0.0)
@@ -432,11 +518,15 @@ class ServiceSkillSupervisor:
         env["ADAOS_SERVICE_HOST"] = spec.host
         env["ADAOS_SERVICE_PORT"] = str(spec.port)
         env.setdefault("ADAOS_BASE_DIR", str(_path_value(self._ctx.paths.base_dir())))
-        env.setdefault("ADAOS_PACKAGE_DIR", str(_path_value(self._ctx.paths.package_path())))
-        env.setdefault("ADAOS_REPO_ROOT", str(_path_value(self._ctx.paths.repo_root())))
-        env.setdefault("ADAOS_MODELS_DIR", str(_path_value(self._ctx.paths.models_dir())))
-        env.setdefault("ADAOS_STATE_DIR", str(_path_value(self._ctx.paths.state_dir())))
-        env.setdefault("ADAOS_LOGS_DIR", str(_path_value(self._ctx.paths.logs_dir())))
+        for env_name, path_value in (
+            ("ADAOS_PACKAGE_DIR", _optional_path_value(self._ctx.paths, "package_path", "package_dir")),
+            ("ADAOS_REPO_ROOT", _optional_path_value(self._ctx.paths, "repo_root")),
+            ("ADAOS_MODELS_DIR", _optional_path_value(self._ctx.paths, "models_dir")),
+            ("ADAOS_STATE_DIR", _optional_path_value(self._ctx.paths, "state_dir")),
+            ("ADAOS_LOGS_DIR", _optional_path_value(self._ctx.paths, "logs_dir")),
+        ):
+            if path_value is not None:
+                env.setdefault(env_name, str(path_value))
         env["PYTHONPATH"] = os.pathsep.join([str(spec.skill_root), env.get("PYTHONPATH", "")]).strip(os.pathsep)
 
         cmd = self._build_command(python, spec.command)
@@ -455,6 +545,7 @@ class ServiceSkillSupervisor:
                 stderr=logf,
             )
         self._procs[name] = proc
+        self._proc_specs[name] = spec_key
         emit(self._ctx.bus, "skill.service.started", {"skill": name, "pid": proc.pid}, source="skill.service")
 
         await self._wait_ready(spec)
@@ -467,6 +558,7 @@ class ServiceSkillSupervisor:
             except Exception:
                 pass
             self._procs.pop(name, None)
+            self._proc_specs.pop(name, None)
         if self._task:
             try:
                 self._task.cancel()
@@ -716,17 +808,38 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             return Path(sys.executable)
 
         venv_dir = spec.venv_dir or (self._service_state_dir(spec.skill) / "venv")
-        python = venv_dir / "Scripts" / "python.exe"
+        python = self._venv_python(venv_dir)
         if python.exists():
             return python
 
         selector = spec.python_selector or "3.11"
         venv_dir.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["py", f"-{selector}", "-m", "venv", str(venv_dir)], check=True)
+        if os.name == "nt":
+            cmd = ["py", f"-{selector}", "-m", "venv", str(venv_dir)]
+        else:
+            cmd = [sys.executable, "-m", "venv", str(venv_dir)]
+        subprocess.run(cmd, check=True)
 
-        python = venv_dir / "Scripts" / "python.exe"
+        python = self._venv_python(venv_dir)
         self._install_deps(python, spec)
         return python
+
+    @staticmethod
+    def _venv_python(venv_dir: Path) -> Path:
+        return venv_dir / "Scripts" / "python.exe" if os.name == "nt" else venv_dir / "bin" / "python"
+
+    @staticmethod
+    def _spec_key(spec: ServiceSpec) -> tuple[Any, ...]:
+        return (
+            str(spec.skill_root.resolve()),
+            str(spec.workdir.resolve()),
+            str(spec.venv_dir.resolve()) if spec.venv_dir else "",
+            spec.host,
+            spec.port,
+            tuple(spec.command),
+            str(spec.requirements_file.resolve()) if spec.requirements_file else "",
+            tuple(spec.dependencies),
+        )
 
     def _install_deps(self, python: Path, spec: ServiceSpec) -> None:
         base = [str(python), "-m", "pip", "install", "--upgrade", "--disable-pip-version-check"]

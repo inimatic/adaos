@@ -56,6 +56,33 @@ async def test_rasa_service_bridge_reuses_healthy_service_and_emits_detected(mon
 
 
 @pytest.mark.anyio
+async def test_rasa_service_bridge_disabled_emits_not_obtained(monkeypatch):
+    from adaos.services.nlu import rasa_service_bridge as bridge
+
+    emitted = []
+    monkeypatch.setenv("ADAOS_NLU_RASA", "0")
+    monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(
+        bridge,
+        "get_service_supervisor",
+        lambda: (_ for _ in ()).throw(AssertionError("disabled Rasa must not touch supervisor")),
+    )
+    monkeypatch.setattr(bridge, "bus_emit", lambda _bus, event, payload, source=None: emitted.append((event, payload, source)))
+
+    await bridge._parse_and_emit(text="open modal", webspace_id="ws1", request_id="rid1")
+
+    assert emitted[0][0] == "nlu.trace.stage"
+    assert emitted[0][1]["stage"] == "rasa"
+    assert emitted[0][1]["status"] == "skipped"
+    assert emitted[0][1]["reason"] == "rasa_disabled"
+    assert emitted[-1] == (
+        "nlp.intent.not_obtained",
+        {"reason": "rasa_disabled", "text": "open modal", "via": "rasa", "webspace_id": "ws1", "request_id": "rid1"},
+        "nlu.rasa",
+    )
+
+
+@pytest.mark.anyio
 async def test_rasa_training_bridge_records_successful_training(monkeypatch, tmp_path):
     from adaos.services.nlu import rasa_training_bridge as bridge
 
@@ -104,3 +131,20 @@ async def test_rasa_training_bridge_records_successful_training(monkeypatch, tmp
             },
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_rasa_training_bridge_disabled_skips_without_supervisor(monkeypatch):
+    from adaos.services.nlu import rasa_training_bridge as bridge
+
+    monkeypatch.setenv("ADAOS_NLU_RASA", "0")
+    monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace()))
+    monkeypatch.setattr(
+        bridge,
+        "get_service_supervisor",
+        lambda: (_ for _ in ()).throw(AssertionError("disabled Rasa must not touch supervisor")),
+    )
+
+    result = await bridge.train_rasa_nlu_once(reason="manual")
+
+    assert result == {"ok": False, "skipped": True, "reason": "rasa_disabled"}
