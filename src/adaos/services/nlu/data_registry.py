@@ -9,6 +9,11 @@ import yaml
 from adaos.services.agent_context import AgentContext
 from adaos.services.interpreter.workspace import InterpreterWorkspace, IntentMapping
 from adaos.services.scenarios import loader as scenarios_loader
+from adaos.services.nlu.baseline_content import (
+    DEFAULT_DESKTOP_SCENARIO_ID,
+    default_desktop_nlu,
+    merge_default_desktop_nlu,
+)
 
 _log = logging.getLogger("adaos.nlu.registry")
 
@@ -85,17 +90,43 @@ def _sync_skill_nlu_metadata(ctx: AgentContext) -> int:
     return count
 
 
+def _intent_mappings_from_nlu(scenario_id: str, nlu_section: Mapping[str, Any]) -> List[IntentMapping]:
+    mappings: List[IntentMapping] = []
+    intents = nlu_section.get("intents") or {}
+    if not isinstance(intents, dict):
+        return mappings
+    for intent_id, spec in intents.items():
+        if not isinstance(intent_id, str) or not isinstance(spec, dict):
+            continue
+        examples = spec.get("examples") or []
+        if not isinstance(examples, list):
+            examples = []
+        mappings.append(
+            IntentMapping(
+                intent=intent_id,
+                description=spec.get("description"),
+                skill=None,
+                tool=None,
+                scenario=scenario_id,
+                examples=[str(e) for e in examples if isinstance(e, str) and e.strip()],
+            )
+        )
+    return mappings
+
+
 def _collect_scenario_intents(ctx: AgentContext) -> List[IntentMapping]:
     mappings: List[IntentMapping] = []
+    seen_scenarios: set[str] = set()
     scenarios_root = Path(ctx.paths.scenarios_dir())
     try:
         children = [p for p in scenarios_root.iterdir() if p.is_dir()]
     except Exception:  # pragma: no cover
         _log.warning("failed to list scenarios_dir=%s", scenarios_root, exc_info=True)
-        return mappings
+        return _intent_mappings_from_nlu(DEFAULT_DESKTOP_SCENARIO_ID, default_desktop_nlu())
 
     for child in children:
         scenario_id = child.name
+        seen_scenarios.add(scenario_id)
         try:
             content = scenarios_loader.read_content(scenario_id)
         except FileNotFoundError:
@@ -106,25 +137,11 @@ def _collect_scenario_intents(ctx: AgentContext) -> List[IntentMapping]:
         if not isinstance(content, dict):
             continue
         nlu_section = content.get("nlu") or {}
-        intents = nlu_section.get("intents") or {}
-        if not isinstance(intents, dict):
-            continue
-        for intent_id, spec in intents.items():
-            if not isinstance(intent_id, str) or not isinstance(spec, dict):
-                continue
-            examples = spec.get("examples") or []
-            if not isinstance(examples, list):
-                examples = []
-            mappings.append(
-                IntentMapping(
-                    intent=intent_id,
-                    description=spec.get("description"),
-                    skill=None,
-                    tool=None,
-                    scenario=scenario_id,
-                    examples=[str(e) for e in examples if isinstance(e, str) and e.strip()],
-                )
-            )
+        nlu_section = merge_default_desktop_nlu(scenario_id, nlu_section if isinstance(nlu_section, Mapping) else {})
+        mappings.extend(_intent_mappings_from_nlu(scenario_id, nlu_section))
+
+    if DEFAULT_DESKTOP_SCENARIO_ID not in seen_scenarios:
+        mappings.extend(_intent_mappings_from_nlu(DEFAULT_DESKTOP_SCENARIO_ID, default_desktop_nlu()))
     return mappings
 
 

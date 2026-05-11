@@ -11,6 +11,7 @@ from adaos.services.eventbus import emit as bus_emit
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
+from adaos.services.nlu.baseline_content import merge_default_desktop_nlu
 
 _log = logging.getLogger("adaos.nlu.dispatcher")
 _CONFIDENCE_MIN = float(os.getenv("ADAOS_NLU_CONFIDENCE_MIN", "0.7") or "0.7")
@@ -66,15 +67,15 @@ def _load_scenario_nlu(scenario_id: str) -> Dict[str, Any]:
         content = scenarios_loader.read_content(scenario_id)
     except FileNotFoundError:
         _log.debug("scenario '%s' has no scenario.json content for NLU", scenario_id)
-        return {}
+        return merge_default_desktop_nlu(scenario_id, {})
     except Exception:
         _log.warning("failed to read scenario.json for '%s' (nlu)", scenario_id, exc_info=True)
-        return {}
+        return merge_default_desktop_nlu(scenario_id, {})
 
     if not isinstance(content, dict):
-        return {}
+        return merge_default_desktop_nlu(scenario_id, {})
     nlu = content.get("nlu") or {}
-    return nlu if isinstance(nlu, dict) else {}
+    return merge_default_desktop_nlu(scenario_id, nlu if isinstance(nlu, Mapping) else {})
 
 
 def _emit_not_obtained(
