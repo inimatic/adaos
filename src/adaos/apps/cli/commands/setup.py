@@ -110,6 +110,18 @@ def _bootstrap_rasa_nlu_after_install(installed: dict, *, enabled: bool, train: 
         return
 
     try:
+        target = ensure_rasa_service_skill_installed()
+        if target is None:
+            installed["nlu"] = {
+                "rasa": {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "rasa_service_skill_not_installed",
+                }
+            }
+            installed["warnings"].append("rasa nlu service-skill was not installed")
+            return
+
         if train:
             result = asyncio.run(train_rasa_nlu_once(reason="post-install", note="rasa-post-install"))
             installed["nlu"] = {"rasa": result}
@@ -117,7 +129,6 @@ def _bootstrap_rasa_nlu_after_install(installed: dict, *, enabled: bool, train: 
                 installed["warnings"].append(f"rasa nlu train: {result.get('reason') or 'failed'}")
             return
 
-        target = ensure_rasa_service_skill_installed()
         installed["nlu"] = {
             "rasa": {
                 "ok": target is not None,
@@ -125,8 +136,6 @@ def _bootstrap_rasa_nlu_after_install(installed: dict, *, enabled: bool, train: 
                 "trained": False,
             }
         }
-        if target is None:
-            installed["warnings"].append("rasa nlu service-skill was not installed")
     except Exception as exc:
         installed.setdefault("nlu", {})["rasa"] = {"ok": False, "error": str(exc)}
         installed["warnings"].append(f"rasa nlu bootstrap: {exc}")

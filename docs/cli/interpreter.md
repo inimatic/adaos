@@ -13,6 +13,10 @@ Useful switches:
 - `ADAOS_NLU_RASA=0` disables Rasa in runtime.
 - `ADAOS_NLU_AUTOTRAIN=1` enables event-driven retraining after scenario/skill changes. Keep it off in production unless noisy model churn is acceptable.
 
+`adaos api serve` does not install Rasa or prepare a new A/B slot on demand. It only starts service skills that the
+service supervisor can already discover from the active runtime slot or workspace source. If Rasa is missing, the NLU
+bridge falls back and the operator should run `adaos install` or the managed update flow intentionally.
+
 ## Commands
 
 ```bash

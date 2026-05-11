@@ -68,6 +68,13 @@ Install behavior:
 - `ADAOS_RASA_PORT_PATH` can point to a local `rasa-port` checkout.
 - `ADAOS_NLU_RASA=0` disables the Rasa stage at runtime.
 
+Runtime behavior:
+
+- `adaos api serve` does not prepare new Rasa skill slots on demand.
+- Rasa parse/train bridges only discover and start an already installed service-skill through `ServiceSkillSupervisor`.
+- If Rasa is missing, the bridge falls back with `rasa_base_url_unresolved` instead of mutating slot A/B.
+- Creating or switching slot A/B belongs to install/update/supervisor rollout flows, not to the hot NLU parse path.
+
 The hub supervises:
 
 - health checks

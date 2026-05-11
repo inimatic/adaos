@@ -85,6 +85,7 @@ adaos api serve --host 127.0.0.1 --port 8779
 
 - When you pass an explicit port to `adaos api serve`, AdaOS persists it as `local_api_url` in `.adaos/node.yaml`, and later `adaos api serve` runs reuse it.
 - `adaos api serve` is a direct development runtime and does not run supervisor-managed slot cutover logic.
+- `adaos api serve` also must not prepare a new Rasa skill slot on first NLU use; run `adaos install` first when Rasa NLU should be available.
 
 In a second terminal:
 
