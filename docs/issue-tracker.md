@@ -6,6 +6,89 @@ and delivery work.
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 
+## Modal Projection and Runtime Recovery Integrity
+
+### Goal
+
+Keep desktop and modal data contracts explicit while recovering from missing
+runtime projections. A widget that declares `kind: y` must render from Yjs; a
+widget that declares `kind: stream` must render from stream data. Recovery may
+request refresh/project work, but it must not silently substitute direct
+skill/API payloads and hide broken projection paths.
+
+### Current Status
+
+Snapshot date: 2026-05-11.
+
+Recent local debugging found several related issues:
+
+- Modal data for `Subnet Environment`, `Infra Access`, `Infrastructure State`,
+  and `Browsers` could appear fixed by direct client fallbacks while the real
+  projection/materialization contract was still broken.
+- The full Python suite currently has a collection-order hazard around test
+  modules that stub `sys.modules["nats"]`; fixing that locally exposes a
+  separate set of pre-existing runtime API expectation failures that need their
+  own cleanup pass.
+- Workspace skill changes are delivered through `adaos skill push`, while root
+  git commits track client/core/tests; CI needs a clearer way to prove the two
+  layers remain compatible.
+
+### Tasks
+
+#### MRI-001: Keep Yjs and stream data-source recovery contract-first
+
+Status: in progress.
+
+Actions:
+
+- [x] Stop direct client fallback payloads from rendering Yjs modal data for
+  the operational projections currently under debug.
+- [x] Treat empty browser arrays as valid live Yjs data, not as missing data.
+- [ ] Move the temporary client-side recovery registry toward declarative
+  schema metadata such as `dataSource.recovery` / `projection.refresh`.
+- [ ] Audit modal schemas and ensure each data source uses `kind: y` or
+  `kind: stream` intentionally, with no implicit source swapping.
+
+#### MRI-002: Make workspace skill publishing verifiable
+
+Status: open.
+
+Actions:
+
+- [ ] Add a lightweight verification command or test fixture that confirms the
+  pushed skill version used by tests contains the expected projection handlers.
+- [ ] Document the expected workflow: edit workspace skill, run targeted tests,
+  `adaos skill push <name> -m ...`, then commit root/client changes.
+- [ ] Avoid root tests whose only passing implementation lives in ignored
+  `.adaos/workspace` state unless the skill push/version is part of the test
+  setup.
+
+#### MRI-003: Restore full pytest suite health after nats test shadowing
+
+Status: open.
+
+Actions:
+
+- [ ] Replace broad `sys.modules["nats"]` stubs with helpers that prefer the
+  installed `nats-py` package and only stub when unavailable.
+- [ ] After collection is stable, triage the currently exposed runtime API
+  expectation failures separately from modal/projection work.
+- [ ] Add a regression that `tests/test_nats_ws_transport.py` can import
+  `nats.errors` regardless of test collection order.
+
+#### MRI-004: Make weather provider behavior explicit
+
+Status: in progress.
+
+Actions:
+
+- [x] Stop showing raw runtime i18n keys when a weather provider returns an
+  error.
+- [x] Migrate the legacy OpenWeatherMap endpoint to the no-key Open-Meteo path
+  for local development fallback.
+- [ ] Document provider selection and API-key behavior so `401` is actionable
+  instead of looking like a modal rendering bug.
+
 ## Hub Memory Growth Under Snapshot and Webspace Fanout
 
 ### Goal
