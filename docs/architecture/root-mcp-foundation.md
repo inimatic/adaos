@@ -164,11 +164,28 @@ Candidate planes include:
 - `AdaOSDevPlane`
 - `InfraOpsPlane`
 - `ProfileOpsPlane`
+- `NLUAuthoringPlane`
 
 The key rule is:
 
 - planes may evolve quickly
 - foundation contracts should evolve slowly
+
+### NLUAuthoringPlane
+
+`NLUAuthoringPlane` is the target MCP plane for NLU Teacher workflows.
+It should not execute arbitrary hub internals directly. It should expose governed descriptors and bounded authoring operations that help an LLM
+decide which intent, skill, tool, action, slots, and NLU template types apply to a user phrase.
+
+Initial capability profile:
+
+- `NLUTeacherRead`: inspect pipeline, desktop registry lookups, skill/tool descriptors, and training targets.
+- `NLUTeacherDryRun`: run phrase checks and read trace/ranking/entities/action preview.
+- `NLUTeacherAuthor`: propose and save curated examples/templates into approved scenario or skill training content.
+
+The web MCP Server modal should issue a target-scoped token/session lease for this profile. Root remains the policy and routing point:
+the browser receives a bearer token, root resolves it to subnet/zone/target/capabilities, and NLU authoring calls are routed only through
+published Root MCP contracts.
 
 ## Root MCP Foundation Model
 
