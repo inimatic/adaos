@@ -15,6 +15,7 @@ if "ypy_websocket" not in sys.modules:
     sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
     sys.modules["ypy_websocket.ystore"] = ystore_mod
 
+from adaos.services.router import service as router_service_module
 from adaos.services.router.service import RouterService
 
 
@@ -139,4 +140,31 @@ async def test_io_out_stream_publish_emits_node_qualified_topics_when_node_owned
     await bus.wait_for_idle(timeout=1.0)
     assert "webio.stream.default.nodes.member-01.telemetry_feed" in seen
     assert "webio.stream.nodes.member-01.telemetry_feed" in seen
+
+
+async def test_webio_stream_guard_denied_owner_does_not_crash(monkeypatch) -> None:
+    import adaos.services.yjs.owner_guard as owner_guard
+
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_WARN_BYTES", "8")
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_BLOCK_BYTES", "16")
+    monkeypatch.setattr(
+        owner_guard,
+        "admit_owner_work",
+        lambda **kwargs: {
+            "allowed": False,
+            "owner": kwargs["owner"],
+            "reason": "browser_stream_payload_blocked",
+            "retry_after_s": 45.0,
+        },
+    )
+
+    assert (
+        router_service_module._webio_stream_admit(
+            webspace_id="desktop",
+            receiver="infrascope.inspector.local",
+            owner="skill:infrascope_skill",
+            payload_bytes=2048,
+        )
+        is False
+    )
 

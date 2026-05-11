@@ -34,6 +34,9 @@ from adaos.skills.runtime_runner import execute_tool
 from adaos.sdk.io.context import io_meta
 
 
+_log = logging.getLogger("adaos.router.service")
+
+
 def _webio_stream_guard_enabled() -> bool:
     return str(os.getenv("ADAOS_WEBIO_STREAM_GUARD_ENABLE") or "1").strip().lower() in {"1", "true", "yes", "on"}
 

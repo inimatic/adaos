@@ -228,7 +228,7 @@ def test_infrascope_profileops_panel_uses_root_mcp_contracts(monkeypatch):
     monkeypatch.setattr(mod, "_profileops_client", lambda: _FakeProfileOpsClient())
 
     panel = mod.get_profileops_panel()
-    snapshot = mod.get_snapshot()
+    snapshot = mod._snapshot()
 
     assert panel["available"] is True
     assert panel["source"] == "root_mcp_profileops"
@@ -317,14 +317,17 @@ def test_infrascope_skill_projects_snapshot_only_when_payload_changes(monkeypatc
         SimpleNamespace(set=lambda slot, value, webspace_id=None: writes.append((slot, webspace_id, value))),
     )
 
+    full_snapshot = mod._snapshot(webspace_id="ws-1")
     snapshot = mod.get_snapshot(webspace_id="ws-1")
     first = mod.refresh_snapshot(webspace_id="ws-1")
     second = mod.refresh_snapshot(webspace_id="ws-1")
 
-    assert snapshot["inventory"]["browsers"][0]["object_id"] == "browser:dev-1"
+    assert full_snapshot["inventory"]["browsers"][0]["object_id"] == "browser:dev-1"
     assert snapshot["inspectors"]["local"]["object_id"] == "hub:local"
-    assert snapshot["inspectors"]["browser:dev-1"]["object"]["kind"] == "browser_session"
-    assert snapshot["inspectors"]["local"]["subnet_planning"] == {"summary": {"node_total": 1}}
+    assert "subnet_planning" not in snapshot["inspectors"]["local"]
+    assert full_snapshot["inspectors"]["local"]["subnet_planning"] == {"summary": {"node_total": 1}}
+    browser_stream_payload = mod._stream_payload_for_receiver(full_snapshot, "infrascope.inspector.browser:dev-1")
+    assert browser_stream_payload["object"]["kind"] == "browser_session"
     assert first["projected"] == 1
     assert second["projected"] == 0
     assert len(writes) == 1
@@ -435,10 +438,69 @@ def test_infrascope_stream_snapshot_request_publishes_requested_receiver(monkeyp
     assert published == [
         (
             "infrascope.inventory.members",
-            [{"id": "member-1"}],
+            [
+                {
+                    "id": "member-1",
+                    "object_id": "member-1",
+                    "details_receiver": "infrascope.inspector.member-1",
+                    "has_details": True,
+                }
+            ],
             {"webspace_id": "ws-1"},
         )
     ]
+
+
+def test_infrascope_inspector_stream_uses_compact_summary_payload(monkeypatch):
+    mod = _load_infrascope_module()
+
+    payload = mod._stream_payload_for_receiver(
+        {
+            "inspectors": {
+                "local": {
+                    "label": "hub",
+                    "value": "warning",
+                    "subtitle": "Local hub",
+                    "description": "summary only",
+                    "object_id": "local",
+                    "object_title": "Local hub",
+                    "object": {
+                        "id": "local",
+                        "kind": "hub",
+                        "title": "Local hub",
+                        "status": "warning",
+                        "raw": "large-object-payload",
+                    },
+                    "topology": {"edges": [{"from": "local", "to": "member"}]},
+                    "task_packet": {"context": {"very": "large"}},
+                    "subnet_planning": {"details": ["large"]},
+                    "actions": [{"id": "restart"}],
+                }
+            }
+        },
+        "infrascope.inspector.local",
+    )
+
+    assert payload["object_id"] == "local"
+    assert payload["object"]["kind"] == "hub"
+    assert "topology" not in payload
+    assert "task_packet" not in payload
+    assert "subnet_planning" not in payload
+    assert "actions" not in payload
+
+
+def test_infrascope_large_detail_stream_payload_is_truncated(monkeypatch):
+    mod = _load_infrascope_module()
+
+    monkeypatch.setenv("INFRASCOPE_STREAM_PAYLOAD_MAX_BYTES", "8192")
+
+    payload = mod._fit_stream_payload(
+        "infrascope.inspector_field.task_packet.local",
+        {"blob": "x" * 20000},
+    )
+
+    assert payload["status"] == "truncated"
+    assert "too large" in payload["warning"]
 
 
 def test_infrascope_stream_snapshot_requests_coalesce_initial_snapshot(monkeypatch):
@@ -518,7 +580,7 @@ def test_infrascope_adds_skill_migration_operation_row(monkeypatch):
         },
     )
 
-    snapshot = mod.get_snapshot()
+    snapshot = mod._snapshot()
 
     rows = snapshot["operations"]["items"]
     assert rows
@@ -554,7 +616,7 @@ def test_infrascope_adds_skill_rollback_operation_row(monkeypatch):
         },
     )
 
-    snapshot = mod.get_snapshot()
+    snapshot = mod._snapshot()
 
     rows = snapshot["operations"]["items"]
     assert rows
@@ -600,7 +662,7 @@ def test_infrascope_adds_skill_post_commit_operation_row(monkeypatch):
         },
     )
 
-    snapshot = mod.get_snapshot()
+    snapshot = mod._snapshot()
 
     rows = snapshot["operations"]["items"]
     assert rows
@@ -646,7 +708,7 @@ def test_infrascope_adds_existing_quarantine_to_post_commit_row(monkeypatch):
         },
     )
 
-    snapshot = mod.get_snapshot()
+    snapshot = mod._snapshot()
 
     rows = snapshot["operations"]["items"]
     assert rows
@@ -711,16 +773,17 @@ def test_infrascope_snapshot_keeps_partial_yjs_payload_when_one_inspector_fails(
 
     monkeypatch.setattr(mod, "get_object_inspector", _inspector)
 
-    snapshot = mod.get_snapshot(webspace_id="ws-1")
+    snapshot = mod._snapshot(webspace_id="ws-1")
 
     assert snapshot["summary"]["value"] == "warning"
     assert snapshot["inventory"]["all"]
-    assert snapshot["inspectors"]["member-1"]["warning"] == "FileNotFoundError: missing member artifact"
+    member_payload = mod._inspector_payload_from_snapshot(snapshot, "member-1")
+    assert member_payload["warning"] == "FileNotFoundError: missing member artifact"
     assert snapshot["summary"]["object_id"] == "local"
-    assert snapshot["summary"]["warning"] == "inspector:member-1: FileNotFoundError: missing member artifact"
-    assert snapshot["errors"] == ["inspector:member-1: FileNotFoundError: missing member artifact"]
-    assert snapshot["meta"]["partial"] is True
-    assert snapshot["meta"]["error_total"] == 1
+    assert "warning" not in snapshot["summary"]
+    assert "errors" not in snapshot
+    assert snapshot["meta"]["partial"] is False
+    assert snapshot["meta"]["error_total"] == 0
 
 
 def test_infrascope_snapshot_reuses_last_good_snapshot_when_refresh_fails(monkeypatch):
@@ -755,7 +818,7 @@ def test_infrascope_snapshot_reuses_last_good_snapshot_when_refresh_fails(monkey
         },
     )
 
-    first = mod.get_snapshot(webspace_id="ws-1")
+    first = mod._snapshot_or_fallback(webspace_id="ws-1")
     assert first["summary"]["value"] == "online"
 
     def _raise_snapshot(*args, **kwargs):
@@ -763,7 +826,7 @@ def test_infrascope_snapshot_reuses_last_good_snapshot_when_refresh_fails(monkey
 
     monkeypatch.setattr(mod, "_snapshot", _raise_snapshot)
 
-    second = mod.get_snapshot(webspace_id="ws-1")
+    second = mod._snapshot_or_fallback(webspace_id="ws-1")
 
     assert second["summary"]["value"] == "online"
     assert second["summary"]["warning"] == "FileNotFoundError: missing control-plane file"

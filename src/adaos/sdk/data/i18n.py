@@ -51,7 +51,21 @@ class I18n:
         cur = get_current_skill()
         skill_path: Optional[Path] = getattr(cur, "path", None) if cur else None
         skill_id: Optional[str] = getattr(cur, "name", None) if cur else None
-        scope = "skill" if key.startswith("prep.") else "global"
+        # Skill runtimes keep both prep-time and runtime-facing messages in
+        # their own i18n bundles. Global translations remain the default for
+        # framework/client keys.
+        if key.startswith(("prep.", "runtime.")) and (skill_path or skill_id):
+            text = svc.translate(
+                key,
+                lang=self.lang,
+                params=kwargs,
+                skill_path=skill_path,
+                skill_id=skill_id,
+                scope="skill",
+            )
+            if text != key:
+                return text
+        scope = "global"
         return svc.translate(
             key,
             lang=self.lang,
