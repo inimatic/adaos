@@ -41,6 +41,11 @@ class _FakeBus:
         self.events.append(event)
 
 
+class _FailingBus:
+    def publish(self, _event) -> None:
+        raise RuntimeError("bus publish failed")
+
+
 class _FakeCtx:
     def __init__(self, bus) -> None:
         self.bus = bus
@@ -210,6 +215,76 @@ def test_update_member_snapshot_event_payload_carries_connected_to_subnet_alias(
     changed_event = next(event for event in fake_bus.events if event.type == "subnet.member.snapshot.changed")
     assert changed_event.payload["snapshot_connected_to_subnet"] is False
     assert changed_event.payload["snapshot_connected_to_hub"] is None
+
+
+def test_update_member_snapshot_logs_publish_failure(monkeypatch) -> None:
+    fake_directory = _FakeDirectory()
+    warnings: list[tuple[str, tuple, dict]] = []
+
+    def _capture_warning(message: str, *args, **kwargs) -> None:
+        warnings.append((message, args, kwargs))
+
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(_FailingBus()))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(mod._log, "warning", _capture_warning)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+
+    result = asyncio.run(
+        manager.update_member_snapshot(
+            "member-1",
+            snapshot={
+                "captured_at": 100.0,
+                "node_id": "member-1",
+                "node_state": "ready",
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert warnings
+    assert warnings[0][0] == "failed to publish subnet link event type=%s node_id=%s"
+    assert warnings[0][1] == ("subnet.member.snapshot.changed", "member-1")
+    assert warnings[0][2].get("exc_info") is True
+
+
+def test_update_member_snapshot_logs_directory_failure(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    warnings: list[tuple[str, tuple, dict]] = []
+
+    def _capture_warning(message: str, *args, **kwargs) -> None:
+        warnings.append((message, args, kwargs))
+
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr(mod._log, "warning", _capture_warning)
+
+    class _FailingDirectory:
+        def on_member_runtime_snapshot(self, _node_id: str, _snapshot: dict) -> None:
+            raise RuntimeError("directory unavailable")
+
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: _FailingDirectory())
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+
+    result = asyncio.run(
+        manager.update_member_snapshot(
+            "member-1",
+            snapshot={
+                "captured_at": 100.0,
+                "node_id": "member-1",
+                "node_state": "ready",
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    assert warnings
+    assert warnings[0][0] == "failed to update subnet directory from member snapshot node_id=%s"
+    assert warnings[0][1] == ("member-1",)
+    assert warnings[0][2].get("exc_info") is True
 
 
 def test_broadcast_event_sends_node_targeted_payload_only_to_matching_member() -> None:
