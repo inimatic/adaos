@@ -12,7 +12,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.interpreter.workspace import InterpreterWorkspace
 from adaos.services.nlu.data_registry import sync_from_scenarios_and_skills
 from adaos.services.skill.service_supervisor import get_service_supervisor
-from .rasa_skill_installer import ensure_rasa_service_skill_installed, env_flag, is_rasa_nlu_enabled
+from .rasa_skill_installer import env_flag, is_rasa_nlu_enabled
 
 _log = logging.getLogger("adaos.nlu.rasa.train")
 _START_LOCK = asyncio.Lock()
@@ -50,17 +50,17 @@ async def _ensure_rasa_service_base_url(supervisor) -> str | None:
     if not is_rasa_nlu_enabled():
         return None
 
-    installed = ensure_rasa_service_skill_installed()
-    if installed is None:
-        return None
-
     await supervisor.refresh_discovered(force=True)
     base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
+    if not base_url:
+        return None
     if base_url and await asyncio.to_thread(_service_health_ok, base_url):
         return base_url
 
     async with _START_LOCK:
         base_url = supervisor.resolve_base_url("rasa_nlu_service_skill")
+        if not base_url:
+            return None
         if base_url and await asyncio.to_thread(_service_health_ok, base_url):
             return base_url
         await supervisor.start("rasa_nlu_service_skill")

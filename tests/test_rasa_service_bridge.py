@@ -1,4 +1,3 @@
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +21,6 @@ async def test_rasa_service_bridge_reuses_healthy_service_and_emits_detected(mon
 
     monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(bus=object()))
     monkeypatch.setattr(bridge, "get_service_supervisor", lambda: Supervisor())
-    monkeypatch.setattr(bridge, "ensure_rasa_service_skill_installed", lambda: Path("rasa_nlu_service_skill"))
     monkeypatch.setattr(bridge, "_service_health_ok", lambda base_url: True)
     monkeypatch.setattr(
         bridge,
@@ -53,6 +51,27 @@ async def test_rasa_service_bridge_reuses_healthy_service_and_emits_detected(mon
     assert payload["webspace_id"] == "ws1"
     assert payload["request_id"] == "rid1"
     assert payload["via"] == "rasa"
+
+
+@pytest.mark.anyio
+async def test_rasa_service_bridge_does_not_install_runtime_slots(monkeypatch):
+    from adaos.services.nlu import rasa_service_bridge as bridge
+
+    class Supervisor:
+        async def refresh_discovered(self, force=False):
+            return None
+
+        async def start(self, name):
+            raise AssertionError("missing Rasa service must not be installed or started from parse path")
+
+        def resolve_base_url(self, name):
+            return None
+
+    monkeypatch.setattr(bridge, "get_service_supervisor", lambda: Supervisor())
+
+    result = await bridge.parse_text("open modal", webspace_id="ws1", request_id="rid1")
+
+    assert result == {"ok": False, "reason": "rasa_base_url_unresolved", "via": "rasa"}
 
 
 @pytest.mark.anyio
@@ -109,7 +128,6 @@ async def test_rasa_training_bridge_records_successful_training(monkeypatch, tmp
     monkeypatch.setenv("ADAOS_NLU_AUTOTRAIN", "1")
     monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace()))
     monkeypatch.setattr(bridge, "get_service_supervisor", lambda: Supervisor())
-    monkeypatch.setattr(bridge, "ensure_rasa_service_skill_installed", lambda: Path("rasa_nlu_service_skill"))
     monkeypatch.setattr(bridge, "_service_health_ok", lambda base_url: True)
     monkeypatch.setattr(bridge, "_train_sync", lambda ctx: {"project_dir": str(tmp_path / "project"), "out_dir": str(tmp_path / "models")})
     monkeypatch.setattr(
@@ -131,6 +149,28 @@ async def test_rasa_training_bridge_records_successful_training(monkeypatch, tmp
             },
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_rasa_training_bridge_does_not_install_runtime_slots(monkeypatch):
+    from adaos.services.nlu import rasa_training_bridge as bridge
+
+    class Supervisor:
+        async def refresh_discovered(self, force=False):
+            return None
+
+        async def start(self, name):
+            raise AssertionError("missing Rasa service must not be installed or started from train path")
+
+        def resolve_base_url(self, name):
+            return None
+
+    monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace()))
+    monkeypatch.setattr(bridge, "get_service_supervisor", lambda: Supervisor())
+
+    result = await bridge.train_rasa_nlu_once(reason="manual")
+
+    assert result == {"ok": False, "skipped": True, "reason": "rasa_base_url_unresolved"}
 
 
 @pytest.mark.anyio
