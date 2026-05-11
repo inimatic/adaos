@@ -430,6 +430,9 @@ Status note:
 - `webui.semantic.v0` draft ABI is published
 - semantic desktop and modal surfaces already pass through a runtime
   compatibility bridge
+- browser renderers now consume a shared layout render plan, so `role`
+  remains semantic slot metadata and placement is selected by `layout.type`,
+  optional `layout.pattern`, or `semantic.layout.pattern`
 - `collection_grid`, `metric_chart`, and `event_log` already materialize into
   browser renderers
 - `chat_panel` now materializes into the shared browser chat surface through
