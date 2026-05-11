@@ -88,6 +88,86 @@ Token/session flow:
 Так мы не ломаем существующую regex-модель: Root MCP дает descriptors и governed operations, а текущий runtime pipeline остается
 `regex-first`; data-owned rules продолжают жить в scenario/skill artifacts.
 
+## NLU authoring contract
+
+Держим реализацию разделенной на три слоя:
+
+- `Teacher UI`: показывает trace, current templates, diffs и approval controls. UI не должен сам решать ownership и писать файлы.
+- `NLU authoring service`: валидирует phrase checks, template patches, training targets и safe-apply rules.
+- `Root MCP`: дает governed descriptors, current template inventory, token/session resolution, routing и audit.
+
+LLM должна получать current template inventory до того, как предлагать изменения. Это убирает duplicate regex rules, повторы Rasa examples
+и blind rewrites training content.
+
+Дополнительные Root MCP surfaces для template inventory и коррекции:
+
+- `nlu.list_templates`: текущие regex/Rasa/neural/lookup templates со stable ids, owners, fingerprints и status.
+- `nlu.get_template`: один текущий template с полным editable content и provenance.
+- `nlu.preview_template_patch`: проверить proposed correction и вернуть diff без записи.
+- `nlu.apply_template_patch`: применить approved correction с audit и защитой от stale writes.
+
+Current template inventory response:
+
+```json
+{
+  "templates": [
+    {
+      "template_id": "rx.web_desktop.desktop.open_weather.01HX...",
+      "engine": "regex",
+      "intent": "desktop.open_weather",
+      "owner": {"type": "scenario", "id": "web_desktop"},
+      "status": "active",
+      "fingerprint": "sha256:...",
+      "summary": "RU/EN weather phrase with optional city",
+      "source": {"path": "scenarios/web_desktop/scenario.json", "json_pointer": "/nlu/regex_rules/0"}
+    },
+    {
+      "template_id": "rasa.web_desktop.desktop.open_node_modal.example.4f9c...",
+      "engine": "rasa",
+      "intent": "desktop.open_node_modal",
+      "owner": {"type": "scenario", "id": "web_desktop"},
+      "status": "active",
+      "fingerprint": "sha256:...",
+      "summary": "open [apps_catalog](modal_id) on [member-1](node_ref)"
+    }
+  ],
+  "snapshot_id": "nlu-template-snapshot.2026-05-11T12:00:00Z",
+  "generated_from": ["scenario:web_desktop", "skills:*", "desktop.registry"]
+}
+```
+
+Template ids должны быть достаточно стабильными для correction и audit:
+
+- `regex`: использовать rule id, если он есть (`rx.<uuid>`), и namespaced owner/intent в MCP.
+- `rasa`: деривировать deterministic id из owner, intent, example text и entity annotations.
+- `neural`: деривировать из owner, intent, masked text и label.
+- `lookup`: деривировать из registry namespace, entity name, snapshot id и value-set fingerprint.
+
+Corrections — это patches к существующим templates, а не raw file writes:
+
+```json
+{
+  "template_id": "rasa.web_desktop.desktop.open_node_modal.example.4f9c...",
+  "base_fingerprint": "sha256:...",
+  "operation": "replace",
+  "patch": {
+    "example": "open [apps_catalog](modal_id) on [kitchen](node_ref)",
+    "reason": "Use real node alias from desktop registry instead of hardcoded member-1"
+  }
+}
+```
+
+Safe apply state machine:
+
+1. `list/get templates`: собрать current ids, owners, fingerprints и editable fields.
+2. `propose patch`: LLM ссылается на existing `template_id` или явно просит create new template.
+3. `preview diff`: authoring service проверяет owner, capability, schema, duplicates и `base_fingerprint`.
+4. `operator approval`: UI показывает before/after, affected intent/action и expected pipeline impact.
+5. `apply`: запись только через scenario/skill training APIs, затем audit event и rollback pointer.
+6. `verify`: запуск `nlu.check_phrase` и optional golden phrase regression checks.
+
+Если `base_fingerprint` уже не совпадает, patch отклоняется как stale, а UI должен обновить template inventory.
+
 ## Multi-engine teacher output
 
 Чтобы первая версия Teacher не была зашита под один NLU engine, LLM должна возвращать bundle шаблонов для всех релевантных стадий.
@@ -205,17 +285,20 @@ After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 - Добавить **Issue token** в MCP Server modal.
 - Выпускать target-scoped Root MCP session leases с capability profile `NLUTeacherAuthor`.
 - Публиковать NLU pipeline, skill tool, scenario action и desktop registry descriptors через Root MCP.
+- Публиковать current NLU template inventory с `template_id`, owner, status, fingerprint и provenance.
 
 ### Phase 3 - Полезный Teacher UI
 
 - Добавить поле Check phrase.
 - Показать intent ranking/entities/action preview.
+- Показывать existing templates, релевантные phrase/intent, и давать выбрать template для correction.
 - Добавить действия Правильно/Исправить.
 - Сохранять curated examples в scenario/skill training content.
 
 ### Phase 4 - Multi-engine template application
 
 - Принимать Teacher template bundles для regex, Rasa, neural и lookup metadata.
+- Принимать correction patches к existing `template_id` с `base_fingerprint` stale-write protection.
 - Применять только поддерживаемую часть безопасно.
 - Оставить regex deterministic и data-owned.
 - Кормить Rasa фактическими lookup values из desktop registry.

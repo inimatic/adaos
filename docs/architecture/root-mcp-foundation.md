@@ -183,6 +183,9 @@ Initial capability profile:
 - `NLUTeacherDryRun`: run phrase checks and read trace/ranking/entities/action preview.
 - `NLUTeacherAuthor`: propose and save curated examples/templates into approved scenario or skill training content.
 
+The plane must expose current NLU templates with stable identifiers before any correction flow runs. LLM-authored changes should reference
+`template_id` plus `base_fingerprint`, then pass through preview diff and operator approval before apply.
+
 The web MCP Server modal should issue a target-scoped token/session lease for this profile. Root remains the policy and routing point:
 the browser receives a bearer token, root resolves it to subnet/zone/target/capabilities, and NLU authoring calls are routed only through
 published Root MCP contracts.
