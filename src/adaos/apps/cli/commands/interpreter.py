@@ -1,6 +1,7 @@
 # src/adaos/apps/cli/commands/interpreter.py
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import List, Optional
@@ -12,6 +13,8 @@ import yaml
 from adaos.apps.bootstrap import get_ctx
 from adaos.services.interpreter.workspace import IntentMapping, InterpreterWorkspace
 from adaos.services.nlu.data_registry import sync_from_scenarios_and_skills
+from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed
+from adaos.services.skill.service_supervisor import get_service_supervisor
 
 app = typer.Typer(help="Интерпретатор: конфигурация, датасеты и обучение.")
 intent_app = typer.Typer(help="Работа с интентами интерпретатора.")
@@ -25,8 +28,28 @@ def _workspace() -> InterpreterWorkspace:
     return InterpreterWorkspace(ctx)
 
 
-def _rasa_service_url() -> str:
+def _run_blocking(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("cannot run blocking async service operation inside an active event loop")
+
+
+def _rasa_service_url(*, start: bool = True) -> str:
     ctx = get_ctx()
+    ensure_rasa_service_skill_installed()
+    supervisor = get_service_supervisor()
+    if start:
+        async def _start() -> None:
+            await supervisor.refresh_discovered(force=True)
+            await supervisor.start("rasa_nlu_service_skill")
+
+        _run_blocking(_start())
+        base = supervisor.resolve_base_url("rasa_nlu_service_skill")
+        if base:
+            return base
+
     skills_root = Path(ctx.paths.skills_dir())
     manifest_path = skills_root / "rasa_nlu_service_skill" / "skill.yaml"
     if not manifest_path.exists():

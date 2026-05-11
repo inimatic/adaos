@@ -191,6 +191,11 @@ def _http_get(url: str, *, timeout_ms: int) -> tuple[int, str]:
         return int(resp.status), body
 
 
+def _path_value(value: Any) -> Path:
+    resolved = value() if callable(value) else value
+    return Path(resolved).expanduser().resolve()
+
+
 class ServiceSkillSupervisor:
     def __init__(self) -> None:
         self._ctx = get_ctx()
@@ -426,6 +431,10 @@ class ServiceSkillSupervisor:
         env["ADAOS_SERVICE_SKILL"] = name
         env["ADAOS_SERVICE_HOST"] = spec.host
         env["ADAOS_SERVICE_PORT"] = str(spec.port)
+        env.setdefault("ADAOS_BASE_DIR", str(_path_value(self._ctx.paths.base_dir())))
+        env.setdefault("ADAOS_MODELS_DIR", str(_path_value(self._ctx.paths.models_dir())))
+        env.setdefault("ADAOS_STATE_DIR", str(_path_value(self._ctx.paths.state_dir())))
+        env.setdefault("ADAOS_LOGS_DIR", str(_path_value(self._ctx.paths.logs_dir())))
         env["PYTHONPATH"] = os.pathsep.join([str(spec.skill_root), env.get("PYTHONPATH", "")]).strip(os.pathsep)
 
         cmd = self._build_command(python, spec.command)
