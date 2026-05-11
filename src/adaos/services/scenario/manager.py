@@ -569,11 +569,12 @@ class ScenarioManager:
 
     def _ensure_scenario_subpath_materialized(self, root: Path, name: str) -> None:
         scenario_dir = root / "scenarios" / name
-        if any((scenario_dir / item).exists() for item in _SCENARIO_MANIFEST_NAMES):
-            return
+        has_manifest = any((scenario_dir / item).exists() for item in _SCENARIO_MANIFEST_NAMES)
         try:
             self.git.sparse_add(str(root), f"scenarios/{name}")
         except Exception:
+            return
+        if has_manifest:
             return
         try:
             self.git.pull(str(root))
