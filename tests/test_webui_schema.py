@@ -47,7 +47,7 @@ def test_webui_schema_accepts_staged_load_hints() -> None:
                     "schema": {
                         "id": "prompt_modal",
                         "load": {"structure": "interaction", "data": "deferred", "focus": "off_focus"},
-                        "layout": {"type": "single", "areas": [{"id": "main"}]},
+                        "layout": {"type": "single", "pattern": "stack", "areas": [{"id": "main"}]},
                         "widgets": [
                             {
                                 "id": "prompt_widget",

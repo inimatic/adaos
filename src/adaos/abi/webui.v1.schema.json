@@ -162,6 +162,22 @@
       "required": ["type", "areas"],
       "properties": {
         "type": { "type": "string", "minLength": 1 },
+        "pattern": {
+          "type": "string",
+          "enum": [
+            "stack",
+            "split",
+            "tabs",
+            "grid",
+            "sidebar-content",
+            "dashboard",
+            "modal",
+            "sheet",
+            "focus-detail",
+            "desktop-zones"
+          ],
+          "description": "Renderer intent hint. Keeps skill manifests declarative without requiring renderer-specific CSS."
+        },
         "areas": { "type": "array", "items": { "$ref": "#/$defs/area" } }
       }
     },
