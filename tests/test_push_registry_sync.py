@@ -134,6 +134,8 @@ def test_skill_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Path)
     registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
     assert revision == "rev-1"
     assert [item["id"] for item in registry["skills"]] == ["demo_skill"]
+    assert git.sparse_add_calls == [(str(workspace), "skills/demo_skill")]
+    assert git.pull_calls == []
     assert git.commit_calls[0]["subpath"] == ["skills/demo_skill", "registry.json"]
     assert git.push_calls == [str(workspace)]
 
@@ -227,6 +229,8 @@ def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Pa
     registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
     assert revision == "rev-1"
     assert [item["id"] for item in registry["scenarios"]] == ["welcome_scene"]
+    assert git.sparse_add_calls == [(str(workspace), "scenarios/welcome_scene")]
+    assert git.pull_calls == []
     assert git.commit_calls[0]["subpath"] == ["scenarios/welcome_scene", "registry.json"]
     assert git.push_calls == [str(workspace)]
 
