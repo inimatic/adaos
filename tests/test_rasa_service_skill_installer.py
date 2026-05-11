@@ -173,3 +173,28 @@ def test_interpreter_cli_rasa_train_records_successful_service_training(monkeypa
             },
         }
     ]
+
+
+def test_setup_install_prepares_rasa_before_post_install_training(monkeypatch, tmp_path):
+    from adaos.apps.cli.commands import setup
+
+    calls = []
+
+    async def _train_once(*, reason="manual", note=None):
+        calls.append(("train", reason, note))
+        return {"ok": True, "response": {"model_path": str(tmp_path / "model.tar.gz")}}
+
+    monkeypatch.setattr(
+        setup,
+        "ensure_rasa_service_skill_installed",
+        lambda: calls.append(("ensure",)) or (tmp_path / "rasa_nlu_service_skill"),
+    )
+    monkeypatch.setattr(setup, "train_rasa_nlu_once", _train_once)
+
+    installed = {"warnings": []}
+
+    setup._bootstrap_rasa_nlu_after_install(installed, enabled=True, train=True)
+
+    assert calls == [("ensure",), ("train", "post-install", "rasa-post-install")]
+    assert installed["nlu"]["rasa"]["ok"] is True
+    assert installed["warnings"] == []

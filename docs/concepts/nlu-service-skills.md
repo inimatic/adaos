@@ -36,6 +36,16 @@ The supervisor discovers the active runtime slot and creates a slot-local venv:
 
 - `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/<version>/slots/<A|B>/venv`
 
+When AdaOS is started directly from the project root with `adaos api serve`, runtime bridges must not prepare or switch
+skill slots. In that mode the service supervisor either:
+
+- uses the already active skill runtime slot, if one exists, or
+- uses the workspace service-skill source and a non-slot service venv under `state/services/rasa_nlu_service_skill`.
+
+Preparing a new A/B slot is reserved for install/update flows (`adaos install`, skill runtime refresh, or a
+supervisor-managed candidate rollout). A plain `api serve` should not create slot B just because Rasa is parsed or
+trained.
+
 Dependencies are installed from:
 
 - `skill.yaml: dependencies`
@@ -68,7 +78,11 @@ If `service.self_managed.doctor.enabled: true`, these issues can also trigger:
 
 1. `adaos.services.nlu.data_registry.sync_from_scenarios_and_skills()` syncs NLU data into interpreter workspace files.
 2. `adaos.services.nlu.rasa_training_bridge` triggers training by calling the service `/train`.
-3. `adaos install` runs one post-install train by default. Use `--no-train-nlu` to skip it.
+3. `adaos install` prepares the service-skill/runtime slot and runs one post-install train by default. Use
+   `--no-train-nlu` to skip training after preparation.
+
+The parse and train bridges do not install or prepare Rasa. If the service-skill is missing, they return fallback
+reasons such as `rasa_base_url_unresolved` and let the operator run the install/update path intentionally.
 
 Controls:
 
