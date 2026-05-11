@@ -12,6 +12,18 @@ _PACKAGE = "adaos.interpreter_data"
 _RESOURCE_DIR = "rasa_nlu_service_skill"
 
 
+def _copy_template_tree(src: Path, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for item in src.rglob("*"):
+        rel = item.relative_to(src)
+        dst = target / rel
+        if item.is_dir():
+            dst.mkdir(parents=True, exist_ok=True)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, dst)
+
+
 def ensure_rasa_service_skill_installed() -> Path | None:
     """
     Ensure default Rasa NLU service-skill exists in workspace skills directory.
@@ -21,8 +33,6 @@ def ensure_rasa_service_skill_installed() -> Path | None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
     target = skills_root / _SKILL_NAME
-    if target.exists():
-        return target
 
     try:
         src_dir = resources.files(_PACKAGE) / _RESOURCE_DIR
@@ -32,8 +42,7 @@ def ensure_rasa_service_skill_installed() -> Path | None:
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         with resources.as_file(src_dir) as src:
-            shutil.copytree(src, target)
+            _copy_template_tree(Path(src), target)
     except Exception:
         return None
     return target
-
