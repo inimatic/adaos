@@ -4,7 +4,7 @@ This document describes the current production MVP direction for intent detectio
 
 ## MVP baseline
 
-- Pipeline: `regex` -> `neural (service-skill, optional)` -> `rasa (service-skill)` -> `teacher (LLM in the loop)`
+- Pipeline: `regex` -> `neural (service-skill, optional)` -> `rasa (service-skill, optional default-on)` -> `teacher (LLM in the loop)`
 - System boundary: NLU runtime code is one; only **data** varies per scenario/skill.
 - Transport: intent detection is integrated into AdaOS event bus (not CLI-only).
 
@@ -43,9 +43,30 @@ This document describes the current production MVP direction for intent detectio
 7. If teacher is enabled:
    - `nlp.teacher.request { webspace_id, request }` is emitted for teacher runtimes.
 
+## Runtime trace
+
+AdaOS records NLU decisions as a stage trace so the UI can explain why a phrase worked or failed.
+
+- `nlu.trace.stage` is emitted for `request`, `regex`, `pipeline delegate`, `rasa`, and `dispatcher action/reject`.
+- Trace items are stored under `data.nlu_trace.items[]`.
+- The Teacher dry-run API can emit the same trace without dispatching actions:
+  - `POST /api/nlu/teacher/{webspace_id}/probe`
+  - request: `{ "text": "...", "use_rasa": true, "emit_trace": true }`
+  - response: `intent`, `confidence`, `slots`, `entities`, `intent_ranking`, `stages`
+
+The implementation checklist is tracked in [nlu-roadmap.md](./nlu-roadmap.md).
+
 ## Rasa as a service-skill
 
-Rasa is treated as a **service-type skill** (separate Python/venv, managed lifecycle) to avoid dependency conflicts with the hub runtime.
+Rasa is treated as a **service-type skill** (separate Python/venv, managed lifecycle) to avoid dependency conflicts with the hub runtime. AdaOS uses the NLU-only `rasa-port` package, not upstream `rasa==3.6.x` in the root venv.
+
+Install behavior:
+
+- `adaos install` prepares `rasa_nlu_service_skill` into an active skill slot and trains once by default.
+- `--no-rasa-nlu` disables service-skill preparation.
+- `--no-train-nlu` keeps the service-skill ready but skips post-install training.
+- `ADAOS_RASA_PORT_PATH` can point to a local `rasa-port` checkout.
+- `ADAOS_NLU_RASA=0` disables the Rasa stage at runtime.
 
 The hub supervises:
 

@@ -11,7 +11,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.skill.service_supervisor import get_service_supervisor
-from .rasa_skill_installer import ensure_rasa_service_skill_installed
+from .rasa_skill_installer import ensure_rasa_service_skill_installed, is_rasa_nlu_enabled
 
 _log = logging.getLogger("adaos.nlu.rasa")
 _SEMAPHORE = asyncio.Semaphore(2)
@@ -63,6 +63,48 @@ def _emit_not_obtained(
     bus_emit(ctx.bus, "nlp.intent.not_obtained", out, source="nlu.rasa")
 
 
+def _emit_stage(
+    *,
+    ctx: Any,
+    text: str,
+    webspace_id: str | None,
+    request_id: str | None,
+    meta: Mapping[str, Any],
+    status: str,
+    reason: str | None = None,
+    intent: str | None = None,
+    confidence: float | None = None,
+    slots: Mapping[str, Any] | None = None,
+    raw: Mapping[str, Any] | None = None,
+) -> None:
+    payload: Dict[str, Any] = {
+        "stage": "rasa",
+        "status": status,
+        "text": text,
+        "via": "rasa",
+    }
+    if webspace_id:
+        payload["webspace_id"] = webspace_id
+    if request_id:
+        payload["request_id"] = request_id
+    if reason:
+        payload["reason"] = reason
+    if intent:
+        payload["intent"] = intent
+    if confidence is not None:
+        payload["confidence"] = float(confidence)
+    if slots:
+        payload["slots"] = dict(slots)
+    if raw:
+        payload["raw"] = dict(raw)
+    if isinstance(meta, Mapping) and meta:
+        payload["_meta"] = dict(meta)
+    try:
+        bus_emit(ctx.bus, "nlu.trace.stage", payload, source="nlu.rasa")
+    except Exception:
+        pass
+
+
 def _http_post_json(url: str, payload: dict, *, timeout_ms: int) -> dict:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = Request(url, data=body, method="POST")
@@ -92,6 +134,9 @@ def _service_health_ok(base_url: str) -> bool:
 
 
 async def _ensure_rasa_service_base_url(supervisor: Any) -> str | None:
+    if not is_rasa_nlu_enabled():
+        return None
+
     installed = ensure_rasa_service_skill_installed()
     if installed is None:
         return None
@@ -119,29 +164,42 @@ def _record_failure(kind: str) -> int:
     return len(times)
 
 
-async def _parse_and_emit(
-    *,
+def _slots_from_entities(entities: Any) -> Dict[str, Any]:
+    slots: Dict[str, Any] = {}
+    if isinstance(entities, list):
+        for ent in entities:
+            if not isinstance(ent, dict):
+                continue
+            name = ent.get("entity")
+            value = ent.get("value")
+            if isinstance(name, str) and name and value is not None:
+                slots.setdefault(name, value)
+    return slots
+
+
+async def parse_text(
     text: str,
-    webspace_id: str | None,
+    *,
+    webspace_id: str | None = None,
     request_id: str | None = None,
     meta: Mapping[str, Any] | None = None,
-) -> None:
-    ctx = get_ctx()
-    supervisor = get_service_supervisor()
+) -> Dict[str, Any]:
     meta = meta if isinstance(meta, Mapping) else {}
 
-    # Best-effort: ensure service is running (and venv exists) before calling /parse.
+    if not is_rasa_nlu_enabled():
+        return {"ok": False, "reason": "rasa_disabled", "via": "rasa"}
+
+    supervisor = get_service_supervisor()
+
     try:
         base_url = await _ensure_rasa_service_base_url(supervisor)
     except Exception:
         _log.warning("failed to start rasa_nlu_service_skill service", exc_info=True)
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_start_failed")
-        return
+        return {"ok": False, "reason": "rasa_start_failed", "via": "rasa"}
 
     if not base_url:
         _log.debug("rasa service base_url unresolved")
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_base_url_unresolved")
-        return
+        return {"ok": False, "reason": "rasa_base_url_unresolved", "via": "rasa"}
 
     try:
         async with _SEMAPHORE:
@@ -167,8 +225,7 @@ async def _parse_and_emit(
                 pass
         else:
             _log.debug("rasa service parse timed out (x%d) text=%r", count, text)
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_timeout")
-        return
+        return {"ok": False, "reason": "rasa_timeout", "via": "rasa"}
     except Exception:
         count = _record_failure("failed")
         if count >= max(_ISSUE_THRESHOLD, 1):
@@ -184,47 +241,103 @@ async def _parse_and_emit(
                 pass
         else:
             _log.debug("rasa service parse failed (x%d) text=%r", count, text, exc_info=True)
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_failed")
-        return
+        return {"ok": False, "reason": "rasa_failed", "via": "rasa"}
 
     if not isinstance(data, dict) or not data.get("ok"):
         _log.debug("rasa parse returned not-ok: %r", data)
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_not_ok")
-        return
+        return {"ok": False, "reason": "rasa_not_ok", "via": "rasa", "raw": data if isinstance(data, dict) else {}}
 
     result = data.get("result") or {}
     if not isinstance(result, dict):
         _log.debug("rasa parse returned invalid result: %r", result)
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_invalid_result")
-        return
+        return {"ok": False, "reason": "rasa_invalid_result", "via": "rasa"}
 
     intent_block = result.get("intent") or {}
     intent_name = intent_block.get("name") if isinstance(intent_block, dict) else None
     confidence = intent_block.get("confidence") if isinstance(intent_block, dict) else None
+    entities = result.get("entities") or []
+    ranking = result.get("intent_ranking") or []
+    slots = _slots_from_entities(entities)
+
+    base: Dict[str, Any] = {
+        "via": "rasa",
+        "intent": intent_name if isinstance(intent_name, str) else None,
+        "confidence": float(confidence) if isinstance(confidence, (int, float)) else None,
+        "slots": slots,
+        "entities": entities if isinstance(entities, list) else [],
+        "intent_ranking": ranking if isinstance(ranking, list) else [],
+        "raw": result,
+    }
     if not isinstance(intent_name, str) or not intent_name.strip():
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_no_intent")
-        return
+        return {"ok": False, "reason": "rasa_no_intent", **base}
     if isinstance(confidence, (int, float)) and float(confidence) < _MIN_CONFIDENCE:
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_low_confidence")
+        return {"ok": False, "reason": "rasa_low_confidence", **base}
+    return {"ok": True, **base}
+
+
+async def _parse_and_emit(
+    *,
+    text: str,
+    webspace_id: str | None,
+    request_id: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> None:
+    ctx = get_ctx()
+    meta = meta if isinstance(meta, Mapping) else {}
+
+    if not is_rasa_nlu_enabled():
+        _emit_stage(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, status="skipped", reason="rasa_disabled")
+        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_disabled")
         return
 
-    slots: Dict[str, Any] = {}
-    entities = result.get("entities") or []
-    if isinstance(entities, list):
-        for ent in entities:
-            if not isinstance(ent, dict):
-                continue
-            name = ent.get("entity")
-            value = ent.get("value")
-            if isinstance(name, str) and name and value is not None:
-                slots.setdefault(name, value)
+    result = await parse_text(text, webspace_id=webspace_id, request_id=request_id, meta=meta)
+    if not result.get("ok"):
+        _emit_stage(
+            ctx=ctx,
+            text=text,
+            webspace_id=webspace_id,
+            request_id=request_id,
+            meta=meta,
+            status="miss",
+            reason=str(result.get("reason") or "rasa_failed"),
+            intent=result.get("intent") if isinstance(result.get("intent"), str) else None,
+            confidence=result.get("confidence") if isinstance(result.get("confidence"), (int, float)) else None,
+            slots=result.get("slots") if isinstance(result.get("slots"), Mapping) else None,
+            raw=result.get("raw") if isinstance(result.get("raw"), Mapping) else None,
+        )
+        _emit_not_obtained(
+            ctx=ctx,
+            text=text,
+            webspace_id=webspace_id,
+            request_id=request_id,
+            meta=meta,
+            reason=str(result.get("reason") or "rasa_failed"),
+        )
+        return
+
+    intent_name = str(result.get("intent") or "").strip()
+    confidence = result.get("confidence")
+    slots = result.get("slots") if isinstance(result.get("slots"), dict) else {}
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    _emit_stage(
+        ctx=ctx,
+        text=text,
+        webspace_id=webspace_id,
+        request_id=request_id,
+        meta=meta,
+        status="hit",
+        intent=intent_name,
+        confidence=confidence if isinstance(confidence, (int, float)) else None,
+        slots=slots,
+        raw=raw,
+    )
 
     detected_payload: Dict[str, Any] = {
         "intent": intent_name,
         "confidence": float(confidence) if isinstance(confidence, (int, float)) else None,
         "slots": slots,
         "text": text,
-        "_raw": result,
+        "_raw": raw,
         "_meta": dict(meta) if isinstance(meta, Mapping) else {},
     }
     if webspace_id:

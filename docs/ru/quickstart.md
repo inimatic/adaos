@@ -24,8 +24,11 @@ cd adaos
 git submodule update --init --recursive \
   src/adaos/integrations/adaos-client \
   src/adaos/integrations/adaos-backend \
-  src/adaos/integrations/infra-inimatic
+  src/adaos/integrations/infra-inimatic \
+  src/adaos/integrations/rasa-port
 ```
+
+`rasa-port` is optional but recommended when working on NLU locally. If it is absent, AdaOS installs `adaos-rasa-nlu` for the Rasa service-skill from `https://github.com/stipot-com/rasa-port.git`.
 
 ## Bootstrap
 
@@ -98,6 +101,8 @@ curl -i http://127.0.0.1:8777/health/ready
 adaos install
 adaos update
 ```
+
+`adaos install` prepares the optional Rasa NLU service-skill and trains it once by default. Use `adaos install --no-rasa-nlu` on nodes that should use regex/neural NLU only, or `adaos install --no-train-nlu` when you want to train later.
 
 Проверить локальные объекты:
 
