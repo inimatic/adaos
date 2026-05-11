@@ -3729,6 +3729,13 @@ async def process_events_command(
         await _ack()
         return None
 
+    if kind == "demo_metrics.host_action":
+        event_payload = dict(payload or {})
+        event_payload["webspace_id"] = payload.get("webspace_id")
+        _publish_bus("demo_metrics.host_action", event_payload)
+        await _ack()
+        return None
+
     if kind == "voice.chat.open":
         event_payload = dict(payload or {})
         event_payload["webspace_id"] = payload.get("webspace_id")
