@@ -92,6 +92,22 @@ managed targets
 - `web control plane`: остается основным human-facing operational surface
 - `MCP`: становится основным agent-facing typed surface
 
+## NLUAuthoringPlane
+
+`NLUAuthoringPlane` — целевой MCP plane для NLU Teacher workflows. Он не должен открывать LLM произвольный доступ к hub internals.
+Его задача — дать governed descriptors и bounded authoring operations, чтобы LLM могла понять intent, skill, tool/action, slots и нужные
+template types для фразы пользователя.
+
+Начальный capability profile:
+
+- `NLUTeacherRead`: читать pipeline, desktop registry lookups, skill/tool descriptors и training targets.
+- `NLUTeacherDryRun`: запускать phrase checks и читать trace/ranking/entities/action preview.
+- `NLUTeacherAuthor`: предлагать и сохранять curated examples/templates в разрешенный scenario или skill training content.
+
+В web-модалке MCP Server должна появиться выдача target-scoped token/session lease для этого профиля. Root остается policy и routing point:
+browser получает bearer token, root восстанавливает subnet/zone/target/capabilities и маршрутизирует NLU authoring calls только через
+опубликованные Root MCP contracts.
+
 ## Root MCP Foundation Model
 
 Foundation должна проектироваться вокруг четырех общих моделей.

@@ -27,6 +27,8 @@ The roadmap has two explicit companion slices:
   - descriptive and authoring-oriented MCP surface for SDK, manifests, templates, and architecture
 - `ProfileOps`
   - operational MCP surface for supervisor-owned profiling and profiling evidence
+- `NLUAuthoringPlane`
+  - governed phrase-checking, descriptor lookup, and training-content authoring surface for NLU Teacher
 
 ## Phase 0. Architectural Fixation
 
@@ -237,6 +239,68 @@ It should not yet be read as proof that the broader subnet-analysis and observab
 Phase is complete when:
 
 - the system can support multiple independently evolving MCP planes without duplicating auth, audit, or routing logic
+
+## `NLUAuthoringPlane` Roadmap
+
+`NLUAuthoringPlane` should make the NLU Teacher modal useful without turning the LLM into an ungoverned code editor.
+The plane provides scoped context and bounded writes for phrase interpretation, template proposals, and training-content updates.
+
+### `NLUAuthoring-0`. Architecture and contracts
+
+- [x] document Root MCP token/session flow for NLU Teacher
+- [x] define multi-engine template bundle output (`regex`, `rasa`, `neural`, `lookups`)
+- [ ] freeze tool ids and capability profile names: `NLUTeacherRead`, `NLUTeacherDryRun`, `NLUTeacherAuthor`
+- [ ] define redaction policy so tokens never enter prompts, examples, traces, or generated artifacts
+
+Phase is complete when:
+
+- NLU Teacher docs describe UI, token flow, MCP context, and safe apply boundaries
+- current regex-first runtime behavior is explicitly preserved
+
+### `NLUAuthoring-1`. Token UI and scoped access
+
+- [ ] add **Issue token** to the web MCP Server modal
+- [ ] issue target-scoped Root MCP session leases for `NLUTeacherAuthor`
+- [ ] add list/revoke UX for issued NLU authoring sessions
+- [ ] audit each token issuance and each NLU authoring call
+
+Phase is complete when:
+
+- the operator can grant and revoke an NLU-authoring session without exposing subnet tokens in prompts or CLI arguments
+
+### `NLUAuthoring-2`. Descriptor and lookup surfaces
+
+- [ ] publish `nlu.describe_pipeline`
+- [ ] publish `desktop.registry.lookup`
+- [ ] publish `skill.describe_tools`
+- [ ] publish `nlu.list_training_targets`
+- [ ] include actual `modal_id`, `node_ref`, `app_id`, `scenario_id`, and webspace values from the current desktop registry
+
+Phase is complete when:
+
+- an LLM can map a phrase to an existing intent/tool/action using governed descriptors instead of hardcoded examples
+
+### `NLUAuthoring-3`. Phrase check and trace
+
+- [ ] publish `nlu.check_phrase`
+- [ ] return stage trace, confidence, ranking, entities, lookup hits, and action preview
+- [ ] show the same data in NLU Teacher UI
+- [ ] preserve low-confidence fallback to `nlp.intent.not_obtained`
+
+Phase is complete when:
+
+- the operator can see why a command did or did not execute
+
+### `NLUAuthoring-4`. Safe apply
+
+- [ ] save confirmed Rasa examples into scenario/skill training content
+- [ ] save regex candidates only after explicit confirmation
+- [ ] store neural labels/masked examples as disabled future-training metadata
+- [ ] regenerate lookup tables from the desktop registry instead of hardcoding sample ids
+
+Phase is complete when:
+
+- applying a Teacher suggestion improves training data without mutating code or bypassing the regex-first pipeline
 
 ## `ProfileOps` Roadmap
 
