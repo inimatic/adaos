@@ -11,6 +11,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.skill.service_supervisor import get_service_supervisor
+from .rasa_skill_installer import ensure_rasa_service_skill_installed
 
 _log = logging.getLogger("adaos.nlu.rasa")
 _SEMAPHORE = asyncio.Semaphore(2)
@@ -97,9 +98,20 @@ async def _parse_and_emit(
         async with _START_LOCK:
             await supervisor.start("rasa_nlu_service_skill")
     except KeyError:
-        _log.debug("rasa service is not configured/installed")
-        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_not_installed")
-        return
+        installed = ensure_rasa_service_skill_installed()
+        if installed is not None:
+            try:
+                await supervisor.refresh_discovered(force=True)
+                async with _START_LOCK:
+                    await supervisor.start("rasa_nlu_service_skill")
+            except Exception:
+                _log.warning("failed to bootstrap/start rasa_nlu_service_skill from template", exc_info=True)
+                _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_start_failed")
+                return
+        else:
+            _log.debug("rasa service is not configured/installed")
+            _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_not_installed")
+            return
     except Exception:
         _log.warning("failed to start rasa_nlu_service_skill service", exc_info=True)
         _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_start_failed")
