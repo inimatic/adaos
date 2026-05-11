@@ -578,6 +578,10 @@ Recommended identifiers:
 - [x] production browser build passes with the upgraded Angular/Taiga baseline
 - [x] demo action paths exercise `open_modal`, `call_host`, and
   `invoke_skill_action`
+- [x] demo host actions have an explicit gateway ack path and no longer rely on
+  command timeout behavior
+- [x] event-log semantic views now render receiver payload collections such as
+  `{ items: [...] }`
 - [x] `open_workspace` is wired end-to-end through a typed runtime bridge
 - [x] desktop and modal demo surfaces both resolve the same data branches under
   an explicit ownership contract instead of relying on accidental scoping

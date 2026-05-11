@@ -631,6 +631,40 @@ def test_process_events_command_preserves_weather_node_target(monkeypatch) -> No
     assert responses[-1]["ok"] is True
 
 
+def test_process_events_command_accepts_demo_metrics_host_action(monkeypatch) -> None:
+    published: list[object] = []
+    responses: list[dict[str, object]] = []
+
+    class _Bus:
+        def publish(self, event: object) -> None:
+            published.append(event)
+
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: SimpleNamespace(bus=_Bus()))
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="demo_metrics.host_action",
+            cmd_id="cmd-demo-host-1",
+            payload={"action_id": "demo", "metric_id": "cpu", "webspace_id": "desktop"},
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert len(published) == 1
+    event = published[0]
+    assert getattr(event, "type", "") == "demo_metrics.host_action"
+    payload = getattr(event, "payload", {})
+    assert payload["action_id"] == "demo"
+    assert payload["metric_id"] == "cpu"
+    assert payload["webspace_id"] == "desktop"
+    assert responses[-1]["ok"] is True
+
+
 def test_process_events_command_records_reload_command_trace(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []
