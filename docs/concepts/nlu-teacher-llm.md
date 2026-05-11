@@ -100,6 +100,23 @@ Response shape:
 
 When `emit_trace=true`, each stage is also persisted through `nlu.trace.stage` into `data.nlu_trace.items[]`.
 
+## Current lookup API
+
+Teacher/LLM can inspect the desktop ids that should be treated as entity candidates:
+
+- `GET /api/nlu/teacher/{webspace_id}/lookups`
+- lookup sets:
+  - `modal_id`
+  - `node_ref`
+  - `app_id`
+  - `scenario_id`
+  - `webspace_id`
+
+The current backend slice reads workspace desktop/scenario manifests and falls back to packaged desktop manifests when the test/install
+workspace is still empty. Rasa export consumes the same snapshot as native lookup-table entries and writes the full snapshot to
+`state/interpreter/rasa_project/data/lookup_tables.json`. A live YJS registry overlay is the next refinement, so runtime-created or renamed
+desktop objects can be reflected without relying only on manifest files.
+
 ## MCP-assisted teacher context
 
 For the teacher to decide which skill/tool owns a phrase, it needs governed machine-readable context, not only free-form prompt text.

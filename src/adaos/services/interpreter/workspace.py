@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import yaml
 
 from adaos.services.agent_context import AgentContext
+from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables, rasa_lookup_entries, summarize_lookup_tables
 
 
 def _utc_now() -> str:
@@ -304,6 +305,13 @@ class InterpreterWorkspace:
             )
         return sorted(items, key=lambda x: x["intent"])
 
+    def _lookup_snapshot(self) -> List[Dict[str, Any]]:
+        try:
+            payload = collect_desktop_lookup_tables(self._ctx)
+        except Exception:
+            payload = {"lookups": {}}
+        return summarize_lookup_tables(payload)
+
     def _config_hash(self, config: Dict[str, Any]) -> str:
         return _hash_payload(config.get("intents", []))
 
@@ -319,12 +327,14 @@ class InterpreterWorkspace:
         skills: List[Dict[str, Any]],
         datasets: List[Dict[str, Any]],
         auto_intents: List[Dict[str, Any]],
+        lookups: List[Dict[str, Any]],
     ) -> str:
         payload = {
             "intents": config.get("intents", []),
             "skills": skills,
             "datasets": datasets,
             "auto_intents": auto_intents,
+            "lookups": lookups,
         }
         return _hash_payload(payload)
 
@@ -334,7 +344,8 @@ class InterpreterWorkspace:
         skills = self._skill_snapshot()
         datasets = self._dataset_snapshot()
         auto_intents = self._auto_intents_snapshot()
-        current_fp = self.fingerprint(config, skills, datasets, auto_intents)
+        lookups = self._lookup_snapshot()
+        current_fp = self.fingerprint(config, skills, datasets, auto_intents, lookups)
         meta = self.load_metadata()
         needs_training = current_fp != meta.get("fingerprint")
 
@@ -350,6 +361,8 @@ class InterpreterWorkspace:
                 reasons.append("Наборы данных изменились.")
             if meta.get("auto_intents_hash") != _hash_payload(auto_intents):
                 reasons.append("Интенты из скиллов обновились.")
+            if meta.get("lookup_hash") != _hash_payload(lookups):
+                reasons.append("NLU lookup tables changed.")
 
         return {
             "needs_training": needs_training,
@@ -360,6 +373,7 @@ class InterpreterWorkspace:
             "fingerprint": current_fp,
             "skills": skills,
             "auto_intents": auto_intents,
+            "lookups": lookups,
         }
 
     def dataset_summary(self) -> Dict[str, Any]:
@@ -399,8 +413,15 @@ class InterpreterWorkspace:
             formatted = "\n".join(f"- {ex}" for ex in mapping.examples if ex)
             if formatted.strip():
                 nlu_payload["nlu"].append({"intent": mapping.intent, "examples": formatted})
+        lookup_payload = collect_desktop_lookup_tables(self._ctx)
+        for entry in rasa_lookup_entries(lookup_payload):
+            nlu_payload["nlu"].append(entry)
         (data_dir / "intents_from_config.yml").write_text(
             yaml.safe_dump(nlu_payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        (data_dir / "lookup_tables.json").write_text(
+            json.dumps(lookup_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -461,13 +482,16 @@ class InterpreterWorkspace:
         skills = self._skill_snapshot()
         datasets = self._dataset_snapshot()
         auto_intents = self._auto_intents_snapshot()
+        lookups = self._lookup_snapshot()
         meta = {
             "trained_at": _utc_now(),
-            "fingerprint": self.fingerprint(config, skills, datasets, auto_intents),
+            "fingerprint": self.fingerprint(config, skills, datasets, auto_intents, lookups),
             "config_hash": self._config_hash(config),
             "skill_hash": self._skill_hash(skills),
             "dataset_hash": self._dataset_hash(datasets),
             "auto_intents_hash": _hash_payload(auto_intents),
+            "lookup_hash": _hash_payload(lookups),
+            "lookup_summary": lookups,
             "skills_snapshot": skills,
             "intent_count": len(config.get("intents", [])),
             "dataset_summary": self.dataset_summary(),
