@@ -439,6 +439,47 @@ def test_ensure_workspace_persists_default_home_scenario_for_new_rows() -> None:
     assert stored == ("web_desktop",)
 
 
+def test_workspace_index_coerces_nested_workspace_ids() -> None:
+    row = ensure_workspace({"webspace_id": "desktop"})
+
+    assert row.workspace_id == "desktop"
+    assert get_workspace("{'webspace_id': 'desktop'}") is not None
+
+
+def test_list_workspaces_dedupes_stringified_workspace_id_rows() -> None:
+    ctx = get_ctx()
+    ensure_workspace("desktop")
+    with ctx.sql.connect() as con:
+        workspace_index_module._ensure_schema(con)
+        con.execute(
+            """
+            INSERT OR REPLACE INTO y_workspaces(
+                workspace_id, path, created_at, display_name,
+                kind, home_scenario, source_mode, owner_scope, profile_scope, device_binding, ui_overlay_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "{'webspace_id': 'desktop'}",
+                "state/ystores/malformed-desktop.sqlite3",
+                1,
+                "Malformed Desktop",
+                "workspace",
+                "web_desktop",
+                "workspace",
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        con.commit()
+
+    rows = workspace_index_module.list_workspaces()
+
+    assert [row.workspace_id for row in rows].count("desktop") == 1
+    assert all(not str(row.workspace_id).startswith("{") for row in rows)
+
+
 def test_set_workspace_manifest_emits_workspace_event(monkeypatch) -> None:
     workspace_id = "manifest-event-space"
     events: list[tuple[str, dict[str, object], str]] = []

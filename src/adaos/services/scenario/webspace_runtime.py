@@ -53,6 +53,7 @@ _SCENARIO_SYNC_REBUILD_CACHE_LIMIT = 512
 _SKILL_RUNTIME_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
 _SKILL_RUNTIME_REBUILD_PENDING: dict[str, Dict[str, Any]] = {}
 _SKILL_RUNTIME_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
+_WEBSPACE_LISTING_SYNC_TASK: asyncio.Task[Any] | None = None
 _WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
 _MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
 _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -2161,7 +2162,15 @@ def _fresh_doc_on_scenario_switch_enabled() -> bool:
     return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC")
 
 
+def _scenario_switch_inline_listing_sync_enabled() -> bool:
+    if os.getenv("ADAOS_TESTING") and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC") is None:
+        return False
+    return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC")
+
+
 def _scenario_switch_subprocess_enabled() -> bool:
+    if os.getenv("ADAOS_TESTING") and os.getenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS") is None:
+        return False
     return _env_flag_default_enabled("ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS")
 
 
@@ -4560,7 +4569,14 @@ def _open_rebuild_ydoc_session(
             write_channel="core.webspace_runtime.async",
         )
     except TypeError:
-        return async_get_ydoc(webspace_id)
+        try:
+            return async_get_ydoc(
+                webspace_id,
+                prefer_live_room=bool(publish_live_room),
+                timings=timings,
+            )
+        except TypeError:
+            return async_get_ydoc(webspace_id)
 
 
 async def _sync_webspace_listing() -> None:
@@ -4576,6 +4592,47 @@ async def _sync_webspace_listing() -> None:
                 data_map = ydoc.get_map("data")
                 with ydoc.begin_transaction() as txn:
                     _set_map_value_if_changed(data_map, txn, "webspaces", payload)
+
+
+def _schedule_webspace_listing_sync(*, reason: str) -> dict[str, Any]:
+    global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
+
+    current = _WEBSPACE_LISTING_SYNC_TASK
+    if current is not None and not current.done():
+        return {
+            "scheduled": True,
+            "coalesced": True,
+            "reason": reason,
+            "task": current.get_name(),
+        }
+
+    async def _runner() -> None:
+        started = time.perf_counter()
+        try:
+            await _sync_webspace_listing()
+            _log.info(
+                "post-ready webspace listing sync completed reason=%s duration_ms=%.3f",
+                reason,
+                _elapsed_ms(started),
+            )
+        except Exception:
+            _log.warning("post-ready webspace listing sync failed reason=%s", reason, exc_info=True)
+        finally:
+            global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
+            if _WEBSPACE_LISTING_SYNC_TASK is task:
+                _WEBSPACE_LISTING_SYNC_TASK = None
+
+    task = asyncio.create_task(
+        _runner(),
+        name=f"webspace-listing-sync:{str(reason or 'background')[:40]}",
+    )
+    _WEBSPACE_LISTING_SYNC_TASK = task
+    return {
+        "scheduled": True,
+        "coalesced": False,
+        "reason": reason,
+        "task": task.get_name(),
+    }
 
 
 class WebspaceService:
@@ -5386,9 +5443,12 @@ async def rebuild_webspace_from_sources(
             )
         _record_timing(timings_ms, "fresh_doc_reset_runtime_state", stage_started)
 
-        stage_started = time.perf_counter()
-        await _sync_webspace_listing()
-        _record_timing(timings_ms, "fresh_doc_sync_listing", stage_started)
+        if _scenario_switch_inline_listing_sync_enabled():
+            stage_started = time.perf_counter()
+            await _sync_webspace_listing()
+            _record_timing(timings_ms, "fresh_doc_sync_listing", stage_started)
+        else:
+            timings_ms["fresh_doc_sync_listing_deferred"] = 0.0
 
     if reseed_from_scenario:
         if not target_scenario:
@@ -5799,6 +5859,7 @@ import sys
 
 os.environ["ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS"] = "0"
 os.environ.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC", "1")
+os.environ.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC", "0")
 os.environ.setdefault("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
 os.environ.setdefault("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "0")
 
@@ -5874,6 +5935,7 @@ asyncio.run(_main())
     env = os.environ.copy()
     env["ADAOS_WEBSPACE_SCENARIO_SWITCH_SUBPROCESS"] = "0"
     env.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_FRESH_DOC", "1")
+    env.setdefault("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC", "0")
     env.setdefault("ADAOS_WEBSPACE_REBUILD_LIVE_ROOM_UPDATES", "0")
     env.setdefault("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "0")
     started = time.perf_counter()
@@ -5997,6 +6059,16 @@ asyncio.run(_main())
         )
     except Exception:
         _log.debug("failed to publish parent rebuild status for scenario switch worker", exc_info=True)
+    if bool(parsed.get("accepted")):
+        try:
+            parsed["post_ready_listing_sync"] = _schedule_webspace_listing_sync(
+                reason="scenario_switch_worker_ready",
+            )
+        except Exception as exc:
+            parsed["post_ready_listing_sync"] = {
+                "scheduled": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
     return parsed
 
 
@@ -6864,6 +6936,7 @@ async def switch_webspace_scenario(
         "ystore_persist": rebuild_result.get("ystore_persist"),
         "live_room_publish": rebuild_result.get("live_room_publish"),
         "live_room_refresh": rebuild_result.get("live_room_refresh"),
+        "post_ready_listing_sync": rebuild_result.get("post_ready_listing_sync"),
         "fresh_doc_rebuild": rebuild_result.get("fresh_doc_rebuild"),
         "resolver": dict(rebuild_result.get("resolver") or {})
         if isinstance(rebuild_result.get("resolver"), Mapping)

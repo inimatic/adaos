@@ -1972,6 +1972,91 @@ def test_background_scenario_switch_rebuild_superseded_request_keeps_newer_statu
     assert "time_to_full_hydration" in final["phase_timings_ms"]
 
 
+def test_scenario_switch_rebuild_can_defer_listing_sync(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_WEBSPACE_SCENARIO_SWITCH_INLINE_LISTING_SYNC", "0")
+    monkeypatch.setenv("ADAOS_WEBSPACE_REBUILD_REFRESH_LIVE_ROOM", "0")
+    sync_calls: list[bool] = []
+
+    async def _fake_sync_listing() -> None:
+        sync_calls.append(True)
+
+    async def _fake_refresh(
+        ctx,  # noqa: ARG001
+        webspace_id: str,  # noqa: ARG001
+        *,
+        scenario_id: str | None = None,
+        scenario_resolution: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "attempted": True,
+            "scenario_id": scenario_id,
+            "scenario_resolution": scenario_resolution,
+        }
+
+    async def _fake_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG001
+        self._last_rebuild_timings_ms = {"collect_inputs": 1.0, "resolve": 1.0, "apply": 1.0, "total": 3.0}
+        self._last_apply_summary = {"changed_branches": 1, "unchanged_branches": 0}
+        self._last_rebuild_ydoc_timings_ms = {"total": 3.0}
+        return SimpleNamespace(scenario_id="prompt_engineer_scenario", apps=[], widgets=[])
+
+    async def _fake_workflow_sync(self, scenario_id: str, webspace_id: str):  # noqa: ARG002
+        return None
+
+    monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
+    monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
+    monkeypatch.setattr(webspace_runtime_module.ScenarioWorkflowRuntime, "sync_workflow_for_webspace", _fake_workflow_sync)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.store",
+        types.SimpleNamespace(reset_ystore_for_webspace=lambda _webspace_id: None),
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.rebuild_webspace_from_sources(
+            "phase2-deferred-listing",
+            action="scenario_switch_rebuild",
+            scenario_id="prompt_engineer_scenario",
+            scenario_resolution="explicit",
+            source_of_truth="scenario_switch",
+            reseed_from_scenario=False,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert sync_calls == []
+    assert "fresh_doc_sync_listing" not in result["timings_ms"]
+    assert result["timings_ms"]["fresh_doc_sync_listing_deferred"] == 0.0
+
+
+def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
+    sync_calls: list[str] = []
+
+    async def _fake_sync_listing() -> None:
+        sync_calls.append("sync")
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
+    webspace_runtime_module._WEBSPACE_LISTING_SYNC_TASK = None
+
+    async def _run() -> tuple[dict[str, object], dict[str, object]]:
+        first = webspace_runtime_module._schedule_webspace_listing_sync(reason="test")
+        second = webspace_runtime_module._schedule_webspace_listing_sync(reason="test")
+        task = webspace_runtime_module._WEBSPACE_LISTING_SYNC_TASK
+        assert task is not None
+        await task
+        return first, second
+
+    try:
+        first, second = asyncio.run(_run())
+    finally:
+        webspace_runtime_module._WEBSPACE_LISTING_SYNC_TASK = None
+
+    assert sync_calls == ["sync"]
+    assert first["coalesced"] is False
+    assert second["coalesced"] is True
+
+
 def test_phase3_stale_rebuild_request_does_not_apply_effective_branches() -> None:
     webspace_id = "phase3-stale-apply-guard"
     webspace_runtime_module._WEBSPACE_REBUILD_STATUS.clear()
