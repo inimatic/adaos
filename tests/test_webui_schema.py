@@ -76,6 +76,7 @@ def test_webui_schema_accepts_stream_receivers_and_stream_data_sources() -> None
                     "dedupeBy": "id",
                     "maxItems": 120,
                     "initialState": {"items": []},
+                    "transport": "hub",
                 }
             }
         },
@@ -87,6 +88,7 @@ def test_webui_schema_accepts_stream_receivers_and_stream_data_sources() -> None
                 "dataSource": {
                     "kind": "stream",
                     "receiver": "telemetry_feed",
+                    "scope": "shared",
                 },
             }
         ],
