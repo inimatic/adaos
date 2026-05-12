@@ -7,7 +7,10 @@ AdaOS provisions an isolated runtime per skill with versioned A/B slots. Each in
 Every skill lives under `skills/<name>` in the workspace. Runtime artefacts are stored separately:
 
 ```
-skills/.runtime/<name>/<version>/
+skills/.runtime/<name>/current_version
+skills/.runtime/<name>/current_runtime.json
+skills/.runtime/<name>/previous_runtime.json
+skills/.runtime/<name>/v<major>.<minor>/
     slots/<A|B>/
         src/                    # snapshot of the skill sources
         env/                    # shared site-packages for current interpreter
@@ -21,19 +24,25 @@ skills/.runtime/<name>/<version>/
     active                      # marker with the current slot (A or B)
     previous                    # marker with the last healthy slot
     meta.json                   # test results, timestamps, history
-skills/.runtime/<name>/data/
-    db/
-    files/
-        secrets.json            # per-skill secrets (managed via CLI/setup)
-        .skill_env.json         # persisted environment snapshot
-    internal/
-        a/                      # optional internal data slot
-        b/                      # optional internal data slot
-        active                  # current internal data slot marker
-        previous                # previous internal data slot marker
+    data/
+        db/
+            skill_env.json      # shared state for this compatibility bucket
+        files/
+            secrets.json        # per-bucket secrets/artifacts
+            .skill_env.json     # optional persisted environment snapshot
+        internal/               # schema-bound internal data for this bucket
 ```
 
-All paths are relative and compatible with Linux/Windows. Slots are created lazily during `adaos skill install`; both directories always exist so an operator can switch immediately.
+Runtime isolation is keyed by semantic `major.minor`, not full SemVer. For example, `0.14.0` and `0.14.3` share `v0.14`; `0.15.0` uses `v0.15`.
+Slots are A/B code deployments inside the same bucket. Data is not A/B-slotted inside a bucket.
+
+## Version policy
+
+The default publication bump for skills is `patch`. A patch release stays in the same runtime bucket and uses the existing `data/` tree.
+
+If the skill manifest declares a data migration hook, a requested/default patch bump is promoted to `minor`. A minor release creates a new `v<major>.<minor>` bucket and prepares a migrated copy of data there before activation.
+
+Major releases are manual. They also land in a new bucket, but the decision to publish one is outside automatic CI/CD policy.
 
 ## Install → test → activate
 
@@ -43,20 +52,20 @@ All paths are relative and compatible with Linux/Windows. Slots are created lazi
 2. Copy the current contents of `skills/<name>` into `slots/<slot>/src`.
 3. Build runtime dependencies (either reusing the host interpreter or creating an isolated virtualenv).
 4. Enrich `manifest.json` into `resolved.manifest.json`, resolving tool entry points, interpreter paths, timeouts, and policy defaults.
-5. Prepare `data/internal/<a|b>` for the target slot. By default AdaOS copies the current internal slot into the inactive one. If the skill declares a custom `data_migration_tool`, AdaOS invokes that tool instead.
+5. Prepare bucket data. Patch installs in the same `v<major>.<minor>` bucket reuse the existing shared `data/` tree without copying. A new bucket runs the declared data migration hook when present.
 6. Optionally run `src/skills/<name>/tests/` (`--test`) from the prepared slot. Commands execute inside the staged environment (interpreter, `PYTHONPATH`, `.skill_env.json`), and logs are streamed to `slots/<slot>/logs/tests.log`.
 7. Persist slot metadata (tests, timestamps, default tool, data migration result) for status and rollback operations.
 
-`adaos skill activate <name>` switches the `active` marker to the prepared slot atomically, records the previous slot for `adaos skill rollback`, writes the active version marker, and also switches `data/internal/active` to the corresponding `a|b` slot. Setup flows must run **after activation** so that secrets and runtime paths are stable.
+`adaos skill activate <name>` switches the active version/slot markers atomically and records the previous version/slot for `adaos skill rollback`. Activation does not run data migration; migration belongs to prepare. Setup flows must run **after activation** so that secrets and runtime paths are stable.
 
-`adaos skill rollback <name>` rolls back both the runtime slot and the `data/internal/active` pointer.
+`adaos skill rollback <name>` rolls back the active version/slot marker. For a patch rollback this means old code over the same bucket data. For a minor rollback this points back to the previous bucket and therefore to that bucket's older data copy. AdaOS does not try to detect or block writes that happened after the minor activation.
 
 Important architectural note:
 
 - activation is a slot-pointer switch, not a generic live-memory migration
 - in-process skills typically pick up new code on the next invocation from the active slot
 - service skills are explicitly restarted by the runtime lifecycle
-- durable migration authority belongs to persisted state and `data/internal/<a|b>`, while derived caches/projections should be rebuilt after activation
+- durable migration authority belongs to persisted bucket data under `v<major>.<minor>/data`, while derived caches/projections should be rebuilt after activation
 
 For the target kernel-facing migration architecture, including rehydrate and rollback semantics for stateful skills, see [AdaOS Supervisor](architecture/adaos-supervisor.md#skill-runtime-migration-lifecycle).
 
@@ -76,16 +85,18 @@ When that happens, the deactivation record now persists the failure contract its
 
 ## Optional internal data migration
 
-This feature is optional. A skill can ignore `data/internal/a|b` completely and continue using only:
+This feature is optional. A skill can ignore `data/internal` completely and continue using only:
 
 - `data/db/skill_env.json`
 - `data/files/*`
 
-Use `data/internal/a|b` only for state that must evolve together with runtime schema changes.
+Use `data/internal` only for state that must evolve together with runtime schema changes.
 
 ### Default behavior
 
-If a skill does not declare a migration hook, AdaOS simply copies the currently active internal data slot into the inactive one during `prepare_runtime`.
+If a skill does not declare a migration hook, AdaOS does not copy data during patch prepare. The prepared slot uses the same bucket-level `data/` directory as the currently active slot.
+
+When preparing a new minor/major bucket without a migration hook, AdaOS creates an empty bucket data tree. Moving data across compatibility buckets is explicit: declare a migration hook.
 
 ### Custom migration hook
 
@@ -99,12 +110,16 @@ tools:
 ```
 
 The hook is resolved through the same tool system as ordinary skill tools.
-During prepare, AdaOS runs it against the staged skill sources for the target slot.
+During prepare of a new compatibility bucket, AdaOS runs it against the staged skill sources for the target slot.
 
 The hook receives a payload with:
 
-- `source_internal_slot`
-- `target_internal_slot`
+- `source_version`
+- `target_version`
+- `source_runtime_bucket`
+- `target_runtime_bucket`
+- `source_data_root`
+- `target_data_root`
 - `source_internal_dir`
 - `target_internal_dir`
 - `data_root`
@@ -121,9 +136,9 @@ AdaOS also exposes convenience environment variables while the hook runs:
 Important notes:
 
 - the hook is optional
-- if the hook is absent, AdaOS falls back to copy
-- the hook is expected to populate `target_internal_dir`
-- on migration failure, AdaOS clears the target internal slot and fails `prepare_runtime`
+- if the hook is absent, AdaOS does not implicitly copy cross-bucket data
+- the hook is expected to populate the target bucket data it owns
+- on migration failure, AdaOS clears the target bucket data and fails `prepare_runtime`
 
 ### Target direction
 
@@ -131,8 +146,8 @@ The target AdaOS migration model separates state classes:
 
 - canonical durable state:
   must survive restart, rollback, and rebuild
-- slot-bound schema state:
-  belongs under `data/internal/a|b`
+- bucket-bound schema state:
+  belongs under `v<major>.<minor>/data/internal`
 - derived runtime state:
   caches, indexes, projections, and similar rebuildable material
 - live memory:
@@ -177,7 +192,7 @@ If activation already switched to a new version/slot and `rehydrate` then fails,
 
 - the previous active version marker
 - the previous active slot selection
-- the previous internal data slot marker
+- the previous runtime bucket data, by restoring the previous active version/slot marker
 - the previous deactivation state
 
 The failed target slot keeps its lifecycle diagnostics so operators can inspect the failed `rehydrate`, shutdown hooks, and rollback result.
@@ -195,7 +210,7 @@ Supervisor-facing validation status and operator projections now also surface a 
 
 ## Secrets management
 
-Secrets are stored under `skills/.runtime/<name>/data/files/secrets.json` and are never copied into the source tree. Runtime execution injects secrets at process start and keeps placeholders (`${secret:NAME}`) inside `resolved.manifest.json`.
+Secrets are stored under `skills/.runtime/<name>/v<major>.<minor>/data/files/secrets.json` and are never copied into the source tree. Runtime execution injects secrets at process start and keeps placeholders (`${secret:NAME}`) inside `resolved.manifest.json`.
 
 Use the CLI to manage secrets either globally or per skill:
 
