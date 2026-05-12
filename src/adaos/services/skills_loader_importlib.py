@@ -54,12 +54,38 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             else:
                 _LOG.info("imported repo workspace skill handler path=%s", handler)
 
-    def _load_handler(self, handler: Path) -> None:
+    async def reload_skill_handlers(self, skills_root: Any, skill_name: str) -> dict[str, Any]:
+        root = Path(skills_root() if callable(skills_root) else skills_root)
+        target = str(skill_name or "").strip()
+        if not target:
+            return {"ok": False, "reason": "skill_name_missing", "handlers": []}
+        handlers = [handler for handler, name in self._discover_runtime_handlers(root) if name == target]
+        if not handlers:
+            loaded: set[str] = set()
+            handlers = [handler for handler, name in self._discover_workspace_handlers(root, loaded) if name == target]
+        if not handlers:
+            handlers = [handler for handler, name in self._discover_repo_workspace_handlers(root, set()) if name == target]
+        loaded_projection_manifests: set[Path] = set()
+        loaded_handlers: list[str] = []
+        for handler in handlers:
+            self._load_skill_data_projections(handler, loaded_projection_manifests)
+            self._load_handler(handler, reload=True)
+            loaded_handlers.append(str(handler))
+            _LOG.info("reloaded skill handler skill=%s path=%s", target, handler)
+        if loaded_handlers:
+            from adaos.sdk.core.decorators import register_subscriptions
+
+            await register_subscriptions(skill_names={target}, force=True)
+        return {"ok": bool(loaded_handlers), "skill": target, "handlers": loaded_handlers}
+
+    def _load_handler(self, handler: Path, *, reload: bool = False) -> None:
         mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
         existing = sys.modules.get(mod_name)
-        if existing is not None:
+        if existing is not None and not reload:
             _LOG.debug("reusing already imported skill handler module=%s path=%s", mod_name, handler)
             return
+        if existing is not None and reload:
+            sys.modules.pop(mod_name, None)
         spec = importlib.util.spec_from_file_location(mod_name, handler)
         module = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
