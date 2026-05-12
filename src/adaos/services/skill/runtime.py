@@ -27,19 +27,16 @@ def _ensure_sys_paths(skill_name: str, slot_root: Path) -> None:
     """Ensure the active slot paths are positioned at the front of ``sys.path``."""
 
     src_path = slot_root / "src"
-    vendor_path = slot_root / "vendor"
-    suffixes = {
-        f"/{skill_name}/slots/current/src",
-        f"/{skill_name}/slots/A/src",
-        f"/{skill_name}/slots/B/src",
-        f"/{skill_name}/slots/current/vendor",
-        f"/{skill_name}/slots/A/vendor",
-        f"/{skill_name}/slots/B/vendor",
-    }
-
+    bucket_root = slot_root.parent.parent if slot_root.parent.name == "slots" else slot_root
+    vendor_path = bucket_root / "vendor"
     def _is_outdated(entry: str) -> bool:
         normalized = entry.replace("\\", "/")
-        return any(normalized.endswith(suffix) for suffix in suffixes)
+        runtime_skill_fragment = f"/.runtime/{skill_name}/"
+        if runtime_skill_fragment not in normalized:
+            return False
+        if normalized.endswith("/vendor"):
+            return True
+        return normalized.endswith("/slots/current/src") or normalized.endswith("/slots/A/src") or normalized.endswith("/slots/B/src")
 
     sys.path[:] = [p for p in sys.path if not _is_outdated(p)]
 

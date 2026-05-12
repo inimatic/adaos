@@ -56,7 +56,7 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
     assert status["port"] == 1111
     assert ".runtime" in status["skill_root"]
     assert status["skill_root"].endswith(str(Path("src") / "skills" / "slot_service"))
-    assert status["venv_dir"].endswith(str(Path("slots") / "A" / "venv"))
+    assert status["venv_dir"].endswith(str(Path("v0.1") / "venv"))
 
     (version_root / "active").write_text("B", encoding="utf-8")
     supervisor.ensure_discovered(force=True)
@@ -64,4 +64,4 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
 
     assert status is not None
     assert status["port"] == 1113
-    assert status["venv_dir"].endswith(str(Path("slots") / "B" / "venv"))
+    assert status["venv_dir"].endswith(str(Path("v0.1") / "venv"))

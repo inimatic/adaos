@@ -36,7 +36,7 @@ class RasaNLURuntime:
         self.ws = workspace
         self.python_spec = python_spec
         # Legacy subprocess fallback layout. The production service-skill owns
-        # its slot-local venv instead.
+        # its bucket-level runtime venv instead.
         self.env_dir = self.ws.root / ".rasa-venv"
         self.models_dir = Path(self.ws.context.paths.models_dir()) / "interpreter"
         self.models_dir.mkdir(parents=True, exist_ok=True)

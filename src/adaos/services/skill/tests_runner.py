@@ -73,7 +73,13 @@ def run_tests(
     else:
         # runtime: src + vendor
         src_root = root  # root у нас = src/skills/<name>, см. существующую логику вызова
-        vendor_root = src_root.parent / "vendor"
+        vendor_root = None
+        if slot_current_dir is not None:
+            slot_root = slot_current_dir.resolve()
+            if slot_root.parent.name == "slots":
+                vendor_root = slot_root.parent.parent / "vendor"
+        if vendor_root is None:
+            vendor_root = src_root.parent / "vendor"
         if vendor_root.exists():
             python_entries.append(str(vendor_root))
         python_entries.append(str(src_root))
