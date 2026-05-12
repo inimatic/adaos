@@ -12,7 +12,7 @@ requirements from the product brief:
 
 ```
 skills/<name>/                    # immutable skill sources
-skills/.runtime/<name>/<version>/
+skills/.runtime/<name>/<runtime-bucket>/
     slots/
         A/
             src/
@@ -26,7 +26,7 @@ skills/.runtime/<name>/<version>/
         B/ ...
     active                        # text file with current slot name
     previous                      # optional previous healthy slot
-    meta.json                     # version metadata (tests etc.)
+    meta.json                     # bucket metadata (slot versions, tests etc.)
 data/
     db/                           # persistent structured skill state
     files/                        # physical file artifacts/blobs
@@ -46,6 +46,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -53,6 +55,34 @@ from typing import Iterable, Optional
 
 
 _SLOT_NAMES: tuple[str, ...] = ("A", "B")
+_SEMVER_MAJOR_RE = re.compile(r"^v?(\d+)(?:[.\-+_].*)?$")
+_RUNTIME_BUCKET_RE = re.compile(r"^v\d+$")
+
+
+def _version_sort_key(value: str) -> tuple[int, int, int, str]:
+    parts = [0, 0, 0]
+    raw_parts = str(value or "").strip().lstrip("vV").split(".")
+    for idx, token in enumerate(raw_parts[:3]):
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if digits:
+            try:
+                parts[idx] = int(digits)
+            except ValueError:
+                parts[idx] = 0
+    return (parts[0], parts[1], parts[2], str(value or ""))
+
+
+def _runtime_bucket_name(version: str) -> str:
+    token = str(version or "").strip() or "0.0.0"
+    match = _SEMVER_MAJOR_RE.match(token)
+    if match:
+        return f"v{int(match.group(1))}"
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in token).strip("._-")
+    return cleaned or "unversioned"
+
+
+def _is_runtime_bucket_name(value: str) -> bool:
+    return bool(_RUNTIME_BUCKET_RE.match(str(value or "").strip()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,8 +141,21 @@ class SkillRuntimeEnvironment:
     def runtime_root(self) -> Path:
         return self._runtime_root
 
+    def runtime_bucket(self, version: str) -> str:
+        return _runtime_bucket_name(version)
+
+    def runtime_bucket_root(self, version: str) -> Path:
+        return (self._runtime_root / self.runtime_bucket(version)).resolve()
+
+    def legacy_version_root(self, version: str) -> Path:
+        return (self._runtime_root / str(version)).resolve()
+
     def version_root(self, version: str) -> Path:
-        return (self._runtime_root / version).resolve()
+        bucket_root = self.runtime_bucket_root(version)
+        legacy_root = self.legacy_version_root(version)
+        if legacy_root.exists() and not bucket_root.exists():
+            return legacy_root
+        return bucket_root
 
     def slots_root(self, version: str) -> Path:
         return self.version_root(version) / "slots"
@@ -233,11 +276,21 @@ class SkillRuntimeEnvironment:
     def list_versions(self) -> list[str]:
         if not self._runtime_root.exists():
             return []
-        versions = []
+        versions: set[str] = set()
+        marker = self.active_version_marker()
+        if marker.exists():
+            marker_version = marker.read_text(encoding="utf-8").strip()
+            if marker_version:
+                versions.add(marker_version)
         for child in self._runtime_root.iterdir():
-            if child.is_dir() and child.name not in {"data"}:
-                versions.append(child.name)
-        return sorted(versions)
+            if not child.is_dir() or child.name in {"data"}:
+                continue
+            metadata = self._read_metadata_path(child / "meta.json")
+            if metadata:
+                self._collect_metadata_versions(metadata, versions)
+            if not _is_runtime_bucket_name(child.name):
+                versions.add(child.name)
+        return sorted(versions, key=_version_sort_key)
 
     def resolve_active_version(self) -> Optional[str]:
         marker = self.active_version_marker()
@@ -265,6 +318,114 @@ class SkillRuntimeEnvironment:
         if not self.internal_active_marker().exists():
             self.internal_active_marker().write_text("a", encoding="utf-8")
 
+    def _seed_bucket_from_legacy(self, version: str) -> None:
+        bucket_root = self.runtime_bucket_root(version)
+        if bucket_root.exists():
+            return
+
+        candidates: list[str] = []
+        current = self.resolve_active_version()
+        if current and self.runtime_bucket(current) == self.runtime_bucket(version):
+            candidates.append(current)
+        candidates.append(version)
+
+        source_root: Path | None = None
+        source_version: str | None = None
+        for candidate in candidates:
+            legacy_root = self.legacy_version_root(candidate)
+            if legacy_root.exists() and legacy_root != bucket_root:
+                source_root = legacy_root
+                source_version = candidate
+                break
+        if source_root is None:
+            return
+
+        def _ignore_links(path: str, names: list[str]) -> set[str]:
+            if Path(path).name == "slots":
+                return {"current"} & set(names)
+            return set()
+
+        try:
+            shutil.copytree(source_root, bucket_root, ignore=_ignore_links)
+            self._normalize_bucket_metadata(bucket_root, fallback_version=source_version or version)
+            selected = self.read_active_slot(source_version or version)
+            self._update_current_link(version, selected)
+        except OSError:
+            if bucket_root.exists():
+                self._remove_tree(bucket_root)
+
+    def _normalize_bucket_metadata(self, bucket_root: Path, *, fallback_version: str) -> None:
+        path = bucket_root / "meta.json"
+        metadata = self._read_metadata_path(path)
+        if not metadata:
+            return
+        metadata["runtime_bucket"] = bucket_root.name
+        slots = metadata.get("slots")
+        if isinstance(slots, dict):
+            for slot_name in _SLOT_NAMES:
+                slot_meta = slots.get(slot_name)
+                if not isinstance(slot_meta, dict):
+                    continue
+                slot_root = bucket_root / "slots" / slot_name
+                resolved = slot_root / "resolved.manifest.json"
+                slot_meta["resolved_manifest"] = str(resolved)
+                if not str(slot_meta.get("version") or "").strip():
+                    slot_meta["version"] = self._read_manifest_version(resolved) or fallback_version
+                slot_meta["runtime_bucket"] = bucket_root.name
+        history = metadata.setdefault("history", {})
+        if isinstance(history, dict):
+            history.setdefault("last_active_version", fallback_version)
+        self._write_metadata_path(path, metadata)
+
+    @staticmethod
+    def _read_manifest_version(path: Path) -> str | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if isinstance(payload, dict):
+            value = payload.get("version")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _read_metadata_path(path: Path) -> dict:
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _write_metadata_path(path: Path, payload: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+
+    @staticmethod
+    def _collect_metadata_versions(metadata: dict, versions: set[str]) -> None:
+        for key in ("version", "active_version"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                versions.add(value.strip())
+        history = metadata.get("history")
+        if isinstance(history, dict):
+            for key in ("last_install_version", "last_active_version", "previous_active_version"):
+                value = history.get(key)
+                if isinstance(value, str) and value.strip():
+                    versions.add(value.strip())
+        slots = metadata.get("slots")
+        if isinstance(slots, dict):
+            for slot_meta in slots.values():
+                if isinstance(slot_meta, dict):
+                    value = slot_meta.get("version")
+                    if isinstance(value, str) and value.strip():
+                        versions.add(value.strip())
+
     def prepare_version(self, version: str, *, activate_slot: Optional[str] = None) -> None:
         """Make sure that version layout exists.
 
@@ -274,6 +435,7 @@ class SkillRuntimeEnvironment:
         """
 
         self.ensure_base()
+        self._seed_bucket_from_legacy(version)
         version_root = self.version_root(version)
         slots_root = self.slots_root(version)
         slots_root.mkdir(parents=True, exist_ok=True)
@@ -449,18 +611,10 @@ class SkillRuntimeEnvironment:
     # ------------------------------------------------------------------
     def write_version_metadata(self, version: str, payload: dict) -> None:
         path = self.metadata_path(version)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        self._write_metadata_path(path, payload)
 
     def read_version_metadata(self, version: str) -> dict:
-        path = self.metadata_path(version)
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {}
+        return self._read_metadata_path(self.metadata_path(version))
 
     def iter_slot_paths(self, version: str) -> Iterable[SkillSlotPaths]:
         for slot in _SLOT_NAMES:

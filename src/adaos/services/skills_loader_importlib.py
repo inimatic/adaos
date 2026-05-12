@@ -10,6 +10,7 @@ from typing import Any, Iterable, Optional, Tuple
 from adaos.ports.skills_loader import SkillsLoaderPort
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 import yaml
 
 _LOG = logging.getLogger("adaos.services.skills_loader")
@@ -119,7 +120,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             version = self._read_text(skill_dir / "current_version")
             if not version:
                 continue
-            version_dir = skill_dir / version
+            env = SkillRuntimeEnvironment(skills_root=root, skill_name=skill_name)
+            version_dir = env.version_root(version)
             slot_dir = self._resolve_slot(version_dir)
             if not slot_dir:
                 continue
