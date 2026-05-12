@@ -106,6 +106,13 @@ def _infer_runtime_slot_root(skill_root: Path, skill_name: str) -> Path | None:
     return slot_root
 
 
+def _infer_runtime_bucket_root(skill_root: Path, skill_name: str) -> Path | None:
+    slot_root = _infer_runtime_slot_root(skill_root, skill_name)
+    if slot_root is None:
+        return None
+    return slot_root.parent.parent
+
+
 def _read_skill_manifest(skill_root: Path) -> dict:
     skill_yaml = skill_root / "skill.yaml"
     if not skill_yaml.exists():
@@ -152,8 +159,8 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         raw_venv_dir = Path(venv_dir_raw).expanduser()
         venv_dir = (skill_root / raw_venv_dir).resolve() if not raw_venv_dir.is_absolute() else raw_venv_dir.resolve()
     else:
-        slot_root = _infer_runtime_slot_root(skill_root, skill_name)
-        venv_dir = (slot_root / "venv").resolve() if env_mode == "venv" and slot_root is not None else None
+        bucket_root = _infer_runtime_bucket_root(skill_root, skill_name)
+        venv_dir = (bucket_root / "venv").resolve() if env_mode == "venv" and bucket_root is not None else None
 
     deps: list[str] = []
     dep_list = manifest.get("dependencies") or []

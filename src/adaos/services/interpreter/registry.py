@@ -167,7 +167,7 @@ def _maybe_autotrain(ctx: AgentContext) -> None:
     Optionally request service-based Rasa training after NLU data changes.
 
     `ADAOS_INTERPRETER_AUTOTRAIN` is kept as a compatibility alias; the actual
-    trainer now runs through the Rasa service-skill and its slot-local venv.
+    trainer now runs through the Rasa service-skill and its bucket-level runtime venv.
     """
     if os.getenv("ADAOS_INTERPRETER_AUTOTRAIN") != "1":
         return

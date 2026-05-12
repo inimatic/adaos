@@ -13,12 +13,13 @@ requirements from the product brief:
 ```
 skills/<name>/                    # immutable skill sources
 skills/.runtime/<name>/<runtime-bucket>/       # v<major>.<minor>
+    vendor/                         # shared pip --target packages for this bucket
+    venv/                           # shared service-skill venv for this bucket
     slots/
         A/
             src/
                 skills/<name>/...
                     tests/
-            vendor/
             runtime/
                 logs/
                 tmp/
@@ -103,6 +104,7 @@ class SkillSlotPaths:
     data_root: Path
     files_dir: Path
     internal_data_dir: Path
+    venv_dir: Path
 
     @property
     def skill_env_path(self) -> Path:
@@ -157,6 +159,12 @@ class SkillRuntimeEnvironment:
 
     def slot_root(self, version: str, slot: str) -> Path:
         return self.slots_root(version) / slot
+
+    def vendor_dir(self, version: str) -> Path:
+        return self.version_root(version) / "vendor"
+
+    def venv_dir(self, version: str) -> Path:
+        return self.version_root(version) / "venv"
 
     def data_root(self, version: str | None = None) -> Path:
         target_version = version or self.resolve_active_version() or "0.0.0"
@@ -312,6 +320,11 @@ class SkillRuntimeEnvironment:
         ):
             path.mkdir(parents=True, exist_ok=True)
 
+    def ensure_bucket_dirs(self, version: str) -> None:
+        self.version_root(version).mkdir(parents=True, exist_ok=True)
+        self.vendor_dir(version).mkdir(parents=True, exist_ok=True)
+        self.ensure_data_dirs(version)
+
     @staticmethod
     def _read_metadata_path(path: Path) -> dict:
         if not path.exists():
@@ -361,7 +374,7 @@ class SkillRuntimeEnvironment:
         version_root = self.version_root(version)
         slots_root = self.slots_root(version)
         slots_root.mkdir(parents=True, exist_ok=True)
-        self.ensure_data_dirs(version)
+        self.ensure_bucket_dirs(version)
         for slot in _SLOT_NAMES:
             slot_root = self.slot_root(version, slot)
             self._ensure_slot(slot_root)
@@ -382,12 +395,11 @@ class SkillRuntimeEnvironment:
     def _ensure_slot(self, slot_root: Path) -> None:
         slot_root.mkdir(parents=True, exist_ok=True)
         src_dir = slot_root / "src"
-        vendor_dir = slot_root / "vendor"
         runtime_dir = slot_root / "runtime"
         logs_dir = runtime_dir / "logs"
         tmp_dir = runtime_dir / "tmp"
 
-        for path in (src_dir, vendor_dir, runtime_dir, logs_dir, tmp_dir):
+        for path in (src_dir, runtime_dir, logs_dir, tmp_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         keep = runtime_dir / ".keep"
@@ -441,7 +453,7 @@ class SkillRuntimeEnvironment:
             slot=slot,
             root=slot_root,
             src_dir=slot_root / "src",
-            vendor_dir=slot_root / "vendor",
+            vendor_dir=self.vendor_dir(version),
             runtime_dir=slot_root / "runtime",
             tests_dir=slot_root / "src" / "skills" / self._skill_name / "tests",
             logs_dir=slot_root / "runtime" / "logs",
@@ -450,6 +462,7 @@ class SkillRuntimeEnvironment:
             data_root=self.data_root(version),
             files_dir=self.files_dir(version),
             internal_data_dir=self.internal_root(version),
+            venv_dir=self.venv_dir(version),
         )
 
     def read_active_slot(self, version: str) -> str:

@@ -70,7 +70,7 @@
             },
             "venv_dir": {
               "type": "string",
-              "description": "Optional custom venv path (default: state/services/<skill>/venv)."
+              "description": "Optional custom venv path (default runtime bucket venv under skills/.runtime/<skill>/v<major>.<minor>/venv; workspace-source fallback: state/services/<skill>/venv)."
             }
           }
         },

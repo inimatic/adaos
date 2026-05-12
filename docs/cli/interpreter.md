@@ -32,8 +32,8 @@ The CLI builds the Rasa project from installed skill/scenario training content, 
 ## Runtime locations
 
 - Workspace template copy: `.adaos/workspace/skills/rasa_nlu_service_skill`
-- Active slot source: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/<version>/slots/<A|B>/src/skills/rasa_nlu_service_skill`
-- Slot-local service venv: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/<version>/slots/<A|B>/venv`
+- Active slot source: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/v<major>.<minor>/slots/<A|B>/src/skills/rasa_nlu_service_skill`
+- Bucket service venv: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/v<major>.<minor>/venv`
 - Generated project: `.adaos/state/interpreter/rasa_project`
 - Model artifact: `.adaos/models/interpreter/interpreter_latest.tar.gz`
 - Service log: `.adaos/logs/service.rasa_nlu_service_skill.log`

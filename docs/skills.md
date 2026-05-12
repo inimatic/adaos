@@ -26,7 +26,7 @@ adaos skill doctor my_skill
 adaos skill gc
 ```
 
-For runtime bucket layout, rollback semantics, and the `data_migration_tool` flow, see [Skill Runtime Lifecycle](skill_runtime.md).
+For runtime bucket layout, rollback semantics, and the reserved `migrations/data_migration.py` flow, see [Skill Runtime Lifecycle](skill_runtime.md).
 
 For browser-facing or LLM-authored skills, follow
 [LLM-Safe Skill Development Guide](guides/llm-skill-development.md). That guide

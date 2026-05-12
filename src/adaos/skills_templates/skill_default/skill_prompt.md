@@ -104,9 +104,11 @@ Generate a minimal but fully functional skill compatible with the AdaOS SDK.
   ```
 
 * **Optional migratable internal data:** if the skill owns schema-sensitive files, it may use
-  `skills/.runtime/<name>/v<major>.<minor>/data/internal` together with an optional manifest field
-  `data_migration_tool`. Patch releases reuse the same bucket data; minor releases create a new
-  bucket and run the migration tool when declared.
+  `skills/.runtime/<name>/v<major>.<minor>/data/internal`. If a schema migration is needed, place
+  the reserved file at `migrations/data_migration.py` and expose `migrate(payload: dict)`.
+  Patch releases reuse the same bucket data; minor releases create a new bucket and run this
+  migration file when present. If the file is absent on a bucket change, AdaOS logs a warning and
+  falls back to a plain data copy.
 
 * **Output abstraction:**
 
