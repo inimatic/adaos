@@ -38,7 +38,7 @@ The project must not start with sidecar or transport adapters as if they alone s
 - Yjs runtime diagnostics now expose explicit ownership boundaries for `ui.current_scenario`, effective `ui/data/registry` branches, compatibility caches, and `yws` transport/session lifecycle
 - repo workspace fallback exists for built-in skills, scenarios, and `webui.json`
 - built-in fallback for `web_desktop` restores the return path from scenario views when scenario assets are missing on a hub
-- canonical runtime store for skill-local env and memory moved to `.runtime/<skill>/data/db/skill_env.json`
+- canonical runtime store for skill-local env and memory lives under `.runtime/<skill>/v<major>.<minor>/data/db/skill_env.json`
 
 ### In progress
 

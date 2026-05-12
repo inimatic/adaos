@@ -31,36 +31,36 @@ def test_slot_skill_env_uses_shared_runtime_store() -> None:
     assert slot.skill_memory_path == slot.skill_env_path
     assert slot.legacy_skill_env_path == slot.runtime_dir / ".skill_env.json"
     assert slot.legacy_skill_memory_path == slot.runtime_dir / ".skill_memory.json"
-    assert slot.internal_data_dir == env.internal_slot_dir("A")
+    assert slot.data_root == env.version_root("1.0.0") / "data"
+    assert slot.internal_data_dir == env.internal_root("1.0.0")
 
 
-def test_patch_and_minor_versions_share_major_runtime_bucket() -> None:
+def test_patch_versions_share_minor_runtime_bucket() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
     env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="bucket_skill")
 
     env.prepare_version("0.1.0")
 
-    assert env.version_root("0.1.0").name == "v0"
-    assert env.version_root("0.1.1") == env.version_root("0.2.0")
-    assert env.version_root("1.0.0").name == "v1"
-    assert env.version_root("1.0.0") != env.version_root("0.2.0")
+    assert env.version_root("0.1.0").name == "v0.1"
+    assert env.version_root("0.1.1") == env.version_root("0.1.0")
+    assert env.version_root("0.2.0").name == "v0.2"
+    assert env.version_root("0.2.0") != env.version_root("0.1.0")
+    assert env.version_root("1.0.0").name == "v1.0"
 
 
-def test_internal_data_slots_have_active_and_previous_markers() -> None:
+def test_internal_data_is_shared_inside_runtime_bucket() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
     env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="internal_data_skill")
     env.prepare_version("1.0.0")
 
-    assert env.read_active_internal_slot() == "a"
-    assert env.internal_slot_dir("A").exists()
-    assert env.internal_slot_dir("B").exists()
+    slot_a = env.build_slot_paths("1.0.0", "A")
+    slot_b = env.build_slot_paths("1.0.1", "B")
 
-    env.set_active_internal_slot("B")
-    assert env.read_active_internal_slot() == "b"
-    assert env.rollback_internal_slot() == "a"
-    assert env.read_active_internal_slot() == "a"
+    assert slot_a.internal_data_dir == slot_b.internal_data_dir
+    assert slot_a.internal_data_dir == env.version_root("1.0.0") / "data" / "internal"
+    assert slot_a.internal_data_dir.exists()
 
 
 def test_sync_skill_env_merges_template_legacy_and_store(tmp_path: Path, monkeypatch) -> None:
@@ -175,7 +175,7 @@ def test_skill_env_workspace_context_uses_runtime_store_without_prepared_runtime
     previous = ctx.skill_ctx.get()
     assert ctx.skill_ctx.set("workspace_only_skill", skill_dir)
     try:
-        assert skill_env_path() == runtime_root / ".runtime" / "workspace_only_skill" / "data" / "db" / "skill_env.json"
+        assert skill_env_path() == runtime_root / ".runtime" / "workspace_only_skill" / "v0.0" / "data" / "db" / "skill_env.json"
     finally:
         if previous is None:
             ctx.skill_ctx.clear()
@@ -245,7 +245,7 @@ def test_run_dev_tool_respects_timeout(monkeypatch, tmp_path: Path) -> None:
         raise AssertionError("expected run_dev_tool() to respect timeout_seconds")
 
 
-def test_prepare_runtime_copies_internal_data_without_custom_tool(monkeypatch) -> None:
+def test_prepare_runtime_keeps_patch_data_shared_without_copy(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
     skill_name = "copy_data_skill"
@@ -256,8 +256,7 @@ def test_prepare_runtime_copies_internal_data_without_custom_tool(monkeypatch) -
 
     env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
     env.prepare_version("1.0.0")
-    env.internal_slot_dir("A").mkdir(parents=True, exist_ok=True)
-    (env.internal_slot_dir("A") / "state.json").write_text('{"value": 1}', encoding="utf-8")
+    (env.internal_root("1.0.0") / "state.json").write_text('{"value": 1}', encoding="utf-8")
 
     monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
     monkeypatch.setattr(
@@ -279,9 +278,9 @@ def test_prepare_runtime_copies_internal_data_without_custom_tool(monkeypatch) -
     result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
 
     assert result.data_migration is not None
-    assert result.data_migration["mode"] == "copy"
-    assert result.data_migration["copied_entries"] == 1
-    assert (env.internal_slot_dir("B") / "state.json").read_text(encoding="utf-8") == '{"value": 1}'
+    assert result.data_migration["mode"] == "shared"
+    assert result.data_migration["reason"] == "same_runtime_bucket"
+    assert (env.internal_root("1.0.0") / "state.json").read_text(encoding="utf-8") == '{"value": 1}'
 
 
 def test_prepare_runtime_runs_custom_internal_data_migration_tool(monkeypatch) -> None:
@@ -294,13 +293,13 @@ def test_prepare_runtime_runs_custom_internal_data_migration_tool(monkeypatch) -
     (
         skill_dir / "skill.yaml"
     ).write_text(
-        "name: migrate_data_skill\nversion: '1.0.0'\ndata_migration_tool: migrate_data\n",
+        "name: migrate_data_skill\nversion: '1.1.0'\ndata_migration_tool: migrate_data\n",
         encoding="utf-8",
     )
 
     env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
     env.prepare_version("1.0.0")
-    (env.internal_slot_dir("A") / "old.txt").write_text("legacy", encoding="utf-8")
+    (env.internal_root("1.0.0") / "old.txt").write_text("legacy", encoding="utf-8")
 
     monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
     monkeypatch.setattr(
@@ -308,7 +307,7 @@ def test_prepare_runtime_runs_custom_internal_data_migration_tool(monkeypatch) -
         "_enrich_manifest",
         lambda **kwargs: {
             "name": skill_name,
-            "version": "1.0.0",
+            "version": "1.1.0",
             "slot": "B",
             "source": str(kwargs["skill_dir"]),
             "runtime": {"skill_env": str(kwargs["slot"].skill_env_path), "skill_memory": str(kwargs["slot"].skill_memory_path)},
@@ -343,10 +342,12 @@ def test_prepare_runtime_runs_custom_internal_data_migration_tool(monkeypatch) -
     assert result.data_migration["mode"] == "tool"
     assert result.data_migration["tool"] == "migrate_data"
     assert captured["attr"] == "migrate_data"
-    assert (env.internal_slot_dir("B") / "migrated.txt").read_text(encoding="utf-8") == "ok"
+    assert captured["payload"]["source_runtime_bucket"] == "v1.0"
+    assert captured["payload"]["target_runtime_bucket"] == "v1.1"
+    assert (env.internal_root("1.1.0") / "migrated.txt").read_text(encoding="utf-8") == "ok"
 
 
-def test_activate_and_rollback_runtime_switch_internal_data_slot(monkeypatch) -> None:
+def test_activate_and_rollback_runtime_keep_shared_bucket_data(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
     skill_name = "internal_switch_skill"
@@ -357,6 +358,7 @@ def test_activate_and_rollback_runtime_switch_internal_data_slot(monkeypatch) ->
 
     env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
     env.prepare_version("1.0.0")
+    (env.internal_root("1.0.0") / "state.json").write_text('{"value": 1}', encoding="utf-8")
 
     monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
     monkeypatch.setattr(
@@ -378,14 +380,14 @@ def test_activate_and_rollback_runtime_switch_internal_data_slot(monkeypatch) ->
     monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
 
     mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
-    assert env.read_active_internal_slot() == "a"
+    assert (env.internal_root("1.0.0") / "state.json").exists()
 
     mgr.activate_runtime(skill_name, version="1.0.0", slot="B")
-    assert env.read_active_internal_slot() == "b"
+    assert (env.internal_root("1.0.0") / "state.json").exists()
 
     restored = mgr.rollback_runtime(skill_name)
     assert restored == "A"
-    assert env.read_active_internal_slot() == "a"
+    assert (env.internal_root("1.0.0") / "state.json").exists()
 
 
 def test_patch_runtime_uses_ab_slots_and_rollback_restores_slot_version(monkeypatch) -> None:
@@ -438,6 +440,83 @@ def test_patch_runtime_uses_ab_slots_and_rollback_restores_slot_version(monkeypa
     assert restored == "A"
     assert env.resolve_active_version() == "0.1.0"
     assert mgr.runtime_status(skill_name)["version"] == "0.1.0"
+
+
+def test_minor_runtime_migrates_bucket_data_and_rollback_restores_previous_bucket(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "minor_bucket_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text("name: minor_bucket_skill\nversion: '1.0.0'\n", encoding="utf-8")
+
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+
+    def _enrich(**kwargs):
+        version = str(kwargs["manifest"].get("version") or "0.0.0")
+        tools = {}
+        data_migration_tool = ""
+        data_migration = {}
+        if version == "1.1.0":
+            tools["migrate_data"] = {
+                "module": "skills.minor_bucket_skill.handlers.main",
+                "callable": "migrate_data",
+            }
+            data_migration_tool = "migrate_data"
+            data_migration = {"tool": "migrate_data"}
+        return {
+            "name": skill_name,
+            "version": version,
+            "runtime_bucket": kwargs["slot"].root.parent.parent.name,
+            "slot": kwargs["slot"].slot,
+            "source": str(kwargs["skill_dir"]),
+            "runtime": {"skill_env": str(kwargs["slot"].skill_env_path), "skill_memory": str(kwargs["slot"].skill_memory_path)},
+            "tools": tools,
+            "default_tool": "",
+            "data_migration_tool": data_migration_tool,
+            "data_migration": data_migration,
+        }
+
+    monkeypatch.setattr(mgr, "_enrich_manifest", _enrich)
+    monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+
+    def _fake_execute_tool(skill_dir_arg, *, module=None, attr=None, payload=None, extra_paths=None):
+        target = Path(str(payload["target_internal_dir"]))
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "migrated.txt").write_text("v1.1", encoding="utf-8")
+        return {"ok": True}
+
+    monkeypatch.setattr(skill_manager_module, "execute_tool", _fake_execute_tool)
+
+    initial = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+    mgr.activate_runtime(skill_name, version=initial.version, slot=initial.slot)
+    (env.internal_root("1.0.0") / "state.txt").write_text("v1.0", encoding="utf-8")
+
+    (skill_dir / "skill.yaml").write_text(
+        "name: minor_bucket_skill\nversion: '1.1.0'\ndata_migration_tool: migrate_data\n",
+        encoding="utf-8",
+    )
+    migrated = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
+
+    assert migrated.data_migration is not None
+    assert migrated.data_migration["mode"] == "tool"
+    assert env.version_root("1.0.0") != env.version_root("1.1.0")
+    assert (env.internal_root("1.1.0") / "migrated.txt").read_text(encoding="utf-8") == "v1.1"
+
+    mgr.activate_runtime(skill_name, version=migrated.version, slot=migrated.slot)
+    assert env.resolve_active_version() == "1.1.0"
+    assert env.data_root() == env.data_root("1.1.0")
+
+    restored = mgr.rollback_runtime(skill_name)
+
+    assert restored == "A"
+    assert env.resolve_active_version() == "1.0.0"
+    assert env.data_root() == env.data_root("1.0.0")
+    assert (env.internal_root() / "state.txt").read_text(encoding="utf-8") == "v1.0"
 
 
 def test_deactivate_runtime_blocks_execution_until_reactivated(monkeypatch) -> None:
@@ -746,7 +825,7 @@ def test_failed_rehydrate_restores_previous_active_version(monkeypatch) -> None:
     env.prepare_version("2.0.0")
     env.active_version_marker().write_text("1.0.0", encoding="utf-8")
     env.set_active_slot("1.0.0", "A")
-    env.set_active_internal_slot("A")
+    env.record_active_selection("1.0.0", "A")
 
     def _fake_enrich_manifest(**kwargs):
         version = kwargs["manifest"].get("version") or "0.0.0"

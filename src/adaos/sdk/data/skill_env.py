@@ -73,6 +73,14 @@ def _current_ctx_and_skill():
     return ctx, current
 
 
+def _is_runtime_bucket_name(value: str) -> bool:
+    token = str(value or "").strip()
+    if not token.startswith("v"):
+        return False
+    major, sep, minor = token[1:].partition(".")
+    return bool(sep and major.isdigit() and minor.isdigit())
+
+
 def _runtime_env_path_from_skill_dir(skill_dir: Path) -> Path | None:
     resolved = skill_dir.expanduser().resolve()
     parts = resolved.parts
@@ -82,8 +90,33 @@ def _runtime_env_path_from_skill_dir(skill_dir: Path) -> Path | None:
         return None
     if len(parts) <= idx + 1:
         return None
-    runtime_root = Path(*parts[: idx + 2])
+    if len(parts) > idx + 2 and _is_runtime_bucket_name(str(parts[idx + 2])):
+        runtime_root = Path(*parts[: idx + 3])
+    else:
+        runtime_root = Path(*parts[: idx + 2]) / "v0.0"
     return runtime_root / "data" / "db" / "skill_env.json"
+
+
+def _runtime_bucket_name(version: str | None) -> str:
+    parts = [0, 0]
+    raw_parts = str(version or "0.0.0").strip().lstrip("vV").split(".")
+    for idx, token in enumerate(raw_parts[:2]):
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if digits:
+            try:
+                parts[idx] = int(digits)
+            except ValueError:
+                parts[idx] = 0
+    return f"v{parts[0]}.{parts[1]}"
+
+
+def _runtime_env_path_from_root(root: Path, skill_name: str) -> Path:
+    runtime_root = root / ".runtime" / skill_name
+    marker = runtime_root / "current_version"
+    version = None
+    if marker.exists():
+        version = marker.read_text(encoding="utf-8").strip() or None
+    return runtime_root / _runtime_bucket_name(version) / "data" / "db" / "skill_env.json"
 
 
 def _runtime_env_path_from_ctx() -> Path | None:
@@ -118,18 +151,18 @@ def _runtime_env_path_from_ctx() -> Path | None:
 
     dev_root = _resolve_root("dev_skills_dir")
     if _is_under(current_dir, dev_root):
-        return dev_root / ".runtime" / current_name / "data" / "db" / "skill_env.json"  # type: ignore[operator]
+        return _runtime_env_path_from_root(dev_root, current_name)  # type: ignore[arg-type]
 
     workspace_root = _resolve_root("skills_dir")
     if _is_under(current_dir, workspace_root):
-        return workspace_root / ".runtime" / current_name / "data" / "db" / "skill_env.json"  # type: ignore[operator]
+        return _runtime_env_path_from_root(workspace_root, current_name)  # type: ignore[arg-type]
 
     # Repo-workspace and other source fallbacks should still persist state into
     # the local runtime store, not back into the git-tracked source tree.
     if workspace_root is not None:
-        return workspace_root / ".runtime" / current_name / "data" / "db" / "skill_env.json"
+        return _runtime_env_path_from_root(workspace_root, current_name)
     if dev_root is not None:
-        return dev_root / ".runtime" / current_name / "data" / "db" / "skill_env.json"
+        return _runtime_env_path_from_root(dev_root, current_name)
     return None
 
 

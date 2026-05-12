@@ -397,7 +397,7 @@ This keeps root updates out of the fast rollback path while preserving the slot-
 
 Installed skills are not automatically valid just because the core slot booted.
 Their runtime dependencies must be prepared against the new core interpreter and surfaced as explicit diagnostics.
-If a skill uses optional `data/internal/a|b`, that data must evolve together with the prepared runtime slot, either by default copy or by an explicit `data_migration_tool`.
+If a skill uses optional `data/internal`, that data evolves with the runtime compatibility bucket (`v<major>.<minor>`), not with the A/B code slot. Cross-bucket changes require an explicit `data_migration_tool`.
 
 ### Target migration model
 
@@ -418,8 +418,8 @@ The target storage classes per skill are:
 
 - canonical durable state:
   long-lived business state that must survive restart, rollback, and projection rebuild
-- slot-bound schema state:
-  data that evolves together with runtime schema and therefore belongs under `data/internal/a|b`
+- bucket-bound schema state:
+  data that evolves together with runtime schema and therefore belongs under `v<major>.<minor>/data/internal`
 - derived runtime state:
   projections, indexes, caches, thread summaries, embeddings, and similar rebuildable material
 - live process memory:
@@ -433,8 +433,8 @@ Derived runtime state must be rebuilt deterministically, and live memory must be
 The current implementation already follows the first half of this model:
 
 - runtime slot activation switches `active` and `previous` markers atomically
-- optional `data/internal/a|b` is copied or migrated during `prepare`
-- rollback switches both runtime slot and internal-data pointer
+- optional `data/internal` is migrated during `prepare` only when a new compatibility bucket is prepared with a migration hook
+- rollback switches the active version/slot marker; patch rollback reuses the same bucket data, while minor rollback points back to the previous bucket data
 - service skills are explicitly restarted on activate/rollback
 - in-process skills reload code on next invocation by clearing skill modules and re-importing from the active slot
 
@@ -460,7 +460,7 @@ The intended semantics are:
 
 1. `prepare_runtime`
    - stage code, interpreter, dependencies, and resolved manifest in the inactive slot
-   - prepare inactive `data/internal/<a|b>` by copy or migration hook
+   - prepare shared bucket data; patch installs reuse it, minor installs run the declared migration hook into the new bucket
 2. `persist_before_switch`
    - flush debounced writes and checkpoint any skill-owned durable stores before mutating slot pointers
    - stop accepting new local work if the runtime cannot safely overlap old and new state
@@ -468,7 +468,7 @@ The intended semantics are:
    - run schema migration only against canonical durable state and slot-bound schema state
    - never attempt generic object-memory serialization as the platform default
 4. `activate_pointer`
-   - atomically switch active runtime slot and active internal-data slot
+   - atomically switch active runtime version and slot
    - record previous slot and migration metadata for rollback
 5. `rehydrate_runtime`
    - rebuild projections, indexes, caches, subscriptions, and other derived state from durable truth
