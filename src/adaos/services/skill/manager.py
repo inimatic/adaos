@@ -38,6 +38,7 @@ from adaos.services.skill.secrets_backend import SkillSecretsBackend
 from adaos.services.skill.resolver import SkillPathResolver
 from adaos.services.capacity import install_skill_in_capacity, uninstall_skill_from_capacity
 from adaos.services.semver import bump_version
+from adaos.services.skill.version_policy import bump_index, effective_skill_bump
 import ast
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
@@ -1174,7 +1175,7 @@ class SkillManager:
         except Exception:
             pass
 
-    def push(self, name: str, message: str, *, signoff: bool = False) -> str:
+    def push(self, name: str, message: str, *, signoff: bool = False, bump: bool = True) -> str:
         self.caps.require("core", "skills.manage", "git.write", "net.git")
         root = self.ctx.paths.workspace_dir()
         try:
@@ -1191,7 +1192,7 @@ class SkillManager:
         sub = name.strip()
         subpath = f"skills/{sub}"
         self._ensure_skill_subpath_materialized(root, sub)
-        version = self._bump_skill_manifest_minor(root / "skills" / sub)
+        version = self._bump_skill_manifest_for_push(root / "skills" / sub) if bump else None
         upsert_workspace_registry_entry(root, "skills", root / "skills" / sub)
         if version and getattr(self, "reg", None) is not None:
             try:
@@ -1255,7 +1256,7 @@ class SkillManager:
                     f"skill '{name}' is not materialized in workspace sparse checkout"
                 ) from None
 
-    def _bump_skill_manifest_minor(self, skill_dir: Path) -> str | None:
+    def _bump_skill_manifest_for_push(self, skill_dir: Path) -> str | None:
         skill_yaml = skill_dir / "skill.yaml"
         if not skill_yaml.exists():
             return None
@@ -1267,7 +1268,8 @@ class SkillManager:
             return None
         existing = payload.get("version")
         existing_version = existing if isinstance(existing, str) and existing.strip() else None
-        payload["version"] = bump_version(existing_version, 1)
+        effective_bump = effective_skill_bump(payload, "patch")
+        payload["version"] = bump_version(existing_version, bump_index(effective_bump))
         payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         skill_yaml.write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False) + "\n",
@@ -1379,6 +1381,8 @@ class SkillManager:
         metadata = env.read_version_metadata(version)
         slots_meta = metadata.setdefault("slots", {})
         slots_meta[slot_name] = {
+            "version": version,
+            "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
@@ -1386,6 +1390,7 @@ class SkillManager:
             "lifecycle": dict(lifecycle),
         }
         metadata["version"] = version
+        metadata["runtime_bucket"] = env.runtime_bucket(version)
         history = metadata.setdefault("history", {})
         history["last_install_slot"] = slot_name
         history["last_install_version"] = version
@@ -1526,10 +1531,14 @@ class SkillManager:
             raise RuntimeError(f"activation rehydrate failed: {exc}") from exc
         history = metadata.setdefault("history", {})
         history["last_active_slot"] = target_slot
+        history["last_active_version"] = target_version
         history["last_active_at"] = datetime.now(timezone.utc).isoformat()
         history["last_activation_error"] = ""
         history["last_activation_error_at"] = ""
-        metadata.setdefault("slots", {}).setdefault(target_slot, {})["lifecycle"] = dict(lifecycle)
+        target_slot_meta = metadata.setdefault("slots", {}).setdefault(target_slot, {})
+        target_slot_meta.setdefault("version", target_version)
+        target_slot_meta.setdefault("runtime_bucket", env.runtime_bucket(target_version))
+        target_slot_meta["lifecycle"] = dict(lifecycle)
         env.write_version_metadata(target_version, metadata)
         try:
             install_skill_in_capacity(name, target_version, active=True)
@@ -1579,14 +1588,29 @@ class SkillManager:
             env.rollback_internal_slot()
         except Exception as exc:
             raise RuntimeError(f"runtime slot restored to {restored_slot}, internal data rollback failed: {exc}") from exc
+        restored_version = self._slot_version(
+            env=env,
+            metadata=metadata,
+            slot=restored_slot,
+            fallback=version,
+        )
+        env.active_version_marker().write_text(restored_version, encoding="utf-8")
         lifecycle["rollback"] = {
             "ok": True,
             "skipped": False,
-            "restored_active_version": version,
+            "restored_active_version": restored_version,
             "restored_active_slot": restored_slot,
         }
+        history = metadata.setdefault("history", {})
+        history["last_active_slot"] = restored_slot
+        history["last_active_version"] = restored_version
+        history["last_rollback_at"] = datetime.now(timezone.utc).isoformat()
         metadata.setdefault("slots", {}).setdefault(current_slot, {})["lifecycle"] = dict(lifecycle)
-        env.write_version_metadata(version, metadata)
+        env.write_version_metadata(restored_version, metadata)
+        try:
+            install_skill_in_capacity(name, restored_version, active=True)
+        except Exception:
+            pass
         return restored_slot
 
     def dev_rollback_runtime(self, name: str) -> str:
@@ -1595,11 +1619,24 @@ class SkillManager:
         if not version:
             raise RuntimeError("no active version")
         env.prepare_version(version)
+        metadata = env.read_version_metadata(version)
         restored_slot = env.rollback_slot(version)
         try:
             env.rollback_internal_slot()
         except Exception as exc:
             raise RuntimeError(f"runtime slot restored to {restored_slot}, internal data rollback failed: {exc}") from exc
+        restored_version = self._slot_version(
+            env=env,
+            metadata=metadata,
+            slot=restored_slot,
+            fallback=version,
+        )
+        env.active_version_marker().write_text(restored_version, encoding="utf-8")
+        history = metadata.setdefault("history", {})
+        history["last_active_slot"] = restored_slot
+        history["last_active_version"] = restored_version
+        history["last_rollback_at"] = datetime.now(timezone.utc).isoformat()
+        env.write_version_metadata(restored_version, metadata)
         return restored_slot
 
     def activate_for_space(
@@ -1740,7 +1777,7 @@ class SkillManager:
         version = env.resolve_active_version()
         if not version:
             raise RuntimeError("no versions installed")
-        version_root = env.runtime_root / version
+        version_root = env.version_root(version)
         active_marker = version_root / "active"
         active_slot = "A"
         if active_marker.exists():
@@ -1762,6 +1799,7 @@ class SkillManager:
         state: Dict[str, Any] = {
             "name": name,
             "version": version,
+            "runtime_bucket": env.runtime_bucket(version),
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
             "ready": ready,
@@ -1790,7 +1828,7 @@ class SkillManager:
         version = env.resolve_active_version()
         if not version:
             raise RuntimeError("no versions installed")
-        version_root = env.runtime_root / version
+        version_root = env.version_root(version)
         active_marker = version_root / "active"
         active_slot = "A"
         if active_marker.exists():
@@ -1812,6 +1850,7 @@ class SkillManager:
         state: Dict[str, Any] = {
             "name": name,
             "version": version,
+            "runtime_bucket": env.runtime_bucket(version),
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
             "ready": ready,
@@ -1874,12 +1913,10 @@ class SkillManager:
 
     def cleanup_runtime(self, name: str, *, purge_data: bool = False) -> None:
         env = self._runtime_env(name)
-        for version in env.list_versions():
-            for slot in ("A", "B"):
-                env.cleanup_slot(version, slot)
-            version_root = env.version_root(version)
-            if version_root.exists():
-                self._remove_tree(version_root)
+        if env.runtime_root.exists():
+            for child in list(env.runtime_root.iterdir()):
+                if child.is_dir() and child.name != "data":
+                    self._remove_tree(child)
         if purge_data:
             data_root = env.data_root()
             if data_root.exists():
@@ -1901,14 +1938,19 @@ class SkillManager:
         for skill in targets:
             env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill)
             active_version = env.resolve_active_version()
+            active_bucket = env.runtime_bucket(active_version) if active_version else None
             removed: list[str] = []
-            for version in env.list_versions():
-                if version == active_version:
+            if not env.runtime_root.exists():
+                cleaned[skill] = removed
+                continue
+            for child in list(env.runtime_root.iterdir()):
+                if not child.is_dir() or child.name == "data":
                     continue
-                for slot in ("A", "B"):
-                    env.cleanup_slot(version, slot)
-                self._remove_tree(env.version_root(version))
-                removed.append(version)
+                child_bucket = child.name if (child.name.startswith("v") and child.name[1:].isdigit()) else env.runtime_bucket(child.name)
+                if active_bucket and child_bucket == active_bucket:
+                    continue
+                self._remove_tree(child)
+                removed.append(child.name)
             cleaned[skill] = removed
         return cleaned
 
@@ -3174,6 +3216,30 @@ class SkillManager:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
+    def _slot_version(
+        self,
+        *,
+        env: SkillRuntimeEnvironment,
+        metadata: Mapping[str, Any],
+        slot: str,
+        fallback: str,
+    ) -> str:
+        slot_meta = (metadata.get("slots") or {}).get(slot) if isinstance(metadata.get("slots"), Mapping) else None
+        if isinstance(slot_meta, Mapping):
+            value = slot_meta.get("version")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            resolved = slot_meta.get("resolved_manifest")
+            if isinstance(resolved, str) and resolved.strip():
+                payload = self._read_json_dict(Path(resolved))
+                value = payload.get("version")
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        candidate = env.build_slot_paths(fallback, slot).resolved_manifest
+        payload = self._read_json_dict(candidate)
+        value = payload.get("version")
+        return value.strip() if isinstance(value, str) and value.strip() else fallback
+
     def _latest_prepared_version(self, env: SkillRuntimeEnvironment) -> Optional[str]:
         latest_version: Optional[str] = None
         latest_time: Optional[datetime] = None
@@ -3189,7 +3255,7 @@ class SkillManager:
                 continue
             if latest_time is None or ts > latest_time:
                 latest_time = ts
-                latest_version = version
+                latest_version = str(history.get("last_install_version") or version)
         return latest_version
 
     def _preferred_activation_slot(
@@ -3273,10 +3339,12 @@ class SkillManager:
         return {
             "name": manifest.get("name", slot.skill_name),
             "version": manifest.get("version"),
+            "runtime_bucket": slot.root.parent.parent.name,
             "slot": slot.slot,
             "source": str(skill_dir.resolve()),
             "runtime": {
                 "type": (manifest.get("runtime") or {}).get("type", "python"),
+                "bucket": slot.root.parent.parent.name,
                 "interpreter": str(interpreter),
                 "src": str(slot.src_dir),
                 "vendor": str(slot.vendor_dir),
@@ -3452,6 +3520,8 @@ class SkillManager:
         metadata = env.read_version_metadata(version)
         slots_meta = metadata.setdefault("slots", {})
         slots_meta[slot_name] = {
+            "version": version,
+            "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
@@ -3459,6 +3529,7 @@ class SkillManager:
             "lifecycle": dict(lifecycle),
         }
         metadata["version"] = version
+        metadata["runtime_bucket"] = env.runtime_bucket(version)
         history = metadata.setdefault("history", {})
         history["last_install_slot"] = slot_name
         history["last_install_version"] = version
@@ -3567,8 +3638,12 @@ class SkillManager:
             raise RuntimeError(f"activation rehydrate failed: {exc}") from exc
         history = metadata.setdefault("history", {})
         history["last_active_slot"] = target_slot
+        history["last_active_version"] = target_version
         history["last_active_at"] = datetime.now(timezone.utc).isoformat()
-        metadata.setdefault("slots", {}).setdefault(target_slot, {})["lifecycle"] = dict(lifecycle)
+        target_slot_meta = metadata.setdefault("slots", {}).setdefault(target_slot, {})
+        target_slot_meta.setdefault("version", target_version)
+        target_slot_meta.setdefault("runtime_bucket", env.runtime_bucket(target_version))
+        target_slot_meta["lifecycle"] = dict(lifecycle)
         env.write_version_metadata(target_version, metadata)
         self._smoke_import(env=env, name=name, version=target_version)
         return target_slot

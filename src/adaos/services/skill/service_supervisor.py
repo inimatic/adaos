@@ -18,6 +18,7 @@ import yaml
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 _log = logging.getLogger("adaos.skill.service")
 
@@ -78,15 +79,12 @@ def _latest_runtime_version(runtime_root: Path) -> str | None:
 
 
 def _active_runtime_skill_root(skills_root: Path, skill_name: str) -> Path | None:
-    runtime_root = skills_root / ".runtime" / skill_name
-    version = _latest_runtime_version(runtime_root)
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name)
+    version = env.resolve_active_version()
     if not version:
         return None
-    version_root = runtime_root / version
-    slot = str(_read_marker(version_root / "active") or "A").strip().upper()
-    if slot not in {"A", "B"}:
-        slot = "A"
-    root = version_root / "slots" / slot / "src" / "skills" / skill_name
+    slot = env.read_active_slot(version)
+    root = env.build_slot_paths(version, slot).src_dir / "skills" / skill_name
     return root if (root / "skill.yaml").exists() else None
 
 

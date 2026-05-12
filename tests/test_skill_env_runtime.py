@@ -34,6 +34,19 @@ def test_slot_skill_env_uses_shared_runtime_store() -> None:
     assert slot.internal_data_dir == env.internal_slot_dir("A")
 
 
+def test_patch_and_minor_versions_share_major_runtime_bucket() -> None:
+    ctx = get_ctx()
+    skills_root = Path(ctx.paths.skills_dir())
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="bucket_skill")
+
+    env.prepare_version("0.1.0")
+
+    assert env.version_root("0.1.0").name == "v0"
+    assert env.version_root("0.1.1") == env.version_root("0.2.0")
+    assert env.version_root("1.0.0").name == "v1"
+    assert env.version_root("1.0.0") != env.version_root("0.2.0")
+
+
 def test_internal_data_slots_have_active_and_previous_markers() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
@@ -373,6 +386,58 @@ def test_activate_and_rollback_runtime_switch_internal_data_slot(monkeypatch) ->
     restored = mgr.rollback_runtime(skill_name)
     assert restored == "A"
     assert env.read_active_internal_slot() == "a"
+
+
+def test_patch_runtime_uses_ab_slots_and_rollback_restores_slot_version(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "patch_bucket_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text("name: patch_bucket_skill\nversion: '0.1.0'\n", encoding="utf-8")
+
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+
+    def _enrich(**kwargs):
+        version = str(kwargs["manifest"].get("version") or "0.0.0")
+        return {
+            "name": skill_name,
+            "version": version,
+            "runtime_bucket": kwargs["slot"].root.parent.parent.name,
+            "slot": kwargs["slot"].slot,
+            "source": str(kwargs["skill_dir"]),
+            "runtime": {"skill_env": str(kwargs["slot"].skill_env_path), "skill_memory": str(kwargs["slot"].skill_memory_path)},
+            "tools": {},
+            "default_tool": "",
+            "data_migration_tool": "",
+            "data_migration": {},
+        }
+
+    monkeypatch.setattr(mgr, "_enrich_manifest", _enrich)
+    monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+
+    initial = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+    mgr.activate_runtime(skill_name, version=initial.version, slot=initial.slot)
+
+    (skill_dir / "skill.yaml").write_text("name: patch_bucket_skill\nversion: '0.1.1'\n", encoding="utf-8")
+    patch = mgr.prepare_runtime(skill_name, run_tests=False)
+
+    assert patch.slot == "B"
+    assert env.version_root("0.1.0") == env.version_root("0.1.1")
+
+    mgr.activate_runtime(skill_name, version=patch.version, slot=patch.slot)
+    assert env.resolve_active_version() == "0.1.1"
+    assert env.read_active_slot("0.1.1") == "B"
+
+    restored = mgr.rollback_runtime(skill_name)
+
+    assert restored == "A"
+    assert env.resolve_active_version() == "0.1.0"
+    assert mgr.runtime_status(skill_name)["version"] == "0.1.0"
 
 
 def test_deactivate_runtime_blocks_execution_until_reactivated(monkeypatch) -> None:

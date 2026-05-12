@@ -45,6 +45,7 @@ from adaos.services.skill.manager import SkillManager
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
+from adaos.services.skill.version_policy import bump_index, effective_skill_bump
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -1338,6 +1339,8 @@ class RootDeveloperService:
                 "root.dev",
             )
         # гарантируем, что подпуть есть в sparse-checkout (на случай узкой sparse-конфигурации)
+        if result.dry_run:
+            return result
         try:
             self.ctx.git.sparse_add(str(self.ctx.paths.workspace_dir()), f"skills/{name}")
         except Exception:
@@ -1353,7 +1356,7 @@ class RootDeveloperService:
             settings=self.ctx.settings,
         )
         msg = f"publish(skill): {result.name} v{result.version}"
-        sha = mgr.push(result.name, msg, signoff=signoff)
+        sha = mgr.push(result.name, msg, signoff=signoff, bump=False)
         # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
@@ -1427,6 +1430,8 @@ class RootDeveloperService:
                 },
                 "root.dev",
             )
+        if result.dry_run:
+            return result
         try:
             self.ctx.git.sparse_add(str(self.ctx.paths.workspace_dir()), f"scenarios/{name}")
         except Exception:
@@ -1441,7 +1446,7 @@ class RootDeveloperService:
             caps=self.ctx.caps,
         )
         msg = f"publish(scenario): {result.name} v{result.version}"
-        sha = mgr.push(result.name, msg, signoff=signoff)
+        sha = mgr.push(result.name, msg, signoff=signoff, bump=False)
         # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
@@ -2204,12 +2209,19 @@ class RootDeveloperService:
         source = workspace / kind / name
         if not source.exists():
             raise RootServiceError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
+        source_payload = self._manifest_payload(source, kind)
+        source_data = source_payload[1] if source_payload else {}
+        publish_bump_index = (
+            bump_index(effective_skill_bump(source_data, "patch"))
+            if kind == "skills"
+            else bump_index("patch")
+        )
         manifest_meta = self._update_manifest(
             kind,
             source,
             name,
             None,
-            version_bump_index=1,
+            version_bump_index=publish_bump_index,
             set_prototype=False,
         )
         try:
@@ -2316,10 +2328,8 @@ class RootDeveloperService:
         force: bool,
         dry_run: bool,
     ) -> ArtifactPublishResult:
-        bump_map = {"major": 0, "minor": 1, "patch": 2}
-        if bump not in bump_map:
+        if bump not in {"major", "minor", "patch"}:
             raise RootServiceError(f"Unsupported version bump '{bump}'")
-        bump_index = bump_map[bump]
 
         workspace_root = self._workspace_root(cfg)
         source = workspace_root / kind / name
@@ -2330,6 +2340,8 @@ class RootDeveloperService:
 
         source_payload = self._manifest_payload(source, kind)
         source_data = source_payload[1] if source_payload else {}
+        effective_bump = effective_skill_bump(source_data, bump) if kind == "skills" else bump
+        resolved_bump_index = bump_index(effective_bump)
         target_payload = self._manifest_payload(target, kind) if target.exists() else None
         target_data = target_payload[1] if target_payload else {}
         warnings = self._manifest_warnings(source_data, target_data)
@@ -2338,7 +2350,7 @@ class RootDeveloperService:
         if target.exists():
             _, previous_version, _ = self._artifact_manifest_info(target, kind)
 
-        new_version = bump_version(previous_version, bump_index)
+        new_version = bump_version(previous_version, resolved_bump_index)
 
         if warnings and not force and not dry_run:
             warning_text = "; ".join(warnings)
