@@ -519,7 +519,7 @@ class ScenarioManager:
         except Exception:
             pass
 
-    def push(self, name: str, message: str, *, signoff: bool = False) -> str:
+    def push(self, name: str, message: str, *, signoff: bool = False, bump: bool = True) -> str:
         self.caps.require("core", "scenarios.manage", "git.write", "net.git")
         root = self.ctx.paths.workspace_dir()
         try:
@@ -535,7 +535,7 @@ class ScenarioManager:
         sub = name.strip()
         subpath = f"scenarios/{sub}"
         self._ensure_scenario_subpath_materialized(Path(root), sub)
-        version = self._bump_scenario_manifest_minor(Path(root) / "scenarios" / sub)
+        version = self._bump_scenario_manifest_patch(Path(root) / "scenarios" / sub) if bump else None
         upsert_workspace_registry_entry(Path(root), "scenarios", Path(root) / "scenarios" / sub)
         if version and getattr(self, "reg", None) is not None:
             try:
@@ -588,7 +588,7 @@ class ScenarioManager:
                     f"scenario '{name}' is not materialized in workspace sparse checkout"
                 ) from None
 
-    def _bump_scenario_manifest_minor(self, scenario_dir: Path) -> str | None:
+    def _bump_scenario_manifest_patch(self, scenario_dir: Path) -> str | None:
         candidates = ("scenario.yaml", "scenario.yml", "scenario.json")
         manifest_path: Path | None = None
         for candidate in candidates:
@@ -611,7 +611,7 @@ class ScenarioManager:
 
         existing = payload.get("version")
         existing_version = existing if isinstance(existing, str) and existing.strip() else None
-        payload["version"] = bump_version(existing_version, 1)
+        payload["version"] = bump_version(existing_version, 2)
         payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
         if manifest_path.suffix.lower() == ".json":
@@ -641,7 +641,7 @@ class ScenarioManager:
             pass
         # коммитим и пушим изменения только своего подпути
         msg = f"publish(skill): {result.name} v{result.version}"
-        sha = self.push(result.name, msg, signoff=signoff)
+        sha = self.push(result.name, msg, signoff=signoff, bump=False)
         # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
         return result
 
