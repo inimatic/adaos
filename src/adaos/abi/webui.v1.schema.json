@@ -215,7 +215,17 @@
         "kind": { "type": "string", "enum": ["y", "stream"] },
         "path": { "type": "string" },
         "transform": { "type": "string" },
-        "receiver": { "$ref": "#/$defs/id" }
+        "receiver": { "$ref": "#/$defs/id" },
+        "scope": {
+          "type": "string",
+          "enum": ["auto", "node", "shared", "local", "workspace"],
+          "description": "Addressing intent for node-aware modal opens. Shared streams and shared Yjs branches are not node-scoped."
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["auto", "member", "hub"],
+          "description": "Preferred stream transport. Receiver-level transport is used when omitted or set to auto."
+        }
       },
       "allOf": [
         {
@@ -264,6 +274,11 @@
         },
         "initialState": {
           "description": "Optional initial client-side receiver state before the first stream event arrives."
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["auto", "member", "hub"],
+          "description": "Default transport for widgets observing this receiver."
         }
       }
     },
