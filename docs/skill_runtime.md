@@ -7,23 +7,23 @@ AdaOS provisions an isolated runtime per skill with versioned A/B slots. Each in
 Every skill lives under `skills/<name>` in the workspace. Runtime artefacts are stored separately:
 
 ```
+skills/<name>/
+    skill.yaml
+    requirements.in            # optional dependency input
+    handlers/
+    migrations/
+        data_migration.py      # reserved optional bucket migration file
+    tests/
+
 skills/.runtime/<name>/current_version
 skills/.runtime/<name>/current_runtime.json
 skills/.runtime/<name>/previous_runtime.json
 skills/.runtime/<name>/v<major>.<minor>/
-    slots/<A|B>/
-        src/                    # snapshot of the skill sources
-        env/                    # shared site-packages for current interpreter
-        venv/                   # isolated interpreter (if requested)
-        node_modules/
-        bin/
-        cache/
-        logs/
-        tmp/
-        resolved.manifest.json
     active                      # marker with the current slot (A or B)
     previous                    # marker with the last healthy slot
     meta.json                   # test results, timestamps, history
+    vendor/                     # shared pip --target deps for this bucket
+    venv/                       # shared service-skill interpreter for this bucket
     data/
         db/
             skill_env.json      # shared state for this compatibility bucket
@@ -31,16 +31,31 @@ skills/.runtime/<name>/v<major>.<minor>/
             secrets.json        # per-bucket secrets/artifacts
             .skill_env.json     # optional persisted environment snapshot
         internal/               # schema-bound internal data for this bucket
+    slots/<A|B>/
+        src/                    # snapshot of the skill sources
+            skills/<name>/
+                skill.yaml
+                handlers/
+                migrations/
+                    data_migration.py  # reserved optional bucket migration file
+                tests/
+        node_modules/
+        bin/
+        cache/
+        runtime/
+            logs/
+            tmp/
+        resolved.manifest.json
 ```
 
 Runtime isolation is keyed by semantic `major.minor`, not full SemVer. For example, `0.14.0` and `0.14.3` share `v0.14`; `0.15.0` uses `v0.15`.
-Slots are A/B code deployments inside the same bucket. Data is not A/B-slotted inside a bucket.
+Slots are A/B code deployments inside the same bucket. Data, `vendor/`, and `venv/` are not A/B-slotted inside a bucket.
 
 ## Version policy
 
-The default publication bump for skills is `patch`. A patch release stays in the same runtime bucket and uses the existing `data/` tree.
+The default publication bump for skills is `patch`. A patch release stays in the same runtime bucket and uses the existing `data/`, `vendor/`, and `venv/` trees.
 
-If the skill manifest declares a data migration hook, a requested/default patch bump is promoted to `minor`. A minor release creates a new `v<major>.<minor>` bucket and prepares a migrated copy of data there before activation.
+If the skill has the reserved migration file, or a legacy manifest data migration hook, a requested/default patch bump is promoted to `minor`. A minor release creates a new `v<major>.<minor>` bucket and prepares a migrated copy of data there before activation.
 
 Major releases are manual. They also land in a new bucket, but the decision to publish one is outside automatic CI/CD policy.
 
@@ -50,13 +65,15 @@ Major releases are manual. They also land in a new bucket, but the decision to p
 
 1. Select the inactive slot (A/B) for the target version and wipe any previous contents.
 2. Copy the current contents of `skills/<name>` into `slots/<slot>/src`.
-3. Build runtime dependencies (either reusing the host interpreter or creating an isolated virtualenv).
+3. Build bucket dependencies (either reusing the host interpreter with bucket `vendor/` or creating the bucket `venv/` for service skills).
 4. Enrich `manifest.json` into `resolved.manifest.json`, resolving tool entry points, interpreter paths, timeouts, and policy defaults.
-5. Prepare bucket data. Patch installs in the same `v<major>.<minor>` bucket reuse the existing shared `data/` tree without copying. A new bucket runs the declared data migration hook when present.
+5. Prepare bucket data. Patch installs in the same `v<major>.<minor>` bucket reuse the existing shared `data/` tree without copying. A new bucket safely looks for the reserved data migration file and runs it when present.
 6. Optionally run `src/skills/<name>/tests/` (`--test`) from the prepared slot. Commands execute inside the staged environment (interpreter, `PYTHONPATH`, `.skill_env.json`), and logs are streamed to `slots/<slot>/logs/tests.log`.
 7. Persist slot metadata (tests, timestamps, default tool, data migration result) for status and rollback operations.
 
 `adaos skill activate <name>` switches the active version/slot markers atomically and records the previous version/slot for `adaos skill rollback`. Activation does not run data migration; migration belongs to prepare. Setup flows must run **after activation** so that secrets and runtime paths are stable.
+
+After a successful activation, AdaOS keeps only the current runtime bucket and the previous rollback bucket. Older runtime buckets are pruned automatically because the runtime supports only one rollback step.
 
 `adaos skill rollback <name>` rolls back the active version/slot marker. For a patch rollback this means old code over the same bucket data. For a minor rollback this points back to the previous bucket and therefore to that bucket's older data copy. AdaOS does not try to detect or block writes that happened after the minor activation.
 
@@ -94,23 +111,27 @@ Use `data/internal` only for state that must evolve together with runtime schema
 
 ### Default behavior
 
-If a skill does not declare a migration hook, AdaOS does not copy data during patch prepare. The prepared slot uses the same bucket-level `data/` directory as the currently active slot.
+If a skill has no migration file, AdaOS does not copy data during patch prepare. The prepared slot uses the same bucket-level `data/` directory as the currently active slot.
 
-When preparing a new minor/major bucket without a migration hook, AdaOS creates an empty bucket data tree. Moving data across compatibility buckets is explicit: declare a migration hook.
+When preparing a new minor/major bucket without a migration file, AdaOS writes a warning to the AdaOS log and copies the previous bucket `data/` tree into the target bucket without schema mutation.
 
-### Custom migration hook
+### Reserved migration file
 
-A skill may declare an optional migration hook in its manifest:
+The standard migration source is reserved at:
 
-```yaml
-data_migration_tool: migrate_data
-tools:
-  - name: migrate_data
-    entry: handlers.main:migrate_data
+```text
+skills/<name>/migrations/data_migration.py
 ```
 
-The hook is resolved through the same tool system as ordinary skill tools.
-During prepare of a new compatibility bucket, AdaOS runs it against the staged skill sources for the target slot.
+In the staged runtime this becomes:
+
+```text
+slots/<A|B>/src/skills/<name>/migrations/data_migration.py
+```
+
+The file should expose `migrate(payload: dict) -> dict | None`. During prepare of a new compatibility bucket, AdaOS runs it against the staged skill sources for the target slot. The migration file owns target data population: it should copy the source data it wants to preserve and mutate schema-bound state as needed.
+
+Manifest-level `data_migration_tool` declarations are legacy-compatible, but LLM-authored skills should prefer the reserved file so core and generated code agree without extra manifest wiring.
 
 The hook receives a payload with:
 
@@ -136,7 +157,7 @@ AdaOS also exposes convenience environment variables while the hook runs:
 Important notes:
 
 - the hook is optional
-- if the hook is absent, AdaOS does not implicitly copy cross-bucket data
+- if the reserved file is absent on a minor/major bucket change, AdaOS logs a warning and falls back to a plain data copy
 - the hook is expected to populate the target bucket data it owns
 - on migration failure, AdaOS clears the target bucket data and fails `prepare_runtime`
 
@@ -153,9 +174,18 @@ The target AdaOS migration model separates state classes:
 - live memory:
   in-flight objects and subscriptions that should be drained and recreated, not migrated implicitly
 
-This means `data_migration_tool` should be used for schema-sensitive persisted state, not as a platform promise that arbitrary process memory can be moved across activation.
+This means the reserved data migration file should be used for schema-sensitive persisted state, not as a platform promise that arbitrary process memory can be moved across activation.
 
 After activation, stateful skills are expected to rebuild derived runtime state from durable truth.
+
+## Vendor vs venv
+
+`vendor/` and `venv/` are separated because they solve different dependency problems:
+
+- `vendor/` is a bucket-level `pip --target` package overlay. It is added to `PYTHONPATH` for ordinary Python skills that can run in the hub interpreter but need extra pure-Python packages.
+- `venv/` is a bucket-level isolated Python environment. Service skills use it when they need their own interpreter process, ABI boundary, or dependencies that must not be installed into the hub runtime.
+
+Both live under `v<major>.<minor>` so patch A/B deployments do not duplicate dependency environments. A minor or major bucket gives the skill a fresh dependency boundary when the migration model says compatibility changed.
 
 ### Runtime lifecycle hooks
 
@@ -173,7 +203,7 @@ lifecycle:
   before_deactivate: before_deactivate
 ```
 
-The hook names resolve through the ordinary skill `tools` table, just like `data_migration_tool`.
+The hook names resolve through the ordinary skill `tools` table. Data migration itself should use the reserved `migrations/data_migration.py` file for new skills.
 
 Current behavior:
 

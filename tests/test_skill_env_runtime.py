@@ -33,6 +33,8 @@ def test_slot_skill_env_uses_shared_runtime_store() -> None:
     assert slot.legacy_skill_memory_path == slot.runtime_dir / ".skill_memory.json"
     assert slot.data_root == env.version_root("1.0.0") / "data"
     assert slot.internal_data_dir == env.internal_root("1.0.0")
+    assert slot.vendor_dir == env.version_root("1.0.0") / "vendor"
+    assert slot.venv_dir == env.version_root("1.0.0") / "venv"
 
 
 def test_patch_versions_share_minor_runtime_bucket() -> None:
@@ -61,6 +63,21 @@ def test_internal_data_is_shared_inside_runtime_bucket() -> None:
     assert slot_a.internal_data_dir == slot_b.internal_data_dir
     assert slot_a.internal_data_dir == env.version_root("1.0.0") / "data" / "internal"
     assert slot_a.internal_data_dir.exists()
+
+
+def test_vendor_and_venv_are_shared_inside_runtime_bucket() -> None:
+    ctx = get_ctx()
+    skills_root = Path(ctx.paths.skills_dir())
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="deps_bucket_skill")
+    env.prepare_version("2.3.0")
+
+    slot_a = env.build_slot_paths("2.3.0", "A")
+    slot_b = env.build_slot_paths("2.3.4", "B")
+
+    assert slot_a.vendor_dir == slot_b.vendor_dir
+    assert slot_a.venv_dir == slot_b.venv_dir
+    assert slot_a.vendor_dir == env.version_root("2.3.0") / "vendor"
+    assert slot_a.venv_dir == env.version_root("2.3.0") / "venv"
 
 
 def test_sync_skill_env_merges_template_legacy_and_store(tmp_path: Path, monkeypatch) -> None:
@@ -347,6 +364,65 @@ def test_prepare_runtime_runs_custom_internal_data_migration_tool(monkeypatch) -
     assert (env.internal_root("1.1.0") / "migrated.txt").read_text(encoding="utf-8") == "ok"
 
 
+def test_prepare_runtime_copies_bucket_data_when_migration_file_missing(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "missing_migration_file_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text("name: missing_migration_file_skill\nversion: '1.1.0'\n", encoding="utf-8")
+
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+    env.prepare_version("1.0.0")
+    (env.data_root("1.0.0") / "internal" / "state.txt").write_text("old", encoding="utf-8")
+    (env.data_root("1.0.0") / "files" / "blob.txt").write_text("blob", encoding="utf-8")
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+
+    result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
+
+    assert result.data_migration["mode"] == "copy"
+    assert result.data_migration["reason"] == "data_migration_file_missing"
+    assert result.data_migration["source_runtime_bucket"] == "v1.0"
+    assert result.data_migration["target_runtime_bucket"] == "v1.1"
+    assert (env.data_root("1.1.0") / "internal" / "state.txt").read_text(encoding="utf-8") == "old"
+    assert (env.data_root("1.1.0") / "files" / "blob.txt").read_text(encoding="utf-8") == "blob"
+
+
+def test_prepare_runtime_runs_reserved_data_migration_file(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "reserved_migration_file_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
+    (skill_dir / "migrations").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "migrations" / "data_migration.py").write_text(
+        "from pathlib import Path\n"
+        "def migrate(payload):\n"
+        "    target = Path(payload['target_internal_dir'])\n"
+        "    target.mkdir(parents=True, exist_ok=True)\n"
+        "    (target / 'migrated.txt').write_text(payload['source_runtime_bucket'] + '->' + payload['target_runtime_bucket'], encoding='utf-8')\n"
+        "    return {'ok': True, 'via': 'reserved-file'}\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text("name: reserved_migration_file_skill\nversion: '2.1.0'\n", encoding="utf-8")
+
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+    env.prepare_version("2.0.0")
+    (env.internal_root("2.0.0") / "old.txt").write_text("old", encoding="utf-8")
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+
+    result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
+
+    assert result.data_migration["mode"] == "file"
+    assert str(result.data_migration["tool"]).replace("\\", "/") == "migrations/data_migration.py"
+    assert result.data_migration["result"]["via"] == "reserved-file"
+    assert (env.internal_root("2.1.0") / "migrated.txt").read_text(encoding="utf-8") == "v2.0->v2.1"
+
+
 def test_activate_and_rollback_runtime_keep_shared_bucket_data(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
@@ -517,6 +593,53 @@ def test_minor_runtime_migrates_bucket_data_and_rollback_restores_previous_bucke
     assert env.resolve_active_version() == "1.0.0"
     assert env.data_root() == env.data_root("1.0.0")
     assert (env.internal_root() / "state.txt").read_text(encoding="utf-8") == "v1.0"
+
+
+def test_activate_runtime_prunes_older_buckets_beyond_previous(monkeypatch) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_name = "prune_history_skill"
+    skill_dir = Path(ctx.paths.skills_dir()) / skill_name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "main.py").write_text("def handle(payload=None):\n    return payload or {}\n", encoding="utf-8")
+    (skill_dir / "skill.yaml").write_text("name: prune_history_skill\nversion: '1.0.0'\n", encoding="utf-8")
+
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
+
+    monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+    monkeypatch.setattr(
+        mgr,
+        "_enrich_manifest",
+        lambda **kwargs: {
+            "name": skill_name,
+            "version": str(kwargs["manifest"].get("version") or "0.0.0"),
+            "runtime_bucket": kwargs["slot"].root.parent.parent.name,
+            "slot": kwargs["slot"].slot,
+            "source": str(kwargs["skill_dir"]),
+            "runtime": {"skill_env": str(kwargs["slot"].skill_env_path), "skill_memory": str(kwargs["slot"].skill_memory_path)},
+            "tools": {},
+            "default_tool": "",
+            "data_migration_tool": "",
+            "data_migration": {},
+        },
+    )
+    monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+
+    first = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+    mgr.activate_runtime(skill_name, version=first.version, slot=first.slot)
+
+    (skill_dir / "skill.yaml").write_text("name: prune_history_skill\nversion: '1.1.0'\n", encoding="utf-8")
+    second = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
+    mgr.activate_runtime(skill_name, version=second.version, slot=second.slot)
+
+    (skill_dir / "skill.yaml").write_text("name: prune_history_skill\nversion: '1.2.0'\n", encoding="utf-8")
+    third = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+    mgr.activate_runtime(skill_name, version=third.version, slot=third.slot)
+
+    assert env.version_root("1.2.0").exists()
+    assert env.version_root("1.1.0").exists()
+    assert not env.version_root("1.0.0").exists()
 
 
 def test_deactivate_runtime_blocks_execution_until_reactivated(monkeypatch) -> None:
