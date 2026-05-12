@@ -37,7 +37,7 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
     workspace_skill = skills_root / "slot_service"
     _write_service_skill(workspace_skill, port=1112)
 
-    version_root = skills_root / ".runtime" / "slot_service" / "0.1.0"
+    version_root = skills_root / ".runtime" / "slot_service" / "v0.1"
     (skills_root / ".runtime" / "slot_service").mkdir(parents=True, exist_ok=True)
     (skills_root / ".runtime" / "slot_service" / "current_version").write_text("0.1.0", encoding="utf-8")
     version_root.mkdir(parents=True, exist_ok=True)
