@@ -1,6 +1,6 @@
 # NLU Roadmap Checklist
 
-Current implementation estimate: **48%** for the practical AdaOS NLU roadmap.
+Current implementation estimate: **49%** for the practical AdaOS NLU roadmap.
 
 ## Phase 1: Baseline Runtime
 
@@ -20,6 +20,7 @@ Current implementation estimate: **48%** for the practical AdaOS NLU roadmap.
   - regex-first, optional Rasa fallback
   - returns `intent_ranking`, `entities`, `slots`, `stages`
   - does not dispatch actions
+- [x] Human verification checklist separates current API/CLI checks from target UI behavior.
 - [ ] UI field for "check phrase" wired to the probe endpoint.
 - [ ] UI buttons: "correct", "fix", "save example".
 - [ ] Operator-approved positive feedback stored with audit metadata.
@@ -36,6 +37,15 @@ Current implementation estimate: **48%** for the practical AdaOS NLU roadmap.
 - [ ] Trace UI should show `voice text -> regex/neural/rasa -> intent -> action`.
 - [ ] Add latency per stage and service timing.
 - [ ] Add golden phrase regression reports.
+
+## Human Verification Gates
+
+- [x] Current implemented behavior has a manual checklist: [nlu-human-verification.md](./nlu-human-verification.md).
+- [x] Documentation marks which NLU Teacher behaviors are current UI, backend/API only, or target architecture.
+- [ ] NLU Teacher UI can run a phrase probe without terminal access.
+- [ ] NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
+- [ ] NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata.
+- [ ] Template correction flow uses stable ids and stale-write fingerprints.
 
 ## Phase 4: Dynamic Lookups and Template Inventory
 
@@ -77,10 +87,11 @@ Current implementation estimate: **48%** for the practical AdaOS NLU roadmap.
 
 ## Immediate Next Steps
 
-1. Wire Teacher UI to `POST /api/nlu/teacher/{webspace_id}/probe`.
-2. Add "save correct example" backend action with scenario/skill target selection.
-3. Expose stable template ids for regex, Rasa examples, neural labels, and lookup sets.
-4. Add stage latency and golden phrase checks.
+1. Add a UI-capable action/bridge for safe NLU Teacher API calls, then wire Check phrase to `POST /api/nlu/teacher/{webspace_id}/probe`.
+2. Render probe response in the Teacher modal: trace, intent ranking, entities, slots, lookup matches, confidence, and action preview.
+3. Add "save correct example" backend action with scenario/skill target selection and audit metadata.
+4. Expose stable template ids for regex, Rasa examples, neural labels, and lookup sets.
+5. Add stage latency and golden phrase checks.
 
 ## Last Completed Slice
 
@@ -92,3 +103,4 @@ Current implementation estimate: **48%** for the practical AdaOS NLU roadmap.
 - Rasa export writes native lookup tables and `data/lookup_tables.json`; lookup summary is included in the training fingerprint.
 - Runtime emits stage trace events for regex, pipeline delegation, Rasa, and dispatcher actions/rejects.
 - Trace items are persisted to `data.nlu_trace.items[]` for the future UI timeline.
+- NLU documentation now includes a human verification checklist and clearly separates current UI, backend/API-only behavior, and target UI.

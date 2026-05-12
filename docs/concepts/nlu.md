@@ -8,6 +8,29 @@ This document describes the current production MVP direction for intent detectio
 - System boundary: NLU runtime code is one; only **data** varies per scenario/skill.
 - Transport: intent detection is integrated into AdaOS event bus (not CLI-only).
 
+## Current implementation status
+
+Implemented now:
+
+- Regex-first event pipeline with optional Rasa service-skill fallback.
+- Rasa NLU service-skill isolation from the hub Python environment.
+- Dry-run probe API for safe phrase checks:
+  - `POST /api/nlu/teacher/{webspace_id}/probe`
+- Lookup API with live desktop-registry overlay:
+  - `GET /api/nlu/teacher/{webspace_id}/lookups`
+- Stage trace persistence in `data.nlu_trace.items[]`.
+- Schema-driven NLU Teacher modal that shows missed requests, candidates, raw event payloads, and Apply actions.
+
+Not implemented yet:
+
+- Teacher UI Check phrase field wired to the probe API.
+- Teacher UI trace/ranking/entities/action preview panel.
+- Operator feedback buttons: Correct, Fix, Save example.
+- Stable template inventory for regex, Rasa examples, neural labels, and lookup sets.
+- Root MCP token/session flow for governed LLM-assisted authoring.
+
+The neural stage is part of the target architecture and remains optional. The current practical baseline is still `regex -> Rasa -> fallback/Teacher`.
+
 ## Event flow (high level)
 
 1. UI / Telegram / Voice publishes:
@@ -55,6 +78,7 @@ AdaOS records NLU decisions as a stage trace so the UI can explain why a phrase 
   - response: `intent`, `confidence`, `slots`, `entities`, `intent_ranking`, `stages`
 
 The implementation checklist is tracked in [nlu-roadmap.md](./nlu-roadmap.md).
+Human verification steps are tracked in [nlu-human-verification.md](./nlu-human-verification.md).
 
 ## Dynamic lookup tables
 
@@ -135,7 +159,7 @@ under `.adaos/state/skills/nlu_teacher/<webspace_id>.json` so it survives YJS re
 
 ## Web UI: NLU Teacher
 
-In the default web desktop scenario the NLU Teacher UI is a schema-driven modal:
+In the default web desktop scenario the current NLU Teacher UI is a schema-driven modal:
 
 - Tabs: **User requests** / **Candidates**
 - Grouping:
@@ -150,15 +174,26 @@ In the default web desktop scenario the NLU Teacher UI is a schema-driven modal:
     - for `skill`/`scenario` candidates: creates a development plan item
   - a successful apply emits `ui.notify` with the owner (skill/scenario) where the rule was installed
 
+Required UI expansion:
+
+- Check phrase field that runs the dry-run probe without dispatching actions.
+- Intent ranking, entities, slots, lookup matches, confidence, and fallback reason.
+- Trace timeline: `voice text -> regex/neural/rasa -> intent -> action`.
+- Correct/Fix/Save example actions with explicit target selection and audit metadata.
+- Current-template view with stable ids so the operator can correct existing templates instead of creating duplicates.
+
+Until this UI expansion lands, the current implementation is human-verifiable through API/CLI using
+[nlu-human-verification.md](./nlu-human-verification.md).
+
 ## Dynamic regex rules (current contract)
 
 - Storage (source of truth):
-  - skill: `.adaos/workspace/skills/<skill>/skill.yaml` → `nlu.regex_rules[]`
-  - scenario: `.adaos/workspace/scenarios/<scenario>/scenario.json` → `nlu.regex_rules[]`
+  - skill: `.adaos/workspace/skills/<skill>/skill.yaml` -> `nlu.regex_rules[]`
+  - scenario: `.adaos/workspace/scenarios/<scenario>/scenario.json` -> `nlu.regex_rules[]`
 - Rule identity:
   - every rule has `id="rx.<uuid>"`
 - Observability:
-  - every `regex.dynamic` match appends a JSONL record into `state/nlu/regex_usage.jsonl` (webspace_id, scenario_id, rule_id, intent, slots…)
+  - every `regex.dynamic` match appends a JSONL record into `state/nlu/regex_usage.jsonl` (webspace_id, scenario_id, rule_id, intent, slots...)
 - Optional trust policy:
   - `skill.yaml: llm_policy.autoapply_nlu_teacher=true` enables automatic Apply for teacher-proposed regex candidates targeting that skill
 
