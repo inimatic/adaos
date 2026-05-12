@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Tuple, Optional
+from typing import Any, Callable, Dict, Iterable, List, Tuple, Optional
 import asyncio
 import inspect
 import logging
@@ -26,6 +26,7 @@ _TOOLS = tools_registry
 _LOG = logging.getLogger("adaos.sdk.subscriptions")
 _SUBSCRIPTION_DENY_LOG_AT: Dict[str, float] = {}
 _SUBSCRIPTION_DENY_LOG_INTERVAL_S = 5.0
+_SKILL_SUBSCRIPTION_GENERATIONS: Dict[str, int] = {}
 
 
 def _topic_matches_any(topic: str, patterns: str) -> bool:
@@ -178,16 +179,48 @@ def subscribe(topic: str):
     return deco
 
 
-async def register_subscriptions():
+def _subscription_is_current(skill_name: Optional[str], generation: int | None) -> bool:
+    if not skill_name or generation is None:
+        return True
+    return generation == int(_SKILL_SUBSCRIPTION_GENERATIONS.get(skill_name) or generation)
+
+
+def _target_subscription_entries(skill_names: Iterable[str] | None) -> list[Tuple[str, Callable]]:
+    targets = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
+    if not targets:
+        return list(subscriptions)
+    latest: dict[tuple[str, str], tuple[int, str, Callable]] = {}
+    for idx, (topic, fn) in enumerate(subscriptions):
+        skill_name = _infer_skill_name(fn)
+        if not skill_name or skill_name not in targets:
+            continue
+        latest[(skill_name, topic)] = (idx, topic, fn)
+    return [(topic, fn) for idx, topic, fn in sorted(latest.values(), key=lambda item: item[0])]
+
+
+async def register_subscriptions(
+    *,
+    skill_names: Iterable[str] | None = None,
+    force: bool = False,
+):
     """Подписать все функции, помеченные @subscribe, на bus (однократно)."""
     global _registered
-    if _registered:
+    target_skills = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
+    if _registered and not force and not target_skills:
         return
+    if target_skills:
+        for skill_name in target_skills:
+            _SKILL_SUBSCRIPTION_GENERATIONS[skill_name] = int(
+                _SKILL_SUBSCRIPTION_GENERATIONS.get(skill_name) or 0
+            ) + 1
     skill_topic_handlers: Dict[str, Dict[str, str]] = {}
     skill_summaries: Dict[str, list[tuple[str, str]]] = {}
 
-    for topic, fn in subscriptions:
+    for topic, fn in _target_subscription_entries(target_skills):
         skill_name = _infer_skill_name(fn)
+        generation: int | None = None
+        if skill_name:
+            generation = int(_SKILL_SUBSCRIPTION_GENERATIONS.setdefault(skill_name, 1))
 
         if skill_name:
             handlers_for_skill = skill_topic_handlers.setdefault(skill_name, {})
@@ -204,7 +237,9 @@ async def register_subscriptions():
 
         if inspect.iscoroutinefunction(fn):
 
-            async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic):
+            async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic, _generation=generation):
+                if not _subscription_is_current(_skill, _generation):
+                    return None
                 if _skill and not _skill_event_targets_this_node(evt):
                     return None
                 admission = _admit_skill_subscription_yjs_work(_skill, _topic, evt)
@@ -226,7 +261,9 @@ async def register_subscriptions():
 
         else:
 
-            async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic):
+            async def _wrap(evt, _fn=fn, _skill=skill_name, _topic=topic, _generation=generation):
+                if not _subscription_is_current(_skill, _generation):
+                    return None
                 if _skill and not _skill_event_targets_this_node(evt):
                     return None
                 admission = _admit_skill_subscription_yjs_work(_skill, _topic, evt)
@@ -256,6 +293,7 @@ async def register_subscriptions():
         setattr(_wrap, "_adaos_skill", skill_name or "<unknown>")
         setattr(_wrap, "_adaos_topic", topic)
         setattr(_wrap, "_adaos_handler", handler_name)
+        setattr(_wrap, "_adaos_generation", generation)
         skill_key = skill_name or "<unknown>"
         skill_summaries.setdefault(skill_key, []).append((topic, fn.__name__))
         await on(topic, _wrap)
@@ -276,7 +314,8 @@ async def register_subscriptions():
         summary = ", ".join(f"{topic}: {handler}" for topic, handler in entries)
         _LOG.info("skill=%s subscriptions=[%s]%s", skill, summary, _subscription_log_suffix(skill))
 
-    _registered = True
+    if not target_skills:
+        _registered = True
 
 
 def tool(

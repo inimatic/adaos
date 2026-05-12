@@ -16,6 +16,7 @@ from adaos.services.skill.update import SkillUpdateService
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import rebuild_webspace_projection, refresh_skill_runtime
+from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 from adaos.services.workspace_registry import build_registry_entry, find_workspace_registry_entry, list_workspace_registry_entries
 from adaos.services.yjs.webspace import default_webspace_id
 
@@ -158,6 +159,14 @@ def _read_registry_catalog_version(ctx: AgentContext, *, skill_id: str) -> str |
         return None
     token = str(version).strip()
     return token or None
+
+
+async def _reload_live_skill_handlers(ctx: AgentContext, skill_name: str) -> dict[str, Any]:
+    try:
+        return await ImportlibSkillsLoader().reload_skill_handlers(ctx.paths.skills_dir(), skill_name)
+    except Exception as exc:
+        log.debug("live skill handler reload failed skill=%s: %s", skill_name, exc, exc_info=True)
+        return {"ok": False, "reason": "reload_failed", "error": str(exc)}
 
 
 def _clean_version_text(value: object | None) -> str | None:
@@ -521,11 +530,16 @@ async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_
 
 
 @router.post("/runtime/activate")
-async def runtime_activate(body: RuntimeActivateReq, mgr: SkillManager = Depends(_get_manager)):
+async def runtime_activate(
+    body: RuntimeActivateReq,
+    mgr: SkillManager = Depends(_get_manager),
+    ctx: AgentContext = Depends(get_ctx),
+):
     webspace_id = body.webspace_id or "default"
     try:
         slot = mgr.activate_for_space(body.name, version=body.version, slot=body.slot, space="default", webspace_id=webspace_id)
-        return {"ok": True, "slot": slot}
+        reload_result = await _reload_live_skill_handlers(ctx, body.name)
+        return {"ok": True, "slot": slot, "handler_reload": reload_result}
     except RuntimeError as exc:
         msg = str(exc).lower()
         if not body.auto_prepare or ("is not prepared" not in msg and "no installed versions" not in msg):
@@ -537,7 +551,8 @@ async def runtime_activate(body: RuntimeActivateReq, mgr: SkillManager = Depends
         pref_slot = body.slot
         prep = mgr.prepare_runtime(body.name, run_tests=False, preferred_slot=pref_slot)
         slot = mgr.activate_for_space(body.name, version=prep.version, slot=prep.slot, space="default", webspace_id=webspace_id)
-        return {"ok": True, "slot": slot, "prepared": prep.slot}
+        reload_result = await _reload_live_skill_handlers(ctx, body.name)
+        return {"ok": True, "slot": slot, "prepared": prep.slot, "handler_reload": reload_result}
 
 
 @router.post("/runtime/notify-activated")
@@ -558,8 +573,9 @@ async def runtime_notify_activated(body: RuntimeNotifyActivatedReq):
         "webspace_id": webspace_id,
         "defer_webspace_rebuild": bool(body.defer_webspace_rebuild),
     }
+    reload_result = await _reload_live_skill_handlers(ctx, body.name)
     bus_emit(bus, "skills.activated", payload, "api.skills")
-    return {"ok": True}
+    return {"ok": True, "handler_reload": reload_result}
 
 
 @router.post("/runtime/rebuild-webspace")

@@ -94,3 +94,34 @@ def test_importlib_loader_does_not_reexecute_same_handler_module(tmp_path: Path)
         sys.modules.pop(mod_name, None)
         if hasattr(builtins, "_adaos_repeat_import_counter"):
             delattr(builtins, "_adaos_repeat_import_counter")
+
+
+def test_importlib_loader_can_force_reload_handler_module(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "reload_skill"
+    handlers_dir = skill_dir / "handlers"
+    handlers_dir.mkdir(parents=True)
+    handler = handlers_dir / "main.py"
+    handler.write_text(
+        "\n".join(
+            [
+                "import builtins",
+                "builtins._adaos_reload_import_counter = getattr(builtins, '_adaos_reload_import_counter', 0) + 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loader = ImportlibSkillsLoader()
+    mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    sys.modules.pop(mod_name, None)
+    if hasattr(builtins, "_adaos_reload_import_counter"):
+        delattr(builtins, "_adaos_reload_import_counter")
+    try:
+        loader._load_handler(handler)
+        loader._load_handler(handler, reload=True)
+        assert getattr(builtins, "_adaos_reload_import_counter", 0) == 2
+    finally:
+        sys.modules.pop(mod_name, None)
+        if hasattr(builtins, "_adaos_reload_import_counter"):
+            delattr(builtins, "_adaos_reload_import_counter")

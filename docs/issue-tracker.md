@@ -1256,3 +1256,22 @@ Actions:
 - [ ] Record payload size reduction and polling reduction in this tracker.
 - [ ] Close this goal only after logs confirm no large repeated monitoring
   responses during normal UI operation.
+
+### TEST-001: Make `test_infrastate_skill_projection.py` hermetic
+
+Status: planned.
+
+Observed while debugging stream-backed modals:
+
+- The full file can fail when marketplace cache/remote-probe defaults leak into
+  tests that expect mocked remote registry data.
+- `_project_async` stream assertions can be affected by live/local Yjs pressure
+  guard state unless the guardrail is explicitly mocked.
+
+Actions:
+
+- [ ] Clear marketplace caches and set remote-probe flags inside affected
+  tests.
+- [ ] Mock `_active_noncritical_stream_guardrail` in projection tests that
+  assert exact stream publications.
+- [ ] Re-run the full file as part of the stream modal regression suite.

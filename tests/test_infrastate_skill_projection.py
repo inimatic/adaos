@@ -1590,6 +1590,47 @@ def test_infrastate_stream_snapshot_request_publishes_requested_receiver(monkeyp
     assert cache_flags == [True]
 
 
+def test_infrastate_stream_snapshot_request_bypasses_noncritical_guardrail(monkeypatch):
+    mod = _load_infrastate_module()
+    published: list[tuple[str, object, str | None]] = []
+    suppressions: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        mod,
+        "_snapshot_or_fallback_cached",
+        lambda webspace_id=None, allow_cache=True: {"logs": [{"id": "log-1"}]},
+    )
+    monkeypatch.setattr(
+        mod,
+        "_active_noncritical_stream_guardrail",
+        lambda webspace_id, receiver: {"active": True, "reason": "yjs_pressure"},
+    )
+    monkeypatch.setattr(
+        mod,
+        "_record_noncritical_stream_guardrail_suppression",
+        lambda **kwargs: suppressions.append(kwargs),
+    )
+    monkeypatch.setattr(
+        mod,
+        "stream_publish",
+        lambda receiver, data, _meta=None: published.append((receiver, data, (_meta or {}).get("webspace_id"))),
+    )
+
+    mod.on_webio_stream_snapshot_requested(
+        SimpleNamespace(
+            payload={
+                "receiver": "infrastate.logs.recent",
+                "webspace_id": "default",
+            }
+        )
+    )
+
+    assert published == [
+        ("infrastate.logs.recent", [{"id": "log-1"}], "default"),
+    ]
+    assert suppressions == []
+
+
 def test_infrastate_cached_snapshot_coalesces_concurrent_stream_requests(monkeypatch):
     mod = _load_infrastate_module()
     calls: list[str | None] = []
