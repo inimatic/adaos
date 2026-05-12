@@ -48,6 +48,12 @@ Goal: prefer improving existing intents (regex rule / dataset revision) over cre
 
 The NLU Teacher modal should become the operator-facing workbench for testing and curating NLU behavior.
 
+Current UI status:
+
+- Implemented: User requests tab, Candidates tab, raw JSON event inspection, revision Apply, and candidate Apply.
+- Implemented in backend/API: dry-run phrase probe and dynamic lookup inspection.
+- Missing in UI: Check phrase, trace/ranking/entities/action preview, Correct/Fix/Save example, template inventory, and patch preview.
+
 Target controls:
 
 - **Check phrase**: input field that sends a dry-run request through the current NLU pipeline.
@@ -119,6 +125,22 @@ empty. For this API, the manifest snapshot is then overlaid with live read-only 
 Rasa export intentionally consumes the stable manifest snapshot as native lookup-table entries and writes the full snapshot to
 `state/interpreter/rasa_project/data/lookup_tables.json`. That keeps training reproducible while the Teacher API can still show the current
 desktop registry.
+
+## Human verification contract
+
+The current implementation is considered verifiable only when the operator can reproduce the result through tests/API and, where available,
+the current UI. The checklist lives in [nlu-human-verification.md](./nlu-human-verification.md).
+
+Minimum acceptance for every NLU slice:
+
+- A focused test or smoke command exists.
+- The expected response includes intent, confidence, slots/entities, ranking when available, and stage trace.
+- Fallback behavior is explicit when confidence is too low or no stage accepts the phrase.
+- The operator can tell whether a value came from regex, Rasa, lookup tables, or Teacher fallback.
+- Documentation states whether the behavior is available in UI now or only through API/CLI.
+
+Teacher UI becomes the primary human control surface only after Check phrase, trace view, Correct/Fix/Save example, and template inventory are
+implemented. Until then, the API/CLI checklist remains the source of truth.
 
 ## MCP-assisted teacher context
 
@@ -271,10 +293,10 @@ Apply can be triggered from UI or programmatically:
 
 ## Where regex rules are stored
 
-The teacher does not “bake” regexes into the hub code. A rule is stored as data owned by a workspace artifact:
+The teacher does not "bake" regexes into the hub code. A rule is stored as data owned by a workspace artifact:
 
-- **Skill-owned** (preferred): `.adaos/workspace/skills/<skill>/skill.yaml` → `nlu.regex_rules[]`
-- **Scenario-owned**: `.adaos/workspace/scenarios/<scenario>/scenario.json` → `nlu.regex_rules[]`
+- **Skill-owned** (preferred): `.adaos/workspace/skills/<skill>/skill.yaml` -> `nlu.regex_rules[]`
+- **Scenario-owned**: `.adaos/workspace/scenarios/<scenario>/scenario.json` -> `nlu.regex_rules[]`
 - **Legacy runtime cache**: mirrored into YJS `data.nlu.regex_rules[]` so it starts matching immediately after Apply.
 
 Every rule has a stable identity: `id="rx.<uuid>"`.
@@ -286,7 +308,7 @@ When the teacher proposes a regex rule, it should also propose a storage target:
 - Prefer the skill that actually handles the intent (derived from scenario intent `callSkill` actions + skill `events.subscribe`).
 - If the intent triggers host/system behavior (`callHost`), the target is usually the scenario.
 
-Apply supports a UI override (“Apply to Scenario”), in addition to an LLM-suggested target.
+Apply supports a UI override ("Apply to Scenario"), in addition to an LLM-suggested target.
 
 ## Auto-apply policy (trusted skills)
 
