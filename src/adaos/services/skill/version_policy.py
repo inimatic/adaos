@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Literal
 
 
 BumpKind = Literal["major", "minor", "patch"]
 
 _BUMP_INDEX: dict[BumpKind, int] = {"major": 0, "minor": 1, "patch": 2}
+RESERVED_DATA_MIGRATION_FILE = Path("migrations") / "data_migration.py"
 
 
 def bump_index(kind: BumpKind) -> int:
@@ -30,14 +32,17 @@ def skill_manifest_has_data_migration(manifest: Mapping[str, Any]) -> bool:
 def effective_skill_bump(
     manifest: Mapping[str, Any],
     requested: BumpKind = "patch",
+    *,
+    has_data_migration_file: bool = False,
 ) -> BumpKind:
-    if requested == "patch" and skill_manifest_has_data_migration(manifest):
+    if requested == "patch" and (has_data_migration_file or skill_manifest_has_data_migration(manifest)):
         return "minor"
     return requested
 
 
 __all__ = [
     "BumpKind",
+    "RESERVED_DATA_MIGRATION_FILE",
     "bump_index",
     "effective_skill_bump",
     "skill_manifest_has_data_migration",

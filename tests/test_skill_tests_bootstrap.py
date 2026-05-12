@@ -18,8 +18,9 @@ from adaos.services.skill.tests_entry import main as run_skill_tests_entry
 @pytest.fixture
 def skill_slot(tmp_path: Path) -> Path:
     base = tmp_path / ".adaos"
-    slot = base / "workspace" / "skills" / ".runtime" / "demo" / "1.0.0" / "slots" / "current"
-    (slot / "vendor").mkdir(parents=True, exist_ok=True)
+    bucket = base / "workspace" / "skills" / ".runtime" / "demo" / "v1.0"
+    slot = bucket / "slots" / "current"
+    (bucket / "vendor").mkdir(parents=True, exist_ok=True)
     namespace_root = slot / "src" / "skills" / "demo"
     namespace_root.mkdir(parents=True, exist_ok=True)
     (namespace_root / "tests").mkdir(parents=True, exist_ok=True)
@@ -27,7 +28,7 @@ def skill_slot(tmp_path: Path) -> Path:
 
 
 def test_mount_skill_paths_for_testing_prioritises_vendor(skill_slot):
-    vendor = str((skill_slot / "vendor").resolve())
+    vendor = str((skill_slot.parent.parent / "vendor").resolve())
     src = str((skill_slot / "src").resolve())
     stale = str((skill_slot.parent / "A" / "src").resolve())
 
@@ -124,7 +125,7 @@ def test_tests_entry_executes_script_with_context(monkeypatch, skill_slot):
     assert require_ctx() is original_ctx
 
     src_dir = str((skill_slot / "src").resolve())
-    vendor_dir = str((skill_slot / "vendor").resolve())
+    vendor_dir = str((skill_slot.parent.parent / "vendor").resolve())
     assert src_dir not in sys.path
     assert vendor_dir not in sys.path
     assert set(sys.path) >= before_paths

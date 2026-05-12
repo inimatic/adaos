@@ -215,21 +215,17 @@ def mount_skill_paths_for_testing(
     import sys
 
     slot_root = slots_current_dir.resolve()
-    vendor = slot_root / "vendor"
+    vendor = slot_root.parent.parent / "vendor" if slot_root.parent.name == "slots" else slot_root / "vendor"
     src = slot_root / "src"
-
-    suffixes = {
-        f"/{skill_name}/slots/current/src",
-        f"/{skill_name}/slots/current/vendor",
-        f"/{skill_name}/{skill_ver}/slots/A/src",
-        f"/{skill_name}/{skill_ver}/slots/B/src",
-        f"/{skill_name}/{skill_ver}/slots/A/vendor",
-        f"/{skill_name}/{skill_ver}/slots/B/vendor",
-    }
 
     def _is_outdated(entry: str) -> bool:
         normalised = entry.replace("\\", "/")
-        return any(normalised.endswith(suffix) for suffix in suffixes)
+        runtime_skill_fragment = f"/.runtime/{skill_name}/"
+        if runtime_skill_fragment not in normalised:
+            return False
+        if normalised.endswith("/vendor"):
+            return True
+        return normalised.endswith("/slots/current/src") or normalised.endswith("/slots/A/src") or normalised.endswith("/slots/B/src")
 
     sys.path[:] = [entry for entry in sys.path if not _is_outdated(entry)]
 
@@ -310,7 +306,9 @@ def bootstrap_test_ctx(
 
     set_ctx(ctx)
     ctx.skill_ctx.set(skill_name, skill_slot_dir)
-    env_root = skill_slot_dir.parents[2] / "data" / "db"
+    slot_dir = skill_slot_dir.resolve()
+    bucket_root = slot_dir.parent.parent if slot_dir.parent.name == "slots" else slot_dir.parents[2]
+    env_root = bucket_root / "data" / "db"
     env_file = env_root / "skill_env.json"
     env_file.parent.mkdir(parents=True, exist_ok=True)
     os.environ["ADAOS_SKILL_ENV_PATH"] = str(env_file)

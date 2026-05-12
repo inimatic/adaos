@@ -45,7 +45,7 @@ from adaos.services.skill.manager import SkillManager
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
-from adaos.services.skill.version_policy import bump_index, effective_skill_bump
+from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -2212,7 +2212,13 @@ class RootDeveloperService:
         source_payload = self._manifest_payload(source, kind)
         source_data = source_payload[1] if source_payload else {}
         publish_bump_index = (
-            bump_index(effective_skill_bump(source_data, "patch"))
+            bump_index(
+                effective_skill_bump(
+                    source_data,
+                    "patch",
+                    has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+                )
+            )
             if kind == "skills"
             else bump_index("patch")
         )
@@ -2340,7 +2346,15 @@ class RootDeveloperService:
 
         source_payload = self._manifest_payload(source, kind)
         source_data = source_payload[1] if source_payload else {}
-        effective_bump = effective_skill_bump(source_data, bump) if kind == "skills" else bump
+        effective_bump = (
+            effective_skill_bump(
+                source_data,
+                bump,
+                has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+            )
+            if kind == "skills"
+            else bump
+        )
         resolved_bump_index = bump_index(effective_bump)
         target_payload = self._manifest_payload(target, kind) if target.exists() else None
         target_data = target_payload[1] if target_payload else {}

@@ -397,7 +397,7 @@ This keeps root updates out of the fast rollback path while preserving the slot-
 
 Installed skills are not automatically valid just because the core slot booted.
 Their runtime dependencies must be prepared against the new core interpreter and surfaced as explicit diagnostics.
-If a skill uses optional `data/internal`, that data evolves with the runtime compatibility bucket (`v<major>.<minor>`), not with the A/B code slot. Cross-bucket changes require an explicit `data_migration_tool`.
+If a skill uses optional `data/internal`, that data evolves with the runtime compatibility bucket (`v<major>.<minor>`), not with the A/B code slot. Cross-bucket schema changes should be implemented in the reserved `migrations/data_migration.py` file.
 
 ### Target migration model
 

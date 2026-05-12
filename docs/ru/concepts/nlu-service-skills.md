@@ -21,7 +21,7 @@ The hub NLU pipeline uses:
 
 - Skill: `.adaos/workspace/skills/rasa_nlu_service_skill`
 - Config: `.adaos/workspace/skills/rasa_nlu_service_skill/skill.yaml`
-- Active source: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/<version>/slots/<A|B>/src/skills/rasa_nlu_service_skill`
+- Active source: `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/v<major>.<minor>/slots/<A|B>/src/skills/rasa_nlu_service_skill`
 - Supervisor: `src/adaos/services/skill/service_supervisor.py`
 - Bridge: `src/adaos/services/nlu/rasa_service_bridge.py`
 - Installer: `src/adaos/services/nlu/rasa_skill_installer.py`
@@ -32,9 +32,11 @@ The hub NLU pipeline uses:
 - `runtime.env.mode: venv`
 - `runtime.env.python: 3.11`
 
-The supervisor discovers the active runtime slot and creates a slot-local venv:
+The supervisor discovers the active runtime slot and uses the bucket-level service venv:
 
-- `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/<version>/slots/<A|B>/venv`
+- `.adaos/workspace/skills/.runtime/rasa_nlu_service_skill/v<major>.<minor>/venv`
+
+Patch A/B updates reuse this venv. A minor/major skill update creates a new runtime bucket and therefore a fresh service venv.
 
 Dependencies are installed from:
 

@@ -45,7 +45,9 @@ For each service skill, the supervisor can perform HTTP health checks:
 Service skills can run in an isolated venv:
 
 - `runtime.env.mode: venv`
-- optional `runtime.env.venv_dir` (default: `state/services/<skill>/venv`)
+- optional `runtime.env.venv_dir`
+- default runtime venv: `skills/.runtime/<skill>/v<major>.<minor>/venv`
+- workspace-source fallback venv: `state/services/<skill>/venv`
 - dependencies:
   - `skill.yaml: dependencies` (pip requirement strings)
   - optional `requirements.in` file inside the skill root

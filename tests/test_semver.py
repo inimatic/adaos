@@ -33,3 +33,7 @@ def test_effective_skill_bump_promotes_data_migration_patch_to_minor():
 def test_effective_skill_bump_keeps_plain_skill_patch():
     assert effective_skill_bump({"version": "1.2.3"}, "patch") == "patch"
 
+
+def test_effective_skill_bump_promotes_reserved_migration_file_patch_to_minor():
+    assert effective_skill_bump({"version": "1.2.3"}, "patch", has_data_migration_file=True) == "minor"
+
