@@ -521,8 +521,10 @@ action routing.
 - [x] Emit `entity.registry.changed` from `access_links` when browser/member
   naming fields change.
 - [ ] Add shared name-resolution helpers for node/device display labels.
-- [ ] Make node labels prefer user name, node names, observed hostname, then
+- [x] Make core node display labels prefer node names, observed hostname, then
   `Node N`.
+- [ ] Extend UI/device consumers to prefer user-confirmed display names before
+  registered/observed names everywhere.
 - [x] Generate browser draft names from browser family, OS, and form factor at
   registration time.
 - [ ] Add conflict detection for duplicate display names and aliases inside the
