@@ -22,6 +22,7 @@ def _ver(cmd: str, pat: str = r"(\d+\.\d+\.\d+)") -> str | None:
 def main() -> int:
     py_cur = f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}"
     min_py = (3, 11, 9)
+    max_py_exclusive = (3, 12, 0)
     py_path = _ver("python --version")  # best-effort: python in PATH
     node = _ver("node --version")
     npmv = _ver("npm --version")
@@ -36,7 +37,7 @@ def main() -> int:
     print(f"Ionic:            {ionicv or '—'} (optional)")
 
     problems: list[str] = []
-    if sys.version_info[:2] != (3, 11) or sys.version_info[:3] < min_py:
+    if not (min_py <= sys.version_info[:3] < max_py_exclusive):
         problems.append("PythonVersion")
     if not _has("node"):
         problems.append("Node.js")
@@ -47,7 +48,7 @@ def main() -> int:
         print("\nProblems:")
         for p in problems:
             print(f"- {p}")
-        print("\nTip (Windows): use Python 3.11.9+ via the launcher: `py -3.11`")
+        print("\nTip (Windows): use Python >=3.11.9,<3.12 via the launcher: `py -3.11`")
         return 1
 
     return 0
