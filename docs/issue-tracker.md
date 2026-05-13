@@ -1472,7 +1472,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 84%.
+- Overall: 88%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1490,10 +1490,13 @@ Integration progress:
   hints, per-locale conflict diagnostics, Root MCP `NLUAuthoringPlane`
   read-only context with canonical named entities, Teacher probe live entity
   matches, per-locale ambiguity evidence in NLU trace, runtime-only
-  model-training evidence for alias resolution, and focused tests.
-- Current implementation slice: expose canonical names to NLU/Teacher
-  diagnostics without changing dispatch or training data.
-- Not started yet: governed writes and consumer migration.
+  model-training evidence for alias resolution, first governed alias-add
+  proposal/apply contract, SDK alias helpers, lifecycle event envelopes for
+  alias add/conflict, and focused tests.
+- Current implementation slice: governed alias proposal/apply contracts before
+  durable source mutation.
+- Not started yet: durable governed writes, Root MCP write exposure, and
+  consumer migration.
 - Verification note: targeted MCP/named-entity checks pass, and
   `test_root_mcp_foundation` is green again after test fixture alignment. The
   broader Yjs projection runs still expose pre-existing
@@ -1514,8 +1517,10 @@ Next implementation steps:
 1. Start migrating node/browser labels to the shared display helper.
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
-3. Begin conflict diagnostics for duplicate display names or aliases.
-4. Start governed alias/display-name proposal commands.
+3. Wire governed alias proposal/apply into the authoritative device/profile
+   write paths with `base_fingerprint` and audit metadata.
+4. Expose governed alias proposals through Root MCP after the durable write
+   path exists.
 5. Migrate node/browser labels to shared display helpers in remaining skill
    projections.
 
@@ -1599,7 +1604,7 @@ Status: in progress.
 Actions:
 
 - [x] Add `sdk.data.entities` read helpers.
-- [ ] Add governed alias proposal/apply commands.
+- [x] Add first governed alias-add proposal/apply service and SDK helpers.
 - [x] Expose named-entity descriptors through Root MCP read capabilities.
 - [x] Include named entities in NLUAuthoringPlane context.
 
@@ -1614,7 +1619,12 @@ Actions:
 - [ ] Emit `entity.draft_name.suggested` for generated browser/node draft names.
 - [ ] Emit display-name and alias lifecycle events from authoritative write
   paths.
+- [x] Return `entity.alias.added`, `entity.alias.conflict.detected`, and
+  `entity.registry.changed` event envelopes from the governed alias-add
+  apply contract.
 - [ ] Include `locale` or `locale: "und"` in label/alias lifecycle events.
+  The first alias-add contract does this; authoritative write paths still need
+  migration.
 - [ ] Emit `entity.alias.conflict.detected`,
   `entity.resolution.ambiguous`, and `entity.resolution.failed` into
   Notifications and node skill logs when operator attention is useful.
