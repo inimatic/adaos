@@ -407,6 +407,26 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_context"},
         ),
         RootMcpToolContract(
+            id="nlu_authoring.add_device_alias",
+            title="Add device alias",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Apply a governed alias add for a browser/member device through the authoritative access-link source.",
+            input_schema=schema_object(
+                properties={
+                    "device_ref": {"type": "string"},
+                    "alias": {"type": "string"},
+                    "locale": {"type": "string"},
+                    "actor": {"type": "string"},
+                    "request_id": {"type": "string"},
+                },
+                required=["device_ref", "alias"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.named_entities",
+            side_effects="write",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_add_device_alias"},
+        ),
+        RootMcpToolContract(
             id="hub.get_status",
             title="Get hub status",
             surface=RootMcpSurface.OPERATIONS,
@@ -1206,6 +1226,57 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
     }
 
 
+def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services import device_inventory
+    from adaos.services import named_entities
+
+    device_ref = _text_or_none(arguments.get("device_ref"))
+    alias = _text_or_none(arguments.get("alias"))
+    locale = _text_or_none(arguments.get("locale"))
+    actor = _text_or_none(arguments.get("actor")) or "root_mcp:nlu_authoring"
+    request_id = _text_or_none(arguments.get("request_id"))
+    if not device_ref:
+        return {"ok": False, "status": "invalid", "error": "device_ref_required"}
+    if not alias:
+        return {"ok": False, "status": "invalid", "error": "alias_required", "device_ref": device_ref}
+
+    parsed = device_inventory.parse_device_ref(device_ref)
+    canonical_ref = named_entities.canonical_device_ref(device_ref)
+    entity_kind = f"device.{parsed[0]}" if parsed is not None else None
+    if dry_run:
+        proposal = named_entities.propose_alias_add(
+            canonical_ref=canonical_ref,
+            alias=alias,
+            locale=locale,
+            kind=entity_kind,
+            actor=actor,
+            source="root_mcp:nlu_authoring",
+            request_id=request_id,
+        )
+        return {
+            "ok": bool(proposal.get("ok")),
+            "status": proposal.get("status"),
+            "dry_run": True,
+            "proposal": proposal,
+            "side_effects": "none",
+        }
+
+    from adaos.sdk.data import entities as sdk_entities
+
+    result = sdk_entities.add_device_alias(
+        device_ref,
+        alias,
+        locale=locale,
+        actor=actor,
+        request_id=request_id,
+    )
+    return {
+        "ok": bool(result.get("ok")),
+        "status": result.get("status") or ("applied" if result.get("ok") else "error"),
+        "result": result,
+    }
+
+
 def _handle_operational_contracts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     items = [item.to_dict() for item in list_tool_contracts(surface=RootMcpSurface.OPERATIONS.value)]
     return {
@@ -1919,6 +1990,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
+    "nlu_authoring.add_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
     "hub.get_status": lambda arguments, dry_run=False: _handle_hub_get_status(arguments, dry_run=dry_run),
     "hub.get_runtime_summary": lambda arguments, dry_run=False: _handle_hub_get_runtime_summary(arguments, dry_run=dry_run),
     "hub.get_operational_surface": lambda arguments, dry_run=False: _handle_hub_get_operational_surface(arguments, dry_run=dry_run),
