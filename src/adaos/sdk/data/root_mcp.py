@@ -293,6 +293,48 @@ def _embedded_issue_session(
     )
 
 
+def _local_hub_target_id(subnet_id: str | None) -> str | None:
+    token = str(subnet_id or "").strip()
+    return f"hub:{token}" if token else None
+
+
+def _local_target_aliases(cfg: Any, *, subnet_id: str | None) -> set[str]:
+    aliases: set[str] = set()
+    node_id = str(getattr(cfg, "node_id", None) or "").strip()
+    if node_id:
+        aliases.update({node_id, f"node:{node_id}", f"device:member:{node_id}"})
+    subnet_token = str(subnet_id or "").strip()
+    if subnet_token:
+        aliases.update({subnet_token, f"subnet:{subnet_token}"})
+    return aliases
+
+
+def _resolve_local_target_id(
+    cfg: Any,
+    *,
+    requested_target_id: str | None,
+    subnet_id: str | None,
+) -> tuple[str | None, dict[str, Any]]:
+    requested = str(requested_target_id or "").strip() or None
+    hub_target_id = _local_hub_target_id(subnet_id)
+    mode = "explicit"
+    resolved = requested
+    if not requested:
+        resolved = hub_target_id
+        mode = "default_hub"
+    elif hub_target_id and requested in _local_target_aliases(cfg, subnet_id=subnet_id):
+        resolved = hub_target_id
+        mode = "local_alias"
+    return (
+        resolved,
+        {
+            "requested": requested,
+            "resolved": resolved,
+            "mode": mode,
+        },
+    )
+
+
 def get_local_target_context(
     *,
     target_id: str | None = None,
@@ -301,7 +343,12 @@ def get_local_target_context(
     ctx = require_ctx("sdk.data.root_mcp")
     cfg = _load_config(ctx)
     subnet_id = str(getattr(cfg, "subnet_id", None) or "").strip() or None
-    effective_target_id = str(target_id or "").strip() or (f"hub:{subnet_id}" if subnet_id else None)
+    requested_target_id = str(target_id or "").strip() or None
+    effective_target_id, target_id_resolution = _resolve_local_target_id(
+        cfg,
+        requested_target_id=requested_target_id,
+        subnet_id=subnet_id,
+    )
     zone = (
         str(getattr(cfg, "zone_id", None) or "").strip()
         or str(os.getenv("ADAOS_ZONE_ID") or os.getenv("ZONE_ID") or "").strip()
@@ -312,6 +359,8 @@ def get_local_target_context(
     return {
         "root_url": resolved_root_url,
         "target_id": effective_target_id,
+        "requested_target_id": requested_target_id,
+        "target_id_resolution": target_id_resolution,
         "subnet_id": subnet_id,
         "zone": zone,
         "local_runtime": _norm_url(resolved_root_url) == _norm_url(default_root_url),

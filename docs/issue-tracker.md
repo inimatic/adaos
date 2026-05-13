@@ -909,6 +909,37 @@ Actions:
 - [x] Add a regression test proving local runtime calls do not probe the bridge.
 - [x] Confirm final 180-second soak has `root_mcp_fetch_failed=0` and `embedded_fallback=0`.
 
+#### F3M-006A: Keep node selectors out of Root MCP managed target IDs
+
+Status: implemented, awaiting local UI confirmation.
+
+Evidence:
+
+- Infra Access `issue_codex_session` received the UI node UUID
+  `8db40740-b3ff-44bf-baf5-9fb013b35b01` as `target_id` and Root MCP rejected
+  it with `managed target ... is not registered`.
+- The current managed-target registry uses hub-scoped target IDs such as
+  `hub:<subnet_id>`; UI node selectors and named-entity device refs are a
+  different addressing layer.
+
+Resolution:
+
+- Root MCP SDK local target context now resolves local aliases such as
+  `node_id`, `node:<node_id>`, `device:member:<node_id>`, and bare
+  `subnet_id` to `hub:<subnet_id>`.
+- Infra Access treats non-`hub:` selectors from the UI as node selectors and
+  lets the SDK infer the local hub target instead of forwarding the selector to
+  the Root MCP target registry.
+
+Actions:
+
+- [x] Add SDK regression coverage for local selector to managed-target
+  resolution.
+- [x] Add Infra Access runtime coverage that `issue_codex_connection` does not
+  pass a UI node UUID as the Root MCP target.
+- [ ] Confirm manually from `[Node 0] Infra Access`: click the Codex session
+  action and verify no `managed target '<node uuid>' is not registered` error.
+
 #### F3M-007: First-3-minute memory footprint
 
 Status: closed for the current 3-minute goal.
