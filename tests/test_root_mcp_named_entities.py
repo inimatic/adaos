@@ -97,7 +97,7 @@ def test_root_mcp_exposes_governed_device_alias_write(monkeypatch) -> None:
     monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: entity_service)
     calls: list[dict[str, object]] = []
 
-    def _fake_add_device_alias(device_ref, alias, *, locale=None, actor=None, request_id=None):
+    def _fake_add_device_alias(device_ref, alias, *, locale=None, actor=None, request_id=None, base_fingerprint=None):
         calls.append(
             {
                 "device_ref": device_ref,
@@ -140,3 +140,57 @@ def test_root_mcp_exposes_governed_device_alias_write(monkeypatch) -> None:
             "request_id": "req-1",
         }
     ]
+
+
+def test_root_mcp_device_alias_write_emits_domain_audit(monkeypatch) -> None:
+    captured: list[object] = []
+
+    def _fake_add_device_alias(device_ref, alias, *, locale=None, actor=None, request_id=None, base_fingerprint=None):
+        return {
+            "ok": True,
+            "status": "applied",
+            "device_ref": device_ref,
+            "proposal": {
+                "canonical_ref": "device:browser:browser-1",
+                "entity_kind": "device.browser",
+                "alias": alias,
+                "locale": locale or "und",
+                "base_fingerprint": base_fingerprint,
+                "reason": "alias_available",
+            },
+            "updated_record": {"fingerprint": "fp-2"},
+            "events": [{"topic": named_entities.ENTITY_ALIAS_ADDED, "payload": {}}],
+        }
+
+    from adaos.sdk.data import entities as sdk_entities
+
+    monkeypatch.setattr(sdk_entities, "add_device_alias", _fake_add_device_alias)
+    monkeypatch.setattr(root_mcp_service, "append_audit_event", lambda event: captured.append(event) or event)
+
+    response = root_mcp_service.invoke_tool(
+        "nlu_authoring.add_device_alias",
+        arguments={
+            "device_ref": "browser:browser-1",
+            "alias": "office browser",
+            "locale": "en",
+            "base_fingerprint": "fp-1",
+        },
+        request_id="req-root",
+        trace_id="trace-root",
+        actor="codex",
+        auth_method="bearer",
+        auth_context={"capabilities": ["development.write.named_entities"]},
+    )
+
+    domain_events = [item for item in captured if getattr(item, "tool_id", "") == "entity.alias.add"]
+    assert response.ok is True
+    assert domain_events
+    domain = domain_events[0]
+    assert domain.request_id == "req-root"
+    assert domain.trace_id == "trace-root"
+    assert domain.actor == "codex"
+    assert domain.capability == "development.write.named_entities"
+    assert domain.result_summary["canonical_ref"] == "device:browser:browser-1"
+    assert domain.result_summary["alias"] == "office browser"
+    assert domain.result_summary["base_fingerprint"] == "fp-1"
+    assert domain.result_summary["entry_fingerprint"] == "fp-2"

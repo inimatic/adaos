@@ -35,8 +35,8 @@ ENTITY_EVENT_TOPICS: tuple[str, ...] = (
 )
 
 EntityStatus = Literal["draft", "confirmed", "observed", "conflicted", "deprecated"]
-EntityAliasProposalStatus = Literal["proposed", "conflict", "noop", "invalid", "not_found"]
-EntityAliasApplyStatus = Literal["applied", "conflict", "noop", "invalid", "not_found"]
+EntityAliasProposalStatus = Literal["proposed", "conflict", "noop", "invalid", "not_found", "stale"]
+EntityAliasApplyStatus = Literal["applied", "conflict", "noop", "invalid", "not_found", "stale"]
 EntityMatchType = Literal[
     "display_name",
     "registered_name",
@@ -389,6 +389,26 @@ class NamedEntityRecord:
     def label_candidates(self, *, include_fallback: bool = False) -> tuple[tuple[str, EntityMatchType], ...]:
         return tuple((label.text, label.match_type) for label in self.label_records(include_fallback=include_fallback))
 
+    @property
+    def fingerprint(self) -> str:
+        payload = {
+            "canonical_ref": self.canonical_ref,
+            "kind": self.kind,
+            "display_name": self.display_name,
+            "registered_names": list(self.registered_names),
+            "observed_name": self.observed_name,
+            "draft_name": self.draft_name,
+            "aliases": list(self.aliases),
+            "labels": [item.to_dict() for item in self.label_records(include_fallback=False)],
+            "fallback_label": self.fallback_label,
+            "scope": dict(self.scope),
+            "source": self.source,
+            "status": self.status,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "canonical_ref": self.canonical_ref,
@@ -406,6 +426,7 @@ class NamedEntityRecord:
             "source_authority": dict(self.source_authority),
             "status": self.status,
             "updated_at": self.updated_at,
+            "fingerprint": self.fingerprint,
         }
 
 
@@ -486,6 +507,7 @@ class EntityAliasProposal:
     source: str = "named_entity_service"
     webspace_id: str | None = None
     request_id: str | None = None
+    base_fingerprint: str | None = None
     reason: str | None = None
     conflicts: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
 
@@ -499,6 +521,7 @@ class EntityAliasProposal:
         object.__setattr__(self, "source", _text(self.source) or "named_entity_service")
         object.__setattr__(self, "webspace_id", _text_or_none(self.webspace_id))
         object.__setattr__(self, "request_id", _text_or_none(self.request_id))
+        object.__setattr__(self, "base_fingerprint", _text_or_none(self.base_fingerprint))
         object.__setattr__(self, "reason", _text_or_none(self.reason))
         object.__setattr__(self, "conflicts", tuple(_mapping(item) for item in self.conflicts))
 
@@ -520,6 +543,7 @@ class EntityAliasProposal:
             "source": self.source,
             "webspace_id": self.webspace_id,
             "request_id": self.request_id,
+            "base_fingerprint": self.base_fingerprint,
             "reason": self.reason,
             "conflicts": [dict(item) for item in self.conflicts],
         }
@@ -701,6 +725,7 @@ def _proposal_from_any(value: EntityAliasProposal | Mapping[str, Any]) -> Entity
         source=payload.get("source") or "named_entity_service",
         webspace_id=payload.get("webspace_id"),
         request_id=payload.get("request_id"),
+        base_fingerprint=payload.get("base_fingerprint"),
         reason=payload.get("reason"),
         conflicts=tuple(payload.get("conflicts") or ()),
     )
@@ -820,10 +845,12 @@ class NamedEntityService:
         actor: str | None = None,
         source: str = "named_entity_service",
         request_id: str | None = None,
+        base_fingerprint: str | None = None,
     ) -> EntityAliasProposal:
         alias_text = _text(alias)
         normalized = normalize_entity_label(alias_text)
         effective_locale = _locale(locale)
+        expected_fingerprint = _text_or_none(base_fingerprint)
         if not alias_text or not normalized:
             return EntityAliasProposal(
                 canonical_ref=canonical_ref,
@@ -836,6 +863,7 @@ class NamedEntityService:
                 source=source,
                 webspace_id=webspace_id,
                 request_id=request_id,
+                base_fingerprint=expected_fingerprint,
                 reason="alias_empty",
             )
 
@@ -852,7 +880,33 @@ class NamedEntityService:
                 source=source,
                 webspace_id=webspace_id,
                 request_id=request_id,
+                base_fingerprint=expected_fingerprint,
                 reason="entity_not_found",
+            )
+
+        if expected_fingerprint and record.fingerprint != expected_fingerprint:
+            return EntityAliasProposal(
+                canonical_ref=record.canonical_ref,
+                entity_kind=record.kind,
+                alias=alias_text,
+                locale=effective_locale,
+                status="stale",
+                normalized=normalized,
+                actor=actor,
+                source=source,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                base_fingerprint=expected_fingerprint,
+                reason="base_fingerprint_mismatch",
+                conflicts=(
+                    {
+                        "canonical_ref": record.canonical_ref,
+                        "kind": record.kind,
+                        "display_label": record.display_label,
+                        "base_fingerprint": expected_fingerprint,
+                        "current_fingerprint": record.fingerprint,
+                    },
+                ),
             )
 
         if self._record_has_label(record, normalized=normalized, locale=effective_locale):
@@ -867,6 +921,7 @@ class NamedEntityService:
                 source=source,
                 webspace_id=webspace_id,
                 request_id=request_id,
+                base_fingerprint=expected_fingerprint,
                 reason="alias_already_registered",
             )
 
@@ -889,6 +944,7 @@ class NamedEntityService:
                 source=source,
                 webspace_id=webspace_id,
                 request_id=request_id,
+                base_fingerprint=expected_fingerprint,
                 reason="alias_conflict",
                 conflicts=tuple(conflicts),
             )
@@ -904,6 +960,7 @@ class NamedEntityService:
             source=source,
             webspace_id=webspace_id,
             request_id=request_id,
+            base_fingerprint=expected_fingerprint,
             reason="alias_available",
         )
 
@@ -912,7 +969,7 @@ class NamedEntityService:
         if proposed.status == "noop":
             return EntityAliasApplyResult(proposal=proposed, status="noop")
 
-        if proposed.status == "conflict":
+        if proposed.status in {"conflict", "stale"}:
             event_payload = entity_event_payload(
                 entity_ref=proposed.canonical_ref,
                 entity_kind=proposed.entity_kind or "",
@@ -924,6 +981,7 @@ class NamedEntityService:
                     "normalized": proposed.normalized,
                     "locale": proposed.locale,
                     "conflicts": [dict(item) for item in proposed.conflicts],
+                    "base_fingerprint": proposed.base_fingerprint,
                 },
                 reason=proposed.reason or "alias_conflict",
                 request_id=proposed.request_id,
@@ -931,7 +989,7 @@ class NamedEntityService:
             )
             return EntityAliasApplyResult(
                 proposal=proposed,
-                status="conflict",
+                status=proposed.status,
                 events=(_event_envelope(ENTITY_ALIAS_CONFLICT_DETECTED, event_payload),),
             )
 
@@ -972,7 +1030,13 @@ class NamedEntityService:
             source=proposed.source,
             actor=proposed.actor,
             previous={"labels": [item.to_dict() for item in record.label_records(include_fallback=False)]},
-            current={"label": label.to_dict(), "display_label": updated.display_label},
+            current={
+                "label": label.to_dict(),
+                "display_label": updated.display_label,
+                "base_fingerprint": proposed.base_fingerprint,
+                "previous_fingerprint": record.fingerprint,
+                "current_fingerprint": updated.fingerprint,
+            },
             reason=proposed.reason or "alias_added",
             request_id=proposed.request_id,
             locale=proposed.locale,
@@ -982,8 +1046,8 @@ class NamedEntityService:
             entity_kind=record.kind,
             source=proposed.source,
             actor=proposed.actor,
-            previous={"fingerprint_basis": "labels"},
-            current={"changed": True, "reason": "alias_added"},
+            previous={"fingerprint": record.fingerprint, "fingerprint_basis": "labels"},
+            current={"fingerprint": updated.fingerprint, "changed": True, "reason": "alias_added"},
             reason="alias_added",
             request_id=proposed.request_id,
             locale=proposed.locale,
@@ -1143,6 +1207,7 @@ def propose_alias_add(
     actor: str | None = None,
     source: str = "named_entity_service",
     request_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     return get_named_entity_service().propose_alias_add(
         canonical_ref=canonical_ref,
@@ -1153,6 +1218,7 @@ def propose_alias_add(
         actor=actor,
         source=source,
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     ).to_dict()
 
 
@@ -1231,6 +1297,7 @@ def compact_registry_payload(
             "status": item.status,
             "scope": dict(item.scope),
             "source": item.source,
+            "fingerprint": item.fingerprint,
         }
         for item in records
     ]

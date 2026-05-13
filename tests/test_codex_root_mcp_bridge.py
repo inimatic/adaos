@@ -96,6 +96,7 @@ class _FakeRootMcpClient:
         alias: str,
         locale: str | None = None,
         actor: str | None = None,
+        base_fingerprint: str | None = None,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
@@ -104,7 +105,13 @@ class _FakeRootMcpClient:
             (
                 "add_nlu_authoring_device_alias",
                 device_ref,
-                {"alias": alias, "locale": locale, "actor": actor, "dry_run": dry_run},
+                {
+                    "alias": alias,
+                    "locale": locale,
+                    "actor": actor,
+                    "base_fingerprint": base_fingerprint,
+                    "dry_run": dry_run,
+                },
             )
         )
         return {"ok": True, "status": "proposed" if dry_run else "applied", "device_ref": device_ref}
@@ -402,7 +409,13 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "method": "tools/call",
             "params": {
                 "name": "add_device_alias",
-                "arguments": {"device_ref": "browser:browser-1", "alias": "office browser", "locale": "en", "dry_run": True},
+                "arguments": {
+                    "device_ref": "browser:browser-1",
+                    "alias": "office browser",
+                    "locale": "en",
+                    "base_fingerprint": "fp-1",
+                    "dry_run": True,
+                },
             },
         }
     )
@@ -505,7 +518,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert (
         "add_nlu_authoring_device_alias",
         "browser:browser-1",
-        {"alias": "office browser", "locale": "en", "actor": None, "dry_run": True},
+        {"alias": "office browser", "locale": "en", "actor": None, "base_fingerprint": "fp-1", "dry_run": True},
     ) in fake_client.calls
     assert ("get_profileops_status", "hub:test-subnet", {}) in fake_client.calls
     assert ("start_profileops_session", "hub:test-subnet", {"profile_mode": "trace_profile", "reason": "root_mcp.memory.start", "trigger_source": "root_mcp"}) in fake_client.calls

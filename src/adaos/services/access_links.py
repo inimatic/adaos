@@ -477,6 +477,7 @@ def add_link_alias(
     source: str = "access_links",
     request_id: str | None = None,
     webspace_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     token = str(entry_id or "").strip()
     alias_text = str(alias or "").strip()
@@ -507,6 +508,7 @@ def add_link_alias(
             actor=actor,
             source=source,
             request_id=request_id,
+            base_fingerprint=base_fingerprint,
         )
         result = service.apply_alias_add(proposal)
     except Exception as exc:
@@ -561,6 +563,7 @@ def add_link_alias(
         "status": result.status,
         "proposal": result.proposal.to_dict(),
         "events": [dict(item) for item in events],
+        "updated_record": result.updated_record.to_dict() if result.updated_record is not None else None,
         "entry": saved,
         "device_ref": f"{kind}:{token}",
     }

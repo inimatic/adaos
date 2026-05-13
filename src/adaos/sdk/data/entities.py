@@ -39,6 +39,7 @@ def propose_alias_add(
     actor: str | None = None,
     source: str = "sdk.data.entities",
     request_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     return _service.propose_alias_add(
         canonical_ref=canonical_ref,
@@ -49,6 +50,7 @@ def propose_alias_add(
         actor=actor,
         source=source,
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     )
 
 
@@ -63,6 +65,7 @@ def add_device_alias(
     locale: str | None = None,
     actor: str | None = None,
     request_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     from adaos.services import device_access as _device_access
 
@@ -72,6 +75,7 @@ def add_device_alias(
         locale=locale,
         actor=actor,
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     )
 
 
