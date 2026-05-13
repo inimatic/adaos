@@ -26,7 +26,7 @@ from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 from adaos.services.webspace_id import coerce_webspace_id
-from adaos.services.yjs.doc import async_get_ydoc
+from adaos.services.yjs.doc import async_get_ydoc, async_read_ydoc, mutate_live_room
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.scenario.node_data_scope import node_scope_data_path
 from adaos.services.scenario.projection_service import _merge_nested_path
@@ -671,7 +671,7 @@ class RouterService:
                 return cached[1]
 
             try:
-                async with async_get_ydoc(src_ws) as ydoc:
+                async with async_read_ydoc(src_ws) as ydoc:
                     data = ydoc.get_map("data")
                     routing = _coerce_y(data.get("routing")) or {}
                     routes = routing.get("routes") if isinstance(routing, dict) else {}
@@ -734,85 +734,115 @@ class RouterService:
             if changed:
                 data_map.set(txn, top_key, merged)
 
-        async def _ensure_voice_chat_state(webspace_id: str, target_node_id: str | None = None) -> None:
+        async def _mutate_data_map(
+            webspace_id: str,
+            mutator: Callable[[Any, Any], None],
+            *,
+            source: str = "router.service",
+            channel: str = "core.router.live_room",
+        ) -> None:
+            def _apply(ydoc: Any, txn: Any) -> None:
+                mutator(ydoc.get_map("data"), txn)
+
+            if mutate_live_room(
+                webspace_id,
+                _apply,
+                root_names=["data"],
+                source=source,
+                owner="core:router",
+                channel=channel,
+            ):
+                return
             async with self._router_yjs_write_meta():
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    data_map = ydoc.get_map("data")
-                    current = _read_voice_chat_state(data_map, target_node_id)
-                    if isinstance(current, dict) and isinstance(current.get("messages"), list):
-                        return
+                async with async_get_ydoc(
+                    webspace_id,
+                    publish_live_room=False,
+                    load_mark_roots=["data"],
+                    write_source=source,
+                    write_owner="core:router",
+                    write_channel="core.router.async",
+                ) as ydoc:
                     with ydoc.begin_transaction() as txn:
-                        _write_voice_chat_state(
-                            data_map,
-                            txn,
-                            target_node_id,
-                            {
-                                "messages": [],
-                                "last_refresh_ts": time.time(),
-                            },
-                        )
+                        _apply(ydoc, txn)
+
+        async def _ensure_voice_chat_state(webspace_id: str, target_node_id: str | None = None) -> None:
+            def _mutator(data_map: Any, txn: Any) -> None:
+                current = _read_voice_chat_state(data_map, target_node_id)
+                if isinstance(current, dict) and isinstance(current.get("messages"), list):
+                    return
+                _write_voice_chat_state(
+                    data_map,
+                    txn,
+                    target_node_id,
+                    {
+                        "messages": [],
+                        "last_refresh_ts": time.time(),
+                    },
+                )
+
+            await _mutate_data_map(webspace_id, _mutator, channel="core.router.voice_chat.live_room")
 
         async def _append_voice_chat_message(
             webspace_id: str,
             msg: dict,
             target_node_id: str | None = None,
         ) -> None:
-            async with self._router_yjs_write_meta():
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    data_map = ydoc.get_map("data")
-                    current = _read_voice_chat_state(data_map, target_node_id)
-                    messages = []
-                    if isinstance(current, dict) and isinstance(current.get("messages"), list):
-                        messages = list(current.get("messages") or [])
-                    messages.append(msg)
-                    # keep last N messages only (MVP)
-                    if len(messages) > 60:
-                        messages = messages[-60:]
-                    with ydoc.begin_transaction() as txn:
-                        _write_voice_chat_state(
-                            data_map,
-                            txn,
-                            target_node_id,
-                            {
-                                "messages": messages,
-                                "last_refresh_ts": time.time(),
-                            },
-                        )
-                    try:
-                        self._vlog.debug(
-                            "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
-                            webspace_id,
-                            str(target_node_id or "").strip() or None,
-                            len(messages),
-                            msg.get("from"),
-                            msg.get("text"),
-                        )
-                    except Exception:
-                        pass
+            count = 0
+
+            def _mutator(data_map: Any, txn: Any) -> None:
+                nonlocal count
+                current = _read_voice_chat_state(data_map, target_node_id)
+                messages = []
+                if isinstance(current, dict) and isinstance(current.get("messages"), list):
+                    messages = list(current.get("messages") or [])
+                messages.append(msg)
+                if len(messages) > 60:
+                    messages = messages[-60:]
+                count = len(messages)
+                _write_voice_chat_state(
+                    data_map,
+                    txn,
+                    target_node_id,
+                    {
+                        "messages": messages,
+                        "last_refresh_ts": time.time(),
+                    },
+                )
+
+            await _mutate_data_map(webspace_id, _mutator, channel="core.router.voice_chat.live_room")
+            try:
+                self._vlog.debug(
+                    "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
+                    webspace_id,
+                    str(target_node_id or "").strip() or None,
+                    count,
+                    msg.get("from"),
+                    msg.get("text"),
+                )
+            except Exception:
+                pass
 
         async def _ensure_tts_state(webspace_id: str) -> None:
-            async with self._router_yjs_write_meta():
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    data_map = ydoc.get_map("data")
-                    current = data_map.get("tts")
-                    if isinstance(current, dict) and isinstance(current.get("queue"), list):
-                        return
-                    with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "tts", {"queue": []})
+            def _mutator(data_map: Any, txn: Any) -> None:
+                current = data_map.get("tts")
+                if isinstance(current, dict) and isinstance(current.get("queue"), list):
+                    return
+                data_map.set(txn, "tts", {"queue": []})
+
+            await _mutate_data_map(webspace_id, _mutator, channel="core.router.tts.live_room")
 
         async def _append_tts_queue_item(webspace_id: str, item: dict) -> None:
-            async with self._router_yjs_write_meta():
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    data_map = ydoc.get_map("data")
-                    current = data_map.get("tts")
-                    queue = []
-                    if isinstance(current, dict) and isinstance(current.get("queue"), list):
-                        queue = list(current.get("queue") or [])
-                    queue.append(item)
-                    if len(queue) > 50:
-                        queue = queue[-50:]
-                    with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "tts", {"queue": queue})
+            def _mutator(data_map: Any, txn: Any) -> None:
+                current = data_map.get("tts")
+                queue = []
+                if isinstance(current, dict) and isinstance(current.get("queue"), list):
+                    queue = list(current.get("queue") or [])
+                queue.append(item)
+                if len(queue) > 50:
+                    queue = queue[-50:]
+                data_map.set(txn, "tts", {"queue": queue})
+
+            await _mutate_data_map(webspace_id, _mutator, channel="core.router.tts.live_room")
 
         def _publish_webio_stream_event(
             webspace_id: str,
@@ -874,29 +904,27 @@ class RouterService:
                 return None
 
         async def _ensure_media_state(webspace_id: str) -> None:
-            async with self._router_yjs_write_meta():
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    data_map = ydoc.get_map("data")
-                    current = _coerce_y(data_map.get("media"))
-                    if isinstance(current, dict) and isinstance(current.get("route"), dict):
-                        return
-                    next_state = dict(current) if isinstance(current, dict) else {}
-                    next_state.setdefault("route", {})
-                    with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "media", next_state)
+            def _mutator(data_map: Any, txn: Any) -> None:
+                current = _coerce_y(data_map.get("media"))
+                if isinstance(current, dict) and isinstance(current.get("route"), dict):
+                    return
+                next_state = dict(current) if isinstance(current, dict) else {}
+                next_state.setdefault("route", {})
+                data_map.set(txn, "media", next_state)
+
+            await _mutate_data_map(webspace_id, _mutator, channel="core.router.media.live_room")
 
         async def _set_media_route_state(webspace_id: str, route_state: dict[str, Any]) -> None:
-            async with self._router_yjs_write_meta():
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    data_map = ydoc.get_map("data")
-                    current = _coerce_y(data_map.get("media"))
-                    next_state = dict(current) if isinstance(current, dict) else {}
-                    next_state["route"] = route_state
-                    with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "media", next_state)
+            def _mutator(data_map: Any, txn: Any) -> None:
+                current = _coerce_y(data_map.get("media"))
+                next_state = dict(current) if isinstance(current, dict) else {}
+                next_state["route"] = route_state
+                data_map.set(txn, "media", next_state)
+
+            await _mutate_data_map(webspace_id, _mutator, channel="core.router.media.live_room")
 
         async def _get_media_route_state(webspace_id: str) -> dict[str, Any] | None:
-            async with async_get_ydoc(webspace_id) as ydoc:
+            async with async_read_ydoc(webspace_id) as ydoc:
                 data_map = ydoc.get_map("data")
                 current = _coerce_y(data_map.get("media"))
                 if not isinstance(current, dict):

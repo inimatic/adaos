@@ -15,7 +15,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.scenarios import loader as scenarios_loader
-from adaos.services.yjs.doc import async_get_ydoc
+from adaos.services.yjs.doc import async_read_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
 
 from .ycoerce import coerce_dict, iter_mappings
@@ -186,7 +186,7 @@ def _emit_stage(
 
 async def _resolve_current_scenario_id(webspace_id: str) -> str | None:
     try:
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_read_ydoc(webspace_id) as ydoc:
             ui_map = ydoc.get_map("ui")
             token = ui_map.get("current_scenario")
     except Exception:
@@ -286,7 +286,7 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
 
         # Backward-compatible: per-webspace rules (will be deprecated).
         try:
-            async with async_get_ydoc(webspace_id) as ydoc:
+            async with async_read_ydoc(webspace_id) as ydoc:
                 data_map = ydoc.get_map("data")
                 nlu_obj = data_map.get("nlu")
                 nlu_obj = coerce_dict(nlu_obj)
