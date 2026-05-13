@@ -668,9 +668,9 @@ action routing.
 - [x] Add per-locale conflict diagnostics for aliases and display names.
 - [x] Add per-locale ambiguity evidence to NLU trace.
 - [x] Make Teacher probe responses show live entity matches and canonical refs.
-- [ ] Keep runtime aliases out of the Rasa stale-training fingerprint by
+- [x] Keep runtime aliases out of the Rasa stale-training fingerprint by
   default.
-- [ ] Add golden phrase tests proving renaming a device does not require model
+- [x] Add golden phrase tests proving renaming a device does not require model
   retraining.
 
 ### Phase 3 - UI and device settings

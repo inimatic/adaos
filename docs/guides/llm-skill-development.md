@@ -275,6 +275,9 @@ Localization rules for generated skills:
   provides it
 - return canonical refs plus display labels in responses when humans need to
   see what was targeted
+- treat runtime alias resolution as model-training neutral: aliases should
+  appear in `entity_resolution` / trace evidence, not as required Rasa or
+  neural retraining inputs
 
 ## Guarding and quarantine
 

@@ -44,6 +44,7 @@ def test_entity_resolver_trace_stage_uses_locale_hints(monkeypatch) -> None:
     assert stage["raw"]["preferred_locales"] == ["ru", "en"]
     assert stage["raw"]["resolved_entities"][0]["canonical_ref"] == "skill:weather_skill"
     assert stage["raw"]["resolved_entities"][0]["locale"] == "ru"
+    assert stage["raw"]["model_training"]["rasa_fingerprint"] == "unchanged"
 
 
 def test_entity_resolver_trace_stage_suppresses_miss_unless_requested(monkeypatch) -> None:
