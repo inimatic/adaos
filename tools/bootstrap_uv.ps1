@@ -19,6 +19,8 @@ $ErrorActionPreference = "Stop"
 $clientSubPath = "src\adaos\integrations\adaos-client"
 $backendSubPath = "src\adaos\integrations\adaos-backend"
 $infraSubPath = "src\adaos\integrations\infra-inimatic"
+$minPython = "3.11.9"
+$maxPythonExclusive = "3.12"
 
 # Ensure we operate from repo root even if invoked from elsewhere.
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -161,28 +163,28 @@ if (-not (Have "uv")) {
   $env:Path = "$HOME\.local\bin;$env:Path"
 }
 
-# Python 3.11 only (uv-managed)
-Write-Host "Ensuring Python 3.11..."
-uv python install 3.11
-if ($LASTEXITCODE -ne 0) { throw "uv python install 3.11 failed" }
-$env:UV_PYTHON = "3.11"
+# Python >=3.11.9,<3.12 only (uv-managed)
+Write-Host "Ensuring Python >=$minPython,<$maxPythonExclusive..."
+uv python install $minPython
+if ($LASTEXITCODE -ne 0) { throw "uv python install $minPython failed" }
+$env:UV_PYTHON = $minPython
 
 # 2) Sync Python deps (creates .venv and installs project)
 if (Test-Path "uv.lock") {
   Write-Host "Syncing environment from uv.lock..."
-  uv sync --locked
+  uv sync --python $env:UV_PYTHON --locked
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "uv sync --locked failed, refreshing lock..."
     uv lock
     if ($LASTEXITCODE -ne 0) { throw "uv lock failed" }
-    uv sync
+    uv sync --python $env:UV_PYTHON
     if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
   }
 } else {
   Write-Host "Locking and syncing environment..."
   uv lock
   if ($LASTEXITCODE -ne 0) { throw "uv lock failed" }
-  uv sync
+  uv sync --python $env:UV_PYTHON
   if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
 }
 

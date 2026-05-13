@@ -18,6 +18,7 @@ ZONE_ID=""
 NO_VOICE="0"
 DEV_MODE="0"
 MIN_PYTHON="3.11.9"
+MAX_PYTHON_EXCLUSIVE="3.12.0"
 PYTHON_ARG=""
 NODE_NAME=""
 NO_CORE_UPDATE="0"
@@ -394,20 +395,16 @@ print("core_update_enabled=" + str(bool(getattr(conf, "core_update_enabled", Tru
 PY
 }
 
-py_is_311() {
-  local bin="$1"
-  "$bin" -c 'import sys; raise SystemExit(0 if (sys.version_info[0], sys.version_info[1]) == (3, 11) else 1)' \
-    >/dev/null 2>&1
-}
-
-py_meets_min() {
+py_is_supported_python() {
   local bin="$1"
   local min_ver="$2"
-  "$bin" - "$min_ver" <<'PY' >/dev/null 2>&1
+  local max_ver="$3"
+  "$bin" - "$min_ver" "$max_ver" <<'PY' >/dev/null 2>&1
 import sys
 min_ver = tuple(int(x) for x in sys.argv[1].split("."))
+max_ver = tuple(int(x) for x in sys.argv[2].split("."))
 cur = sys.version_info[:3]
-raise SystemExit(0 if cur >= min_ver else 1)
+raise SystemExit(0 if min_ver <= cur < max_ver else 1)
 PY
 }
 
@@ -424,7 +421,7 @@ choose_system_python_311() {
     have "$c" || continue
     p="$(command -v "$c")"
     resolved_p="$(normalize_python_candidate "$p")"
-    if py_is_311 "$resolved_p" && py_meets_min "$resolved_p" "$MIN_PYTHON"; then
+    if py_is_supported_python "$resolved_p" "$MIN_PYTHON" "$MAX_PYTHON_EXCLUSIVE"; then
       UV_PYTHON="$resolved_p"
       py_ver="$("$resolved_p" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}")' 2>/dev/null || echo "3.11")"
       if [[ "$p" != "$resolved_p" ]]; then
@@ -519,8 +516,8 @@ if ! have uv; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# 1.5) Python 3.11.9+ only (uv-managed)
-log "Ensuring Python ${MIN_PYTHON}+..."
+# 1.5) Python >=3.11.9,<3.12 only (uv-managed)
+log "Ensuring Python >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE}..."
 uv python install "${MIN_PYTHON}" || die "uv python install ${MIN_PYTHON} failed"
 
 if choose_system_python_311; then
@@ -530,10 +527,10 @@ else
   UV_PYTHON="$(uv python find --system --managed-python "${MIN_PYTHON}" 2>/dev/null)"
   rc=$?
   set -e
-  [[ $rc -eq 0 && -n "${UV_PYTHON:-}" ]] || die "Failed to locate a usable Python ${MIN_PYTHON}+ interpreter for uv sync"
+  [[ $rc -eq 0 && -n "${UV_PYTHON:-}" ]] || die "Failed to locate a usable Python >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE} interpreter for uv sync"
   UV_PYTHON="$(normalize_python_candidate "$UV_PYTHON")"
-  py_is_311 "$UV_PYTHON" && py_meets_min "$UV_PYTHON" "$MIN_PYTHON" \
-    || die "Resolved uv-managed Python is not a usable ${MIN_PYTHON}+ interpreter: ${UV_PYTHON}"
+  py_is_supported_python "$UV_PYTHON" "$MIN_PYTHON" "$MAX_PYTHON_EXCLUSIVE" \
+    || die "Resolved uv-managed Python is not a usable >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE} interpreter: ${UV_PYTHON}"
   log "Using uv-managed Python -> ${UV_PYTHON}"
   export UV_PYTHON
 fi

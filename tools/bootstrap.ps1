@@ -32,6 +32,8 @@ if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
     }
 }
 function Get-PythonCandidates {
+    $minPy = [version]"3.11.9"
+    $maxPyExclusive = [version]"3.12.0"
     $cands = @()
 
     if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -40,9 +42,10 @@ function Get-PythonCandidates {
             if ($ln -match "(?<path>[A-Za-z]:\\.+?python\.exe)\s*$") {
                 $path = $Matches["path"]
                 try {
-                    $out = & "$path" -c "import sys,platform; print(f'{sys.version_info[0]}.{sys.version_info[1]}|{platform.architecture()[0]}')" 2>$null
+                    $out = & "$path" -c "import sys,platform; print(f'{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}|{platform.architecture()[0]}')" 2>$null
                     $ver,$arch = $out.Split("|")
                     $v = [version]$ver
+                    if ($v -lt $minPy -or $v -ge $maxPyExclusive) { continue }
                     $cands += [pscustomobject]@{
                         Version = $v
                         Arch    = ($arch -replace '-bit','')
@@ -56,13 +59,15 @@ function Get-PythonCandidates {
 
     if (-not $cands -and (Get-Command python -ErrorAction SilentlyContinue)) {
         try {
-            $out = & python -c "import sys,platform; print(f'{sys.version_info[0]}.{sys.version_info[1]}|{platform.architecture()[0]}')" 2>$null
+            $out = & python -c "import sys,platform; print(f'{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}|{platform.architecture()[0]}')" 2>$null
             $ver,$arch = $out.Split("|")
             $v = [version]$ver
-            $cands += [pscustomobject]@{
-                Version = $v
-                Arch    = ($arch -replace '-bit','')
-                Path    = (Get-Command python).Source
+            if ($v -ge $minPy -and $v -lt $maxPyExclusive) {
+                $cands += [pscustomobject]@{
+                    Version = $v
+                    Arch    = ($arch -replace '-bit','')
+                    Path    = (Get-Command python).Source
+                }
             }
         }
         catch { }
@@ -195,8 +200,6 @@ function Show-AutostartDiagnostics {
 
 Write-Host "Searching for installed Python..."
 $pyCands = Get-PythonCandidates
-$minPy = [version]"3.11.9"
-$maxPyExclusive = [version]"3.12.0"
 if (-not $pyCands -or $pyCands.Count -eq 0) {
     $bootstrapMode = [string]$env:ADAOS_BOOTSTRAP_MODE
     if ([string]::IsNullOrWhiteSpace($bootstrapMode)) { $bootstrapMode = "" }
@@ -216,45 +219,19 @@ if (-not $pyCands -or $pyCands.Count -eq 0) {
             -ZoneId $ZoneId
         exit $LASTEXITCODE
     }
-    Write-Host "No Python found. Install Python 3.11.9+ and re-run (or run tools\\bootstrap_uv.ps1)." -ForegroundColor Red
+    Write-Host "No supported Python found. Install Python >=3.11.9,<3.12 and re-run (or run tools\\bootstrap_uv.ps1)." -ForegroundColor Red
     exit 1
 }
 
-$pyCands311 = @($pyCands | Where-Object { $_.Version -ge $minPy -and $_.Version -lt $maxPyExclusive })
-if (-not $pyCands311 -or $pyCands311.Count -eq 0) {
-    $found = ($pyCands | ForEach-Object { "$($_.Version) $($_.Arch)" } | Sort-Object -Unique) -join ", "
-    $bootstrapMode = [string]$env:ADAOS_BOOTSTRAP_MODE
-    if ([string]::IsNullOrWhiteSpace($bootstrapMode)) { $bootstrapMode = "" }
-    if ($bootstrapMode.ToLower() -ne "venv") {
-        Write-Warning "Python 3.11.9+ is required. Found: $found. Falling back to uv-managed Python 3.11."
-        & (Join-Path $PSScriptRoot "bootstrap_uv.ps1") `
-            -JoinCode $JoinCode `
-            -Role $Role `
-            -Dev:$Dev `
-            -NoVoice:$NoVoice `
-            -InstallService $InstallService `
-            -ServeHost $ServeHost `
-            -ServePort $ServePort `
-            -ControlPort $ControlPort `
-            -RootUrl $RootUrl `
-            -Rev $Rev `
-            -ZoneId $ZoneId
-        exit $LASTEXITCODE
-    }
-    Write-Host "Python 3.11.9+ is required. Found: $found" -ForegroundColor Red
-    Write-Host "Tip (Windows): install Python 3.11.9+ and use: py -3.11 (or run tools\\bootstrap_uv.ps1)" -ForegroundColor Yellow
-    exit 1
-}
-
-$default = $pyCands311 | Where-Object { $_.Arch -eq "x64" } | Select-Object -First 1
-if (-not $default) { $default = $pyCands311 | Select-Object -First 1 }
+$default = $pyCands | Where-Object { $_.Arch -eq "x64" } | Select-Object -First 1
+if (-not $default) { $default = $pyCands | Select-Object -First 1 }
 
 Write-Host ""
-Write-Host "Available Python:"
-for ($i=0; $i -lt $pyCands311.Count; $i++) {
+Write-Host "Available supported Python (>=3.11.9,<3.12):"
+for ($i=0; $i -lt $pyCands.Count; $i++) {
     $mark = ""
-    if ($pyCands311[$i].Path -eq $default.Path) { $mark = " (default)" }
-    Write-Host ("  [{0}] {1} {2} -> {3}{4}" -f $i, $pyCands311[$i].Version, $pyCands311[$i].Arch, $pyCands311[$i].Path, $mark)
+    if ($pyCands[$i].Path -eq $default.Path) { $mark = " (default)" }
+    Write-Host ("  [{0}] {1} {2} -> {3}{4}" -f $i, $pyCands[$i].Version, $pyCands[$i].Arch, $pyCands[$i].Path, $mark)
 }
 
 $chosen = $default
