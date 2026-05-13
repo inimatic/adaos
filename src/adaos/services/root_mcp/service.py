@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from adaos.build_info import BUILD_INFO
-from adaos.services.diag360 import create_360log_snapshot, list_360log_snapshots, view_360log_snapshot
 from adaos.services.agent_context import get_ctx
 from adaos.services.id_gen import new_id
 
@@ -60,6 +59,35 @@ from .tokens import access_token_registry_summary, get_access_token_record, issu
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _text_or_none(value: Any) -> str | None:
+    token = str(value or "").strip()
+    return token or None
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_items: list[Any] = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = []
+    items: list[str] = []
+    for item in raw_items:
+        token = str(item or "").strip()
+        if token and token not in items:
+            items.append(token)
+    return items
+
+
+def _locale_order(*, request_locale: str | None, preferred_locales: list[str]) -> list[str]:
+    order: list[str] = []
+    for item in [request_locale, *preferred_locales, "und"]:
+        token = str(item or "").strip().lower()
+        if token and token not in order:
+            order.append(token)
+    return order
 
 
 def _root_host_summary() -> dict[str, Any]:
@@ -360,6 +388,23 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_named_entity_registry"},
+        ),
+        RootMcpToolContract(
+            id="nlu_authoring.get_context",
+            title="Get NLU authoring context",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return read-only NLU authoring context with canonical named entities, locale hints, and authoring boundaries.",
+            input_schema=schema_object(
+                properties={
+                    "webspace_id": {"type": "string"},
+                    "kind": {"type": "string"},
+                    "request_locale": {"type": "string"},
+                    "preferred_locales": {"type": "array", "items": {"type": "string"}},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_context"},
         ),
         RootMcpToolContract(
             id="hub.get_status",
@@ -1112,6 +1157,55 @@ def _handle_adaos_dev_named_entity_registry(arguments: dict[str, Any], *, dry_ru
     return {"descriptor": descriptor}
 
 
+def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services import named_entities
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    kind = _text_or_none(arguments.get("kind"))
+    request_locale = _text_or_none(arguments.get("request_locale"))
+    preferred_locales = _text_list(arguments.get("preferred_locales"))
+    registry = named_entities.compact_registry_payload(kind=kind, webspace_id=webspace_id)
+    return {
+        "context": {
+            "context_id": "nlu_authoring_context.v1",
+            "plane_id": "nlu_authoring",
+            "version": 1,
+            "webspace_id": webspace_id,
+            "kind_filter": kind,
+            "locale": {
+                "request_locale": request_locale,
+                "preferred_locales": preferred_locales,
+                "effective_locale_order": _locale_order(request_locale=request_locale, preferred_locales=preferred_locales),
+            },
+            "named_entities": registry,
+            "canonicalization": {
+                "canonical_ref_required": True,
+                "dispatch_contract": "Resolve labels and aliases to canonical_ref before action selection; labels are never routing keys.",
+                "localized_labels_are_metadata": True,
+                "fallback_labels_allowed_for_debug_only": True,
+            },
+            "authoring_boundaries": {
+                "mode": "read_only_context",
+                "side_effects": "none",
+                "alias_writes": "not_available",
+                "training_mutation": "not_available",
+                "rasa_training_mutation": False,
+            },
+            "trace_hints": {
+                "include_fields": [
+                    "normalized_text",
+                    "resolved_entities",
+                    "ambiguities",
+                    "request_locale",
+                    "preferred_locales",
+                    "canonical_ref",
+                ],
+                "low_confidence_behavior": "preserve current nlp.intent.not_obtained fallback until dry-run evidence is visible",
+            },
+        }
+    }
+
+
 def _handle_operational_contracts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     items = [item.to_dict() for item in list_tool_contracts(surface=RootMcpSurface.OPERATIONS.value)]
     return {
@@ -1767,6 +1861,8 @@ def _handle_hub_rollback_last_test_deploy(arguments: dict[str, Any], *, dry_run:
 
 
 def _handle_create_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.diag360 import create_360log_snapshot
+
     query = {
         "reason": str(arguments.get("reason") or "").strip() or None,
         "scope": str(arguments.get("scope") or "auto").strip().lower() or "auto",
@@ -1784,11 +1880,15 @@ def _handle_create_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) 
 
 
 def _handle_list_360log_snapshots(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.diag360 import list_360log_snapshots
+
     limit = max(1, min(int(arguments.get("limit") or 20), 100))
     return {"snapshots": list_360log_snapshots(limit=limit)}
 
 
 def _handle_get_360log_snapshot(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.diag360 import view_360log_snapshot
+
     snapshot_id = str(arguments.get("snapshot_id") or "").strip()
     if not snapshot_id:
         raise ValueError("snapshot_id is required")
@@ -1818,6 +1918,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_skill_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_skill_registry_summary"),
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
+    "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
     "hub.get_status": lambda arguments, dry_run=False: _handle_hub_get_status(arguments, dry_run=dry_run),
     "hub.get_runtime_summary": lambda arguments, dry_run=False: _handle_hub_get_runtime_summary(arguments, dry_run=dry_run),
     "hub.get_operational_surface": lambda arguments, dry_run=False: _handle_hub_get_operational_surface(arguments, dry_run=dry_run),
@@ -1975,6 +2076,10 @@ def _execution_adapter_for_tool(tool_id: str) -> str:
         return "profile_ops.local_process.retry"
     if token == "hub.memory.publish_profile":
         return "profile_ops.local_process.publish"
+    if token.startswith("nlu_authoring."):
+        return "nlu_authoring.context"
+    if token.startswith("adaos_dev."):
+        return "adaos_dev.descriptor_registry"
     if token.startswith("development."):
         return "root.descriptor_registry"
     if token.startswith("operations."):

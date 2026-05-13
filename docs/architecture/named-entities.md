@@ -413,6 +413,10 @@ Current read surfaces:
 - Root MCP / AdaOSDevPlane: `adaos_dev.get_named_entity_registry`, exposed to
   Codex as `get_named_entity_registry`, returns the same compact registry as a
   descriptor payload and accepts optional `webspace_id` and `kind` filters.
+- Root MCP / NLUAuthoringPlane: `nlu_authoring.get_context`, exposed to Codex
+  as `get_nlu_authoring_context`, returns a read-only authoring context with
+  named entities, locale hints, canonicalization rules, and explicit
+  no-write/no-training-mutation boundaries.
 
 ## UI behavior
 
@@ -695,7 +699,7 @@ action routing.
 
 - [x] Expose named-entity descriptors through Root MCP read capabilities.
 - [ ] Add governed alias proposal/apply flows for LLM-assisted correction.
-- [ ] Include named entities in NLUAuthoringPlane context.
+- [x] Include named entities in NLUAuthoringPlane context.
 - [ ] Add audit records for alias changes and conflict resolution.
 
 ### Acceptance criteria

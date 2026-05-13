@@ -1366,7 +1366,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 76%.
+- Overall: 79%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1381,9 +1381,10 @@ Integration progress:
   labels, client catalog/modal title enrichment from `registry.named_entities`,
   read-only registry label conflict diagnostics, localization-as-label-metadata
   architecture, compact registry label metadata, locale-aware resolver trace
-  hints, per-locale conflict diagnostics, and focused tests.
-- Current implementation slice: start migrating node/browser labels to the
-  shared display model while keeping routing behavior unchanged.
+  hints, per-locale conflict diagnostics, Root MCP `NLUAuthoringPlane`
+  read-only context with canonical named entities, and focused tests.
+- Current implementation slice: expose canonical names to NLU/LLM authoring
+  without changing dispatch or training data.
 - Not started yet: governed writes and consumer migration.
 - Verification note: targeted MCP/named-entity checks pass. Broader
   `test_root_mcp_foundation` / Yjs projection runs still expose pre-existing
@@ -1406,7 +1407,7 @@ Next implementation steps:
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
 3. Begin conflict diagnostics for duplicate display names or aliases.
-4. Include named entities in NLUAuthoringPlane context.
+4. Update Teacher probe output to show live entity resolver matches.
 5. Start governed alias/display-name proposal commands.
 
 ### Tasks
@@ -1491,7 +1492,7 @@ Actions:
 - [x] Add `sdk.data.entities` read helpers.
 - [ ] Add governed alias proposal/apply commands.
 - [x] Expose named-entity descriptors through Root MCP read capabilities.
-- [ ] Include named entities in NLUAuthoringPlane context.
+- [x] Include named entities in NLUAuthoringPlane context.
 
 #### NER-005: Integrate named entities with the operational event model
 

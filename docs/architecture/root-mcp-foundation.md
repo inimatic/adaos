@@ -186,6 +186,12 @@ Initial capability profile:
 The plane must expose current NLU templates with stable identifiers before any correction flow runs. LLM-authored changes should reference
 `template_id` plus `base_fingerprint`, then pass through preview diff and operator approval before apply.
 
+The first implemented read surface is `nlu_authoring.get_context`: it exposes
+the compact named-entity registry, locale hints, and canonicalization rules as
+read-only authoring context. Labels and localized aliases are treated as
+metadata for recognition; dispatch and generated patches must reference
+canonical refs.
+
 The web MCP Server modal should issue a target-scoped token/session lease for this profile. Root remains the policy and routing point:
 the browser receives a bearer token, root resolves it to subnet/zone/target/capabilities, and NLU authoring calls are routed only through
 published Root MCP contracts.
