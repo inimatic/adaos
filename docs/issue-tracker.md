@@ -1410,7 +1410,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 82%.
+- Overall: 84%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1427,7 +1427,8 @@ Integration progress:
   architecture, compact registry label metadata, locale-aware resolver trace
   hints, per-locale conflict diagnostics, Root MCP `NLUAuthoringPlane`
   read-only context with canonical named entities, Teacher probe live entity
-  matches, per-locale ambiguity evidence in NLU trace, and focused tests.
+  matches, per-locale ambiguity evidence in NLU trace, runtime-only
+  model-training evidence for alias resolution, and focused tests.
 - Current implementation slice: expose canonical names to NLU/Teacher
   diagnostics without changing dispatch or training data.
 - Not started yet: governed writes and consumer migration.
@@ -1452,9 +1453,9 @@ Next implementation steps:
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
 3. Begin conflict diagnostics for duplicate display names or aliases.
-4. Add golden tests proving runtime aliases do not require Rasa/neural
-   retraining.
-5. Start governed alias/display-name proposal commands.
+4. Start governed alias/display-name proposal commands.
+5. Migrate node/browser labels to shared display helpers in remaining skill
+   projections.
 
 ### Tasks
 
@@ -1526,7 +1527,7 @@ Actions:
 - [x] Add per-locale conflict evidence to compact registry diagnostics.
 - [x] Add per-locale ambiguity evidence to NLU trace.
 - [x] Update Teacher probe output to show live entity resolver matches.
-- [ ] Add golden tests proving runtime aliases do not require Rasa/neural
+- [x] Add golden tests proving runtime aliases do not require Rasa/neural
   retraining.
 
 #### NER-004: Expose named entities to SDK/MCP/LLM tooling
