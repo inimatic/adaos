@@ -61,6 +61,7 @@ def _plane_registry_payload() -> dict[str, Any]:
                     "template_catalog",
                     "public_skill_registry_summary",
                     "public_scenario_registry_summary",
+                    "named_entity_registry",
                 ],
                 "tool_prefixes": ["adaos_dev."],
                 "capability_profiles": [],
@@ -293,6 +294,7 @@ def _descriptor_build_profile() -> dict[str, Any]:
             "architecture_catalog",
             "public_skill_registry_summary",
             "public_scenario_registry_summary",
+            "named_entity_registry",
             "descriptor_bundle",
         ],
         "sdk_export_meta": sdk_meta,
@@ -451,6 +453,10 @@ def _descriptor_payload(descriptor_id: str, *, level: str = "std") -> Any:
         return _public_registry_summary("skills")
     if token == "public_scenario_registry_summary":
         return _public_registry_summary("scenarios")
+    if token == "named_entity_registry":
+        from adaos.services import named_entities
+
+        return named_entities.compact_registry_payload(webspace_id="desktop")
     if token == "descriptor_build_profile":
         return _descriptor_build_profile()
     if token == "descriptor_bundle":
@@ -581,6 +587,14 @@ def list_descriptor_sets() -> list[dict[str, Any]]:
             source_kind="workspace_registry",
             descriptor_class="registry",
             tags=["development", "scenarios", "registry"],
+        ),
+        _descriptor_entry(
+            "named_entity_registry",
+            title="Named entity registry",
+            summary="Compact read-only canonical named-entity registry for LLM, NLU, UI diagnostics, and operator tooling.",
+            source_kind="named_entity_service",
+            descriptor_class="registry",
+            tags=["development", "nlu", "entities", "registry"],
         ),
         _descriptor_entry(
             "descriptor_build_profile",

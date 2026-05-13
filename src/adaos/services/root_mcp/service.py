@@ -347,6 +347,21 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_public_scenario_registry"},
         ),
         RootMcpToolContract(
+            id="adaos_dev.get_named_entity_registry",
+            title="Get named entity registry",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return the compact read-only canonical named-entity registry through AdaOSDevPlane.",
+            input_schema=schema_object(
+                properties={
+                    "webspace_id": {"type": "string"},
+                    "kind": {"type": "string"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_named_entity_registry"},
+        ),
+        RootMcpToolContract(
             id="hub.get_status",
             title="Get hub status",
             surface=RootMcpSurface.OPERATIONS,
@@ -1085,6 +1100,18 @@ def _handle_adaos_dev_descriptor(arguments: dict[str, Any], *, descriptor_id: st
     return {"descriptor": get_descriptor(descriptor_id, level=level)}
 
 
+def _handle_adaos_dev_named_entity_registry(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services import named_entities
+
+    descriptor = get_descriptor("named_entity_registry", level="std")
+    payload = named_entities.compact_registry_payload(
+        kind=str(arguments.get("kind") or "").strip() or None,
+        webspace_id=str(arguments.get("webspace_id") or "").strip() or None,
+    )
+    descriptor["payload"] = payload
+    return {"descriptor": descriptor}
+
+
 def _handle_operational_contracts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     items = [item.to_dict() for item in list_tool_contracts(surface=RootMcpSurface.OPERATIONS.value)]
     return {
@@ -1790,6 +1817,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_template_catalog": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="template_catalog"),
     "adaos_dev.get_public_skill_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_skill_registry_summary"),
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
+    "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "hub.get_status": lambda arguments, dry_run=False: _handle_hub_get_status(arguments, dry_run=dry_run),
     "hub.get_runtime_summary": lambda arguments, dry_run=False: _handle_hub_get_runtime_summary(arguments, dry_run=dry_run),
     "hub.get_operational_surface": lambda arguments, dry_run=False: _handle_hub_get_operational_surface(arguments, dry_run=dry_run),

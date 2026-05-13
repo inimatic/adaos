@@ -47,6 +47,18 @@ class _FakeRootMcpClient:
         self.calls.append(("get_adaos_dev_public_scenario_registry", "", {}))
         return {"descriptor": {"payload": {"kind": "scenarios", "item_count": 2}}}
 
+    def get_adaos_dev_named_entity_registry(self, *, webspace_id: str | None = None, kind: str | None = None) -> dict:
+        self.calls.append(("get_adaos_dev_named_entity_registry", webspace_id or "", {"kind": kind}))
+        return {
+            "descriptor": {
+                "payload": {
+                    "version": 1,
+                    "webspace_id": webspace_id or "desktop",
+                    "items": [{"canonical_ref": "device:browser:browser-1", "kind": kind or "device.browser"}],
+                }
+            }
+        }
+
     def get_profileops_status(self, target_id: str) -> dict:
         self.calls.append(("get_profileops_status", target_id, {}))
         return {"target_id": target_id, "report_count": 1, "latest_session": {"session_id": "mem-001"}}
@@ -314,6 +326,14 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "params": {"name": "get_architecture_catalog", "arguments": {}},
         }
     )
+    named_entities = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {"name": "get_named_entity_registry", "arguments": {"webspace_id": "desktop", "kind": "device.browser"}},
+        }
+    )
     profileops = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -369,6 +389,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     tool_names = {item["name"] for item in tools_list["result"]["tools"]}
     assert "get_status" in tool_names
     assert "get_architecture_catalog" in tool_names
+    assert "get_named_entity_registry" in tool_names
     assert "get_sdk_metadata" in tool_names
     assert "get_profileops_status" in tool_names
     assert "list_profileops_sessions" in tool_names
@@ -383,6 +404,8 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert status["result"]["structuredContent"]["target_id"] == "hub:test-subnet"
     assert architecture is not None
     assert architecture["result"]["structuredContent"]["descriptor"]["payload"]["page_count"] == 3
+    assert named_entities is not None
+    assert named_entities["result"]["structuredContent"]["descriptor"]["payload"]["items"][0]["canonical_ref"] == "device:browser:browser-1"
     assert profileops is not None
     assert profileops["result"]["structuredContent"]["latest_session"]["session_id"] == "mem-001"
     assert profileops_start is not None
@@ -395,6 +418,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert subnet_info["result"]["structuredContent"]["subnet"]["subnet_id"] == "test-subnet"
     assert ("get_target_status", "hub:test-subnet", {}) in fake_client.calls
     assert ("get_adaos_dev_architecture_catalog", "", {}) in fake_client.calls
+    assert ("get_adaos_dev_named_entity_registry", "desktop", {"kind": "device.browser"}) in fake_client.calls
     assert ("get_profileops_status", "hub:test-subnet", {}) in fake_client.calls
     assert ("start_profileops_session", "hub:test-subnet", {"profile_mode": "trace_profile", "reason": "root_mcp.memory.start", "trigger_source": "root_mcp"}) in fake_client.calls
     assert ("get_yjs_load_mark_history", "desktop", {"limit": 25, "kind": "owner", "bucket_id": "_by_owner/unknown", "display_contains": None, "status": None, "last_source": None, "since_ts": None, "until_ts": None}) in fake_client.calls

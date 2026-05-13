@@ -1365,7 +1365,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 48%.
+- Overall: 54%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1374,10 +1374,16 @@ Integration progress:
   `registry.named_entities` projection, live-room-safe NLU trace writes,
   voice/chat router live-room writes, read-only NLU Yjs reads, browser metadata
   capture from Yjs handshakes, access-links-driven
-  `entity.registry.changed` invalidation, and focused tests.
-- Current implementation slice: finish read-only registry/MCP coverage, then
-  start migrating node/browser labels to the shared display model.
-- Not started yet: governed writes, MCP, and consumer migration.
+  `entity.registry.changed` invalidation, Root MCP/Codex read access to the
+  compact named-entity registry, and focused tests.
+- Current implementation slice: start migrating node/browser labels to the
+  shared display model while keeping routing behavior unchanged.
+- Not started yet: governed writes and consumer migration.
+- Verification note: targeted MCP/named-entity checks pass. Broader
+  `test_root_mcp_foundation` / Yjs projection runs still expose pre-existing
+  fixture drift around `TestPaths.root_mcp_state_dir`, stale endpoint
+  monkeypatch names, and `AdaosMemoryYStore.started`; track that separately so
+  it does not mask NER regressions.
 
 Human verification:
 
@@ -1388,11 +1394,11 @@ Human verification:
 
 Next implementation steps:
 
-1. Expose the compact named-entity registry in diagnostics/MCP read context.
-2. Start migrating node/browser labels to the shared display helper.
-3. Add observed/draft/display-name lifecycle events beyond coarse
+1. Start migrating node/browser labels to the shared display helper.
+2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
-4. Begin conflict diagnostics for duplicate display names or aliases.
+3. Begin conflict diagnostics for duplicate display names or aliases.
+4. Include named entities in NLUAuthoringPlane context.
 
 ### Tasks
 
@@ -1458,7 +1464,7 @@ Actions:
 
 - [x] Add `sdk.data.entities` read helpers.
 - [ ] Add governed alias proposal/apply commands.
-- [ ] Expose named-entity descriptors through Root MCP read capabilities.
+- [x] Expose named-entity descriptors through Root MCP read capabilities.
 - [ ] Include named entities in NLUAuthoringPlane context.
 
 #### NER-005: Integrate named entities with the operational event model
