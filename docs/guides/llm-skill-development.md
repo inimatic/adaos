@@ -278,6 +278,10 @@ Localization rules for generated skills:
 - treat runtime alias resolution as model-training neutral: aliases should
   appear in `entity_resolution` / trace evidence, not as required Rasa or
   neural retraining inputs
+- propose alias changes through `sdk.data.entities.propose_alias_add` /
+  `apply_alias_add` instead of mutating projected registry data directly; the
+  apply result returns lifecycle event envelopes that the authoritative write
+  path can persist and publish
 
 ## Guarding and quarantine
 

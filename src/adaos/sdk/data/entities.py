@@ -29,4 +29,31 @@ def resolve_text(
     )
 
 
-__all__ = ["list_entities", "resolve_text"]
+def propose_alias_add(
+    *,
+    canonical_ref: str,
+    alias: str,
+    locale: str | None = None,
+    kind: str | None = None,
+    webspace_id: str | None = None,
+    actor: str | None = None,
+    source: str = "sdk.data.entities",
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    return _service.propose_alias_add(
+        canonical_ref=canonical_ref,
+        alias=alias,
+        locale=locale,
+        kind=kind,
+        webspace_id=webspace_id,
+        actor=actor,
+        source=source,
+        request_id=request_id,
+    )
+
+
+def apply_alias_add(proposal: dict[str, Any]) -> dict[str, Any]:
+    return _service.apply_alias_add(proposal)
+
+
+__all__ = ["apply_alias_add", "list_entities", "propose_alias_add", "resolve_text"]

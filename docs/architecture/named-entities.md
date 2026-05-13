@@ -377,6 +377,57 @@ Operational rules:
 - LLM/MCP tools should write through governed alias/display-name commands rather
   than mutating entity projections directly.
 
+## Governed alias proposal/apply contract
+
+Alias writes should pass through a proposal/apply boundary before any
+authoritative source mutates durable state.
+
+The current implementation slice provides this as a service and SDK contract:
+
+- `propose_alias_add` validates the target `canonical_ref`, normalizes the
+  alias, applies the requested `locale` or `und`, and checks same-locale
+  conflicts inside the effective scope.
+- `apply_alias_add` consumes a proposal and returns an updated
+  `NamedEntityRecord` plus event envelopes. It does not persist by itself.
+- Successful applies return `entity.alias.added` and `entity.registry.changed`
+  envelopes.
+- Conflicted applies return `entity.alias.conflict.detected` and do not return
+  an updated record.
+- `noop`, `invalid`, and `not_found` statuses are explicit so LLM or UI callers
+  can explain what happened instead of retrying blindly.
+
+This deliberately keeps policy in one place while leaving storage authority to
+the owning source service, such as future profile/device settings or Root MCP
+governed write handlers.
+
+Example successful proposal result:
+
+```json
+{
+  "ok": true,
+  "action": "alias.add",
+  "status": "proposed",
+  "canonical_ref": "device:member:node-1",
+  "alias": "kitchen screen",
+  "normalized": "kitchen screen",
+  "locale": "en",
+  "source": "sdk.data.entities"
+}
+```
+
+Example apply result:
+
+```json
+{
+  "ok": true,
+  "status": "applied",
+  "events": [
+    { "topic": "entity.alias.added", "payload": { "locale": "en" } },
+    { "topic": "entity.registry.changed", "payload": { "reason": "alias_added" } }
+  ]
+}
+```
+
 ## Storage and projection boundaries
 
 Named entities are a read model over authoritative sources, not a replacement
@@ -399,7 +450,8 @@ Target service:
   its output remains canonical refs and spans rather than localized dispatch
   ids.
 - SDK exposes `sdk.data.entities.list_entities`,
-  `sdk.data.entities.resolve_text`, and alias-management helpers.
+  `sdk.data.entities.resolve_text`, `sdk.data.entities.propose_alias_add`, and
+  `sdk.data.entities.apply_alias_add`.
 - Yjs may project a read-only compact registry under a path such as
   `registry.named_entities` for UI and diagnostics.
 - Root MCP should expose named-entity descriptors through governed read
@@ -561,6 +613,8 @@ Goal: allow humans and tools to change names safely.
 Deliverables:
 
 - Adopt, rename, add-alias, remove-alias, and deprecate-alias commands.
+- Proposal/apply contracts that validate conflicts and return lifecycle event
+  envelopes before durable mutation.
 - `base_fingerprint`, actor, source, reason, and audit metadata on writes.
 - Device/browser settings flows that separate observed facts from user names.
 - Alias management UI for devices first, then webspaces, scenarios, skills, and
@@ -690,7 +744,10 @@ action routing.
 ### Phase 4 - SDK and skill migration
 
 - [x] Add `sdk.data.entities` read helpers.
-- [ ] Add alias-management commands with policy and audit metadata.
+- [x] Add first alias-management proposal/apply helpers with policy metadata
+  and lifecycle event envelopes.
+- [ ] Add durable alias-management commands with `base_fingerprint`, audit
+  metadata, and authoritative source persistence.
 - [ ] Update skill templates so LLM-authored skills consume canonical refs
   rather than raw labels.
 - [ ] Update `browsers_skill`, `infrastate_skill`, and `infrascope_skill` to
@@ -699,7 +756,9 @@ action routing.
 ### Phase 5 - MCP and LLM authoring
 
 - [x] Expose named-entity descriptors through Root MCP read capabilities.
-- [ ] Add governed alias proposal/apply flows for LLM-assisted correction.
+- [x] Add governed alias proposal/apply service contracts for LLM-assisted
+  correction.
+- [ ] Expose governed alias proposal/apply flows through Root MCP.
 - [x] Include named entities in NLUAuthoringPlane context.
 - [ ] Add audit records for alias changes and conflict resolution.
 
