@@ -1365,7 +1365,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 66%.
+- Overall: 70%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1378,7 +1378,7 @@ Integration progress:
   compact named-entity registry, core node-display hostname-before-fallback
   behavior, client node-display helper alignment for legacy `Node N` fallback
   labels, client catalog/modal title enrichment from `registry.named_entities`,
-  and focused tests.
+  read-only registry label conflict diagnostics, and focused tests.
 - Current implementation slice: start migrating node/browser labels to the
   shared display model while keeping routing behavior unchanged.
 - Not started yet: governed writes and consumer migration.
@@ -1444,7 +1444,10 @@ Actions:
 - [x] Use compact named-entity registry labels for client catalog and modal
   node display when the local label is still fallback-like.
 - [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
-- [ ] Add conflict diagnostics for duplicate display names or aliases.
+- [x] Add read-only conflict diagnostics for duplicate display names or aliases
+  in the compact registry payload.
+- [ ] Surface conflict diagnostics in Notifications and operator-facing skill
+  logs when user attention is useful.
 - [ ] Invalidate display-name consumers through `entity.registry.changed`
   instead of reload-only behavior. Backend invalidation emission is in place;
   client/name-rendering consumers still need migration.
