@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from adaos.sdk.data import root_mcp as sdk_root_mcp
 from adaos.services.root.client import RootHttpError
 
@@ -43,6 +45,34 @@ class _StubClient:
     def issue_session_lease(self, payload: dict) -> dict:
         self.calls.append(("issue_session_lease", dict(payload)))
         return {"result": {"session_id": "sess-1", "access_token": "secret"}}
+
+
+def test_sdk_root_mcp_resolves_local_node_aliases_to_hub_target(monkeypatch) -> None:
+    cfg = SimpleNamespace(
+        node_id="8db40740-b3ff-44bf-baf5-9fb013b35b01",
+        subnet_id="sn_6acf0c01",
+        zone_id="local-dev",
+        root_settings=SimpleNamespace(base_url="http://127.0.0.1:8777"),
+    )
+    monkeypatch.setattr(sdk_root_mcp, "require_ctx", lambda name: object())
+    monkeypatch.setattr(sdk_root_mcp, "_load_config", lambda ctx: cfg)
+
+    for selector in [
+        "8db40740-b3ff-44bf-baf5-9fb013b35b01",
+        "node:8db40740-b3ff-44bf-baf5-9fb013b35b01",
+        "device:member:8db40740-b3ff-44bf-baf5-9fb013b35b01",
+        "sn_6acf0c01",
+    ]:
+        context = sdk_root_mcp.get_local_target_context(target_id=selector)
+
+        assert context["target_id"] == "hub:sn_6acf0c01"
+        assert context["requested_target_id"] == selector
+        assert context["target_id_resolution"]["mode"] == "local_alias"
+
+    explicit = sdk_root_mcp.get_local_target_context(target_id="hub:another-subnet")
+
+    assert explicit["target_id"] == "hub:another-subnet"
+    assert explicit["target_id_resolution"]["mode"] == "explicit"
 
 
 def test_sdk_root_mcp_prefers_rest_surfaces(monkeypatch) -> None:
