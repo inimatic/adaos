@@ -1366,7 +1366,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 72%.
+- Overall: 76%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1380,7 +1380,8 @@ Integration progress:
   behavior, client node-display helper alignment for legacy `Node N` fallback
   labels, client catalog/modal title enrichment from `registry.named_entities`,
   read-only registry label conflict diagnostics, localization-as-label-metadata
-  architecture, and focused tests.
+  architecture, compact registry label metadata, locale-aware resolver trace
+  hints, per-locale conflict diagnostics, and focused tests.
 - Current implementation slice: start migrating node/browser labels to the
   shared display model while keeping routing behavior unchanged.
 - Not started yet: governed writes and consumer migration.
@@ -1405,8 +1406,8 @@ Next implementation steps:
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
 3. Begin conflict diagnostics for duplicate display names or aliases.
-4. Add locale metadata to compact registry labels and resolver trace.
-5. Include named entities in NLUAuthoringPlane context.
+4. Include named entities in NLUAuthoringPlane context.
+5. Start governed alias/display-name proposal commands.
 
 ### Tasks
 
@@ -1451,7 +1452,7 @@ Actions:
   observed hostname or registered names are present.
 - [x] Use compact named-entity registry labels for client catalog and modal
   node display when the local label is still fallback-like.
-- [ ] Add locale metadata to compact registry labels while keeping
+- [x] Add locale metadata to compact registry labels while keeping
   `display_label` compatibility for current UI consumers.
 - [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
 - [x] Add read-only conflict diagnostics for duplicate display names or aliases
@@ -1472,10 +1473,11 @@ Actions:
   dispatch behavior.
 - [ ] Resolve registered names and aliases before or alongside
   `nlp.intent.detect.request`.
-- [ ] Accept `request_locale` and `preferred_locales` as resolver hints.
+- [x] Accept `request_locale` and `preferred_locales` as resolver hints.
 - [ ] Add `normalized_text`, `resolved_entities`, canonical refs, and ambiguity
   records to NLU trace.
-- [ ] Add per-locale conflict and ambiguity evidence to NLU trace.
+- [x] Add per-locale conflict evidence to compact registry diagnostics.
+- [ ] Add per-locale ambiguity evidence to NLU trace.
 - [ ] Update Teacher probe output to show live entity resolver matches.
 - [ ] Add golden tests proving runtime aliases do not require Rasa/neural
   retraining.
