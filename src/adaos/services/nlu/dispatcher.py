@@ -9,7 +9,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.scenarios import loader as scenarios_loader
-from adaos.services.yjs.doc import async_get_ydoc
+from adaos.services.yjs.doc import async_read_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.nlu.baseline_content import merge_default_desktop_nlu
 
@@ -49,7 +49,7 @@ async def _resolve_scenario_id(ctx: AgentContext, webspace_id: str) -> str:
     """
     scenario_id = "web_desktop"
     try:
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_read_ydoc(webspace_id) as ydoc:
             ui_map = ydoc.get_map("ui")
             current = ui_map.get("current_scenario")
             if isinstance(current, str) and current.strip():
