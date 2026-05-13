@@ -1365,15 +1365,17 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 30%.
+- Overall: 38%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
-  exact resolver, SDK read helpers, NLU dry-run trace subscriber, live-room-safe
-  NLU trace writes, voice/chat router live-room writes, read-only NLU Yjs reads,
-  and focused tests.
-- Current implementation slice: make dry-run diagnostics visible on a live hub
-  and then start cache invalidation/events.
+  skill lookup adapter, exact resolver, SDK read helpers, NLU dry-run trace
+  subscriber, compact read-only `registry.named_entities` projection,
+  live-room-safe NLU trace writes, voice/chat router live-room writes,
+  read-only NLU Yjs reads, and focused tests.
+- Current implementation slice: finish read-only registry coverage, then make
+  `entity.registry.changed` the explicit invalidation signal for resolver and
+  name-rendering consumers.
 - Not started yet: governed writes, MCP, and consumer migration.
 
 Human verification:
@@ -1385,12 +1387,11 @@ Human verification:
 
 Next implementation steps:
 
-1. Add schemas/dataclasses and topic constants.
-2. Add golden tests for display priority, canonical refs, aliases, and
-   ambiguity.
-3. Add a read-only `NamedEntityService` over current node/device/browser
-   sources.
-4. Add SDK read helpers and diagnostics before enabling any write path.
+1. Emit `entity.registry.changed` from authoritative source transitions without
+   introducing alias/display-name writes yet.
+2. Add browser/node draft-name generation as observed-only metadata.
+3. Expose the compact named-entity registry in diagnostics/MCP read context.
+4. Start migrating node/browser labels to the shared display helper.
 
 ### Tasks
 
@@ -1405,7 +1406,7 @@ Actions:
 - [x] Add shared `entity.*` event topic constants.
 - [x] Add golden fixtures for node/browser/device alias and ambiguity examples.
 - [x] Add golden fixtures for webspace, scenario, modal, and app examples.
-- [ ] Add golden fixtures for skill examples.
+- [x] Add golden fixtures for skill examples.
 - [ ] Build a read model over device inventory, node display, workspace
   manifests, system model objects, and desktop registry entries.
 - [x] Build the first read-only device entity adapter over
@@ -1415,7 +1416,7 @@ Actions:
 - [ ] Preserve source authority: device access remains owned by
   `access_links` / `DeviceInventoryService`, not by the named-entity read
   model.
-- [ ] Project a compact read-only entity registry for UI/debug consumers.
+- [x] Project a compact read-only entity registry for UI/debug consumers.
 
 #### NER-002: Make device and browser display names consistent
 
