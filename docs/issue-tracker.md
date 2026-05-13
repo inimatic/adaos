@@ -1333,3 +1333,149 @@ Actions:
 - [ ] Mirror accepted notifications into node skill logs with webspace, node,
   scenario, widget, action, and modal context.
 - [ ] Add LLM-oriented grouping for repeated contract issues.
+
+## Named Entity Registry and NLU Canonicalization
+
+### Goal
+
+Keep human-facing names, runtime-observed names, aliases, and canonical refs in
+one governed model so NLU, UI, skills, and LLM tooling can refer to the same
+objects without retraining models after every rename.
+
+### Current Status
+
+Snapshot date: 2026-05-13.
+
+Target architecture is documented in
+`docs/architecture/named-entities.md`.
+
+Recommended implementation order:
+
+1. Contract and fixtures: `NamedEntityRecord`, `EntityResolutionResult`, topic
+   constants, and ambiguity examples.
+2. Read-only registry: `NamedEntityService`, shared display helper, and optional
+   diagnostic projection.
+3. Event integration: observed/draft/name/alias events plus
+   `entity.registry.changed` invalidation.
+4. NLU dry-run: resolver trace without dispatch changes.
+5. Governed writes: adopt, rename, alias add/remove/deprecate with conflict
+   checks and audit metadata.
+6. MCP and skill migration: canonical descriptors for LLM tooling and removal
+   of ad hoc fallback logic.
+
+Integration progress:
+
+- Overall: 5%.
+- Completed: target architecture, addressing boundary, event model contract,
+  and initial roadmap.
+- Current implementation slice: contract and read-only foundations.
+- Not started yet: runtime registry, resolver dry-run, governed writes, MCP,
+  and consumer migration.
+
+Human verification:
+
+- Check that docs consistently say human labels are not routing keys.
+- Check that `Node N` is described as fallback-only.
+- Check that the implementation starts read-only and does not change NLU
+  dispatch until dry-run trace is visible.
+
+Next implementation steps:
+
+1. Add schemas/dataclasses and topic constants.
+2. Add golden tests for display priority, canonical refs, aliases, and
+   ambiguity.
+3. Add a read-only `NamedEntityService` over current node/device/browser
+   sources.
+4. Add SDK read helpers and diagnostics before enabling any write path.
+
+### Tasks
+
+#### NER-001: Establish canonical named-entity read model
+
+Status: planned.
+
+Actions:
+
+- [ ] Add `NamedEntityRecord` schema or dataclass.
+- [ ] Add `EntityResolutionResult` schema or dataclass.
+- [ ] Add shared `entity.*` event topic constants.
+- [ ] Add golden fixtures for node, browser, webspace, scenario, skill, app,
+  alias, and ambiguity examples.
+- [ ] Build a read model over device inventory, node display, workspace
+  manifests, system model objects, and desktop registry entries.
+- [ ] Preserve source authority: device access remains owned by
+  `access_links` / `DeviceInventoryService`, not by the named-entity read
+  model.
+- [ ] Project a compact read-only entity registry for UI/debug consumers.
+
+#### NER-002: Make device and browser display names consistent
+
+Status: planned.
+
+Actions:
+
+- [ ] Prefer user-confirmed display name, then node names, then observed
+  hostname/browser+OS, then `Node N`.
+- [ ] Generate draft names for newly registered browsers.
+- [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
+- [ ] Add conflict diagnostics for duplicate display names or aliases.
+- [ ] Invalidate display-name consumers through `entity.registry.changed`
+  instead of reload-only behavior.
+
+#### NER-003: Add NLU entity canonicalization
+
+Status: planned.
+
+Actions:
+
+- [ ] Add a resolver dry-run mode that records NLU trace without changing
+  dispatch behavior.
+- [ ] Resolve registered names and aliases before or alongside
+  `nlp.intent.detect.request`.
+- [ ] Add `normalized_text`, `resolved_entities`, canonical refs, and ambiguity
+  records to NLU trace.
+- [ ] Update Teacher probe output to show live entity resolver matches.
+- [ ] Add golden tests proving runtime aliases do not require Rasa/neural
+  retraining.
+
+#### NER-004: Expose named entities to SDK/MCP/LLM tooling
+
+Status: planned.
+
+Actions:
+
+- [ ] Add `sdk.data.entities` read helpers.
+- [ ] Add governed alias proposal/apply commands.
+- [ ] Expose named-entity descriptors through Root MCP read capabilities.
+- [ ] Include named entities in NLUAuthoringPlane context.
+
+#### NER-005: Integrate named entities with the operational event model
+
+Status: planned.
+
+Actions:
+
+- [ ] Emit `entity.observed` when node, browser, workspace, or manifest sources
+  report observed labels.
+- [ ] Emit `entity.draft_name.suggested` for generated browser/node draft names.
+- [ ] Emit display-name and alias lifecycle events from authoritative write
+  paths.
+- [ ] Emit `entity.alias.conflict.detected`,
+  `entity.resolution.ambiguous`, and `entity.resolution.failed` into
+  Notifications and node skill logs when operator attention is useful.
+- [ ] Treat `entity.registry.changed` as the cache invalidation signal for
+  `EntityResolver` and demanded name-rendering projections.
+
+#### NER-006: Migrate consumers away from ad hoc name fallback
+
+Status: planned.
+
+Actions:
+
+- [ ] Replace client-side node/browser display fallback helpers with the shared
+  named-entity display helper.
+- [ ] Update operator-facing skills to consume canonical refs and shared display
+  names instead of raw labels.
+- [ ] Remove duplicate fallback rules after the shared helper is adopted.
+- [ ] Add regression tests for `Node N` fallback, hostname display, browser
+  draft names, alias ambiguity, and renamed-device NLU resolution.

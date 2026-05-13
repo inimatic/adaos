@@ -88,6 +88,21 @@ This name is intended to become the stable label used by:
 - future voice commands
 - future automation rules
 
+Device naming participates in the broader named-entity architecture described
+in [Named Entities and Canonical Naming](named-entities.md). A device may have:
+
+- a user-confirmed `display_name`;
+- runtime `observed_name` values such as hostnames or browser/OS labels;
+- `draft_name` suggestions for newly seen browsers;
+- `aliases` used by NLU and search;
+- a deterministic fallback such as `Node 0` only when no meaningful name is
+  available.
+
+For member nodes, an observed hostname such as `ZVERZVE-A1BNQF7` is a better
+fallback label than `Node 0`. For browser links, the first draft name should be
+derived from browser family and operating system, for example `Edge on Windows`
+or `Safari on iPhone`.
+
 ### Webspace affinity
 
 Browser links should remember the last known or current webspace.
@@ -283,6 +298,11 @@ DeviceRecord
     runtime_version?
 ```
 
+Named-entity projections may be derived from this read model, but
+`DeviceInventoryService` remains the device-domain source for effective device
+names and policy state. The named-entity layer should not create a second
+storage owner for device access facts.
+
 During migration, the short `browser:<device_id>` and `member:<node_id>` forms
 remain acceptable inside device-facing read models.
 The broader target vocabulary should treat them as domain refs of the form:
@@ -436,6 +456,7 @@ This design complements:
 - [Registry Marketplace And Operations](registry-marketplace-operations-roadmap.md): node-scoped marketplace publication and install flows
 - [Operational Event Model](operational-event-model.md): browser-facing projections and operator materialization
 - [Semantic State Plane](semantic-state-plane.md): separating access policy from short-lived transport status
+- [Named Entities and Canonical Naming](named-entities.md): display names, aliases, observed names, and canonical refs for NLU and LLM tooling
 
 ## Transition roadmap
 

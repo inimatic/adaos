@@ -112,6 +112,7 @@ References:
 
 - [ ] `phase1.master_event_taxonomy`: freeze the shared taxonomy from the Operational Event Model
 - [ ] `phase1.core_skill_contract`: define the core-skill interaction contract as a first-class runtime layer
+- [ ] `phase1.named_entity_contract`: freeze name, alias, conflict, registry-changed, and resolver-diagnostic events
 - [ ] `phase1.platform_emitters`: define the platform as a first-class emitter of notifications, diagnostics, and system errors
 - [ ] `phase1.scope_model`: freeze `per-webspace` projection scope plus reserved `node scope`
 - [ ] `phase1.access_contract`: freeze MVP access metadata with `shared`, `owner`, `guest`, and `dev`
@@ -126,10 +127,12 @@ Primary source:
 - [ ] `phase2.refresh_contract`: define the shared invalidation and refresh contract before browser-specific migration
 - [ ] `phase2.restore_demand`: define startup restoration from Yjs demand state for core and skills
 - [ ] `phase2.platform_projection_families`: define the initial platform-owned projection families
+- [ ] `phase2.named_entity_runtime_abi`: define `NamedEntityRecord`, `EntityResolutionResult`, and `entity.registry.changed` invalidation semantics
 
 Primary sources:
 
 - [Operational Event Model](operational-event-model.md)
+- [Named Entities and Canonical Naming](named-entities.md)
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md)
 
 ### Phase 3. Node-Aware Yjs Shape
@@ -137,6 +140,7 @@ Primary sources:
 - [ ] `phase3.projection_record_shape`: lock the canonical projection record shape
 - [ ] `phase3.client_subscription_shape`: lock the client-written subscription shape
 - [ ] `phase3.node_top_level_reserved`: add a reserved node-aware top-level envelope in shared Yjs state
+- [ ] `phase3.named_entity_projection_path`: lock the read-only named-entity projection path and privacy constraints
 - [ ] `phase3.compat_layer_defined`: define compatibility rules for legacy skill/scenario JSON branches
 
 Current checkpoint as of 2026-05-02:
