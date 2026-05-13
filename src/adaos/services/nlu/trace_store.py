@@ -74,7 +74,19 @@ def _compact_raw(raw: Any) -> Any:
     if not isinstance(raw, Mapping):
         return None
     out: dict[str, Any] = {}
-    for key in ("rule_id", "pattern", "builtin", "intent_ranking", "entities", "service", "reason"):
+    for key in (
+        "rule_id",
+        "pattern",
+        "builtin",
+        "intent_ranking",
+        "entities",
+        "named_entities",
+        "resolved_entities",
+        "ambiguities",
+        "normalized_text",
+        "service",
+        "reason",
+    ):
         value = raw.get(key)
         if value is not None:
             out[key] = value
