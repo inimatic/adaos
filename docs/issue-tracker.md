@@ -1338,9 +1338,10 @@ Actions:
 
 ### Goal
 
-Keep human-facing names, runtime-observed names, aliases, and canonical refs in
-one governed model so NLU, UI, skills, and LLM tooling can refer to the same
-objects without retraining models after every rename.
+Keep human-facing names, localized labels, runtime-observed names, aliases, and
+canonical refs in one governed model so NLU, UI, skills, and LLM tooling can
+refer to the same objects without retraining models after every rename or
+language-specific alias change.
 
 ### Current Status
 
@@ -1353,8 +1354,8 @@ Recommended implementation order:
 
 1. Contract and fixtures: `NamedEntityRecord`, `EntityResolutionResult`, topic
    constants, and ambiguity examples.
-2. Read-only registry: `NamedEntityService`, shared display helper, and optional
-   diagnostic projection.
+2. Read-only registry: `NamedEntityService`, shared display helper, localized
+   label metadata, and optional diagnostic projection.
 3. Event integration: observed/draft/name/alias events plus
    `entity.registry.changed` invalidation.
 4. NLU dry-run: resolver trace without dispatch changes.
@@ -1365,7 +1366,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 70%.
+- Overall: 72%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1378,7 +1379,8 @@ Integration progress:
   compact named-entity registry, core node-display hostname-before-fallback
   behavior, client node-display helper alignment for legacy `Node N` fallback
   labels, client catalog/modal title enrichment from `registry.named_entities`,
-  read-only registry label conflict diagnostics, and focused tests.
+  read-only registry label conflict diagnostics, localization-as-label-metadata
+  architecture, and focused tests.
 - Current implementation slice: start migrating node/browser labels to the
   shared display model while keeping routing behavior unchanged.
 - Not started yet: governed writes and consumer migration.
@@ -1391,6 +1393,8 @@ Integration progress:
 Human verification:
 
 - Check that docs consistently say human labels are not routing keys.
+- Check that localization is described as label/alias selection, not as a
+  change to canonical refs.
 - Check that `Node N` is described as fallback-only.
 - Check that the implementation starts read-only and does not change NLU
   dispatch until dry-run trace is visible.
@@ -1401,7 +1405,8 @@ Next implementation steps:
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
 3. Begin conflict diagnostics for duplicate display names or aliases.
-4. Include named entities in NLUAuthoringPlane context.
+4. Add locale metadata to compact registry labels and resolver trace.
+5. Include named entities in NLUAuthoringPlane context.
 
 ### Tasks
 
@@ -1417,6 +1422,7 @@ Actions:
 - [x] Add golden fixtures for node/browser/device alias and ambiguity examples.
 - [x] Add golden fixtures for webspace, scenario, modal, and app examples.
 - [x] Add golden fixtures for skill examples.
+- [x] Document localized labels and aliases as read-model metadata.
 - [ ] Build a read model over device inventory, node display, workspace
   manifests, system model objects, and desktop registry entries.
 - [x] Build the first read-only device entity adapter over
@@ -1436,6 +1442,8 @@ Actions:
 
 - [ ] Prefer user-confirmed display name, then node names, then observed
   hostname/browser+OS, then `Node N`.
+- [ ] Preserve exact user-confirmed names while allowing localized aliases and
+  localized system fallbacks.
 - [x] Generate draft names for newly registered browsers.
 - [x] Make core node display helpers use observed hostname before `Node N`
   fallback.
@@ -1443,6 +1451,8 @@ Actions:
   observed hostname or registered names are present.
 - [x] Use compact named-entity registry labels for client catalog and modal
   node display when the local label is still fallback-like.
+- [ ] Add locale metadata to compact registry labels while keeping
+  `display_label` compatibility for current UI consumers.
 - [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
 - [x] Add read-only conflict diagnostics for duplicate display names or aliases
   in the compact registry payload.
@@ -1462,8 +1472,10 @@ Actions:
   dispatch behavior.
 - [ ] Resolve registered names and aliases before or alongside
   `nlp.intent.detect.request`.
+- [ ] Accept `request_locale` and `preferred_locales` as resolver hints.
 - [ ] Add `normalized_text`, `resolved_entities`, canonical refs, and ambiguity
   records to NLU trace.
+- [ ] Add per-locale conflict and ambiguity evidence to NLU trace.
 - [ ] Update Teacher probe output to show live entity resolver matches.
 - [ ] Add golden tests proving runtime aliases do not require Rasa/neural
   retraining.
@@ -1490,6 +1502,7 @@ Actions:
 - [ ] Emit `entity.draft_name.suggested` for generated browser/node draft names.
 - [ ] Emit display-name and alias lifecycle events from authoritative write
   paths.
+- [ ] Include `locale` or `locale: "und"` in label/alias lifecycle events.
 - [ ] Emit `entity.alias.conflict.detected`,
   `entity.resolution.ambiguous`, and `entity.resolution.failed` into
   Notifications and node skill logs when operator attention is useful.

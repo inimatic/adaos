@@ -11,6 +11,7 @@ Read this together with:
 
 - the repository note `docs/io/webio.md`
 - [UI Addressing](../architecture/ui-addressing.md)
+- [Named Entities and Canonical Naming](../architecture/named-entities.md)
 - [Semantic State Plane](../architecture/semantic-state-plane.md)
 - [Runtime Guarding](../architecture/runtime-guarding.md)
 - [Projection Subscription Roadmap](../architecture/projection-subscription-roadmap.md)
@@ -247,6 +248,33 @@ Rules:
   contains explicit routing metadata
 - keep node-owned Yjs state node-scoped when it enters the shared desktop
 - publish member stream data with `_meta.webspace_id` and node identity
+
+## Names, aliases, and localization
+
+Generated skills should treat human-facing names as presentation and input
+resolution data, not as routing identity.
+
+Use canonical refs for actions and storage:
+
+- `device:member:<node_id>`
+- `device:browser:<device_id>`
+- `webspace:<webspace_id>`
+- `scenario:<scenario_id>`
+- `skill:<skill_name>`
+
+Do not parse or persist a localized label as the only target id.
+If a skill receives a phrase such as `work browser` or `рабочий браузер`, it
+should let the named-entity resolver produce the canonical ref before dispatch.
+
+Localization rules for generated skills:
+
+- preserve exact user-confirmed names instead of translating them
+- use localized aliases as resolver input, not as storage keys
+- keep language-neutral observed labels such as hostnames under `locale: "und"`
+- accept `request_locale` or `preferred_locales` metadata when the runtime
+  provides it
+- return canonical refs plus display labels in responses when humans need to
+  see what was targeted
 
 ## Guarding and quarantine
 
