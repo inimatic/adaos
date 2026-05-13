@@ -1365,7 +1365,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 62%.
+- Overall: 66%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1377,7 +1377,8 @@ Integration progress:
   `entity.registry.changed` invalidation, Root MCP/Codex read access to the
   compact named-entity registry, core node-display hostname-before-fallback
   behavior, client node-display helper alignment for legacy `Node N` fallback
-  labels, and focused tests.
+  labels, client catalog/modal title enrichment from `registry.named_entities`,
+  and focused tests.
 - Current implementation slice: start migrating node/browser labels to the
   shared display model while keeping routing behavior unchanged.
 - Not started yet: governed writes and consumer migration.
@@ -1440,6 +1441,8 @@ Actions:
   fallback.
 - [x] Make the client node-display helper treat `Node N` as fallback when
   observed hostname or registered names are present.
+- [x] Use compact named-entity registry labels for client catalog and modal
+  node display when the local label is still fallback-like.
 - [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
 - [ ] Add conflict diagnostics for duplicate display names or aliases.
 - [ ] Invalidate display-name consumers through `entity.registry.changed`
@@ -1498,8 +1501,10 @@ Status: planned.
 
 Actions:
 
-- [ ] Replace client-side node/browser display fallback helpers with the shared
-  named-entity display helper.
+- [x] Replace the first client-side node display fallback path with the shared
+  named-entity display helper for catalog and modal titles.
+- [ ] Extend client-side named-entity display enrichment to widget-level node
+  badges and workspace manager surfaces.
 - [ ] Update operator-facing skills to consume canonical refs and shared display
   names instead of raw labels.
 - [ ] Remove duplicate fallback rules after the shared helper is adopted.
