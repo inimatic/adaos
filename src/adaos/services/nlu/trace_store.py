@@ -43,20 +43,40 @@ def _resolve_webspace_id(payload: Mapping[str, Any]) -> str:
 async def _append_trace_item(webspace_id: str, item: dict) -> None:
     # Import lazily to avoid importing y_py at module import time in contexts
     # where YJS is not available.
-    from adaos.services.yjs.doc import async_get_ydoc
+    from adaos.services.yjs.doc import async_get_ydoc, mutate_live_room
+
+    def _append_to_doc(ydoc: Any, txn: Any) -> None:
+        data_map = ydoc.get_map("data")
+        current = data_map.get("nlu_trace")
+        items = []
+        if isinstance(current, dict) and isinstance(current.get("items"), list):
+            items = list(current.get("items") or [])
+        items.append(item)
+        if _MAX_ITEMS > 0 and len(items) > _MAX_ITEMS:
+            items = items[-_MAX_ITEMS:]
+        data_map.set(txn, "nlu_trace", {"items": items})
+
+    if mutate_live_room(
+        webspace_id,
+        _append_to_doc,
+        root_names=["data"],
+        source="nlu.trace_store",
+        owner="core:nlu.trace",
+        channel="core.nlu.trace.live_room",
+    ):
+        return
 
     async with _nlu_trace_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
-            data_map = ydoc.get_map("data")
-            current = data_map.get("nlu_trace")
-            items = []
-            if isinstance(current, dict) and isinstance(current.get("items"), list):
-                items = list(current.get("items") or [])
-            items.append(item)
-            if _MAX_ITEMS > 0 and len(items) > _MAX_ITEMS:
-                items = items[-_MAX_ITEMS:]
+        async with async_get_ydoc(
+            webspace_id,
+            publish_live_room=False,
+            load_mark_roots=["data"],
+            write_source="nlu.trace_store",
+            write_owner="core:nlu.trace",
+            write_channel="core.nlu.trace.async",
+        ) as ydoc:
             with ydoc.begin_transaction() as txn:
-                data_map.set(txn, "nlu_trace", {"items": items})
+                _append_to_doc(ydoc, txn)
 
 
 def _compact_meta(meta: Mapping[str, Any] | None) -> dict:
