@@ -128,6 +128,13 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token", "bearer"],
         ),
         _capability_entry(
+            "development.write.named_entities",
+            surface="development",
+            risk="medium",
+            summary="Apply governed named-entity changes such as adding a device alias.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "operations.read.contracts",
             surface="operations",
             risk="low",

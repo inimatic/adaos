@@ -415,7 +415,7 @@ Current durable device/browser implementation:
   projection. Yjs receives the compact registry after
   `entity.registry.changed` invalidates the read model.
 - Remaining hardening: `base_fingerprint`, audit trail records, remove and
-  deprecate operations, and Root MCP write exposure.
+  deprecate operations, profile-owned aliases, and remote target routing.
 
 Example successful proposal result:
 
@@ -487,6 +487,9 @@ Current read surfaces:
   as `get_nlu_authoring_context`, returns a read-only authoring context with
   named entities, locale hints, canonicalization rules, and explicit
   no-write/no-training-mutation boundaries.
+- Root MCP / NLUAuthoringPlane write: `nlu_authoring.add_device_alias`, exposed
+  to Codex as `add_device_alias`, writes through the governed access-link
+  source and requires `development.write.named_entities` / `ProfileOpsControl`.
 
 ## UI behavior
 
@@ -778,7 +781,10 @@ action routing.
 - [x] Expose named-entity descriptors through Root MCP read capabilities.
 - [x] Add governed alias proposal/apply service contracts for LLM-assisted
   correction.
-- [ ] Expose governed alias proposal/apply flows through Root MCP.
+- [x] Expose governed device alias add through Root MCP / NLUAuthoringPlane
+  with a write capability separated from read-only profiles.
+- [ ] Expose remove/deprecate and profile-owned alias proposal/apply flows
+  through Root MCP after those durable commands exist.
 - [x] Include named entities in NLUAuthoringPlane context.
 - [ ] Add audit records for alias changes and conflict resolution.
 

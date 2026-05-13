@@ -321,6 +321,22 @@ class CodexRootMcpBridge:
                 },
             },
             {
+                "name": "add_device_alias",
+                "description": "Add a governed alias for a browser/member device through NLUAuthoringPlane. Requires a write-capable Root MCP session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "device_ref": {"type": "string", "description": "Canonical device ref, such as browser:<id> or member:<node_id>."},
+                        "alias": {"type": "string", "description": "Human phrase to register as an alias."},
+                        "locale": {"type": "string", "description": "Optional alias locale, such as en or ru."},
+                        "actor": {"type": "string", "description": "Optional actor metadata for audit/event payloads."},
+                        "dry_run": {"type": "boolean", "default": False, "description": "When true, return the governed proposal without mutating state."},
+                    },
+                    "required": ["device_ref", "alias"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "get_profileops_status",
                 "description": "Read root-published profiler status and latest session summary for the managed target.",
                 "inputSchema": {"type": "object", "properties": target_properties, "required": target_required, "additionalProperties": False},
@@ -708,6 +724,16 @@ class CodexRootMcpBridge:
                     kind=_normalize_text(args.get("kind")),
                     request_locale=_normalize_text(args.get("request_locale")),
                     preferred_locales=preferred_locales,
+                )
+            )
+        if tool == "add_device_alias":
+            return _tool_text(
+                client.add_nlu_authoring_device_alias(
+                    device_ref=str(args.get("device_ref") or ""),
+                    alias=str(args.get("alias") or ""),
+                    locale=_normalize_text(args.get("locale")),
+                    actor=_normalize_text(args.get("actor")),
+                    dry_run=bool(args.get("dry_run")),
                 )
             )
         if tool == "get_profileops_status":

@@ -286,6 +286,9 @@ Localization rules for generated skills:
   `sdk.data.entities.add_device_alias(device_ref, alias, locale=...)`; it
   writes through the governed access-link source and keeps Yjs as a read-only
   projection
+- MCP clients can use `add_device_alias` from NLUAuthoringPlane only with a
+  write-capable session such as `ProfileOpsControl`; read-only sessions should
+  use `get_nlu_authoring_context` and `get_named_entity_registry`
 
 ## Guarding and quarantine
 

@@ -89,6 +89,26 @@ class _FakeRootMcpClient:
             }
         }
 
+    def add_nlu_authoring_device_alias(
+        self,
+        *,
+        device_ref: str,
+        alias: str,
+        locale: str | None = None,
+        actor: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        self.calls.append(
+            (
+                "add_nlu_authoring_device_alias",
+                device_ref,
+                {"alias": alias, "locale": locale, "actor": actor, "dry_run": dry_run},
+            )
+        )
+        return {"ok": True, "status": "proposed" if dry_run else "applied", "device_ref": device_ref}
+
     def get_profileops_status(self, target_id: str) -> dict:
         self.calls.append(("get_profileops_status", target_id, {}))
         return {"target_id": target_id, "report_count": 1, "latest_session": {"session_id": "mem-001"}}
@@ -375,6 +395,17 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             },
         }
     )
+    add_alias = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 43,
+            "method": "tools/call",
+            "params": {
+                "name": "add_device_alias",
+                "arguments": {"device_ref": "browser:browser-1", "alias": "office browser", "locale": "en", "dry_run": True},
+            },
+        }
+    )
     profileops = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -432,6 +463,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert "get_architecture_catalog" in tool_names
     assert "get_named_entity_registry" in tool_names
     assert "get_nlu_authoring_context" in tool_names
+    assert "add_device_alias" in tool_names
     assert "get_sdk_metadata" in tool_names
     assert "get_profileops_status" in tool_names
     assert "list_profileops_sessions" in tool_names
@@ -450,6 +482,8 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert named_entities["result"]["structuredContent"]["descriptor"]["payload"]["items"][0]["canonical_ref"] == "device:browser:browser-1"
     assert nlu_context is not None
     assert nlu_context["result"]["structuredContent"]["context"]["plane_id"] == "nlu_authoring"
+    assert add_alias is not None
+    assert add_alias["result"]["structuredContent"]["status"] == "proposed"
     assert profileops is not None
     assert profileops["result"]["structuredContent"]["latest_session"]["session_id"] == "mem-001"
     assert profileops_start is not None
@@ -467,6 +501,11 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
         "get_nlu_authoring_context",
         "desktop",
         {"kind": "device.browser", "request_locale": "ru", "preferred_locales": ["en"]},
+    ) in fake_client.calls
+    assert (
+        "add_nlu_authoring_device_alias",
+        "browser:browser-1",
+        {"alias": "office browser", "locale": "en", "actor": None, "dry_run": True},
     ) in fake_client.calls
     assert ("get_profileops_status", "hub:test-subnet", {}) in fake_client.calls
     assert ("start_profileops_session", "hub:test-subnet", {"profile_mode": "trace_profile", "reason": "root_mcp.memory.start", "trigger_source": "root_mcp"}) in fake_client.calls

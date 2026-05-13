@@ -70,10 +70,73 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert contract is not None
     assert contract.required_capability == "development.read.descriptors"
     assert contract.metadata["published_by"] == "plane:nlu_authoring"
-    assert [item.id for item in plane_contracts] == ["nlu_authoring.get_context"]
+    assert [item.id for item in plane_contracts] == [
+        "nlu_authoring.get_context",
+        "nlu_authoring.add_device_alias",
+    ]
     context = result["context"]
     assert context["plane_id"] == "nlu_authoring"
     assert context["locale"]["effective_locale_order"] == ["ru", "en", "und"]
     assert context["canonicalization"]["canonical_ref_required"] is True
     assert context["authoring_boundaries"]["mode"] == "read_only_context"
     assert context["named_entities"]["items"][0]["canonical_ref"] == "skill:weather_skill"
+
+
+def test_root_mcp_exposes_governed_device_alias_write(monkeypatch) -> None:
+    entity_service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:browser:browser-1",
+                kind="device.browser",
+                display_name="Work browser",
+            )
+        ],
+        device_inventory_service=_EmptyDeviceInventory(),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: entity_service)
+    calls: list[dict[str, object]] = []
+
+    def _fake_add_device_alias(device_ref, alias, *, locale=None, actor=None, request_id=None):
+        calls.append(
+            {
+                "device_ref": device_ref,
+                "alias": alias,
+                "locale": locale,
+                "actor": actor,
+                "request_id": request_id,
+            }
+        )
+        return {"ok": True, "status": "applied", "device_ref": device_ref}
+
+    from adaos.sdk.data import entities as sdk_entities
+
+    monkeypatch.setattr(sdk_entities, "add_device_alias", _fake_add_device_alias)
+
+    contract = root_mcp_service.get_tool_contract("nlu_authoring.add_device_alias")
+    dry_run = root_mcp_service._handle_nlu_authoring_add_device_alias(  # type: ignore[attr-defined]
+        {"device_ref": "browser:browser-1", "alias": "office browser", "locale": "en"},
+        dry_run=True,
+    )
+    applied = root_mcp_service._handle_nlu_authoring_add_device_alias(  # type: ignore[attr-defined]
+        {"device_ref": "browser:browser-1", "alias": "office browser", "locale": "en", "request_id": "req-1"},
+        dry_run=False,
+    )
+
+    assert contract is not None
+    assert contract.required_capability == "development.write.named_entities"
+    assert contract.side_effects == "write"
+    assert dry_run["ok"] is True
+    assert dry_run["status"] == "proposed"
+    assert dry_run["side_effects"] == "none"
+    assert applied["ok"] is True
+    assert applied["status"] == "applied"
+    assert calls == [
+        {
+            "device_ref": "browser:browser-1",
+            "alias": "office browser",
+            "locale": "en",
+            "actor": "root_mcp:nlu_authoring",
+            "request_id": "req-1",
+        }
+    ]

@@ -35,6 +35,7 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
     ],
     "ProfileOpsControl": [
         *DEFAULT_BEARER_CAPABILITIES,
+        "development.write.named_entities",
         "operations.read.targets",
         "operations.issue.tokens",
         "operations.revoke.tokens",
