@@ -1365,7 +1365,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 54%.
+- Overall: 58%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1375,7 +1375,8 @@ Integration progress:
   voice/chat router live-room writes, read-only NLU Yjs reads, browser metadata
   capture from Yjs handshakes, access-links-driven
   `entity.registry.changed` invalidation, Root MCP/Codex read access to the
-  compact named-entity registry, and focused tests.
+  compact named-entity registry, core node-display hostname-before-fallback
+  behavior, and focused tests.
 - Current implementation slice: start migrating node/browser labels to the
   shared display model while keeping routing behavior unchanged.
 - Not started yet: governed writes and consumer migration.
@@ -1434,6 +1435,8 @@ Actions:
 - [ ] Prefer user-confirmed display name, then node names, then observed
   hostname/browser+OS, then `Node N`.
 - [x] Generate draft names for newly registered browsers.
+- [x] Make core node display helpers use observed hostname before `Node N`
+  fallback.
 - [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
 - [ ] Add conflict diagnostics for duplicate display names or aliases.
 - [ ] Invalidate display-name consumers through `entity.registry.changed`
