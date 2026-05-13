@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import uuid
 from typing import Any, Mapping
 
@@ -121,6 +122,7 @@ def node_display_payload(
     role: str,
     node_names: Any = None,
     primary_node_name: Any = None,
+    observed_name: Any = None,
     display_index: Any = None,
     accent_index: Any = None,
 ) -> dict[str, Any]:
@@ -135,7 +137,11 @@ def node_display_payload(
     explicit_name = meaningful_names[0] if meaningful_names else (
         None if _noise_node_name(primary, role=role_norm) else primary
     )
-    node_label = explicit_name or fallback_node_label(resolved_index)
+    observed = str(observed_name or "").strip()
+    if _noise_node_name(observed, role=role_norm):
+        observed = ""
+    node_label = explicit_name or observed or fallback_node_label(resolved_index)
+    node_name_source = "registered" if explicit_name else "observed" if observed else "fallback"
     compact_label = compact_node_label(resolved_index)
     resolved_accent_index = _normalize_int(accent_index)
     if resolved_accent_index is None:
@@ -151,6 +157,7 @@ def node_display_payload(
         "node_color": node_color,
         "node_color_index": resolved_accent_index,
         "node_has_explicit_name": bool(explicit_name),
+        "node_name_source": node_name_source,
     }
 
 
@@ -158,12 +165,14 @@ def node_display_from_config(conf: Any) -> dict[str, Any]:
     role = str(getattr(conf, "role", "") or "").strip().lower()
     node_id = str(getattr(conf, "node_id", "") or "").strip()
     node_names = list(getattr(conf, "node_names", []) or [])
+    hostname = str(getattr(conf, "hostname", "") or "").strip() or socket.gethostname()
     assignment = load_node_display_runtime_state() if role == "member" else {}
     return node_display_payload(
         node_id=node_id,
         role=role,
         node_names=node_names,
         primary_node_name=str(getattr(conf, "primary_node_name", "") or ""),
+        observed_name=hostname,
         display_index=assignment.get("display_index"),
         accent_index=assignment.get("accent_index"),
     )
@@ -201,6 +210,12 @@ def node_display_from_directory_node(node: Mapping[str, Any] | None) -> dict[str
         primary_node_name=(
             runtime_projection.get("primary_node_name")
             or snapshot.get("primary_node_name")
+            or ""
+        ),
+        observed_name=(
+            runtime_projection.get("hostname")
+            or snapshot.get("hostname")
+            or payload.get("hostname")
             or ""
         ),
         display_index=payload.get("display_index"),
