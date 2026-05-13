@@ -1365,10 +1365,13 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 5%.
+- Overall: 15%.
 - Completed: target architecture, addressing boundary, event model contract,
-  and initial roadmap.
-- Current implementation slice: contract and read-only foundations.
+  initial roadmap, code-level record/result contracts, topic constants,
+  read-only device entity adapter, exact resolver, SDK read helpers, and focused
+  tests.
+- Current implementation slice: expand the read-only registry beyond devices
+  and wire dry-run diagnostics.
 - Not started yet: runtime registry, resolver dry-run, governed writes, MCP,
   and consumer migration.
 
@@ -1392,17 +1395,19 @@ Next implementation steps:
 
 #### NER-001: Establish canonical named-entity read model
 
-Status: planned.
+Status: in progress.
 
 Actions:
 
-- [ ] Add `NamedEntityRecord` schema or dataclass.
-- [ ] Add `EntityResolutionResult` schema or dataclass.
-- [ ] Add shared `entity.*` event topic constants.
-- [ ] Add golden fixtures for node, browser, webspace, scenario, skill, app,
-  alias, and ambiguity examples.
+- [x] Add `NamedEntityRecord` schema or dataclass.
+- [x] Add `EntityResolutionResult` schema or dataclass.
+- [x] Add shared `entity.*` event topic constants.
+- [x] Add golden fixtures for node/browser/device alias and ambiguity examples.
+- [ ] Add golden fixtures for webspace, scenario, skill, and app examples.
 - [ ] Build a read model over device inventory, node display, workspace
   manifests, system model objects, and desktop registry entries.
+- [x] Build the first read-only device entity adapter over
+  `DeviceInventoryService`.
 - [ ] Preserve source authority: device access remains owned by
   `access_links` / `DeviceInventoryService`, not by the named-entity read
   model.
@@ -1440,11 +1445,11 @@ Actions:
 
 #### NER-004: Expose named entities to SDK/MCP/LLM tooling
 
-Status: planned.
+Status: in progress.
 
 Actions:
 
-- [ ] Add `sdk.data.entities` read helpers.
+- [x] Add `sdk.data.entities` read helpers.
 - [ ] Add governed alias proposal/apply commands.
 - [ ] Expose named-entity descriptors through Root MCP read capabilities.
 - [ ] Include named entities in NLUAuthoringPlane context.
