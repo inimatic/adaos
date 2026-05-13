@@ -14,6 +14,7 @@ from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.node_config import load_config
+from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.yjs.store import AdaosMemoryYStore, get_ystore_for_webspace, ystore_write_metadata
@@ -214,6 +215,16 @@ def _project_seed_payload_to_compat_branches(ydoc: Y.YDoc, *, scenario_id: str) 
         data_map.set(txn, "scenarios", updated_data)
 
 
+def _project_runtime_environment(ydoc: Y.YDoc) -> bool:
+    runtime_map = ydoc.get_map("runtime")
+    payload = runtime_environment_payload()
+    if _coerce_dict(runtime_map.get("environment") or {}) == payload:
+        return False
+    with ydoc.begin_transaction() as txn:
+        runtime_map.set(txn, "environment", _clone_json_like(payload))
+    return True
+
+
 def _encode_bootstrap_diff(ydoc: Y.YDoc, before_state_vector: bytes | None) -> bytes | None:
     try:
         if before_state_vector is not None:
@@ -234,7 +245,7 @@ async def _persist_bootstrap_seed_update(
     if callable(writer) and update:
         try:
             async with ystore_write_metadata(
-                root_names=["ui", "registry", "data"],
+                root_names=["ui", "registry", "data", "runtime"],
                 source="yjs.bootstrap",
                 owner="core:yjs_bootstrap",
                 channel="core.yjs.bootstrap",
@@ -244,7 +255,7 @@ async def _persist_bootstrap_seed_update(
         except TypeError:
             try:
                 async with ystore_write_metadata(
-                    root_names=["ui", "registry", "data"],
+                    root_names=["ui", "registry", "data", "runtime"],
                     source="yjs.bootstrap",
                     owner="core:yjs_bootstrap",
                     channel="core.yjs.bootstrap",
@@ -257,7 +268,7 @@ async def _persist_bootstrap_seed_update(
             _log.warning("bootstrap diff write failed for webspace=%s: %s", getattr(ystore, "path", "?"), exc, exc_info=True)
 
     async with ystore_write_metadata(
-        root_names=["ui", "registry", "data"],
+        root_names=["ui", "registry", "data", "runtime"],
         source="yjs.bootstrap",
         owner="core:yjs_bootstrap",
         channel="core.yjs.bootstrap",
@@ -329,6 +340,7 @@ async def ensure_webspace_seeded_from_scenario(
 
     ui_map = target_doc.get_map("ui")
     data_map = target_doc.get_map("data")
+    runtime_environment_changed = _project_runtime_environment(target_doc)
 
     def _is_seeded_state(app: object, catalog: object) -> bool:
         if not isinstance(app, dict) or not app:
@@ -352,15 +364,27 @@ async def ensure_webspace_seeded_from_scenario(
     requested_scenario_id = _resolve_requested_scenario(ui_map, default_scenario_id)
     result["scenario_id"] = requested_scenario_id
     if _is_seeded_state(application, data_map.get("catalog")):
+        if runtime_environment_changed:
+            result["persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
         _log.debug(
             "webspace %s already seeded (ui keys=%s, data keys=%s)",
             webspace_id,
             list(ui_map.keys()),
             list(data_map.keys()),
         )
-        return _finish("already_seeded")
+        return _finish("already_seeded_runtime_refreshed" if runtime_environment_changed else "already_seeded")
 
     if _has_projected_scenario_seed(ui_map, data_map, requested_scenario_id):
+        if runtime_environment_changed:
+            result["persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
         _log.info(
             "webspace %s has projected scenario seed for %s; nudging semantic rebuild",
             webspace_id,
@@ -386,6 +410,12 @@ async def ensure_webspace_seeded_from_scenario(
                 result["emitted_rebuild_nudge"] = True
             return _finish("scenario_projection")
 
+        if runtime_environment_changed:
+            result["runtime_persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
         await mgr.sync_to_yjs_async(
             requested_scenario_id,
             webspace_id,
@@ -405,6 +435,12 @@ async def ensure_webspace_seeded_from_scenario(
         result["scenario_seed_error"] = f"{type(exc).__name__}: {exc}"
 
     if webspace_id != default_webspace_id():
+        if runtime_environment_changed:
+            result["persisted_via"] = await _persist_bootstrap_seed_update(
+                ystore,
+                target_doc,
+                before_state_vector=before_state_vector,
+            )
         return _finish("non_default_unseeded")
 
     fallback_scenario_id = str(default_scenario_id or "").strip() or "web_desktop"

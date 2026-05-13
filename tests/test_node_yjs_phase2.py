@@ -2960,6 +2960,7 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
                     },
                 },
             ),
+            "runtime": _TrackingMap({"environment": webspace_runtime_module.runtime_environment_payload()}),
         }
     )
     inputs = webspace_runtime_module.WebspaceResolverInputs(
@@ -2986,22 +2987,22 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
     runtime._apply_resolved_state_in_doc(ydoc, "default", resolved, inputs=inputs)
 
     assert runtime._last_apply_summary == {
-        "branch_count": 7,
+        "branch_count": 8,
         "changed_branches": 0,
-        "unchanged_branches": 7,
+        "unchanged_branches": 8,
         "failed_branches": 0,
         "changed_paths": [],
         "defaults_failed": False,
         "transaction_total": 2,
         "phases": {
             "structure": {
-                "branch_count": 2,
+                "branch_count": 3,
                 "changed_branches": 0,
-                "unchanged_branches": 2,
+                "unchanged_branches": 3,
                 "failed_branches": 0,
                 "changed_paths": [],
-                "fingerprint_unchanged_branches": 2,
-                "fingerprint_unchanged_paths": ["ui.application", "registry.merged"],
+                "fingerprint_unchanged_branches": 3,
+                "fingerprint_unchanged_paths": ["ui.application", "registry.merged", "runtime.environment"],
             },
             "interactive": {
                 "branch_count": 5,
@@ -3019,10 +3020,11 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
                 ],
             },
         },
-        "fingerprint_unchanged_branches": 7,
+        "fingerprint_unchanged_branches": 8,
         "fingerprint_unchanged_paths": [
             "ui.application",
             "registry.merged",
+            "runtime.environment",
             "data.catalog",
             "data.installed",
             "data.desktop",
@@ -3100,6 +3102,7 @@ def test_webspace_runtime_apply_rewrites_missing_effective_branch_even_when_fing
                     },
                 }
             ),
+            "runtime": _TrackingMap({"environment": webspace_runtime_module.runtime_environment_payload()}),
         }
     )
     inputs = webspace_runtime_module.WebspaceResolverInputs(
