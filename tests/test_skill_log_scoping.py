@@ -56,6 +56,38 @@ async def test_ui_runtime_diagnostics_write_skill_scoped_log_and_mcp_can_read_it
         clear_ctx()
 
 
+@pytest.mark.asyncio
+async def test_ui_runtime_diagnostics_preserve_unattributed_fallback_log_name(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    set_ctx(SimpleNamespace(paths=paths, skill_ctx=InprocSkillContext()))
+    try:
+        result = await ingest_ui_runtime_diagnostics(
+            {
+                "webspace_id": "desktop",
+                "events": [
+                    {
+                        "level": "warning",
+                        "source": "ui.modal",
+                        "code": "modal.missing_id",
+                        "message": "Cannot open modal: modal id is missing.",
+                        "details": {"options": {"nodeId": "node-1"}},
+                    }
+                ],
+            }
+        )
+        assert result["accepted"] == 1
+
+        log_path = paths.skill_ui_diagnostics_log_path("__ui_runtime__")
+        assert log_path.name == "service.__ui_runtime__.ui_runtime.log"
+        assert log_path.exists()
+        line = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+        assert line["skill_id"] == "__ui_runtime__"
+        assert line["code"] == "modal.missing_id"
+    finally:
+        clear_ctx()
+
+
 def test_skill_context_logs_route_to_skill_runtime_log_not_platform_log(tmp_path: Path) -> None:
     paths = PathProvider(tmp_path)
     paths.ensure_tree()
