@@ -1405,7 +1405,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 79%.
+- Overall: 82%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1421,9 +1421,10 @@ Integration progress:
   read-only registry label conflict diagnostics, localization-as-label-metadata
   architecture, compact registry label metadata, locale-aware resolver trace
   hints, per-locale conflict diagnostics, Root MCP `NLUAuthoringPlane`
-  read-only context with canonical named entities, and focused tests.
-- Current implementation slice: expose canonical names to NLU/LLM authoring
-  without changing dispatch or training data.
+  read-only context with canonical named entities, Teacher probe live entity
+  matches, per-locale ambiguity evidence in NLU trace, and focused tests.
+- Current implementation slice: expose canonical names to NLU/Teacher
+  diagnostics without changing dispatch or training data.
 - Not started yet: governed writes and consumer migration.
 - Verification note: targeted MCP/named-entity checks pass. Broader
   `test_root_mcp_foundation` / Yjs projection runs still expose pre-existing
@@ -1446,7 +1447,8 @@ Next implementation steps:
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
 3. Begin conflict diagnostics for duplicate display names or aliases.
-4. Update Teacher probe output to show live entity resolver matches.
+4. Add golden tests proving runtime aliases do not require Rasa/neural
+   retraining.
 5. Start governed alias/display-name proposal commands.
 
 ### Tasks
@@ -1511,14 +1513,14 @@ Actions:
 
 - [x] Add a resolver dry-run mode that records NLU trace without changing
   dispatch behavior.
-- [ ] Resolve registered names and aliases before or alongside
+- [x] Resolve registered names and aliases before or alongside
   `nlp.intent.detect.request`.
 - [x] Accept `request_locale` and `preferred_locales` as resolver hints.
-- [ ] Add `normalized_text`, `resolved_entities`, canonical refs, and ambiguity
+- [x] Add `normalized_text`, `resolved_entities`, canonical refs, and ambiguity
   records to NLU trace.
 - [x] Add per-locale conflict evidence to compact registry diagnostics.
-- [ ] Add per-locale ambiguity evidence to NLU trace.
-- [ ] Update Teacher probe output to show live entity resolver matches.
+- [x] Add per-locale ambiguity evidence to NLU trace.
+- [x] Update Teacher probe output to show live entity resolver matches.
 - [ ] Add golden tests proving runtime aliases do not require Rasa/neural
   retraining.
 

@@ -102,8 +102,11 @@ def _compact_raw(raw: Any) -> Any:
         "entities",
         "named_entities",
         "resolved_entities",
+        "unresolved_entity_spans",
         "ambiguities",
         "normalized_text",
+        "request_locale",
+        "preferred_locales",
         "service",
         "reason",
     ):

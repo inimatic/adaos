@@ -661,12 +661,13 @@ action routing.
 
 - [x] Add an NLU resolver dry-run mode that records trace without changing
   dispatch.
-- [ ] Add `EntityResolver` preprocessing for `nlp.intent.detect.request`.
-- [ ] Add `resolved_entities`, `normalized_text`, and ambiguity records to NLU
+- [x] Add `EntityResolver` preprocessing for `nlp.intent.detect.request`.
+- [x] Add `resolved_entities`, `normalized_text`, and ambiguity records to NLU
   trace.
 - [x] Add request-locale and preferred-locale hints to resolver input and trace.
 - [x] Add per-locale conflict diagnostics for aliases and display names.
-- [ ] Make Teacher probe responses show live entity matches and canonical refs.
+- [x] Add per-locale ambiguity evidence to NLU trace.
+- [x] Make Teacher probe responses show live entity matches and canonical refs.
 - [ ] Keep runtime aliases out of the Rasa stale-training fingerprint by
   default.
 - [ ] Add golden phrase tests proving renaming a device does not require model
