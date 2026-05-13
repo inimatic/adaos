@@ -260,7 +260,7 @@ def test_root_mcp_reads_yjs_load_mark_history(monkeypatch) -> None:
 
     monkeypatch.setattr(
         root_endpoints,
-        "list_yjs_load_mark_history_rows",
+        "_list_yjs_load_mark_history_rows",
         lambda **kwargs: {
             "path": "/tmp/yjs_load_mark.jsonl",
             "count": 1,
@@ -690,11 +690,17 @@ def test_root_mcp_access_token_lifecycle_management(monkeypatch, tmp_path) -> No
 
 def test_root_mcp_session_lease_lifecycle_and_bearer_scope(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
+    from adaos.services.root_mcp import audit as audit_registry
+    from adaos.services.root_mcp import registry as descriptor_registry
     from adaos.services.root_mcp import sessions as session_registry
     from adaos.services.root_mcp import targets as target_registry
+    from adaos.services.root_mcp import tokens as token_registry
 
+    monkeypatch.setattr(audit_registry, "_audit_path", lambda: tmp_path / "audit.jsonl")
+    monkeypatch.setattr(descriptor_registry, "_descriptor_cache_state_path", lambda: tmp_path / "descriptor_cache.json")
     monkeypatch.setattr(target_registry, "_registry_path", lambda: tmp_path / "managed_targets.json")
     monkeypatch.setattr(session_registry, "_sessions_path", lambda: tmp_path / "mcp_sessions.json")
+    monkeypatch.setattr(token_registry, "_tokens_path", lambda: tmp_path / "access_tokens.json")
 
     client = _make_client()
     owner_headers = {"X-Owner-Token": "owner-secret"}
@@ -735,6 +741,14 @@ def test_root_mcp_session_lease_lifecycle_and_bearer_scope(monkeypatch, tmp_path
     assert session["subnet_id"] == "subnet:profile"
     assert session["zone"] == "lab-profile"
     assert session["use_count"] == 0
+    assert {
+        "hub.get_operational_surface",
+        "hub.get_status",
+        "hub.get_runtime_summary",
+        "hub.get_activity_log",
+        "hub.get_capability_usage_summary",
+        "hub.get_logs",
+    }.issubset(set(session["capabilities"]))
 
     listed = client.get(
         "/v1/root/mcp/sessions",
