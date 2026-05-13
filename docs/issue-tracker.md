@@ -1365,18 +1365,18 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 42%.
+- Overall: 48%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
   skill lookup adapter, browser draft-name helper, exact resolver, SDK read
   helpers, NLU dry-run trace subscriber, compact read-only
   `registry.named_entities` projection, live-room-safe NLU trace writes,
-  voice/chat router live-room writes, read-only NLU Yjs reads, and focused
-  tests.
-- Current implementation slice: finish read-only registry coverage, then make
-  `entity.registry.changed` the explicit invalidation signal for resolver and
-  name-rendering consumers.
+  voice/chat router live-room writes, read-only NLU Yjs reads, browser metadata
+  capture from Yjs handshakes, access-links-driven
+  `entity.registry.changed` invalidation, and focused tests.
+- Current implementation slice: finish read-only registry/MCP coverage, then
+  start migrating node/browser labels to the shared display model.
 - Not started yet: governed writes, MCP, and consumer migration.
 
 Human verification:
@@ -1388,12 +1388,11 @@ Human verification:
 
 Next implementation steps:
 
-1. Emit `entity.registry.changed` from authoritative source transitions without
-   introducing alias/display-name writes yet.
-2. Wire browser metadata capture from the client/gateway path so draft names
-   use browser family, OS, and form factor when available.
-3. Expose the compact named-entity registry in diagnostics/MCP read context.
-4. Start migrating node/browser labels to the shared display helper.
+1. Expose the compact named-entity registry in diagnostics/MCP read context.
+2. Start migrating node/browser labels to the shared display helper.
+3. Add observed/draft/display-name lifecycle events beyond coarse
+   `entity.registry.changed`.
+4. Begin conflict diagnostics for duplicate display names or aliases.
 
 ### Tasks
 
@@ -1415,7 +1414,7 @@ Actions:
   `DeviceInventoryService`.
 - [x] Build the first read-only modal/app/scenario/webspace adapter over
   existing NLU lookup tables.
-- [ ] Preserve source authority: device access remains owned by
+- [x] Preserve source authority: device access remains owned by
   `access_links` / `DeviceInventoryService`, not by the named-entity read
   model.
 - [x] Project a compact read-only entity registry for UI/debug consumers.
@@ -1432,7 +1431,8 @@ Actions:
 - [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
 - [ ] Add conflict diagnostics for duplicate display names or aliases.
 - [ ] Invalidate display-name consumers through `entity.registry.changed`
-  instead of reload-only behavior.
+  instead of reload-only behavior. Backend invalidation emission is in place;
+  client/name-rendering consumers still need migration.
 
 #### NER-003: Add NLU entity canonicalization
 
@@ -1476,7 +1476,9 @@ Actions:
   `entity.resolution.ambiguous`, and `entity.resolution.failed` into
   Notifications and node skill logs when operator attention is useful.
 - [ ] Treat `entity.registry.changed` as the cache invalidation signal for
-  `EntityResolver` and demanded name-rendering projections.
+  `EntityResolver` and demanded name-rendering projections. The compact Yjs
+  projection already subscribes to this signal; resolver cache ownership is
+  still pending.
 
 #### NER-006: Migrate consumers away from ad hoc name fallback
 

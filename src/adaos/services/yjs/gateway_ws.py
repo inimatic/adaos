@@ -101,6 +101,28 @@ def _coerce_gateway_webspace_id(value: Any) -> str:
     return raw
 
 
+def _clean_browser_metadata_value(value: Any, *, max_len: int = 256) -> str | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    return token[:max_len]
+
+
+def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
+    raw: dict[str, Any] = {
+        "browser_family": params.get("browser_family") or params.get("browserFamily") or params.get("browser"),
+        "os_name": params.get("os_name") or params.get("osName") or params.get("os") or params.get("platform"),
+        "form_factor": params.get("form_factor") or params.get("formFactor") or params.get("form"),
+        "user_agent": params.get("user_agent") or params.get("userAgent") or params.get("ua"),
+    }
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        cleaned = _clean_browser_metadata_value(value, max_len=512 if key == "user_agent" else 96)
+        if cleaned:
+            out[key] = cleaned
+    return out
+
+
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     try:
         value = int(os.getenv(name, str(default)) or str(default))
@@ -3368,6 +3390,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     params: Dict[str, str] = dict(websocket.query_params)
     webspace_id = _coerce_gateway_webspace_id(room or params.get("ws"))
     dev_id = params.get("dev") or "unknown"
+    browser_metadata = _browser_session_metadata(params)
 
     if _ws_trace_enabled():
         try:
@@ -3392,6 +3415,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
                     webspace_id=webspace_id,
                     connection_state=reason or "denied",
                     online=False,
+                    **browser_metadata,
                 )
             except Exception:
                 pass
@@ -3426,7 +3450,13 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     try:
         from adaos.services.access_links import touch_browser_session
 
-        touch_browser_session(dev_id, webspace_id=webspace_id, connection_state="connected", online=True)
+        touch_browser_session(
+            dev_id,
+            webspace_id=webspace_id,
+            connection_state="connected",
+            online=True,
+            **browser_metadata,
+        )
     except Exception:
         _ylog.debug("browser access registry open update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
     _publish_runtime_event(
@@ -3457,7 +3487,13 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         try:
             from adaos.services.access_links import touch_browser_session
 
-            touch_browser_session(dev_id, webspace_id=webspace_id, connection_state="closed", online=False)
+            touch_browser_session(
+                dev_id,
+                webspace_id=webspace_id,
+                connection_state="closed",
+                online=False,
+                **browser_metadata,
+            )
         except Exception:
             _ylog.debug("browser access registry close update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
         _publish_runtime_event(
