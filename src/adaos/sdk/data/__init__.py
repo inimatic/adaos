@@ -38,6 +38,8 @@ __all__ = [
     "skill_memory_set",
     "skill_env_get",
     "skill_env_set",
+    "entities_list",
+    "entities_resolve_text",
     "get_tts_backend",
     "get_stt_backend",
     "get_audio_out_backend",
@@ -75,6 +77,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "skill_memory_set": ("adaos.sdk.data.skill_memory", "set"),
     "skill_env_get": ("adaos.sdk.data.skill_env", "get_env"),
     "skill_env_set": ("adaos.sdk.data.skill_env", "set_env"),
+    "entities_list": ("adaos.sdk.data.entities", "list_entities"),
+    "entities_resolve_text": ("adaos.sdk.data.entities", "resolve_text"),
 }
 
 
