@@ -204,3 +204,51 @@ def test_weather_async_fetch_preserves_skill_i18n_in_worker_thread(monkeypatch):
 
     assert ok is False
     assert data["error"] == "Weather API returned status 503"
+
+
+def test_weather_intent_api_error_appends_chat_when_route_missing(monkeypatch):
+    mod = _load_weather_module()
+    emitted: list[tuple[str, dict, dict]] = []
+
+    async def _emit(topic, payload, **kwargs):
+        emitted.append((topic, payload, kwargs))
+
+    async def _fetch_weather_async(*_args, **_kwargs):
+        return False, {"error": "Weather API error"}
+
+    monkeypatch.setattr(mod, "emit", _emit)
+    monkeypatch.setattr(mod, "_load_config", lambda: ("https://example.test", "Berlin"))
+    monkeypatch.setattr(mod, "_resolve_city", lambda city: city)
+    monkeypatch.setattr(mod, "_fetch_weather_async", _fetch_weather_async)
+
+    import asyncio
+
+    asyncio.run(mod.on_weather_intent({"city": "Berlin", "_meta": {"webspace_id": "desktop"}}))
+
+    assert [entry[0] for entry in emitted] == ["ui.notify", "io.out.chat.append"]
+    assert emitted[0][1]["text"] == "Не удается получить данные о погоде."
+    assert emitted[1][1]["text"] == "Не удается получить данные о погоде."
+    assert emitted[1][1]["_meta"] == {"webspace_id": "desktop"}
+
+
+def test_weather_intent_api_error_keeps_existing_route_single_delivery(monkeypatch):
+    mod = _load_weather_module()
+    emitted: list[tuple[str, dict, dict]] = []
+
+    async def _emit(topic, payload, **kwargs):
+        emitted.append((topic, payload, kwargs))
+
+    async def _fetch_weather_async(*_args, **_kwargs):
+        return False, {"error": "Weather API error"}
+
+    monkeypatch.setattr(mod, "emit", _emit)
+    monkeypatch.setattr(mod, "_load_config", lambda: ("https://example.test", "Berlin"))
+    monkeypatch.setattr(mod, "_resolve_city", lambda city: city)
+    monkeypatch.setattr(mod, "_fetch_weather_async", _fetch_weather_async)
+
+    import asyncio
+
+    asyncio.run(mod.on_weather_intent({"city": "Berlin", "_meta": {"webspace_id": "desktop", "route_id": "voice_chat"}}))
+
+    assert [entry[0] for entry in emitted] == ["ui.notify"]
+    assert emitted[0][1]["text"] == "Не удается получить данные о погоде."
