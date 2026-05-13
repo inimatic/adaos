@@ -330,6 +330,7 @@ class CodexRootMcpBridge:
                         "alias": {"type": "string", "description": "Human phrase to register as an alias."},
                         "locale": {"type": "string", "description": "Optional alias locale, such as en or ru."},
                         "actor": {"type": "string", "description": "Optional actor metadata for audit/event payloads."},
+                        "base_fingerprint": {"type": "string", "description": "Optional entity fingerprint from get_named_entity_registry for stale-write protection."},
                         "dry_run": {"type": "boolean", "default": False, "description": "When true, return the governed proposal without mutating state."},
                     },
                     "required": ["device_ref", "alias"],
@@ -733,6 +734,7 @@ class CodexRootMcpBridge:
                     alias=str(args.get("alias") or ""),
                     locale=_normalize_text(args.get("locale")),
                     actor=_normalize_text(args.get("actor")),
+                    base_fingerprint=_normalize_text(args.get("base_fingerprint")),
                     dry_run=bool(args.get("dry_run")),
                 )
             )

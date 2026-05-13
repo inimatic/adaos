@@ -36,6 +36,7 @@ def add_browser_alias(
     locale: str | None = None,
     actor: str | None = None,
     request_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     return _service.add_link_alias(
         "browser",
@@ -45,6 +46,7 @@ def add_browser_alias(
         actor=actor,
         source="sdk.data.access_links",
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     )
 
 
@@ -55,6 +57,7 @@ def add_member_alias(
     locale: str | None = None,
     actor: str | None = None,
     request_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     return _service.add_link_alias(
         "member",
@@ -64,6 +67,7 @@ def add_member_alias(
         actor=actor,
         source="sdk.data.access_links",
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     )
 
 

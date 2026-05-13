@@ -317,6 +317,7 @@ def test_compact_registry_payload_is_ui_safe_and_fingerprinted() -> None:
             "status": "confirmed",
             "scope": {},
             "source": "test",
+            "fingerprint": payload["items"][0]["fingerprint"],
         }
     ]
     assert payload["summary"]["count"] == 1
@@ -476,6 +477,39 @@ def test_governed_alias_add_reports_conflict_without_mutation() -> None:
     assert result.updated_record is None
     assert [item["topic"] for item in result.events] == [named_entities.ENTITY_ALIAS_CONFLICT_DETECTED]
     assert result.events[0]["payload"]["current"]["conflicts"][0]["canonical_ref"] == "device:browser:browser-1"
+
+
+def test_governed_alias_add_rejects_stale_base_fingerprint() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen Display",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    proposal = service.propose_alias_add(
+        canonical_ref="device:member:node-1",
+        alias="kitchen screen",
+        locale="en",
+        source="test",
+        base_fingerprint="stale-fingerprint",
+    )
+    result = service.apply_alias_add(proposal)
+
+    assert proposal.ok is False
+    assert proposal.status == "stale"
+    assert proposal.reason == "base_fingerprint_mismatch"
+    assert proposal.conflicts[0]["base_fingerprint"] == "stale-fingerprint"
+    assert proposal.conflicts[0]["current_fingerprint"]
+    assert result.ok is False
+    assert result.status == "stale"
+    assert [item["topic"] for item in result.events] == [named_entities.ENTITY_ALIAS_CONFLICT_DETECTED]
+    assert result.events[0]["payload"]["current"]["base_fingerprint"] == "stale-fingerprint"
 
 
 def test_sdk_entities_alias_helpers_delegate_to_named_entity_service(monkeypatch) -> None:

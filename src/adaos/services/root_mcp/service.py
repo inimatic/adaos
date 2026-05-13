@@ -418,6 +418,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "locale": {"type": "string"},
                     "actor": {"type": "string"},
                     "request_id": {"type": "string"},
+                    "base_fingerprint": {"type": "string"},
                 },
                 required=["device_ref", "alias"],
             ),
@@ -1226,6 +1227,62 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
     }
 
 
+def _append_named_entity_alias_audit(arguments: dict[str, Any], result: dict[str, Any], *, dry_run: bool) -> None:
+    if dry_run:
+        return
+    context = arguments.get("_mcp_context")
+    mcp_context = dict(context) if isinstance(context, dict) else {}
+    result_payload = dict(result.get("result") or {}) if isinstance(result.get("result"), dict) else {}
+    proposal = dict(result_payload.get("proposal") or {}) if isinstance(result_payload.get("proposal"), dict) else {}
+    events = list(result_payload.get("events") or []) if isinstance(result_payload.get("events"), list) else []
+    entry = dict(result_payload.get("entry") or {}) if isinstance(result_payload.get("entry"), dict) else {}
+    updated_record = dict(result_payload.get("updated_record") or {}) if isinstance(result_payload.get("updated_record"), dict) else {}
+    status = str(result.get("status") or result_payload.get("status") or "").strip() or "unknown"
+    now = _iso_now()
+    try:
+        append_audit_event(
+            RootMcpAuditEvent(
+                event_id=new_id(),
+                request_id=str(mcp_context.get("request_id") or arguments.get("request_id") or new_id()),
+                trace_id=str(mcp_context.get("trace_id") or new_id()),
+                tool_id="entity.alias.add",
+                surface=RootMcpSurface.DEVELOPMENT,
+                actor=str(mcp_context.get("actor") or arguments.get("actor") or "root_mcp:nlu_authoring"),
+                auth_method=str(mcp_context.get("auth_method") or "unknown"),
+                capability="development.write.named_entities",
+                policy_decision="allow",
+                execution_adapter="named_entities.access_links",
+                dry_run=False,
+                status="ok" if bool(result.get("ok")) else "error",
+                started_at=now,
+                finished_at=now,
+                result_summary={
+                    "status": status,
+                    "device_ref": str(result_payload.get("device_ref") or arguments.get("device_ref") or "").strip(),
+                    "canonical_ref": str(proposal.get("canonical_ref") or "").strip() or None,
+                    "alias": str(proposal.get("alias") or arguments.get("alias") or "").strip(),
+                    "locale": str(proposal.get("locale") or arguments.get("locale") or "und").strip() or "und",
+                    "base_fingerprint": str(proposal.get("base_fingerprint") or arguments.get("base_fingerprint") or "").strip() or None,
+                    "entry_fingerprint": str(entry.get("fingerprint") or updated_record.get("fingerprint") or "").strip() or None,
+                    "event_topics": [
+                        str(item.get("topic") or "").strip()
+                        for item in events
+                        if isinstance(item, dict) and str(item.get("topic") or "").strip()
+                    ],
+                },
+                meta={
+                    "domain": "named_entities",
+                    "operation": "alias.add",
+                    "entity_ref": str(proposal.get("canonical_ref") or "").strip() or None,
+                    "entity_kind": str(proposal.get("entity_kind") or "").strip() or None,
+                    "reason": str(proposal.get("reason") or "").strip() or None,
+                },
+            )
+        )
+    except Exception:
+        return
+
+
 def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     from adaos.services import device_inventory
     from adaos.services import named_entities
@@ -1235,6 +1292,7 @@ def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run
     locale = _text_or_none(arguments.get("locale"))
     actor = _text_or_none(arguments.get("actor")) or "root_mcp:nlu_authoring"
     request_id = _text_or_none(arguments.get("request_id"))
+    base_fingerprint = _text_or_none(arguments.get("base_fingerprint"))
     if not device_ref:
         return {"ok": False, "status": "invalid", "error": "device_ref_required"}
     if not alias:
@@ -1252,6 +1310,7 @@ def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run
             actor=actor,
             source="root_mcp:nlu_authoring",
             request_id=request_id,
+            base_fingerprint=base_fingerprint,
         )
         return {
             "ok": bool(proposal.get("ok")),
@@ -1269,12 +1328,15 @@ def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run
         locale=locale,
         actor=actor,
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     )
-    return {
+    payload = {
         "ok": bool(result.get("ok")),
         "status": result.get("status") or ("applied" if result.get("ok") else "error"),
         "result": result,
     }
+    _append_named_entity_alias_audit(arguments, payload, dry_run=bool(dry_run))
+    return payload
 
 
 def _handle_operational_contracts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -2331,7 +2393,14 @@ def invoke_tool(
                 )
             else:
                 try:
-                    result = handler(payload_arguments, dry_run=bool(dry_run))
+                    handler_arguments = dict(payload_arguments)
+                    handler_arguments["_mcp_context"] = {
+                        "request_id": effective_request_id,
+                        "trace_id": effective_trace_id,
+                        "actor": actor,
+                        "auth_method": auth_method,
+                    }
+                    result = handler(handler_arguments, dry_run=bool(dry_run))
                     summary = _result_summary(result)
                     trace = _trace_meta(
                         tool_id=contract.id,

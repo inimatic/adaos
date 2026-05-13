@@ -163,3 +163,26 @@ def test_add_browser_alias_conflict_does_not_mutate_registry(monkeypatch) -> Non
     assert [event["topic"] for event in emitted] == [
         named_entities.ENTITY_ALIAS_CONFLICT_DETECTED,
     ]
+
+
+def test_add_browser_alias_rejects_stale_base_fingerprint(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_event_envelopes", lambda events: None)
+
+    access_links.touch_browser_session("browser-1", webspace_id="desktop")
+    registry = named_entities.compact_registry_payload(kind="device.browser", webspace_id="desktop")
+    base_fingerprint = registry["items"][0]["fingerprint"]
+    access_links.rename_link("browser", "browser-1", "Renamed browser")
+
+    result = access_links.add_link_alias(
+        "browser",
+        "browser-1",
+        "office browser",
+        locale="en",
+        base_fingerprint=base_fingerprint,
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "stale"
+    assert result["proposal"]["reason"] == "base_fingerprint_mismatch"
+    assert access_links.get_link("browser", "browser-1")["labels"] == []

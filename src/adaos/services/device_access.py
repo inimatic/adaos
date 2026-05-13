@@ -302,6 +302,7 @@ def add_device_alias(
     locale: str | None = None,
     actor: str | None = None,
     request_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     device, error = _device_or_error(device_ref)
     if error is not None:
@@ -318,6 +319,7 @@ def add_device_alias(
         actor=actor,
         source="device_access",
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     )
     if not bool(result.get("ok")):
         return result
