@@ -940,6 +940,37 @@ Actions:
 - [ ] Confirm manually from `[Node 0] Infra Access`: click the Codex session
   action and verify no `managed target '<node uuid>' is not registered` error.
 
+#### F3M-006B: Align Codex ProfileOpsRead with advertised Root MCP read tools
+
+Status: implemented and locally smoke-verified.
+
+Evidence:
+
+- The local stdio Codex bridge advertised operational read tools such as
+  `get_status`, `get_runtime_summary`, `get_operational_surface`, and
+  `get_activity_log`.
+- Fresh `ProfileOpsRead` MCP session leases only received generic
+  `operations.read.*` plus memory-profile capabilities, so the advertised tools
+  returned policy-denied payloads instead of operational data.
+
+Resolution:
+
+- `ProfileOpsRead` now includes the read-only `hub.get_*` capabilities that the
+  Codex bridge exposes.
+- `ProfileOpsControl` now includes the same read set plus `hub.run_healthchecks`.
+- The public backend capability-profile definition is kept in sync with the
+  local hub implementation.
+
+Verification:
+
+- `pytest tests/test_root_mcp_foundation.py` passes.
+- `pytest tests/test_sdk_root_mcp.py tests/test_infra_access_skill_runtime.py`
+  passes in the focused MCP/infra_access slice.
+- Local stdio MCP smoke against `adaos-local-hub` reports 37 tools and
+  `ok=true` for `foundation`, `get_status`, `get_runtime_summary`,
+  `get_operational_surface`, `get_activity_log`, `get_skill_logs`, and
+  `get_subnet_diagnostics`.
+
 #### F3M-007: First-3-minute memory footprint
 
 Status: closed for the current 3-minute goal.
@@ -1463,11 +1494,11 @@ Integration progress:
 - Current implementation slice: expose canonical names to NLU/Teacher
   diagnostics without changing dispatch or training data.
 - Not started yet: governed writes and consumer migration.
-- Verification note: targeted MCP/named-entity checks pass. Broader
-  `test_root_mcp_foundation` / Yjs projection runs still expose pre-existing
-  fixture drift around `TestPaths.root_mcp_state_dir`, stale endpoint
-  monkeypatch names, and `AdaosMemoryYStore.started`; track that separately so
-  it does not mask NER regressions.
+- Verification note: targeted MCP/named-entity checks pass, and
+  `test_root_mcp_foundation` is green again after test fixture alignment. The
+  broader Yjs projection runs still expose pre-existing
+  `AdaosMemoryYStore.started` drift; track that separately so it does not mask
+  NER regressions.
 
 Human verification:
 
