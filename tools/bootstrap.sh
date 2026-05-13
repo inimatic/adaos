@@ -9,6 +9,7 @@ INFRA_SUBMODULE_PATH="src/adaos/integrations/infra-inimatic"
 VENV_DIR=".venv"
 VENV_ACTIVATE=".venv/bin/activate"
 MIN_PYTHON="3.11.9"
+MAX_PYTHON_EXCLUSIVE="3.12.0"
 
 JOIN_CODE=""
 ROLE=""
@@ -416,20 +417,16 @@ configure_rasa_nlu() {
   log "Rasa NLU will be prepared as an optional AdaOS service-skill"
 }
 
-py_is_311() {
-  local bin="$1"
-  "$bin" -c 'import sys; raise SystemExit(0 if (sys.version_info[0], sys.version_info[1]) == (3, 11) else 1)' \
-    >/dev/null 2>&1
-}
-
-py_meets_min() {
+py_is_supported_python() {
   local bin="$1"
   local min_ver="$2"
-  "$bin" - "$min_ver" <<'PY' >/dev/null 2>&1
+  local max_ver="$3"
+  "$bin" - "$min_ver" "$max_ver" <<'PY' >/dev/null 2>&1
 import sys
 min_ver = tuple(int(x) for x in sys.argv[1].split("."))
+max_ver = tuple(int(x) for x in sys.argv[2].split("."))
 cur = sys.version_info[:3]
-raise SystemExit(0 if cur >= min_ver else 1)
+raise SystemExit(0 if min_ver <= cur < max_ver else 1)
 PY
 }
 
@@ -445,7 +442,7 @@ choose_python_311() {
     local p resolved_p
     p="$(command -v "$c")"
     resolved_p="$(normalize_python_candidate "$p")"
-    if py_is_311 "$resolved_p" && py_meets_min "$resolved_p" "$MIN_PYTHON"; then
+    if py_is_supported_python "$resolved_p" "$MIN_PYTHON" "$MAX_PYTHON_EXCLUSIVE"; then
       PY_BIN="$resolved_p"
       PY_VER="$("$resolved_p" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}")' 2>/dev/null || echo "3.11")"
       if [[ "$p" != "$resolved_p" ]]; then
@@ -577,9 +574,9 @@ if [[ -z "${ROLE:-}" ]]; then
   fi
 fi
 
-log "Choosing Python 3.11.9+..."
+log "Choosing Python >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE}..."
 if ! choose_python_311; then
-  fallback_to_uv "Python 3.11.9+ not found (or not on PATH)."
+  fallback_to_uv "Python >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE} not found (or not on PATH)."
 fi
 
 log "Checking Python venv support..."
