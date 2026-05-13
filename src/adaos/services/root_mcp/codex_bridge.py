@@ -243,7 +243,8 @@ class CodexRootMcpBridge:
             "This MCP server is a local stdio bridge from Codex to AdaOS Root MCP. "
             f"It is currently bound to {target} using {bootstrap}. "
             "For descriptive AdaOS programming context, prefer get_architecture_catalog, get_sdk_metadata, "
-            "get_template_catalog, named entity registry, and public registry summaries from AdaOSDevPlane. "
+            "get_template_catalog, NLU authoring context, named entity registry, and public registry summaries "
+            "from AdaOSDevPlane/NLUAuthoringPlane. "
             "For operational context, prefer get_status, get_runtime_summary, and get_operational_surface "
             "before requesting logs or healthchecks."
         )
@@ -297,6 +298,24 @@ class CodexRootMcpBridge:
                     "properties": {
                         "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
                         "kind": {"type": "string", "description": "Optional entity kind filter, such as device.browser or skill."},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_nlu_authoring_context",
+                "description": "Read NLUAuthoringPlane context with canonical named entities, locale hints, and read-only authoring boundaries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "kind": {"type": "string", "description": "Optional entity kind filter, such as device.browser or skill."},
+                        "request_locale": {"type": "string", "description": "Optional active request locale, such as ru or en-US."},
+                        "preferred_locales": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional ordered locale preferences for label selection.",
+                        },
                     },
                     "additionalProperties": False,
                 },
@@ -678,6 +697,17 @@ class CodexRootMcpBridge:
                 client.get_adaos_dev_named_entity_registry(
                     webspace_id=_normalize_text(args.get("webspace_id")),
                     kind=_normalize_text(args.get("kind")),
+                )
+            )
+        if tool == "get_nlu_authoring_context":
+            raw_locales = args.get("preferred_locales")
+            preferred_locales = _normalize_unique(raw_locales if isinstance(raw_locales, list) else None)
+            return _tool_text(
+                client.get_nlu_authoring_context(
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    kind=_normalize_text(args.get("kind")),
+                    request_locale=_normalize_text(args.get("request_locale")),
+                    preferred_locales=preferred_locales,
                 )
             )
         if tool == "get_profileops_status":

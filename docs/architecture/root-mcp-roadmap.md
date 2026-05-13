@@ -270,6 +270,8 @@ Phase is complete when:
 
 ### `NLUAuthoring-2`. Descriptor and lookup surfaces
 
+- [x] publish `nlu_authoring.get_context` as a read-only context that includes
+  canonical named entities, locale hints, and no-write authoring boundaries
 - [ ] publish `nlu.describe_pipeline`
 - [ ] publish `nlu.list_templates` and `nlu.get_template` so LLMs can inspect current template ids before proposing corrections
 - [ ] publish `desktop.registry.lookup`

@@ -139,6 +139,34 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def get_nlu_authoring_context(
+        self,
+        *,
+        webspace_id: str | None = None,
+        kind: str | None = None,
+        request_locale: str | None = None,
+        preferred_locales: list[str] | tuple[str, ...] | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if kind:
+            arguments["kind"] = str(kind)
+        if request_locale:
+            arguments["request_locale"] = str(request_locale)
+        if preferred_locales:
+            arguments["preferred_locales"] = [str(item) for item in preferred_locales if str(item).strip()]
+        return self.call(
+            "nlu_authoring.get_context",
+            arguments=arguments,
+            request_id=request_id,
+            trace_id=trace_id,
+            dry_run=dry_run,
+        )
+
     def list_managed_targets(self, *, environment: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if environment:
