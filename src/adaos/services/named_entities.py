@@ -606,6 +606,8 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
     display_name = _text_or_none(policy.get("display_name"))
     registered_names = _tuple_of_texts(identity.get("node_names"))
     observed_name = _text_or_none(identity.get("hostname"))
+    aliases = _tuple_of_texts(policy.get("aliases"))
+    labels = _tuple_of_labels(policy.get("labels"))
     status: EntityStatus = "confirmed" if display_name else "draft" if draft_name else "observed"
     updated_at = observation.get("last_seen_at") if isinstance(observation.get("last_seen_at"), (int, float)) else None
     return NamedEntityRecord(
@@ -615,6 +617,8 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
         registered_names=registered_names,
         observed_name=observed_name,
         draft_name=draft_name,
+        aliases=aliases,
+        labels=labels,
         fallback_label=fallback,
         scope={
             "node_id": identity.get("node_id"),
@@ -627,6 +631,8 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
             "registered_names": "device_inventory",
             "observed_name": observation.get("source") or "device_inventory",
             "draft_name": "named_entity_service.browser_draft" if draft_name else None,
+            "aliases": "access_links" if aliases else None,
+            "labels": "access_links" if labels else None,
             "diagnostics": diagnostics,
         },
         status=status,

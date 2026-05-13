@@ -400,6 +400,23 @@ This deliberately keeps policy in one place while leaving storage authority to
 the owning source service, such as future profile/device settings or Root MCP
 governed write handlers.
 
+Current durable device/browser implementation:
+
+- `access_links.add_link_alias` runs the proposal/apply policy check, persists
+  confirmed alias labels on the browser/member access-link record, and
+  publishes returned lifecycle event envelopes.
+- `device_access.add_device_alias` exposes the same write path through the
+  device command layer and requires the target device to have an authoritative
+  access-link policy record.
+- `sdk.data.entities.add_device_alias` is the recommended SDK helper when a
+  generated skill or operator tool needs to add an alias for a concrete
+  `device:browser:<id>` or `device:member:<id>` ref.
+- The implementation intentionally does not persist into the read-only Yjs
+  projection. Yjs receives the compact registry after
+  `entity.registry.changed` invalidates the read model.
+- Remaining hardening: `base_fingerprint`, audit trail records, remove and
+  deprecate operations, and Root MCP write exposure.
+
 Example successful proposal result:
 
 ```json
@@ -461,6 +478,7 @@ Current read surfaces:
 
 - SDK: `sdk.data.entities.list_entities` and
   `sdk.data.entities.resolve_text`.
+- SDK durable device alias write: `sdk.data.entities.add_device_alias`.
 - Yjs: compact read-only projection under `registry.named_entities`.
 - Root MCP / AdaOSDevPlane: `adaos_dev.get_named_entity_registry`, exposed to
   Codex as `get_named_entity_registry`, returns the same compact registry as a
@@ -746,8 +764,10 @@ action routing.
 - [x] Add `sdk.data.entities` read helpers.
 - [x] Add first alias-management proposal/apply helpers with policy metadata
   and lifecycle event envelopes.
-- [ ] Add durable alias-management commands with `base_fingerprint`, audit
-  metadata, and authoritative source persistence.
+- [x] Add first durable device/browser alias-management command through
+  `access_links`, `device_access`, and `sdk.data.entities.add_device_alias`.
+- [ ] Add `base_fingerprint`, audit metadata, remove/deprecate operations, and
+  profile-owned alias persistence.
 - [ ] Update skill templates so LLM-authored skills consume canonical refs
   rather than raw labels.
 - [ ] Update `browsers_skill`, `infrastate_skill`, and `infrascope_skill` to
@@ -769,7 +789,7 @@ action routing.
   available.
 - [ ] A newly registered browser receives a useful draft name such as
   `Edge on Windows`.
-- [ ] A phrase using a newly added device alias resolves to the correct
+- [x] A phrase using a newly added device alias resolves to the correct
   canonical ref without retraining Rasa or the neural model.
 - [ ] Ambiguous aliases produce a clarification path instead of silent wrong
   dispatch.
