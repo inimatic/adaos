@@ -309,6 +309,15 @@ Target service:
 - Root MCP should expose named-entity descriptors through governed read
   capability before allowing alias writes.
 
+Current read surfaces:
+
+- SDK: `sdk.data.entities.list_entities` and
+  `sdk.data.entities.resolve_text`.
+- Yjs: compact read-only projection under `registry.named_entities`.
+- Root MCP / AdaOSDevPlane: `adaos_dev.get_named_entity_registry`, exposed to
+  Codex as `get_named_entity_registry`, returns the same compact registry as a
+  descriptor payload and accepts optional `webspace_id` and `kind` filters.
+
 ## UI behavior
 
 The UI should call a shared name resolver instead of duplicating fallback rules.
@@ -555,7 +564,7 @@ action routing.
 
 ### Phase 5 - MCP and LLM authoring
 
-- [ ] Expose named-entity descriptors through Root MCP read capabilities.
+- [x] Expose named-entity descriptors through Root MCP read capabilities.
 - [ ] Add governed alias proposal/apply flows for LLM-assisted correction.
 - [ ] Include named entities in NLUAuthoringPlane context.
 - [ ] Add audit records for alias changes and conflict resolution.

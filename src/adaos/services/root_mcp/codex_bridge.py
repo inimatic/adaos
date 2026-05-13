@@ -243,7 +243,7 @@ class CodexRootMcpBridge:
             "This MCP server is a local stdio bridge from Codex to AdaOS Root MCP. "
             f"It is currently bound to {target} using {bootstrap}. "
             "For descriptive AdaOS programming context, prefer get_architecture_catalog, get_sdk_metadata, "
-            "get_template_catalog, and public registry summaries from AdaOSDevPlane. "
+            "get_template_catalog, named entity registry, and public registry summaries from AdaOSDevPlane. "
             "For operational context, prefer get_status, get_runtime_summary, and get_operational_surface "
             "before requesting logs or healthchecks."
         )
@@ -288,6 +288,18 @@ class CodexRootMcpBridge:
                 "name": "get_public_scenario_registry",
                 "description": "Read the published workspace scenario registry summary through AdaOSDevPlane.",
                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+            {
+                "name": "get_named_entity_registry",
+                "description": "Read the compact canonical named-entity registry through AdaOSDevPlane.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "kind": {"type": "string", "description": "Optional entity kind filter, such as device.browser or skill."},
+                    },
+                    "additionalProperties": False,
+                },
             },
             {
                 "name": "get_profileops_status",
@@ -661,6 +673,13 @@ class CodexRootMcpBridge:
             return _tool_text(client.get_adaos_dev_public_skill_registry())
         if tool == "get_public_scenario_registry":
             return _tool_text(client.get_adaos_dev_public_scenario_registry())
+        if tool == "get_named_entity_registry":
+            return _tool_text(
+                client.get_adaos_dev_named_entity_registry(
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    kind=_normalize_text(args.get("kind")),
+                )
+            )
         if tool == "get_profileops_status":
             return _tool_text(client.get_profileops_status(self._effective_target_id(args)))
         if tool == "list_profileops_sessions":
