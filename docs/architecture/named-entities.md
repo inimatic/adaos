@@ -411,11 +411,18 @@ Current durable device/browser implementation:
 - `sdk.data.entities.add_device_alias` is the recommended SDK helper when a
   generated skill or operator tool needs to add an alias for a concrete
   `device:browser:<id>` or `device:member:<id>` ref.
+- `base_fingerprint` is an optional stale-write guard. Callers should read the
+  current entity fingerprint from `get_named_entity_registry` or
+  `sdk.data.entities.list_entities` and pass it back when applying a change.
+  If the entity changed meanwhile, the proposal returns `status: "stale"` and
+  no durable mutation happens.
 - The implementation intentionally does not persist into the read-only Yjs
   projection. Yjs receives the compact registry after
   `entity.registry.changed` invalidates the read model.
-- Remaining hardening: `base_fingerprint`, audit trail records, remove and
-  deprecate operations, profile-owned aliases, and remote target routing.
+- Root MCP writes append a dedicated `entity.alias.add` audit record in
+  addition to the generic MCP invocation envelope.
+- Remaining hardening: remove and deprecate operations, profile-owned aliases,
+  richer conflict-resolution UX, and remote target routing.
 
 Example successful proposal result:
 
@@ -479,6 +486,8 @@ Current read surfaces:
 - SDK: `sdk.data.entities.list_entities` and
   `sdk.data.entities.resolve_text`.
 - SDK durable device alias write: `sdk.data.entities.add_device_alias`.
+- Registry items carry a stable `fingerprint` for optimistic concurrency on
+  human/LLM-authored writes.
 - Yjs: compact read-only projection under `registry.named_entities`.
 - Root MCP / AdaOSDevPlane: `adaos_dev.get_named_entity_registry`, exposed to
   Codex as `get_named_entity_registry`, returns the same compact registry as a
@@ -490,6 +499,7 @@ Current read surfaces:
 - Root MCP / NLUAuthoringPlane write: `nlu_authoring.add_device_alias`, exposed
   to Codex as `add_device_alias`, writes through the governed access-link
   source and requires `development.write.named_entities` / `ProfileOpsControl`.
+  The tool accepts `base_fingerprint` and emits a domain audit record.
 
 ## UI behavior
 
@@ -769,8 +779,9 @@ action routing.
   and lifecycle event envelopes.
 - [x] Add first durable device/browser alias-management command through
   `access_links`, `device_access`, and `sdk.data.entities.add_device_alias`.
-- [ ] Add `base_fingerprint`, audit metadata, remove/deprecate operations, and
-  profile-owned alias persistence.
+- [x] Add `base_fingerprint` stale-write protection for governed device alias
+  writes.
+- [ ] Add remove/deprecate operations and profile-owned alias persistence.
 - [ ] Update skill templates so LLM-authored skills consume canonical refs
   rather than raw labels.
 - [ ] Update `browsers_skill`, `infrastate_skill`, and `infrascope_skill` to
@@ -783,10 +794,12 @@ action routing.
   correction.
 - [x] Expose governed device alias add through Root MCP / NLUAuthoringPlane
   with a write capability separated from read-only profiles.
+- [x] Add a dedicated Root MCP domain audit record for governed device alias
+  writes.
 - [ ] Expose remove/deprecate and profile-owned alias proposal/apply flows
   through Root MCP after those durable commands exist.
 - [x] Include named entities in NLUAuthoringPlane context.
-- [ ] Add audit records for alias changes and conflict resolution.
+- [ ] Add richer conflict-resolution audit views and operator UX.
 
 ### Acceptance criteria
 

@@ -289,7 +289,17 @@ def test_add_device_alias_requires_policy_and_delegates_to_access_links(monkeypa
     }
     calls: list[tuple[str, str, str, str | None, str | None, str | None]] = []
 
-    def _fake_add_alias(kind, link_id, alias, *, locale=None, actor=None, source="access_links", request_id=None):
+    def _fake_add_alias(
+        kind,
+        link_id,
+        alias,
+        *,
+        locale=None,
+        actor=None,
+        source="access_links",
+        request_id=None,
+        base_fingerprint=None,
+    ):
         calls.append((kind, link_id, alias, locale, actor, source))
         return {"ok": True, "status": "applied", "entry": {"id": link_id}}
 

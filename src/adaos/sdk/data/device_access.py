@@ -30,6 +30,7 @@ def add_device_alias(
     locale: str | None = None,
     actor: str | None = None,
     request_id: str | None = None,
+    base_fingerprint: str | None = None,
 ) -> dict:
     return _service.add_device_alias(
         str(device_ref or ""),
@@ -37,6 +38,7 @@ def add_device_alias(
         locale=locale,
         actor=actor,
         request_id=request_id,
+        base_fingerprint=base_fingerprint,
     )
 
 

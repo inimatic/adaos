@@ -1472,7 +1472,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 93%.
+- Overall: 95%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1496,10 +1496,13 @@ Integration progress:
   `access_links`, `device_access.add_device_alias`,
   `sdk.data.entities.add_device_alias`, authoritative alias lifecycle event
   publishing, Root MCP / NLUAuthoringPlane `add_device_alias` write exposure
-  guarded by `development.write.named_entities`, and focused tests.
-- Current implementation slice: governed alias write exposure through Root MCP.
-- Not started yet: audit trail storage, remove/deprecate alias operations,
-  profile-owned aliases, remote target routing, and consumer migration.
+  guarded by `development.write.named_entities`, entity-level fingerprints,
+  `base_fingerprint` stale-write protection, dedicated Root MCP
+  `entity.alias.add` audit records, and focused tests.
+- Current implementation slice: stale-write protection and domain audit for
+  governed alias writes.
+- Not started yet: remove/deprecate alias operations, profile-owned aliases,
+  conflict-resolution UX, remote target routing, and consumer migration.
 - Verification note: targeted MCP/named-entity checks pass, and
   `test_root_mcp_foundation` is green again after test fixture alignment. The
   broader Yjs projection runs still expose pre-existing
@@ -1520,9 +1523,9 @@ Next implementation steps:
 1. Start migrating node/browser labels to the shared display helper.
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
-3. Add `base_fingerprint` and audit metadata to the durable device alias write
-   path.
-4. Add audit records and conflict-resolution UX around Root MCP alias writes.
+3. Add remove/deprecate alias operations with the same fingerprint/audit
+   contract.
+4. Add conflict-resolution UX around Root MCP alias writes.
 5. Migrate node/browser labels to shared display helpers in remaining skill
    projections.
 
@@ -1613,6 +1616,8 @@ Actions:
 - [x] Include named entities in NLUAuthoringPlane context.
 - [x] Expose governed device alias add through Root MCP / NLUAuthoringPlane
   with a write capability separated from `ProfileOpsRead`.
+- [x] Expose entity `fingerprint` values and accept `base_fingerprint` on
+  governed alias writes.
 
 #### NER-005: Integrate named entities with the operational event model
 
@@ -1632,10 +1637,12 @@ Actions:
   apply contract.
 - [x] Include `locale` or `locale: "und"` in the first authoritative alias-add
   lifecycle events.
+- [x] Add stale-write protection through `base_fingerprint` and explicit
+  `status: stale` results.
 - [ ] Emit `entity.alias.conflict.detected`,
   `entity.resolution.ambiguous`, and `entity.resolution.failed` into
   Notifications and node skill logs when operator attention is useful.
-- [ ] Add dedicated audit trail records for Root MCP alias writes beyond the
+- [x] Add dedicated audit trail records for Root MCP alias writes beyond the
   generic Root MCP invocation audit envelope.
 - [ ] Treat `entity.registry.changed` as the cache invalidation signal for
   `EntityResolver` and demanded name-rendering projections. The compact Yjs

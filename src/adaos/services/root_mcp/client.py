@@ -174,6 +174,7 @@ class RootMcpClient:
         alias: str,
         locale: str | None = None,
         actor: str | None = None,
+        base_fingerprint: str | None = None,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
@@ -186,6 +187,8 @@ class RootMcpClient:
             arguments["locale"] = str(locale)
         if actor:
             arguments["actor"] = str(actor)
+        if base_fingerprint:
+            arguments["base_fingerprint"] = str(base_fingerprint)
         if request_id:
             arguments["request_id"] = str(request_id)
         return self.call(
