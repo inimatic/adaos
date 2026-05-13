@@ -16,7 +16,7 @@ adaos api restart
 - `8777` and `8778` are the browser-discoverable local hub ports.
 - Use a port such as `8779` if you want the browser client to stay on Root instead of auto-attaching to the local runtime.
 - Supervisor-managed runtime mode is separate: it owns port `8776`, manages slots, and sets `ADAOS_SUPERVISOR_ENABLED=1`.
-- Direct development `adaos api serve` does not participate in supervisor-driven core update or slot cutover flows.
+- Development runtimes with `ENV_TYPE=dev` do not follow hub/root core-update signals by default; set `ADAOS_DEV_ALLOW_CORE_UPDATE=1` only when deliberately testing the update machinery.
 
 The API command manages a local FastAPI process and keeps a pidfile in runtime state. On restart and stop it attempts graceful shutdown first, then falls back to process termination when necessary.
 

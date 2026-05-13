@@ -38,7 +38,35 @@ mod = importlib.import_module("adaos.services.subnet.link_client")
 def test_member_link_client_skips_hub_follow_when_node_config_disables_updates(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
+    monkeypatch.delenv("ENV_TYPE", raising=False)
     monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(core_update_enabled=False)))
+
+    def _fail_post_local_admin(*_args, **_kwargs):
+        raise AssertionError("local admin must not be called")
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_post_local_admin", staticmethod(_fail_post_local_admin))
+
+    asyncio.run(
+        client._follow_hub_core_update(
+            {
+                "state": "countdown",
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "abc123",
+            }
+        )
+    )
+
+    assert client._last_follow_key == ""
+    assert client._last_follow_result == {}
+
+
+def test_member_link_client_skips_hub_follow_in_dev_environment(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
+    monkeypatch.delenv("ADAOS_DEV_ALLOW_CORE_UPDATE", raising=False)
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(core_update_enabled=True)))
 
     def _fail_post_local_admin(*_args, **_kwargs):
         raise AssertionError("local admin must not be called")

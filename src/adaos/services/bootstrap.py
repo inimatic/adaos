@@ -247,15 +247,20 @@ def _dev_without_supervisor() -> bool:
 
 
 def _dev_api_serve_core_update_sync_disabled() -> bool:
-    launch_mode = str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip().lower()
-    if launch_mode != "api_serve":
-        return False
-    return str(os.getenv("ADAOS_API_SERVE_ALLOW_CORE_UPDATE") or "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    try:
+        from adaos.services.core_update_policy import core_update_reactions_disabled_reason
+
+        return core_update_reactions_disabled_reason() is not None
+    except Exception:
+        launch_mode = str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip().lower()
+        if launch_mode != "api_serve":
+            return False
+        return str(os.getenv("ADAOS_API_SERVE_ALLOW_CORE_UPDATE") or "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
 
 def _supervisor_local_bases() -> list[str]:

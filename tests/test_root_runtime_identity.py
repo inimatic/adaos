@@ -112,6 +112,27 @@ def test_core_update_reconcile_skips_dev_api_serve(monkeypatch) -> None:
     }
 
 
+def test_core_update_reconcile_skips_dev_environment(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
+    monkeypatch.delenv("ADAOS_DEV_ALLOW_CORE_UPDATE", raising=False)
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    monkeypatch.setattr(
+        core_update_sync,
+        "_root_client",
+        lambda _conf: (_ for _ in ()).throw(AssertionError("root client must not be used")),
+    )
+
+    conf = SimpleNamespace(subnet_id="sn-test", node_id="node-1", role="hub")
+
+    result = core_update_sync.reconcile_hub_core_update(conf)
+
+    assert result == {
+        "ok": True,
+        "skipped": True,
+        "reason": "dev_core_update_reactions_disabled",
+    }
+
+
 def test_core_update_reconcile_skips_when_node_config_disables_updates(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
     monkeypatch.setattr(

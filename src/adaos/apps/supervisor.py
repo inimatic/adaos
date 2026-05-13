@@ -56,6 +56,7 @@ from adaos.services.core_update import resolved_root_promotion_requirement
 from adaos.services.core_update import rollback_installed_skill_runtimes
 from adaos.services.core_update import write_plan as write_core_update_plan
 from adaos.services.core_update import write_status as write_core_update_status
+from adaos.services.core_update_policy import core_update_reactions_disabled_reason
 from adaos.services.node_config import load_config
 from adaos.services.realtime_sidecar import (
     probe_realtime_sidecar_ready,
@@ -6080,6 +6081,16 @@ class SupervisorManager:
             drain_timeout_sec=drain_timeout_sec,
             signal_delay_sec=signal_delay_sec,
         )
+        disabled_reason = core_update_reactions_disabled_reason()
+        if disabled_reason:
+            return {
+                "ok": True,
+                "accepted": False,
+                "skipped": True,
+                "reason": disabled_reason,
+                "status": read_core_update_status(),
+                "_served_by": "supervisor",
+            }
         current_status = read_core_update_status()
         current_attempt = _read_update_attempt()
         if _is_transition_in_progress(current_status, current_attempt):
