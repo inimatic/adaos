@@ -72,6 +72,7 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     client.get_subnet_info(target_id="hub:test-zone")
     client.call("development.list_descriptor_sets", request_id="req-1")
     client.get_adaos_dev_named_entity_registry(webspace_id="desktop", kind="device.browser")
+    client.get_nlu_authoring_context(webspace_id="desktop", kind="skill", request_locale="ru", preferred_locales=["en"])
 
     assert config.headers()["Authorization"] == "Bearer access-123"
     assert config.headers()["X-AdaOS-Subnet-Id"] == "subnet:test-zone"
@@ -163,3 +164,8 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     assert stub.calls[49][2]["json"]["tool_id"] == "adaos_dev.get_named_entity_registry"
     assert stub.calls[49][2]["json"]["arguments"]["webspace_id"] == "desktop"
     assert stub.calls[49][2]["json"]["arguments"]["kind"] == "device.browser"
+    assert stub.calls[50][2]["json"]["tool_id"] == "nlu_authoring.get_context"
+    assert stub.calls[50][2]["json"]["arguments"]["webspace_id"] == "desktop"
+    assert stub.calls[50][2]["json"]["arguments"]["kind"] == "skill"
+    assert stub.calls[50][2]["json"]["arguments"]["request_locale"] == "ru"
+    assert stub.calls[50][2]["json"]["arguments"]["preferred_locales"] == ["en"]

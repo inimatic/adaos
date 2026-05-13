@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import importlib
 import json
 import sys
 import types
@@ -9,11 +10,17 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 if "y_py" not in sys.modules:
-    sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
+    try:
+        importlib.import_module("y_py")
+    except ModuleNotFoundError:
+        sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
 if "ypy_websocket" not in sys.modules:
-    ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
-    sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
-    sys.modules["ypy_websocket.ystore"] = ystore_mod
+    try:
+        importlib.import_module("ypy_websocket")
+    except ModuleNotFoundError:
+        ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
+        sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
+        sys.modules["ypy_websocket.ystore"] = ystore_mod
 
 from adaos.apps.cli.commands import dev as dev_cmd
 from adaos.services.root_mcp import codex_bridge as bridge_mod
@@ -56,6 +63,29 @@ class _FakeRootMcpClient:
                     "webspace_id": webspace_id or "desktop",
                     "items": [{"canonical_ref": "device:browser:browser-1", "kind": kind or "device.browser"}],
                 }
+            }
+        }
+
+    def get_nlu_authoring_context(
+        self,
+        *,
+        webspace_id: str | None = None,
+        kind: str | None = None,
+        request_locale: str | None = None,
+        preferred_locales: list[str] | None = None,
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_nlu_authoring_context",
+                webspace_id or "",
+                {"kind": kind, "request_locale": request_locale, "preferred_locales": preferred_locales or []},
+            )
+        )
+        return {
+            "context": {
+                "plane_id": "nlu_authoring",
+                "webspace_id": webspace_id or "desktop",
+                "named_entities": {"items": [{"canonical_ref": "device:browser:browser-1", "kind": kind or "device.browser"}]},
             }
         }
 
@@ -334,6 +364,17 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "params": {"name": "get_named_entity_registry", "arguments": {"webspace_id": "desktop", "kind": "device.browser"}},
         }
     )
+    nlu_context = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {
+                "name": "get_nlu_authoring_context",
+                "arguments": {"webspace_id": "desktop", "kind": "device.browser", "request_locale": "ru", "preferred_locales": ["en"]},
+            },
+        }
+    )
     profileops = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -390,6 +431,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert "get_status" in tool_names
     assert "get_architecture_catalog" in tool_names
     assert "get_named_entity_registry" in tool_names
+    assert "get_nlu_authoring_context" in tool_names
     assert "get_sdk_metadata" in tool_names
     assert "get_profileops_status" in tool_names
     assert "list_profileops_sessions" in tool_names
@@ -406,6 +448,8 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert architecture["result"]["structuredContent"]["descriptor"]["payload"]["page_count"] == 3
     assert named_entities is not None
     assert named_entities["result"]["structuredContent"]["descriptor"]["payload"]["items"][0]["canonical_ref"] == "device:browser:browser-1"
+    assert nlu_context is not None
+    assert nlu_context["result"]["structuredContent"]["context"]["plane_id"] == "nlu_authoring"
     assert profileops is not None
     assert profileops["result"]["structuredContent"]["latest_session"]["session_id"] == "mem-001"
     assert profileops_start is not None
@@ -419,6 +463,11 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert ("get_target_status", "hub:test-subnet", {}) in fake_client.calls
     assert ("get_adaos_dev_architecture_catalog", "", {}) in fake_client.calls
     assert ("get_adaos_dev_named_entity_registry", "desktop", {"kind": "device.browser"}) in fake_client.calls
+    assert (
+        "get_nlu_authoring_context",
+        "desktop",
+        {"kind": "device.browser", "request_locale": "ru", "preferred_locales": ["en"]},
+    ) in fake_client.calls
     assert ("get_profileops_status", "hub:test-subnet", {}) in fake_client.calls
     assert ("start_profileops_session", "hub:test-subnet", {"profile_mode": "trace_profile", "reason": "root_mcp.memory.start", "trigger_source": "root_mcp"}) in fake_client.calls
     assert ("get_yjs_load_mark_history", "desktop", {"limit": 25, "kind": "owner", "bucket_id": "_by_owner/unknown", "display_contains": None, "status": None, "last_source": None, "since_ts": None, "until_ts": None}) in fake_client.calls
