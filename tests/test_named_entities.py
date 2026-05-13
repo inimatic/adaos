@@ -400,6 +400,113 @@ def test_entity_event_payload_carries_locale_metadata() -> None:
     assert payload["preferred_locales"] == ["ru-RU", "ru", "en"]
 
 
+def test_governed_alias_add_returns_updated_record_and_lifecycle_events() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen Display",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    proposal = service.propose_alias_add(
+        canonical_ref="device:member:node-1",
+        alias="kitchen screen",
+        locale="en",
+        actor="user:operator",
+        source="test",
+        request_id="req-1",
+    )
+    result = service.apply_alias_add(proposal)
+
+    assert proposal.ok is True
+    assert proposal.status == "proposed"
+    assert result.ok is True
+    assert result.status == "applied"
+    assert result.updated_record is not None
+    assert {
+        "text": "kitchen screen",
+        "locale": "en",
+        "role": "alias",
+        "status": "confirmed",
+        "source": "test",
+    } in [item.to_dict() for item in result.updated_record.label_records()]
+    assert [item["topic"] for item in result.events] == [
+        named_entities.ENTITY_ALIAS_ADDED,
+        named_entities.ENTITY_REGISTRY_CHANGED,
+    ]
+    assert result.events[0]["payload"]["locale"] == "en"
+    assert result.events[0]["payload"]["current"]["label"]["text"] == "kitchen screen"
+
+
+def test_governed_alias_add_reports_conflict_without_mutation() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen Display",
+            ),
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:browser:browser-1",
+                kind="device.browser",
+                labels=[named_entities.EntityLabel(text="screen", locale="en", role="alias")],
+            ),
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    proposal = service.propose_alias_add(
+        canonical_ref="device:member:node-1",
+        alias="screen",
+        locale="en",
+        source="test",
+    )
+    result = service.apply_alias_add(proposal)
+
+    assert proposal.ok is False
+    assert proposal.status == "conflict"
+    assert proposal.conflicts[0]["canonical_ref"] == "device:browser:browser-1"
+    assert result.ok is False
+    assert result.updated_record is None
+    assert [item["topic"] for item in result.events] == [named_entities.ENTITY_ALIAS_CONFLICT_DETECTED]
+    assert result.events[0]["payload"]["current"]["conflicts"][0]["canonical_ref"] == "device:browser:browser-1"
+
+
+def test_sdk_entities_alias_helpers_delegate_to_named_entity_service(monkeypatch) -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen Display",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
+
+    from adaos.sdk.data import entities as sdk_entities
+
+    proposal = sdk_entities.propose_alias_add(
+        canonical_ref="device:member:node-1",
+        alias="kitchen screen",
+        locale="en",
+    )
+    result = sdk_entities.apply_alias_add(proposal)
+
+    assert proposal["status"] == "proposed"
+    assert result["ok"] is True
+    assert result["status"] == "applied"
+    assert result["updated_record"]["labels"][-1]["text"] == "kitchen screen"
+
+
 @pytest.mark.anyio
 async def test_project_named_entity_registry_writes_compact_yjs_branch(monkeypatch) -> None:
     from adaos.services import named_entity_projection
