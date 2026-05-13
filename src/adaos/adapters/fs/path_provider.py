@@ -2,7 +2,16 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from adaos.services.settings import Settings
+
+
+_SAFE_LOG_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _safe_log_token(value: str) -> str:
+    token = _SAFE_LOG_TOKEN_RE.sub("_", str(value or "").strip())
+    return token.strip("._-") or "unknown"
 
 
 @dataclass(slots=True)
@@ -87,6 +96,15 @@ class PathProvider:
 
     def logs_dir(self) -> Path:
         return (self.base / "logs").resolve()
+
+    def skill_service_log_path(self, skill_name: str) -> Path:
+        return (self.logs_dir() / f"service.{_safe_log_token(skill_name)}.log").resolve()
+
+    def skill_runtime_log_path(self, skill_name: str) -> Path:
+        return (self.logs_dir() / f"service.{_safe_log_token(skill_name)}.runtime.log").resolve()
+
+    def skill_ui_diagnostics_log_path(self, skill_name: str) -> Path:
+        return (self.logs_dir() / f"service.{_safe_log_token(skill_name)}.ui_runtime.log").resolve()
 
     def cache_dir(self) -> Path:
         return (self.base / "cache").resolve()

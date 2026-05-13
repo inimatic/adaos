@@ -64,6 +64,7 @@ from adaos.services.realtime_sidecar import (
     restart_realtime_sidecar_subprocess,
 )
 from adaos.services.root_mcp.logs import list_local_logs, normalize_log_category
+from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
 from adaos.services.system_model.service import (
     current_inventory_projection,
@@ -1101,6 +1102,11 @@ class InfraAccessActionRequest(BaseModel):
     ttl_seconds: int | None = None
 
 
+class UiRuntimeDiagnosticsRequest(BaseModel):
+    webspace_id: str | None = None
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 def _raise_400(detail: str) -> None:
     raise HTTPException(status_code=400, detail=detail)
 
@@ -1596,6 +1602,14 @@ async def node_logs(
         )
 
     return {"ok": True, "logs": await anyio.to_thread.run_sync(_load_logs)}
+
+
+@router.post("/ui/diagnostics", dependencies=[Depends(require_token)])
+async def node_ui_runtime_diagnostics(payload: UiRuntimeDiagnosticsRequest) -> dict[str, Any]:
+    return await ingest_ui_runtime_diagnostics(
+        {"webspace_id": payload.webspace_id, "events": payload.events},
+        webspace_id=payload.webspace_id,
+    )
 
 
 @router.post("/infrastate/action", dependencies=[Depends(require_token)])

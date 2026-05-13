@@ -538,7 +538,8 @@ class ServiceSkillSupervisor:
         logs_dir = self._ctx.paths.logs_dir()
         logs_dir = Path(logs_dir() if callable(logs_dir) else logs_dir)
         logs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = logs_dir / f"service.{name}.log"
+        log_path_fn = getattr(self._ctx.paths, "skill_service_log_path", None)
+        log_path = Path(log_path_fn(name)) if callable(log_path_fn) else logs_dir / f"service.{name}.log"
 
         _log.info("starting service skill=%s cmd=%s cwd=%s", name, cmd, spec.workdir)
         with open(log_path, "a", encoding="utf-8") as logf:
@@ -687,7 +688,8 @@ class ServiceSkillSupervisor:
             return []
         logs_dir = self._ctx.paths.logs_dir()
         logs_dir = Path(logs_dir() if callable(logs_dir) else logs_dir)
-        path = logs_dir / f"service.{skill}.log"
+        log_path_fn = getattr(self._ctx.paths, "skill_service_log_path", None)
+        path = Path(log_path_fn(skill)) if callable(log_path_fn) else logs_dir / f"service.{skill}.log"
         if not path.exists():
             return []
         try:

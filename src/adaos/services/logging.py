@@ -127,6 +127,92 @@ class PrefixMinLevelFilter(logging.Filter):
         return True
 
 
+def _current_skill_context():
+    try:
+        from adaos.services.agent_context import get_ctx  # pylint: disable=import-outside-toplevel
+
+        skill_ctx = getattr(get_ctx(), "skill_ctx", None)
+        if skill_ctx is None:
+            return None
+        return skill_ctx.get()
+    except Exception:
+        return None
+
+
+class SuppressSkillContextFilter(logging.Filter):
+    """Keep skill-scoped records out of the platform-wide adaos.log handlers."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _current_skill_context() is None
+
+
+class SkillContextLogRouter(logging.Handler):
+    """Mirror adaos.* records emitted inside a skill context into that skill log."""
+
+    def __init__(
+        self,
+        paths: PathProvider,
+        *,
+        level: int,
+        max_bytes: int = 5_000_000,
+        backup_count: int = 3,
+    ) -> None:
+        super().__init__(level=level)
+        self._paths = paths
+        self._max_bytes = max_bytes
+        self._backup_count = backup_count
+        self._handlers: dict[Path, RotatingFileHandler] = {}
+        self.setFormatter(JsonFormatter())
+
+    def emit(self, record: logging.LogRecord) -> None:
+        current = _current_skill_context()
+        skill_name = str(getattr(current, "name", "") or "").strip() if current is not None else ""
+        if not skill_name:
+            return
+        try:
+            path = self._resolve_path(current)
+            handler = self._handler_for(path)
+            handler.handle(record)
+        except Exception:
+            self.handleError(record)
+
+    def close(self) -> None:
+        for handler in list(self._handlers.values()):
+            try:
+                handler.close()
+            except Exception:
+                pass
+        self._handlers.clear()
+        super().close()
+
+    def _resolve_path(self, current: object) -> Path:
+        explicit = getattr(current, "runtime_log_path", None)
+        if explicit:
+            return Path(explicit)
+        skill_name = str(getattr(current, "name", "") or "").strip()
+        fn = getattr(self._paths, "skill_runtime_log_path", None)
+        if callable(fn):
+            return Path(fn(skill_name))
+        return Path(self._paths.logs_dir()) / f"service.{skill_name}.runtime.log"
+
+    def _handler_for(self, path: Path) -> RotatingFileHandler:
+        resolved = path.resolve()
+        handler = self._handlers.get(resolved)
+        if handler is not None:
+            return handler
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            resolved,
+            maxBytes=self._max_bytes,
+            backupCount=self._backup_count,
+            encoding="utf-8",
+        )
+        handler.setLevel(self.level)
+        handler.setFormatter(self.formatter or JsonFormatter())
+        self._handlers[resolved] = handler
+        return handler
+
+
 def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     """
     Настройка логов:
@@ -150,6 +236,13 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     file_h = RotatingFileHandler(logfile, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
     file_h.setFormatter(JsonFormatter())
     file_h.setLevel(logger.level)
+
+    if str(os.getenv("ADAOS_LOG_ROUTE_SKILL_CONTEXT", "1") or "1").strip() != "0":
+        skill_filter = SuppressSkillContextFilter()
+        stream_h.addFilter(skill_filter)
+        file_h.addFilter(skill_filter)
+        skill_h = SkillContextLogRouter(paths, level=logger.level)
+        logger.addHandler(skill_h)
 
     logger.addHandler(stream_h)
     logger.addHandler(file_h)
