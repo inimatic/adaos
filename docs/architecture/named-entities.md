@@ -124,6 +124,11 @@ Firefox on Linux
 Chrome on Android Tablet
 ```
 
+Current implementation captures browser metadata from the Yjs/browser session
+handshake as `browser_family`, `os_name`, `form_factor`, and `user_agent`.
+Those fields are stored as observed facts in `access_links`; they may produce a
+`draft_name`, but they do not overwrite a user-confirmed `display_name`.
+
 If multiple devices would receive the same draft name, the resolver may append
 a stable suffix such as `#2` until the user confirms a better name.
 
@@ -268,6 +273,10 @@ Operational rules:
   materializations.
 - `entity.registry.changed` invalidates `EntityResolver` snapshots and any
   demanded projections that render affected names.
+- Authoritative sources should emit `entity.registry.changed` only when fields
+  that affect the compact entity read model change. Reconnects and transient
+  online/offline state should not force a registry projection refresh by
+  themselves.
 - Successful high-volume resolutions should normally stay in NLU trace, not the
   global event log.
 - Ambiguity, failed resolution, alias conflict, and dev-mode resolver details
@@ -283,7 +292,7 @@ for them.
 Initial source owners:
 
 - `access_links`: durable browser/member access policy and user-confirmed
-  device display names.
+  device display names, plus observed browser metadata from Yjs handshakes.
 - `subnet_directory`: remembered member node metadata and runtime snapshots.
 - live browser/member transports: transient presence and observed names.
 - workspace/scenario/skill manifests: stable software object ids and labels.
@@ -485,32 +494,36 @@ action routing.
 - [x] Add the initial named-entity event contract to the Operational Event
   Model.
 - [x] Define the coarse vertical implementation slices.
-- [ ] Add a JSON schema or dataclass for `NamedEntityRecord`.
-- [ ] Add a JSON schema or dataclass for `EntityResolutionResult`.
-- [ ] Decide the first public Yjs projection path and privacy constraints.
+- [x] Add a JSON schema or dataclass for `NamedEntityRecord`.
+- [x] Add a JSON schema or dataclass for `EntityResolutionResult`.
+- [x] Decide the first public Yjs projection path and privacy constraints.
 
 ### Phase 1 - Read model and display consistency
 
-- [ ] Add `NamedEntityService` as a read model over device inventory, system
-  model, manifests, and workspace registry.
-- [ ] Add golden fixtures for node, browser, webspace, scenario, skill, app,
+- [x] Add initial `NamedEntityService` coverage for device inventory and
+  manifest-backed lookup tables.
+- [x] Add golden tests for node, browser, webspace, scenario, skill, app,
   alias, and ambiguity examples.
+- [ ] Extend `NamedEntityService` coverage to the full system model and
+  workspace registry.
 - [ ] Emit `entity.observed`, `entity.draft_name.suggested`,
   `entity.display_name.changed`, alias lifecycle, and conflict events from the
   authoritative source services.
+- [x] Emit `entity.registry.changed` from `access_links` when browser/member
+  naming fields change.
 - [ ] Add shared name-resolution helpers for node/device display labels.
 - [ ] Make node labels prefer user name, node names, observed hostname, then
   `Node N`.
-- [ ] Generate browser draft names from browser family, OS, and form factor at
+- [x] Generate browser draft names from browser family, OS, and form factor at
   registration time.
 - [ ] Add conflict detection for duplicate display names and aliases inside the
   same scope.
-- [ ] Add a resolver cache invalidation path driven by
+- [x] Add a registry projection invalidation path driven by
   `entity.registry.changed`.
 
 ### Phase 2 - NLU canonicalization
 
-- [ ] Add an NLU resolver dry-run mode that records trace without changing
+- [x] Add an NLU resolver dry-run mode that records trace without changing
   dispatch.
 - [ ] Add `EntityResolver` preprocessing for `nlp.intent.detect.request`.
 - [ ] Add `resolved_entities`, `normalized_text`, and ambiguity records to NLU
@@ -533,7 +546,7 @@ action routing.
 
 ### Phase 4 - SDK and skill migration
 
-- [ ] Add `sdk.data.entities` read helpers.
+- [x] Add `sdk.data.entities` read helpers.
 - [ ] Add alias-management commands with policy and audit metadata.
 - [ ] Update skill templates so LLM-authored skills consume canonical refs
   rather than raw labels.

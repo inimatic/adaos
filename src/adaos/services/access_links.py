@@ -154,6 +154,81 @@ def _updated(entry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
+_ENTITY_REGISTRY_FIELDS = {
+    "access_class",
+    "browser_family",
+    "display_name",
+    "form_factor",
+    "hostname",
+    "last_webspace_id",
+    "node_names",
+    "os_name",
+    "revoked",
+    "user_agent",
+}
+
+
+def _entity_registry_view(entry: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        return {}
+    kind: LinkKind = "member" if str(entry.get("kind") or "").strip() == "member" else "browser"
+    normalized = _normalize_entry(kind, str(entry.get("id") or ""), entry)
+    return {key: normalized.get(key) for key in sorted(_ENTITY_REGISTRY_FIELDS)}
+
+
+def _entity_registry_fields_changed(
+    previous: Mapping[str, Any] | None,
+    current: Mapping[str, Any] | None,
+) -> bool:
+    return _entity_registry_view(previous) != _entity_registry_view(current)
+
+
+def _emit_entity_registry_changed(
+    kind: LinkKind,
+    previous: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+    *,
+    reason: str,
+) -> None:
+    try:
+        from adaos.services import named_entities
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.eventbus import emit as bus_emit
+
+        entry_id = str(current.get("id") or "").strip()
+        if not entry_id:
+            return
+        webspace_id = str(current.get("last_webspace_id") or "").strip()
+        payload = named_entities.entity_event_payload(
+            entity_ref=f"device:{kind}:{entry_id}",
+            entity_kind=f"device.{kind}",
+            source="access_links",
+            scope={
+                "device_id": entry_id,
+                "link_kind": kind,
+                **({"webspace_id": webspace_id} if webspace_id else {}),
+            },
+            previous=_entity_registry_view(previous),
+            current=_entity_registry_view(current),
+            reason=reason,
+        )
+        bus_emit(get_ctx().bus, named_entities.ENTITY_REGISTRY_CHANGED, payload, source="access_links")
+    except Exception:
+        # Device naming must never break the browser/member access path.
+        return
+
+
+def _emit_entity_registry_changed_if_needed(
+    kind: LinkKind,
+    previous: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+    *,
+    reason: str,
+) -> None:
+    if _entity_registry_fields_changed(previous, current):
+        _emit_entity_registry_changed(kind, previous, current, reason=reason)
+
+
 def get_link(kind: LinkKind, entry_id: str) -> dict[str, Any] | None:
     registry = _load_registry()
     if kind == "browser":
@@ -210,6 +285,10 @@ def touch_browser_session(
     webspace_id: str | None = None,
     connection_state: str | None = None,
     online: bool | None = None,
+    browser_family: str | None = None,
+    os_name: str | None = None,
+    form_factor: str | None = None,
+    user_agent: str | None = None,
 ) -> dict[str, Any] | None:
     token = str(device_id or "").strip()
     if not token:
@@ -217,6 +296,7 @@ def touch_browser_session(
     registry = _load_registry()
     _purge_expired_browsers(registry)
     entry = _get_entry(registry, "browser", token) or _normalize_entry("browser", token, {})
+    previous = dict(entry)
     entry.setdefault("display_name", "")
     entry.setdefault("access_class", "device")
     entry.setdefault("autorotate", True)
@@ -228,9 +308,18 @@ def touch_browser_session(
         entry["connection_state"] = str(connection_state or "").strip().lower() or None
     if online is not None:
         entry["online"] = bool(online)
+    if browser_family is not None:
+        entry["browser_family"] = str(browser_family or "").strip() or None
+    if os_name is not None:
+        entry["os_name"] = str(os_name or "").strip() or None
+    if form_factor is not None:
+        entry["form_factor"] = str(form_factor or "").strip() or None
+    if user_agent is not None:
+        entry["user_agent"] = str(user_agent or "").strip() or None
     entry = _updated(entry)
     saved = _put_entry(registry, "browser", entry)
     _save_registry(registry)
+    _emit_entity_registry_changed_if_needed("browser", previous, saved, reason="browser_session.changed")
     return saved
 
 
@@ -247,6 +336,7 @@ def touch_member_link(
         return None
     registry = _load_registry()
     entry = _get_entry(registry, "member", token) or _normalize_entry("member", token, {})
+    previous = dict(entry)
     entry.setdefault("access_class", "device")
     entry.setdefault("autorotate", True)
     entry.setdefault("lifetime_mode", "permanent")
@@ -262,6 +352,7 @@ def touch_member_link(
     entry = _updated(entry)
     saved = _put_entry(registry, "member", entry)
     _save_registry(registry)
+    _emit_entity_registry_changed_if_needed("member", previous, saved, reason="member_link.changed")
     return saved
 
 
@@ -271,10 +362,12 @@ def rename_link(kind: LinkKind, entry_id: str, display_name: str) -> dict[str, A
         raise ValueError("entry id is required")
     registry = _load_registry()
     entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
+    previous = dict(entry)
     entry["display_name"] = str(display_name or "").strip()
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
+    _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="display_name.changed")
     return saved
 
 
@@ -284,6 +377,7 @@ def upsert_link(kind: LinkKind, entry_id: str, patch: Mapping[str, Any] | None =
         raise ValueError("entry id is required")
     registry = _load_registry()
     entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
+    previous = dict(entry)
     payload = dict(patch or {})
     for key, value in payload.items():
         if key in {"id", "kind"}:
@@ -292,6 +386,7 @@ def upsert_link(kind: LinkKind, entry_id: str, patch: Mapping[str, Any] | None =
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
+    _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="link.upserted")
     return saved
 
 
@@ -308,6 +403,7 @@ def set_link_lifetime(kind: LinkKind, entry_id: str, preset: str) -> dict[str, A
     }
     registry = _load_registry()
     entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
+    previous = dict(entry)
     entry["revoked"] = False
     entry["revoked_at"] = None
     entry["autorotate"] = True
@@ -323,6 +419,7 @@ def set_link_lifetime(kind: LinkKind, entry_id: str, preset: str) -> dict[str, A
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
+    _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="lifetime.changed")
     return saved
 
 
@@ -332,6 +429,7 @@ def detach_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
         raise ValueError("entry id is required")
     registry = _load_registry()
     entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
+    previous = dict(entry)
     entry["revoked"] = True
     entry["revoked_at"] = _now_ts()
     entry["online"] = False
@@ -339,6 +437,7 @@ def detach_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
+    _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="link.detached")
     return saved
 
 
