@@ -249,7 +249,7 @@ def _json_safe(value: Any, *, depth: int) -> Any:
 
 def _safe_log_token(value: str) -> str:
     token = _SAFE_LOG_TOKEN_RE.sub("_", str(value or "").strip())
-    return token.strip("._-") or "unknown"
+    return token.strip(".") or "unknown"
 
 
 def _normalize_level(value: Any) -> str:

@@ -11,7 +11,7 @@ _SAFE_LOG_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 def _safe_log_token(value: str) -> str:
     token = _SAFE_LOG_TOKEN_RE.sub("_", str(value or "").strip())
-    return token.strip("._-") or "unknown"
+    return token.strip(".") or "unknown"
 
 
 @dataclass(slots=True)
