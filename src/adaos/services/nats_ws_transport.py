@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import ParseResult
 
+from adaos.services.nats_errors import is_transient_nats_error, nats_error_summary
+
 _ORIG_NATS_WS_TRANSPORT: Any | None = None
 _ORIG_NATS_WS_TRANSPORT_CLIENT: Any | None = None
 _TRANSPORT_LOG = logging.getLogger("adaos.hub-io.transport")
@@ -1776,9 +1778,11 @@ class WebSocketTransportWebsockets:
                 try:
                     ws = self._ws
                     ws_state = getattr(ws, "state", None)
+                    transient = is_transient_nats_error(e)
+                    label = "nats ws recv transient close" if transient else "nats ws recv failed"
                     _emit_hub_io_console_log(
-                        "nats ws recv failed "
-                        f"url={self._adaos_ws_url} err={type(e).__name__}: {e} "
+                        f"{label} "
+                        f"url={self._adaos_ws_url} err={nats_error_summary(e)} "
                         f"code={getattr(e, 'code', None)} reason={getattr(e, 'reason', None)} "
                         f"rcvd={getattr(e, 'rcvd', None)} sent={getattr(e, 'sent', None)} state={ws_state}",
                         level=logging.WARNING,
