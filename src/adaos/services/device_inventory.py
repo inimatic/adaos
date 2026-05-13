@@ -297,6 +297,10 @@ class DeviceInventoryService:
                         "hostname": hostname,
                         "node_names": [],
                         "base_url": None,
+                        "browser_family": _text_or_none(entry.get("browser_family")),
+                        "os_name": _text_or_none(entry.get("os_name")),
+                        "form_factor": _text_or_none(entry.get("form_factor")),
+                        "user_agent": _text_or_none(entry.get("user_agent")),
                     },
                     "policy": _build_policy_block(
                         kind="browser",

@@ -66,6 +66,37 @@ def test_named_entity_service_builds_device_records_from_inventory() -> None:
     assert records[0].observed_name == "ZVERZVE-A1BNQF7"
 
 
+def test_named_entity_service_suggests_browser_draft_name_without_display_overwrite() -> None:
+    service = named_entities.NamedEntityService(
+        device_inventory_service=_FakeDeviceInventory(
+            [
+                {
+                    "ref": "browser:browser-1",
+                    "kind": "browser",
+                    "identity": {
+                        "browser_device_id": "browser-1",
+                        "browser_family": "edge",
+                        "os_name": "windows",
+                        "form_factor": "desktop",
+                    },
+                    "policy": {"display_name": "", "managed_state": "observed_only"},
+                    "observation": {"source": "browser_session", "last_seen_at": 120.0},
+                    "diagnostics": {},
+                }
+            ]
+        ),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    record = service.list_entities()[0]
+
+    assert record.canonical_ref == "device:browser:browser-1"
+    assert record.display_name is None
+    assert record.draft_name == "Edge on Windows"
+    assert record.display_label == "Edge on Windows"
+    assert record.status == "draft"
+
+
 def test_resolver_matches_exact_labels_without_dispatch_side_effects() -> None:
     service = named_entities.NamedEntityService(
         static_entities=[

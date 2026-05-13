@@ -1365,14 +1365,15 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 38%.
+- Overall: 42%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
-  skill lookup adapter, exact resolver, SDK read helpers, NLU dry-run trace
-  subscriber, compact read-only `registry.named_entities` projection,
-  live-room-safe NLU trace writes, voice/chat router live-room writes,
-  read-only NLU Yjs reads, and focused tests.
+  skill lookup adapter, browser draft-name helper, exact resolver, SDK read
+  helpers, NLU dry-run trace subscriber, compact read-only
+  `registry.named_entities` projection, live-room-safe NLU trace writes,
+  voice/chat router live-room writes, read-only NLU Yjs reads, and focused
+  tests.
 - Current implementation slice: finish read-only registry coverage, then make
   `entity.registry.changed` the explicit invalidation signal for resolver and
   name-rendering consumers.
@@ -1389,7 +1390,8 @@ Next implementation steps:
 
 1. Emit `entity.registry.changed` from authoritative source transitions without
    introducing alias/display-name writes yet.
-2. Add browser/node draft-name generation as observed-only metadata.
+2. Wire browser metadata capture from the client/gateway path so draft names
+   use browser family, OS, and form factor when available.
 3. Expose the compact named-entity registry in diagnostics/MCP read context.
 4. Start migrating node/browser labels to the shared display helper.
 
@@ -1426,7 +1428,7 @@ Actions:
 
 - [ ] Prefer user-confirmed display name, then node names, then observed
   hostname/browser+OS, then `Node N`.
-- [ ] Generate draft names for newly registered browsers.
+- [x] Generate draft names for newly registered browsers.
 - [ ] Make observed-only device rename flow explicitly adopt or adopt+rename.
 - [ ] Add conflict diagnostics for duplicate display names or aliases.
 - [ ] Invalidate display-name consumers through `entity.registry.changed`

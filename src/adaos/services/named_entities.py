@@ -104,6 +104,53 @@ def compatibility_device_ref(canonical_ref: str) -> str:
     return token[len(prefix) :]
 
 
+def _title_token(value: Any) -> str:
+    token = _text(value)
+    if not token:
+        return ""
+    known = {
+        "android": "Android",
+        "chrome": "Chrome",
+        "edge": "Edge",
+        "firefox": "Firefox",
+        "ios": "iOS",
+        "iphone": "iPhone",
+        "ipad": "iPad",
+        "linux": "Linux",
+        "mac": "Mac",
+        "macos": "macOS",
+        "safari": "Safari",
+        "tablet": "Tablet",
+        "windows": "Windows",
+    }
+    folded = token.casefold().replace("_", " ").replace("-", " ")
+    return known.get(folded, " ".join(part.capitalize() for part in folded.split()))
+
+
+def _browser_draft_name(identity: Mapping[str, Any], *, fallback: str) -> str | None:
+    browser = _title_token(
+        identity.get("browser_family")
+        or identity.get("browser_name")
+        or identity.get("browser")
+    )
+    os_name = _title_token(identity.get("os_name") or identity.get("os") or identity.get("platform"))
+    form_factor = _title_token(identity.get("form_factor") or identity.get("device_type"))
+    if form_factor.casefold() in {"desktop", "computer", "pc"}:
+        form_factor = ""
+    if browser and os_name and form_factor:
+        return f"{browser} on {os_name} {form_factor}"
+    if browser and os_name:
+        return f"{browser} on {os_name}"
+    if browser:
+        return f"{browser} browser"
+    if os_name:
+        return f"Browser on {os_name}"
+    short_id = _text(fallback)
+    if short_id:
+        return f"Browser {short_id[-6:]}" if len(short_id) > 6 else f"Browser {short_id}"
+    return None
+
+
 @dataclass(frozen=True)
 class NamedEntityRecord:
     canonical_ref: str
@@ -291,16 +338,19 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
     if kind_token == "browser":
         entity_kind = "device.browser"
         fallback = _text(identity.get("browser_device_id")) or compatibility_device_ref(canonical_ref)
+        draft_name = _browser_draft_name(identity, fallback=fallback)
     elif kind_token == "member":
         entity_kind = "device.member"
         fallback = _text(identity.get("node_id")) or compatibility_device_ref(canonical_ref)
+        draft_name = None
     else:
         entity_kind = f"device.{kind_token}" if kind_token else "device"
         fallback = compatibility_device_ref(canonical_ref)
+        draft_name = None
     display_name = _text_or_none(policy.get("display_name"))
     registered_names = _tuple_of_texts(identity.get("node_names"))
     observed_name = _text_or_none(identity.get("hostname"))
-    status: EntityStatus = "confirmed" if display_name else "observed"
+    status: EntityStatus = "confirmed" if display_name else "draft" if draft_name else "observed"
     updated_at = observation.get("last_seen_at") if isinstance(observation.get("last_seen_at"), (int, float)) else None
     return NamedEntityRecord(
         canonical_ref=canonical_ref,
@@ -308,6 +358,7 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
         display_name=display_name,
         registered_names=registered_names,
         observed_name=observed_name,
+        draft_name=draft_name,
         fallback_label=fallback,
         scope={
             "node_id": identity.get("node_id"),
@@ -319,6 +370,7 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
             "display_name": "access_links" if display_name else None,
             "registered_names": "device_inventory",
             "observed_name": observation.get("source") or "device_inventory",
+            "draft_name": "named_entity_service.browser_draft" if draft_name else None,
             "diagnostics": diagnostics,
         },
         status=status,
