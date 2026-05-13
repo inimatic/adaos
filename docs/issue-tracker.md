@@ -1365,15 +1365,15 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 20%.
+- Overall: 25%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
-  exact resolver, SDK read helpers, and focused tests.
-- Current implementation slice: wire dry-run diagnostics before dispatch
-  changes.
-- Not started yet: runtime registry, resolver dry-run, governed writes, MCP,
-  and consumer migration.
+  exact resolver, SDK read helpers, NLU dry-run trace subscriber, and focused
+  tests.
+- Current implementation slice: make dry-run diagnostics visible on a live hub
+  and then start cache invalidation/events.
+- Not started yet: governed writes, MCP, and consumer migration.
 
 Human verification:
 
@@ -1432,11 +1432,11 @@ Actions:
 
 #### NER-003: Add NLU entity canonicalization
 
-Status: planned.
+Status: in progress.
 
 Actions:
 
-- [ ] Add a resolver dry-run mode that records NLU trace without changing
+- [x] Add a resolver dry-run mode that records NLU trace without changing
   dispatch behavior.
 - [ ] Resolve registered names and aliases before or alongside
   `nlp.intent.detect.request`.
