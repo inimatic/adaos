@@ -96,6 +96,9 @@ class TestPaths:
     def state_dir(self) -> Path:
         return self._state
 
+    def root_mcp_state_dir(self) -> Path:
+        return self._state / "root_mcp"
+
     def cache_dir(self) -> Path:
         return self._cache
 
@@ -104,6 +107,9 @@ class TestPaths:
 
     def models_dir(self) -> Path:
         return self._models
+
+    def mcp_dir(self) -> Path:
+        return self._base / "mcp"
 
     def tmp_dir(self) -> Path:
         return self._tmp

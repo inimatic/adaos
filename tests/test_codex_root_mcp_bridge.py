@@ -566,7 +566,6 @@ def test_prepare_codex_writes_profile_and_prints_command(tmp_path: Path, monkeyp
         "_resolve_root_mcp_management_client",
         lambda **kwargs: (_FakeSetupClient(), _Cfg(), "owner_bearer"),
     )
-    monkeypatch.setattr(dev_cmd, "_repo_root_dir", lambda: tmp_path)
 
     result = CliRunner().invoke(dev_cmd.mcp_app, ["prepare-codex", "--json"])
 
