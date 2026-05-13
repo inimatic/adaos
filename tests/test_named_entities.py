@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
+import pytest
+
 from adaos.services import named_entities
 
 
@@ -150,6 +154,7 @@ def test_named_entity_service_projects_lookup_tables_as_addressed_entities() -> 
                 "app_id": [{"value": "browsers_app", "labels": ["Browsers"]}],
                 "scenario_id": [{"value": "web_desktop"}],
                 "webspace_id": [{"value": "desktop"}],
+                "skill_id": [{"value": "browsers_skill", "labels": ["Browsers Skill", "browser tools"]}],
                 "node_ref": [{"value": "Node 0", "labels": ["Node 0"]}],
             },
         }
@@ -168,7 +173,75 @@ def test_named_entity_service_projects_lookup_tables_as_addressed_entities() -> 
     assert "app:browsers_app" in refs
     assert "scenario:web_desktop" in refs
     assert "webspace:desktop" in refs
+    assert "skill:browsers_skill" in refs
+    assert refs["skill:browsers_skill"].display_label == "Browsers Skill"
+    assert refs["skill:browsers_skill"].aliases == ("browser tools",)
     assert "node:Node 0" not in refs
 
     result = service.resolve_text("open Browser Link Settings", webspace_id="desktop")
     assert result.resolved_entities[0].canonical_ref == "modal:browser_link_settings_modal"
+
+
+def test_compact_registry_payload_is_ui_safe_and_fingerprinted() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="skill:browsers_skill",
+                kind="skill",
+                display_name="Browsers Skill",
+                aliases=("browser tools",),
+                source="test",
+                status="confirmed",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    payload = named_entities.compact_registry_payload(service=service, webspace_id="desktop")
+
+    assert payload["version"] == 1
+    assert payload["webspace_id"] == "desktop"
+    assert payload["items"] == [
+        {
+            "canonical_ref": "skill:browsers_skill",
+            "kind": "skill",
+            "display_label": "Browsers Skill",
+            "status": "confirmed",
+            "scope": {},
+            "source": "test",
+        }
+    ]
+    assert payload["summary"]["count"] == 1
+    assert payload["summary"]["fingerprint"]
+
+
+@pytest.mark.anyio
+async def test_project_named_entity_registry_writes_compact_yjs_branch(monkeypatch) -> None:
+    from adaos.services import named_entity_projection
+    from adaos.services.yjs.doc import async_get_ydoc
+    from adaos.services.yjs.store import reset_ystore_for_webspace
+
+    webspace_id = f"named-entities-{uuid4().hex}"
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="skill:browsers_skill",
+                kind="skill",
+                display_name="Browsers Skill",
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+    monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
+
+    try:
+        payload = await named_entity_projection.project_named_entity_registry(webspace_id=webspace_id)
+
+        async with async_get_ydoc(webspace_id, read_only=True, load_mark_roots=["registry"]) as ydoc:
+            current = ydoc.get_map("registry").get("named_entities")
+        assert current["summary"]["fingerprint"] == payload["summary"]["fingerprint"]
+        assert current["items"][0]["canonical_ref"] == "skill:browsers_skill"
+    finally:
+        reset_ystore_for_webspace(webspace_id)

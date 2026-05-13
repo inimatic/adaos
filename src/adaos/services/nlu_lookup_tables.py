@@ -6,11 +6,13 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+import yaml
+
 from adaos.services.agent_context import AgentContext, get_ctx
 
 _log = logging.getLogger(__name__)
 
-LOOKUP_NAMES = ("modal_id", "node_ref", "app_id", "scenario_id", "webspace_id")
+LOOKUP_NAMES = ("modal_id", "node_ref", "app_id", "scenario_id", "webspace_id", "skill_id")
 DEFAULT_WEBSPACE_ID = "desktop"
 
 
@@ -70,6 +72,14 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _read_yaml(path: Path) -> Any:
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
+        return None
+
+
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -123,6 +133,13 @@ def _add_modal_entry(buckets: dict[str, dict[str, dict[str, Any]]], key: str | N
     item_map = _as_mapping(item)
     modal_id = key or item_map.get("id") or item_map.get("modal_id")
     _add(buckets, "modal_id", modal_id, source=source, label=item_map.get("title") or item_map.get("name"))
+
+
+def _add_skill_entry(buckets: dict[str, dict[str, dict[str, Any]]], key: str | None, item: Any, *, source: str) -> None:
+    item_map = _as_mapping(item)
+    skill_id = key or item_map.get("id") or item_map.get("skill_id") or item_map.get("name")
+    label = item_map.get("title") or item_map.get("display_name") or item_map.get("label") or item_map.get("name")
+    _add(buckets, "skill_id", skill_id, source=source, label=label)
 
 
 def _collect_from_manifest(
@@ -209,9 +226,20 @@ def _collect_workspace_manifests(buckets: dict[str, dict[str, dict[str, Any]]], 
     for skills_dir in skill_roots:
         if not skills_dir.exists():
             continue
+        for skill_dir in sorted(child for child in skills_dir.iterdir() if child.is_dir() and not child.name.startswith(".")):
+            _add_skill_entry(buckets, skill_dir.name, {}, source=f"skill.{skill_dir.name}.dir")
+            for manifest_name in ("skill.yaml", "skill.yml"):
+                manifest_path = skill_dir / manifest_name
+                if not manifest_path.exists():
+                    continue
+                doc = _read_yaml(manifest_path)
+                if isinstance(doc, Mapping):
+                    _add_skill_entry(buckets, skill_dir.name, doc, source=f"skill.{skill_dir.name}.{manifest_name}")
+                break
         for path in sorted(skills_dir.glob("*/webui.json")):
             doc = _read_json(path)
             if isinstance(doc, Mapping):
+                _add_skill_entry(buckets, path.parent.name, doc, source=f"{path.parent.name}.webui")
                 _collect_from_manifest(buckets, doc, source=path.parent.name)
 
     scenario_roots = _unique_paths(
