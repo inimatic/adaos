@@ -1900,15 +1900,18 @@ class BootstrapService:
             pass
         diag_log = logging.getLogger("adaos.diagnostics")
         startup_log = logging.getLogger("adaos.startup")
+        startup_stage_logs_enabled = str(os.getenv("ADAOS_STARTUP_STAGE_LOGS") or "").strip().lower() in {"1", "true", "yes", "on"}
 
         def _startup_stage_mark(stage: str, *, started: float | None = None, failed: Exception | None = None) -> float:
             now = time.perf_counter()
             if started is None:
-                startup_log.info("startup stage start stage=%s", stage)
+                if startup_stage_logs_enabled:
+                    startup_log.info("startup stage start stage=%s", stage)
                 return now
             duration = now - started
             if failed is None:
-                startup_log.info("startup stage done stage=%s duration_s=%.3f", stage, duration)
+                if startup_stage_logs_enabled:
+                    startup_log.info("startup stage done stage=%s duration_s=%.3f", stage, duration)
             else:
                 startup_log.warning(
                     "startup stage failed stage=%s duration_s=%.3f error=%s",
