@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from adaos.services import named_entities as _service
@@ -15,12 +16,16 @@ def resolve_text(
     kind: str | None = None,
     include_fallback: bool = False,
     webspace_id: str | None = None,
+    request_locale: str | None = None,
+    preferred_locales: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     return _service.resolve_text(
         text,
         kind=kind,
         include_fallback=include_fallback,
         webspace_id=webspace_id,
+        request_locale=request_locale,
+        preferred_locales=preferred_locales,
     )
 
 

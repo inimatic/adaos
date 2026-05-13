@@ -36,6 +36,33 @@ def test_named_entity_display_priority_prefers_registered_over_fallback() -> Non
     assert [label for label, _kind in record.label_candidates(include_fallback=True)][-1] == "Node 0"
 
 
+def test_named_entity_record_exposes_locale_label_metadata() -> None:
+    record = named_entities.NamedEntityRecord(
+        canonical_ref="device:member:node-1",
+        kind="device.member",
+        display_name="Kitchen Display",
+        labels=[
+            {
+                "text": "кухонный экран",
+                "locale": "ru",
+                "role": "alias",
+                "source": "user",
+            }
+        ],
+    )
+
+    labels = record.to_dict()["labels"]
+
+    assert {"text": "Kitchen Display", "locale": "und", "role": "display", "status": "confirmed"} in labels
+    assert {
+        "text": "кухонный экран",
+        "locale": "ru",
+        "role": "alias",
+        "status": "confirmed",
+        "source": "user",
+    } in labels
+
+
 def test_named_entity_service_builds_device_records_from_inventory() -> None:
     service = named_entities.NamedEntityService(
         device_inventory_service=_FakeDeviceInventory(
@@ -117,6 +144,39 @@ def test_resolver_matches_exact_labels_without_dispatch_side_effects() -> None:
     assert [item.canonical_ref for item in result.resolved_entities] == ["device:member:node-1"]
     assert result.resolved_entities[0].match_type == "alias"
     assert result.ambiguities == ()
+
+
+def test_resolver_accepts_locale_hints_without_changing_canonical_refs() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen Display",
+                labels=[
+                    named_entities.EntityLabel(
+                        text="кухонный экран",
+                        locale="ru",
+                        role="alias",
+                        source="user",
+                    )
+                ],
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    result = service.resolve_text(
+        "покажи логи кухонный экран",
+        request_locale="ru-RU",
+        preferred_locales=("en",),
+    )
+
+    assert [item.canonical_ref for item in result.resolved_entities] == ["device:member:node-1"]
+    assert result.resolved_entities[0].locale == "ru"
+    assert result.to_dict()["request_locale"] == "ru-RU"
+    assert result.to_dict()["preferred_locales"] == ["ru-RU", "ru", "en"]
 
 
 def test_resolver_reports_ambiguity_instead_of_guessing() -> None:
@@ -238,6 +298,22 @@ def test_compact_registry_payload_is_ui_safe_and_fingerprinted() -> None:
             "canonical_ref": "skill:browsers_skill",
             "kind": "skill",
             "display_label": "Browsers Skill",
+            "labels": [
+                {
+                    "text": "Browsers Skill",
+                    "locale": "und",
+                    "role": "display",
+                    "status": "confirmed",
+                    "source": "test",
+                },
+                {
+                    "text": "browser tools",
+                    "locale": "und",
+                    "role": "alias",
+                    "status": "confirmed",
+                    "source": "test",
+                },
+            ],
             "status": "confirmed",
             "scope": {},
             "source": "test",
@@ -270,11 +346,58 @@ def test_compact_registry_payload_reports_label_conflicts_without_resolving_them
     payload = named_entities.compact_registry_payload(service=service, webspace_id="desktop")
 
     assert payload["summary"]["conflict_count"] == 1
+    assert payload["conflicts"][0]["locale"] == "und"
     assert payload["conflicts"][0]["normalized"] == "kitchen"
     assert {item["canonical_ref"] for item in payload["conflicts"][0]["candidates"]} == {
         "device:browser:browser-1",
         "device:member:node-1",
     }
+
+
+def test_compact_registry_payload_reports_conflicts_per_locale() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                labels=[
+                    named_entities.EntityLabel(text="экран", locale="ru", role="alias"),
+                    named_entities.EntityLabel(text="screen", locale="en", role="alias"),
+                ],
+            ),
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:browser:browser-1",
+                kind="device.browser",
+                labels=[
+                    named_entities.EntityLabel(text="экран", locale="ru", role="alias"),
+                    named_entities.EntityLabel(text="screen", locale="en", role="alias"),
+                ],
+            ),
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    payload = named_entities.compact_registry_payload(service=service, webspace_id="desktop")
+
+    assert payload["summary"]["conflict_count"] == 2
+    assert {(item["locale"], item["normalized"]) for item in payload["conflicts"]} == {
+        ("en", "screen"),
+        ("ru", "экран"),
+    }
+
+
+def test_entity_event_payload_carries_locale_metadata() -> None:
+    payload = named_entities.entity_event_payload(
+        entity_ref="device:member:node-1",
+        entity_kind="device.member",
+        source="test",
+        locale="ru-RU",
+        preferred_locales=("en",),
+    )
+
+    assert payload["locale"] == "ru-RU"
+    assert payload["preferred_locales"] == ["ru-RU", "ru", "en"]
 
 
 @pytest.mark.anyio
