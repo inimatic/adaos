@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from adaos.services import access_links
+from adaos.services import named_entities
 from adaos.services.yjs import gateway_ws
 
 
@@ -89,3 +90,76 @@ def test_yws_browser_session_metadata_accepts_client_handshake_fields() -> None:
         "user_agent": "Mozilla/5.0 Edg/123",
     }
 
+
+def test_add_browser_alias_persists_label_and_updates_named_entity_resolution(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(access_links, "_emit_entity_event_envelopes", lambda events: emitted.extend(events))
+
+    access_links.touch_browser_session(
+        "dev-browser",
+        webspace_id="desktop",
+        browser_family="Edge",
+        os_name="Windows",
+        form_factor="Desktop",
+    )
+
+    result = access_links.add_link_alias(
+        "browser",
+        "dev-browser",
+        "work browser",
+        locale="en",
+        actor="user:operator",
+        request_id="req-1",
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "applied"
+    assert result["entry"]["labels"] == [
+        {
+            "text": "work browser",
+            "locale": "en",
+            "role": "alias",
+            "status": "confirmed",
+            "source": "access_links",
+            "actor": "user:operator",
+            "request_id": "req-1",
+            "created_at": result["entry"]["labels"][0]["created_at"],
+        }
+    ]
+    assert [event["topic"] for event in emitted] == [
+        named_entities.ENTITY_ALIAS_ADDED,
+        named_entities.ENTITY_REGISTRY_CHANGED,
+    ]
+
+    resolved = named_entities.resolve_text(
+        "open work browser settings",
+        kind="device.browser",
+        request_locale="en",
+    )
+
+    assert resolved["resolved_entities"][0]["canonical_ref"] == "device:browser:dev-browser"
+    assert resolved["resolved_entities"][0]["match_type"] == "alias"
+    assert resolved["resolved_entities"][0]["locale"] == "en"
+
+
+def test_add_browser_alias_conflict_does_not_mutate_registry(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(access_links, "_emit_entity_event_envelopes", lambda events: emitted.extend(events))
+
+    access_links.touch_browser_session("browser-1", webspace_id="desktop")
+    access_links.touch_browser_session("browser-2", webspace_id="desktop")
+    first = access_links.add_link_alias("browser", "browser-1", "screen", locale="en")
+    emitted.clear()
+
+    second = access_links.add_link_alias("browser", "browser-2", "screen", locale="en")
+
+    assert first["ok"] is True
+    assert second["ok"] is False
+    assert second["status"] == "conflict"
+    assert second["proposal"]["conflicts"][0]["canonical_ref"] == "device:browser:browser-1"
+    assert access_links.get_link("browser", "browser-2")["labels"] == []
+    assert [event["topic"] for event in emitted] == [
+        named_entities.ENTITY_ALIAS_CONFLICT_DETECTED,
+    ]
