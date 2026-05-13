@@ -64,7 +64,6 @@ def build_entity_trace_stage(payload: Mapping[str, Any]) -> dict[str, Any] | Non
         "via": "named_entity.dry_run",
         "confidence": confidence,
         "raw": {
-            "named_entities": raw,
             "resolved_entities": raw.get("resolved_entities") or [],
             "ambiguities": raw.get("ambiguities") or [],
             "normalized_text": raw.get("normalized_text"),

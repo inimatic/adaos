@@ -1365,12 +1365,12 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 25%.
+- Overall: 27%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
-  exact resolver, SDK read helpers, NLU dry-run trace subscriber, and focused
-  tests.
+  exact resolver, SDK read helpers, NLU dry-run trace subscriber, live-room-safe
+  NLU trace writes, and focused tests.
 - Current implementation slice: make dry-run diagnostics visible on a live hub
   and then start cache invalidation/events.
 - Not started yet: governed writes, MCP, and consumer migration.
