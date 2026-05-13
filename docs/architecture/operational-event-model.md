@@ -12,6 +12,8 @@ The implementation order for this target state is tracked in
 
 For the target typed ref vocabulary used by browser-facing manifests and
 projection-aware runtime contracts, see [UI Addressing](ui-addressing.md).
+For the target runtime naming and alias model that feeds NLU canonicalization,
+see [Named Entities and Canonical Naming](named-entities.md).
 
 ## Why This Exists
 
@@ -23,6 +25,7 @@ The main problems are:
 - skills often know more than the active UI currently needs
 - multiple webspaces may be open at the same time in different browsers
 - page, widget, modal, and panel surfaces may need different projections concurrently
+- human-facing names, observed hostnames, aliases, and canonical refs change over time and must not be baked into model training
 - the platform itself emits system messages, failures, and diagnostics that do not belong to one skill
 - the same domain event may affect many potential projections, but only a few are actually demanded
 
@@ -30,6 +33,7 @@ The target model therefore separates:
 
 - domain truth
 - internal runtime interaction between core and skills
+- named-entity lifecycle and canonical resolution
 - UI demand for projections
 - projection lifecycle state
 - platform-originated operational messages and diagnostics
@@ -62,6 +66,24 @@ Examples:
 
 This interaction layer is where the main architectural value sits.
 Browser-facing materialization is a downstream consumer of that model, not its whole purpose.
+
+### 1b. Named Entity Lifecycle Events
+
+AdaOS also needs explicit events for human-facing names, observed names,
+aliases, canonical refs, and resolution diagnostics.
+
+Examples:
+
+- a node hostname was observed and can be used as a display fallback
+- a browser draft name was suggested during registration
+- a user confirmed or changed a device display name
+- an alias was added, removed, deprecated, or found to conflict
+- an NLU request could not resolve an entity name unambiguously
+
+These events bridge runtime truth and language understanding.
+They are not projection payloads by themselves.
+They update the named-entity read model, invalidate resolver snapshots, and may
+produce operator-facing diagnostics when ambiguity or conflict matters.
 
 ### 2. UI Intent Events
 
@@ -399,6 +421,29 @@ Examples:
 - inventory changes
 - policy and governance changes
 
+### Named Entity Lifecycle Events
+
+Examples:
+
+- `entity.observed`
+- `entity.draft_name.suggested`
+- `entity.display_name.changed`
+- `entity.alias.added`
+- `entity.alias.removed`
+- `entity.alias.conflict.detected`
+- `entity.registry.changed`
+- `entity.resolution.ambiguous`
+- `entity.resolution.failed`
+
+Entity lifecycle events should carry canonical refs whenever known, source
+authority, scope, actor, previous/current values, and conflict or ambiguity
+metadata.
+
+Successful high-volume resolution traces do not need to be persisted as global
+events by default.
+Conflicts, failed resolutions, ambiguous resolutions, and dev-mode diagnostics
+should be eligible for Notifications, node skill logs, and future MCP analysis.
+
 ### Projection Demand Events
 
 Examples:
@@ -446,6 +491,7 @@ For core services, browser-facing skills, scenario-support services, and shared 
 ### They should do
 
 - subscribe to domain, core-interaction, or platform events needed to maintain semantic context
+- use named-entity events and canonical refs instead of duplicating name fallback logic
 - keep richer semantic and derived state in memory when useful
 - restore active projection demand from Yjs on startup
 - materialize only demanded projections per webspace
@@ -460,6 +506,7 @@ For core services, browser-facing skills, scenario-support services, and shared 
 - assume one browser per webspace
 - assume one effective node view in shared Yjs state
 - infer all UI demand from domain events alone
+- silently pick one entity when a human-facing name is ambiguous
 
 ## Candidate Early Consumers and Architectural Prerequisites
 
@@ -474,9 +521,13 @@ The best architectural preparation steps are:
 
 1. core and skill interaction contract
    The event model should first become a real runtime contract between core-owned services and skills.
-2. client/runtime projection adapter
+2. named-entity lifecycle contract
+   Names, aliases, observed labels, conflicts, and canonical refs should become
+   a shared runtime contract before NLU and UI surfaces duplicate fallback
+   behavior.
+3. client/runtime projection adapter
    The browser and shared runtime need a stable way to register demand and consume projection lifecycle state.
-3. node-scoped Yjs envelope
+4. node-scoped Yjs envelope
    Shared Yjs space should gain explicit room for per-node branches before higher-level scenario pilots rely on it.
 
 After those prerequisites, the best early scenario and skill candidates are:
@@ -499,6 +550,7 @@ The platform should also be treated as an early first-class emitter for:
 - operator-visible errors
 - materialization diagnostics
 - browser/runtime transport state
+- named-entity conflicts and ambiguous user references
 
 This emitter track is important because it exercises the event model before every skill is migrated.
 
@@ -527,15 +579,18 @@ The intended implementation order for this architecture is:
    Harden node-browser and runtime communication semantics first.
 2. `core/runtime event contract`
    Introduce the shared taxonomy and ownership rules for domain, core-skill, and platform events.
-3. `node-aware Yjs envelope`
+3. `named-entity event contract`
+   Define canonical refs, name/alias lifecycle events, resolver invalidation,
+   and ambiguity diagnostics before NLU and UI consumers depend on them.
+4. `node-aware Yjs envelope`
    Reserve explicit node-scoped and projection-scoped branches in shared Yjs state.
-4. `client projection adapter`
+5. `client projection adapter`
    Teach the browser runtime to register demand, consume projection lifecycle state, and stop assuming a single anonymous node view.
-5. `shared projection dispatcher`
+6. `shared projection dispatcher`
    Add one reusable runtime path for `event -> in-memory update -> demanded projection refresh`.
-6. `platform-emitted projections`
+7. `platform-emitted projections`
    Migrate notifications, diagnostics, and system errors as the first real emitted projections.
-7. `heavy skill pilots`
+8. `heavy skill pilots`
    Only after the above layers are stable should complex skills such as `Infrascope` migrate to the new model.
 
 This ordering should be treated as part of the target architecture, not just an implementation suggestion.
