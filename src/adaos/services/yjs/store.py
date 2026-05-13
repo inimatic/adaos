@@ -376,7 +376,9 @@ class AdaosMemoryYStore(BaseYStore):
             task_status.started()
             return
         self._running = True
-        self.started.set()
+        started = getattr(self, "started", None) or self._started
+        if started is not None:
+            started.set()
         task_status.started()
 
     def stop(self) -> None:
