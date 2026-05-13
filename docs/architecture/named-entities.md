@@ -531,8 +531,10 @@ action routing.
   registered/observed names everywhere.
 - [x] Generate browser draft names from browser family, OS, and form factor at
   registration time.
-- [ ] Add conflict detection for duplicate display names and aliases inside the
-  same scope.
+- [x] Report read-only duplicate display-name/alias conflicts in the compact
+  registry payload for diagnostics and MCP clients.
+- [ ] Emit conflict events or notifications for duplicate display names and
+  aliases inside the same scope.
 - [x] Add a registry projection invalidation path driven by
   `entity.registry.changed`.
 

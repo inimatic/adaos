@@ -244,7 +244,37 @@ def test_compact_registry_payload_is_ui_safe_and_fingerprinted() -> None:
         }
     ]
     assert payload["summary"]["count"] == 1
+    assert payload["summary"]["conflict_count"] == 0
+    assert payload["conflicts"] == []
     assert payload["summary"]["fingerprint"]
+
+
+def test_compact_registry_payload_reports_label_conflicts_without_resolving_them() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen",
+            ),
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:browser:browser-1",
+                kind="device.browser",
+                aliases=("Kitchen",),
+            ),
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    payload = named_entities.compact_registry_payload(service=service, webspace_id="desktop")
+
+    assert payload["summary"]["conflict_count"] == 1
+    assert payload["conflicts"][0]["normalized"] == "kitchen"
+    assert {item["canonical_ref"] for item in payload["conflicts"][0]["candidates"]} == {
+        "device:browser:browser-1",
+        "device:member:node-1",
+    }
 
 
 @pytest.mark.anyio
