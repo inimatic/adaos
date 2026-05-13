@@ -43,6 +43,7 @@ EntityMatchType = Literal[
     "alias",
     "fallback_label",
 ]
+EntityLabelRole = Literal["display", "registered", "observed", "draft", "alias", "fallback"]
 
 
 _SPACE_RE = re.compile(r"\s+")
@@ -76,6 +77,50 @@ def _tuple_of_texts(value: Any) -> tuple[str, ...]:
         seen.add(folded)
         out.append(token)
     return tuple(out)
+
+
+def _locale(value: Any) -> str:
+    token = _text(value)
+    return token or "und"
+
+
+def _preferred_locales(
+    *,
+    request_locale: str | None = None,
+    preferred_locales: Iterable[str] | None = None,
+) -> tuple[str, ...]:
+    out: list[str] = []
+    seen: set[str] = set()
+    raw_values: list[str | None] = [request_locale]
+    raw_values.extend(str(item) for item in tuple(preferred_locales or ()))
+    for raw in raw_values:
+        token = _locale(raw)
+        folded = token.casefold()
+        if not token or token == "und" or folded in seen:
+            continue
+        seen.add(folded)
+        out.append(token)
+        base = token.split("-", 1)[0]
+        if base and base != token and base.casefold() not in seen:
+            seen.add(base.casefold())
+            out.append(base)
+    return tuple(out)
+
+
+def _locale_match_score(label_locale: str, preferred: tuple[str, ...]) -> float:
+    locale = _locale(label_locale)
+    if locale == "und":
+        return 1.0
+    if not preferred:
+        return 0.95
+    folded = locale.casefold()
+    preferred_folded = {item.casefold() for item in preferred}
+    if folded in preferred_folded:
+        return 1.0
+    base = locale.split("-", 1)[0].casefold()
+    if base in preferred_folded:
+        return 0.98
+    return 0.9
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -152,6 +197,87 @@ def _browser_draft_name(identity: Mapping[str, Any], *, fallback: str) -> str | 
 
 
 @dataclass(frozen=True)
+class EntityLabel:
+    text: str
+    locale: str = "und"
+    role: EntityLabelRole = "alias"
+    status: EntityStatus = "confirmed"
+    source: str | None = None
+    confidence: float | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "text", _text(self.text))
+        object.__setattr__(self, "locale", _locale(self.locale))
+        object.__setattr__(self, "role", _text(self.role) or "alias")
+        object.__setattr__(self, "status", _text(self.status) or "confirmed")
+        object.__setattr__(self, "source", _text_or_none(self.source))
+
+    @property
+    def match_type(self) -> EntityMatchType:
+        role = self.role
+        if role == "display":
+            return "display_name"
+        if role == "registered":
+            return "registered_name"
+        if role == "observed":
+            return "observed_name"
+        if role == "draft":
+            return "draft_name"
+        if role == "fallback":
+            return "fallback_label"
+        return "alias"
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "text": self.text,
+            "locale": self.locale,
+            "role": self.role,
+            "status": self.status,
+        }
+        if self.source:
+            payload["source"] = self.source
+        if self.confidence is not None:
+            payload["confidence"] = self.confidence
+        return payload
+
+
+def _tuple_of_labels(value: Any) -> tuple[EntityLabel, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (EntityLabel, Mapping, str)):
+        items = [value]
+    elif isinstance(value, Iterable):
+        items = list(value)
+    else:
+        items = []
+    labels: list[EntityLabel] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in items:
+        if isinstance(item, EntityLabel):
+            label = item
+        elif isinstance(item, Mapping):
+            label = EntityLabel(
+                text=item.get("text") or item.get("label") or item.get("value"),
+                locale=item.get("locale") or "und",
+                role=item.get("role") or "alias",
+                status=item.get("status") or "confirmed",
+                source=item.get("source"),
+                confidence=item.get("confidence") if isinstance(item.get("confidence"), (int, float)) else None,
+            )
+        else:
+            label = EntityLabel(text=item, locale="und", role="alias")
+        normalized = normalize_entity_label(label.text)
+        if not normalized:
+            continue
+        key = (normalized, label.locale.casefold(), str(label.role))
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return tuple(labels)
+
+
+@dataclass(frozen=True)
 class NamedEntityRecord:
     canonical_ref: str
     kind: str
@@ -160,6 +286,7 @@ class NamedEntityRecord:
     observed_name: str | None = None
     draft_name: str | None = None
     aliases: tuple[str, ...] = field(default_factory=tuple)
+    labels: tuple[EntityLabel, ...] = field(default_factory=tuple)
     fallback_label: str | None = None
     scope: Mapping[str, Any] = field(default_factory=dict)
     source: str | None = None
@@ -175,6 +302,7 @@ class NamedEntityRecord:
         object.__setattr__(self, "observed_name", _text_or_none(self.observed_name))
         object.__setattr__(self, "draft_name", _text_or_none(self.draft_name))
         object.__setattr__(self, "aliases", _tuple_of_texts(self.aliases))
+        object.__setattr__(self, "labels", _tuple_of_labels(self.labels))
         object.__setattr__(self, "fallback_label", _text_or_none(self.fallback_label))
         object.__setattr__(self, "scope", _mapping(self.scope))
         object.__setattr__(self, "source", _text_or_none(self.source))
@@ -190,28 +318,74 @@ class NamedEntityRecord:
             fallback_label=self.fallback_label or self.canonical_ref,
         )
 
-    def label_candidates(self, *, include_fallback: bool = False) -> tuple[tuple[str, EntityMatchType], ...]:
-        candidates: list[tuple[str, EntityMatchType]] = []
+    def label_records(self, *, include_fallback: bool = False) -> tuple[EntityLabel, ...]:
+        candidates: list[EntityLabel] = []
         if self.display_name:
-            candidates.append((self.display_name, "display_name"))
-        candidates.extend((item, "registered_name") for item in self.registered_names)
+            display_status: EntityStatus = (
+                self.status if self.status in {"confirmed", "conflicted", "deprecated"} else "confirmed"
+            )
+            candidates.append(
+                EntityLabel(
+                    text=self.display_name,
+                    locale="und",
+                    role="display",
+                    status=display_status,
+                    source=self.source_authority.get("display_name") or self.source,
+                )
+            )
+        candidates.extend(
+            EntityLabel(
+                text=item,
+                locale="und",
+                role="registered",
+                status="confirmed",
+                source=self.source_authority.get("registered_names") or self.source,
+            )
+            for item in self.registered_names
+        )
         if self.observed_name:
-            candidates.append((self.observed_name, "observed_name"))
+            candidates.append(
+                EntityLabel(
+                    text=self.observed_name,
+                    locale="und",
+                    role="observed",
+                    status="observed",
+                    source=self.source_authority.get("observed_name") or self.source,
+                )
+            )
         if self.draft_name:
-            candidates.append((self.draft_name, "draft_name"))
-        candidates.extend((item, "alias") for item in self.aliases)
+            candidates.append(
+                EntityLabel(
+                    text=self.draft_name,
+                    locale="und",
+                    role="draft",
+                    status="draft",
+                    source=self.source_authority.get("draft_name") or self.source,
+                )
+            )
+        candidates.extend(
+            EntityLabel(text=item, locale="und", role="alias", status="confirmed", source=self.source)
+            for item in self.aliases
+        )
+        candidates.extend(self.labels)
         if include_fallback and self.fallback_label:
-            candidates.append((self.fallback_label, "fallback_label"))
+            candidates.append(
+                EntityLabel(text=self.fallback_label, locale="und", role="fallback", status="observed", source="fallback")
+            )
 
-        out: list[tuple[str, EntityMatchType]] = []
-        seen: set[str] = set()
-        for label, match_type in candidates:
-            normalized = normalize_entity_label(label)
-            if not normalized or normalized in seen:
+        out: list[EntityLabel] = []
+        seen: set[tuple[str, str, str]] = set()
+        for label in candidates:
+            normalized = normalize_entity_label(label.text)
+            key = (normalized, label.locale.casefold(), label.role)
+            if not normalized or key in seen:
                 continue
-            seen.add(normalized)
-            out.append((label, match_type))
+            seen.add(key)
+            out.append(label)
         return tuple(out)
+
+    def label_candidates(self, *, include_fallback: bool = False) -> tuple[tuple[str, EntityMatchType], ...]:
+        return tuple((label.text, label.match_type) for label in self.label_records(include_fallback=include_fallback))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -222,6 +396,7 @@ class NamedEntityRecord:
             "observed_name": self.observed_name,
             "draft_name": self.draft_name,
             "aliases": list(self.aliases),
+            "labels": [item.to_dict() for item in self.label_records(include_fallback=False)],
             "fallback_label": self.fallback_label,
             "display_label": self.display_label,
             "scope": dict(self.scope),
@@ -243,6 +418,7 @@ class EntityResolutionMatch:
     confidence: float
     match_type: EntityMatchType
     display_label: str
+    locale: str = "und"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -255,6 +431,7 @@ class EntityResolutionMatch:
             "confidence": self.confidence,
             "match_type": self.match_type,
             "display_label": self.display_label,
+            "locale": self.locale,
         }
 
 
@@ -269,6 +446,7 @@ class EntityResolutionAmbiguity:
             "text": self.text,
             "normalized": self.normalized,
             "candidates": [item.to_dict() for item in self.candidates],
+            "locales": sorted({item.locale for item in self.candidates}),
         }
 
 
@@ -279,6 +457,8 @@ class EntityResolutionResult:
     resolved_entities: tuple[EntityResolutionMatch, ...] = field(default_factory=tuple)
     unresolved_entity_spans: tuple[str, ...] = field(default_factory=tuple)
     ambiguities: tuple[EntityResolutionAmbiguity, ...] = field(default_factory=tuple)
+    request_locale: str | None = None
+    preferred_locales: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -287,6 +467,8 @@ class EntityResolutionResult:
             "resolved_entities": [item.to_dict() for item in self.resolved_entities],
             "unresolved_entity_spans": list(self.unresolved_entity_spans),
             "ambiguities": [item.to_dict() for item in self.ambiguities],
+            "request_locale": self.request_locale,
+            "preferred_locales": list(self.preferred_locales),
         }
 
 
@@ -460,16 +642,28 @@ class NamedEntityService:
         kind: str | None = None,
         include_fallback: bool = False,
         webspace_id: str | None = None,
+        request_locale: str | None = None,
+        preferred_locales: Iterable[str] | None = None,
     ) -> EntityResolutionResult:
         raw_text = _text(text)
         normalized_text = normalize_entity_label(raw_text)
+        locale_order = _preferred_locales(request_locale=request_locale, preferred_locales=preferred_locales)
         records = self.list_entities(kind=kind, webspace_id=webspace_id)
         matches_by_span: dict[tuple[int, int, str], list[EntityResolutionMatch]] = {}
         for record in records:
-            for label, match_type in record.label_candidates(include_fallback=include_fallback):
-                pattern = re.compile(rf"(?<!\w){re.escape(label)}(?!\w)", re.IGNORECASE)
+            labels = sorted(
+                record.label_records(include_fallback=include_fallback),
+                key=lambda item: (
+                    -_locale_match_score(item.locale, locale_order),
+                    -(_confidence_for_match(item.match_type)),
+                    item.text.casefold(),
+                ),
+            )
+            for label in labels:
+                pattern = re.compile(rf"(?<!\w){re.escape(label.text)}(?!\w)", re.IGNORECASE)
                 for match in pattern.finditer(raw_text):
                     key = (match.start(), match.end(), normalize_entity_label(match.group(0)))
+                    confidence = _confidence_for_match(label.match_type) * _locale_match_score(label.locale, locale_order)
                     matches_by_span.setdefault(key, []).append(
                         EntityResolutionMatch(
                             canonical_ref=record.canonical_ref,
@@ -478,9 +672,10 @@ class NamedEntityService:
                             normalized=key[2],
                             start=match.start(),
                             end=match.end(),
-                            confidence=_confidence_for_match(match_type),
-                            match_type=match_type,
+                            confidence=round(confidence, 4),
+                            match_type=label.match_type,
                             display_label=record.display_label,
+                            locale=label.locale,
                         )
                     )
 
@@ -506,6 +701,8 @@ class NamedEntityService:
             normalized_text=normalized_text,
             resolved_entities=tuple(resolved),
             ambiguities=tuple(ambiguities),
+            request_locale=_text_or_none(request_locale),
+            preferred_locales=locale_order,
         )
 
     def _list_device_entities(self) -> list[NamedEntityRecord]:
@@ -577,26 +774,32 @@ def resolve_text(
     kind: str | None = None,
     include_fallback: bool = False,
     webspace_id: str | None = None,
+    request_locale: str | None = None,
+    preferred_locales: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     return get_named_entity_service().resolve_text(
         text,
         kind=kind,
         include_fallback=include_fallback,
         webspace_id=webspace_id,
+        request_locale=request_locale,
+        preferred_locales=preferred_locales,
     ).to_dict()
 
 
 def _registry_conflicts(records: Iterable[NamedEntityRecord]) -> list[dict[str, Any]]:
     by_label: dict[str, dict[str, Any]] = {}
     for record in records:
-        for label, match_type in record.label_candidates(include_fallback=False):
-            normalized = normalize_entity_label(label)
+        for label in record.label_records(include_fallback=False):
+            normalized = normalize_entity_label(label.text)
             if not normalized:
                 continue
+            bucket_key = f"{label.locale.casefold()}:{normalized}"
             bucket = by_label.setdefault(
-                normalized,
+                bucket_key,
                 {
-                    "label": label,
+                    "label": label.text,
+                    "locale": label.locale,
                     "normalized": normalized,
                     "candidates": {},
                 },
@@ -607,11 +810,12 @@ def _registry_conflicts(records: Iterable[NamedEntityRecord]) -> list[dict[str, 
                     "canonical_ref": record.canonical_ref,
                     "kind": record.kind,
                     "display_label": record.display_label,
+                    "locale": label.locale,
                     "match_types": [],
                 }
             candidate = candidates[record.canonical_ref]
-            if match_type not in candidate["match_types"]:
-                candidate["match_types"].append(match_type)
+            if label.match_type not in candidate["match_types"]:
+                candidate["match_types"].append(label.match_type)
     conflicts: list[dict[str, Any]] = []
     for bucket in by_label.values():
         candidates = list(bucket["candidates"].values())
@@ -621,12 +825,19 @@ def _registry_conflicts(records: Iterable[NamedEntityRecord]) -> list[dict[str, 
         conflicts.append(
             {
                 "label": bucket["label"],
+                "locale": bucket["locale"],
                 "normalized": bucket["normalized"],
                 "candidate_count": len(candidates),
                 "candidates": candidates,
             }
         )
-    conflicts.sort(key=lambda item: (str(item.get("normalized") or ""), int(item.get("candidate_count") or 0)))
+    conflicts.sort(
+        key=lambda item: (
+            str(item.get("locale") or ""),
+            str(item.get("normalized") or ""),
+            int(item.get("candidate_count") or 0),
+        )
+    )
     return conflicts
 
 
@@ -643,6 +854,7 @@ def compact_registry_payload(
             "canonical_ref": item.canonical_ref,
             "kind": item.kind,
             "display_label": item.display_label,
+            "labels": [label.to_dict() for label in item.label_records(include_fallback=False)],
             "status": item.status,
             "scope": dict(item.scope),
             "source": item.source,
@@ -678,6 +890,8 @@ def entity_event_payload(
     current: Mapping[str, Any] | None = None,
     reason: str | None = None,
     request_id: str | None = None,
+    locale: str | None = None,
+    preferred_locales: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "entity_ref": _text(entity_ref),
@@ -689,6 +903,10 @@ def entity_event_payload(
         "current": _mapping(current),
         "reason": _text_or_none(reason),
         "request_id": _text_or_none(request_id),
+        "locale": _text_or_none(locale),
+        "preferred_locales": list(
+            _preferred_locales(request_locale=locale, preferred_locales=preferred_locales)
+        ),
         "ts": time.time(),
     }
 
@@ -705,6 +923,7 @@ __all__ = [
     "ENTITY_REGISTRY_CHANGED",
     "ENTITY_RESOLUTION_AMBIGUOUS",
     "ENTITY_RESOLUTION_FAILED",
+    "EntityLabel",
     "EntityResolutionAmbiguity",
     "EntityResolutionMatch",
     "EntityResolutionResult",

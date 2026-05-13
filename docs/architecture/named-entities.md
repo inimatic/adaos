@@ -642,7 +642,7 @@ action routing.
   `registry.named_entities` when the local label is only fallback-like.
 - [ ] Extend UI/device consumers to prefer user-confirmed display names before
   registered/observed names everywhere.
-- [ ] Add locale metadata to compact registry labels while keeping legacy
+- [x] Add locale metadata to compact registry labels while keeping legacy
   `display_label` compatibility.
 - [x] Generate browser draft names from browser family, OS, and form factor at
   registration time.
@@ -660,8 +660,8 @@ action routing.
 - [ ] Add `EntityResolver` preprocessing for `nlp.intent.detect.request`.
 - [ ] Add `resolved_entities`, `normalized_text`, and ambiguity records to NLU
   trace.
-- [ ] Add request-locale and preferred-locale hints to resolver input and trace.
-- [ ] Add per-locale conflict diagnostics for aliases and display names.
+- [x] Add request-locale and preferred-locale hints to resolver input and trace.
+- [x] Add per-locale conflict diagnostics for aliases and display names.
 - [ ] Make Teacher probe responses show live entity matches and canonical refs.
 - [ ] Keep runtime aliases out of the Rasa stale-training fingerprint by
   default.
