@@ -133,7 +133,7 @@ def test_infra_access_skill_snapshot_and_projection(monkeypatch) -> None:
     assert snapshot["summary"]["value"] == 2
     assert snapshot["tokens"][0]["title"] == "MCP session sess-1"
     assert snapshot["tokens"][1]["title"] == "Access token tok-1"
-    assert snapshot["codex_help"][0]["content"]["step_2"].startswith("adaos dev root mcp prepare-codex")
+    assert snapshot["codex_help"][0]["content"]["step_5"].startswith("adaos dev root mcp prepare-codex")
     assert projected and projected[0][0] == "default"
     assert projected[0][1]["connection"]["mcp_http_url"] == "https://root.test/v1/root/mcp"
 
@@ -144,6 +144,8 @@ def test_infra_access_skill_issue_codex_connection(monkeypatch) -> None:
     module._CACHE["ts"] = 0.0
     module._CACHE["snapshot"] = None
     module._LAST_ISSUED.clear()
+    issue_calls: list[dict] = []
+    refresh_calls: list[dict] = []
     monkeypatch.setattr(
         module.sdk_root_mcp,
         "get_local_target_context",
@@ -157,7 +159,7 @@ def test_infra_access_skill_issue_codex_connection(monkeypatch) -> None:
     monkeypatch.setattr(
         module.sdk_root_mcp,
         "issue_local_codex_mcp_session",
-        lambda **kwargs: {
+        lambda **kwargs: issue_calls.append(dict(kwargs)) or {
             "response": {
                 "result": {
                     "session_id": "sess-new",
@@ -168,16 +170,21 @@ def test_infra_access_skill_issue_codex_connection(monkeypatch) -> None:
             }
         },
     )
-    monkeypatch.setattr(module, "_snapshot_or_cached", lambda **kwargs: {"ok": True})
+    monkeypatch.setattr(module, "_snapshot_or_cached", lambda **kwargs: refresh_calls.append(dict(kwargs)) or {"ok": True})
     monkeypatch.setattr(module, "_project", lambda snapshot, webspace_id=None: None)
 
-    payload = module.issue_codex_connection(webspace_id="default")
+    payload = module.issue_codex_connection(
+        target_id="8db40740-b3ff-44bf-baf5-9fb013b35b01",
+        webspace_id="default",
+    )
 
     assert payload["session_id"] == "sess-new"
     assert payload["access_token"] == "secret-token"
     assert payload["mcp_http_url"] == "https://root.test/v1/root/mcp"
     assert "--apply-codex" in payload["codex_prepare_command"]
     assert module._LAST_ISSUED["payload"]["access_token"] == "secret-token"
+    assert issue_calls[0]["target_id"] is None
+    assert refresh_calls[0]["target_id"] is None
 
 
 def test_infra_access_skill_cached_snapshot_keeps_fresh_issued_connection(monkeypatch) -> None:
