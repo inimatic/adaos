@@ -12,6 +12,8 @@ The target architecture is:
 - Runtime resolvers map registered names and aliases to canonical refs.
 - UI displays the best human-facing name but keeps fallback labels available.
 - Skills and automation receive canonical ids, not ambiguous display strings.
+- Localization selects which labels and aliases are shown or resolved first,
+  but it never changes canonical identity.
 - LLM-assisted authoring can inspect and update names through governed
   descriptors instead of inventing ad hoc labels.
 
@@ -99,6 +101,8 @@ authority and lifecycle:
 - `draft_name`: suggested name for a new entity before the user confirms it.
 - `aliases`: additional phrases accepted by NLU and search.
 - `fallback_label`: deterministic UI fallback such as `Node 0`.
+- `labels`: localized or source-qualified human-facing strings derived from
+  the fields above. Labels are read-model entries, not routing ids.
 
 Display priority should be:
 
@@ -150,6 +154,29 @@ through SDK/MCP descriptors:
   "draft_name": null,
   "fallback_label": "Node 1",
   "aliases": ["kitchen screen", "display"],
+  "labels": [
+    {
+      "text": "Kitchen display",
+      "locale": "en",
+      "role": "display",
+      "status": "confirmed",
+      "source": "user"
+    },
+    {
+      "text": "кухонный экран",
+      "locale": "ru",
+      "role": "alias",
+      "status": "confirmed",
+      "source": "user"
+    },
+    {
+      "text": "ZVERZVE-A1BNQF7",
+      "locale": "und",
+      "role": "observed",
+      "status": "observed",
+      "source": "runtime.hostname"
+    }
+  ],
   "status": "confirmed",
   "scope": {
     "subnet_id": "sn_...",
@@ -173,6 +200,65 @@ Recommended statuses:
 - `conflicted`: name or alias collides with another entity in the same scope.
 - `deprecated`: old alias retained for compatibility but not suggested.
 
+## Localization model
+
+Localization is part of the named-entity layer because users address the same
+entity through different natural-language labels.
+It is not part of domain identity.
+
+Core rules:
+
+- `canonical_ref` is locale-neutral and must not be translated.
+- User-confirmed device names such as `Kitchen display` or `ZVERZVE-A1BNQF7`
+  are names, not UI strings. They should be displayed exactly as registered
+  unless the user adds a localized alias.
+- System-generated fallbacks such as `Node 0`, `Unnamed browser`, or
+  `Unknown scenario` may be localized by UI i18n, but the localized fallback is
+  still lower authority than `display_name`, registered names, and
+  `observed_name`.
+- Aliases may be locale-specific. A Russian alias and an English alias can
+  point to the same `canonical_ref` without forcing NLU retraining.
+- The resolver should prefer the request locale, then profile/subnet preferred
+  locales when available, then language-neutral labels such as hostnames, then
+  cross-locale aliases at lower confidence.
+- Conflict detection must run per effective scope and per locale. A phrase may
+  be unambiguous in `en` but conflicted in `ru`.
+
+Suggested label shape:
+
+```json
+{
+  "text": "кухонный экран",
+  "locale": "ru",
+  "role": "alias",
+  "status": "confirmed",
+  "source": "user",
+  "confidence": 1.0
+}
+```
+
+Recommended locale values:
+
+- BCP-47 language tags such as `ru`, `en`, or `en-US`.
+- `und` for language-neutral observed labels such as hostnames, device ids, and
+  browser-generated technical names.
+- `zxx` only for labels that are intentionally non-linguistic.
+
+Until user profiles are implemented, the runtime may use the browser/login
+locale as a request hint.
+After profile support lands, resolver input should include:
+
+```json
+{
+  "request_locale": "ru",
+  "preferred_locales": ["ru", "en"],
+  "profile_id": "profile:..."
+}
+```
+
+This keeps localization compatible with the current local-first model and with
+future per-user or per-subnet language preferences.
+
 ## Resolution pipeline
 
 The target NLU request path should run a deterministic entity resolver before
@@ -182,18 +268,21 @@ model-dependent interpretation is treated as final.
 2. Build an entity snapshot from system-model objects, device inventory,
    access links, workspace manifests, desktop registry, and user-approved
    aliases.
-3. Normalize candidate labels with locale-aware case folding, punctuation
+3. Select candidate labels by request locale, profile/subnet preferred
+   locales, language-neutral labels, and only then lower-confidence
+   cross-locale aliases.
+4. Normalize candidate labels with locale-aware case folding, punctuation
    cleanup, and safe transliteration where configured.
-4. Resolve exact display-name and alias matches first.
-5. Resolve observed names next, with lower confidence.
-6. Use fuzzy matching only above a high threshold and only when the scope has no
+5. Resolve exact display-name and alias matches first.
+6. Resolve observed names next, with lower confidence.
+7. Use fuzzy matching only above a high threshold and only when the scope has no
    close ambiguity.
-7. Replace matched spans in the model-facing text with entity masks such as
+8. Replace matched spans in the model-facing text with entity masks such as
    `{device}`, `{webspace}`, `{scenario}`.
-8. Emit `resolved_entities`, `unresolved_entity_spans`, and ambiguity records
+9. Emit `resolved_entities`, `unresolved_entity_spans`, and ambiguity records
    into NLU trace.
-9. Let regex, neural, and Rasa stages classify intent from the normalized text.
-10. Dispatch actions with canonical refs and original spans.
+10. Let regex, neural, and Rasa stages classify intent from the normalized text.
+11. Dispatch actions with canonical refs and original spans.
 
 If multiple entities match, the resolver must not silently pick one. It should
 emit an ambiguity result so the assistant can ask a focused clarification.
@@ -259,6 +348,8 @@ Recommended event payload fields:
     "node_id": "8db40740-b3ff-44bf-baf5-9fb013b35b01"
   },
   "source": "device_inventory",
+  "locale": "ru",
+  "preferred_locales": ["ru", "en"],
   "actor": "user",
   "previous": { "display_name": "Node 0" },
   "current": { "display_name": "ZVERZVE-A1BNQF7" },
@@ -281,6 +372,8 @@ Operational rules:
   global event log.
 - Ambiguity, failed resolution, alias conflict, and dev-mode resolver details
   should be eligible for Notifications and node skill logs.
+- Events that change labels or aliases should include `locale` for linguistic
+  labels, or `locale: "und"` for language-neutral observed labels.
 - LLM/MCP tools should write through governed alias/display-name commands rather
   than mutating entity projections directly.
 
@@ -302,6 +395,9 @@ Target service:
 
 - `NamedEntityService` builds and caches canonical entity records.
 - `EntityResolver` performs text-to-ref matching.
+- `EntityResolver` accepts `request_locale` and `preferred_locales` hints, but
+  its output remains canonical refs and spans rather than localized dispatch
+  ids.
 - SDK exposes `sdk.data.entities.list_entities`,
   `sdk.data.entities.resolve_text`, and alias-management helpers.
 - Yjs may project a read-only compact registry under a path such as
@@ -328,6 +424,8 @@ For node/device labels:
 - Otherwise use `primary_node_name` or registered `node_names[0]`.
 - Otherwise use `observed_name` such as hostname.
 - Only then use `Node N`.
+- When several labels are valid, choose the best label for the active locale
+  without translating user-confirmed names or changing refs.
 
 For settings:
 
@@ -350,6 +448,10 @@ The model should see compact facts such as:
   "kind": "device.browser",
   "display_name": "Edge on Windows",
   "aliases": ["work browser"],
+  "labels": [
+    { "text": "Edge on Windows", "locale": "und", "role": "display" },
+    { "text": "рабочий браузер", "locale": "ru", "role": "alias" }
+  ],
   "scope": { "webspace_id": "desktop" }
 }
 ```
@@ -373,6 +475,8 @@ Deliverables:
 
 - `NamedEntityRecord` schema or dataclass.
 - `EntityResolutionResult` shape for NLU, Teacher, diagnostics, and MCP.
+- Localized `labels` and request-locale metadata in the read/result contracts,
+  without making localization affect canonical refs.
 - Shared topic constants for `entity.*` events.
 - Golden fixtures for nodes, browsers, webspaces, scenarios, skills, aliases,
   and ambiguous names.
@@ -396,6 +500,8 @@ Deliverables:
   `display_name > registered name > observed_name > fallback_label`.
 - Browser/node draft-name generator that suggests names without silently
   overwriting observed facts.
+- Locale-aware display selection that can prefer profile/browser language while
+  preserving exact user-confirmed names.
 - Optional compact read-only Yjs projection for diagnostics and UI inspection.
 
 Exit criteria:
@@ -432,6 +538,8 @@ Deliverables:
 - `EntityResolver` preprocessing for `nlp.intent.detect.request`.
 - `normalized_text`, `resolved_entities`, `unresolved_entity_spans`, and
   ambiguity records in NLU trace.
+- `request_locale`, `preferred_locales`, and per-locale conflict evidence in
+  resolver trace when available.
 - Masked model-facing text such as `show logs for {device}`.
 - Teacher/probe output that compares static lookup matches with live entity
   matches.
@@ -453,6 +561,8 @@ Deliverables:
 - Device/browser settings flows that separate observed facts from user names.
 - Alias management UI for devices first, then webspaces, scenarios, skills, and
   apps.
+- Localized alias management that lets a user add language-specific aliases
+  without translating canonical refs or observed hostnames.
 - Dev-mode diagnostics that explain why a name was accepted, rejected, or
   marked ambiguous.
 
@@ -485,6 +595,8 @@ Recommended first vertical MVP:
 - Add record/result schemas and fixtures.
 - Build read-only `NamedEntityService` for nodes, browsers, scenarios, skills,
   apps, and webspaces.
+- Include locale metadata in the registry read model while keeping
+  `display_label` backward-compatible for existing UI consumers.
 - Emit `entity.observed`, `entity.draft_name.suggested`, and
   `entity.registry.changed`.
 - Use the shared display helper in node/browser labels.
@@ -506,6 +618,7 @@ action routing.
 - [x] Add a JSON schema or dataclass for `NamedEntityRecord`.
 - [x] Add a JSON schema or dataclass for `EntityResolutionResult`.
 - [x] Decide the first public Yjs projection path and privacy constraints.
+- [x] Document localization as label/alias metadata, not identity.
 
 ### Phase 1 - Read model and display consistency
 
@@ -529,6 +642,8 @@ action routing.
   `registry.named_entities` when the local label is only fallback-like.
 - [ ] Extend UI/device consumers to prefer user-confirmed display names before
   registered/observed names everywhere.
+- [ ] Add locale metadata to compact registry labels while keeping legacy
+  `display_label` compatibility.
 - [x] Generate browser draft names from browser family, OS, and form factor at
   registration time.
 - [x] Report read-only duplicate display-name/alias conflicts in the compact
@@ -545,6 +660,8 @@ action routing.
 - [ ] Add `EntityResolver` preprocessing for `nlp.intent.detect.request`.
 - [ ] Add `resolved_entities`, `normalized_text`, and ambiguity records to NLU
   trace.
+- [ ] Add request-locale and preferred-locale hints to resolver input and trace.
+- [ ] Add per-locale conflict diagnostics for aliases and display names.
 - [ ] Make Teacher probe responses show live entity matches and canonical refs.
 - [ ] Keep runtime aliases out of the Rasa stale-training fingerprint by
   default.
@@ -557,6 +674,8 @@ action routing.
   intentionally.
 - [ ] Add alias-management UI for devices, browsers, webspaces, scenarios, and
   skills.
+- [ ] Add localized alias-management UI after profile/subnet language
+  preferences are available.
 - [ ] Show ambiguity/conflict notifications in the Notifications surface.
 - [ ] Show why a displayed name was chosen: user name, observed hostname,
   browser draft, or fallback.

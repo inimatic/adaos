@@ -26,6 +26,8 @@ The main problems are:
 - multiple webspaces may be open at the same time in different browsers
 - page, widget, modal, and panel surfaces may need different projections concurrently
 - human-facing names, observed hostnames, aliases, and canonical refs change over time and must not be baked into model training
+- localized labels and aliases are runtime facts, while canonical refs remain
+  language-neutral
 - the platform itself emits system messages, failures, and diagnostics that do not belong to one skill
 - the same domain event may affect many potential projections, but only a few are actually demanded
 
@@ -69,8 +71,8 @@ Browser-facing materialization is a downstream consumer of that model, not its w
 
 ### 1b. Named Entity Lifecycle Events
 
-AdaOS also needs explicit events for human-facing names, observed names,
-aliases, canonical refs, and resolution diagnostics.
+AdaOS also needs explicit events for human-facing names, localized labels,
+observed names, aliases, canonical refs, and resolution diagnostics.
 
 Examples:
 
@@ -78,12 +80,15 @@ Examples:
 - a browser draft name was suggested during registration
 - a user confirmed or changed a device display name
 - an alias was added, removed, deprecated, or found to conflict
+- a localized alias was added for one locale without changing the entity id
 - an NLU request could not resolve an entity name unambiguously
 
 These events bridge runtime truth and language understanding.
 They are not projection payloads by themselves.
 They update the named-entity read model, invalidate resolver snapshots, and may
 produce operator-facing diagnostics when ambiguity or conflict matters.
+They must carry locale hints for linguistic labels, while keeping canonical refs
+and dispatch identities locale-neutral.
 
 ### 2. UI Intent Events
 
@@ -438,6 +443,9 @@ Examples:
 Entity lifecycle events should carry canonical refs whenever known, source
 authority, scope, actor, previous/current values, and conflict or ambiguity
 metadata.
+When the event concerns a linguistic label or alias, it should also carry
+`locale` and optionally `preferred_locales` or `profile_id`.
+Language-neutral observed values such as hostnames should use `locale: "und"`.
 
 Successful high-volume resolution traces do not need to be persisted as global
 events by default.

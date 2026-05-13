@@ -112,7 +112,7 @@ References:
 
 - [ ] `phase1.master_event_taxonomy`: freeze the shared taxonomy from the Operational Event Model
 - [ ] `phase1.core_skill_contract`: define the core-skill interaction contract as a first-class runtime layer
-- [ ] `phase1.named_entity_contract`: freeze name, alias, conflict, registry-changed, and resolver-diagnostic events
+- [ ] `phase1.named_entity_contract`: freeze name, localized label, alias, conflict, registry-changed, and resolver-diagnostic events
 - [ ] `phase1.platform_emitters`: define the platform as a first-class emitter of notifications, diagnostics, and system errors
 - [ ] `phase1.scope_model`: freeze `per-webspace` projection scope plus reserved `node scope`
 - [ ] `phase1.access_contract`: freeze MVP access metadata with `shared`, `owner`, `guest`, and `dev`
@@ -127,7 +127,7 @@ Primary source:
 - [ ] `phase2.refresh_contract`: define the shared invalidation and refresh contract before browser-specific migration
 - [ ] `phase2.restore_demand`: define startup restoration from Yjs demand state for core and skills
 - [ ] `phase2.platform_projection_families`: define the initial platform-owned projection families
-- [ ] `phase2.named_entity_runtime_abi`: define `NamedEntityRecord`, `EntityResolutionResult`, and `entity.registry.changed` invalidation semantics
+- [ ] `phase2.named_entity_runtime_abi`: define `NamedEntityRecord`, localized label metadata, `EntityResolutionResult`, and `entity.registry.changed` invalidation semantics
 
 Primary sources:
 
