@@ -59,7 +59,10 @@ localStorage. `YDocService` uses it only as a fallback for missing `ui`, `data`,
 and `registry` reads; live Yjs branches always take precedence, and Yjs
 IndexedDB persistence remains opt-in. `DesktopRendererComponent` now binds the
 desktop view before `initFromHub()` resolves, so login no longer blocks first
-paint on first Yjs sync/materialization.
+paint on first Yjs sync/materialization. Runtime data-source 401/403 responses
+that arrive while Yjs bootstrap is still pending are now treated as transient
+load failures instead of forcing a page reload, preventing startup reload loops
+when cached first paint races ahead of live runtime authorization.
 
 ### Tasks
 
@@ -74,6 +77,8 @@ Actions:
 - [x] Let desktop schema/UI reads fall back to the snapshot while live branches
   are absent.
 - [x] Start desktop rendering before `YDocService.initFromHub()` resolves.
+- [x] Defer page reload on transient runtime data-source unauthorized responses
+  while Yjs bootstrap is still pending.
 - [x] Add focused Angular tests for snapshot fallback and non-blocking desktop
   startup.
 - [ ] Add browser-visible "syncing latest state" affordance for cached first
