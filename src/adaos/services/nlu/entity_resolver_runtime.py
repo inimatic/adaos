@@ -39,17 +39,49 @@ def _request_id(payload: Mapping[str, Any], *, text: str, webspace_id: str) -> s
     return "auto." + hashlib.sha1(seed.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
-def build_entity_trace_stage(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+def _request_locale(payload: Mapping[str, Any]) -> str | None:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    token = payload.get("request_locale") or payload.get("locale") or meta.get("request_locale") or meta.get("locale")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def _preferred_locales(payload: Mapping[str, Any]) -> list[str]:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    raw = payload.get("preferred_locales") or meta.get("preferred_locales")
+    if isinstance(raw, str):
+        items: list[Any] = raw.split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        items = []
+    out: list[str] = []
+    for item in items:
+        token = str(item or "").strip()
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def build_entity_trace_stage(payload: Mapping[str, Any], *, include_miss: bool = False) -> dict[str, Any] | None:
     text = payload.get("text") or payload.get("utterance")
     if not isinstance(text, str) or not text.strip():
         return None
     text = text.strip()
     webspace_id = _resolve_webspace_id(payload)
     request_id = _request_id(payload, text=text, webspace_id=webspace_id)
-    result = named_entities.get_named_entity_service().resolve_text(text, webspace_id=webspace_id)
-    if not result.resolved_entities and not result.ambiguities:
+    request_locale = _request_locale(payload)
+    preferred_locales = _preferred_locales(payload)
+    result = named_entities.get_named_entity_service().resolve_text(
+        text,
+        webspace_id=webspace_id,
+        request_locale=request_locale,
+        preferred_locales=preferred_locales,
+    )
+    if not include_miss and not result.resolved_entities and not result.ambiguities:
         return None
-    status = "ambiguous" if result.ambiguities else "resolved"
+    status = "ambiguous" if result.ambiguities else "resolved" if result.resolved_entities else "miss"
     confidence = None
     if result.resolved_entities:
         confidence = max(item.confidence for item in result.resolved_entities)
@@ -65,8 +97,11 @@ def build_entity_trace_stage(payload: Mapping[str, Any]) -> dict[str, Any] | Non
         "confidence": confidence,
         "raw": {
             "resolved_entities": raw.get("resolved_entities") or [],
+            "unresolved_entity_spans": raw.get("unresolved_entity_spans") or [],
             "ambiguities": raw.get("ambiguities") or [],
             "normalized_text": raw.get("normalized_text"),
+            "request_locale": raw.get("request_locale"),
+            "preferred_locales": raw.get("preferred_locales") or [],
         },
         "_meta": dict(meta),
     }

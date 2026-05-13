@@ -39,6 +39,8 @@ class ProbePhraseRequest(BaseModel):
     text: str = Field(..., min_length=1)
     use_rasa: bool = True
     emit_trace: bool = True
+    request_locale: Optional[str] = None
+    preferred_locales: list[str] = Field(default_factory=list)
 
 
 @router.get("/nlu/teacher/{webspace_id}", dependencies=[Depends(require_token)])
@@ -90,6 +92,8 @@ async def probe(webspace_id: str, body: ProbePhraseRequest):
             webspace_id=ws,
             use_rasa=bool(body.use_rasa),
             emit_trace=bool(body.emit_trace),
+            request_locale=body.request_locale,
+            preferred_locales=body.preferred_locales,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"failed to probe phrase: {exc}")

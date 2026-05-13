@@ -7,6 +7,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.yjs.webspace import default_webspace_id
 
+from .entity_resolver_runtime import build_entity_trace_stage
 from . import rasa_service_bridge
 from .pipeline import _try_regex_intent
 
@@ -67,6 +68,8 @@ async def probe_phrase(
     webspace_id: str | None = None,
     use_rasa: bool = True,
     emit_trace: bool = True,
+    request_locale: str | None = None,
+    preferred_locales: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     clean_text = str(text or "").strip()
     ws = _resolve_webspace_id(webspace_id)
@@ -109,6 +112,21 @@ async def probe_phrase(
             "stages": stages,
         }
 
+    entity_stage = build_entity_trace_stage(
+        {
+            "text": clean_text,
+            "webspace_id": ws,
+            "request_id": request_id,
+            "request_locale": request_locale,
+            "preferred_locales": list(preferred_locales or []),
+            "_meta": {"webspace_id": ws, "probe": "nlu_teacher"},
+        },
+        include_miss=True,
+    )
+    entity_resolution = dict(entity_stage.get("raw") or {}) if isinstance(entity_stage, Mapping) else {}
+    if entity_stage:
+        add_stage(dict(entity_stage))
+
     intent, slots, via, raw = await _try_regex_intent(clean_text, webspace_id=ws)
     if intent:
         add_stage(
@@ -136,6 +154,7 @@ async def probe_phrase(
             "confidence": 1.0,
             "slots": slots,
             "entities": [{"entity": key, "value": value} for key, value in slots.items()],
+            "entity_resolution": entity_resolution,
             "intent_ranking": [{"name": intent, "confidence": 1.0}],
             "raw": raw,
             "stages": stages,
@@ -172,6 +191,7 @@ async def probe_phrase(
             "text": clean_text,
             "webspace_id": ws,
             "request_id": request_id,
+            "entity_resolution": entity_resolution,
             "stages": stages,
         }
 
@@ -205,5 +225,6 @@ async def probe_phrase(
         "webspace_id": ws,
         "request_id": request_id,
         "via": rasa_result.get("via") or "rasa",
+        "entity_resolution": entity_resolution,
         "stages": stages,
     }
