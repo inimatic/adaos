@@ -56,6 +56,10 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
                 "online": True,
                 "connection_state": "connected",
                 "last_webspace_id": "desktop",
+                "browser_family": "Edge",
+                "os_name": "Windows",
+                "form_factor": "Desktop",
+                "user_agent": "Mozilla/5.0 Edge",
             }
         ],
     )
@@ -73,6 +77,9 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
         "source": "browser_session",
         "last_webspace_id": "desktop",
     }
+    assert item["identity"]["browser_family"] == "Edge"
+    assert item["identity"]["os_name"] == "Windows"
+    assert item["identity"]["form_factor"] == "Desktop"
     assert item["runtime"]["connected_to_subnet"] is None
 
 

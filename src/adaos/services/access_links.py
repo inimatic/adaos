@@ -87,6 +87,10 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
             for item in list(data.get("node_names") or [])
             if str(item or "").strip()
         ],
+        "browser_family": str(data.get("browser_family") or "").strip() or None,
+        "os_name": str(data.get("os_name") or "").strip() or None,
+        "form_factor": str(data.get("form_factor") or "").strip() or None,
+        "user_agent": str(data.get("user_agent") or "").strip() or None,
     }
 
 
