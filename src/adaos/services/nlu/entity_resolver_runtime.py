@@ -13,6 +13,12 @@ from adaos.services.yjs.webspace import default_webspace_id
 
 _log = logging.getLogger("adaos.nlu.entity_resolver")
 
+_MODEL_TRAINING_EFFECT: dict[str, Any] = {
+    "rasa_fingerprint": "unchanged",
+    "neural_training": "unchanged",
+    "reason": "runtime_entity_resolution_only",
+}
+
 
 def _payload(evt: Any) -> dict[str, Any]:
     if isinstance(evt, dict):
@@ -102,6 +108,7 @@ def build_entity_trace_stage(payload: Mapping[str, Any], *, include_miss: bool =
             "normalized_text": raw.get("normalized_text"),
             "request_locale": raw.get("request_locale"),
             "preferred_locales": raw.get("preferred_locales") or [],
+            "model_training": dict(_MODEL_TRAINING_EFFECT),
         },
         "_meta": dict(meta),
     }
