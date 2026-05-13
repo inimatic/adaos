@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time
 from collections.abc import Iterable
@@ -335,6 +337,7 @@ def _records_from_lookup_items(
         "app_id": "app",
         "scenario_id": "scenario",
         "webspace_id": "webspace",
+        "skill_id": "skill",
     }
     entity_kind = lookup_to_kind.get(lookup_name)
     if not entity_kind:
@@ -495,6 +498,7 @@ class NamedEntityService:
         records.extend(_records_from_lookup_items("app_id", lookups.get("app_id"), webspace_id=webspace))
         records.extend(_records_from_lookup_items("scenario_id", lookups.get("scenario_id"), webspace_id=webspace))
         records.extend(_records_from_lookup_items("webspace_id", lookups.get("webspace_id"), webspace_id=webspace))
+        records.extend(_records_from_lookup_items("skill_id", lookups.get("skill_id"), webspace_id=webspace))
         return records
 
 
@@ -528,6 +532,40 @@ def resolve_text(
         include_fallback=include_fallback,
         webspace_id=webspace_id,
     ).to_dict()
+
+
+def compact_registry_payload(
+    *,
+    kind: str | None = None,
+    webspace_id: str | None = None,
+    service: NamedEntityService | None = None,
+) -> dict[str, Any]:
+    webspace = _text(webspace_id) or "desktop"
+    records = (service or get_named_entity_service()).list_entities(kind=kind, webspace_id=webspace)
+    items = [
+        {
+            "canonical_ref": item.canonical_ref,
+            "kind": item.kind,
+            "display_label": item.display_label,
+            "status": item.status,
+            "scope": dict(item.scope),
+            "source": item.source,
+        }
+        for item in records
+    ]
+    fingerprint = hashlib.sha256(
+        json.dumps(items, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+    return {
+        "version": 1,
+        "webspace_id": webspace,
+        "items": items,
+        "summary": {
+            "count": len(items),
+            "fingerprint": fingerprint,
+            "updated_at": time.time(),
+        },
+    }
 
 
 def entity_event_payload(
@@ -575,6 +613,7 @@ __all__ = [
     "NamedEntityService",
     "canonical_device_ref",
     "compatibility_device_ref",
+    "compact_registry_payload",
     "entity_event_payload",
     "get_named_entity_service",
     "list_entities",
