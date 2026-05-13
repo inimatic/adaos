@@ -200,6 +200,7 @@ from adaos.services.core_update import read_plan as read_core_update_plan
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update import write_plan as write_core_update_plan
 from adaos.services.core_update import write_status as write_core_update_status
+from adaos.services.core_update_policy import core_update_reactions_disabled_reason
 from adaos.services.core_slots import active_slot, active_slot_manifest, slot_status as core_slot_status
 from adaos.services.node_config import save_config
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_transition_role
@@ -1222,6 +1223,15 @@ async def admin_root_mcp_logs(
 @app.post("/api/admin/update/start", dependencies=[Depends(require_token)])
 async def admin_update_start(body: CoreUpdateStartRequest):
     _ensure_runtime_admin_mutation_allowed("update.start")
+    disabled_reason = core_update_reactions_disabled_reason()
+    if disabled_reason:
+        return {
+            "ok": True,
+            "accepted": False,
+            "skipped": True,
+            "reason": disabled_reason,
+            "status": read_core_update_status(),
+        }
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
         return {"ok": True, "accepted": False, "status": read_core_update_status()}
@@ -1296,6 +1306,15 @@ async def admin_update_cancel(body: CoreUpdateCancelRequest):
 @app.post("/api/admin/update/rollback", dependencies=[Depends(require_token)])
 async def admin_update_rollback(body: CoreUpdateRollbackRequest):
     _ensure_runtime_admin_mutation_allowed("update.rollback")
+    disabled_reason = core_update_reactions_disabled_reason()
+    if disabled_reason:
+        return {
+            "ok": True,
+            "accepted": False,
+            "skipped": True,
+            "reason": disabled_reason,
+            "status": read_core_update_status(),
+        }
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
         return {"ok": True, "accepted": False, "status": read_core_update_status()}

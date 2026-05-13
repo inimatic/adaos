@@ -10,23 +10,12 @@ import requests
 from adaos.services.agent_context import get_ctx
 from adaos.services.core_slots import active_slot_manifest, slot_status
 from adaos.services.core_update import read_status
+from adaos.services.core_update_policy import core_update_reactions_disabled_reason
 from adaos.services.hub_root_protocol_store import ack_stream_message, prepare_stream_message
 from adaos.services.root.client import RootHttpClient
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_instance_id, runtime_transition_role
 
 _CORE_UPDATE_STREAM_FLOW_ID = "hub_root.integration.github_core_update"
-
-
-def _dev_api_serve_core_update_sync_disabled() -> bool:
-    launch_mode = str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip().lower()
-    if launch_mode != "api_serve":
-        return False
-    return str(os.getenv("ADAOS_API_SERVE_ALLOW_CORE_UPDATE") or "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
 
 def _node_core_update_disabled(conf: Any) -> bool:
@@ -128,11 +117,12 @@ def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str,
             "skipped": True,
             "reason": "node_core_update_disabled",
         }
-    if _dev_api_serve_core_update_sync_disabled():
+    disabled_reason = core_update_reactions_disabled_reason()
+    if disabled_reason:
         return {
             "ok": True,
             "skipped": True,
-            "reason": "dev_api_serve_core_update_sync_disabled",
+            "reason": disabled_reason,
         }
     client = _root_client(conf)
     if client is None:
