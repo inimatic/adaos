@@ -11,6 +11,10 @@ class _FakeDeviceInventory:
         return [dict(item) for item in self._devices]
 
 
+def _empty_lookup_provider(*, webspace_id: str = "desktop") -> dict[str, object]:
+    return {"webspace_id": webspace_id, "lookups": {}}
+
+
 def test_named_entity_display_priority_prefers_registered_over_fallback() -> None:
     record = named_entities.NamedEntityRecord(
         canonical_ref="device:member:node-1",
@@ -45,7 +49,8 @@ def test_named_entity_service_builds_device_records_from_inventory() -> None:
                     "diagnostics": {"policy_source": "none"},
                 }
             ]
-        )
+        ),
+        lookup_payload_provider=_empty_lookup_provider,
     )
 
     records = service.list_entities()
@@ -68,6 +73,7 @@ def test_resolver_matches_exact_labels_without_dispatch_side_effects() -> None:
             )
         ],
         device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
     )
 
     result = service.resolve_text("show logs for kitchen screen")
@@ -95,6 +101,7 @@ def test_resolver_reports_ambiguity_instead_of_guessing() -> None:
             ),
         ],
         device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
     )
 
     result = service.resolve_text("open screen settings")
@@ -118,6 +125,7 @@ def test_sdk_entities_helpers_delegate_to_service(monkeypatch) -> None:
             )
         ],
         device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
     )
     monkeypatch.setattr(named_entities, "get_named_entity_service", lambda: service)
 
@@ -125,3 +133,42 @@ def test_sdk_entities_helpers_delegate_to_service(monkeypatch) -> None:
 
     assert sdk_entities.list_entities()[0]["canonical_ref"] == "webspace:desktop"
     assert sdk_entities.resolve_text("open Desktop")["resolved_entities"][0]["kind"] == "webspace"
+
+
+def test_named_entity_service_projects_lookup_tables_as_addressed_entities() -> None:
+    def _lookup_payload_provider(*, webspace_id: str) -> dict[str, object]:
+        return {
+            "webspace_id": webspace_id,
+            "lookups": {
+                "modal_id": [
+                    {
+                        "value": "browser_link_settings_modal",
+                        "labels": ["Browser Link Settings"],
+                        "sources": ["registry.modals"],
+                    }
+                ],
+                "app_id": [{"value": "browsers_app", "labels": ["Browsers"]}],
+                "scenario_id": [{"value": "web_desktop"}],
+                "webspace_id": [{"value": "desktop"}],
+                "node_ref": [{"value": "Node 0", "labels": ["Node 0"]}],
+            },
+        }
+
+    service = named_entities.NamedEntityService(
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_lookup_payload_provider,
+    )
+
+    records = service.list_entities(webspace_id="desktop")
+    refs = {record.canonical_ref: record for record in records}
+
+    assert "modal:browser_link_settings_modal" in refs
+    assert refs["modal:browser_link_settings_modal"].display_label == "Browser Link Settings"
+    assert refs["modal:browser_link_settings_modal"].registered_names == ("browser_link_settings_modal",)
+    assert "app:browsers_app" in refs
+    assert "scenario:web_desktop" in refs
+    assert "webspace:desktop" in refs
+    assert "node:Node 0" not in refs
+
+    result = service.resolve_text("open Browser Link Settings", webspace_id="desktop")
+    assert result.resolved_entities[0].canonical_ref == "modal:browser_link_settings_modal"

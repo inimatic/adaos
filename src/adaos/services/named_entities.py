@@ -324,19 +324,74 @@ def _entity_from_device(device: Mapping[str, Any]) -> NamedEntityRecord | None:
     )
 
 
+def _records_from_lookup_items(
+    lookup_name: str,
+    items: Any,
+    *,
+    webspace_id: str,
+) -> list[NamedEntityRecord]:
+    lookup_to_kind = {
+        "modal_id": "modal",
+        "app_id": "app",
+        "scenario_id": "scenario",
+        "webspace_id": "webspace",
+    }
+    entity_kind = lookup_to_kind.get(lookup_name)
+    if not entity_kind:
+        return []
+    rows = list(items) if isinstance(items, list) else []
+    records: list[NamedEntityRecord] = []
+    for raw in rows:
+        item = _mapping(raw)
+        value = _text(item.get("value"))
+        if not value:
+            continue
+        labels = _tuple_of_texts(item.get("labels"))
+        display_name = labels[0] if labels else value
+        registered_names = (value,) if normalize_entity_label(display_name) != normalize_entity_label(value) else ()
+        records.append(
+            NamedEntityRecord(
+                canonical_ref=f"{entity_kind}:{value}",
+                kind=entity_kind,
+                display_name=display_name,
+                registered_names=registered_names,
+                aliases=labels[1:],
+                fallback_label=value,
+                scope={"webspace_id": webspace_id},
+                source="nlu_lookup_tables",
+                source_authority={
+                    "lookup": lookup_name,
+                    "sources": list(item.get("sources") or []),
+                },
+                status="confirmed",
+            )
+        )
+    return records
+
+
 class NamedEntityService:
     def __init__(
         self,
         *,
         device_inventory_service: Any | None = None,
+        lookup_payload_provider: Any | None = None,
+        default_webspace_id: str = "desktop",
         static_entities: Iterable[NamedEntityRecord] | None = None,
     ) -> None:
         self._device_inventory_service = device_inventory_service
+        self._lookup_payload_provider = lookup_payload_provider
+        self._default_webspace_id = _text(default_webspace_id) or "desktop"
         self._static_entities = tuple(static_entities or ())
 
-    def list_entities(self, *, kind: str | None = None) -> list[NamedEntityRecord]:
+    def list_entities(
+        self,
+        *,
+        kind: str | None = None,
+        webspace_id: str | None = None,
+    ) -> list[NamedEntityRecord]:
         records: list[NamedEntityRecord] = list(self._static_entities)
         records.extend(self._list_device_entities())
+        records.extend(self._list_lookup_entities(webspace_id=webspace_id))
         if kind:
             wanted = _text(kind)
             records = [item for item in records if item.kind == wanted]
@@ -349,10 +404,11 @@ class NamedEntityService:
         *,
         kind: str | None = None,
         include_fallback: bool = False,
+        webspace_id: str | None = None,
     ) -> EntityResolutionResult:
         raw_text = _text(text)
         normalized_text = normalize_entity_label(raw_text)
-        records = self.list_entities(kind=kind)
+        records = self.list_entities(kind=kind, webspace_id=webspace_id)
         matches_by_span: dict[tuple[int, int, str], list[EntityResolutionMatch]] = {}
         for record in records:
             for label, match_type in record.label_candidates(include_fallback=include_fallback):
@@ -410,6 +466,37 @@ class NamedEntityService:
                 records.append(record)
         return records
 
+    def _lookup_payload(self, *, webspace_id: str | None = None) -> Mapping[str, Any]:
+        webspace = _text(webspace_id) or self._default_webspace_id
+        provider = self._lookup_payload_provider
+        if provider is not None:
+            try:
+                payload = provider(webspace_id=webspace)
+            except TypeError:
+                payload = provider()
+            except Exception:
+                return {}
+            return payload if isinstance(payload, Mapping) else {}
+        try:
+            from adaos.services.agent_context import get_ctx
+            from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables
+
+            payload = collect_desktop_lookup_tables(get_ctx(), webspace_id=webspace)
+        except Exception:
+            return {}
+        return payload if isinstance(payload, Mapping) else {}
+
+    def _list_lookup_entities(self, *, webspace_id: str | None = None) -> list[NamedEntityRecord]:
+        payload = self._lookup_payload(webspace_id=webspace_id)
+        lookups = payload.get("lookups") if isinstance(payload.get("lookups"), Mapping) else {}
+        webspace = _text(payload.get("webspace_id")) or _text(webspace_id) or self._default_webspace_id
+        records: list[NamedEntityRecord] = []
+        records.extend(_records_from_lookup_items("modal_id", lookups.get("modal_id"), webspace_id=webspace))
+        records.extend(_records_from_lookup_items("app_id", lookups.get("app_id"), webspace_id=webspace))
+        records.extend(_records_from_lookup_items("scenario_id", lookups.get("scenario_id"), webspace_id=webspace))
+        records.extend(_records_from_lookup_items("webspace_id", lookups.get("webspace_id"), webspace_id=webspace))
+        return records
+
 
 _SERVICE: NamedEntityService | None = None
 
@@ -421,15 +508,25 @@ def get_named_entity_service() -> NamedEntityService:
     return _SERVICE
 
 
-def list_entities(*, kind: str | None = None) -> list[dict[str, Any]]:
-    return [item.to_dict() for item in get_named_entity_service().list_entities(kind=kind)]
+def list_entities(*, kind: str | None = None, webspace_id: str | None = None) -> list[dict[str, Any]]:
+    return [
+        item.to_dict()
+        for item in get_named_entity_service().list_entities(kind=kind, webspace_id=webspace_id)
+    ]
 
 
-def resolve_text(text: str, *, kind: str | None = None, include_fallback: bool = False) -> dict[str, Any]:
+def resolve_text(
+    text: str,
+    *,
+    kind: str | None = None,
+    include_fallback: bool = False,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
     return get_named_entity_service().resolve_text(
         text,
         kind=kind,
         include_fallback=include_fallback,
+        webspace_id=webspace_id,
     ).to_dict()
 
 
