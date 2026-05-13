@@ -6,6 +6,42 @@ and delivery work.
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 
+## UI Runtime Diagnostics and Skill-Scoped Logs
+
+### Goal
+
+Keep browser-side UI failures, in-process skill runtime logs, and service-skill
+logs attached to the skill being developed so LLM-assisted debugging can stay in
+the correct entity context.
+
+### Current Status
+
+Snapshot date: 2026-05-13.
+
+Implemented baseline is documented in
+`docs/architecture/ui-runtime-diagnostics.md`.
+
+### Tasks
+
+#### UILOG-001: Complete skill-scoped diagnostics pipeline
+
+Status: in progress.
+
+Actions:
+
+- [x] Add explicit skill log paths to `CurrentSkill` and `PathProvider`.
+- [x] Route in-process skill-context `adaos.*` logs to
+  `service.<skill>.runtime.log` instead of platform-wide `adaos.log`.
+- [x] Send dev-mode browser UI diagnostics to the node.
+- [x] Persist browser UI diagnostics to `service.<skill>.ui_runtime.log`.
+- [x] Extend MCP `get_skill_logs(skill=...)` to include
+  `service.<skill>.*.log`.
+- [ ] Add widget-level ownership metadata for renderer failures that are not
+  modal-owned.
+- [ ] Add a typed ABI schema for UI diagnostic payloads.
+- [ ] Add rate limiting and duplicate suppression for repeated renderer errors.
+- [ ] Feed skill logs into the future LLM skill-debugging MCP workflow.
+
 ## Modal Projection and Runtime Recovery Integrity
 
 ### Goal
