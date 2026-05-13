@@ -195,6 +195,9 @@ Examples:
 Human-facing names such as `Kitchen display`, `ZVERZVE-A1BNQF7`, `Edge on
 Windows`, or `Node 0` are labels, not addressing refs.
 They may resolve to a domain ref through the named-entity layer.
+Localized labels and aliases follow the same rule: the active language can
+change which text is displayed or matched, but it must not change the target
+domain ref.
 
 Addressing contracts should not encode these labels as routing keys.
 
@@ -319,7 +322,7 @@ The boundary is:
 
 - UI Addressing defines stable typed refs and binding shapes.
 - Named Entities define display names, observed names, aliases, ambiguity, and
-  text-to-ref resolution.
+  locale-aware text-to-ref resolution.
 - NLU and operator tooling should resolve labels to refs before dispatching
   `action:*` commands.
 - Manifests may include display labels for readability, but action payloads,
@@ -333,6 +336,9 @@ Examples:
   `device:member:<node_id>`.
 - A browser settings modal may show `Edge on Windows`, but modal addressing
   should still use the modal/action ref plus `device:browser:<device_id>`.
+- A Russian alias such as `рабочий браузер` and an English alias such as
+  `work browser` may resolve to the same `device:browser:<device_id>`; neither
+  alias becomes an addressing key.
 
 The direction must stay one-way:
 
@@ -463,6 +469,8 @@ Status note:
   slice
 - [ ] keep named-entity docs aligned so human-facing labels resolve into domain
   refs but never become addressing refs themselves
+- [ ] keep localization guidance aligned so localized labels affect display and
+  resolution priority, not addressing identity
 - [ ] update browser/runtime docs so Yjs, streams, and local view state are
   described through the same scope vocabulary
 
