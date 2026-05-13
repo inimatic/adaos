@@ -1365,13 +1365,13 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 15%.
+- Overall: 20%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
-  read-only device entity adapter, exact resolver, SDK read helpers, and focused
-  tests.
-- Current implementation slice: expand the read-only registry beyond devices
-  and wire dry-run diagnostics.
+  read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
+  exact resolver, SDK read helpers, and focused tests.
+- Current implementation slice: wire dry-run diagnostics before dispatch
+  changes.
 - Not started yet: runtime registry, resolver dry-run, governed writes, MCP,
   and consumer migration.
 
@@ -1403,11 +1403,14 @@ Actions:
 - [x] Add `EntityResolutionResult` schema or dataclass.
 - [x] Add shared `entity.*` event topic constants.
 - [x] Add golden fixtures for node/browser/device alias and ambiguity examples.
-- [ ] Add golden fixtures for webspace, scenario, skill, and app examples.
+- [x] Add golden fixtures for webspace, scenario, modal, and app examples.
+- [ ] Add golden fixtures for skill examples.
 - [ ] Build a read model over device inventory, node display, workspace
   manifests, system model objects, and desktop registry entries.
 - [x] Build the first read-only device entity adapter over
   `DeviceInventoryService`.
+- [x] Build the first read-only modal/app/scenario/webspace adapter over
+  existing NLU lookup tables.
 - [ ] Preserve source authority: device access remains owned by
   `access_links` / `DeviceInventoryService`, not by the named-entity read
   model.
