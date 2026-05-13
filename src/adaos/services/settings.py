@@ -26,10 +26,10 @@ def _parse_env_file(path: str) -> Dict[str, str]:
 @dataclass(frozen=True, slots=True)
 class Settings:
     package_dir = Path(__file__).resolve().parent.parent
-    env_type = os.getenv("ENV_TYPE", "prod")
     override_base_suffix = os.getenv("ADAOS_BASE_DIR_SUFFIX", "")
     override_base = os.getenv("ADAOS_BASE_DIR")
     base_dir: Path
+    env_type: str = "prod"
     profile: str = "default"
     git_author_name: str = "AdaOS Bot"
     git_author_email: str = "bot@adaos.local"
@@ -192,6 +192,7 @@ class Settings:
         dev_scenarios_dirname = pick_env("ADAOS_DEV_SCENARIOS_DIRNAME", dev_scenarios_dirname) or dev_scenarios_dirname
         return Settings(
             base_dir=base,
+            env_type=pick_env("ENV_TYPE", "prod") or "prod",
             profile=profile,
             skills_monorepo_url=skills_url,
             skills_monorepo_branch=skills_branch,

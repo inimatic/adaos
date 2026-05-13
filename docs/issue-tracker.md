@@ -1275,3 +1275,25 @@ Actions:
 - [ ] Mock `_active_noncritical_stream_guardrail` in projection tests that
   assert exact stream publications.
 - [ ] Re-run the full file as part of the stream modal regression suite.
+
+### UI-RT-001: Forward UI runtime notifications to node skill logs
+
+Status: planned.
+
+Expected behavior:
+
+- Client-side runtime issues are visible in `[Node 0] Notifications` first.
+- Dev mode may include diagnostic `details`; prod mode keeps the user-facing
+  notification compact.
+- The same notification envelope is eventually mirrored into node skill logs so
+  an LLM/debugger can analyze UI contract mismatches without browser console
+  access.
+
+Actions:
+
+- [ ] Define a stable notification envelope for UI runtime issues.
+- [ ] Add a backend ingestion endpoint or stream receiver for client runtime
+  notifications.
+- [ ] Mirror accepted notifications into node skill logs with webspace, node,
+  scenario, widget, action, and modal context.
+- [ ] Add LLM-oriented grouping for repeated contract issues.
