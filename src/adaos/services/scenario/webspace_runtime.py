@@ -32,6 +32,7 @@ from adaos.services.yjs.doc import (
     try_read_live_map_value,
 )
 from adaos.services.scenarios import loader as scenarios_loader
+from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.workspaces import index as workspace_index
 from adaos.services.yjs.store import get_ystore_for_webspace, ystore_write_metadata, ystore_write_metadata_sync
@@ -74,6 +75,7 @@ _EFFECTIVE_BRANCH_PATHS = (
     "data.webio",
     "data.routing",
     "registry.merged",
+    "runtime.environment",
 )
 
 
@@ -1684,6 +1686,7 @@ def _resolved_output_branch_fingerprints(resolved: "WebspaceResolverOutputs") ->
         "data.webio": _fingerprint_json_like(resolved.webio),
         "data.routing": _fingerprint_json_like(resolved.routing),
         "registry.merged": _fingerprint_json_like(resolved.registry),
+        "runtime.environment": _fingerprint_json_like(runtime_environment_payload()),
     }
 
 
@@ -3707,6 +3710,8 @@ class WebspaceScenarioRuntime:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         registry_map = ydoc.get_map("registry")
+        runtime_map = ydoc.get_map("runtime")
+        runtime_environment = runtime_environment_payload()
         target_paths = _EFFECTIVE_BRANCH_PATHS
         changed_paths: List[str] = []
         diff_applied_paths: List[str] = []
@@ -3893,6 +3898,7 @@ class WebspaceScenarioRuntime:
             (
                 ("ui.application", ui_map, "application", resolved.application, False),
                 ("registry.merged", registry_map, "merged", resolved.registry, False),
+                ("runtime.environment", runtime_map, "environment", runtime_environment, False),
             ),
             apply_defaults=True,
             flush_fingerprints=False,
@@ -4012,7 +4018,7 @@ class WebspaceScenarioRuntime:
         and returns the resulting registry snapshot.
         """
         with _webspace_runtime_sync_write_meta(
-            root_names=["ui", "data", "registry"],
+            root_names=["ui", "data", "registry", "runtime"],
             source="webspace_runtime.rebuild_sync",
         ):
             with get_ydoc(webspace_id) as ydoc:
@@ -4562,7 +4568,7 @@ def _open_rebuild_ydoc_session(
             prefer_live_room=bool(publish_live_room),
             publish_live_room=bool(publish_live_room),
             timings=timings,
-            load_mark_roots=["ui", "data", "registry"],
+            load_mark_roots=["ui", "data", "registry", "runtime"],
             governed=True,
             write_source="webspace_runtime.rebuild_async",
             write_owner="core:webspace_runtime",
