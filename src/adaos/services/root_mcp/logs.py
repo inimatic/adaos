@@ -182,7 +182,8 @@ def match_log_category(category: str, name: str, *, contains: str | None = None,
         skill_token = str(skill or "").strip()
         if not skill_token:
             return True
-        return token == f"service.{skill_token}.log"
+        base = f"service.{skill_token}"
+        return token == f"{base}.log" or (token.startswith(f"{base}.") and token.endswith(".log"))
     return False
 
 

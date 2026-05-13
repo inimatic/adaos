@@ -881,6 +881,24 @@ def _mark_entry(entry: Dict[str, Any], *, source: str, dev: bool) -> Dict[str, A
     return data
 
 
+def _mark_modal_def(entry: Any, *, source: str, skill: str, dev: bool) -> Dict[str, Any]:
+    data = dict(entry) if isinstance(entry, Mapping) else {}
+    skill_token = str(skill or "").strip()
+    if source:
+        data.setdefault("origin", source)
+    if skill_token:
+        data.setdefault("originSkill", skill_token)
+    data.setdefault("dev", dev)
+    meta = dict(data.get("_adaos") or {}) if isinstance(data.get("_adaos"), Mapping) else {}
+    if source:
+        meta.setdefault("origin", source)
+    if skill_token:
+        meta.setdefault("originSkill", skill_token)
+    if meta:
+        data["_adaos"] = meta
+    return data
+
+
 def _apply_node_display_to_entry(entry: Dict[str, Any], display: Mapping[str, Any] | None, *, node_id: str | None = None) -> Dict[str, Any]:
     data = dict(entry)
     resolved_node_id = str(node_id or data.get("node_id") or "").strip()
@@ -1036,10 +1054,16 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
                 scoped_token = modal_id_map.get(token, token)
                 if scoped_token in registry_modals:
                     continue
-                registry_modals[scoped_token] = (
+                modal_def = (
                     _apply_node_context_to_ui(value, display, node_id=node_id, modal_id_map=modal_id_map)
                     if node_owned
                     else _clone_json_like(value)
+                )
+                registry_modals[scoped_token] = _mark_modal_def(
+                    modal_def,
+                    source=source,
+                    skill=skill_name,
+                    dev=dev_flag,
                 )
         wid_spec = reg.get("widgets") if isinstance(reg, Mapping) else {}
         if isinstance(wid_spec, Mapping):
@@ -3095,11 +3119,16 @@ class WebspaceScenarioRuntime:
                     if not token:
                         continue
                     scoped_token = modal_id_map.get(token, _node_scoped_catalog_id(node_id, token))
-                    decl["registry"]["modals"][scoped_token] = _apply_node_context_to_ui(
-                        value,
-                        display,
-                        node_id=node_id,
-                        modal_id_map=modal_id_map,
+                    decl["registry"]["modals"][scoped_token] = _mark_modal_def(
+                        _apply_node_context_to_ui(
+                            value,
+                            display,
+                            node_id=node_id,
+                            modal_id_map=modal_id_map,
+                        ),
+                        source=f"skill:subnet.member.{node_id}",
+                        skill=f"subnet.member.{node_id}",
+                        dev=False,
                     )
             wid_spec = registry.get("widgets") if isinstance(registry.get("widgets"), Mapping) else {}
             if isinstance(wid_spec, Mapping):
@@ -3534,10 +3563,16 @@ class WebspaceScenarioRuntime:
                 raw_token = str(key)
                 token = modal_id_map.get(raw_token, raw_token)
                 if token and token not in merged_modals_map:
-                    merged_modals_map[token] = (
+                    modal_def = (
                         _apply_node_context_to_ui(value, decl_display, node_id=node_id, modal_id_map=modal_id_map)
                         if node_owned and node_id
                         else value
+                    )
+                    merged_modals_map[token] = _mark_modal_def(
+                        modal_def,
+                        source=f"skill:{skill_name}" if skill_name else "skill:unknown",
+                        skill=skill_name,
+                        dev=str(decl.get("space") or "default").strip().lower() == "dev",
                     )
 
         if supports_catalog_controls and "apps_catalog" not in merged_modals_map:

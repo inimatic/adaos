@@ -545,7 +545,7 @@ class CodexRootMcpBridge:
             },
             {
                 "name": "get_skill_logs",
-                "description": "Read bounded skill service log tails. Defaults to aggregated logs from active subnet nodes unless scope=root_local is requested, and returns explicit provenance and health for the selected log path.",
+                "description": "Read bounded skill log tails, including service stdout/stderr, in-process runtime logs, and browser UI runtime diagnostics. Defaults to aggregated logs from active subnet nodes unless scope=root_local is requested, and returns explicit provenance and health for the selected log path.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
