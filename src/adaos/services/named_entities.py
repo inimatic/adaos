@@ -586,6 +586,50 @@ def resolve_text(
     ).to_dict()
 
 
+def _registry_conflicts(records: Iterable[NamedEntityRecord]) -> list[dict[str, Any]]:
+    by_label: dict[str, dict[str, Any]] = {}
+    for record in records:
+        for label, match_type in record.label_candidates(include_fallback=False):
+            normalized = normalize_entity_label(label)
+            if not normalized:
+                continue
+            bucket = by_label.setdefault(
+                normalized,
+                {
+                    "label": label,
+                    "normalized": normalized,
+                    "candidates": {},
+                },
+            )
+            candidates = bucket["candidates"]
+            if record.canonical_ref not in candidates:
+                candidates[record.canonical_ref] = {
+                    "canonical_ref": record.canonical_ref,
+                    "kind": record.kind,
+                    "display_label": record.display_label,
+                    "match_types": [],
+                }
+            candidate = candidates[record.canonical_ref]
+            if match_type not in candidate["match_types"]:
+                candidate["match_types"].append(match_type)
+    conflicts: list[dict[str, Any]] = []
+    for bucket in by_label.values():
+        candidates = list(bucket["candidates"].values())
+        if len(candidates) < 2:
+            continue
+        candidates.sort(key=lambda item: (str(item.get("kind") or ""), str(item.get("canonical_ref") or "")))
+        conflicts.append(
+            {
+                "label": bucket["label"],
+                "normalized": bucket["normalized"],
+                "candidate_count": len(candidates),
+                "candidates": candidates,
+            }
+        )
+    conflicts.sort(key=lambda item: (str(item.get("normalized") or ""), int(item.get("candidate_count") or 0)))
+    return conflicts
+
+
 def compact_registry_payload(
     *,
     kind: str | None = None,
@@ -605,6 +649,7 @@ def compact_registry_payload(
         }
         for item in records
     ]
+    conflicts = _registry_conflicts(records)
     fingerprint = hashlib.sha256(
         json.dumps(items, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
     ).hexdigest()
@@ -616,7 +661,9 @@ def compact_registry_payload(
             "count": len(items),
             "fingerprint": fingerprint,
             "updated_at": time.time(),
+            "conflict_count": len(conflicts),
         },
+        "conflicts": conflicts,
     }
 
 
