@@ -105,6 +105,27 @@ without waiting for a training export. Rasa training continues to use the stable
 
 The lookup summary participates in the Rasa training fingerprint, so changing available manifest desktop ids can mark the NLU model stale.
 
+## Runtime entity canonicalization
+
+Device, browser, webspace, node, skill, and scenario names should not become
+permanent model behavior. AdaOS should resolve registered display names,
+observed names, and aliases to canonical refs before or alongside intent
+detection, then pass the model masked text such as `open weather on {device}`.
+
+Target behavior:
+
+- runtime aliases and observed device names do not require Rasa/neural
+  retraining by default;
+- NLU trace records `resolved_entities`, original spans, canonical refs, and
+  ambiguity decisions;
+- Teacher/probe APIs show both static lookup matches and live named-entity
+  resolver matches;
+- dispatch receives canonical refs such as `device:member:<node_id>` rather
+  than display strings.
+
+The target architecture and roadmap are documented in
+[Named Entities and Canonical Naming](../architecture/named-entities.md).
+
 ## Rasa as a service-skill
 
 Rasa is treated as a **service-type skill** (separate Python/venv, managed lifecycle) to avoid dependency conflicts with the hub runtime. AdaOS uses the NLU-only `rasa-port` package, not upstream `rasa==3.6.x` in the root venv.

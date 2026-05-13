@@ -22,6 +22,7 @@ Current implementation details remain documented in:
 - [Operational Event Model](operational-event-model.md)
 - [Webspace Evolution Roadmap](webspace-evolution-roadmap.md)
 - [Device Access and Browsers](device-access-and-browsers.md)
+- [Named Entities and Canonical Naming](named-entities.md)
 
 ## Governing Rules
 
@@ -95,6 +96,10 @@ Examples:
 - `device:browser:<device_id>`
 - `device:member:<node_id>`
 - `webspace:<webspace_id>`
+
+Human-facing names and aliases for these refs are governed by the named-entity
+layer described in [Named Entities and Canonical Naming](named-entities.md).
+The domain ref stays stable when a label changes.
 
 This layer is shared across UI, SDK, runtime, and operator tooling.
 
@@ -185,6 +190,35 @@ Examples:
 - `device:member:member-01`
 - `webspace:desktop`
 
+### Human names are not refs
+
+Human-facing names such as `Kitchen display`, `ZVERZVE-A1BNQF7`, `Edge on
+Windows`, or `Node 0` are labels, not addressing refs.
+They may resolve to a domain ref through the named-entity layer.
+
+Addressing contracts should not encode these labels as routing keys.
+
+Correct shape:
+
+```json
+{
+  "target": {
+    "ref": "device:member:8db40740-b3ff-44bf-baf5-9fb013b35b01",
+    "label": "ZVERZVE-A1BNQF7"
+  }
+}
+```
+
+Avoid:
+
+```json
+{
+  "target": "ZVERZVE-A1BNQF7"
+}
+```
+
+The `label` is display-only and may change without invalidating the ref.
+
 ## Scope Model
 
 Addressing is not complete without scope.
@@ -272,6 +306,42 @@ evolve toward an explicitly typed domain-ref vocabulary:
 Device-facing architecture may continue to document the shorter
 `browser:<device_id>` and `member:<node_id>` forms during migration, but the
 target vocabulary should be explicit about the domain class.
+
+The naming layer should resolve user-facing labels and aliases into these refs
+before actions are dispatched. UI manifests should bind to refs, not to mutable
+display strings.
+
+### Named Entities
+
+Named entities are the bridge from human language to addressing.
+
+The boundary is:
+
+- UI Addressing defines stable typed refs and binding shapes.
+- Named Entities define display names, observed names, aliases, ambiguity, and
+  text-to-ref resolution.
+- NLU and operator tooling should resolve labels to refs before dispatching
+  `action:*` commands.
+- Manifests may include display labels for readability, but action payloads,
+  projection demand, and state binding should use typed refs.
+
+Examples:
+
+- `"show logs for kitchen display"` resolves `kitchen display` to
+  `device:member:<node_id>`, then dispatches an action with that ref.
+- A device settings form displays `ZVERZVE-A1BNQF7`, but the save action targets
+  `device:member:<node_id>`.
+- A browser settings modal may show `Edge on Windows`, but modal addressing
+  should still use the modal/action ref plus `device:browser:<device_id>`.
+
+The direction must stay one-way:
+
+1. user phrase or UI label
+2. named-entity resolution
+3. typed domain ref
+4. action, projection, or state binding
+
+Typed refs should never be derived by parsing display strings.
 
 ## Priority Slice for Web UI
 
@@ -391,6 +461,8 @@ Status note:
   ref identity
 - [ ] update device-access docs so `DeviceRef` is documented as a domain-ref
   slice
+- [ ] keep named-entity docs aligned so human-facing labels resolve into domain
+  refs but never become addressing refs themselves
 - [ ] update browser/runtime docs so Yjs, streams, and local view state are
   described through the same scope vocabulary
 
@@ -419,6 +491,8 @@ Status note:
 
 - [ ] publish LLM-oriented authoring examples using the finalized ref classes
 - [ ] validate manifests against allowed ref kinds and scope combinations
+- [ ] validate that action targets, projection demand, and state bindings do not
+  use mutable display labels as routing keys
 - [x] add repository examples covering shared, node-scoped, and local browser
   state
 

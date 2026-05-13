@@ -62,6 +62,23 @@ Current implementation estimate: **49%** for the practical AdaOS NLU roadmap.
 - [ ] Expose stable template ids for regex, Rasa examples, neural labels, and lookup sets.
 - [ ] Implement stale-write protection using template fingerprints.
 
+## Phase 4a: Runtime Named Entities and Canonicalization
+
+- [ ] Add a named-entity read model over devices, nodes, browsers, webspaces,
+  scenarios, skills, apps, and modals.
+- [ ] Add a deterministic resolver that maps display names, observed names, and
+  aliases to canonical refs before model dispatch.
+- [ ] Add entity masking so model-facing text can use placeholders such as
+  `{device}`, `{webspace}`, and `{scenario}`.
+- [ ] Add ambiguity handling instead of silently choosing between conflicting
+  aliases.
+- [ ] Add Teacher/probe output for resolved entities, unresolved spans,
+  canonical refs, and ambiguity evidence.
+- [ ] Add regression tests proving alias and device-name changes do not require
+  Rasa/neural retraining.
+- [ ] Track the full target design in
+  [Named Entities and Canonical Naming](../architecture/named-entities.md).
+
 ## Phase 5: MCP-Assisted Authoring
 
 - [ ] MCP Server modal issues scoped NLU authoring token.
@@ -90,8 +107,9 @@ Current implementation estimate: **49%** for the practical AdaOS NLU roadmap.
 1. Add a UI-capable action/bridge for safe NLU Teacher API calls, then wire Check phrase to `POST /api/nlu/teacher/{webspace_id}/probe`.
 2. Render probe response in the Teacher modal: trace, intent ranking, entities, slots, lookup matches, confidence, and action preview.
 3. Add "save correct example" backend action with scenario/skill target selection and audit metadata.
-4. Expose stable template ids for regex, Rasa examples, neural labels, and lookup sets.
-5. Add stage latency and golden phrase checks.
+4. Add the first named-entity resolver slice for device and browser aliases.
+5. Expose stable template ids for regex, Rasa examples, neural labels, and lookup sets.
+6. Add stage latency and golden phrase checks.
 
 ## Last Completed Slice
 

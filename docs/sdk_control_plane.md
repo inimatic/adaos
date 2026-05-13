@@ -19,6 +19,7 @@ In the current codebase, the control plane is split across:
 - canonical neighborhood projection access over subnet-directory peers, root connectivity, and nearby capacity snapshots
 - canonical workspace, profile, browser-session, device, quota, and local capacity objects through SDK-first helpers
 - canonical kind and relation registries under `adaos.services.system_model.model` so SDK, API, and LLM projections share the same vocabulary
+- target named-entity vocabulary for display names, observed names, aliases, and canonical refs as described in [Named Entities and Canonical Naming](architecture/named-entities.md)
 - shared governance and action-role defaults so SDK-facing objects carry owner, visibility, and role hints consistently
 - local inventory projection that combines node, workspace, browser, device, skill, scenario, capacity, and selected reliability-derived root/quota objects for LLM-oriented reasoning
 
