@@ -1472,7 +1472,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 88%.
+- Overall: 91%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1492,11 +1492,15 @@ Integration progress:
   matches, per-locale ambiguity evidence in NLU trace, runtime-only
   model-training evidence for alias resolution, first governed alias-add
   proposal/apply contract, SDK alias helpers, lifecycle event envelopes for
-  alias add/conflict, and focused tests.
-- Current implementation slice: governed alias proposal/apply contracts before
-  durable source mutation.
-- Not started yet: durable governed writes, Root MCP write exposure, and
-  consumer migration.
+  alias add/conflict, durable device/browser alias persistence in
+  `access_links`, `device_access.add_device_alias`,
+  `sdk.data.entities.add_device_alias`, authoritative alias lifecycle event
+  publishing, and focused tests.
+- Current implementation slice: durable governed alias writes for device and
+  browser entities.
+- Not started yet: Root MCP write exposure, audit trail storage,
+  remove/deprecate alias operations, profile-owned aliases, and consumer
+  migration.
 - Verification note: targeted MCP/named-entity checks pass, and
   `test_root_mcp_foundation` is green again after test fixture alignment. The
   broader Yjs projection runs still expose pre-existing
@@ -1517,10 +1521,10 @@ Next implementation steps:
 1. Start migrating node/browser labels to the shared display helper.
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
-3. Wire governed alias proposal/apply into the authoritative device/profile
-   write paths with `base_fingerprint` and audit metadata.
-4. Expose governed alias proposals through Root MCP after the durable write
-   path exists.
+3. Add `base_fingerprint` and audit metadata to the durable device alias write
+   path.
+4. Expose governed alias proposals through Root MCP now that the first durable
+   write path exists.
 5. Migrate node/browser labels to shared display helpers in remaining skill
    projections.
 
@@ -1605,6 +1609,8 @@ Actions:
 
 - [x] Add `sdk.data.entities` read helpers.
 - [x] Add first governed alias-add proposal/apply service and SDK helpers.
+- [x] Add durable device/browser alias write helper:
+  `sdk.data.entities.add_device_alias`.
 - [x] Expose named-entity descriptors through Root MCP read capabilities.
 - [x] Include named entities in NLUAuthoringPlane context.
 
@@ -1617,14 +1623,15 @@ Actions:
 - [ ] Emit `entity.observed` when node, browser, workspace, or manifest sources
   report observed labels.
 - [ ] Emit `entity.draft_name.suggested` for generated browser/node draft names.
-- [ ] Emit display-name and alias lifecycle events from authoritative write
-  paths.
+- [x] Emit alias lifecycle events from the first authoritative device/browser
+  alias write path.
+- [ ] Emit display-name lifecycle events and alias remove/deprecate lifecycle
+  events from authoritative write paths.
 - [x] Return `entity.alias.added`, `entity.alias.conflict.detected`, and
   `entity.registry.changed` event envelopes from the governed alias-add
   apply contract.
-- [ ] Include `locale` or `locale: "und"` in label/alias lifecycle events.
-  The first alias-add contract does this; authoritative write paths still need
-  migration.
+- [x] Include `locale` or `locale: "und"` in the first authoritative alias-add
+  lifecycle events.
 - [ ] Emit `entity.alias.conflict.detected`,
   `entity.resolution.ambiguous`, and `entity.resolution.failed` into
   Notifications and node skill logs when operator attention is useful.
@@ -1646,5 +1653,7 @@ Actions:
 - [ ] Update operator-facing skills to consume canonical refs and shared display
   names instead of raw labels.
 - [ ] Remove duplicate fallback rules after the shared helper is adopted.
-- [ ] Add regression tests for `Node N` fallback, hostname display, browser
-  draft names, alias ambiguity, and renamed-device NLU resolution.
+- [x] Add regression test proving a newly persisted browser alias resolves
+  through NLU without model retraining.
+- [ ] Add remaining regression tests for `Node N` fallback, hostname display,
+  browser draft names, alias ambiguity, and renamed-device NLU resolution.

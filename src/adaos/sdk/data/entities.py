@@ -56,4 +56,29 @@ def apply_alias_add(proposal: dict[str, Any]) -> dict[str, Any]:
     return _service.apply_alias_add(proposal)
 
 
-__all__ = ["apply_alias_add", "list_entities", "propose_alias_add", "resolve_text"]
+def add_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    from adaos.services import device_access as _device_access
+
+    return _device_access.add_device_alias(
+        device_ref,
+        alias,
+        locale=locale,
+        actor=actor,
+        request_id=request_id,
+    )
+
+
+__all__ = [
+    "add_device_alias",
+    "apply_alias_add",
+    "list_entities",
+    "propose_alias_add",
+    "resolve_text",
+]

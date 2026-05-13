@@ -49,6 +49,49 @@ def _list_of_texts(value: Any, *, role: str | None = None) -> list[str]:
     return normalize_node_names(items, role=role)
 
 
+def _list_of_raw_texts(value: Any) -> list[str]:
+    items = list(value) if isinstance(value, list) else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        token = _text(item)
+        folded = token.casefold()
+        if not token or folded in seen:
+            continue
+        seen.add(folded)
+        out.append(token)
+    return out
+
+
+def _list_of_labels(value: Any) -> list[dict[str, Any]]:
+    items = list(value) if isinstance(value, list) else []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        text = _text(item.get("text") or item.get("label") or item.get("value"))
+        if not text:
+            continue
+        locale = _text(item.get("locale")) or "und"
+        role = _text(item.get("role")) or "alias"
+        key = (text.casefold(), locale.casefold(), role.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        label = {
+            "text": text,
+            "locale": locale,
+            "role": role,
+            "status": _text(item.get("status")) or "confirmed",
+        }
+        source = _text(item.get("source"))
+        if source:
+            label["source"] = source
+        out.append(label)
+    return out
+
+
 def _unique_runtime_sources(*values: str) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -128,6 +171,8 @@ def _build_policy_block(
         "expires_at": _float_or_none(entry.get("expires_at")),
         "revoked": revoked,
         "revoked_at": _float_or_none(entry.get("revoked_at")),
+        "aliases": _list_of_raw_texts(entry.get("aliases")),
+        "labels": _list_of_labels(entry.get("labels")),
     }
 
 

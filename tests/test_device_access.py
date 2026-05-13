@@ -280,6 +280,39 @@ def test_rename_device_updates_live_member_when_connected(monkeypatch) -> None:
     ]
 
 
+def test_add_device_alias_requires_policy_and_delegates_to_access_links(monkeypatch) -> None:
+    device = {
+        "ref": "member:member-1",
+        "kind": "member",
+        "identity": {"node_id": "member-1"},
+        "policy": {"present": True, "managed_state": "managed", "revoked": False},
+    }
+    calls: list[tuple[str, str, str, str | None, str | None, str | None]] = []
+
+    def _fake_add_alias(kind, link_id, alias, *, locale=None, actor=None, source="access_links", request_id=None):
+        calls.append((kind, link_id, alias, locale, actor, source))
+        return {"ok": True, "status": "applied", "entry": {"id": link_id}}
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("member", "member-1"),
+    )
+    monkeypatch.setattr(device_access._access_links, "add_link_alias", _fake_add_alias)
+
+    result = device_access.add_device_alias(
+        "member:member-1",
+        "kitchen screen",
+        locale="en",
+        actor="user:operator",
+    )
+
+    assert result["ok"] is True
+    assert result["device"] == device
+    assert calls == [("member", "member-1", "kitchen screen", "en", "user:operator", "device_access")]
+
+
 def test_detach_device_unregisters_live_member_when_connected(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
     device = {

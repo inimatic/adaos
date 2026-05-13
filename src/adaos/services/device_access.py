@@ -211,6 +211,15 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
                 params=command_params,
             ),
         },
+        "aliases": {
+            "labels": list(policy.get("labels") or []),
+            "add": _toggle(
+                bool(name_meta.get("enabled")),
+                reason=_text(name_meta.get("reason")) or None,
+                target="browsers_skill.add_device_alias",
+                params=command_params,
+            ),
+        },
         "lifetime": {
             "current_label": _lifetime_label(policy),
             "current_mode": _text(policy.get("lifetime_mode")) or "permanent",
@@ -286,6 +295,38 @@ def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
     }
 
 
+def add_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    device, error = _device_or_error(device_ref)
+    if error is not None:
+        return error
+    assert device is not None
+    if not _policy_present(device):
+        return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
+    kind, link_id = _kind_and_link_id(_text(device_ref))
+    result = _access_links.add_link_alias(
+        kind,
+        link_id,
+        _text(alias),
+        locale=locale,
+        actor=actor,
+        source="device_access",
+        request_id=request_id,
+    )
+    if not bool(result.get("ok")):
+        return result
+    return {
+        **result,
+        "device": _device_inventory.get_device(_text(device_ref)),
+    }
+
+
 def set_device_lifetime(device_ref: str, preset: str) -> dict[str, Any]:
     device, error = _device_or_error(device_ref)
     if error is not None:
@@ -349,6 +390,7 @@ def adopt_device(device_ref: str, display_name: str | None = None, preset: str =
 
 __all__ = [
     "adopt_device",
+    "add_device_alias",
     "detach_device",
     "get_device_settings",
     "get_command_profile",

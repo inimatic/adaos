@@ -282,6 +282,10 @@ Localization rules for generated skills:
   `apply_alias_add` instead of mutating projected registry data directly; the
   apply result returns lifecycle event envelopes that the authoritative write
   path can persist and publish
+- when adding an alias for an actual browser/member device, prefer
+  `sdk.data.entities.add_device_alias(device_ref, alias, locale=...)`; it
+  writes through the governed access-link source and keeps Yjs as a read-only
+  projection
 
 ## Guarding and quarantine
 

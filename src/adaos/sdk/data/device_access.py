@@ -23,6 +23,23 @@ def rename_device(device_ref: str, display_name: str) -> dict:
     return _service.rename_device(str(device_ref or ""), str(display_name or ""))
 
 
+def add_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+) -> dict:
+    return _service.add_device_alias(
+        str(device_ref or ""),
+        str(alias or ""),
+        locale=locale,
+        actor=actor,
+        request_id=request_id,
+    )
+
+
 def set_device_lifetime(device_ref: str, preset: str) -> dict:
     return _service.set_device_lifetime(str(device_ref or ""), str(preset or ""))
 
