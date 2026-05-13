@@ -525,6 +525,8 @@ action routing.
   `Node N`.
 - [x] Make the client node-display helper treat legacy `Node N` labels as
   fallback when registered or observed names are available.
+- [x] Enrich client catalog and modal-title node labels from
+  `registry.named_entities` when the local label is only fallback-like.
 - [ ] Extend UI/device consumers to prefer user-confirmed display names before
   registered/observed names everywhere.
 - [x] Generate browser draft names from browser family, OS, and form factor at
@@ -556,6 +558,8 @@ action routing.
 - [ ] Show ambiguity/conflict notifications in the Notifications surface.
 - [ ] Show why a displayed name was chosen: user name, observed hostname,
   browser draft, or fallback.
+- [x] Use `registry.named_entities` as a read-only UI enrichment source for the
+  first catalog/modal node-label consumers.
 
 ### Phase 4 - SDK and skill migration
 
