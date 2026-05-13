@@ -87,6 +87,11 @@ from adaos.services.node_runtime_state import (
     migrate_legacy_nats_runtime_config,
     save_nats_runtime_config,
 )
+from adaos.services.nats_errors import (
+    install_transient_nats_log_filter,
+    is_transient_nats_error,
+    nats_error_summary,
+)
 from adaos.services.hub_root_outbox_store import load_outbox_items, outbox_store_path, save_outbox_items
 from adaos.services.root.control_lifecycle_sync import report_hub_control_lifecycle_state
 from adaos.services.root.core_update_sync import reconcile_hub_core_update
@@ -3234,6 +3239,7 @@ class BootstrapService:
 
                             async def _on_error_cb(e: Exception, *, nc_for_diag: Any | None = None) -> None:
                                 # Best-effort; keep quiet unless explicitly verbose or useful
+                                is_transient = is_transient_nats_error(e)
                                 is_eof = type(e).__name__ == "UnexpectedEOF" or "unexpected eof" in str(e).lower()
                                 if os.getenv("SILENCE_NATS_EOF", "0") == "1" and is_eof:
                                     return
@@ -3347,15 +3353,18 @@ class BootstrapService:
                                             )
                                         except Exception:
                                             pass
-                                    self._log.warning(
-                                        "nats error_cb hub_id=%s server=%s type=%s err=%s",
+                                    error_summary = nats_error_summary(e)
+                                    log_method = self._log.info if is_transient else self._log.warning
+                                    log_method(
+                                        "nats error_cb hub_id=%s server=%s transient=%s type=%s err=%s",
                                         hub_id,
                                         _resolve_nats_log_server(
                                             current_attempt=nats_attempt_server,
                                             connected_server=nats_last_server,
                                         ),
+                                        is_transient,
                                         type(e).__name__,
-                                        str(e),
+                                        error_summary,
                                     )
                                 except Exception:
                                     pass
@@ -3436,6 +3445,11 @@ class BootstrapService:
                                     )
                                 except Exception:
                                     pass
+
+                            try:
+                                install_transient_nats_log_filter()
+                            except Exception:
+                                pass
 
                             # NOTE: Connect to candidates sequentially. Some endpoints can hang the WS handshake
                             # (leading to "Authentication Timeout") while others work; trying one-by-one keeps
@@ -8245,34 +8259,52 @@ class BootstrapService:
                                 pass
                             return
                         except Exception as e:
+                            ran_for_s = time.monotonic() - started_at
+                            is_transient = is_transient_nats_error(e)
+                            error_summary = nats_error_summary(e)
                             try:
-                                self._log.warning(
-                                    "nats supervisor error hub_id=%s server=%s type=%s err=%s",
-                                    hub_id,
-                                    _resolve_nats_log_server(
-                                        current_attempt=nats_attempt_server,
-                                        connected_server=nats_last_server,
-                                    ),
-                                    type(e).__name__,
-                                    str(e),
-                                )
+                                if is_transient:
+                                    self._log.warning(
+                                        "nats transient disconnect hub_id=%s server=%s type=%s err=%s ran_for_s=%.1f",
+                                        hub_id,
+                                        _resolve_nats_log_server(
+                                            current_attempt=nats_attempt_server,
+                                            connected_server=nats_last_server,
+                                        ),
+                                        type(e).__name__,
+                                        error_summary,
+                                        ran_for_s,
+                                    )
+                                else:
+                                    self._log.warning(
+                                        "nats supervisor error hub_id=%s server=%s type=%s err=%s",
+                                        hub_id,
+                                        _resolve_nats_log_server(
+                                            current_attempt=nats_attempt_server,
+                                            connected_server=nats_last_server,
+                                        ),
+                                        type(e).__name__,
+                                        error_summary,
+                                    )
                             except Exception:
                                 pass
                             try:
-                                self._log.warning(
-                                    "nats encountered error hub_id=%s server=%s type=%s err=%s",
-                                    hub_id,
-                                    _resolve_nats_log_server(
-                                        current_attempt=nats_attempt_server,
-                                        connected_server=nats_last_server,
-                                    ),
-                                    type(e).__name__,
-                                    str(e),
-                                )
+                                if not is_transient:
+                                    self._log.warning(
+                                        "nats encountered error hub_id=%s server=%s type=%s err=%s",
+                                        hub_id,
+                                        _resolve_nats_log_server(
+                                            current_attempt=nats_attempt_server,
+                                            connected_server=nats_last_server,
+                                        ),
+                                        type(e).__name__,
+                                        error_summary,
+                                    )
                             except Exception:
                                 pass
                             try:
-                                print(f"[hub-io] nats: encountered error: {e}")
+                                if os.getenv("HUB_NATS_VERBOSE", "0") == "1" or not is_transient:
+                                    print(f"[hub-io] nats: encountered error: {error_summary}")
                             except Exception:
                                 pass
                             try:
@@ -8410,22 +8442,6 @@ class BootstrapService:
                                 delays = []
                             except Exception:
                                 pass
-
-                            ran_for_s = time.monotonic() - started_at
-                            try:
-                                low = str(e).lower()
-                                is_transient = (
-                                    type(e).__name__ in ("UnexpectedEOF", "ClientConnectionResetError", "ConnectionClosedError")
-                                    or "unexpected eof" in low
-                                    or "connection reset" in low
-                                    or "clientconnectionreseterror" in low
-                                    or "cannot write to closing transport" in low
-                                    or "connectionclosed" in low
-                                    or "no close frame received or sent" in low
-                                    or "winerror 121" in low
-                                )
-                            except Exception:
-                                is_transient = False
 
                             try:
                                 auto_env = os.getenv("HUB_NATS_WS_AUTO_FALLBACK")
