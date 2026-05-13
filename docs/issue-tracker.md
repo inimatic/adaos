@@ -42,6 +42,45 @@ Actions:
 - [ ] Add rate limiting and duplicate suppression for repeated renderer errors.
 - [ ] Feed skill logs into the future LLM skill-debugging MCP workflow.
 
+## Browser Startup and Progressive Hydration
+
+### Goal
+
+Make the browser desktop usable immediately after login by rendering from
+available local state first, while live Yjs sync and materialization catch up in
+the background.
+
+### Current Status
+
+Snapshot date: 2026-05-13.
+
+The browser client now keeps a read-only last-good desktop render snapshot in
+localStorage. `YDocService` uses it only as a fallback for missing `ui`, `data`,
+and `registry` reads; live Yjs branches always take precedence, and Yjs
+IndexedDB persistence remains opt-in. `DesktopRendererComponent` now binds the
+desktop view before `initFromHub()` resolves, so login no longer blocks first
+paint on first Yjs sync/materialization.
+
+### Tasks
+
+#### BSPH-001: Render desktop before Yjs first-sync completion
+
+Status: in progress.
+
+Actions:
+
+- [x] Add a read-only last-good render snapshot separate from Yjs persistence.
+- [x] Save snapshots only from live `interactive` or `ready` materialization.
+- [x] Let desktop schema/UI reads fall back to the snapshot while live branches
+  are absent.
+- [x] Start desktop rendering before `YDocService.initFromHub()` resolves.
+- [x] Add focused Angular tests for snapshot fallback and non-blocking desktop
+  startup.
+- [ ] Add browser-visible "syncing latest state" affordance for cached first
+  paint, without hiding normal link/Yjs diagnostics.
+- [ ] Add an end-to-end timing assertion for login-to-first-desktop-paint once
+  the browser E2E harness is available.
+
 ## Modal Projection and Runtime Recovery Integrity
 
 ### Goal
