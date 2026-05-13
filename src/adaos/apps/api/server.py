@@ -101,6 +101,10 @@ _startup_log = logging.getLogger("adaos.startup")
 _runtime_log = logging.getLogger("adaos.runtime")
 
 
+def _startup_stage_logs_enabled() -> bool:
+    return str(os.getenv("ADAOS_STARTUP_STAGE_LOGS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class _StartupTimer:
     def __init__(self, stage: str):
         self.stage = stage
@@ -108,13 +112,15 @@ class _StartupTimer:
 
     def __enter__(self):
         self.started = time.perf_counter()
-        _startup_log.info("startup stage start stage=%s", self.stage)
+        if _startup_stage_logs_enabled():
+            _startup_log.info("startup stage start stage=%s", self.stage)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         duration = time.perf_counter() - self.started
         if exc is None:
-            _startup_log.info("startup stage done stage=%s duration_s=%.3f", self.stage, duration)
+            if _startup_stage_logs_enabled():
+                _startup_log.info("startup stage done stage=%s duration_s=%.3f", self.stage, duration)
         else:
             _startup_log.warning(
                 "startup stage failed stage=%s duration_s=%.3f error=%s",

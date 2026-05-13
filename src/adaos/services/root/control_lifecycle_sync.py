@@ -24,14 +24,20 @@ _CONTROL_LIFECYCLE_FLOW_ID = "hub_root.control.lifecycle"
 _LOG = logging.getLogger("adaos.startup")
 
 
+def _startup_stage_logs_enabled() -> bool:
+    return str(os.getenv("ADAOS_STARTUP_STAGE_LOGS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _stage_mark(stage: str, *, started: float | None = None, failed: Exception | None = None) -> float:
     now = time.perf_counter()
     if started is None:
-        _LOG.info("startup stage start stage=%s", stage)
+        if _startup_stage_logs_enabled():
+            _LOG.info("startup stage start stage=%s", stage)
         return now
     duration = now - started
     if failed is None:
-        _LOG.info("startup stage done stage=%s duration_s=%.3f", stage, duration)
+        if _startup_stage_logs_enabled():
+            _LOG.info("startup stage done stage=%s duration_s=%.3f", stage, duration)
     else:
         _LOG.warning(
             "startup stage failed stage=%s duration_s=%.3f error=%s",
