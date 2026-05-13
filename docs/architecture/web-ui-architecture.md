@@ -315,6 +315,28 @@ The shell should be allowed to:
 - expose honest readiness state rather than pretending full hydration already
   exists
 
+### Login-Time Progressive Hydration
+
+After authentication, the desktop shell may render from the last known good
+desktop render snapshot before the live Yjs room finishes first sync.
+
+This snapshot is a read-only browser render cache, not a second source of
+truth. It can provide `ui`, `data`, and `registry` branches for first paint
+when the live Yjs branch is still absent, but live Yjs always wins as soon as a
+branch materializes. The cache is written only from live materialization states
+that are at least `interactive`, and normal Yjs persistence remains opt-in
+because replaying an old Yjs document can mutate or overwrite freshly seeded
+server state.
+
+Expected behavior:
+
+- login can show the previous usable desktop immediately
+- Yjs sync and materialization continue in the background
+- widgets and schemas refresh as live branches arrive
+- degraded/sync status remains visible instead of being hidden by the cache
+- user writes should continue through authoritative runtime commands, not by
+  mutating cached JSON
+
 ## Renderer Registry
 
 The renderer registry is the universalization mechanism.
