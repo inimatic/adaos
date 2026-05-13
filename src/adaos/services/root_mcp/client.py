@@ -117,6 +117,28 @@ class RootMcpClient:
     ) -> dict[str, Any]:
         return self.call("adaos_dev.get_public_scenario_registry", request_id=request_id, trace_id=trace_id, dry_run=dry_run)
 
+    def get_adaos_dev_named_entity_registry(
+        self,
+        *,
+        webspace_id: str | None = None,
+        kind: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if kind:
+            arguments["kind"] = str(kind)
+        return self.call(
+            "adaos_dev.get_named_entity_registry",
+            arguments=arguments,
+            request_id=request_id,
+            trace_id=trace_id,
+            dry_run=dry_run,
+        )
+
     def list_managed_targets(self, *, environment: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if environment:
