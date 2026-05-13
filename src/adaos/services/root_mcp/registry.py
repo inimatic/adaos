@@ -90,8 +90,8 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "preferred_for": ["nlu_teacher", "entity_canonicalization", "llm_authoring"],
                 "descriptor_ids": ["named_entity_registry"],
                 "tool_prefixes": ["nlu_authoring."],
-                "capability_profiles": [],
-                "backing_store": "root_descriptor_cache + named_entity_read_model",
+                "capability_profiles": ["ProfileOpsControl"],
+                "backing_store": "root_descriptor_cache + named_entity_read_model + governed_access_links",
             },
         ],
     }

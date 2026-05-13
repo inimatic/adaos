@@ -167,6 +167,35 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def add_nlu_authoring_device_alias(
+        self,
+        *,
+        device_ref: str,
+        alias: str,
+        locale: str | None = None,
+        actor: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "device_ref": str(device_ref or ""),
+            "alias": str(alias or ""),
+        }
+        if locale:
+            arguments["locale"] = str(locale)
+        if actor:
+            arguments["actor"] = str(actor)
+        if request_id:
+            arguments["request_id"] = str(request_id)
+        return self.call(
+            "nlu_authoring.add_device_alias",
+            arguments=arguments,
+            request_id=request_id,
+            trace_id=trace_id,
+            dry_run=dry_run,
+        )
+
     def list_managed_targets(self, *, environment: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if environment:
