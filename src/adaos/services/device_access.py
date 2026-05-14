@@ -161,6 +161,14 @@ def _hub_ref_id(device_ref: str) -> str | None:
     return hub_id or None
 
 
+def _config_text(conf: Any, *names: str) -> str:
+    for name in names:
+        value = _text(getattr(conf, name, None))
+        if value:
+            return value
+    return ""
+
+
 def _load_node_config():
     from adaos.services.node_config import load_config
 
@@ -171,6 +179,33 @@ def _set_local_node_names(names: list[str]):
     from adaos.services.node_config import set_node_names
 
     return set_node_names(names)
+
+
+def _local_hub_ref_from_member_alias(device_ref: str) -> str | None:
+    token = _text(device_ref)
+    try:
+        parsed = _device_inventory.parse_device_ref(token)
+    except Exception:
+        return None
+    if parsed is None:
+        return None
+    kind, link_id = parsed
+    if kind != "member":
+        return None
+    try:
+        conf = _load_node_config()
+    except Exception:
+        return None
+    role = _config_text(conf, "role", "node_role").lower()
+    node_id = _config_text(conf, "node_id_value", "node_id")
+    subnet_id = _config_text(conf, "subnet_id_value", "subnet_id")
+    if role == "hub" and node_id and link_id == node_id and subnet_id:
+        return f"hub:{subnet_id}"
+    return None
+
+
+def _hub_ref_for_device_ref(device_ref: str) -> str | None:
+    return _hub_ref_id(device_ref) and _text(device_ref) or _local_hub_ref_from_member_alias(device_ref)
 
 
 def _hub_config_matches(device_ref: str) -> tuple[Any | None, dict[str, Any] | None]:
@@ -301,14 +336,14 @@ def _hub_device_settings(device_ref: str) -> dict[str, Any] | None:
 
 
 def get_command_profile(device_ref: str) -> dict[str, Any] | None:
-    hub_id = _hub_ref_id(device_ref)
-    if hub_id:
-        conf, error = _hub_config_matches(device_ref)
+    hub_ref = _hub_ref_for_device_ref(device_ref)
+    if hub_ref:
+        conf, error = _hub_config_matches(hub_ref)
         if error is not None or conf is None:
             return None
         node_id = _text(getattr(conf, "node_id_value", None) or getattr(conf, "node_id", None)) or None
         return {
-            "device_ref": _text(device_ref),
+            "device_ref": hub_ref,
             "kind": "hub",
             "rename": _toggle(True),
             "set_lifetime": _toggle(False, reason="hub_lifetime_not_applicable"),
@@ -359,8 +394,9 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
 
 
 def get_device_settings(device_ref: str) -> dict[str, Any] | None:
-    if _hub_ref_id(device_ref):
-        return _hub_device_settings(device_ref)
+    hub_ref = _hub_ref_for_device_ref(device_ref)
+    if hub_ref:
+        return _hub_device_settings(hub_ref)
     device, error = _device_or_error(device_ref)
     if error is not None:
         return None
@@ -501,26 +537,27 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
 
 
 def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
-    if _hub_ref_id(device_ref):
+    hub_ref = _hub_ref_for_device_ref(device_ref)
+    if hub_ref:
         names = _name_list(display_name)
         if not names:
             return {"ok": False, "error": "name_required", "device_ref": _text(device_ref)}
-        conf, error = _hub_config_matches(device_ref)
+        conf, error = _hub_config_matches(hub_ref)
         if error is not None:
             return error
         updated = _set_local_node_names(names)
         subnet_id = _text(getattr(updated, "subnet_id_value", None) or getattr(updated, "subnet_id", None))
         return {
             "ok": True,
-            "device_ref": f"hub:{subnet_id or _hub_ref_id(device_ref) or 'local'}",
+            "device_ref": f"hub:{subnet_id or _hub_ref_id(hub_ref) or 'local'}",
             "entry": {
                 "kind": "hub",
-                "id": subnet_id or _hub_ref_id(device_ref),
+                "id": subnet_id or _hub_ref_id(hub_ref),
                 "display_name": names[0],
                 "node_names": names,
                 "storage": ".adaos/node.yaml: node.node_names",
             },
-            "device": _hub_device_settings(f"hub:{subnet_id or _hub_ref_id(device_ref) or 'local'}"),
+            "device": _hub_device_settings(f"hub:{subnet_id or _hub_ref_id(hub_ref) or 'local'}"),
             "runtime_update": {"attempted": False, "applied": True},
         }
     device, error = _device_or_error(device_ref)
@@ -655,7 +692,7 @@ def deprecate_device_alias(
 
 
 def set_device_lifetime(device_ref: str, preset: str) -> dict[str, Any]:
-    if _hub_ref_id(device_ref):
+    if _hub_ref_for_device_ref(device_ref):
         return {"ok": False, "error": "hub_lifetime_not_applicable", "device_ref": _text(device_ref)}
     device, error = _device_or_error(device_ref)
     if error is not None:
@@ -674,7 +711,7 @@ def set_device_lifetime(device_ref: str, preset: str) -> dict[str, Any]:
 
 
 def detach_device(device_ref: str) -> dict[str, Any]:
-    if _hub_ref_id(device_ref):
+    if _hub_ref_for_device_ref(device_ref):
         return {"ok": False, "error": "hub_detach_not_applicable", "device_ref": _text(device_ref)}
     device, error = _device_or_error(device_ref)
     if error is not None:
