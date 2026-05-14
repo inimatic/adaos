@@ -2,7 +2,7 @@
 
 ![AdaOS CI](https://github.com/stipot-com/adaos/actions/workflows/ci.yml/badge.svg)
 
-AdaOS is a Python-based platform for building distributed assistant systems composed of skills, scenarios, and node services. It provides a local CLI, an HTTP API, runtime services, and developer tooling for bootstrapping, testing, orchestration, and automation across local, private, and hybrid environments.
+AdaOS is an environment for personal digital assistants. It turns devices, agents, skills, applications, and interfaces into one assistant environment while keeping the lower-level subnet, scenario, widget, and hub/member machinery available for diagnostics and developer workflows.
 
 [Documentation](https://stipot-com.github.io/adaos/)
 
@@ -10,9 +10,11 @@ AdaOS is a Python-based platform for building distributed assistant systems comp
 
 AdaOS is designed around a small core and extensible edges:
 
+- an **Assistant** is the persistent user-facing environment, internally backed by a subnet
+- **Webspaces** define web access and projection contexts such as Main, Owner, Guests, or Developer
+- **Applications** are user-facing scenarios inside a webspace; `web_desktop` is shown as **Capabilities**
+- **Devices** are physical or virtual hosts, while **Agents** are software participants running on them
 - `skills` implement focused capabilities such as integrations, automations, interface logic, or assistant behaviors
-- `scenarios` compose workflows and user-facing flows on top of runtime services and skills
-- `nodes` can run as hubs or members inside a larger AdaOS network
 - `SDK`, `CLI` and `API` provide local control, automation, diagnostics, and operational workflows
 
 This repository contains the open developer platform: core runtime components, SDK modules, bootstrap scripts, documentation, and tests for local development, experimentation, and integration work.
