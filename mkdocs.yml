@@ -145,6 +145,7 @@ nav:
   - Architecture:
       - Overview: architecture/index.md
       - Runtime Overview: architecture/overview.md
+      - Product Terminology: architecture/product-terminology.md
       - Layers: architecture/layers.md
       - Agent Context: architecture/context.md
       - Security: architecture/security.md
@@ -160,6 +161,7 @@ nav:
       - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
       - Device Access and Browsers: architecture/device-access-and-browsers.md
       - Device Access Roadmap: architecture/device-access-roadmap.md
+      - Skill Assets and Icons Roadmap: architecture/skill-assets-and-icons-roadmap.md
   - CLI:
       - Overview: cli/index.md
       - API Service: cli/api.md

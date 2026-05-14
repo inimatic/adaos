@@ -48,6 +48,10 @@ SEED: dict = {
                 },
             },
             "modals": {
+                "settings": {
+                    "title": "Settings",
+                    "type": "scenario-settings",
+                },
                 "apps_catalog": {
                     "title": "Available Apps",
                     "schema": {
