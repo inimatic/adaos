@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from adaos.services import access_links
 from adaos.services import named_entities
 from adaos.services.yjs import gateway_ws
@@ -89,6 +91,37 @@ def test_yws_browser_session_metadata_accepts_client_handshake_fields() -> None:
         "form_factor": "Desktop",
         "user_agent": "Mozilla/5.0 Edg/123",
     }
+
+
+def test_access_links_emits_specific_lifecycle_events_before_registry_invalidation(monkeypatch) -> None:
+    emitted: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr("adaos.services.agent_context.get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(
+        "adaos.services.eventbus.emit",
+        lambda _bus, topic, payload, source=None: emitted.append((topic, dict(payload))),
+    )
+
+    access_links._emit_entity_registry_changed(
+        "browser",
+        {},
+        {
+            "id": "dev-browser",
+            "kind": "browser",
+            "browser_family": "Edge",
+            "os_name": "Windows",
+            "form_factor": "Desktop",
+            "last_webspace_id": "desktop",
+        },
+        reason="browser_session.changed",
+    )
+
+    assert [topic for topic, _payload in emitted] == [
+        named_entities.ENTITY_OBSERVED,
+        named_entities.ENTITY_DRAFT_NAME_SUGGESTED,
+        named_entities.ENTITY_REGISTRY_CHANGED,
+    ]
+    assert emitted[1][1]["current"]["draft_name"] == "Edge on Windows"
 
 
 def test_add_browser_alias_persists_label_and_updates_named_entity_resolution(monkeypatch) -> None:

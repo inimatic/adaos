@@ -742,6 +742,125 @@ def _event_envelope(topic: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"topic": topic, "payload": dict(payload)}
 
 
+def _device_event_scope(kind: str, entry_id: str, current: Mapping[str, Any]) -> dict[str, Any]:
+    webspace_id = _text(current.get("last_webspace_id"))
+    return {
+        "device_id": _text(entry_id),
+        "link_kind": _text(kind),
+        **({"webspace_id": webspace_id} if webspace_id else {}),
+    }
+
+
+def _browser_draft_from_registry_entry(entry_id: str, entry: Mapping[str, Any]) -> str | None:
+    if not any(_text(entry.get(key)) for key in ("browser_family", "os_name", "form_factor")):
+        return None
+    identity = {
+        "browser_family": entry.get("browser_family"),
+        "os_name": entry.get("os_name"),
+        "form_factor": entry.get("form_factor"),
+        "browser_device_id": entry_id,
+    }
+    return _browser_draft_name(identity, fallback=entry_id)
+
+
+def device_entity_lifecycle_event_envelopes(
+    *,
+    kind: str,
+    entry_id: str,
+    previous: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+    source: str,
+    reason: str,
+) -> tuple[Mapping[str, Any], ...]:
+    link_kind = "member" if _text(kind) == "member" else "browser"
+    token = _text(entry_id)
+    if not token:
+        return ()
+    previous_view = _mapping(previous)
+    current_view = _mapping(current)
+    entity_ref = f"device:{link_kind}:{token}"
+    entity_kind = f"device.{link_kind}"
+    scope = _device_event_scope(link_kind, token, current_view)
+    events: list[Mapping[str, Any]] = []
+
+    previous_display = _text(previous_view.get("display_name"))
+    current_display = _text(current_view.get("display_name"))
+    if current_display and previous_display != current_display:
+        payload = entity_event_payload(
+            entity_ref=entity_ref,
+            entity_kind=entity_kind,
+            source=source,
+            scope=scope,
+            previous={"display_name": previous_display or None},
+            current={"display_name": current_display},
+            reason=reason or "display_name.changed",
+        )
+        events.append(_event_envelope(ENTITY_DISPLAY_NAME_CHANGED, payload))
+
+    if link_kind == "member":
+        observed_changed = (
+            _text(previous_view.get("hostname")) != _text(current_view.get("hostname"))
+            or list(previous_view.get("node_names") or []) != list(current_view.get("node_names") or [])
+        )
+        current_hostname = _text(current_view.get("hostname"))
+        current_node_names = [str(item) for item in list(current_view.get("node_names") or []) if str(item).strip()]
+        if observed_changed and (current_hostname or current_node_names):
+            payload = entity_event_payload(
+                entity_ref=entity_ref,
+                entity_kind=entity_kind,
+                source=source,
+                scope=scope,
+                previous={
+                    "observed_name": _text(previous_view.get("hostname")) or None,
+                    "registered_names": list(previous_view.get("node_names") or []),
+                },
+                current={
+                    "observed_name": current_hostname or None,
+                    "registered_names": current_node_names,
+                },
+                reason=reason or "entity_observed",
+            )
+            events.append(_event_envelope(ENTITY_OBSERVED, payload))
+    else:
+        observed_keys = ("browser_family", "os_name", "form_factor", "user_agent")
+        observed_changed = any(_text(previous_view.get(key)) != _text(current_view.get(key)) for key in observed_keys)
+        observed_current = {key: _text(current_view.get(key)) for key in observed_keys if _text(current_view.get(key))}
+        if observed_changed and observed_current:
+            payload = entity_event_payload(
+                entity_ref=entity_ref,
+                entity_kind=entity_kind,
+                source=source,
+                scope=scope,
+                previous={key: _text(previous_view.get(key)) or None for key in observed_keys},
+                current=observed_current,
+                reason=reason or "entity_observed",
+            )
+            events.append(_event_envelope(ENTITY_OBSERVED, payload))
+
+        previous_draft = _browser_draft_from_registry_entry(token, previous_view)
+        current_draft = _browser_draft_from_registry_entry(token, current_view)
+        if current_draft and previous_draft != current_draft:
+            payload = entity_event_payload(
+                entity_ref=entity_ref,
+                entity_kind=entity_kind,
+                source=source,
+                scope=scope,
+                previous={"draft_name": previous_draft},
+                current={
+                    "draft_name": current_draft,
+                    "basis": {
+                        key: _text(current_view.get(key))
+                        for key in ("browser_family", "os_name", "form_factor")
+                        if _text(current_view.get(key))
+                    },
+                },
+                reason=reason or "draft_name.suggested",
+            )
+            events.append(_event_envelope(ENTITY_DRAFT_NAME_SUGGESTED, payload))
+
+    return tuple(events)
+
+
 def _alias_label_matches(label: EntityLabel, *, normalized: str, locale: str) -> bool:
     return (
         label.role == "alias"
@@ -1811,6 +1930,7 @@ __all__ = [
     "canonical_device_ref",
     "compatibility_device_ref",
     "compact_registry_payload",
+    "device_entity_lifecycle_event_envelopes",
     "entity_event_payload",
     "get_named_entity_service",
     "list_entities",
