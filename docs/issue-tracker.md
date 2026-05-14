@@ -1062,6 +1062,46 @@ Verification:
   `get_operational_surface`, `get_activity_log`, `get_skill_logs`, and
   `get_subnet_diagnostics`.
 
+#### F3M-006C: Classify direct remote MCP health separately from bearer validity
+
+Status: implemented; current public smoke result is blocked by upstream `502`.
+
+Evidence:
+
+- Fresh `ProfileOpsRead` MCP session for `hub:sn_92ffc943` was active, but
+  direct remote MCP smoke on 2026-05-14 returned HTTP `502` for:
+  `GET /v1/root/mcp/foundation`, JSON-RPC `initialize`, JSON-RPC
+  `tools/list`, and JSON-RPC `tools/call:get_status`.
+- The same `502` class reproduced on the regional `ru.api.inimatic.com`
+  endpoint and the global `api.inimatic.com` endpoint. This means the check is
+  failing before useful bearer/tool-level validation, not as an ordinary
+  `401/403` token rejection.
+
+Resolution:
+
+- Added `adaos dev root mcp smoke` so operator and LLM diagnostics use one
+  repeatable transport check instead of manual curl snippets.
+- The smoke command redacts auth by design, exits non-zero on failure, and
+  classifies `401/403` as `auth_failed`, `404` as `endpoint_not_found`,
+  JSON-RPC errors as `jsonrpc_error`, and `5xx` responses such as `502` as
+  `upstream_unavailable`.
+
+Verification:
+
+- `pytest tests/test_root_mcp_smoke.py` covers `502`,
+  auth-failure, and JSON-RPC-error classification.
+- Manual check to repeat after backend/root route work:
+  `adaos dev root mcp smoke --mcp-http-url https://ru.api.inimatic.com/v1/root/mcp --auth-env-var ADAOS_ROOT_MCP_AUTH`.
+
+Actions:
+
+- [x] Add CLI smoke check for direct remote MCP.
+- [x] Document failure classification and human verification path.
+- [ ] Fix or route the public remote MCP upstream so the same smoke reaches
+  `initialize`, `tools/list`, and `get_status`.
+- [ ] After backend/root route repair, run the smoke against the fresh
+  `ProfileOpsRead` session and record the target/tool result here.
+
 #### F3M-007: First-3-minute memory footprint
 
 Status: closed for the current 3-minute goal.

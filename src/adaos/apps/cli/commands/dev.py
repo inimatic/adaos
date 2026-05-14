@@ -43,6 +43,7 @@ from adaos.services.root_mcp.codex_bridge import (
     write_codex_bridge_profile,
 )
 from adaos.services.root_mcp.client import RootMcpClient, RootMcpClientConfig
+from adaos.services.root_mcp.smoke import run_root_mcp_smoke
 from adaos.services.nats_config import normalize_nats_ws_url
 from adaos.services.node_runtime_state import save_nats_runtime_config
 from adaos.services.subnet_alias import load_subnet_alias, save_subnet_alias
@@ -65,6 +66,8 @@ def _run_safe(func):
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
+        except typer.Exit:
+            raise
         except Exception as e:
             if os.getenv("ADAOS_CLI_DEBUG") == "1":
                 traceback.print_exc()
@@ -729,6 +732,73 @@ def serve_codex(
         serve_codex_stdio_bridge(effective_profile)
     except Exception as exc:
         typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+
+
+@mcp_app.command("smoke")
+@_run_safe
+def smoke_mcp(
+    mcp_http_url: str | None = typer.Option(None, "--mcp-http-url", help="Direct MCP HTTP endpoint, e.g. https://ru.api.inimatic.com/v1/root/mcp."),
+    root_url: str | None = typer.Option(None, "--root-url", help="Root base URL used to derive /v1/root/mcp when --mcp-http-url is omitted."),
+    auth_env_var: str = typer.Option("ADAOS_ROOT_MCP_AUTH", "--auth-env-var", help="Environment variable containing the bearer token."),
+    access_token: str | None = typer.Option(None, "--access-token", help="Inline bearer token for manual smoke tests. Prefer --auth-env-var."),
+    timeout: float = typer.Option(10.0, "--timeout", min=1.0, help="Per-request timeout in seconds."),
+    tool_name: str = typer.Option("get_status", "--tool", help="Optional MCP tool to call after tools/list. Pass an empty string to skip."),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable smoke output."),
+) -> None:
+    def _emit(line: str, *, fg: str | None = None) -> None:
+        try:
+            if fg:
+                typer.secho(line, fg=fg)
+            else:
+                typer.echo(line)
+        except OSError:
+            # Some Windows re-exec/captured-console combinations can expose an
+            # invalid stdout handle. The smoke result should still be returned
+            # through the process exit code instead of leaking a rich traceback.
+            return
+
+    endpoint = str(
+        mcp_http_url
+        or os.getenv("ADAOS_MCP_HTTP_URL")
+        or (f"{str(root_url or '').rstrip('/')}/v1/root/mcp" if root_url else "")
+    ).strip()
+    if not endpoint:
+        raise RootServiceError("MCP HTTP URL is missing. Pass --mcp-http-url or --root-url.")
+    bearer_token = str(access_token or os.getenv(auth_env_var) or "").strip()
+    access_token = None
+    if not bearer_token:
+        raise RootServiceError(f"Bearer token is missing. Set {auth_env_var} or pass --access-token.")
+
+    try:
+        result = run_root_mcp_smoke(
+            mcp_http_url=endpoint,
+            bearer_token=bearer_token,
+            timeout=float(timeout),
+            tool_name=tool_name,
+        )
+    finally:
+        bearer_token = "<redacted>"
+    if json_output:
+        _emit(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        status = "OK" if result["ok"] else "FAILED"
+        color = typer.colors.GREEN if result["ok"] else typer.colors.RED
+        _emit(f"Root MCP smoke {status}: {result['mcp_http_url']}", fg=color)
+        _emit(f"Classification: {result['classification']}")
+        for step in result["steps"]:
+            step_status = "ok" if step["ok"] else "fail"
+            bits = [
+                f"{step['name']}: {step_status}",
+                f"classification={step['classification']}",
+                f"status={step.get('status_code') if step.get('status_code') is not None else 'n/a'}",
+            ]
+            if step.get("error"):
+                bits.append(f"error={step['error']}")
+            if step.get("jsonrpc_error"):
+                bits.append(f"jsonrpc_error={step['jsonrpc_error']}")
+            _emit(" | ".join(bits))
+    if not result["ok"]:
         raise typer.Exit(1)
 
 
