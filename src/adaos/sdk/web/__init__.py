@@ -24,6 +24,16 @@ from .desktop import (
     desktop_toggle_app,
     desktop_toggle_widget,
 )
+from .application import (
+    application_get_installed,
+    application_get_pinned_panels,
+    application_get_snapshot,
+    application_set_installed,
+    application_set_pinned_panels,
+    application_set_snapshot,
+    application_toggle_application,
+    application_toggle_install,
+)
 from .webspace import (
     webspace_list,
     webspace_describe,
@@ -42,6 +52,14 @@ __all__ = [
     "desktop_toggle_install",
     "desktop_toggle_app",
     "desktop_toggle_widget",
+    "application_toggle_install",
+    "application_toggle_application",
+    "application_get_installed",
+    "application_get_snapshot",
+    "application_set_installed",
+    "application_get_pinned_panels",
+    "application_set_pinned_panels",
+    "application_set_snapshot",
     "desktop_get_installed",
     "desktop_get_snapshot",
     "desktop_set_installed",

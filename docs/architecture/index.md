@@ -31,6 +31,7 @@ When a page is explicitly labeled as a roadmap or target-state design, it captur
 
 Current target-state control-plane extensions are documented in:
 
+- [AdaOS Product Terminology](product-terminology.md): product-facing terms and compatibility rules for Assistant, Webspace, Application, Device, Agent, Skill, Widget/Panel, Interface, and Catalog
 - [Infrascope](infrascope.md): human-facing control-plane architecture over the canonical system model
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions
 - [Named Entities and Canonical Naming](named-entities.md): target architecture and roadmap for display names, localized labels, observed names, aliases, canonical refs, and NLU entity canonicalization
@@ -48,3 +49,4 @@ Current target-state control-plane extensions are documented in:
 - [Device Access Roadmap](device-access-roadmap.md): recommended migration order from bootstrap-only links and ad hoc UI actions to a shared access-link control plane
 - [Semantic State Plane](semantic-state-plane.md): target kernel architecture for separating connectivity, shared-state sync freshness, and Yjs pressure governance without adding redundant status entities
 - [Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md): target architecture and migration checklist for moving scenario switching from materialize-and-copy to pointer-first semantic rebuild
+- [Skill Assets and Icons Roadmap](skill-assets-and-icons-roadmap.md): roadmap for loading skill-owned icons and resources without recompiling the browser client
