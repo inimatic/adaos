@@ -42,6 +42,44 @@ def add_device_alias(
     )
 
 
+def remove_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict:
+    return _service.remove_device_alias(
+        str(device_ref or ""),
+        str(alias or ""),
+        locale=locale,
+        actor=actor,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def deprecate_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict:
+    return _service.deprecate_device_alias(
+        str(device_ref or ""),
+        str(alias or ""),
+        locale=locale,
+        actor=actor,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
 def set_device_lifetime(device_ref: str, preset: str) -> dict:
     return _service.set_device_lifetime(str(device_ref or ""), str(preset or ""))
 

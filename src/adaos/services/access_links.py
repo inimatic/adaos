@@ -124,6 +124,18 @@ def _normalize_label_list(value: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _normalized_alias_key(value: Any) -> str:
+    return " ".join(str(value or "").strip().split()).casefold()
+
+
+def _label_matches_alias(label: Mapping[str, Any], alias: str, locale: str | None) -> bool:
+    return (
+        str(label.get("role") or "alias").strip().casefold() == "alias"
+        and _normalized_alias_key(label.get("text")) == _normalized_alias_key(alias)
+        and str(label.get("locale") or "und").strip().casefold() == str(locale or "und").strip().casefold()
+    )
+
+
 def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     data = dict(raw or {})
     now = _now_ts()
@@ -521,7 +533,7 @@ def add_link_alias(
         }
 
     events = tuple(result.events or ())
-    if result.status in {"conflict"}:
+    if result.status in {"conflict", "stale"}:
         _emit_entity_event_envelopes(events)
     if not result.ok:
         return {
@@ -553,7 +565,12 @@ def add_link_alias(
         label["actor"] = str(actor or "").strip()
     if request_id:
         label["request_id"] = str(request_id or "").strip()
-    entry["labels"] = _normalize_label_list([*list(entry.get("labels") or []), label])
+    previous_labels = [
+        item
+        for item in _normalize_label_list(entry.get("labels"))
+        if not _label_matches_alias(item, alias_text, locale)
+    ]
+    entry["labels"] = _normalize_label_list([*previous_labels, label])
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
@@ -567,6 +584,181 @@ def add_link_alias(
         "entry": saved,
         "device_ref": f"{kind}:{token}",
     }
+
+
+def _change_link_alias_state(
+    action: Literal["remove", "deprecate"],
+    kind: LinkKind,
+    entry_id: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    source: str = "access_links",
+    request_id: str | None = None,
+    webspace_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    token = str(entry_id or "").strip()
+    alias_text = str(alias or "").strip()
+    if not token:
+        return {"ok": False, "status": "invalid", "error": "entry_id_required"}
+    registry = _load_registry()
+    if kind == "browser":
+        _purge_expired_browsers(registry)
+    entry = _get_entry(registry, kind, token)
+    if entry is None:
+        return {
+            "ok": False,
+            "status": "not_found",
+            "error": "managed_link_not_found",
+            "device_ref": f"{kind}:{token}",
+        }
+
+    try:
+        from adaos.services import named_entities
+
+        service = named_entities.get_named_entity_service()
+        proposal_factory = (
+            service.propose_alias_remove if action == "remove" else service.propose_alias_deprecate
+        )
+        apply_factory = service.apply_alias_remove if action == "remove" else service.apply_alias_deprecate
+        proposal = proposal_factory(
+            canonical_ref=f"device:{kind}:{token}",
+            alias=alias_text,
+            locale=locale,
+            kind=f"device.{kind}",
+            webspace_id=webspace_id or entry.get("last_webspace_id"),
+            actor=actor,
+            source=source,
+            request_id=request_id,
+            base_fingerprint=base_fingerprint,
+        )
+        result = apply_factory(proposal)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "error": "alias_policy_failed",
+            "message": str(exc),
+            "device_ref": f"{kind}:{token}",
+        }
+
+    events = tuple(result.events or ())
+    if result.status in {"conflict", "stale"}:
+        _emit_entity_event_envelopes(events)
+    if not result.ok:
+        return {
+            "ok": False,
+            "status": result.status,
+            "proposal": result.proposal.to_dict(),
+            "events": [dict(item) for item in events],
+            "device_ref": f"{kind}:{token}",
+        }
+    if result.status == "noop":
+        return {
+            "ok": True,
+            "status": "noop",
+            "proposal": result.proposal.to_dict(),
+            "events": [],
+            "entry": entry,
+            "device_ref": f"{kind}:{token}",
+        }
+
+    labels = _normalize_label_list(entry.get("labels"))
+    if action == "remove":
+        labels = [label for label in labels if not _label_matches_alias(label, alias_text, locale)]
+    else:
+        found = False
+        updated_labels: list[dict[str, Any]] = []
+        for label in labels:
+            if _label_matches_alias(label, alias_text, locale):
+                label = {**label, "status": "deprecated", "source": label.get("source") or source}
+                found = True
+            updated_labels.append(label)
+        if not found:
+            updated_labels.append(
+                {
+                    "text": alias_text,
+                    "locale": str(locale or "und").strip() or "und",
+                    "role": "alias",
+                    "status": "deprecated",
+                    "source": source,
+                    "created_at": _now_ts(),
+                }
+            )
+        labels = updated_labels
+    entry["aliases"] = [
+        item
+        for item in _normalize_text_list(entry.get("aliases"))
+        if not (str(locale or "und").strip().casefold() == "und" and _normalized_alias_key(item) == _normalized_alias_key(alias_text))
+    ]
+    entry["labels"] = _normalize_label_list(labels)
+    entry = _updated(entry)
+    saved = _put_entry(registry, kind, entry)
+    _save_registry(registry)
+    _emit_entity_event_envelopes(events)
+    return {
+        "ok": True,
+        "status": result.status,
+        "proposal": result.proposal.to_dict(),
+        "events": [dict(item) for item in events],
+        "updated_record": result.updated_record.to_dict() if result.updated_record is not None else None,
+        "entry": saved,
+        "device_ref": f"{kind}:{token}",
+    }
+
+
+def remove_link_alias(
+    kind: LinkKind,
+    entry_id: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    source: str = "access_links",
+    request_id: str | None = None,
+    webspace_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _change_link_alias_state(
+        "remove",
+        kind,
+        entry_id,
+        alias,
+        locale=locale,
+        actor=actor,
+        source=source,
+        request_id=request_id,
+        webspace_id=webspace_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def deprecate_link_alias(
+    kind: LinkKind,
+    entry_id: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    source: str = "access_links",
+    request_id: str | None = None,
+    webspace_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _change_link_alias_state(
+        "deprecate",
+        kind,
+        entry_id,
+        alias,
+        locale=locale,
+        actor=actor,
+        source=source,
+        request_id=request_id,
+        webspace_id=webspace_id,
+        base_fingerprint=base_fingerprint,
+    )
 
 
 def upsert_link(kind: LinkKind, entry_id: str, patch: Mapping[str, Any] | None = None) -> dict[str, Any]:

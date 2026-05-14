@@ -428,6 +428,48 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_add_device_alias"},
         ),
         RootMcpToolContract(
+            id="nlu_authoring.remove_device_alias",
+            title="Remove device alias",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Apply a governed alias removal for a browser/member device through the authoritative access-link source.",
+            input_schema=schema_object(
+                properties={
+                    "device_ref": {"type": "string"},
+                    "alias": {"type": "string"},
+                    "locale": {"type": "string"},
+                    "actor": {"type": "string"},
+                    "request_id": {"type": "string"},
+                    "base_fingerprint": {"type": "string"},
+                },
+                required=["device_ref", "alias"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.named_entities",
+            side_effects="write",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_remove_device_alias"},
+        ),
+        RootMcpToolContract(
+            id="nlu_authoring.deprecate_device_alias",
+            title="Deprecate device alias",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Apply a governed alias deprecation for a browser/member device through the authoritative access-link source.",
+            input_schema=schema_object(
+                properties={
+                    "device_ref": {"type": "string"},
+                    "alias": {"type": "string"},
+                    "locale": {"type": "string"},
+                    "actor": {"type": "string"},
+                    "request_id": {"type": "string"},
+                    "base_fingerprint": {"type": "string"},
+                },
+                required=["device_ref", "alias"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.write.named_entities",
+            side_effects="write",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_deprecate_device_alias"},
+        ),
+        RootMcpToolContract(
             id="hub.get_status",
             title="Get hub status",
             surface=RootMcpSurface.OPERATIONS,
@@ -1227,7 +1269,13 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
     }
 
 
-def _append_named_entity_alias_audit(arguments: dict[str, Any], result: dict[str, Any], *, dry_run: bool) -> None:
+def _append_named_entity_alias_audit(
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    dry_run: bool,
+    operation: str = "alias.add",
+) -> None:
     if dry_run:
         return
     context = arguments.get("_mcp_context")
@@ -1245,7 +1293,7 @@ def _append_named_entity_alias_audit(arguments: dict[str, Any], result: dict[str
                 event_id=new_id(),
                 request_id=str(mcp_context.get("request_id") or arguments.get("request_id") or new_id()),
                 trace_id=str(mcp_context.get("trace_id") or new_id()),
-                tool_id="entity.alias.add",
+                tool_id=f"entity.{operation}",
                 surface=RootMcpSurface.DEVELOPMENT,
                 actor=str(mcp_context.get("actor") or arguments.get("actor") or "root_mcp:nlu_authoring"),
                 auth_method=str(mcp_context.get("auth_method") or "unknown"),
@@ -1261,6 +1309,7 @@ def _append_named_entity_alias_audit(arguments: dict[str, Any], result: dict[str
                     "device_ref": str(result_payload.get("device_ref") or arguments.get("device_ref") or "").strip(),
                     "canonical_ref": str(proposal.get("canonical_ref") or "").strip() or None,
                     "alias": str(proposal.get("alias") or arguments.get("alias") or "").strip(),
+                    "operation": operation,
                     "locale": str(proposal.get("locale") or arguments.get("locale") or "und").strip() or "und",
                     "base_fingerprint": str(proposal.get("base_fingerprint") or arguments.get("base_fingerprint") or "").strip() or None,
                     "entry_fingerprint": str(entry.get("fingerprint") or updated_record.get("fingerprint") or "").strip() or None,
@@ -1272,7 +1321,7 @@ def _append_named_entity_alias_audit(arguments: dict[str, Any], result: dict[str
                 },
                 meta={
                     "domain": "named_entities",
-                    "operation": "alias.add",
+                    "operation": operation,
                     "entity_ref": str(proposal.get("canonical_ref") or "").strip() or None,
                     "entity_kind": str(proposal.get("entity_kind") or "").strip() or None,
                     "reason": str(proposal.get("reason") or "").strip() or None,
@@ -1283,7 +1332,12 @@ def _append_named_entity_alias_audit(arguments: dict[str, Any], result: dict[str
         return
 
 
-def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+def _handle_nlu_authoring_device_alias_state_change(
+    arguments: dict[str, Any],
+    *,
+    dry_run: bool,
+    action: str,
+) -> dict[str, Any]:
     from adaos.services import device_inventory
     from adaos.services import named_entities
 
@@ -1302,7 +1356,13 @@ def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run
     canonical_ref = named_entities.canonical_device_ref(device_ref)
     entity_kind = f"device.{parsed[0]}" if parsed is not None else None
     if dry_run:
-        proposal = named_entities.propose_alias_add(
+        if action == "alias.remove":
+            proposal_factory = named_entities.propose_alias_remove
+        elif action == "alias.deprecate":
+            proposal_factory = named_entities.propose_alias_deprecate
+        else:
+            proposal_factory = named_entities.propose_alias_add
+        proposal = proposal_factory(
             canonical_ref=canonical_ref,
             alias=alias,
             locale=locale,
@@ -1322,7 +1382,13 @@ def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run
 
     from adaos.sdk.data import entities as sdk_entities
 
-    result = sdk_entities.add_device_alias(
+    if action == "alias.remove":
+        apply_factory = sdk_entities.remove_device_alias
+    elif action == "alias.deprecate":
+        apply_factory = sdk_entities.deprecate_device_alias
+    else:
+        apply_factory = sdk_entities.add_device_alias
+    result = apply_factory(
         device_ref,
         alias,
         locale=locale,
@@ -1335,8 +1401,20 @@ def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run
         "status": result.get("status") or ("applied" if result.get("ok") else "error"),
         "result": result,
     }
-    _append_named_entity_alias_audit(arguments, payload, dry_run=bool(dry_run))
+    _append_named_entity_alias_audit(arguments, payload, dry_run=bool(dry_run), operation=action)
     return payload
+
+
+def _handle_nlu_authoring_add_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _handle_nlu_authoring_device_alias_state_change(arguments, dry_run=dry_run, action="alias.add")
+
+
+def _handle_nlu_authoring_remove_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _handle_nlu_authoring_device_alias_state_change(arguments, dry_run=dry_run, action="alias.remove")
+
+
+def _handle_nlu_authoring_deprecate_device_alias(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return _handle_nlu_authoring_device_alias_state_change(arguments, dry_run=dry_run, action="alias.deprecate")
 
 
 def _handle_operational_contracts(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -2053,6 +2131,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
     "nlu_authoring.add_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
+    "nlu_authoring.remove_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_remove_device_alias(arguments, dry_run=dry_run),
+    "nlu_authoring.deprecate_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_deprecate_device_alias(arguments, dry_run=dry_run),
     "hub.get_status": lambda arguments, dry_run=False: _handle_hub_get_status(arguments, dry_run=dry_run),
     "hub.get_runtime_summary": lambda arguments, dry_run=False: _handle_hub_get_runtime_summary(arguments, dry_run=dry_run),
     "hub.get_operational_surface": lambda arguments, dry_run=False: _handle_hub_get_operational_surface(arguments, dry_run=dry_run),
