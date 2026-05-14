@@ -50,6 +50,48 @@ def add_browser_alias(
     )
 
 
+def remove_browser_alias(
+    device_id: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _service.remove_link_alias(
+        "browser",
+        device_id,
+        alias,
+        locale=locale,
+        actor=actor,
+        source="sdk.data.access_links",
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def deprecate_browser_alias(
+    device_id: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _service.deprecate_link_alias(
+        "browser",
+        device_id,
+        alias,
+        locale=locale,
+        actor=actor,
+        source="sdk.data.access_links",
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
 def add_member_alias(
     node_id: str,
     alias: str,
@@ -60,6 +102,48 @@ def add_member_alias(
     base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     return _service.add_link_alias(
+        "member",
+        node_id,
+        alias,
+        locale=locale,
+        actor=actor,
+        source="sdk.data.access_links",
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def remove_member_alias(
+    node_id: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _service.remove_link_alias(
+        "member",
+        node_id,
+        alias,
+        locale=locale,
+        actor=actor,
+        source="sdk.data.access_links",
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def deprecate_member_alias(
+    node_id: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _service.deprecate_link_alias(
         "member",
         node_id,
         alias,

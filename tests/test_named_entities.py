@@ -512,6 +512,122 @@ def test_governed_alias_add_rejects_stale_base_fingerprint() -> None:
     assert result.events[0]["payload"]["current"]["base_fingerprint"] == "stale-fingerprint"
 
 
+def test_governed_alias_remove_returns_updated_record_and_lifecycle_events() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen Display",
+                labels=[named_entities.EntityLabel(text="kitchen screen", locale="en", role="alias")],
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    proposal = service.propose_alias_remove(
+        canonical_ref="device:member:node-1",
+        alias="kitchen screen",
+        locale="en",
+        actor="user:operator",
+        source="test",
+        request_id="req-1",
+    )
+    result = service.apply_alias_remove(proposal)
+
+    assert proposal.ok is True
+    assert proposal.action == "alias.remove"
+    assert result.ok is True
+    assert result.status == "applied"
+    assert result.updated_record is not None
+    assert [
+        item
+        for item in result.updated_record.label_records()
+        if item.role == "alias" and item.text == "kitchen screen"
+    ] == []
+    assert [item["topic"] for item in result.events] == [
+        named_entities.ENTITY_ALIAS_REMOVED,
+        named_entities.ENTITY_REGISTRY_CHANGED,
+    ]
+    assert result.events[0]["payload"]["current"]["action"] == "alias.remove"
+
+
+def test_governed_alias_deprecate_marks_label_but_keeps_compat_resolution() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                display_name="Kitchen Display",
+                labels=[named_entities.EntityLabel(text="kitchen screen", locale="en", role="alias")],
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    proposal = service.propose_alias_deprecate(
+        canonical_ref="device:member:node-1",
+        alias="kitchen screen",
+        locale="en",
+        source="test",
+    )
+    result = service.apply_alias_deprecate(proposal)
+
+    assert proposal.ok is True
+    assert proposal.action == "alias.deprecate"
+    assert result.ok is True
+    assert result.updated_record is not None
+    deprecated = [
+        item
+        for item in result.updated_record.label_records()
+        if item.role == "alias" and item.text == "kitchen screen"
+    ]
+    assert deprecated[0].status == "deprecated"
+    assert [item["topic"] for item in result.events] == [
+        named_entities.ENTITY_ALIAS_DEPRECATED,
+        named_entities.ENTITY_REGISTRY_CHANGED,
+    ]
+
+    resolved = named_entities.NamedEntityService(
+        static_entities=[result.updated_record],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    ).resolve_text("open kitchen screen")
+    assert [item.canonical_ref for item in resolved.resolved_entities] == ["device:member:node-1"]
+
+
+def test_governed_alias_remove_rejects_stale_base_fingerprint() -> None:
+    service = named_entities.NamedEntityService(
+        static_entities=[
+            named_entities.NamedEntityRecord(
+                canonical_ref="device:member:node-1",
+                kind="device.member",
+                labels=[named_entities.EntityLabel(text="kitchen screen", locale="en", role="alias")],
+            )
+        ],
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+    )
+
+    proposal = service.propose_alias_remove(
+        canonical_ref="device:member:node-1",
+        alias="kitchen screen",
+        locale="en",
+        source="test",
+        base_fingerprint="stale-fingerprint",
+    )
+    result = service.apply_alias_remove(proposal)
+
+    assert proposal.ok is False
+    assert proposal.status == "stale"
+    assert proposal.action == "alias.remove"
+    assert result.ok is False
+    assert result.status == "stale"
+    assert [item["topic"] for item in result.events] == [named_entities.ENTITY_ALIAS_CONFLICT_DETECTED]
+
+
 def test_sdk_entities_alias_helpers_delegate_to_named_entity_service(monkeypatch) -> None:
     service = named_entities.NamedEntityService(
         static_entities=[

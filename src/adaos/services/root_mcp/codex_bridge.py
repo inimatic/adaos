@@ -338,6 +338,40 @@ class CodexRootMcpBridge:
                 },
             },
             {
+                "name": "remove_device_alias",
+                "description": "Remove a governed alias for a browser/member device through NLUAuthoringPlane. Requires a write-capable Root MCP session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "device_ref": {"type": "string", "description": "Canonical device ref, such as browser:<id> or member:<node_id>."},
+                        "alias": {"type": "string", "description": "Human phrase to remove from aliases."},
+                        "locale": {"type": "string", "description": "Optional alias locale, such as en or ru."},
+                        "actor": {"type": "string", "description": "Optional actor metadata for audit/event payloads."},
+                        "base_fingerprint": {"type": "string", "description": "Optional entity fingerprint from get_named_entity_registry for stale-write protection."},
+                        "dry_run": {"type": "boolean", "default": False, "description": "When true, return the governed proposal without mutating state."},
+                    },
+                    "required": ["device_ref", "alias"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "deprecate_device_alias",
+                "description": "Mark a governed alias as deprecated for a browser/member device through NLUAuthoringPlane. Requires a write-capable Root MCP session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "device_ref": {"type": "string", "description": "Canonical device ref, such as browser:<id> or member:<node_id>."},
+                        "alias": {"type": "string", "description": "Human phrase to deprecate as an alias."},
+                        "locale": {"type": "string", "description": "Optional alias locale, such as en or ru."},
+                        "actor": {"type": "string", "description": "Optional actor metadata for audit/event payloads."},
+                        "base_fingerprint": {"type": "string", "description": "Optional entity fingerprint from get_named_entity_registry for stale-write protection."},
+                        "dry_run": {"type": "boolean", "default": False, "description": "When true, return the governed proposal without mutating state."},
+                    },
+                    "required": ["device_ref", "alias"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "get_profileops_status",
                 "description": "Read root-published profiler status and latest session summary for the managed target.",
                 "inputSchema": {"type": "object", "properties": target_properties, "required": target_required, "additionalProperties": False},
@@ -730,6 +764,28 @@ class CodexRootMcpBridge:
         if tool == "add_device_alias":
             return _tool_text(
                 client.add_nlu_authoring_device_alias(
+                    device_ref=str(args.get("device_ref") or ""),
+                    alias=str(args.get("alias") or ""),
+                    locale=_normalize_text(args.get("locale")),
+                    actor=_normalize_text(args.get("actor")),
+                    base_fingerprint=_normalize_text(args.get("base_fingerprint")),
+                    dry_run=bool(args.get("dry_run")),
+                )
+            )
+        if tool == "remove_device_alias":
+            return _tool_text(
+                client.remove_nlu_authoring_device_alias(
+                    device_ref=str(args.get("device_ref") or ""),
+                    alias=str(args.get("alias") or ""),
+                    locale=_normalize_text(args.get("locale")),
+                    actor=_normalize_text(args.get("actor")),
+                    base_fingerprint=_normalize_text(args.get("base_fingerprint")),
+                    dry_run=bool(args.get("dry_run")),
+                )
+            )
+        if tool == "deprecate_device_alias":
+            return _tool_text(
+                client.deprecate_nlu_authoring_device_alias(
                     device_ref=str(args.get("device_ref") or ""),
                     alias=str(args.get("alias") or ""),
                     locale=_normalize_text(args.get("locale")),

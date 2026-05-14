@@ -329,6 +329,74 @@ def add_device_alias(
     }
 
 
+def remove_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    device, error = _device_or_error(device_ref)
+    if error is not None:
+        return error
+    assert device is not None
+    if not _policy_present(device):
+        return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
+    kind, link_id = _kind_and_link_id(_text(device_ref))
+    result = _access_links.remove_link_alias(
+        kind,
+        link_id,
+        _text(alias),
+        locale=locale,
+        actor=actor,
+        source="device_access",
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+    if not bool(result.get("ok")):
+        return result
+    return {
+        **result,
+        "device": _device_inventory.get_device(_text(device_ref)),
+    }
+
+
+def deprecate_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    device, error = _device_or_error(device_ref)
+    if error is not None:
+        return error
+    assert device is not None
+    if not _policy_present(device):
+        return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
+    kind, link_id = _kind_and_link_id(_text(device_ref))
+    result = _access_links.deprecate_link_alias(
+        kind,
+        link_id,
+        _text(alias),
+        locale=locale,
+        actor=actor,
+        source="device_access",
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+    if not bool(result.get("ok")):
+        return result
+    return {
+        **result,
+        "device": _device_inventory.get_device(_text(device_ref)),
+    }
+
+
 def set_device_lifetime(device_ref: str, preset: str) -> dict[str, Any]:
     device, error = _device_or_error(device_ref)
     if error is not None:
@@ -393,9 +461,11 @@ def adopt_device(device_ref: str, display_name: str | None = None, preset: str =
 __all__ = [
     "adopt_device",
     "add_device_alias",
+    "deprecate_device_alias",
     "detach_device",
     "get_device_settings",
     "get_command_profile",
+    "remove_device_alias",
     "rename_device",
     "set_device_lifetime",
 ]
