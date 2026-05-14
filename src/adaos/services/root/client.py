@@ -23,6 +23,21 @@ class RootHttpError(RuntimeError):
 _ROOT_HTTP_LOG = logging.getLogger("adaos.root-http")
 
 
+def _is_routine_control_report(method: str, path: str) -> bool:
+    return method.upper() == "POST" and str(path or "").rstrip("/") == "/v1/hub/control/report"
+
+
+def _log_root_http_success(method: str, path: str, duration_s: float, status_code: int) -> None:
+    log = _ROOT_HTTP_LOG.debug if _is_routine_control_report(method, path) else _ROOT_HTTP_LOG.info
+    log(
+        "root http response method=%s path=%s duration_s=%.3f status=%s",
+        method,
+        path,
+        duration_s,
+        status_code,
+    )
+
+
 @dataclass(slots=True)
 class RootHttpClient:
     """HTTP client for the Inimatic Root API."""
@@ -175,13 +190,7 @@ class RootHttpClient:
 
         if response.status_code == 204 and accept_204:
             if trace_request:
-                _ROOT_HTTP_LOG.info(
-                    "root http response method=%s path=%s duration_s=%.3f status=%s",
-                    method,
-                    path,
-                    time.perf_counter() - started,
-                    response.status_code,
-                )
+                _log_root_http_success(method, path, time.perf_counter() - started, response.status_code)
             return {}
 
         if response.status_code >= 400:
@@ -206,13 +215,7 @@ class RootHttpClient:
             raise RootHttpError(message, status_code=response.status_code, error_code=error_code, payload=content)
 
         if trace_request:
-            _ROOT_HTTP_LOG.info(
-                "root http response method=%s path=%s duration_s=%.3f status=%s",
-                method,
-                path,
-                time.perf_counter() - started,
-                response.status_code,
-            )
+            _log_root_http_success(method, path, time.perf_counter() - started, response.status_code)
         return content if content is not None else {}
 
     # ------------------------------------------------------------------
