@@ -1603,7 +1603,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 97%.
+- Overall: 98%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1633,10 +1633,10 @@ Integration progress:
   and apply flows, durable device/browser remove/deprecate persistence,
   NLUAuthoringPlane remove/deprecate write tools, dedicated
   `entity.alias.remove` / `entity.alias.deprecate` audit records, and focused
-  tests.
-- Current implementation slice: governed alias lifecycle symmetry for
-  add/remove/deprecate over SDK, authoritative access links, Root MCP, and
-  Codex bridge.
+  tests, plus first authoritative device/browser observation, browser
+  draft-name, and display-name lifecycle events from `access_links`.
+- Current implementation slice: named-entity operational lifecycle events over
+  authoritative device/browser registry changes.
 - Not started yet: profile-owned aliases, conflict-resolution UX, remote
   target routing, and consumer migration.
 - Verification note: targeted MCP/named-entity checks pass, and
@@ -1660,8 +1660,8 @@ Human verification:
 Next implementation steps:
 
 1. Start migrating node/browser labels to the shared display helper.
-2. Add observed/draft/display-name lifecycle events beyond coarse
-   `entity.registry.changed`.
+2. Extend observed/draft/display-name lifecycle events from device/browser
+   sources to workspace and manifest sources.
 3. Add conflict-resolution UX around Root MCP alias writes.
 4. Add profile-owned alias storage and policy boundaries.
 5. Migrate node/browser labels to shared display helpers in remaining skill
@@ -1761,16 +1761,20 @@ Actions:
 
 #### NER-005: Integrate named entities with the operational event model
 
-Status: planned.
+Status: in progress.
 
 Actions:
 
-- [ ] Emit `entity.observed` when node, browser, workspace, or manifest sources
-  report observed labels.
-- [ ] Emit `entity.draft_name.suggested` for generated browser/node draft names.
+- [x] Emit `entity.observed` when authoritative device/browser access-link
+  sources report observed labels.
+- [ ] Extend `entity.observed` to workspace and manifest sources.
+- [x] Emit `entity.draft_name.suggested` for generated browser draft names.
+- [ ] Extend `entity.draft_name.suggested` to generated node draft names once
+  node draft-name policy is explicit.
 - [x] Emit alias lifecycle events from the first authoritative device/browser
   alias write path.
-- [ ] Emit display-name lifecycle events from authoritative write paths.
+- [x] Emit display-name lifecycle events from the first authoritative
+  device/browser display-name write path.
 - [x] Emit alias remove/deprecate lifecycle events from authoritative
   device/browser write paths.
 - [x] Return `entity.alias.added`, `entity.alias.conflict.detected`, and

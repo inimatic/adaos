@@ -286,6 +286,18 @@ def _emit_entity_registry_changed(
         if not entry_id:
             return
         webspace_id = str(current.get("last_webspace_id") or "").strip()
+        previous_view = _entity_registry_view(previous)
+        current_view = _entity_registry_view(current)
+        events = list(
+            named_entities.device_entity_lifecycle_event_envelopes(
+                kind=kind,
+                entry_id=entry_id,
+                previous=previous_view,
+                current=current_view,
+                source="access_links",
+                reason=reason,
+            )
+        )
         payload = named_entities.entity_event_payload(
             entity_ref=f"device:{kind}:{entry_id}",
             entity_kind=f"device.{kind}",
@@ -295,11 +307,17 @@ def _emit_entity_registry_changed(
                 "link_kind": kind,
                 **({"webspace_id": webspace_id} if webspace_id else {}),
             },
-            previous=_entity_registry_view(previous),
-            current=_entity_registry_view(current),
+            previous=previous_view,
+            current=current_view,
             reason=reason,
         )
-        bus_emit(get_ctx().bus, named_entities.ENTITY_REGISTRY_CHANGED, payload, source="access_links")
+        events.append({"topic": named_entities.ENTITY_REGISTRY_CHANGED, "payload": payload})
+        bus = get_ctx().bus
+        for event in events:
+            topic = str(event.get("topic") or "").strip()
+            event_payload = event.get("payload")
+            if topic and isinstance(event_payload, Mapping):
+                bus_emit(bus, topic, dict(event_payload), source="access_links")
     except Exception:
         # Device naming must never break the browser/member access path.
         return

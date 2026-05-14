@@ -401,6 +401,52 @@ def test_entity_event_payload_carries_locale_metadata() -> None:
     assert payload["preferred_locales"] == ["ru-RU", "ru", "en"]
 
 
+def test_device_lifecycle_events_include_browser_observation_and_draft() -> None:
+    events = named_entities.device_entity_lifecycle_event_envelopes(
+        kind="browser",
+        entry_id="dev-browser",
+        previous={},
+        current={
+            "browser_family": "Edge",
+            "os_name": "Windows",
+            "form_factor": "Desktop",
+            "last_webspace_id": "desktop",
+        },
+        source="access_links",
+        reason="browser_session.changed",
+    )
+
+    assert [event["topic"] for event in events] == [
+        named_entities.ENTITY_OBSERVED,
+        named_entities.ENTITY_DRAFT_NAME_SUGGESTED,
+    ]
+    assert events[0]["payload"]["current"]["browser_family"] == "Edge"
+    assert events[1]["payload"]["current"]["draft_name"] == "Edge on Windows"
+    assert events[1]["payload"]["scope"]["webspace_id"] == "desktop"
+
+
+def test_device_lifecycle_events_include_display_and_member_observation() -> None:
+    events = named_entities.device_entity_lifecycle_event_envelopes(
+        kind="member",
+        entry_id="node-1",
+        previous={"display_name": "Old node"},
+        current={
+            "display_name": "Kitchen hub",
+            "hostname": "ZVERZVE-A1BNQF7",
+            "node_names": ["Kitchen hub"],
+        },
+        source="access_links",
+        reason="member_link.changed",
+    )
+
+    assert [event["topic"] for event in events] == [
+        named_entities.ENTITY_DISPLAY_NAME_CHANGED,
+        named_entities.ENTITY_OBSERVED,
+    ]
+    assert events[0]["payload"]["current"]["display_name"] == "Kitchen hub"
+    assert events[1]["payload"]["current"]["observed_name"] == "ZVERZVE-A1BNQF7"
+
+
 def test_governed_alias_add_returns_updated_record_and_lifecycle_events() -> None:
     service = named_entities.NamedEntityService(
         static_entities=[
