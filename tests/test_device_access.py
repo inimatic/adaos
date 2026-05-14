@@ -226,6 +226,70 @@ def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -
     }
 
 
+def test_hub_device_settings_use_local_node_config_policy(monkeypatch) -> None:
+    class _Config:
+        subnet_id_value = "sn_local"
+        node_id_value = "node-local"
+        node_names = ["Main hub", "Workstation"]
+
+    monkeypatch.setattr(device_access, "_load_node_config", lambda: _Config())
+
+    settings = device_access.get_device_settings("hub:sn_local")
+
+    assert settings is not None
+    assert settings["kind"] == "hub"
+    assert settings["id"] == {
+        "value": "hub:sn_local",
+        "kind": "hub",
+        "node_id": "node-local",
+        "link_id": "sn_local",
+    }
+    assert settings["name"]["value"] == "Main hub, Workstation"
+    assert settings["name"]["save"] == {
+        "enabled": True,
+        "target": "browsers_skill.rename_device",
+        "params": {"device_ref": "hub:sn_local"},
+    }
+    assert settings["name"]["policy"] == {
+        "can_edit": True,
+        "status": "local_config",
+        "storage": ".adaos/node.yaml: node.node_names",
+        "field": "node.node_names",
+        "mode": "rename",
+        "reason": None,
+    }
+    assert settings["lifetime"]["set"]["reason"] == "hub_lifetime_not_applicable"
+    assert settings["detach"]["reason"] == "hub_detach_not_applicable"
+
+
+def test_rename_hub_device_updates_local_node_names(monkeypatch) -> None:
+    class _Config:
+        subnet_id_value = "sn_local"
+        node_id_value = "node-local"
+        node_names = ["Main hub"]
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(device_access, "_load_node_config", lambda: _Config())
+
+    def _fake_set_node_names(names: list[str]):
+        calls.append(list(names))
+        updated = _Config()
+        updated.node_names = list(names)
+        return updated
+
+    monkeypatch.setattr(device_access, "_set_local_node_names", _fake_set_node_names)
+
+    result = device_access.rename_device("hub:sn_local", "Main hub, Workstation, main hub")
+
+    assert result["ok"] is True
+    assert result["entry"]["kind"] == "hub"
+    assert result["entry"]["display_name"] == "Main hub"
+    assert result["entry"]["node_names"] == ["Main hub", "Workstation"]
+    assert result["entry"]["storage"] == ".adaos/node.yaml: node.node_names"
+    assert calls == [["Main hub", "Workstation"]]
+
+
 def test_adopt_device_delegates_to_reconciler(monkeypatch) -> None:
     captured: list[tuple[str, str | None, str]] = []
 
