@@ -27,6 +27,32 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _name_list(value: Any) -> list[str]:
+    raw_items = str(value or "").split(",") if not isinstance(value, list) else value
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        token = _text(item)
+        if not token:
+            continue
+        folded = token.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        names.append(token)
+    return names
+
+
+def _policy_name_list(policy: Mapping[str, Any], identity: Mapping[str, Any], fallback: str) -> list[str]:
+    names = _name_list(policy.get("display_name"))
+    for item in _name_list(identity.get("node_names")):
+        if item.casefold() not in {name.casefold() for name in names}:
+            names.append(item)
+    if not names:
+        names = _name_list(fallback)
+    return names
+
+
 def _toggle(
     enabled: bool,
     *,
@@ -188,11 +214,43 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     device_ref_token = _text(device_ref)
     command_params = {"device_ref": device_ref_token}
     effective_name = _text(policy.get("effective_name")) or _text(device.get("ref"))
-    current_name = _text(policy.get("display_name")) or effective_name
+    current_names = _policy_name_list(policy, identity, effective_name)
+    current_name = current_names[0] if current_names else effective_name
+    rename_enabled = bool(name_meta.get("enabled"))
+    adopt_enabled = bool(adopt_payload.get("enabled"))
+    save_action = (
+        _toggle(
+            True,
+            target="browsers_skill.rename_device",
+            params=command_params,
+        )
+        if rename_enabled
+        else _toggle(
+            True,
+            target="browsers_skill.adopt_device",
+            params=command_params,
+        )
+        if adopt_enabled
+        else _toggle(
+            False,
+            reason=_text(name_meta.get("reason")) or "device_policy_missing",
+            target="browsers_skill.rename_device",
+            params=command_params,
+        )
+    )
+    policy_status = _text(policy.get("managed_state")) or "observed_only"
+    policy_storage = "access_links.display_name + access_links.node_names"
+    policy_mode = "rename" if rename_enabled else "adopt" if adopt_enabled else "disabled"
     return {
         "device_ref": device_ref_token,
         "kind": _text(device.get("kind")),
         "title": effective_name,
+        "id": {
+            "value": device_ref_token,
+            "kind": _text(device.get("kind")),
+            "node_id": _text(identity.get("node_id")) or None,
+            "link_id": _kind_and_link_id(device_ref_token)[1],
+        },
         "device": device,
         "status": {
             "online": bool(observation.get("online")),
@@ -202,13 +260,23 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "connected_to_subnet": runtime.get("connected_to_subnet"),
         },
         "name": {
-            "value": current_name,
-            "placeholder": "Living room TV",
-            "save": _toggle(
-                bool(name_meta.get("enabled")),
-                reason=_text(name_meta.get("reason")) or None,
-                target="browsers_skill.rename_device",
-                params=command_params,
+            "value": ", ".join(current_names),
+            "primary": current_name,
+            "names": current_names,
+            "placeholder": "Living room TV, Kitchen display",
+            "save": save_action,
+            "policy": {
+                "can_edit": bool(save_action.get("enabled")),
+                "status": policy_status,
+                "storage": policy_storage,
+                "field": "display_name,node_names",
+                "mode": policy_mode,
+                "reason": _text(save_action.get("reason")) or None,
+            },
+            "helper": (
+                f"Primary name is the first comma-separated value. "
+                f"canEdit={str(bool(save_action.get('enabled'))).lower()} "
+                f"status={policy_status} storage={policy_storage}"
             ),
         },
         "aliases": {
@@ -275,15 +343,17 @@ def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
     if not _policy_present(device):
         return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
     kind, link_id = _kind_and_link_id(_text(device_ref))
-    entry = _access_links.rename_link(kind, link_id, _text(display_name))
+    names = _name_list(display_name)
+    primary_name = names[0] if names else ""
+    entry = _access_links.rename_link(kind, link_id, primary_name, node_names=names)
     runtime_update = {"attempted": False, "applied": False}
     if kind == "member":
         mgr = _get_hub_link_manager()
         if mgr is not None:
             try:
-                if mgr.is_connected(link_id) and _text(display_name):
+                if mgr.is_connected(link_id) and names:
                     runtime_update = {"attempted": True, "applied": True}
-                    _run_coro(mgr.set_member_node_names(link_id, node_names=[_text(display_name)]))
+                    _run_coro(mgr.set_member_node_names(link_id, node_names=names))
             except Exception:
                 _log.debug("rename_device runtime update failed device_ref=%s", device_ref, exc_info=True)
     return {
