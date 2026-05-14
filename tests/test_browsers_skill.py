@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import inspect
 import sys
 import types
 from pathlib import Path
@@ -93,6 +95,55 @@ def test_browsers_skill_detach_link_refreshes_snapshot_without_nameerror(monkeyp
     assert mod._SELECTED_BROWSER_BY_WS["default"] == "browser-1"
     assert any(slot == "browsers.current_name" and webspace_id == "default" for slot, webspace_id, _value in published)
     assert any(slot == "browsers.current_name" and webspace_id == "desktop" for slot, webspace_id, _value in published)
+
+
+def test_browsers_skill_refresh_event_handler_does_not_wait_for_projection(monkeypatch) -> None:
+    mod = _load_browsers_skill_module()
+    mod._PENDING_REFRESH_BY_WS.clear()
+    submitted: list[object] = []
+
+    class _Future:
+        def done(self) -> bool:
+            return False
+
+        def add_done_callback(self, callback):
+            self.callback = callback
+
+        def result(self):
+            raise AssertionError("event-loop refresh must not wait for projection result")
+
+    class _Executor:
+        def submit(self, fn):
+            submitted.append(fn)
+            for cell in fn.__closure__ or ():
+                value = cell.cell_contents
+                if inspect.iscoroutine(value):
+                    value.close()
+            return _Future()
+
+    monkeypatch.setattr(mod, "_PROJECTION_EXECUTOR", _Executor())
+    monkeypatch.setattr(
+        mod,
+        "_build_snapshot",
+        lambda target_ws=None: (
+            {
+                "summary": {},
+                "devices": [],
+                "clients": [],
+                "current_summary": [],
+                "current_name": {"value": ""},
+            },
+            str(target_ws or "desktop"),
+        ),
+    )
+
+    async def _invoke() -> None:
+        mod._on_refresh(SimpleNamespace(payload={"webspace_id": "desktop"}))
+
+    asyncio.run(_invoke())
+
+    assert submitted
+    assert "desktop" in mod._PENDING_REFRESH_BY_WS
 
 
 def test_browsers_skill_get_link_settings_uses_sdk_device_access(monkeypatch) -> None:
