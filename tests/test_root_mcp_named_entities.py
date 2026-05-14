@@ -73,6 +73,8 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert [item.id for item in plane_contracts] == [
         "nlu_authoring.get_context",
         "nlu_authoring.add_device_alias",
+        "nlu_authoring.remove_device_alias",
+        "nlu_authoring.deprecate_device_alias",
     ]
     context = result["context"]
     assert context["plane_id"] == "nlu_authoring"
@@ -194,3 +196,71 @@ def test_root_mcp_device_alias_write_emits_domain_audit(monkeypatch) -> None:
     assert domain.result_summary["alias"] == "office browser"
     assert domain.result_summary["base_fingerprint"] == "fp-1"
     assert domain.result_summary["entry_fingerprint"] == "fp-2"
+
+
+def test_root_mcp_exposes_governed_device_alias_remove_and_deprecate(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def _fake_remove_device_alias(device_ref, alias, *, locale=None, actor=None, request_id=None, base_fingerprint=None):
+        calls.append(("remove", device_ref, alias))
+        return {
+            "ok": True,
+            "status": "applied",
+            "device_ref": device_ref,
+            "proposal": {
+                "action": "alias.remove",
+                "canonical_ref": "device:browser:browser-1",
+                "entity_kind": "device.browser",
+                "alias": alias,
+                "locale": locale or "und",
+                "base_fingerprint": base_fingerprint,
+                "reason": "alias_registered",
+            },
+            "updated_record": {"fingerprint": "fp-3"},
+            "events": [{"topic": named_entities.ENTITY_ALIAS_REMOVED, "payload": {}}],
+        }
+
+    def _fake_deprecate_device_alias(device_ref, alias, *, locale=None, actor=None, request_id=None, base_fingerprint=None):
+        calls.append(("deprecate", device_ref, alias))
+        return {
+            "ok": True,
+            "status": "applied",
+            "device_ref": device_ref,
+            "proposal": {
+                "action": "alias.deprecate",
+                "canonical_ref": "device:browser:browser-1",
+                "entity_kind": "device.browser",
+                "alias": alias,
+                "locale": locale or "und",
+                "base_fingerprint": base_fingerprint,
+                "reason": "alias_registered",
+            },
+            "updated_record": {"fingerprint": "fp-4"},
+            "events": [{"topic": named_entities.ENTITY_ALIAS_DEPRECATED, "payload": {}}],
+        }
+
+    from adaos.sdk.data import entities as sdk_entities
+
+    monkeypatch.setattr(sdk_entities, "remove_device_alias", _fake_remove_device_alias)
+    monkeypatch.setattr(sdk_entities, "deprecate_device_alias", _fake_deprecate_device_alias)
+    monkeypatch.setattr(root_mcp_service, "append_audit_event", lambda event: event)
+
+    removed = root_mcp_service._handle_nlu_authoring_remove_device_alias(  # type: ignore[attr-defined]
+        {"device_ref": "browser:browser-1", "alias": "office browser", "locale": "en"},
+        dry_run=False,
+    )
+    deprecated = root_mcp_service._handle_nlu_authoring_deprecate_device_alias(  # type: ignore[attr-defined]
+        {"device_ref": "browser:browser-1", "alias": "old browser", "locale": "en"},
+        dry_run=False,
+    )
+
+    assert root_mcp_service.get_tool_contract("nlu_authoring.remove_device_alias") is not None
+    assert root_mcp_service.get_tool_contract("nlu_authoring.deprecate_device_alias") is not None
+    assert removed["ok"] is True
+    assert removed["result"]["proposal"]["action"] == "alias.remove"
+    assert deprecated["ok"] is True
+    assert deprecated["result"]["proposal"]["action"] == "alias.deprecate"
+    assert calls == [
+        ("remove", "browser:browser-1", "office browser"),
+        ("deprecate", "browser:browser-1", "old browser"),
+    ]

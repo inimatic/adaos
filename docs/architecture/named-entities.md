@@ -405,11 +405,19 @@ Current durable device/browser implementation:
 - `access_links.add_link_alias` runs the proposal/apply policy check, persists
   confirmed alias labels on the browser/member access-link record, and
   publishes returned lifecycle event envelopes.
-- `device_access.add_device_alias` exposes the same write path through the
-  device command layer and requires the target device to have an authoritative
-  access-link policy record.
-- `sdk.data.entities.add_device_alias` is the recommended SDK helper when a
-  generated skill or operator tool needs to add an alias for a concrete
+- `access_links.remove_link_alias` removes only alias labels and legacy alias
+  entries. It does not delete display names, observed names, registered names,
+  or draft names.
+- `access_links.deprecate_link_alias` marks an alias label as `deprecated`.
+  Deprecated aliases remain visible and can continue to resolve for
+  compatibility, but they are no longer the preferred/suggested vocabulary.
+- `device_access.add_device_alias`, `device_access.remove_device_alias`, and
+  `device_access.deprecate_device_alias` expose the same write paths through
+  the device command layer and require the target device to have an
+  authoritative access-link policy record.
+- `sdk.data.entities.add_device_alias`, `remove_device_alias`, and
+  `deprecate_device_alias` are the recommended SDK helpers when a generated
+  skill or operator tool needs to manage aliases for a concrete
   `device:browser:<id>` or `device:member:<id>` ref.
 - `base_fingerprint` is an optional stale-write guard. Callers should read the
   current entity fingerprint from `get_named_entity_registry` or
@@ -419,10 +427,11 @@ Current durable device/browser implementation:
 - The implementation intentionally does not persist into the read-only Yjs
   projection. Yjs receives the compact registry after
   `entity.registry.changed` invalidates the read model.
-- Root MCP writes append a dedicated `entity.alias.add` audit record in
+- Root MCP writes append dedicated domain audit records such as
+  `entity.alias.add`, `entity.alias.remove`, and `entity.alias.deprecate` in
   addition to the generic MCP invocation envelope.
-- Remaining hardening: remove and deprecate operations, profile-owned aliases,
-  richer conflict-resolution UX, and remote target routing.
+- Remaining hardening: profile-owned aliases, richer conflict-resolution UX,
+  and remote target routing.
 
 Example successful proposal result:
 
@@ -438,6 +447,10 @@ Example successful proposal result:
   "source": "sdk.data.entities"
 }
 ```
+
+The same proposal/apply shape is used for `alias.remove` and
+`alias.deprecate`; callers should still pass `base_fingerprint` for optimistic
+concurrency.
 
 Example apply result:
 
@@ -474,8 +487,9 @@ Target service:
   its output remains canonical refs and spans rather than localized dispatch
   ids.
 - SDK exposes `sdk.data.entities.list_entities`,
-  `sdk.data.entities.resolve_text`, `sdk.data.entities.propose_alias_add`, and
-  `sdk.data.entities.apply_alias_add`.
+  `sdk.data.entities.resolve_text`, `sdk.data.entities.propose_alias_add`,
+  `propose_alias_remove`, `propose_alias_deprecate`, and the matching
+  apply helpers.
 - Yjs may project a read-only compact registry under a path such as
   `registry.named_entities` for UI and diagnostics.
 - Root MCP should expose named-entity descriptors through governed read
@@ -485,7 +499,8 @@ Current read surfaces:
 
 - SDK: `sdk.data.entities.list_entities` and
   `sdk.data.entities.resolve_text`.
-- SDK durable device alias write: `sdk.data.entities.add_device_alias`.
+- SDK durable device alias writes: `sdk.data.entities.add_device_alias`,
+  `remove_device_alias`, and `deprecate_device_alias`.
 - Registry items carry a stable `fingerprint` for optimistic concurrency on
   human/LLM-authored writes.
 - Yjs: compact read-only projection under `registry.named_entities`.
@@ -496,10 +511,13 @@ Current read surfaces:
   as `get_nlu_authoring_context`, returns a read-only authoring context with
   named entities, locale hints, canonicalization rules, and explicit
   no-write/no-training-mutation boundaries.
-- Root MCP / NLUAuthoringPlane write: `nlu_authoring.add_device_alias`, exposed
-  to Codex as `add_device_alias`, writes through the governed access-link
-  source and requires `development.write.named_entities` / `ProfileOpsControl`.
-  The tool accepts `base_fingerprint` and emits a domain audit record.
+- Root MCP / NLUAuthoringPlane writes: `nlu_authoring.add_device_alias`,
+  `nlu_authoring.remove_device_alias`, and
+  `nlu_authoring.deprecate_device_alias`, exposed to Codex as
+  `add_device_alias`, `remove_device_alias`, and `deprecate_device_alias`.
+  They write through the governed access-link source, require
+  `development.write.named_entities` / `ProfileOpsControl`, accept
+  `base_fingerprint`, and emit domain audit records.
 
 ## UI behavior
 
@@ -781,7 +799,8 @@ action routing.
   `access_links`, `device_access`, and `sdk.data.entities.add_device_alias`.
 - [x] Add `base_fingerprint` stale-write protection for governed device alias
   writes.
-- [ ] Add remove/deprecate operations and profile-owned alias persistence.
+- [x] Add remove/deprecate operations for durable device/browser aliases.
+- [ ] Add profile-owned alias persistence.
 - [ ] Update skill templates so LLM-authored skills consume canonical refs
   rather than raw labels.
 - [ ] Update `browsers_skill`, `infrastate_skill`, and `infrascope_skill` to
@@ -796,8 +815,10 @@ action routing.
   with a write capability separated from read-only profiles.
 - [x] Add a dedicated Root MCP domain audit record for governed device alias
   writes.
-- [ ] Expose remove/deprecate and profile-owned alias proposal/apply flows
-  through Root MCP after those durable commands exist.
+- [x] Expose remove/deprecate device alias proposal/apply flows through Root
+  MCP / NLUAuthoringPlane.
+- [ ] Expose profile-owned alias proposal/apply flows through Root MCP after
+  those durable commands exist.
 - [x] Include named entities in NLUAuthoringPlane context.
 - [ ] Add richer conflict-resolution audit views and operator UX.
 

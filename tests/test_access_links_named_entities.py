@@ -186,3 +186,47 @@ def test_add_browser_alias_rejects_stale_base_fingerprint(monkeypatch) -> None:
     assert result["status"] == "stale"
     assert result["proposal"]["reason"] == "base_fingerprint_mismatch"
     assert access_links.get_link("browser", "browser-1")["labels"] == []
+
+
+def test_remove_browser_alias_persists_change_and_updates_resolution(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(access_links, "_emit_entity_event_envelopes", lambda events: emitted.extend(events))
+
+    access_links.touch_browser_session("dev-browser", webspace_id="desktop")
+    access_links.add_link_alias("browser", "dev-browser", "work browser", locale="en")
+    emitted.clear()
+
+    result = access_links.remove_link_alias("browser", "dev-browser", "work browser", locale="en")
+
+    assert result["ok"] is True
+    assert result["status"] == "applied"
+    assert result["entry"]["labels"] == []
+    assert [event["topic"] for event in emitted] == [
+        named_entities.ENTITY_ALIAS_REMOVED,
+        named_entities.ENTITY_REGISTRY_CHANGED,
+    ]
+    resolved = named_entities.resolve_text("open work browser", kind="device.browser", request_locale="en")
+    assert resolved["resolved_entities"] == []
+
+
+def test_deprecate_browser_alias_marks_label_and_updates_resolution(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(access_links, "_emit_entity_event_envelopes", lambda events: emitted.extend(events))
+
+    access_links.touch_browser_session("dev-browser", webspace_id="desktop")
+    access_links.add_link_alias("browser", "dev-browser", "work browser", locale="en")
+    emitted.clear()
+
+    result = access_links.deprecate_link_alias("browser", "dev-browser", "work browser", locale="en")
+
+    assert result["ok"] is True
+    assert result["status"] == "applied"
+    assert result["entry"]["labels"][0]["status"] == "deprecated"
+    assert [event["topic"] for event in emitted] == [
+        named_entities.ENTITY_ALIAS_DEPRECATED,
+        named_entities.ENTITY_REGISTRY_CHANGED,
+    ]
+    resolved = named_entities.resolve_text("open work browser", kind="device.browser", request_locale="en")
+    assert resolved["resolved_entities"][0]["canonical_ref"] == "device:browser:dev-browser"

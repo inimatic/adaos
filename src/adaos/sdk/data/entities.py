@@ -58,6 +58,64 @@ def apply_alias_add(proposal: dict[str, Any]) -> dict[str, Any]:
     return _service.apply_alias_add(proposal)
 
 
+def propose_alias_remove(
+    *,
+    canonical_ref: str,
+    alias: str,
+    locale: str | None = None,
+    kind: str | None = None,
+    webspace_id: str | None = None,
+    actor: str | None = None,
+    source: str = "sdk.data.entities",
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _service.propose_alias_remove(
+        canonical_ref=canonical_ref,
+        alias=alias,
+        locale=locale,
+        kind=kind,
+        webspace_id=webspace_id,
+        actor=actor,
+        source=source,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def apply_alias_remove(proposal: dict[str, Any]) -> dict[str, Any]:
+    return _service.apply_alias_remove(proposal)
+
+
+def propose_alias_deprecate(
+    *,
+    canonical_ref: str,
+    alias: str,
+    locale: str | None = None,
+    kind: str | None = None,
+    webspace_id: str | None = None,
+    actor: str | None = None,
+    source: str = "sdk.data.entities",
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return _service.propose_alias_deprecate(
+        canonical_ref=canonical_ref,
+        alias=alias,
+        locale=locale,
+        kind=kind,
+        webspace_id=webspace_id,
+        actor=actor,
+        source=source,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def apply_alias_deprecate(proposal: dict[str, Any]) -> dict[str, Any]:
+    return _service.apply_alias_deprecate(proposal)
+
+
 def add_device_alias(
     device_ref: str,
     alias: str,
@@ -79,10 +137,58 @@ def add_device_alias(
     )
 
 
+def remove_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    from adaos.services import device_access as _device_access
+
+    return _device_access.remove_device_alias(
+        device_ref,
+        alias,
+        locale=locale,
+        actor=actor,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
+def deprecate_device_alias(
+    device_ref: str,
+    alias: str,
+    *,
+    locale: str | None = None,
+    actor: str | None = None,
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    from adaos.services import device_access as _device_access
+
+    return _device_access.deprecate_device_alias(
+        device_ref,
+        alias,
+        locale=locale,
+        actor=actor,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    )
+
+
 __all__ = [
     "add_device_alias",
+    "apply_alias_deprecate",
     "apply_alias_add",
+    "apply_alias_remove",
+    "deprecate_device_alias",
     "list_entities",
+    "propose_alias_deprecate",
     "propose_alias_add",
+    "propose_alias_remove",
+    "remove_device_alias",
     "resolve_text",
 ]

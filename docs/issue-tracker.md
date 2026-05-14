@@ -1472,7 +1472,7 @@ Recommended implementation order:
 
 Integration progress:
 
-- Overall: 95%.
+- Overall: 97%.
 - Completed: target architecture, addressing boundary, event model contract,
   initial roadmap, code-level record/result contracts, topic constants,
   read-only device entity adapter, modal/app/scenario/webspace lookup adapter,
@@ -1498,11 +1498,16 @@ Integration progress:
   publishing, Root MCP / NLUAuthoringPlane `add_device_alias` write exposure
   guarded by `development.write.named_entities`, entity-level fingerprints,
   `base_fingerprint` stale-write protection, dedicated Root MCP
-  `entity.alias.add` audit records, and focused tests.
-- Current implementation slice: stale-write protection and domain audit for
-  governed alias writes.
-- Not started yet: remove/deprecate alias operations, profile-owned aliases,
-  conflict-resolution UX, remote target routing, and consumer migration.
+  `entity.alias.add` audit records, governed alias remove/deprecate proposal
+  and apply flows, durable device/browser remove/deprecate persistence,
+  NLUAuthoringPlane remove/deprecate write tools, dedicated
+  `entity.alias.remove` / `entity.alias.deprecate` audit records, and focused
+  tests.
+- Current implementation slice: governed alias lifecycle symmetry for
+  add/remove/deprecate over SDK, authoritative access links, Root MCP, and
+  Codex bridge.
+- Not started yet: profile-owned aliases, conflict-resolution UX, remote
+  target routing, and consumer migration.
 - Verification note: targeted MCP/named-entity checks pass, and
   `test_root_mcp_foundation` is green again after test fixture alignment. The
   broader Yjs projection runs still expose pre-existing
@@ -1517,15 +1522,17 @@ Human verification:
 - Check that `Node N` is described as fallback-only.
 - Check that the implementation starts read-only and does not change NLU
   dispatch until dry-run trace is visible.
+- Check alias lifecycle manually: add a browser alias, deprecate it and confirm
+  it remains visible for compatibility, then remove it and confirm NLU no
+  longer resolves that phrase.
 
 Next implementation steps:
 
 1. Start migrating node/browser labels to the shared display helper.
 2. Add observed/draft/display-name lifecycle events beyond coarse
    `entity.registry.changed`.
-3. Add remove/deprecate alias operations with the same fingerprint/audit
-   contract.
-4. Add conflict-resolution UX around Root MCP alias writes.
+3. Add conflict-resolution UX around Root MCP alias writes.
+4. Add profile-owned alias storage and policy boundaries.
 5. Migrate node/browser labels to shared display helpers in remaining skill
    projections.
 
@@ -1618,6 +1625,8 @@ Actions:
   with a write capability separated from `ProfileOpsRead`.
 - [x] Expose entity `fingerprint` values and accept `base_fingerprint` on
   governed alias writes.
+- [x] Expose governed device alias remove/deprecate through SDK and Root MCP /
+  NLUAuthoringPlane with the same write capability and stale-write guard.
 
 #### NER-005: Integrate named entities with the operational event model
 
@@ -1630,8 +1639,9 @@ Actions:
 - [ ] Emit `entity.draft_name.suggested` for generated browser/node draft names.
 - [x] Emit alias lifecycle events from the first authoritative device/browser
   alias write path.
-- [ ] Emit display-name lifecycle events and alias remove/deprecate lifecycle
-  events from authoritative write paths.
+- [ ] Emit display-name lifecycle events from authoritative write paths.
+- [x] Emit alias remove/deprecate lifecycle events from authoritative
+  device/browser write paths.
 - [x] Return `entity.alias.added`, `entity.alias.conflict.detected`, and
   `entity.registry.changed` event envelopes from the governed alias-add
   apply contract.
@@ -1644,6 +1654,8 @@ Actions:
   Notifications and node skill logs when operator attention is useful.
 - [x] Add dedicated audit trail records for Root MCP alias writes beyond the
   generic Root MCP invocation audit envelope.
+- [x] Add dedicated audit trail records for Root MCP alias remove/deprecate
+  writes.
 - [ ] Treat `entity.registry.changed` as the cache invalidation signal for
   `EntityResolver` and demanded name-rendering projections. The compact Yjs
   projection already subscribes to this signal; resolver cache ownership is

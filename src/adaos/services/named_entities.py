@@ -35,6 +35,7 @@ ENTITY_EVENT_TOPICS: tuple[str, ...] = (
 )
 
 EntityStatus = Literal["draft", "confirmed", "observed", "conflicted", "deprecated"]
+EntityAliasAction = Literal["alias.add", "alias.remove", "alias.deprecate"]
 EntityAliasProposalStatus = Literal["proposed", "conflict", "noop", "invalid", "not_found", "stale"]
 EntityAliasApplyStatus = Literal["applied", "conflict", "noop", "invalid", "not_found", "stale"]
 EntityMatchType = Literal[
@@ -501,6 +502,7 @@ class EntityAliasProposal:
     alias: str
     locale: str = "und"
     status: EntityAliasProposalStatus = "proposed"
+    action: EntityAliasAction = "alias.add"
     entity_kind: str | None = None
     normalized: str | None = None
     actor: str | None = None
@@ -515,6 +517,10 @@ class EntityAliasProposal:
         object.__setattr__(self, "canonical_ref", _text(self.canonical_ref))
         object.__setattr__(self, "alias", _text(self.alias))
         object.__setattr__(self, "locale", _locale(self.locale))
+        action = _text(self.action) or "alias.add"
+        if action not in {"alias.add", "alias.remove", "alias.deprecate"}:
+            action = "alias.add"
+        object.__setattr__(self, "action", action)
         object.__setattr__(self, "entity_kind", _text_or_none(self.entity_kind))
         object.__setattr__(self, "normalized", _text(self.normalized) or normalize_entity_label(self.alias))
         object.__setattr__(self, "actor", _text_or_none(self.actor))
@@ -532,7 +538,7 @@ class EntityAliasProposal:
     def to_dict(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
-            "action": "alias.add",
+            "action": self.action,
             "status": self.status,
             "canonical_ref": self.canonical_ref,
             "entity_kind": self.entity_kind,
@@ -720,6 +726,7 @@ def _proposal_from_any(value: EntityAliasProposal | Mapping[str, Any]) -> Entity
         alias=payload.get("alias"),
         locale=payload.get("locale") or "und",
         status=payload.get("status") or "proposed",
+        action=payload.get("action") or "alias.add",
         normalized=payload.get("normalized"),
         actor=payload.get("actor"),
         source=payload.get("source") or "named_entity_service",
@@ -733,6 +740,14 @@ def _proposal_from_any(value: EntityAliasProposal | Mapping[str, Any]) -> Entity
 
 def _event_envelope(topic: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"topic": topic, "payload": dict(payload)}
+
+
+def _alias_label_matches(label: EntityLabel, *, normalized: str, locale: str) -> bool:
+    return (
+        label.role == "alias"
+        and normalize_entity_label(label.text) == normalized
+        and label.locale.casefold() == _locale(locale).casefold()
+    )
 
 
 class NamedEntityService:
@@ -964,8 +979,179 @@ class NamedEntityService:
             reason="alias_available",
         )
 
+    def propose_alias_remove(
+        self,
+        *,
+        canonical_ref: str,
+        alias: str,
+        locale: str | None = None,
+        kind: str | None = None,
+        webspace_id: str | None = None,
+        actor: str | None = None,
+        source: str = "named_entity_service",
+        request_id: str | None = None,
+        base_fingerprint: str | None = None,
+    ) -> EntityAliasProposal:
+        return self._propose_alias_state_change(
+            "alias.remove",
+            canonical_ref=canonical_ref,
+            alias=alias,
+            locale=locale,
+            kind=kind,
+            webspace_id=webspace_id,
+            actor=actor,
+            source=source,
+            request_id=request_id,
+            base_fingerprint=base_fingerprint,
+        )
+
+    def propose_alias_deprecate(
+        self,
+        *,
+        canonical_ref: str,
+        alias: str,
+        locale: str | None = None,
+        kind: str | None = None,
+        webspace_id: str | None = None,
+        actor: str | None = None,
+        source: str = "named_entity_service",
+        request_id: str | None = None,
+        base_fingerprint: str | None = None,
+    ) -> EntityAliasProposal:
+        return self._propose_alias_state_change(
+            "alias.deprecate",
+            canonical_ref=canonical_ref,
+            alias=alias,
+            locale=locale,
+            kind=kind,
+            webspace_id=webspace_id,
+            actor=actor,
+            source=source,
+            request_id=request_id,
+            base_fingerprint=base_fingerprint,
+        )
+
+    def _propose_alias_state_change(
+        self,
+        action: EntityAliasAction,
+        *,
+        canonical_ref: str,
+        alias: str,
+        locale: str | None,
+        kind: str | None,
+        webspace_id: str | None,
+        actor: str | None,
+        source: str,
+        request_id: str | None,
+        base_fingerprint: str | None,
+    ) -> EntityAliasProposal:
+        alias_text = _text(alias)
+        normalized = normalize_entity_label(alias_text)
+        effective_locale = _locale(locale)
+        expected_fingerprint = _text_or_none(base_fingerprint)
+        if not alias_text or not normalized:
+            return EntityAliasProposal(
+                canonical_ref=canonical_ref,
+                entity_kind=kind,
+                alias=alias_text,
+                locale=effective_locale,
+                status="invalid",
+                action=action,
+                normalized=normalized,
+                actor=actor,
+                source=source,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                base_fingerprint=expected_fingerprint,
+                reason="alias_empty",
+            )
+
+        record = self._find_entity(canonical_ref=canonical_ref, kind=kind, webspace_id=webspace_id)
+        if record is None:
+            return EntityAliasProposal(
+                canonical_ref=canonical_ref,
+                entity_kind=kind,
+                alias=alias_text,
+                locale=effective_locale,
+                status="not_found",
+                action=action,
+                normalized=normalized,
+                actor=actor,
+                source=source,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                base_fingerprint=expected_fingerprint,
+                reason="entity_not_found",
+            )
+
+        if expected_fingerprint and record.fingerprint != expected_fingerprint:
+            return EntityAliasProposal(
+                canonical_ref=record.canonical_ref,
+                entity_kind=record.kind,
+                alias=alias_text,
+                locale=effective_locale,
+                status="stale",
+                action=action,
+                normalized=normalized,
+                actor=actor,
+                source=source,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                base_fingerprint=expected_fingerprint,
+                reason="base_fingerprint_mismatch",
+                conflicts=(
+                    {
+                        "canonical_ref": record.canonical_ref,
+                        "kind": record.kind,
+                        "display_label": record.display_label,
+                        "base_fingerprint": expected_fingerprint,
+                        "current_fingerprint": record.fingerprint,
+                    },
+                ),
+            )
+
+        include_deprecated = action == "alias.remove"
+        if not self._record_has_alias(record, normalized=normalized, locale=effective_locale, include_deprecated=include_deprecated):
+            reason = (
+                "alias_already_deprecated"
+                if action == "alias.deprecate"
+                and self._record_has_alias(record, normalized=normalized, locale=effective_locale, include_deprecated=True)
+                else "alias_not_registered"
+            )
+            return EntityAliasProposal(
+                canonical_ref=record.canonical_ref,
+                entity_kind=record.kind,
+                alias=alias_text,
+                locale=effective_locale,
+                status="noop",
+                action=action,
+                normalized=normalized,
+                actor=actor,
+                source=source,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                base_fingerprint=expected_fingerprint,
+                reason=reason,
+            )
+
+        return EntityAliasProposal(
+            canonical_ref=record.canonical_ref,
+            entity_kind=record.kind,
+            alias=alias_text,
+            locale=effective_locale,
+            status="proposed",
+            action=action,
+            normalized=normalized,
+            actor=actor,
+            source=source,
+            webspace_id=webspace_id,
+            request_id=request_id,
+            base_fingerprint=expected_fingerprint,
+            reason="alias_registered",
+        )
+
     def apply_alias_add(self, proposal: EntityAliasProposal | Mapping[str, Any]) -> EntityAliasApplyResult:
-        proposed = _proposal_from_any(proposal)
+        proposed = replace(_proposal_from_any(proposal), action="alias.add")
         if proposed.status == "noop":
             return EntityAliasApplyResult(proposal=proposed, status="noop")
 
@@ -976,7 +1162,7 @@ class NamedEntityService:
                 source=proposed.source,
                 actor=proposed.actor,
                 current={
-                    "action": "alias.add",
+                    "action": proposed.action,
                     "alias": proposed.alias,
                     "normalized": proposed.normalized,
                     "locale": proposed.locale,
@@ -1023,7 +1209,16 @@ class NamedEntityService:
             status="confirmed",
             source=proposed.source,
         )
-        updated = replace(record, labels=tuple(record.labels) + (label,), status="confirmed")
+        labels = tuple(
+            item
+            for item in record.labels
+            if not _alias_label_matches(
+                item,
+                normalized=proposed.normalized or normalize_entity_label(proposed.alias),
+                locale=proposed.locale,
+            )
+        )
+        updated = replace(record, labels=labels + (label,), status="confirmed")
         alias_event = entity_event_payload(
             entity_ref=record.canonical_ref,
             entity_kind=record.kind,
@@ -1062,6 +1257,122 @@ class NamedEntityService:
             ),
         )
 
+    def apply_alias_remove(self, proposal: EntityAliasProposal | Mapping[str, Any]) -> EntityAliasApplyResult:
+        return self._apply_alias_state_change(
+            proposal,
+            action="alias.remove",
+            event_topic=ENTITY_ALIAS_REMOVED,
+            changed_reason="alias_removed",
+        )
+
+    def apply_alias_deprecate(self, proposal: EntityAliasProposal | Mapping[str, Any]) -> EntityAliasApplyResult:
+        return self._apply_alias_state_change(
+            proposal,
+            action="alias.deprecate",
+            event_topic=ENTITY_ALIAS_DEPRECATED,
+            changed_reason="alias_deprecated",
+        )
+
+    def _apply_alias_state_change(
+        self,
+        proposal: EntityAliasProposal | Mapping[str, Any],
+        *,
+        action: EntityAliasAction,
+        event_topic: str,
+        changed_reason: str,
+    ) -> EntityAliasApplyResult:
+        proposed = replace(_proposal_from_any(proposal), action=action)
+        if proposed.status == "noop":
+            return EntityAliasApplyResult(proposal=proposed, status="noop")
+
+        if proposed.status in {"conflict", "stale"}:
+            event_payload = entity_event_payload(
+                entity_ref=proposed.canonical_ref,
+                entity_kind=proposed.entity_kind or "",
+                source=proposed.source,
+                actor=proposed.actor,
+                current={
+                    "action": action,
+                    "alias": proposed.alias,
+                    "normalized": proposed.normalized,
+                    "locale": proposed.locale,
+                    "conflicts": [dict(item) for item in proposed.conflicts],
+                    "base_fingerprint": proposed.base_fingerprint,
+                },
+                reason=proposed.reason or "alias_state_conflict",
+                request_id=proposed.request_id,
+                locale=proposed.locale,
+            )
+            return EntityAliasApplyResult(
+                proposal=proposed,
+                status=proposed.status,
+                events=(_event_envelope(ENTITY_ALIAS_CONFLICT_DETECTED, event_payload),),
+            )
+
+        if proposed.status != "proposed":
+            return EntityAliasApplyResult(proposal=proposed, status=proposed.status)
+
+        record = self._find_entity(
+            canonical_ref=proposed.canonical_ref,
+            kind=proposed.entity_kind,
+            webspace_id=proposed.webspace_id,
+        )
+        if record is None:
+            missing = replace(proposed, status="not_found", reason="entity_not_found")
+            return EntityAliasApplyResult(proposal=missing, status="not_found")
+
+        include_deprecated = action == "alias.remove"
+        if not self._record_has_alias(
+            record,
+            normalized=proposed.normalized or normalize_entity_label(proposed.alias),
+            locale=proposed.locale,
+            include_deprecated=include_deprecated,
+        ):
+            missing = replace(proposed, status="noop", reason="alias_not_registered")
+            return EntityAliasApplyResult(proposal=missing, status="noop")
+
+        updated = self._updated_record_for_alias_state_change(record, proposed, action=action)
+        alias_event = entity_event_payload(
+            entity_ref=record.canonical_ref,
+            entity_kind=record.kind,
+            source=proposed.source,
+            actor=proposed.actor,
+            previous={"labels": [item.to_dict() for item in record.label_records(include_fallback=False)]},
+            current={
+                "action": action,
+                "alias": proposed.alias,
+                "normalized": proposed.normalized,
+                "locale": proposed.locale,
+                "display_label": updated.display_label,
+                "base_fingerprint": proposed.base_fingerprint,
+                "previous_fingerprint": record.fingerprint,
+                "current_fingerprint": updated.fingerprint,
+            },
+            reason=changed_reason,
+            request_id=proposed.request_id,
+            locale=proposed.locale,
+        )
+        changed_event = entity_event_payload(
+            entity_ref=record.canonical_ref,
+            entity_kind=record.kind,
+            source=proposed.source,
+            actor=proposed.actor,
+            previous={"fingerprint": record.fingerprint, "fingerprint_basis": "labels"},
+            current={"fingerprint": updated.fingerprint, "changed": True, "reason": changed_reason},
+            reason=changed_reason,
+            request_id=proposed.request_id,
+            locale=proposed.locale,
+        )
+        return EntityAliasApplyResult(
+            proposal=proposed,
+            status="applied",
+            updated_record=updated,
+            events=(
+                _event_envelope(event_topic, alias_event),
+                _event_envelope(ENTITY_REGISTRY_CHANGED, changed_event),
+            ),
+        )
+
     def _find_entity(
         self,
         *,
@@ -1080,9 +1391,72 @@ class NamedEntityService:
     def _record_has_label(self, record: NamedEntityRecord, *, normalized: str, locale: str) -> bool:
         folded_locale = _locale(locale).casefold()
         for label in record.label_records(include_fallback=False):
+            if label.status == "deprecated":
+                continue
             if normalize_entity_label(label.text) == normalized and label.locale.casefold() == folded_locale:
                 return True
         return False
+
+    def _record_has_alias(
+        self,
+        record: NamedEntityRecord,
+        *,
+        normalized: str,
+        locale: str,
+        include_deprecated: bool = False,
+    ) -> bool:
+        folded_locale = _locale(locale).casefold()
+        if folded_locale == "und":
+            for alias in record.aliases:
+                if normalize_entity_label(alias) == normalized:
+                    return True
+        for label in record.labels:
+            if not _alias_label_matches(label, normalized=normalized, locale=locale):
+                continue
+            if include_deprecated or label.status != "deprecated":
+                return True
+        return False
+
+    def _updated_record_for_alias_state_change(
+        self,
+        record: NamedEntityRecord,
+        proposal: EntityAliasProposal,
+        *,
+        action: EntityAliasAction,
+    ) -> NamedEntityRecord:
+        normalized = proposal.normalized or normalize_entity_label(proposal.alias)
+        folded_locale = proposal.locale.casefold()
+        aliases = tuple(
+            alias
+            for alias in record.aliases
+            if not (folded_locale == "und" and normalize_entity_label(alias) == normalized)
+        )
+        labels: list[EntityLabel] = []
+        matched_legacy_alias = len(aliases) != len(record.aliases)
+        for label in record.labels:
+            if not _alias_label_matches(label, normalized=normalized, locale=proposal.locale):
+                labels.append(label)
+                continue
+            if action == "alias.remove":
+                continue
+            labels.append(
+                replace(
+                    label,
+                    status="deprecated",
+                    source=label.source or proposal.source,
+                )
+            )
+        if action == "alias.deprecate" and matched_legacy_alias:
+            labels.append(
+                EntityLabel(
+                    text=proposal.alias,
+                    locale=proposal.locale,
+                    role="alias",
+                    status="deprecated",
+                    source=proposal.source,
+                )
+            )
+        return replace(record, aliases=aliases, labels=tuple(labels), status="confirmed")
 
     def _alias_conflicts(
         self,
@@ -1226,6 +1600,64 @@ def apply_alias_add(proposal: EntityAliasProposal | Mapping[str, Any]) -> dict[s
     return get_named_entity_service().apply_alias_add(proposal).to_dict()
 
 
+def propose_alias_remove(
+    *,
+    canonical_ref: str,
+    alias: str,
+    locale: str | None = None,
+    kind: str | None = None,
+    webspace_id: str | None = None,
+    actor: str | None = None,
+    source: str = "named_entity_service",
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return get_named_entity_service().propose_alias_remove(
+        canonical_ref=canonical_ref,
+        alias=alias,
+        locale=locale,
+        kind=kind,
+        webspace_id=webspace_id,
+        actor=actor,
+        source=source,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    ).to_dict()
+
+
+def apply_alias_remove(proposal: EntityAliasProposal | Mapping[str, Any]) -> dict[str, Any]:
+    return get_named_entity_service().apply_alias_remove(proposal).to_dict()
+
+
+def propose_alias_deprecate(
+    *,
+    canonical_ref: str,
+    alias: str,
+    locale: str | None = None,
+    kind: str | None = None,
+    webspace_id: str | None = None,
+    actor: str | None = None,
+    source: str = "named_entity_service",
+    request_id: str | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    return get_named_entity_service().propose_alias_deprecate(
+        canonical_ref=canonical_ref,
+        alias=alias,
+        locale=locale,
+        kind=kind,
+        webspace_id=webspace_id,
+        actor=actor,
+        source=source,
+        request_id=request_id,
+        base_fingerprint=base_fingerprint,
+    ).to_dict()
+
+
+def apply_alias_deprecate(proposal: EntityAliasProposal | Mapping[str, Any]) -> dict[str, Any]:
+    return get_named_entity_service().apply_alias_deprecate(proposal).to_dict()
+
+
 def _registry_conflicts(records: Iterable[NamedEntityRecord]) -> list[dict[str, Any]]:
     by_label: dict[str, dict[str, Any]] = {}
     for record in records:
@@ -1363,6 +1795,7 @@ __all__ = [
     "ENTITY_REGISTRY_CHANGED",
     "ENTITY_RESOLUTION_AMBIGUOUS",
     "ENTITY_RESOLUTION_FAILED",
+    "EntityAliasAction",
     "EntityAliasApplyStatus",
     "EntityAliasApplyResult",
     "EntityAliasProposal",
@@ -1372,7 +1805,9 @@ __all__ = [
     "EntityResolutionResult",
     "NamedEntityRecord",
     "NamedEntityService",
+    "apply_alias_deprecate",
     "apply_alias_add",
+    "apply_alias_remove",
     "canonical_device_ref",
     "compatibility_device_ref",
     "compact_registry_payload",
@@ -1380,7 +1815,9 @@ __all__ = [
     "get_named_entity_service",
     "list_entities",
     "normalize_entity_label",
+    "propose_alias_deprecate",
     "propose_alias_add",
+    "propose_alias_remove",
     "resolve_display_label",
     "resolve_text",
 ]

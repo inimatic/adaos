@@ -323,6 +323,43 @@ def test_add_device_alias_requires_policy_and_delegates_to_access_links(monkeypa
     assert calls == [("member", "member-1", "kitchen screen", "en", "user:operator", "device_access")]
 
 
+def test_remove_and_deprecate_device_alias_delegate_to_access_links(monkeypatch) -> None:
+    device = {
+        "ref": "member:member-1",
+        "kind": "member",
+        "identity": {"node_id": "member-1"},
+        "policy": {"present": True, "managed_state": "managed", "revoked": False},
+    }
+    calls: list[tuple[str, str, str, str, str | None]] = []
+
+    def _fake_remove_alias(kind, link_id, alias, *, locale=None, actor=None, source="access_links", request_id=None, base_fingerprint=None):
+        calls.append(("remove", kind, link_id, alias, source))
+        return {"ok": True, "status": "applied", "entry": {"id": link_id}}
+
+    def _fake_deprecate_alias(kind, link_id, alias, *, locale=None, actor=None, source="access_links", request_id=None, base_fingerprint=None):
+        calls.append(("deprecate", kind, link_id, alias, source))
+        return {"ok": True, "status": "applied", "entry": {"id": link_id}}
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("member", "member-1"),
+    )
+    monkeypatch.setattr(device_access._access_links, "remove_link_alias", _fake_remove_alias)
+    monkeypatch.setattr(device_access._access_links, "deprecate_link_alias", _fake_deprecate_alias)
+
+    removed = device_access.remove_device_alias("member:member-1", "kitchen screen", locale="en")
+    deprecated = device_access.deprecate_device_alias("member:member-1", "old kitchen screen", locale="en")
+
+    assert removed["ok"] is True
+    assert deprecated["ok"] is True
+    assert calls == [
+        ("remove", "member", "member-1", "kitchen screen", "device_access"),
+        ("deprecate", "member", "member-1", "old kitchen screen", "device_access"),
+    ]
+
+
 def test_detach_device_unregisters_live_member_when_connected(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
     device = {

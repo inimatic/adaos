@@ -278,20 +278,24 @@ Localization rules for generated skills:
 - treat runtime alias resolution as model-training neutral: aliases should
   appear in `entity_resolution` / trace evidence, not as required Rasa or
   neural retraining inputs
-- propose alias changes through `sdk.data.entities.propose_alias_add` /
-  `apply_alias_add` instead of mutating projected registry data directly; the
-  apply result returns lifecycle event envelopes that the authoritative write
-  path can persist and publish
+- propose alias changes through `sdk.data.entities.propose_alias_add`,
+  `propose_alias_remove`, or `propose_alias_deprecate` plus the matching apply
+  helper instead of mutating projected registry data directly; the apply result
+  returns lifecycle event envelopes that the authoritative write path can
+  persist and publish
 - when adding an alias for an actual browser/member device, prefer
-  `sdk.data.entities.add_device_alias(device_ref, alias, locale=...)`; it
-  writes through the governed access-link source and keeps Yjs as a read-only
-  projection
+  `sdk.data.entities.add_device_alias(device_ref, alias, locale=...)`; use
+  `remove_device_alias` to stop accepting an alias, and
+  `deprecate_device_alias` to keep compatibility while marking the alias as
+  old vocabulary. These helpers write through the governed access-link source
+  and keep Yjs as a read-only projection
 - when applying an alias change from a previously read registry item, pass the
   item's `fingerprint` as `base_fingerprint`; if the result is `stale`, reread
   the registry instead of retrying blindly
-- MCP clients can use `add_device_alias` from NLUAuthoringPlane only with a
-  write-capable session such as `ProfileOpsControl`; read-only sessions should
-  use `get_nlu_authoring_context` and `get_named_entity_registry`
+- MCP clients can use `add_device_alias`, `remove_device_alias`, and
+  `deprecate_device_alias` from NLUAuthoringPlane only with a write-capable
+  session such as `ProfileOpsControl`; read-only sessions should use
+  `get_nlu_authoring_context` and `get_named_entity_registry`
 
 ## Guarding and quarantine
 

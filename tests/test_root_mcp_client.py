@@ -80,6 +80,20 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
         base_fingerprint="fp-1",
         dry_run=True,
     )
+    client.remove_nlu_authoring_device_alias(
+        device_ref="browser:browser-1",
+        alias="office browser",
+        locale="en",
+        base_fingerprint="fp-2",
+        dry_run=True,
+    )
+    client.deprecate_nlu_authoring_device_alias(
+        device_ref="browser:browser-1",
+        alias="old browser",
+        locale="en",
+        base_fingerprint="fp-3",
+        dry_run=True,
+    )
 
     assert config.headers()["Authorization"] == "Bearer access-123"
     assert config.headers()["X-AdaOS-Subnet-Id"] == "subnet:test-zone"
@@ -182,3 +196,13 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     assert stub.calls[51][2]["json"]["arguments"]["locale"] == "en"
     assert stub.calls[51][2]["json"]["arguments"]["base_fingerprint"] == "fp-1"
     assert stub.calls[51][2]["json"]["dry_run"] is True
+    assert stub.calls[52][2]["json"]["tool_id"] == "nlu_authoring.remove_device_alias"
+    assert stub.calls[52][2]["json"]["arguments"]["device_ref"] == "browser:browser-1"
+    assert stub.calls[52][2]["json"]["arguments"]["alias"] == "office browser"
+    assert stub.calls[52][2]["json"]["arguments"]["base_fingerprint"] == "fp-2"
+    assert stub.calls[52][2]["json"]["dry_run"] is True
+    assert stub.calls[53][2]["json"]["tool_id"] == "nlu_authoring.deprecate_device_alias"
+    assert stub.calls[53][2]["json"]["arguments"]["device_ref"] == "browser:browser-1"
+    assert stub.calls[53][2]["json"]["arguments"]["alias"] == "old browser"
+    assert stub.calls[53][2]["json"]["arguments"]["base_fingerprint"] == "fp-3"
+    assert stub.calls[53][2]["json"]["dry_run"] is True
