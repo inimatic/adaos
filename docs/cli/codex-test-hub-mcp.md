@@ -45,6 +45,28 @@ curl -i https://ru.api.inimatic.com/v1/root/mcp `
   -d '{"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
 ```
 
+The same checks are available through the CLI smoke command:
+
+```powershell
+adaos dev root mcp smoke `
+  --mcp-http-url https://ru.api.inimatic.com/v1/root/mcp `
+  --auth-env-var ADAOS_ROOT_MCP_AUTH
+```
+
+The smoke command checks:
+
+- `GET /foundation`
+- JSON-RPC `initialize`
+- JSON-RPC `tools/list`
+- JSON-RPC `tools/call` for `get_status`
+
+It exits non-zero when any step fails and classifies common failure modes:
+
+- `auth_failed`: bearer was rejected with `401` or `403`
+- `endpoint_not_found`: MCP endpoint route is missing
+- `upstream_unavailable`: root/proxy/upstream returned `5xx`, including `502`
+- `jsonrpc_error`: HTTP transport worked, but the MCP server returned a JSON-RPC error
+
 ## Local Bridge MVP
 
 The current implementation is intentionally a local `stdio` bridge:
