@@ -952,11 +952,21 @@ Evidence resolved:
 - Shutdown can still emit an expected idle-wait suppression debug line and a requested NATS disconnect warning.
 - The 2026-04-29 root-load run exposed a new severe Windows freeze stack: `service_supervisor._watchdog_loop -> refresh_discovered -> asyncio.to_thread -> run_in_executor -> ThreadPoolExecutor._adjust_thread_count -> Thread.start`.
 - After making service discovery refresh inline and cached, the `service_supervisor` / `Thread.start` stack did not recur in follow-up diagnostics.
+- A 2026-05-14 direct Root MCP smoke correctly classified remote MCP as
+  `upstream_unavailable`, but the concurrently running local hub emitted a
+  severe hang stack in `browsers_skill._on_refresh ->
+  _refresh_snapshot_sync -> _run_coro -> Future.result()`. The smoke was not
+  the cause; it exposed a skill refresh handler blocking the event loop while
+  waiting for snapshot projection.
 
 Resolution:
 
 - Known synchronous startup/hot-path operations have been moved off the event loop or deferred out of `sys.ready`.
 - Diagnostic writes remain enabled, but NATS WS JSONL append now runs in a worker thread.
+- `browsers_skill` refresh now schedules snapshot projection on its single
+  projection executor without waiting when it is invoked from an active event
+  loop. Pending refreshes are coalesced by webspace, and projection failures are
+  logged asynchronously.
 
 Actions:
 
@@ -977,6 +987,8 @@ Actions:
 - [x] Avoid recurring `asyncio.to_thread` submission in skill-service discovery refresh.
 - [x] Make control lifecycle await-resume watcher opt-in so normal heartbeats do not start a diagnostic thread from the event loop.
 - [x] Confirm follow-up diagnostics have no `service_supervisor` / `Thread.start` stack and no 60-second event-loop freeze.
+- [x] Remove blocking `Future.result()` wait from `browsers_skill` refresh
+  handlers and add regression coverage for event-loop invocation.
 - [ ] Reconfirm no real loop lag/hang during the final root-routed browser acceptance after `/nats` keepalive is restored.
 
 #### F3M-006: Root MCP local startup uses fallback as the normal path
