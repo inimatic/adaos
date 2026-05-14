@@ -290,6 +290,65 @@ def test_rename_hub_device_updates_local_node_names(monkeypatch) -> None:
     assert calls == [["Main hub", "Workstation"]]
 
 
+def test_local_hub_member_alias_resolves_to_hub_settings(monkeypatch) -> None:
+    class _Config:
+        role = "hub"
+        subnet_id_value = "sn_local"
+        node_id_value = "node-local"
+        node_names = ["Main hub"]
+
+    monkeypatch.setattr(device_access, "_load_node_config", lambda: _Config())
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("member", "node-local"),
+    )
+
+    settings = device_access.get_device_settings("member:node-local")
+
+    assert settings is not None
+    assert settings["device_ref"] == "hub:sn_local"
+    assert settings["kind"] == "hub"
+    assert settings["id"]["value"] == "hub:sn_local"
+    assert settings["id"]["kind"] == "hub"
+    assert settings["name"]["save"]["params"] == {"device_ref": "hub:sn_local"}
+    assert settings["lifetime"]["set"]["enabled"] is False
+    assert settings["detach"]["enabled"] is False
+
+
+def test_rename_local_hub_member_alias_updates_local_node_names(monkeypatch) -> None:
+    class _Config:
+        role = "hub"
+        subnet_id_value = "sn_local"
+        node_id_value = "node-local"
+        node_names = ["Main hub"]
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(device_access, "_load_node_config", lambda: _Config())
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("member", "node-local"),
+    )
+
+    def _fake_set_node_names(names: list[str]):
+        calls.append(list(names))
+        updated = _Config()
+        updated.node_names = list(names)
+        return updated
+
+    monkeypatch.setattr(device_access, "_set_local_node_names", _fake_set_node_names)
+
+    result = device_access.rename_device("member:node-local", "Main hub, Workstation")
+
+    assert result["ok"] is True
+    assert result["device_ref"] == "hub:sn_local"
+    assert result["entry"]["kind"] == "hub"
+    assert result["entry"]["node_names"] == ["Main hub", "Workstation"]
+    assert calls == [["Main hub", "Workstation"]]
+
+
 def test_adopt_device_delegates_to_reconciler(monkeypatch) -> None:
     captured: list[tuple[str, str | None, str]] = []
 

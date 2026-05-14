@@ -6,6 +6,97 @@ and delivery work.
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 
+## Device Identity and Access Usability
+
+### Goal
+
+Make node/browser settings explain identity, editable human names, lifetime, and
+detach behavior without leaking transport implementation details into the
+operator UI.
+
+### Current Status
+
+Snapshot date: 2026-05-14.
+
+Local debugging found that the local hub can still be addressed by legacy
+`member:<local_node_id>` refs in desktop settings. That is an addressing alias,
+not a true member identity. Device access must normalize this alias to
+`hub:<subnet_id>` so policies, name storage, and disabled hub-only actions are
+derived from `.adaos/node.yaml`.
+
+### Tasks
+
+#### DIAU-001: Normalize local hub identity in settings flows
+
+Status: in progress.
+
+Actions:
+
+- [x] Treat `member:<local_node_id>` as `hub:<subnet_id>` when local node config
+  says `role: hub`.
+- [x] Keep hub display names editable through `.adaos/node.yaml:
+  node.node_names`.
+- [x] Keep hub lifetime and detach actions disabled with explicit reasons.
+- [ ] Verify live desktop settings now shows `kind=hub` and `ID hub:<subnet_id>`
+  after hub restart/client reload.
+
+Human verification:
+
+- Open local node Settings and confirm ID is `hub:<subnet_id>`, kind is `hub`,
+  Save name enables after editing, and lifetime/detach remain disabled with
+  policy hints.
+
+#### DIAU-002: Harden settings modal controls
+
+Status: in progress.
+
+Actions:
+
+- [x] Use native modal controls with pointer/click duplicate suppression for
+  Settings actions.
+- [x] Keep Close, Apps, Marketplace, Hide, Save name, Lifetime, and Detach
+  responsive after editing text fields.
+- [ ] Add broader browser regression coverage once the modal E2E harness is
+  available.
+
+Human verification:
+
+- Open Settings, edit Name, click Close.
+- Open Settings, click Hide, then Close.
+- Open Settings, edit Name, then Apps/Marketplace.
+
+#### DIAU-003: Clarify browser settings identity
+
+Status: in progress.
+
+Actions:
+
+- [x] Show immutable browser Device ID separately from editable Browser name.
+- [x] Add explicit Save name flow for browser-name edits.
+- [x] Document that the name is hub-side access policy state and is not written
+  back to the remote browser.
+- [ ] Implement immediate remote browser logout on Detach, or add a control-plane
+  event if the current runtime has no safe rail for it.
+
+Human verification:
+
+- Open `[node] Browser settings`, confirm Device ID is visible, edit Browser
+  name, Save name, then refresh Browsers and confirm the new label remains.
+
+#### DIAU-004: Align terminology around subnet endpoints
+
+Status: open.
+
+Actions:
+
+- [x] Prefer `subnet endpoint` for software participants attached to a subnet:
+  browser, member node, LLM agent, IoT bridge, or future headless client.
+- [x] Keep `device` for the operator-facing managed/trusted endpoint class.
+- [x] Keep `client` as a policy class for temporary browser access, not as the
+  general architectural term.
+- [ ] Audit UI copy and docs for places where `device`, `browser`, `member`,
+  and `client` are still conflated.
+
 ## UI Runtime Diagnostics and Skill-Scoped Logs
 
 ### Goal
