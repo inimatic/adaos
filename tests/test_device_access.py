@@ -74,6 +74,7 @@ def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatc
             "node_id": "member-1",
             "browser_device_id": None,
             "hostname": "kitchen-tablet",
+            "node_names": ["Kitchen tablet", "Kitchen screen"],
         },
         "policy": {
             "present": True,
@@ -105,15 +106,24 @@ def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatc
 
     assert settings is not None
     assert settings["title"] == "Kitchen tablet"
-    assert settings["name"] == {
-        "value": "Kitchen tablet",
-        "placeholder": "Living room TV",
-        "save": {
-            "enabled": True,
-            "target": "browsers_skill.rename_device",
-            "params": {"device_ref": "member:member-1"},
-        },
+    assert settings["id"] == {
+        "value": "member:member-1",
+        "kind": "member",
+        "node_id": "member-1",
+        "link_id": "member-1",
     }
+    assert settings["name"]["value"] == "Kitchen tablet, Kitchen screen"
+    assert settings["name"]["primary"] == "Kitchen tablet"
+    assert settings["name"]["names"] == ["Kitchen tablet", "Kitchen screen"]
+    assert settings["name"]["placeholder"] == "Living room TV, Kitchen display"
+    assert settings["name"]["save"] == {
+        "enabled": True,
+        "target": "browsers_skill.rename_device",
+        "params": {"device_ref": "member:member-1"},
+    }
+    assert settings["name"]["policy"]["can_edit"] is True
+    assert settings["name"]["policy"]["status"] == "managed"
+    assert settings["name"]["policy"]["storage"] == "access_links.display_name + access_links.node_names"
     assert settings["lifetime"]["current_label"] == "Permanent"
     assert settings["lifetime"]["set"] == {
         "enabled": True,
@@ -181,11 +191,12 @@ def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -
 
     assert settings is not None
     assert settings["name"]["save"] == {
-        "enabled": False,
-        "reason": "device_policy_missing",
-        "target": "browsers_skill.rename_device",
+        "enabled": True,
+        "target": "browsers_skill.adopt_device",
         "params": {"device_ref": "member:member-2"},
     }
+    assert settings["name"]["policy"]["mode"] == "adopt"
+    assert settings["name"]["policy"]["can_edit"] is True
     assert settings["lifetime"]["set"] == {
         "enabled": False,
         "reason": "device_policy_missing",
@@ -257,26 +268,28 @@ def test_rename_device_updates_live_member_when_connected(monkeypatch) -> None:
     monkeypatch.setattr(
         device_access._access_links,
         "rename_link",
-        lambda kind, link_id, display_name: {
+        lambda kind, link_id, display_name, *, node_names=None: {
             "kind": kind,
             "id": link_id,
             "display_name": display_name,
+            "node_names": list(node_names or []),
         },
     )
     monkeypatch.setattr(device_access, "_get_hub_link_manager", lambda: _FakeManager())
 
-    result = device_access.rename_device("member:member-1", "Kitchen tablet")
+    result = device_access.rename_device("member:member-1", "Kitchen tablet, Kitchen screen, kitchen tablet")
 
     assert result["ok"] is True
     assert result["entry"] == {
         "kind": "member",
         "id": "member-1",
         "display_name": "Kitchen tablet",
+        "node_names": ["Kitchen tablet", "Kitchen screen"],
     }
     assert result["runtime_update"] == {"attempted": True, "applied": True}
     assert calls == [
         ("is_connected", "member-1"),
-        ("set_names", "member-1", ["Kitchen tablet"]),
+        ("set_names", "member-1", ["Kitchen tablet", "Kitchen screen"]),
     ]
 
 

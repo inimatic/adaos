@@ -464,7 +464,13 @@ def touch_member_link(
     return saved
 
 
-def rename_link(kind: LinkKind, entry_id: str, display_name: str) -> dict[str, Any]:
+def rename_link(
+    kind: LinkKind,
+    entry_id: str,
+    display_name: str,
+    *,
+    node_names: list[str] | None = None,
+) -> dict[str, Any]:
     token = str(entry_id or "").strip()
     if not token:
         raise ValueError("entry id is required")
@@ -472,6 +478,12 @@ def rename_link(kind: LinkKind, entry_id: str, display_name: str) -> dict[str, A
     entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
     previous = dict(entry)
     entry["display_name"] = str(display_name or "").strip()
+    if node_names is not None:
+        entry["node_names"] = [
+            str(item or "").strip()
+            for item in list(node_names or [])
+            if str(item or "").strip()
+        ]
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
