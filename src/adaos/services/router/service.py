@@ -702,6 +702,31 @@ class RouterService:
         def _voice_chat_data_path(target_node_id: str | None) -> str:
             return node_scope_data_path("data/voice_chat", str(target_node_id or "").strip())
 
+        def _local_node_id() -> str:
+            try:
+                return str(get_ctx().config.node_id or "").strip()
+            except Exception:
+                return ""
+
+        def _resolve_voice_target_node_id(
+            payload: Any,
+            meta: dict | None = None,
+            *,
+            default_local: bool = False,
+        ) -> str | None:
+            payload_dict = payload if isinstance(payload, dict) else {}
+            meta_dict = meta if isinstance(meta, dict) else {}
+            token = str(
+                payload_dict.get("target_node_id")
+                or payload_dict.get("node_id")
+                or meta_dict.get("target_node_id")
+                or meta_dict.get("node_target_id")
+                or ""
+            ).strip()
+            if not token and default_local:
+                token = _local_node_id()
+            return token or None
+
         def _read_voice_chat_state(data_map: Any, target_node_id: str | None) -> dict:
             current = data_map.to_json() if hasattr(data_map, "to_json") else {}
             if isinstance(current, str):
@@ -1333,7 +1358,7 @@ class RouterService:
             if not self._event_targets_local_node(payload):
                 return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
-            target_node_id = str(payload.get("target_node_id") or meta.get("target_node_id") or "").strip() or None
+            target_node_id = _resolve_voice_target_node_id(payload, meta)
             for ws in await _resolve_webspace_ids(payload):
                 await _ensure_voice_chat_state(ws, target_node_id)
                 await _ensure_tts_state(ws)
@@ -1418,7 +1443,12 @@ class RouterService:
                 "ts": float(payload.get("ts") or time.time()),
             }
             targets = await _resolve_webspace_ids(payload)
-            target_node_id = str(meta.get("target_node_id") or payload.get("target_node_id") or "").strip() or None
+            route_id = str(meta.get("route_id") or meta.get("route") or "").strip()
+            target_node_id = _resolve_voice_target_node_id(
+                payload,
+                meta,
+                default_local=route_id == "voice_chat",
+            )
             try:
                 self._vlog.debug(
                     "io.out.chat.append received text=%r from=%s targets=%s node_id=%s",
@@ -1619,20 +1649,10 @@ class RouterService:
             except Exception:
                 pass
 
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=True)
             try:
-                await _ensure_voice_chat_state(
-                    ws,
-                    str(
-                        payload.get("target_node_id")
-                        or (
-                            payload.get("_meta", {}).get("target_node_id")
-                            if isinstance(payload.get("_meta"), dict)
-                            else ""
-                        )
-                        or ""
-                    ).strip()
-                    or None,
-                )
+                await _ensure_voice_chat_state(ws, target_node_id)
             except Exception:
                 try:
                     logging.getLogger("adaos.router").warning("voice.chat.user: failed to ensure voice_chat state", exc_info=True)
@@ -1640,11 +1660,11 @@ class RouterService:
                     pass
                 return
 
-            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
             meta = {**meta, "webspace_id": ws}
             if len(target_webspaces) > 1:
                 meta["webspace_ids"] = list(target_webspaces)
-            target_node_id = str(meta.get("target_node_id") or payload.get("target_node_id") or "").strip() or None
+            if target_node_id:
+                meta.setdefault("target_node_id", target_node_id)
             # Ensure voice chat history is updated even if io.out.chat.append routing breaks.
             msg = {
                 "id": _make_id("m"),
