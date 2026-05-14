@@ -68,6 +68,25 @@ Two link kinds exist:
 The access link is the authoritative policy object.
 Bootstrap artifacts such as join codes, pair codes, or approval tokens are only temporary issuance flows.
 
+### Subnet endpoint
+
+A `subnet endpoint` is the software participant that attaches to a subnet.
+This term is deliberately broader than `browser` or `client`:
+
+- a browser runtime opened by a person;
+- a member node runtime;
+- a future LLM agent process;
+- a future IoT bridge or appliance runtime.
+
+The endpoint owns a stable technical identity for routing and policy checks.
+It may run on a physical device, but it is not the same thing as the physical
+device. A laptop can host several endpoints, and one endpoint can expose
+several UI or automation surfaces.
+
+Use `subnet endpoint` for architecture and protocol discussions. Use `device`
+for the operator-facing managed/trusted class, and use `client` only for the
+temporary browser-access policy class.
+
 ### Device vs client
 
 Browser links are grouped into two operator-facing classes:
@@ -77,6 +96,11 @@ Browser links are grouped into two operator-facing classes:
 
 This is intentionally a policy distinction, not a transport distinction.
 A phone browser, TV browser, or laptop browser can all be promoted to a `device`.
+
+In other words, `browser` is an endpoint kind, while `device` and `client` are
+operator-facing access classes for that endpoint. This keeps future endpoint
+kinds such as `llm-agent` or `iot-bridge` from inheriting browser-specific UI
+language.
 
 ### Device name
 
@@ -309,9 +333,14 @@ The broader target vocabulary should treat them as domain refs of the form:
 
 - `device:browser:<device_id>`
 - `device:member:<node_id>`
+- `hub:<subnet_id>` for the local hub settings surface
 
 Important boundaries:
 
+- `hub:<subnet_id>` is a local hub settings target, not a remote member link.
+- When a local hub is accidentally addressed through `member:<local_node_id>`,
+  device access must normalize it back to `hub:<subnet_id>` before deriving
+  command availability.
 - `managed_state` belongs in the canonical read model because it is a device-level semantic derived from policy plus observation.
 - `observation.source` belongs in the read model because it explains whether the device is live, link-backed, or only remembered.
 - command availability such as `can_rename` or `can_detach` should not live inside `DeviceRecord`; it belongs to a separate command-profile surface.
@@ -414,8 +443,19 @@ The target browser UX is:
 Browser settings should mirror the same device access model:
 
 - editable name
+- immutable Device ID
 - permanent versus fixed lifetime
 - detach
+
+The editable browser name is hub-side access policy state. It is not written
+back to the remote browser. The remote browser keeps its immutable `device_id`
+and may only observe refreshed labels through hub projections.
+
+Detach currently revokes the access link and prevents future ingress for the
+endpoint. Immediate remote logout requires a live control-plane rail such as
+`endpoint.access.revoked` or `browser.logout.requested` delivered to active
+browser sessions; until that rail exists, the UI should describe detach as
+revocation and the roadmap should track forced logout separately.
 
 ## 11. Marketplace and app management stay node-scoped
 

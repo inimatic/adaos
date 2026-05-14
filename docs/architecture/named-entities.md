@@ -81,6 +81,8 @@ Initial target refs:
 
 - `device:member:<node_id>`
 - `device:browser:<device_id>`
+- `hub:<subnet_id>` for the local hub settings identity; this is not a remote
+  member alias
 - `node:<node_id>` as a compatibility or system-model view when the object is
   specifically a node rather than a device access endpoint
 - `webspace:<webspace_id>`
@@ -89,6 +91,12 @@ Initial target refs:
 - `modal:<modal_id>`
 - `app:<app_id>`
 - `profile:<user_id>`
+
+For device-access naming, the architecture term is `subnet endpoint`: the
+software participant attached to the subnet. `browser` and `member` are
+endpoint kinds; `device` and `client` are operator-facing access classes. NLU
+canonicalization should resolve human names to the stable endpoint ref and keep
+the class/kind distinction as metadata.
 
 ### Name classes
 

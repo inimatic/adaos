@@ -305,10 +305,18 @@ evolve toward an explicitly typed domain-ref vocabulary:
 
 - `device:browser:<device_id>`
 - `device:member:<node_id>`
+- `hub:<subnet_id>` for the local hub settings target
 
 Device-facing architecture may continue to document the shorter
 `browser:<device_id>` and `member:<node_id>` forms during migration, but the
 target vocabulary should be explicit about the domain class.
+If a local hub is observed through the legacy `member:<local_node_id>` form,
+the device-access layer must normalize it to `hub:<subnet_id>` before exposing
+settings or command availability.
+
+Use `subnet endpoint` for the software participant attached to the subnet.
+`browser` and `member` are endpoint kinds; `device` and `client` are
+operator-facing access classes.
 
 The naming layer should resolve user-facing labels and aliases into these refs
 before actions are dispatched. UI manifests should bind to refs, not to mutable
