@@ -743,9 +743,11 @@ action routing.
   alias, and ambiguity examples.
 - [ ] Extend `NamedEntityService` coverage to the full system model and
   workspace registry.
-- [ ] Emit `entity.observed`, `entity.draft_name.suggested`,
+- [x] Emit `entity.observed`, browser `entity.draft_name.suggested`,
   `entity.display_name.changed`, alias lifecycle, and conflict events from the
-  authoritative source services.
+  first authoritative device/browser source service.
+- [ ] Extend observed/draft/display-name lifecycle events to workspace,
+  manifest, and future node-draft sources.
 - [x] Emit `entity.registry.changed` from `access_links` when browser/member
   naming fields change.
 - [ ] Add shared name-resolution helpers for node/device display labels.
