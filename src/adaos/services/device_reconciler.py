@@ -14,6 +14,22 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _name_list(value: Any) -> list[str]:
+    raw_items = str(value or "").split(",") if not isinstance(value, list) else value
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        token = _text(item)
+        if not token:
+            continue
+        folded = token.casefold()
+        if folded in seen:
+            continue
+        seen.add(folded)
+        names.append(token)
+    return names
+
+
 def _first_text(values: list[Any]) -> str:
     for value in values:
         token = _text(value)
@@ -179,9 +195,10 @@ def adopt_device(device_ref: str, *, display_name: str | None = None, preset: st
     kind, link_id = parsed
     identity = _mapping(device.get("identity"))
     observation = _mapping(device.get("observation"))
-    chosen_name = _text(display_name)
-    if not chosen_name:
-        chosen_name = _default_adopt_display_name(device)
+    chosen_names = _name_list(display_name)
+    if not chosen_names:
+        chosen_names = _name_list(_default_adopt_display_name(device))
+    chosen_name = chosen_names[0] if chosen_names else ""
 
     entry_patch: dict[str, Any] = {
         "display_name": chosen_name,
@@ -196,7 +213,7 @@ def adopt_device(device_ref: str, *, display_name: str | None = None, preset: st
         entry_patch["last_webspace_id"] = _text(observation.get("last_webspace_id")) or None
     else:
         entry_patch["hostname"] = _text(identity.get("hostname")) or None
-        entry_patch["node_names"] = list(identity.get("node_names") or [])
+        entry_patch["node_names"] = chosen_names or list(identity.get("node_names") or [])
 
     _access_links.upsert_link(kind, link_id, entry_patch)
     entry = _access_links.set_link_lifetime(kind, link_id, _text(preset) or "permanent")
