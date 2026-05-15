@@ -209,14 +209,76 @@ def _git_path_flags(status: object) -> list[str]:
     ahead = _positive_int(_status_value(status, "ahead_count", 0))
     behind = _positive_int(_status_value(status, "behind_count", 0))
     if dirty:
-        flags.append("dirty")
+        flags.append("git-dirty")
     if changed and ahead:
-        flags.append("ahead")
+        flags.append("git-ahead")
     if changed and behind:
-        flags.append("behind")
+        flags.append("git-behind")
     if changed and not ahead and not behind:
-        flags.append("diff")
+        flags.append("git-different")
     return flags
+
+
+def _compare_versions(left: str | None, right: str | None) -> int | None:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text or not right_text:
+        return None
+    try:
+        from packaging.version import Version
+
+        left_version = Version(left_text)
+        right_version = Version(right_text)
+    except Exception:
+        left_parts = _simple_version_parts(left_text)
+        right_parts = _simple_version_parts(right_text)
+        if left_parts is None or right_parts is None:
+            return None
+        max_len = max(len(left_parts), len(right_parts))
+        left_parts = left_parts + (0,) * (max_len - len(left_parts))
+        right_parts = right_parts + (0,) * (max_len - len(right_parts))
+        if left_parts > right_parts:
+            return 1
+        if left_parts < right_parts:
+            return -1
+        return 0
+    if left_version > right_version:
+        return 1
+    if left_version < right_version:
+        return -1
+    return 0
+
+
+def _simple_version_parts(value: str) -> tuple[int, ...] | None:
+    text = str(value or "").strip().removeprefix("v").removeprefix("V")
+    if not text:
+        return None
+    parts: list[int] = []
+    for segment in text.split("."):
+        digits: list[str] = []
+        for char in segment:
+            if not char.isdigit():
+                break
+            digits.append(char)
+        if not digits:
+            return None
+        parts.append(int("".join(digits)))
+    return tuple(parts)
+
+
+def _runtime_version_flags(
+    workspace_version: str | None,
+    runtime_version: str | None,
+    version_drift: bool,
+) -> list[str]:
+    if not version_drift:
+        return []
+    order = _compare_versions(workspace_version, runtime_version)
+    if order is None or order == 0:
+        return ["runtime-different"]
+    if order > 0:
+        return ["runtime-ahead"]
+    return ["runtime-behind"]
 
 
 def _resolve_workspace_skill_versions(
@@ -233,6 +295,40 @@ def _resolve_workspace_skill_versions(
         runtime_version = _clean_version_text(runtime_state.get("version"))
     version_drift = bool(workspace_version and runtime_version and workspace_version != runtime_version)
     return workspace_version, runtime_version, version_drift
+
+
+def _resolve_list_skill_flags(
+    *,
+    ctx,
+    skill_name: str,
+    row_version: object | None,
+    runtime_state: dict[str, object] | None = None,
+    workspace_root: Path,
+    workspace_skills_root: Path,
+    registry_meta: dict[str, object] | None,
+) -> list[str]:
+    _source_workdir, source_path, _source_kind = _resolve_workspace_skill_source(
+        ctx,
+        skill_name,
+        workspace_root,
+        workspace_skills_root,
+    )
+    if runtime_state is None and _clean_version_text(row_version):
+        runtime_state = {"version": row_version}
+    workspace_version, runtime_version, version_drift = _resolve_workspace_skill_versions(
+        runtime_state=runtime_state,
+        registry_meta=registry_meta,
+        source_path=source_path,
+    )
+    return [
+        *_runtime_version_flags(workspace_version, runtime_version, version_drift),
+        *_resolve_list_skill_git_flags(
+            ctx=ctx,
+            skill_name=skill_name,
+            workspace_root=workspace_root,
+            workspace_skills_root=workspace_skills_root,
+        ),
+    ]
 
 
 def _skill_names_from_paths(paths: list[str]) -> list[str]:
@@ -774,6 +870,17 @@ def list_cmd(
         if item_name:
             workspace_registry_by_name[item_name] = item
 
+    def _list_runtime_state(skill_name: str, row_version: object | None) -> dict[str, object] | None:
+        try:
+            state = mgr.runtime_status(skill_name)
+        except Exception:
+            state = None
+        if isinstance(state, dict):
+            return state
+        if _clean_version_text(row_version):
+            return {"version": row_version}
+        return None
+
     if json_output:
         payload = {
             "skills": [
@@ -788,11 +895,14 @@ def list_cmd(
                         workspace_skills_root=workspace_skills_root,
                         registry_meta=workspace_registry_by_name.get(r.name),
                     ),
-                    "flags": _resolve_list_skill_git_flags(
+                    "flags": _resolve_list_skill_flags(
                         ctx=ctx,
                         skill_name=r.name,
+                        row_version=getattr(r, "active_version", None),
+                        runtime_state=_list_runtime_state(r.name, getattr(r, "active_version", None)),
                         workspace_root=workspace_root,
                         workspace_skills_root=workspace_skills_root,
+                        registry_meta=workspace_registry_by_name.get(r.name),
                     ),
                 }
                 for r in rows
@@ -817,11 +927,14 @@ def list_cmd(
                 workspace_skills_root=workspace_skills_root,
                 registry_meta=workspace_registry_by_name.get(r.name),
             )
-            flags = _resolve_list_skill_git_flags(
+            flags = _resolve_list_skill_flags(
                 ctx=ctx,
                 skill_name=r.name,
+                row_version=getattr(r, "active_version", None),
+                runtime_state=_list_runtime_state(r.name, getattr(r, "active_version", None)),
                 workspace_root=workspace_root,
                 workspace_skills_root=workspace_skills_root,
+                registry_meta=workspace_registry_by_name.get(r.name),
             )
             suffix = f" [{' '.join(flags)}]" if flags else ""
             typer.echo(f'{_("cli.skill.list.item", name=r.name, version=av)}{suffix}')
@@ -1511,6 +1624,7 @@ def status(
                 workspace_version=workspace_version,
                 runtime_version=runtime_version,
             )
+            runtime_flags = _runtime_version_flags(workspace_version, runtime_version, version_drift)
             path_status = compute_path_status(
                 workdir=source_workdir,
                 path=source_path,
@@ -1530,6 +1644,7 @@ def status(
                 "runtime_version": runtime_version,
                 "display_version": display_version,
                 "version_drift": version_drift,
+                "runtime_flags": runtime_flags,
                 "git": {
                     "path": path_status.path,
                     "exists": path_status.exists,
@@ -1648,6 +1763,7 @@ def status(
         reg = entry.get("workspace_registry") or {}
         display_version = str(entry.get("display_version") or "").strip()
         runtime_version = str(entry.get("runtime_version") or "").strip()
+        runtime_flags = [str(flag) for flag in (entry.get("runtime_flags") or []) if str(flag).strip()]
         typer.echo(f"skill: {entry.get('name')}")
         typer.echo(f"space: {entry.get('space')}")
         if space == "workspace" and display_version and display_version != "n/a":
@@ -1670,6 +1786,8 @@ def status(
                 typer.echo(f"active slot: {st.get('active_slot')}")
                 if entry.get("version_drift") and runtime_version:
                     typer.echo(f"runtime version: {runtime_version}")
+                if runtime_flags:
+                    typer.echo("runtime status: " + ", ".join(runtime_flags))
             if st.get("installed") is False or state in {"draft", "runtime-missing"}:
                 typer.echo("resolved manifest: (not installed)")
             elif st.get("ready", True):
@@ -1751,8 +1869,7 @@ def status(
                 flags.append("draft")
             elif state == "runtime-missing":
                 flags.append("runtime-missing")
-            if entry.get("version_drift"):
-                flags.append("version-drift")
+            flags.extend(str(flag) for flag in (entry.get("runtime_flags") or []) if str(flag).strip())
         if space == "workspace":
             flags.extend(_git_path_flags(g))
         else:
