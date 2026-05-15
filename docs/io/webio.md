@@ -778,6 +778,60 @@ surfaces are first-paint critical versus off-focus or deferred, but they do
 not encode a low-level scheduler. Keep them at page/widget/modal/catalog
 granularity rather than annotating every leaf control.
 
+### Overlay presentation and focus lifecycle
+
+Schema-driven modals are runtime-owned overlays. A `webui.json` manifest
+declares the modal/action intent; the browser runtime owns DOM mechanics such
+as Ionic overlay creation, background hiding, focus release, and focus restore.
+This keeps widget actions data-driven and prevents skill manifests from
+encoding browser-specific accessibility workarounds.
+
+By default, opening a modal captures the currently focused element, releases
+background focus before the renderer hides the desktop surface, and restores
+the origin focus after dismissal when that element is still connected and
+visible. This prevents the background `ion-router-outlet` from being marked
+`aria-hidden` while one of its descendants still owns focus.
+
+Modal definitions can override the default presentation policy:
+
+```json
+{
+  "registry": {
+    "modals": {
+      "nlu_teacher_modal": {
+        "title": "NLU Teacher",
+        "presentation": {
+          "kind": "modal",
+          "focus": {
+            "captureOrigin": true,
+            "releaseBackground": true,
+            "restoreOrigin": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Per-action overrides use the same policy through `params.presentation`,
+`params.focus`, or the `restoreFocus` shortcut:
+
+```json
+{
+  "on": "select",
+  "type": "openModal",
+  "params": {
+    "modalId": "nlu_teacher_modal",
+    "restoreFocus": true
+  }
+}
+```
+
+Most manifests should omit this block and rely on the runtime defaults. Use
+explicit focus policy only for unusual overlay flows, such as nested overlays
+or flows that intentionally do not return focus to the opener.
+
 ## Simplifications and Limitations
 
 * Switching webspaces still reloads the page to keep the YDoc tree simple.

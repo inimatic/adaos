@@ -136,7 +136,53 @@
       "properties": {
         "title": { "type": "string" },
         "schema": { "$ref": "#/$defs/pageSchema" },
-        "load": { "$ref": "#/$defs/loadHint" }
+        "load": { "$ref": "#/$defs/loadHint" },
+        "presentation": { "$ref": "#/$defs/overlayPresentation" },
+        "overlay": {
+          "$ref": "#/$defs/overlayPresentation",
+          "description": "Alias for presentation kept for manifests that model modals as overlays."
+        }
+      }
+    },
+
+    "overlayPresentation": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Runtime overlay presentation contract. The renderer owns mechanics such as Ionic modal, sheet, or drawer, while the manifest declares lifecycle intent.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["modal", "sheet", "sideSheet", "popover", "drawer", "fullscreen"],
+          "description": "Renderer intent hint for the overlay shape."
+        },
+        "focus": { "$ref": "#/$defs/overlayFocusPolicy" },
+        "restoreFocus": {
+          "type": "boolean",
+          "description": "Shortcut for focus.restoreOrigin. Defaults to true."
+        }
+      }
+    },
+
+    "overlayFocusPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Focus lifecycle policy for runtime-owned overlays. Defaults protect accessibility by releasing hidden background focus and restoring the opener after dismissal.",
+      "properties": {
+        "captureOrigin": {
+          "type": "boolean",
+          "default": true,
+          "description": "Capture the active element before opening so it can be restored later."
+        },
+        "releaseBackground": {
+          "type": "boolean",
+          "default": true,
+          "description": "Blur focused background elements before the renderer hides the background surface."
+        },
+        "restoreOrigin": {
+          "type": "boolean",
+          "default": true,
+          "description": "Restore focus to the captured origin after the overlay closes, when still connected and visible."
+        }
       }
     },
 
@@ -292,6 +338,54 @@
         "type": { "type": "string", "minLength": 1, "description": "Action type (e.g. 'callHost')." },
         "target": { "type": "string" },
         "params": { "type": "object", "additionalProperties": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "openModal" } } },
+          "then": {
+            "properties": {
+              "params": { "$ref": "#/$defs/openModalActionParams" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "openOverlay" } } },
+          "then": {
+            "properties": {
+              "params": { "$ref": "#/$defs/openOverlayActionParams" }
+            }
+          }
+        }
+      ]
+    },
+
+    "openModalActionParams": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "modalId": { "$ref": "#/$defs/id" },
+        "id": { "$ref": "#/$defs/id" },
+        "presentation": { "$ref": "#/$defs/overlayPresentation" },
+        "focus": { "$ref": "#/$defs/overlayFocusPolicy" },
+        "restoreFocus": {
+          "type": "boolean",
+          "description": "Per-open shortcut for presentation.focus.restoreOrigin."
+        }
+      }
+    },
+
+    "openOverlayActionParams": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "overlayId": { "$ref": "#/$defs/id" },
+        "id": { "$ref": "#/$defs/id" },
+        "presentation": { "$ref": "#/$defs/overlayPresentation" },
+        "focus": { "$ref": "#/$defs/overlayFocusPolicy" },
+        "restoreFocus": {
+          "type": "boolean",
+          "description": "Per-open shortcut for presentation.focus.restoreOrigin."
+        }
       }
     },
 
