@@ -153,6 +153,7 @@ nav:
       - UI Addressing: architecture/ui-addressing.md
       - Web UI Architecture: architecture/web-ui-architecture.md
       - Operational Event Model: architecture/operational-event-model.md
+      - Operational Event Model Reference Plan: architecture/operational-event-model-reference-plan.md
       - Operational Event Model Roadmap: architecture/operational-event-model-roadmap.md
       - Projection Subscription Roadmap: architecture/projection-subscription-roadmap.md
       - Root MCP Foundation: architecture/root-mcp-foundation.md
