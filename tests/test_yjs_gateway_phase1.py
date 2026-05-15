@@ -207,6 +207,58 @@ def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
     ]
 
 
+def test_yws_denied_browser_accepts_before_policy_close(monkeypatch) -> None:
+    touched: list[dict[str, object]] = []
+
+    class FakeWebSocket:
+        query_params = {
+            "dev": "dev_tv",
+            "browser_family": "Chrome",
+            "os_name": "Android",
+            "form_factor": "TV",
+        }
+
+        def __init__(self) -> None:
+            self.accepted = False
+            self.closed: dict[str, object] | None = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed = {"code": code, "reason": reason}
+
+    from adaos.services import access_links
+
+    monkeypatch.setattr(
+        access_links,
+        "authorize_link",
+        lambda kind, entry_id: (False, "revoked"),
+    )
+    monkeypatch.setattr(
+        access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+    )
+
+    websocket = FakeWebSocket()
+    asyncio.run(gateway_module._yws_impl(websocket, room="default"))
+
+    assert websocket.accepted is True
+    assert websocket.closed == {"code": 1008, "reason": "device_revoked"}
+    assert touched == [
+        {
+            "device_id": "dev_tv",
+            "webspace_id": "desktop",
+            "connection_state": "revoked",
+            "online": False,
+            "browser_family": "Chrome",
+            "os_name": "Android",
+            "form_factor": "TV",
+        }
+    ]
+
+
 def test_diagnostic_room_skips_duplicate_backend_persisted_update() -> None:
     reset_backend_room_update_markers()
     ystore = _FakeWriteYStore()
