@@ -1076,7 +1076,7 @@ Verification:
 
 #### F3M-006C: Classify direct remote MCP health separately from bearer validity
 
-Status: implemented; current public smoke result is blocked by upstream `502`.
+Status: implemented locally; public deployment/fresh-bearer validation pending.
 
 Evidence:
 
@@ -1088,6 +1088,16 @@ Evidence:
   endpoint and the global `api.inimatic.com` endpoint. This means the check is
   failing before useful bearer/tool-level validation, not as an ordinary
   `401/403` token rejection.
+- Backend inspection showed the public `/v1/root/mcp` route was still installed
+  as a legacy upstream proxy to `ADAOS_BASE` (`http://127.0.0.1:8777` by
+  default). In public zones that makes a healthy bearer look like an upstream
+  outage because the backend is trying to reach its own localhost instead of a
+  native Root MCP surface.
+- The observed 2026-05-13 `deny` -> `allow` transition for the same
+  `mcp_session_lease:*` actor should be treated as profile/runtime drift during
+  rollout, not expected steady-state behavior. Session leases should carry a
+  frozen grant snapshot; after changing profiles or endpoint mode, issue a
+  fresh bearer and correlate events by session id and issued-at time.
 
 Resolution:
 
@@ -1097,11 +1107,19 @@ Resolution:
   classifies `401/403` as `auth_failed`, `404` as `endpoint_not_found`,
   JSON-RPC errors as `jsonrpc_error`, and `5xx` responses such as `502` as
   `upstream_unavailable`.
+- The public backend now installs a native `/v1/root/mcp` HTTP/JSON-RPC route
+  by default and keeps the historical upstream proxy only behind
+  `ROOT_MCP_LEGACY_UPSTREAM_PROXY=1`.
+- Backend Root MCP `ProfileOpsRead`/`ProfileOpsControl` capabilities were
+  aligned with the Python Root MCP profile shape, including `hub.get_status`,
+  `hub.get_runtime_summary`, `hub.get_operational_surface`, activity/capability
+  summaries, and memory read tools.
 
 Verification:
 
 - `pytest tests/test_root_mcp_smoke.py` covers `502`,
   auth-failure, and JSON-RPC-error classification.
+- `npm run build:api` passes in `src/adaos/integrations/adaos-backend`.
 - Manual check to repeat after backend/root route work:
   `adaos dev root mcp smoke --mcp-http-url https://ru.api.inimatic.com/v1/root/mcp --auth-env-var ADAOS_ROOT_MCP_AUTH`.
 
@@ -1109,9 +1127,11 @@ Actions:
 
 - [x] Add CLI smoke check for direct remote MCP.
 - [x] Document failure classification and human verification path.
-- [ ] Fix or route the public remote MCP upstream so the same smoke reaches
+- [x] Fix the public backend route shape so native Root MCP can answer
   `initialize`, `tools/list`, and `get_status`.
-- [ ] After backend/root route repair, run the smoke against the fresh
+- [ ] Deploy the backend route repair to the target zone.
+- [ ] After deployment, issue a fresh backend-native `ProfileOpsRead` session
+  and run the smoke against the fresh
   `ProfileOpsRead` session and record the target/tool result here.
 
 #### F3M-007: First-3-minute memory footprint
