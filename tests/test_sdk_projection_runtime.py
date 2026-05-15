@@ -7,7 +7,9 @@ from adaos.sdk.data.projections import (
     DirtyRouter,
     ProjectionRuntime,
     ProjectionSlot,
+    SectionCache,
     StreamReceiver,
+    StreamRuntime,
     stable_payload_fingerprint,
 )
 
@@ -105,3 +107,107 @@ def test_stream_receiver_is_declarative_type() -> None:
 
     assert receiver.name == "infrastate.logs.recent"
     assert receiver.min_interval_s == 0.5
+
+
+def test_projection_runtime_refresh_dirty_uses_slot_events() -> None:
+    subnet = _FakeSubnet()
+    runtime = ProjectionRuntime(
+        "browsers_skill",
+        ctx_subnet=subnet,
+        projections=[
+            ProjectionSlot(
+                "browsers.summary",
+                "data/browsers/summary",
+                build=lambda context: {"topic": context.event_topic},
+                events=("browser.*",),
+            )
+        ],
+    )
+
+    result = asyncio.run(runtime.refresh_dirty("browser.session.changed", webspace_id="desktop"))
+
+    assert result.sections == ("browsers.summary",)
+    assert result.results[0].written is True
+    assert subnet.calls == [("browsers.summary", {"topic": "browser.session.changed"}, "desktop")]
+
+
+def test_projection_runtime_coalesces_concurrent_refreshes() -> None:
+    subnet = _FakeSubnet()
+    build_calls = 0
+
+    async def _run() -> tuple[object, object]:
+        nonlocal build_calls
+
+        async def _build(_context):
+            nonlocal build_calls
+            build_calls += 1
+            await asyncio.sleep(0.01)
+            return {"build_calls": build_calls}
+
+        runtime = ProjectionRuntime(
+            "browsers_skill",
+            ctx_subnet=subnet,
+            projections=[ProjectionSlot("browsers.summary", build=_build)],
+        )
+        return await asyncio.gather(
+            runtime.refresh_sections(["browsers.summary"], webspace_id="desktop"),
+            runtime.refresh_sections(["browsers.summary"], webspace_id="desktop"),
+        )
+
+    first, second = asyncio.run(_run())
+
+    assert build_calls == 1
+    assert subnet.calls == [("browsers.summary", {"build_calls": 1}, "desktop")]
+    assert {first.coalesced, second.coalesced} == {False, True}
+
+
+def test_section_cache_expires_and_invalidates_by_webspace() -> None:
+    clock = [10.0]
+    cache = SectionCache(default_ttl_s=5.0, max_entries=4, clock=lambda: clock[0])
+
+    cache.set("summary", {"state": "ok"}, webspace_id="desktop")
+    cache.set("summary", {"state": "ops"}, webspace_id="ops")
+
+    assert cache.get("summary", webspace_id="desktop") == {"state": "ok"}
+    clock[0] = 16.0
+    assert cache.get("summary", webspace_id="desktop") is None
+    assert cache.invalidate(webspace_id="ops") == 1
+    assert cache.get("summary", webspace_id="ops") is None
+
+
+def test_stream_runtime_tracks_receivers_dedupes_and_rate_limits() -> None:
+    calls: list[tuple[str, object, dict]] = []
+    clock = [100.0]
+
+    def _publish(receiver, data, *, ts=None, _meta=None):  # noqa: ANN001
+        calls.append((receiver, data, dict(_meta or {})))
+        return {"ok": True}
+
+    runtime = StreamRuntime(
+        "infrastate_skill",
+        receivers=[StreamReceiver("infrastate.logs.recent", min_interval_s=5.0)],
+        stream_publish=_publish,
+        clock=lambda: clock[0],
+    )
+
+    first = runtime.publish_snapshot("infrastate.logs.recent", {"lines": [1]}, webspace_id="desktop")
+    unchanged = runtime.publish_snapshot("infrastate.logs.recent", {"lines": [1]}, webspace_id="desktop")
+    clock[0] = 101.0
+    limited = runtime.publish_snapshot("infrastate.logs.recent", {"lines": [2]}, webspace_id="desktop")
+    clock[0] = 106.0
+    changed = runtime.publish_snapshot("infrastate.logs.recent", {"lines": [2]}, webspace_id="desktop")
+
+    assert first.published is True
+    assert unchanged.skipped is True
+    assert unchanged.reason == "unchanged"
+    assert limited.rate_limited is True
+    assert changed.published is True
+    assert calls == [
+        ("infrastate.logs.recent", {"lines": [1]}, {"webspace_id": "desktop"}),
+        ("infrastate.logs.recent", {"lines": [2]}, {"webspace_id": "desktop"}),
+    ]
+    assert runtime.active_receivers_snapshot() == [
+        {"webspace_id": "desktop", "receiver": "infrastate.logs.recent"}
+    ]
+    runtime.forget_receiver("infrastate.logs.recent", webspace_id="desktop")
+    assert runtime.active_receivers_snapshot() == []
