@@ -1107,15 +1107,13 @@ Resolution:
   classifies `401/403` as `auth_failed`, `404` as `endpoint_not_found`,
   JSON-RPC errors as `jsonrpc_error`, and `5xx` responses such as `502` as
   `upstream_unavailable`.
-- The public backend now installs a native `/v1/root/mcp` HTTP/JSON-RPC route
-  by default and keeps the historical upstream proxy only behind
-  `ROOT_MCP_LEGACY_UPSTREAM_PROXY=1`.
+- The public backend now installs only the native `/v1/root/mcp`
+  HTTP/JSON-RPC route. The historical `/v1/root/mcp -> ADAOS_BASE` upstream
+  proxy has been removed for the MVP to avoid ambiguous operator diagnostics.
 - Follow-up live smoke after deployment still returned
   `adaos_root_mcp_upstream_failed`, proving the legacy proxy was still taking
-  precedence in that deployment. Native routes now register before the legacy
-  proxy, so the proxy can remain an opt-in fallback without intercepting
-  `/v1/root/mcp/foundation`, JSON-RPC `/v1/root/mcp`, or
-  `/v1/root/mcp/call`.
+  precedence in that deployment. After legacy removal, this response body means
+  the deployed backend is stale.
 - Backend Root MCP `ProfileOpsRead`/`ProfileOpsControl` capabilities were
   aligned with the Python Root MCP profile shape, including `hub.get_status`,
   `hub.get_runtime_summary`, `hub.get_operational_surface`, activity/capability
@@ -1138,8 +1136,7 @@ Actions:
 - [x] Document failure classification and human verification path.
 - [x] Fix the public backend route shape so native Root MCP can answer
   `initialize`, `tools/list`, and `get_status`.
-- [x] Harden route order so an enabled legacy proxy cannot shadow native Root
-  MCP routes.
+- [x] Remove the legacy Root MCP upstream proxy from the backend MVP.
 - [ ] Deploy the backend route repair to the target zone.
 - [ ] After deployment, issue a fresh backend-native `ProfileOpsRead` session
   and run the smoke against the fresh
