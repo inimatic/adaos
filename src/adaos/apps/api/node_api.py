@@ -993,6 +993,8 @@ class NodeStatus(BaseModel):
     route_mode: Optional[str] = None
     connected_to_subnet: Optional[bool] = None
     connected_to_hub: Optional[bool] = None
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    environment: dict[str, Any] = Field(default_factory=dict)
 
 
 class RoleChangeRequest(BaseModel):
