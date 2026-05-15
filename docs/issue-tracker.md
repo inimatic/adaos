@@ -1110,6 +1110,12 @@ Resolution:
 - The public backend now installs a native `/v1/root/mcp` HTTP/JSON-RPC route
   by default and keeps the historical upstream proxy only behind
   `ROOT_MCP_LEGACY_UPSTREAM_PROXY=1`.
+- Follow-up live smoke after deployment still returned
+  `adaos_root_mcp_upstream_failed`, proving the legacy proxy was still taking
+  precedence in that deployment. Native routes now register before the legacy
+  proxy, so the proxy can remain an opt-in fallback without intercepting
+  `/v1/root/mcp/foundation`, JSON-RPC `/v1/root/mcp`, or
+  `/v1/root/mcp/call`.
 - Backend Root MCP `ProfileOpsRead`/`ProfileOpsControl` capabilities were
   aligned with the Python Root MCP profile shape, including `hub.get_status`,
   `hub.get_runtime_summary`, `hub.get_operational_surface`, activity/capability
@@ -1120,6 +1126,9 @@ Verification:
 - `pytest tests/test_root_mcp_smoke.py` covers `502`,
   auth-failure, and JSON-RPC-error classification.
 - `npm run build:api` passes in `src/adaos/integrations/adaos-backend`.
+- The 2026-05-15 live response body
+  `{"error":"adaos_root_mcp_upstream_failed","detail":"fetch failed"}`
+  identifies the legacy proxy path rather than the native Root MCP handler.
 - Manual check to repeat after backend/root route work:
   `adaos dev root mcp smoke --mcp-http-url https://ru.api.inimatic.com/v1/root/mcp --auth-env-var ADAOS_ROOT_MCP_AUTH`.
 
@@ -1129,6 +1138,8 @@ Actions:
 - [x] Document failure classification and human verification path.
 - [x] Fix the public backend route shape so native Root MCP can answer
   `initialize`, `tools/list`, and `get_status`.
+- [x] Harden route order so an enabled legacy proxy cannot shadow native Root
+  MCP routes.
 - [ ] Deploy the backend route repair to the target zone.
 - [ ] After deployment, issue a fresh backend-native `ProfileOpsRead` session
   and run the smoke against the fresh
