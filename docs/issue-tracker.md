@@ -1170,21 +1170,27 @@ Context:
 
 Target architecture:
 
-- Keep public browser/bootstrap/operator endpoints on a host that does not ask
-  for client certificates during TLS handshake.
-- Move hub/node mTLS-only endpoints to a separate hostname or separate nginx
-  server block, for example `mtls.api.inimatic.com` or a dedicated zone-local
-  mTLS host.
+- Keep `api.inimatic.com` as the hub/node API surface that requests client
+  certificates during TLS handshake with `ssl_verify_client optional`. Backend
+  routes on this host use `$ssl_client_verify` and forwarded certificate
+  headers to enforce mTLS where required.
+- Add `pub.inimatic.com` as the public API surface with no client-certificate
+  request during TLS handshake. Browser, bootstrap, pairing, operator bearer,
+  and Codex/Root MCP public entrypoints should move here unless they explicitly
+  need the mTLS-aware surface.
 - Make backend route policy explicit: public bearer/JWT routes and mTLS routes
   should be distinguishable by host/surface, not only by path conventions.
 
 Checklist:
 
-- [ ] Choose canonical mTLS hostname and zone naming convention.
-- [ ] Add nginx/vhost templates for the mTLS hostname with
-  `ssl_verify_client optional` or `on` at server scope.
-- [ ] Move hub/node mTLS routes and client config defaults to the mTLS host.
-- [ ] Keep public API/browser/bootstrap routes on the non-mTLS public host.
+- [x] Choose canonical host split: `api.inimatic.com` for mTLS-aware API,
+  `pub.inimatic.com` for public API.
+- [ ] Add nginx/vhost templates for `pub.inimatic.com` without
+  `ssl_verify_client`.
+- [ ] Keep `api.inimatic.com` configured with `ssl_verify_client optional` at
+  server scope for hub/node mTLS-aware routes.
+- [ ] Move browser/bootstrap/pairing/operator bearer/Codex Root MCP defaults
+  to `pub.inimatic.com`.
 - [ ] Add deploy smoke that runs `nginx -t` and validates both public and mTLS
   host routing before slot cutover.
 - [ ] Update bootstrap/node docs once the host split is live.
