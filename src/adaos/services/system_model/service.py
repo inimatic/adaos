@@ -12,6 +12,7 @@ from adaos.services.bootstrap import is_ready, load_config
 from adaos.services.reliability import reliability_snapshot
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.runtime_paths import current_base_dir
+from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
 from adaos.services.subnet.link_client import get_member_link_client
 from adaos.services.system_model.catalog import (
@@ -79,6 +80,7 @@ def current_node_status_payload() -> dict[str, Any]:
     conf = load_config()
     route_mode, connected = route_info(conf.role)
     lifecycle = runtime_lifecycle_snapshot()
+    runtime_environment = runtime_environment_payload()
     return {
         "node_id": conf.node_id,
         "subnet_id": conf.subnet_id,
@@ -91,6 +93,10 @@ def current_node_status_payload() -> dict[str, Any]:
         "route_mode": route_mode,
         "connected_to_subnet": connected,
         "connected_to_hub": connected,
+        "runtime": {
+            "environment": runtime_environment,
+        },
+        "environment": runtime_environment,
     }
 
 

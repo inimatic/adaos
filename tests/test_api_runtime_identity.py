@@ -30,6 +30,7 @@ if "ypy_websocket" not in sys.modules:
     sys.modules["ypy_websocket"] = pkg
 
 from adaos.apps.api import server as api_server
+from adaos.apps.api import node_api
 
 
 def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
@@ -47,6 +48,16 @@ def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
     assert payload["runtime"]["slot"] == "B"
     assert payload["runtime"]["runtime_port"] == 8778
     assert payload["runtime"]["admin_mutation_allowed"] is False
+
+
+def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "dev")
+
+    payload = node_api._node_status_payload()
+
+    assert payload["environment"]["envType"] == "dev"
+    assert payload["environment"]["debug"] is True
+    assert payload["runtime"]["environment"]["envType"] == "dev"
 
 
 def test_private_network_access_middleware_allows_cross_origin_loopback_probe() -> None:
