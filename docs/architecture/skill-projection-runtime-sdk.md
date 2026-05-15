@@ -237,7 +237,7 @@ summary is explicitly needed for reconnect recovery.
 - [x] `sdk.set_if_changed`: add the shared Yjs set-if-changed path
 - [x] `sdk.per_webspace_fingerprint_state`: keep fingerprints per skill,
   webspace, and slot
-- [ ] `sdk.pending_refresh_state`: keep pending refresh state per skill,
+- [x] `sdk.pending_refresh_state`: keep pending refresh state per skill,
   webspace, and slot
 - [x] `sdk.force_recompute_skip_identical`: define force refresh as recompute,
   not unconditional write
@@ -251,16 +251,16 @@ summary is explicitly needed for reconnect recovery.
   `webio.stream.snapshot.requested` handling
 - [ ] `sdk.subscription_changed_handler`: centralize
   `webio.stream.subscription.changed` handling
-- [ ] `sdk.stream_fingerprint`: suppress duplicate stream payloads per receiver
-- [ ] `sdk.stream_rate_limit`: add shared per-receiver rate limits
-- [ ] `sdk.active_receiver_registry`: expose active receiver state for
+- [x] `sdk.stream_fingerprint`: suppress duplicate stream payloads per receiver
+- [x] `sdk.stream_rate_limit`: add shared per-receiver rate limits
+- [x] `sdk.active_receiver_registry`: expose active receiver state for
   diagnostics
 
 ### 3. Dirty Router and Section Cache
 
 - [x] `sdk.dirty_router`: map event topics to sections/projection slots
-- [ ] `sdk.single_flight_refresh`: coalesce refresh work per skill/webspace
-- [ ] `sdk.section_cache`: add bounded section cache with TTL and invalidation
+- [x] `sdk.single_flight_refresh`: coalesce refresh work per skill/webspace
+- [x] `sdk.section_cache`: add bounded section cache with TTL and invalidation
 - [ ] `sdk.event_pressure_counters`: preserve coalesced/superseded/dropped
   evidence
 - [ ] `sdk.restore_active_demand`: restore active projection/stream demand on

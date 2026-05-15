@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import math
 import threading
 import time
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from typing import Any, Callable, Iterable, Mapping
 
 
@@ -80,6 +81,56 @@ class ProjectionWriteResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectionRefreshResult:
+    """Result of one dirty-section refresh attempt."""
+
+    skill_id: str
+    webspace_id: str
+    sections: tuple[str, ...]
+    results: tuple[ProjectionWriteResult, ...]
+    coalesced: bool = False
+    reason: str = "refreshed"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "skill_id": self.skill_id,
+            "webspace_id": self.webspace_id,
+            "sections": list(self.sections),
+            "results": [result.as_dict() for result in self.results],
+            "coalesced": self.coalesced,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StreamPublishResult:
+    """Result of one volatile stream publish attempt."""
+
+    skill_id: str
+    receiver: str
+    webspace_id: str
+    fingerprint: str
+    published: bool
+    skipped: bool
+    reason: str
+    rate_limited: bool = False
+    error: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "skill_id": self.skill_id,
+            "receiver": self.receiver,
+            "webspace_id": self.webspace_id,
+            "fingerprint": self.fingerprint,
+            "published": self.published,
+            "skipped": self.skipped,
+            "reason": self.reason,
+            "rate_limited": self.rate_limited,
+            "error": self.error,
+        }
+
+
 @dataclass(slots=True)
 class ProjectionDiagnostics:
     applied_total: int = 0
@@ -89,6 +140,8 @@ class ProjectionDiagnostics:
     errored_total: int = 0
     last_result: ProjectionWriteResult | None = None
     by_slot: dict[str, dict[str, Any]] = field(default_factory=dict)
+    refresh_started_total: int = 0
+    refresh_coalesced_total: int = 0
 
     def record(self, result: ProjectionWriteResult) -> None:
         self.last_result = result
@@ -127,7 +180,176 @@ class ProjectionDiagnostics:
             "errored_total": self.errored_total,
             "last_result": self.last_result.as_dict() if self.last_result else None,
             "by_slot": json.loads(json.dumps(self.by_slot, sort_keys=True)),
+            "refresh_started_total": self.refresh_started_total,
+            "refresh_coalesced_total": self.refresh_coalesced_total,
         }
+
+
+@dataclass(slots=True)
+class StreamDiagnostics:
+    published_total: int = 0
+    skipped_unchanged_total: int = 0
+    rate_limited_total: int = 0
+    errored_total: int = 0
+    last_result: StreamPublishResult | None = None
+    by_receiver: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def record(self, result: StreamPublishResult) -> None:
+        self.last_result = result
+        receiver_state = self.by_receiver.setdefault(
+            result.receiver,
+            {
+                "published_total": 0,
+                "skipped_unchanged_total": 0,
+                "rate_limited_total": 0,
+                "errored_total": 0,
+                "last_webspace_id": None,
+                "last_reason": None,
+                "last_fingerprint": None,
+            },
+        )
+        receiver_state["last_webspace_id"] = result.webspace_id
+        receiver_state["last_reason"] = result.reason
+        receiver_state["last_fingerprint"] = result.fingerprint
+        if result.error:
+            self.errored_total += 1
+            receiver_state["errored_total"] = int(receiver_state["errored_total"]) + 1
+        elif result.rate_limited:
+            self.rate_limited_total += 1
+            receiver_state["rate_limited_total"] = int(receiver_state["rate_limited_total"]) + 1
+        elif result.published:
+            self.published_total += 1
+            receiver_state["published_total"] = int(receiver_state["published_total"]) + 1
+        elif result.skipped:
+            self.skipped_unchanged_total += 1
+            receiver_state["skipped_unchanged_total"] = int(receiver_state["skipped_unchanged_total"]) + 1
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "published_total": self.published_total,
+            "skipped_unchanged_total": self.skipped_unchanged_total,
+            "rate_limited_total": self.rate_limited_total,
+            "errored_total": self.errored_total,
+            "last_result": self.last_result.as_dict() if self.last_result else None,
+            "by_receiver": json.loads(json.dumps(self.by_receiver, sort_keys=True)),
+        }
+
+
+@dataclass(slots=True)
+class _SectionCacheEntry:
+    value: Any
+    fingerprint: str
+    expires_at: float | None
+    stored_at: float
+
+
+class SectionCache:
+    """Bounded TTL cache keyed by webspace and semantic section."""
+
+    def __init__(
+        self,
+        *,
+        default_ttl_s: float = 0.0,
+        max_entries: int = 128,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.default_ttl_s = max(0.0, float(default_ttl_s))
+        self.max_entries = max(1, int(max_entries))
+        self._clock = clock or time.time
+        self._items: dict[tuple[str, str], _SectionCacheEntry] = {}
+        self._lock = threading.RLock()
+
+    def get(self, section: str, *, webspace_id: str | None = None) -> Any | None:
+        key = (_webspace_token(webspace_id), _section_name(section))
+        now = self._clock()
+        with self._lock:
+            entry = self._items.get(key)
+            if entry is None:
+                return None
+            if entry.expires_at is not None and entry.expires_at <= now:
+                self._items.pop(key, None)
+                return None
+            return entry.value
+
+    def set(
+        self,
+        section: str,
+        value: Any,
+        *,
+        webspace_id: str | None = None,
+        ttl_s: float | None = None,
+    ) -> Any:
+        ttl = self.default_ttl_s if ttl_s is None else max(0.0, float(ttl_s))
+        now = self._clock()
+        expires_at = now + ttl if ttl > 0.0 else None
+        key = (_webspace_token(webspace_id), _section_name(section))
+        with self._lock:
+            self._items[key] = _SectionCacheEntry(
+                value=value,
+                fingerprint=stable_payload_fingerprint(value),
+                expires_at=expires_at,
+                stored_at=now,
+            )
+            self._trim_locked()
+        return value
+
+    def get_or_build(
+        self,
+        section: str,
+        build: Callable[[], Any],
+        *,
+        webspace_id: str | None = None,
+        ttl_s: float | None = None,
+    ) -> Any:
+        cached = self.get(section, webspace_id=webspace_id)
+        if cached is not None:
+            return cached
+        return self.set(section, build(), webspace_id=webspace_id, ttl_s=ttl_s)
+
+    def invalidate(self, section: str | None = None, *, webspace_id: str | None = None) -> int:
+        section_name = _section_name(section) if section is not None else None
+        ws_id = _webspace_token(webspace_id) if webspace_id is not None else None
+        removed = 0
+        with self._lock:
+            for key in list(self._items):
+                key_ws, key_section = key
+                if ws_id is not None and key_ws != ws_id:
+                    continue
+                if section_name is not None and key_section != section_name:
+                    continue
+                self._items.pop(key, None)
+                removed += 1
+        return removed
+
+    def snapshot(self) -> dict[str, Any]:
+        now = self._clock()
+        with self._lock:
+            entries = []
+            for (webspace_id, section), entry in self._items.items():
+                entries.append(
+                    {
+                        "webspace_id": webspace_id,
+                        "section": section,
+                        "fingerprint": entry.fingerprint,
+                        "stored_at": entry.stored_at,
+                        "expires_at": entry.expires_at,
+                        "expired": entry.expires_at is not None and entry.expires_at <= now,
+                    }
+                )
+            return {
+                "entries": len(entries),
+                "max_entries": self.max_entries,
+                "default_ttl_s": self.default_ttl_s,
+                "items": entries,
+            }
+
+    def _trim_locked(self) -> None:
+        if len(self._items) <= self.max_entries:
+            return
+        overflow = len(self._items) - self.max_entries
+        ordered = sorted(self._items.items(), key=lambda item: item[1].stored_at)
+        for key, _entry in ordered[:overflow]:
+            self._items.pop(key, None)
 
 
 def _json_safe(value: Any) -> Any:
@@ -230,12 +452,200 @@ def _topic_matches(pattern: str, topic: str) -> bool:
 class ProjectionRuntime:
     """Minimal per-skill set-if-changed projection runtime."""
 
-    def __init__(self, skill_id: str, *, ctx_subnet: Any | None = None) -> None:
+    def __init__(
+        self,
+        skill_id: str,
+        *,
+        ctx_subnet: Any | None = None,
+        projections: Iterable[ProjectionSlot] | None = None,
+        router: DirtyRouter | None = None,
+        section_cache: SectionCache | None = None,
+    ) -> None:
         self.skill_id = str(skill_id or "unknown_skill").strip() or "unknown_skill"
         self._ctx_subnet = ctx_subnet
         self._fingerprints: dict[tuple[str, str], str] = {}
+        self._pending_refresh: dict[tuple[str, tuple[str, ...]], asyncio.Task[ProjectionRefreshResult]] = {}
+        self._projections: dict[str, ProjectionSlot] = {}
+        self._router = router or DirtyRouter()
+        self.section_cache = section_cache or SectionCache()
         self._diagnostics = ProjectionDiagnostics()
         self._lock = threading.RLock()
+        self.register_projections(projections or ())
+
+    def register_projection(self, slot: ProjectionSlot) -> ProjectionSlot:
+        slot_name = _slot_name(slot)
+        with self._lock:
+            self._projections[slot_name] = slot
+        return slot
+
+    def register_projections(self, slots: Iterable[ProjectionSlot]) -> None:
+        for slot in slots:
+            self.register_projection(slot)
+
+    def dirty_for(self, topic: str) -> set[str]:
+        dirty = set(self._router.dirty_for(topic))
+        token = str(topic or "").strip()
+        with self._lock:
+            projections = tuple(self._projections.values())
+        for slot in projections:
+            if any(_topic_matches(pattern, token) for pattern in slot.events):
+                dirty.add(slot.name)
+        return dirty
+
+    async def refresh_dirty(
+        self,
+        topic: str,
+        *,
+        webspace_id: str | None = None,
+        force: bool = False,
+        context: ProjectionContext | None = None,
+        reason: str | None = None,
+    ) -> ProjectionRefreshResult:
+        return await self.refresh_sections(
+            self.dirty_for(topic),
+            webspace_id=webspace_id,
+            force=force,
+            context=context
+            or ProjectionContext(
+                skill_id=self.skill_id,
+                webspace_id=_webspace_token(webspace_id),
+                event_topic=topic,
+                reason=reason,
+            ),
+            reason=reason or topic or "dirty_refresh",
+        )
+
+    async def refresh_sections(
+        self,
+        sections: Iterable[str],
+        *,
+        webspace_id: str | None = None,
+        force: bool = False,
+        context: ProjectionContext | None = None,
+        reason: str | None = None,
+    ) -> ProjectionRefreshResult:
+        ws_id = _webspace_token(webspace_id)
+        section_names = tuple(sorted({_section_name(section) for section in sections if str(section or "").strip()}))
+        if not section_names:
+            return ProjectionRefreshResult(
+                skill_id=self.skill_id,
+                webspace_id=ws_id,
+                sections=(),
+                results=(),
+                reason="no_dirty_sections",
+            )
+
+        refresh_context = context or ProjectionContext(skill_id=self.skill_id, webspace_id=ws_id, reason=reason)
+        key = (ws_id, section_names)
+        reused_task: asyncio.Task[ProjectionRefreshResult] | None = None
+        with self._lock:
+            current = self._pending_refresh.get(key)
+            if current is not None and not current.done():
+                self._diagnostics.refresh_coalesced_total += 1
+                reused_task = current
+            else:
+                self._diagnostics.refresh_started_total += 1
+                task = asyncio.create_task(
+                    self._refresh_sections_now(
+                        section_names,
+                        webspace_id=ws_id,
+                        force=force,
+                        context=refresh_context,
+                        reason=reason,
+                    )
+                )
+                self._pending_refresh[key] = task
+
+        if reused_task is not None:
+            result = await reused_task
+            return replace(result, coalesced=True)
+
+        task = self._pending_refresh[key]
+        try:
+            return await task
+        finally:
+            with self._lock:
+                if self._pending_refresh.get(key) is task:
+                    self._pending_refresh.pop(key, None)
+
+    async def _refresh_sections_now(
+        self,
+        sections: tuple[str, ...],
+        *,
+        webspace_id: str,
+        force: bool,
+        context: ProjectionContext,
+        reason: str | None,
+    ) -> ProjectionRefreshResult:
+        results: list[ProjectionWriteResult] = []
+        for section in sections:
+            slot = self._projections.get(section)
+            if slot is None:
+                result = ProjectionWriteResult(
+                    skill_id=self.skill_id,
+                    slot=section,
+                    webspace_id=webspace_id,
+                    fingerprint="",
+                    written=False,
+                    skipped=False,
+                    reason="projection_slot_missing",
+                    force=bool(force),
+                    error="projection slot is not registered",
+                )
+                with self._lock:
+                    self._diagnostics.record(result)
+                results.append(result)
+                continue
+            if slot.build is None:
+                result = ProjectionWriteResult(
+                    skill_id=self.skill_id,
+                    slot=section,
+                    webspace_id=webspace_id,
+                    fingerprint="",
+                    written=False,
+                    skipped=False,
+                    reason="projection_builder_missing",
+                    force=bool(force),
+                    error="projection slot has no build function",
+                )
+                with self._lock:
+                    self._diagnostics.record(result)
+                results.append(result)
+                continue
+            try:
+                value = await _call_build(slot.build, context)
+            except Exception as exc:
+                result = ProjectionWriteResult(
+                    skill_id=self.skill_id,
+                    slot=section,
+                    webspace_id=webspace_id,
+                    fingerprint="",
+                    written=False,
+                    skipped=False,
+                    reason="projection_build_failed",
+                    force=bool(force),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                with self._lock:
+                    self._diagnostics.record(result)
+                results.append(result)
+                continue
+            results.append(
+                await self.set_if_changed(
+                    slot,
+                    value,
+                    webspace_id=webspace_id,
+                    force=force,
+                    reason=reason or "refresh_dirty",
+                )
+            )
+        return ProjectionRefreshResult(
+            skill_id=self.skill_id,
+            webspace_id=webspace_id,
+            sections=sections,
+            results=tuple(results),
+            reason=reason or "refreshed",
+        )
 
     async def set_if_changed(
         self,
@@ -344,7 +754,153 @@ class ProjectionRuntime:
             payload = self._diagnostics.snapshot()
             payload["skill_id"] = self.skill_id
             payload["fingerprint_entries"] = len(self._fingerprints)
+            payload["pending_refresh_entries"] = sum(1 for task in self._pending_refresh.values() if not task.done())
+            payload["registered_projections"] = sorted(self._projections)
+            payload["dirty_routes"] = self._router.snapshot()
             payload["ts"] = time.time()
+            return payload
+
+
+class StreamRuntime:
+    """Minimal volatile stream runtime for browser-facing receivers."""
+
+    def __init__(
+        self,
+        skill_id: str,
+        *,
+        receivers: Iterable[StreamReceiver] | None = None,
+        stream_publish: Callable[..., Mapping[str, Any]] | None = None,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.skill_id = str(skill_id or "unknown_skill").strip() or "unknown_skill"
+        self._stream_publish = stream_publish
+        self._clock = clock or time.time
+        self._receivers: dict[str, StreamReceiver] = {}
+        self._active_receivers: set[tuple[str, str]] = set()
+        self._fingerprints: dict[tuple[str, str], str] = {}
+        self._last_publish_at: dict[tuple[str, str], float] = {}
+        self._diagnostics = StreamDiagnostics()
+        self._lock = threading.RLock()
+        for receiver in receivers or ():
+            self.register_receiver(receiver)
+
+    def register_receiver(self, receiver: StreamReceiver) -> StreamReceiver:
+        name = _receiver_name(receiver)
+        with self._lock:
+            self._receivers[name] = receiver
+        return receiver
+
+    def remember_receiver(self, receiver: StreamReceiver | str, *, webspace_id: str | None = None) -> None:
+        key = (_webspace_token(webspace_id), _receiver_name(receiver))
+        with self._lock:
+            self._active_receivers.add(key)
+
+    def forget_receiver(self, receiver: StreamReceiver | str, *, webspace_id: str | None = None) -> None:
+        key = (_webspace_token(webspace_id), _receiver_name(receiver))
+        with self._lock:
+            self._active_receivers.discard(key)
+            self._fingerprints.pop(key, None)
+            self._last_publish_at.pop(key, None)
+
+    def active_receivers_snapshot(self) -> list[dict[str, str]]:
+        with self._lock:
+            return [
+                {"webspace_id": webspace_id, "receiver": receiver}
+                for webspace_id, receiver in sorted(self._active_receivers)
+            ]
+
+    def publish_snapshot(
+        self,
+        receiver: StreamReceiver | str,
+        data: Any,
+        *,
+        webspace_id: str | None = None,
+        force: bool = False,
+        ts: float | None = None,
+        meta: Mapping[str, Any] | None = None,
+    ) -> StreamPublishResult:
+        receiver_name = _receiver_name(receiver)
+        ws_id = _webspace_token(webspace_id)
+        key = (ws_id, receiver_name)
+        fingerprint = stable_payload_fingerprint(data)
+        now = self._clock()
+        with self._lock:
+            registered = self._receivers.get(receiver_name)
+            min_interval_s = float(getattr(registered, "min_interval_s", 0.0) or 0.0)
+            previous = self._fingerprints.get(key)
+            if previous == fingerprint and not force:
+                result = StreamPublishResult(
+                    skill_id=self.skill_id,
+                    receiver=receiver_name,
+                    webspace_id=ws_id,
+                    fingerprint=fingerprint,
+                    published=False,
+                    skipped=True,
+                    reason="unchanged",
+                )
+                self._diagnostics.record(result)
+                return result
+            last_at = float(self._last_publish_at.get(key) or 0.0)
+            if min_interval_s > 0.0 and last_at > 0.0 and now - last_at < min_interval_s and not force:
+                result = StreamPublishResult(
+                    skill_id=self.skill_id,
+                    receiver=receiver_name,
+                    webspace_id=ws_id,
+                    fingerprint=fingerprint,
+                    published=False,
+                    skipped=True,
+                    reason="rate_limited",
+                    rate_limited=True,
+                )
+                self._diagnostics.record(result)
+                return result
+
+        try:
+            publisher = self._stream_publish or _default_stream_publish()
+            effective_meta = dict(meta or {})
+            effective_meta.setdefault("webspace_id", ws_id)
+            publish_result = publisher(receiver_name, data, ts=ts, _meta=effective_meta)
+            if isinstance(publish_result, Mapping) and publish_result.get("ok") is False:
+                raise RuntimeError("stream publish returned ok=false")
+        except Exception as exc:
+            result = StreamPublishResult(
+                skill_id=self.skill_id,
+                receiver=receiver_name,
+                webspace_id=ws_id,
+                fingerprint=fingerprint,
+                published=False,
+                skipped=False,
+                reason="publish_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            with self._lock:
+                self._diagnostics.record(result)
+            return result
+
+        result = StreamPublishResult(
+            skill_id=self.skill_id,
+            receiver=receiver_name,
+            webspace_id=ws_id,
+            fingerprint=fingerprint,
+            published=True,
+            skipped=False,
+            reason="force" if force else "changed",
+        )
+        with self._lock:
+            self._active_receivers.add(key)
+            self._fingerprints[key] = fingerprint
+            self._last_publish_at[key] = now
+            self._diagnostics.record(result)
+        return result
+
+    def diagnostics_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            payload = self._diagnostics.snapshot()
+            payload["skill_id"] = self.skill_id
+            payload["fingerprint_entries"] = len(self._fingerprints)
+            payload["active_receivers"] = self.active_receivers_snapshot()
+            payload["registered_receivers"] = sorted(self._receivers)
+            payload["ts"] = self._clock()
             return payload
 
 
@@ -359,10 +915,61 @@ def _slot_name(slot: ProjectionSlot | str | None) -> str:
     return token
 
 
+def _receiver_name(receiver: StreamReceiver | str | None) -> str:
+    if isinstance(receiver, StreamReceiver):
+        name = receiver.name
+    else:
+        name = str(receiver or "")
+    token = str(name or "").strip()
+    if not token:
+        raise ValueError("stream receiver name is required")
+    return token
+
+
+def _section_name(section: str | None) -> str:
+    token = str(section or "").strip()
+    if not token:
+        raise ValueError("section name is required")
+    return token
+
+
+def _webspace_token(webspace_id: str | None) -> str:
+    return str(webspace_id or "default").strip() or "default"
+
+
+async def _call_build(build: BuildFn, context: ProjectionContext) -> Any:
+    try:
+        signature = inspect.signature(build)
+        required = [
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.default is inspect.Parameter.empty
+            and parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        ]
+        use_context = bool(required)
+    except (TypeError, ValueError):
+        use_context = True
+    value = build(context) if use_context else build()
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
 def _default_ctx_subnet() -> Any:
     from adaos.sdk.data.ctx import subnet
 
     return subnet
+
+
+def _default_stream_publish() -> Callable[..., Mapping[str, Any]]:
+    from adaos.sdk.io.out import stream_publish
+
+    return stream_publish
 
 
 _RUNTIMES: dict[str, ProjectionRuntime] = {}
@@ -406,10 +1013,15 @@ __all__ = [
     "DirtyRouter",
     "ProjectionContext",
     "ProjectionDiagnostics",
+    "ProjectionRefreshResult",
     "ProjectionRuntime",
     "ProjectionSlot",
     "ProjectionWriteResult",
+    "SectionCache",
+    "StreamDiagnostics",
+    "StreamPublishResult",
     "StreamReceiver",
+    "StreamRuntime",
     "clear_projection_runtime_state",
     "get_projection_runtime",
     "set_projection_if_changed",
