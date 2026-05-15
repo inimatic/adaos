@@ -16,11 +16,14 @@ from adaos.sdk.data.i18n import _
 from adaos.apps.cli.active_control import probe_control_api, resolve_control_base_url, resolve_control_token
 from adaos.apps.cli.git_status import (
     compute_path_status,
+    current_branch,
     ensure_remote,
     fetch_remote,
+    list_changed_paths,
     ref_exists,
     render_diff,
     resolve_base_ref,
+    read_path_divergence,
     render_noindex_diff,
     unzip_b64_to_dir,
 )
@@ -230,6 +233,80 @@ def _resolve_workspace_skill_versions(
         runtime_version = _clean_version_text(runtime_state.get("version"))
     version_drift = bool(workspace_version and runtime_version and workspace_version != runtime_version)
     return workspace_version, runtime_version, version_drift
+
+
+def _skill_names_from_paths(paths: list[str]) -> list[str]:
+    names: set[str] = set()
+    for path in paths:
+        parts = str(path or "").replace("\\", "/").split("/")
+        if len(parts) >= 2 and parts[0] == "skills" and parts[1]:
+            names.add(parts[1])
+    return sorted(names)
+
+
+def _push_committed_skill_ahead(
+    *,
+    skill_name: str | None = None,
+    remote: str = "origin",
+) -> dict[str, object]:
+    ctx = get_ctx()
+    workspace_root = Path(ctx.paths.workspace_dir())
+    if not (workspace_root / ".git").exists():
+        raise RuntimeError("Skills workspace repo is not initialized. Run `adaos skill sync` once.")
+
+    mgr = _mgr()
+    caps = getattr(mgr, "caps", None)
+    if caps is not None:
+        caps.require("core", "skills.manage", "git.write", "net.git")
+
+    if skill_name:
+        _resolve_skill_path(skill_name)
+
+    base_ref = resolve_base_ref(workspace_root, remote=remote)
+    if not base_ref or not ref_exists(workspace_root, base_ref):
+        raise RuntimeError(f"cannot resolve workspace base ref for remote {remote!r}")
+
+    ahead, behind = read_path_divergence(workspace_root, base_ref=base_ref, path="skills")
+    ahead_count = _positive_int(ahead)
+    behind_count = _positive_int(behind)
+    changed_paths = list_changed_paths(workspace_root, base_ref=base_ref, path="skills")
+    changed_skills = _skill_names_from_paths(changed_paths)
+
+    if skill_name and skill_name not in changed_skills:
+        return {
+            "pushed": False,
+            "reason": "skill-not-ahead",
+            "base_ref": base_ref,
+            "ahead_count": ahead_count,
+            "behind_count": behind_count,
+            "skills": changed_skills,
+        }
+    if ahead_count <= 0 or not changed_skills:
+        return {
+            "pushed": False,
+            "reason": "nothing-ahead",
+            "base_ref": base_ref,
+            "ahead_count": ahead_count,
+            "behind_count": behind_count,
+            "skills": changed_skills,
+        }
+
+    dirty_status = compute_path_status(
+        workdir=workspace_root,
+        path=workspace_root / "skills",
+        base_ref=base_ref,
+    )
+    branch = current_branch(workspace_root)
+    ctx.git.push(str(workspace_root), remote=remote, branch=branch)
+    return {
+        "pushed": True,
+        "base_ref": base_ref,
+        "branch": branch,
+        "ahead_count": ahead_count,
+        "behind_count": behind_count,
+        "skills": changed_skills,
+        "dirty": bool(dirty_status.dirty),
+    }
 
 
 def _resolve_skill_display_version(
@@ -837,13 +914,14 @@ def reconcile_fs_to_db():
 @app.command("push", context_settings={"allow_extra_args": True, "ignore_unknown_options": False})
 def push_command(
     ctx: typer.Context,
-    skill_name: str = typer.Argument(..., help=_("cli.skill.push.name_help")),
+    skill_name: Optional[str] = typer.Argument(None, help=_("cli.skill.push.name_help")),
     message: Optional[str] = typer.Option(None, "--message", "-m", help=_("cli.commit_message.help")),
     signoff: bool = typer.Option(False, "--signoff", help=_("cli.option.signoff")),
+    remote: str = typer.Option("origin", "--remote", help="workspace git remote for committed ahead pushes"),
 ):
     """
-    Закоммитить изменения ТОЛЬКО внутри подпапки навыка и выполнить git push.
-    Защищён политиками: skills.manage + git.write + net.git.
+    Push committed ahead workspace skill changes, or commit one skill when
+    --message/-m is provided.
     """
     extra = [str(item) for item in getattr(ctx, "args", []) or []]
     if extra:
@@ -852,12 +930,37 @@ def push_command(
         message = " ".join([part for part in ([message] if message else []) + extra if str(part).strip()]).strip() or None
 
     if message is None:
-        typer.secho(
-            "Root publishing via 'adaos skill push' has moved to 'adaos dev skill push'.",
-            fg=typer.colors.YELLOW,
+        try:
+            result = _push_committed_skill_ahead(skill_name=skill_name, remote=remote)
+        except Exception as exc:
+            typer.secho(f"push failed: {exc}", fg=typer.colors.RED)
+            raise typer.Exit(1) from exc
+        if not bool(result.get("pushed")):
+            reason = str(result.get("reason") or "nothing-ahead")
+            if reason == "skill-not-ahead" and skill_name:
+                typer.echo(f"skill {skill_name} has no committed ahead changes to push.")
+            else:
+                typer.echo("No committed ahead skill changes to push.")
+            return
+        skills = ", ".join(str(item) for item in result.get("skills") or []) or "(unknown)"
+        base_ref = str(result.get("base_ref") or "(none)")
+        branch = str(result.get("branch") or "HEAD")
+        ahead = _positive_int(result.get("ahead_count"))
+        behind = _positive_int(result.get("behind_count"))
+        typer.echo(
+            f"pushed committed skill changes: {skills} "
+            f"(branch={branch}, base={base_ref}, ahead={ahead}, behind={behind})"
         )
-        typer.echo("Use --message/-m to push commits or run 'adaos dev skill push <name>'.")
-        raise typer.Exit(1)
+        if bool(result.get("dirty")):
+            typer.secho(
+                "workspace still has uncommitted skill changes; only committed ahead changes were pushed.",
+                fg=typer.colors.YELLOW,
+            )
+        return
+
+    if not skill_name:
+        typer.secho("skill name is required when --message/-m is used", fg=typer.colors.RED)
+        raise typer.Exit(2)
 
     _resolve_skill_path(skill_name)
     mgr = _mgr()
