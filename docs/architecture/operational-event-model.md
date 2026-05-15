@@ -9,11 +9,58 @@ The goal is to keep Yjs as a live collaborative projection layer while making de
 
 The implementation order for this target state is tracked in
 [Operational Event Model Roadmap](operational-event-model-roadmap.md).
+That roadmap is the single authoritative delivery track for event,
+projection, browser/runtime, and platform-emitter work.  The companion
+[Projection Subscription Roadmap](projection-subscription-roadmap.md) is a
+detail checklist for the projection/client/dispatcher parts of that same
+track; it must not define an independent implementation order.
+For the top-level coverage gates and completion definition used to review
+implementation slices, see
+[Operational Event Model Reference Plan](operational-event-model-reference-plan.md).
 
 For the target typed ref vocabulary used by browser-facing manifests and
 projection-aware runtime contracts, see [UI Addressing](ui-addressing.md).
 For the target runtime naming and alias model that feeds NLU canonicalization,
 see [Named Entities and Canonical Naming](named-entities.md).
+
+## Current Implementation Boundary
+
+Snapshot date: 2026-05-15.
+
+The target model is now ahead of a pure design note: several foundation pieces
+already exist in code and should be treated as implementation constraints for
+the next roadmap slice.
+
+Implemented foundation:
+
+- the local event bus has bounded hot-topic async fanout, supersede/drop
+  counters, slow-handler logging, and backlog snapshots for incident capture
+- named-entity records, localized label metadata, entity resolution results,
+  compact registry projection, and `entity.*` topic constants exist
+- authoritative device/browser access-link changes emit first lifecycle events
+  such as `entity.observed`, `entity.draft_name.suggested`,
+  `entity.display_name.changed`, `entity.alias.*`, and
+  `entity.registry.changed`
+- node ownership is already visible in several compatibility-era browser
+  surfaces, stream receiver hints, catalog items, and workspace-manager state
+- stream-backed operational overlays already exercise some of the future
+  projection pressure paths through `webio.stream.*` events
+
+Remaining architectural gap:
+
+- there is still no shared event envelope for all runtime events
+- projection demand is not yet represented by one browser-written subscription
+  registry
+- projection records are not yet one canonical ABI across platform, skills, and
+  scenarios
+- the dispatcher is still a pattern spread across services and skills, not a
+  reusable runtime service
+- platform operational emitters are emerging through diagnostics/status work,
+  but notifications, status cards, and projection lifecycle events are not yet
+  one shared plane
+
+The next implementation step should therefore be treated as an ABI and runtime
+contract slice, not as another skill-specific migration.
 
 ## Why This Exists
 

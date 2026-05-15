@@ -177,6 +177,90 @@ Actions:
 - [ ] Add an end-to-end timing assertion for login-to-first-desktop-paint once
   the browser E2E harness is available.
 
+## Operational Event Model Roadmap Consolidation
+
+### Goal
+
+Keep event, projection, browser/runtime, platform-emitter, and heavy-skill
+migration work on one master delivery track so the project can execute the
+target event model without drifting between parallel roadmaps.
+
+### Current Status
+
+Snapshot date: 2026-05-15.
+
+The target architecture remains valid, but the documentation had two related
+roadmaps that could be read as competing priority sources:
+
+- `docs/architecture/operational-event-model-roadmap.md`
+- `docs/architecture/projection-subscription-roadmap.md`
+
+The master roadmap is now explicitly authoritative.  The projection roadmap is
+now a subordinate detailed checklist for projection record, browser
+subscription, Yjs adapter, shared dispatcher, Infrascope, and rollout tasks.
+
+The next execution slice is intentionally contract-first:
+
+1. freeze a minimal shared event envelope
+2. align named-entity and status-card ABI work with the event model
+3. lock projection record and client subscription shapes
+4. implement the client subscription runtime
+5. add a shared demanded-projection dispatcher
+6. validate platform emitters before heavy skill migration
+
+### Tasks
+
+#### OEM-001: Consolidate roadmap authority
+
+Status: in progress.
+
+Actions:
+
+- [x] Mark `Operational Event Model Roadmap` as the single authoritative
+  delivery sequence.
+- [x] Recast `Projection Subscription Roadmap` as a subordinate detail
+  checklist instead of a separate priority track.
+- [x] Record the 2026-05-15 implementation boundary in the target event model:
+  eventbus guardrails, named-entity ABI, node-aware compatibility surfaces,
+  and remaining shared ABI gaps.
+- [x] Add a top-level reference execution plan with coverage gates, contract
+  shapes, review checklist, and completion definition.
+- [x] Update roadmap progress for named-entity contract/runtime ABI and
+  eventbus hot-topic guardrails.
+- [ ] Define the minimal shared event envelope and compatibility rules for
+  existing `Event(type, payload, source, ts)` producers.
+- [ ] Bind `STATUS-*` work to the platform-emitter phase so status cards do not
+  become a separate monitoring-only architecture.
+
+#### OEM-002: Lock projection ABI before client/runtime migration
+
+Status: planned.
+
+Actions:
+
+- [ ] Define canonical projection record fields: `status`, `data`, `meta`,
+  `error`, lifecycle timestamps, version/fingerprint, access metadata, and
+  source ownership.
+- [ ] Define browser-written subscription records for page, widget, modal, and
+  pinned panel consumers.
+- [ ] Define compatibility rules for legacy Yjs branches during migration.
+- [ ] Use `registry.named_entities` and planned status cards as reference
+  examples before Infrascope migration.
+
+#### OEM-003: Keep heavy-skill pilots behind platform-emitter validation
+
+Status: planned.
+
+Actions:
+
+- [ ] Allow Infrascope inventory/tests that do not create a parallel projection
+  ABI.
+- [ ] Migrate status cards, notifications, diagnostics, or workspace-manager
+  surfaces first through the shared projection contract.
+- [ ] Start Infrascope split only after event envelope, projection ABI, client
+  subscriptions, dispatcher, and at least one platform-emitter pilot are
+  materially in place.
+
 ## Modal Projection and Runtime Recovery Integrity
 
 ### Goal
