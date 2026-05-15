@@ -1114,6 +1114,13 @@ Resolution:
   `adaos_root_mcp_upstream_failed`, proving the legacy proxy was still taking
   precedence in that deployment. After legacy removal, this response body means
   the deployed backend is stale.
+- A later deployment attempt did not update backend because reverse-proxy
+  health failed before slot cutover. `nginx -t` rejected
+  `ssl_verify_client off` inside `location` blocks in
+  `vhost.d/api.inimatic.com`. The API vhost now keeps
+  `ssl_verify_client optional` only at server level; public routes do not need
+  per-location disablement, and protected routes still enforce mTLS via
+  `$ssl_client_verify`.
 - Backend Root MCP `ProfileOpsRead`/`ProfileOpsControl` capabilities were
   aligned with the Python Root MCP profile shape, including `hub.get_status`,
   `hub.get_runtime_summary`, `hub.get_operational_surface`, activity/capability
@@ -1137,6 +1144,8 @@ Actions:
 - [x] Fix the public backend route shape so native Root MCP can answer
   `initialize`, `tools/list`, and `get_status`.
 - [x] Remove the legacy Root MCP upstream proxy from the backend MVP.
+- [x] Remove invalid location-level `ssl_verify_client off` directives from
+  API nginx vhost templates so reverse-proxy health can pass.
 - [ ] Deploy the backend route repair to the target zone.
 - [ ] After deployment, issue a fresh backend-native `ProfileOpsRead` session
   and run the smoke against the fresh
