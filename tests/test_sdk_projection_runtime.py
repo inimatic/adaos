@@ -88,6 +88,26 @@ def test_projection_runtime_writes_when_payload_changes() -> None:
     assert [call[1] for call in subnet.calls] == [{"state": "ok"}, {"state": "warn"}]
 
 
+def test_projection_runtime_rate_limits_changed_payloads_per_slot() -> None:
+    subnet = _FakeSubnet()
+    clock = [100.0]
+    runtime = ProjectionRuntime("infrastate_skill", ctx_subnet=subnet, clock=lambda: clock[0])
+    slot = ProjectionSlot("infrastate.summary", "data/infrastate/summary", min_interval_s=5.0)
+
+    first = asyncio.run(runtime.set_if_changed(slot, {"state": "ok"}, webspace_id="desktop"))
+    clock[0] = 101.0
+    limited = asyncio.run(runtime.set_if_changed(slot, {"state": "warn"}, webspace_id="desktop"))
+    clock[0] = 106.0
+    changed = asyncio.run(runtime.set_if_changed(slot, {"state": "warn"}, webspace_id="desktop"))
+
+    assert first.written is True
+    assert limited.throttled is True
+    assert limited.reason == "rate_limited"
+    assert changed.written is True
+    assert [call[1] for call in subnet.calls] == [{"state": "ok"}, {"state": "warn"}]
+    assert runtime.diagnostics_snapshot()["throttled_total"] == 1
+
+
 def test_dirty_router_matches_exact_and_prefix_patterns() -> None:
     router = (
         DirtyRouter()
