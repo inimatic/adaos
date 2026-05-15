@@ -123,6 +123,29 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     return out
 
 
+def _browser_auth_response_payload(
+    *,
+    dev_id: str,
+    webspace_id: str,
+    allowed: bool,
+    reason: str | None,
+) -> dict[str, Any]:
+    reason_token = str(reason or "").strip().lower() or None
+    payload: dict[str, Any] = {
+        "ok": True,
+        "kind": "browser",
+        "device_id": str(dev_id or "").strip(),
+        "webspace_id": _coerce_gateway_webspace_id(webspace_id),
+        "allowed": bool(allowed),
+        "reason": reason_token,
+        "next": "continue" if allowed else "login",
+        "terminal": not bool(allowed),
+    }
+    if reason_token:
+        payload["connection_state"] = reason_token
+    return payload
+
+
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     try:
         value = int(os.getenv(name, str(default)) or str(default))
@@ -3539,6 +3562,70 @@ async def yws_room(websocket: WebSocket, room: str):
       ws://host:port/yws/<webspace_id>?dev=<device_id>
     """
     await _yws_impl(websocket, room=room)
+
+
+@router.get("/api/browser/session/authorize")
+async def browser_session_authorize(
+    dev: str | None = None,
+    ws: str | None = None,
+    browser_family: str | None = None,
+    os_name: str | None = None,
+    form_factor: str | None = None,
+    user_agent: str | None = None,
+):
+    """
+    Lightweight browser-device preflight for clients before opening /yws.
+
+    WebSocket close reasons can be hidden by browsers/proxies when the server
+    rejects before accept. This JSON endpoint gives the shell a stable,
+    product-level state so revoked/expired endpoints can enter login instead
+    of running a noisy reconnect loop.
+    """
+    dev_id = str(dev or "").strip() or "unknown"
+    webspace_id = _coerce_gateway_webspace_id(ws)
+    metadata = _browser_session_metadata(
+        {
+            "browser_family": browser_family or "",
+            "os_name": os_name or "",
+            "form_factor": form_factor or "",
+            "user_agent": user_agent or "",
+        }
+    )
+    try:
+        from adaos.services.access_links import authorize_link, touch_browser_session
+
+        allowed, reason = authorize_link("browser", dev_id)
+        if not allowed:
+            try:
+                touch_browser_session(
+                    dev_id,
+                    webspace_id=webspace_id,
+                    connection_state=reason or "denied",
+                    online=False,
+                    **metadata,
+                )
+            except Exception:
+                pass
+        return _browser_auth_response_payload(
+            dev_id=dev_id,
+            webspace_id=webspace_id,
+            allowed=allowed,
+            reason=reason,
+        )
+    except Exception:
+        _ylog.debug(
+            "browser session authorize policy check failed webspace=%s dev=%s",
+            webspace_id,
+            dev_id,
+            exc_info=True,
+        )
+        # Match /yws behavior: policy storage failures must not lock users out.
+        return _browser_auth_response_payload(
+            dev_id=dev_id,
+            webspace_id=webspace_id,
+            allowed=True,
+            reason=None,
+        )
 
 
 def _make_publish_bus(
