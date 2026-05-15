@@ -67,7 +67,20 @@ This path is backed by `/api/services/*`.
 
 The repository now distinguishes between:
 
-- workspace git push commands such as `adaos skill push --message ...`
+- workspace git push commands such as `adaos skill push`
+- workspace publish-commit commands such as `adaos skill push <name> --message ...`
 - Root-backed developer publishing through `adaos dev skill ...`
 
 That split is important when reading older documentation.
+
+`adaos skill push` has two workspace modes:
+
+- `adaos skill push`: push already committed `ahead` changes under
+  `skills/*` for all workspace skills. This does not bump versions and does not
+  create a new commit.
+- `adaos skill push <name> -m "message"`: update that skill's registry entry,
+  bump the manifest version, commit `skills/<name>` plus `registry.json`, and
+  push.
+
+Use the no-argument form after `adaos skill list --local` shows `[ahead]` for
+one or more skills and the source is already committed.

@@ -84,6 +84,26 @@ def ref_exists(workdir: Path, ref: str) -> bool:
     return _git_ok(proc)
 
 
+def current_branch(workdir: Path) -> Optional[str]:
+    proc = _run_git(workdir, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if not _git_ok(proc):
+        return None
+    token = (proc.stdout or "").strip()
+    if not token or token == "HEAD":
+        return None
+    return token
+
+
+def list_changed_paths(workdir: Path, *, base_ref: str, path: str | None = None) -> list[str]:
+    args = ["diff", "--name-only", f"{base_ref}...HEAD"]
+    if path:
+        args.extend(["--", path])
+    proc = _run_git(workdir, args)
+    if not _git_ok(proc):
+        return []
+    return [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+
+
 def ensure_remote(workdir: Path, *, name: str, url: str) -> Optional[str]:
     """
     Ensure a remote exists and points to the requested URL. Returns error string on failure.
