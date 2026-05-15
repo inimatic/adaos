@@ -30,6 +30,7 @@ class ProjectionSlot:
     events: tuple[str, ...] = ()
     scope: str = "webspace"
     audience: str = "shared"
+    min_interval_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,8 @@ class ProjectionWriteResult:
     skipped: bool
     reason: str
     force: bool = False
+    throttled: bool = False
+    pressure_blocked: bool = False
     error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -78,6 +81,8 @@ class ProjectionWriteResult:
             "skipped": self.skipped,
             "reason": self.reason,
             "force": self.force,
+            "throttled": self.throttled,
+            "pressure_blocked": self.pressure_blocked,
             "error": self.error,
         }
 
@@ -165,6 +170,12 @@ class ProjectionDiagnostics:
         if result.error:
             self.errored_total += 1
             slot_state["errored_total"] = int(slot_state["errored_total"]) + 1
+        elif result.pressure_blocked:
+            self.pressure_blocked_total += 1
+            slot_state["pressure_blocked_total"] = int(slot_state["pressure_blocked_total"]) + 1
+        elif result.throttled:
+            self.throttled_total += 1
+            slot_state["throttled_total"] = int(slot_state["throttled_total"]) + 1
         elif result.written:
             self.applied_total += 1
             slot_state["applied_total"] = int(slot_state["applied_total"]) + 1
@@ -461,10 +472,13 @@ class ProjectionRuntime:
         projections: Iterable[ProjectionSlot] | None = None,
         router: DirtyRouter | None = None,
         section_cache: SectionCache | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.skill_id = str(skill_id or "unknown_skill").strip() or "unknown_skill"
         self._ctx_subnet = ctx_subnet
+        self._clock = clock or time.monotonic
         self._fingerprints: dict[tuple[str, str], str] = {}
+        self._last_write_at: dict[tuple[str, str], float] = {}
         self._pending_refresh: dict[tuple[str, tuple[str, ...]], asyncio.Task[ProjectionRefreshResult]] = {}
         self._projections: dict[str, ProjectionSlot] = {}
         self._router = router or DirtyRouter()
@@ -482,6 +496,11 @@ class ProjectionRuntime:
     def register_projections(self, slots: Iterable[ProjectionSlot]) -> None:
         for slot in slots:
             self.register_projection(slot)
+
+    def bind_ctx_subnet(self, ctx_subnet: Any | None) -> "ProjectionRuntime":
+        with self._lock:
+            self._ctx_subnet = ctx_subnet
+        return self
 
     def dirty_for(self, topic: str) -> set[str]:
         dirty = set(self._router.dirty_for(topic))
@@ -661,6 +680,7 @@ class ProjectionRuntime:
         ws_id = str(webspace_id or "default").strip() or "default"
         fingerprint = stable_payload_fingerprint(value)
         key = (ws_id, slot_name)
+        slot_decl = slot if isinstance(slot, ProjectionSlot) else self._projections.get(slot_name)
 
         with self._lock:
             previous = self._fingerprints.get(key)
@@ -673,6 +693,23 @@ class ProjectionRuntime:
                     written=False,
                     skipped=True,
                     reason="unchanged",
+                    force=bool(force),
+                )
+                self._diagnostics.record(result)
+                return result
+            min_interval_s = max(0.0, float(getattr(slot_decl, "min_interval_s", 0.0) or 0.0))
+            last_write_at = float(self._last_write_at.get(key) or 0.0)
+            now = self._clock()
+            if min_interval_s > 0.0 and last_write_at > 0.0 and now - last_write_at < min_interval_s and not force:
+                result = ProjectionWriteResult(
+                    skill_id=self.skill_id,
+                    slot=slot_name,
+                    webspace_id=ws_id,
+                    fingerprint=fingerprint,
+                    written=False,
+                    skipped=True,
+                    reason="rate_limited",
+                    throttled=True,
                     force=bool(force),
                 )
                 self._diagnostics.record(result)
@@ -709,6 +746,7 @@ class ProjectionRuntime:
         )
         with self._lock:
             self._fingerprints[key] = fingerprint
+            self._last_write_at[key] = self._clock()
             self._diagnostics.record(result)
         return result
 
@@ -740,21 +778,24 @@ class ProjectionRuntime:
         with self._lock:
             if ws_id is None and slot_name is None:
                 self._fingerprints.clear()
+                self._last_write_at.clear()
                 self._diagnostics = ProjectionDiagnostics()
                 return
-            for key in list(self._fingerprints):
+            for key in set(self._fingerprints) | set(self._last_write_at):
                 key_ws, key_slot = key
                 if ws_id is not None and key_ws != ws_id:
                     continue
                 if slot_name is not None and key_slot != slot_name:
                     continue
                 self._fingerprints.pop(key, None)
+                self._last_write_at.pop(key, None)
 
     def diagnostics_snapshot(self) -> dict[str, Any]:
         with self._lock:
             payload = self._diagnostics.snapshot()
             payload["skill_id"] = self.skill_id
             payload["fingerprint_entries"] = len(self._fingerprints)
+            payload["last_write_entries"] = len(self._last_write_at)
             payload["pending_refresh_entries"] = sum(1 for task in self._pending_refresh.values() if not task.done())
             payload["registered_projections"] = sorted(self._projections)
             payload["dirty_routes"] = self._router.snapshot()
@@ -809,6 +850,29 @@ class StreamRuntime:
                 {"webspace_id": webspace_id, "receiver": receiver}
                 for webspace_id, receiver in sorted(self._active_receivers)
             ]
+
+    def reset(
+        self,
+        *,
+        webspace_id: str | None = None,
+        receiver: StreamReceiver | str | None = None,
+        forget_active: bool = True,
+    ) -> None:
+        ws_id = _webspace_token(webspace_id) if webspace_id is not None else None
+        receiver_name = _receiver_name(receiver) if receiver is not None else None
+        with self._lock:
+            for key in set(self._fingerprints) | set(self._last_publish_at) | set(self._active_receivers):
+                key_ws, key_receiver = key
+                if ws_id is not None and key_ws != ws_id:
+                    continue
+                if receiver_name is not None and key_receiver != receiver_name:
+                    continue
+                self._fingerprints.pop(key, None)
+                self._last_publish_at.pop(key, None)
+                if forget_active:
+                    self._active_receivers.discard(key)
+            if ws_id is None and receiver_name is None:
+                self._diagnostics = StreamDiagnostics()
 
     def publish_snapshot(
         self,
