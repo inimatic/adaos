@@ -35,21 +35,16 @@ The public backend serves `/v1/root/mcp` as a native Root MCP HTTP/JSON-RPC
 surface by default. It should not require direct HTTP access from the public
 backend to a developer laptop's `127.0.0.1:8777`.
 
-The old upstream proxy remains available only as an explicit escape hatch:
+The legacy upstream proxy for `/v1/root/mcp -> ADAOS_BASE` is intentionally
+removed for the MVP. There is only one supported meaning for this endpoint:
+native Root MCP.
 
-```powershell
-$env:ROOT_MCP_LEGACY_UPSTREAM_PROXY = "1"
-```
-
-Use that mode only when deliberately validating the historical bridge behavior.
-For Codex/operator smoke checks, native mode is the expected route. If smoke
-returns `502`, treat it as endpoint/upstream health first, not as proof that the
-bearer is invalid.
+If smoke returns `502`, treat it as endpoint/deployment health first, not as
+proof that the bearer is invalid.
 
 If the response body contains `adaos_root_mcp_upstream_failed`, the request was
-handled by the legacy upstream proxy rather than the native Root MCP handler.
-Check that the deployed backend includes the native route-order hardening and
-that `ROOT_MCP_LEGACY_UPSTREAM_PROXY` is not being used as the primary route.
+handled by an old backend build with the removed legacy proxy. Deploy a backend
+revision that has native Root MCP only.
 
 If you want to verify the issued bearer before wiring Codex, test it directly:
 
