@@ -105,6 +105,12 @@ In the default web desktop scenario the NLU Teacher UI is a schema-driven modal:
     - for `skill`/`scenario` candidates: creates a development plan item
   - a successful apply emits `ui.notify` with the owner (skill/scenario) where the rule was installed
 
+The modal is opened through the Web UI overlay runtime, not directly by a
+widget. The runtime captures the focused desktop element, releases background
+focus before hiding the desktop surface, and restores focus after dismissal.
+This keeps the NLU Teacher action declarative while preserving the shared
+accessibility lifecycle for all schema-driven modals.
+
 ## Dynamic regex rules (current contract)
 
 - Storage (source of truth):
