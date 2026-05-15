@@ -94,6 +94,7 @@ async def on_sys_ready(evt: Any) -> None:
 
 
 @subscribe(named_entities.ENTITY_REGISTRY_CHANGED)
+@subscribe("subnet.alias.changed")
 async def on_entity_registry_changed(evt: Any) -> None:
     try:
         await project_named_entity_registry(webspace_id=_resolve_webspace_id(_payload(evt)))

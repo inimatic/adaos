@@ -716,6 +716,40 @@ def _records_from_lookup_items(
     return records
 
 
+def _entity_from_current_subnet() -> NamedEntityRecord | None:
+    try:
+        from adaos.services.node_config import load_config
+        from adaos.services.subnet_alias import load_subnet_alias
+    except Exception:
+        return None
+    try:
+        conf = load_config()
+    except Exception:
+        return None
+    subnet_id = _text(getattr(conf, "subnet_id", "") or getattr(conf, "subnet_id_value", ""))
+    if not subnet_id:
+        return None
+    alias = _text_or_none(load_subnet_alias(subnet_id=subnet_id))
+    return NamedEntityRecord(
+        canonical_ref=f"assistant:{subnet_id}",
+        kind="assistant",
+        display_name=alias,
+        registered_names=(alias,) if alias else (),
+        fallback_label=subnet_id,
+        scope={
+            "subnet_id": subnet_id,
+            "node_id": _text(getattr(conf, "node_id", "") or getattr(conf, "node_id_value", "")) or None,
+        },
+        source="node_config.subnet",
+        source_authority={
+            "display_name": ".adaos/node.yaml: subnet.names" if alias else None,
+            "registered_names": ".adaos/node.yaml: subnet.names" if alias else None,
+            "fallback": "node_config.subnet_id",
+        },
+        status="confirmed" if alias else "observed",
+    )
+
+
 def _proposal_from_any(value: EntityAliasProposal | Mapping[str, Any]) -> EntityAliasProposal:
     if isinstance(value, EntityAliasProposal):
         return value
@@ -877,11 +911,19 @@ class NamedEntityService:
         lookup_payload_provider: Any | None = None,
         default_webspace_id: str = "desktop",
         static_entities: Iterable[NamedEntityRecord] | None = None,
+        include_runtime_subnet_entity: bool | None = None,
     ) -> None:
         self._device_inventory_service = device_inventory_service
         self._lookup_payload_provider = lookup_payload_provider
         self._default_webspace_id = _text(default_webspace_id) or "desktop"
         self._static_entities = tuple(static_entities or ())
+        if include_runtime_subnet_entity is None:
+            include_runtime_subnet_entity = (
+                device_inventory_service is None
+                and lookup_payload_provider is None
+                and not self._static_entities
+            )
+        self._include_runtime_subnet_entity = bool(include_runtime_subnet_entity)
 
     def list_entities(
         self,
@@ -890,6 +932,10 @@ class NamedEntityService:
         webspace_id: str | None = None,
     ) -> list[NamedEntityRecord]:
         records: list[NamedEntityRecord] = list(self._static_entities)
+        if self._include_runtime_subnet_entity:
+            subnet_entity = _entity_from_current_subnet()
+            if subnet_entity is not None:
+                records.append(subnet_entity)
         records.extend(self._list_device_entities())
         records.extend(self._list_lookup_entities(webspace_id=webspace_id))
         if kind:
