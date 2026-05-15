@@ -48,6 +48,7 @@ class ProjectionContext:
 
     skill_id: str
     webspace_id: str | None = None
+    receiver: str | None = None
     event_topic: str | None = None
     node_id: str | None = None
     reason: str | None = None
@@ -903,6 +904,117 @@ class StreamRuntime:
             payload["ts"] = self._clock()
             return payload
 
+    def publish_receiver_snapshot(
+        self,
+        receiver: StreamReceiver | str,
+        *,
+        webspace_id: str | None = None,
+        force: bool = False,
+        context: ProjectionContext | None = None,
+        meta: Mapping[str, Any] | None = None,
+    ) -> StreamPublishResult | None:
+        receiver_name = _receiver_name(receiver)
+        with self._lock:
+            registered = self._receivers.get(receiver_name)
+        if registered is None or registered.build is None:
+            return None
+        ws_id = _webspace_token(webspace_id)
+        build_context = context or ProjectionContext(
+            skill_id=self.skill_id,
+            webspace_id=ws_id,
+            receiver=receiver_name,
+            reason="stream_snapshot",
+        )
+        if build_context.receiver != receiver_name or build_context.webspace_id != ws_id:
+            build_context = replace(build_context, webspace_id=ws_id, receiver=receiver_name)
+        try:
+            data = _call_build_sync(registered.build, build_context)
+        except Exception as exc:
+            result = StreamPublishResult(
+                skill_id=self.skill_id,
+                receiver=receiver_name,
+                webspace_id=ws_id,
+                fingerprint="",
+                published=False,
+                skipped=False,
+                reason="stream_build_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            with self._lock:
+                self._diagnostics.record(result)
+            return result
+        return self.publish_snapshot(receiver_name, data, webspace_id=ws_id, force=force, meta=meta)
+
+    def handle_snapshot_requested(
+        self,
+        event: Any,
+        *,
+        receiver_prefix: str | None = None,
+        force: bool = True,
+    ) -> StreamPublishResult | None:
+        payload = _event_payload(event)
+        receiver_name = _receiver_from_payload(payload)
+        if not receiver_name:
+            return None
+        if receiver_prefix and not receiver_name.startswith(str(receiver_prefix)):
+            return None
+        with self._lock:
+            if receiver_name not in self._receivers:
+                return None
+        ws_id = _webspace_from_payload(payload)
+        self.remember_receiver(receiver_name, webspace_id=ws_id)
+        return self.publish_receiver_snapshot(
+            receiver_name,
+            webspace_id=ws_id,
+            force=force,
+            context=ProjectionContext(
+                skill_id=self.skill_id,
+                webspace_id=ws_id,
+                receiver=receiver_name,
+                event_topic=_event_topic(event),
+                reason="snapshot_requested",
+            ),
+        )
+
+    def handle_subscription_changed(
+        self,
+        event: Any,
+        *,
+        receiver_prefix: str | None = None,
+        publish_on_subscribe: bool = True,
+    ) -> StreamPublishResult | None:
+        payload = _event_payload(event)
+        receiver_name = _receiver_from_payload(payload)
+        if not receiver_name:
+            return None
+        if receiver_prefix and not receiver_name.startswith(str(receiver_prefix)):
+            return None
+        ws_id = _webspace_from_payload(payload)
+        action = ""
+        if isinstance(payload, Mapping):
+            action = str(payload.get("action") or "").strip().lower()
+        if action == "unsubscribed":
+            self.forget_receiver(receiver_name, webspace_id=ws_id)
+            return None
+        with self._lock:
+            if receiver_name not in self._receivers:
+                return None
+        self.remember_receiver(receiver_name, webspace_id=ws_id)
+        if not publish_on_subscribe:
+            return None
+        return self.publish_receiver_snapshot(
+            receiver_name,
+            webspace_id=ws_id,
+            force=True,
+            context=ProjectionContext(
+                skill_id=self.skill_id,
+                webspace_id=ws_id,
+                receiver=receiver_name,
+                event_topic=_event_topic(event),
+                reason="subscription_changed",
+            ),
+        )
+
 
 def _slot_name(slot: ProjectionSlot | str | None) -> str:
     if isinstance(slot, ProjectionSlot):
@@ -937,6 +1049,43 @@ def _webspace_token(webspace_id: str | None) -> str:
     return str(webspace_id or "default").strip() or "default"
 
 
+def _event_payload(event: Any) -> Any:
+    return getattr(event, "payload", event)
+
+
+def _event_topic(event: Any) -> str:
+    for attr in ("topic", "type", "name"):
+        token = str(getattr(event, attr, "") or "").strip()
+        if token:
+            return token
+    payload = _event_payload(event)
+    if isinstance(payload, Mapping):
+        for key in ("topic", "type", "event_type"):
+            token = str(payload.get(key) or "").strip()
+            if token:
+                return token
+    return ""
+
+
+def _receiver_from_payload(payload: Any) -> str:
+    if not isinstance(payload, Mapping):
+        return ""
+    return str(payload.get("receiver") or "").strip()
+
+
+def _webspace_from_payload(payload: Any) -> str:
+    if isinstance(payload, Mapping):
+        token = str(payload.get("webspace_id") or payload.get("workspace_id") or "").strip()
+        if token:
+            return token
+        meta = payload.get("_meta")
+        if isinstance(meta, Mapping):
+            token = str(meta.get("webspace_id") or meta.get("workspace_id") or "").strip()
+            if token:
+                return token
+    return "default"
+
+
 async def _call_build(build: BuildFn, context: ProjectionContext) -> Any:
     try:
         signature = inspect.signature(build)
@@ -958,6 +1107,36 @@ async def _call_build(build: BuildFn, context: ProjectionContext) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def _call_build_sync(build: BuildFn, context: ProjectionContext) -> Any:
+    try:
+        signature = inspect.signature(build)
+        required = [
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.default is inspect.Parameter.empty
+            and parameter.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        ]
+        use_context = bool(required)
+    except (TypeError, ValueError):
+        use_context = True
+    value = build(context) if use_context else build()
+    if not inspect.isawaitable(value):
+        return value
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(value)
+    close = getattr(value, "close", None)
+    if callable(close):
+        close()
+    raise RuntimeError("stream receiver build returned awaitable inside active event loop")
 
 
 def _default_ctx_subnet() -> Any:
