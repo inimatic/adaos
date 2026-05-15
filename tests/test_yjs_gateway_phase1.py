@@ -147,6 +147,66 @@ def test_gateway_coerces_legacy_default_webspace_to_runtime_default() -> None:
     assert gateway_module._coerce_gateway_webspace_id("lab") == "lab"
 
 
+def test_browser_auth_response_marks_denial_as_terminal_login() -> None:
+    payload = gateway_module._browser_auth_response_payload(
+        dev_id="dev_tv",
+        webspace_id="default",
+        allowed=False,
+        reason="revoked",
+    )
+
+    assert payload["allowed"] is False
+    assert payload["reason"] == "revoked"
+    assert payload["connection_state"] == "revoked"
+    assert payload["next"] == "login"
+    assert payload["terminal"] is True
+    assert payload["webspace_id"] == "desktop"
+
+
+def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
+    touched: list[dict[str, object]] = []
+
+    from adaos.services import access_links
+
+    monkeypatch.setattr(
+        access_links,
+        "authorize_link",
+        lambda kind, entry_id: (False, "revoked"),
+    )
+    monkeypatch.setattr(
+        access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+    )
+
+    payload = asyncio.run(
+        gateway_module.browser_session_authorize(
+            dev="dev_tv",
+            ws="default",
+            browser_family="Chrome",
+            os_name="Android",
+            form_factor="TV",
+            user_agent="ua",
+        )
+    )
+
+    assert payload["allowed"] is False
+    assert payload["reason"] == "revoked"
+    assert payload["next"] == "login"
+    assert touched == [
+        {
+            "device_id": "dev_tv",
+            "webspace_id": "desktop",
+            "connection_state": "revoked",
+            "online": False,
+            "browser_family": "Chrome",
+            "os_name": "Android",
+            "form_factor": "TV",
+            "user_agent": "ua",
+        }
+    ]
+
+
 def test_diagnostic_room_skips_duplicate_backend_persisted_update() -> None:
     reset_backend_room_update_markers()
     ystore = _FakeWriteYStore()
