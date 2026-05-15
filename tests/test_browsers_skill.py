@@ -49,7 +49,7 @@ def _load_browsers_skill_module():
 def test_browsers_skill_detach_link_refreshes_snapshot_without_nameerror(monkeypatch) -> None:
     mod = _load_browsers_skill_module()
     mod._SELECTED_BROWSER_BY_WS.clear()
-    mod._LAST_YJS_FINGERPRINT_BY_WS_SLOT.clear()
+    mod._PROJECTION_RUNTIME.reset()
     mod._SELECTED_BROWSER_BY_WS["desktop"] = "missing-browser"
 
     browser_entry = {
@@ -101,7 +101,7 @@ def test_browsers_skill_detach_link_refreshes_snapshot_without_nameerror(monkeyp
 def test_browsers_skill_projection_refresh_skips_unchanged_yjs_writes(monkeypatch) -> None:
     mod = _load_browsers_skill_module()
     mod._SELECTED_BROWSER_BY_WS.clear()
-    mod._LAST_YJS_FINGERPRINT_BY_WS_SLOT.clear()
+    mod._PROJECTION_RUNTIME.reset()
 
     browser_entry = {
         "id": "browser-1",
@@ -136,10 +136,10 @@ def test_browsers_skill_projection_refresh_skips_unchanged_yjs_writes(monkeypatc
     assert len(writes) == first_write_count
 
 
-def test_browsers_skill_explicit_refresh_forces_projection_recovery(monkeypatch) -> None:
+def test_browsers_skill_explicit_refresh_recomputes_without_rewriting_identical_yjs(monkeypatch) -> None:
     mod = _load_browsers_skill_module()
     mod._SELECTED_BROWSER_BY_WS.clear()
-    mod._LAST_YJS_FINGERPRINT_BY_WS_SLOT.clear()
+    mod._PROJECTION_RUNTIME.reset()
 
     browser_entry = {
         "id": "browser-1",
@@ -169,13 +169,14 @@ def test_browsers_skill_explicit_refresh_forces_projection_recovery(monkeypatch)
     assert mod.refresh_snapshot("desktop")["delivery"] == "projection"
     assert mod.refresh_snapshot("desktop")["delivery"] == "projection"
 
-    assert len(writes) == 10
+    assert len(writes) == 5
+    assert mod._PROJECTION_RUNTIME.diagnostics_snapshot()["skipped_unchanged_total"] == 5
 
 
 def test_browsers_skill_projection_refresh_does_not_eager_publish_streams(monkeypatch) -> None:
     mod = _load_browsers_skill_module()
     mod._SELECTED_BROWSER_BY_WS.clear()
-    mod._LAST_YJS_FINGERPRINT_BY_WS_SLOT.clear()
+    mod._PROJECTION_RUNTIME.reset()
 
     browser_entry = {
         "id": "browser-1",
