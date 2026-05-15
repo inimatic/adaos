@@ -232,19 +232,21 @@ summary is explicitly needed for reconnect recovery.
 
 ### 1. Minimal Core Primitive
 
-- [ ] `sdk.projection_slot_type`: add a typed projection slot declaration
-- [ ] `sdk.stable_fingerprint`: add a shared stable JSON fingerprint helper
-- [ ] `sdk.set_if_changed`: add the shared Yjs set-if-changed path
-- [ ] `sdk.per_webspace_state`: keep fingerprints and pending refresh state per
-  skill, webspace, and slot
-- [ ] `sdk.force_recompute_skip_identical`: define force refresh as recompute,
+- [x] `sdk.projection_slot_type`: add a typed projection slot declaration
+- [x] `sdk.stable_fingerprint`: add a shared stable JSON fingerprint helper
+- [x] `sdk.set_if_changed`: add the shared Yjs set-if-changed path
+- [x] `sdk.per_webspace_fingerprint_state`: keep fingerprints per skill,
+  webspace, and slot
+- [ ] `sdk.pending_refresh_state`: keep pending refresh state per skill,
+  webspace, and slot
+- [x] `sdk.force_recompute_skip_identical`: define force refresh as recompute,
   not unconditional write
-- [ ] `sdk.projection_diagnostics`: expose applied, skipped, throttled,
+- [x] `sdk.projection_diagnostics`: expose applied, skipped, throttled,
   errored, and pressure-blocked counters
 
 ### 2. Stream Runtime
 
-- [ ] `sdk.stream_receiver_type`: add a typed stream receiver declaration
+- [x] `sdk.stream_receiver_type`: add a typed stream receiver declaration
 - [ ] `sdk.snapshot_request_handler`: centralize
   `webio.stream.snapshot.requested` handling
 - [ ] `sdk.subscription_changed_handler`: centralize
@@ -256,7 +258,7 @@ summary is explicitly needed for reconnect recovery.
 
 ### 3. Dirty Router and Section Cache
 
-- [ ] `sdk.dirty_router`: map event topics to sections/projection slots
+- [x] `sdk.dirty_router`: map event topics to sections/projection slots
 - [ ] `sdk.single_flight_refresh`: coalesce refresh work per skill/webspace
 - [ ] `sdk.section_cache`: add bounded section cache with TTL and invalidation
 - [ ] `sdk.event_pressure_counters`: preserve coalesced/superseded/dropped
