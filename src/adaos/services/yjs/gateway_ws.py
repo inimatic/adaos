@@ -3432,17 +3432,25 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
 
         allowed, reason = authorize_link("browser", dev_id)
         if not allowed:
+            reason_token = str(reason or "denied").strip().lower() or "denied"
             try:
                 touch_browser_session(
                     dev_id,
                     webspace_id=webspace_id,
-                    connection_state=reason or "denied",
+                    connection_state=reason_token,
                     online=False,
                     **browser_metadata,
                 )
             except Exception:
                 pass
-            await websocket.close(code=1008, reason=f"device_{reason or 'denied'}")
+            # Accept before closing so browsers receive a real close event with
+            # a policy reason. Closing before accept is exposed as an opaque 403
+            # in Chrome/WebView, which lets y-websocket keep reconnecting.
+            if await _accept_websocket(websocket, channel="yws.auth_denied"):
+                try:
+                    await websocket.close(code=1008, reason=f"device_{reason_token}")
+                except Exception:
+                    pass
             return
     except Exception:
         _ylog.debug("browser access policy check failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
