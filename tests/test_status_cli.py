@@ -291,7 +291,7 @@ def test_skill_status_prefers_workspace_version_over_runtime_version(tmp_base_di
 
     assert result.exit_code == 0
     assert "demo_skill: v1.1.0 slot=A" in result.stdout
-    assert "version-drift" in result.stdout
+    assert "runtime-ahead" in result.stdout
 
 
 def test_skill_list_prefers_workspace_version_over_runtime_version(tmp_base_dir, monkeypatch):
@@ -383,11 +383,12 @@ def test_skill_list_shows_dirty_flag_and_json_flags(tmp_base_dir, monkeypatch):
 
     text_result = CliRunner().invoke(skill_cmd.app, ["list", "--local"])
     assert text_result.exit_code == 0
-    assert "[dirty]" in text_result.stdout
+    assert "runtime-ahead" in text_result.stdout
+    assert "git-dirty" in text_result.stdout
 
     json_result = CliRunner().invoke(skill_cmd.app, ["list", "--local", "--json"])
     assert json_result.exit_code == 0
-    assert '"flags": ["dirty"]' in json_result.stdout
+    assert '"flags": ["runtime-ahead", "git-dirty"]' in json_result.stdout
 
 
 def test_skill_list_shows_ahead_flag_for_committed_workspace_diff(tmp_base_dir, monkeypatch):
@@ -444,12 +445,12 @@ def test_skill_list_shows_ahead_flag_for_committed_workspace_diff(tmp_base_dir, 
 
     text_result = CliRunner().invoke(skill_cmd.app, ["list", "--local"])
     assert text_result.exit_code == 0
-    assert "[ahead]" in text_result.stdout
+    assert "[git-ahead]" in text_result.stdout
     assert seen_base_refs == ["origin/main"]
 
     json_result = CliRunner().invoke(skill_cmd.app, ["list", "--local", "--json"])
     assert json_result.exit_code == 0
-    assert '"flags": ["ahead"]' in json_result.stdout
+    assert '"flags": ["git-ahead"]' in json_result.stdout
 
 
 def test_skill_status_reports_path_ahead_divergence(tmp_base_dir, monkeypatch):
@@ -504,7 +505,7 @@ def test_skill_status_reports_path_ahead_divergence(tmp_base_dir, monkeypatch):
     result = CliRunner().invoke(skill_cmd.app, ["status", "demo_skill"])
 
     assert result.exit_code == 0
-    assert "git status: ahead" in result.stdout
+    assert "git status: git-ahead" in result.stdout
     assert "git divergence: ahead=1 behind=0" in result.stdout
 
 
