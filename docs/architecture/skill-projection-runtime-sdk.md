@@ -247,9 +247,9 @@ summary is explicitly needed for reconnect recovery.
 ### 2. Stream Runtime
 
 - [x] `sdk.stream_receiver_type`: add a typed stream receiver declaration
-- [ ] `sdk.snapshot_request_handler`: centralize
+- [x] `sdk.snapshot_request_handler`: centralize
   `webio.stream.snapshot.requested` handling
-- [ ] `sdk.subscription_changed_handler`: centralize
+- [x] `sdk.subscription_changed_handler`: centralize
   `webio.stream.subscription.changed` handling
 - [x] `sdk.stream_fingerprint`: suppress duplicate stream payloads per receiver
 - [x] `sdk.stream_rate_limit`: add shared per-receiver rate limits
@@ -268,12 +268,12 @@ summary is explicitly needed for reconnect recovery.
 
 ### 4. `browsers_skill` Migration
 
-- [ ] `browsers.use_sdk_slots`: migrate current projection entries onto SDK
+- [x] `browsers.use_sdk_slots`: migrate current projection entries onto SDK
   `ProjectionSlot`
 - [ ] `browsers.remove_local_executor`: remove local projection executor once
   sync/async bridge is shared
-- [ ] `browsers.remove_local_fingerprints`: remove local fingerprint maps
-- [ ] `browsers.tests_unchanged_skip`: test duplicate refresh does not write
+- [x] `browsers.remove_local_fingerprints`: remove local fingerprint maps
+- [x] `browsers.tests_unchanged_skip`: test duplicate refresh does not write
   unchanged Yjs payloads
 - [ ] `browsers.reference_doc`: document the migrated skill as the minimal
   reference implementation

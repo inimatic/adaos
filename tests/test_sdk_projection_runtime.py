@@ -211,3 +211,65 @@ def test_stream_runtime_tracks_receivers_dedupes_and_rate_limits() -> None:
     ]
     runtime.forget_receiver("infrastate.logs.recent", webspace_id="desktop")
     assert runtime.active_receivers_snapshot() == []
+
+
+def test_stream_runtime_handles_snapshot_requested_event() -> None:
+    calls: list[tuple[str, object, dict]] = []
+
+    def _publish(receiver, data, *, ts=None, _meta=None):  # noqa: ANN001
+        calls.append((receiver, data, dict(_meta or {})))
+        return {"ok": True}
+
+    runtime = StreamRuntime(
+        "browsers_skill",
+        receivers=[
+            StreamReceiver(
+                "browsers.devices",
+                build=lambda context: {
+                    "receiver": context.receiver,
+                    "webspace": context.webspace_id,
+                    "reason": context.reason,
+                },
+            )
+        ],
+        stream_publish=_publish,
+    )
+
+    result = runtime.handle_snapshot_requested(
+        {
+            "receiver": "browsers.devices",
+            "_meta": {"webspace_id": "desktop"},
+        },
+        receiver_prefix="browsers.",
+    )
+
+    assert result is not None
+    assert result.published is True
+    assert calls == [
+        (
+            "browsers.devices",
+            {"receiver": "browsers.devices", "webspace": "desktop", "reason": "snapshot_requested"},
+            {"webspace_id": "desktop"},
+        )
+    ]
+
+
+def test_stream_runtime_handles_subscription_changed_unsubscribed() -> None:
+    calls: list[tuple[str, object, dict]] = []
+    runtime = StreamRuntime(
+        "browsers_skill",
+        receivers=[StreamReceiver("browsers.devices", build=lambda _context: {"items": []})],
+        stream_publish=lambda receiver, data, *, ts=None, _meta=None: calls.append((receiver, data, dict(_meta or {}))) or {"ok": True},
+    )
+
+    runtime.handle_subscription_changed(
+        {"receiver": "browsers.devices", "action": "subscribed", "webspace_id": "desktop"},
+        receiver_prefix="browsers.",
+    )
+    runtime.handle_subscription_changed(
+        {"receiver": "browsers.devices", "action": "unsubscribed", "webspace_id": "desktop"},
+        receiver_prefix="browsers.",
+    )
+
+    assert len(calls) == 1
+    assert runtime.active_receivers_snapshot() == []
