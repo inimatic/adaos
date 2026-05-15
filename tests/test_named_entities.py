@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -17,6 +18,28 @@ class _FakeDeviceInventory:
 
 def _empty_lookup_provider(*, webspace_id: str = "desktop") -> dict[str, object]:
     return {"webspace_id": webspace_id, "lookups": {}}
+
+
+def test_named_entity_service_exposes_current_subnet_assistant(monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.services import node_config, subnet_alias
+
+    monkeypatch.setattr(
+        node_config,
+        "load_config",
+        lambda: SimpleNamespace(subnet_id="sn_home", node_id="node-1"),
+    )
+    monkeypatch.setattr(subnet_alias, "load_subnet_alias", lambda *, subnet_id=None: "Home Assistant")
+
+    service = named_entities.NamedEntityService(
+        device_inventory_service=_FakeDeviceInventory([]),
+        lookup_payload_provider=_empty_lookup_provider,
+        include_runtime_subnet_entity=True,
+    )
+
+    records = service.list_entities(kind="assistant")
+
+    assert records[0].canonical_ref == "assistant:sn_home"
+    assert records[0].display_label == "Home Assistant"
 
 
 def test_named_entity_display_priority_prefers_registered_over_fallback() -> None:
