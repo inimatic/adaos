@@ -49,6 +49,11 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+_YSTORE_APPLY_YIELD_BYTES = _env_int("ADAOS_YSTORE_APPLY_YIELD_BYTES", 512 * 1024, minimum=0)
+_YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum=0.0)
+_YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
+
+
 def add_ystore_write_listener(cb: Callable[..., Any]) -> Callable[[], None]:
     """
     Register a global listener called on every YStore write:
@@ -354,6 +359,10 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_snapshot_bytes = 0
         self._last_apply_update_total = 0
         self._last_apply_bytes = 0
+        self._apply_yield_total = 0
+        self._last_apply_yield_total = 0
+        self._last_apply_slow_update_ms = 0.0
+        self._last_apply_slow_update_bytes = 0
         self._auto_backup_inflight = False
         self._generation = 0
         self._persisted_generation = -1
@@ -398,6 +407,9 @@ class AdaosMemoryYStore(BaseYStore):
         self._base_state_vector = None
         self._last_apply_update_total = 0
         self._last_apply_bytes = 0
+        self._last_apply_yield_total = 0
+        self._last_apply_slow_update_ms = 0.0
+        self._last_apply_slow_update_bytes = 0
         self._last_apply_mode = ""
         self._last_loaded_from_disk_at = 0.0
         return released_entries, released_bytes
@@ -520,11 +532,38 @@ class AdaosMemoryYStore(BaseYStore):
         now = time.time()
         applied_total = 0
         applied_bytes = 0
+        yielded_total = 0
+        budget_bytes = int(_YSTORE_APPLY_YIELD_BYTES)
+        budget_s = float(_YSTORE_APPLY_YIELD_MS) / 1000.0
+        slow_update_s = float(_YSTORE_APPLY_SLOW_UPDATE_MS) / 1000.0
+        bytes_since_yield = 0
+        last_yield = time.perf_counter()
+        slow_update_ms = 0.0
+        slow_update_bytes = 0
         try:
             for update, _metadata, _ts in updates:
+                update_started = time.perf_counter()
                 Y.apply_update(ydoc, update)  # type: ignore[arg-type]
+                update_elapsed = time.perf_counter() - update_started
                 applied_total += 1
-                applied_bytes += len(update)
+                update_bytes = len(update)
+                applied_bytes += update_bytes
+                bytes_since_yield += update_bytes
+                if (
+                    slow_update_s > 0.0
+                    and update_elapsed >= slow_update_s
+                    and update_elapsed * 1000.0 > slow_update_ms
+                ):
+                    slow_update_ms = update_elapsed * 1000.0
+                    slow_update_bytes = update_bytes
+                if applied_total < len(updates) and (
+                    (budget_bytes > 0 and bytes_since_yield >= budget_bytes)
+                    or (budget_s > 0.0 and time.perf_counter() - last_yield >= budget_s)
+                ):
+                    yielded_total += 1
+                    bytes_since_yield = 0
+                    last_yield = time.perf_counter()
+                    await asyncio.sleep(0)
         finally:
             async with self._lock:
                 self._apply_total += 1
@@ -533,7 +572,19 @@ class AdaosMemoryYStore(BaseYStore):
                 self._last_apply_at = now
                 self._last_apply_update_total = applied_total
                 self._last_apply_bytes = applied_bytes
+                self._apply_yield_total += yielded_total
+                self._last_apply_yield_total = yielded_total
+                self._last_apply_slow_update_ms = round(slow_update_ms, 3)
+                self._last_apply_slow_update_bytes = int(slow_update_bytes)
                 self._last_apply_mode = apply_mode
+        if slow_update_ms > 0.0:
+            _log.warning(
+                "YStore apply_update blocked event loop webspace=%s update_bytes=%d elapsed_ms=%.1f updates=%d",
+                self.path,
+                slow_update_bytes,
+                slow_update_ms,
+                len(updates),
+            )
 
     async def current_state_vector(self) -> bytes | None:
         """
@@ -930,6 +981,7 @@ class AdaosMemoryYStore(BaseYStore):
             "apply_total": int(self._apply_total),
             "applied_update_total": int(self._applied_update_total),
             "applied_update_bytes": int(self._applied_update_bytes),
+            "apply_yield_total": int(self._apply_yield_total),
             "auto_backup_after_compact": bool(self.auto_backup_after_compact),
             "auto_backup_cooldown_sec": float(self.auto_backup_cooldown_sec),
             "auto_backup_debounce_sec": float(self.auto_backup_debounce_sec),
@@ -952,6 +1004,9 @@ class AdaosMemoryYStore(BaseYStore):
             "last_backup_mode": self._last_backup_mode or None,
             "last_apply_update_total": int(self._last_apply_update_total),
             "last_apply_bytes": int(self._last_apply_bytes),
+            "last_apply_yield_total": int(self._last_apply_yield_total),
+            "last_apply_slow_update_ms": float(self._last_apply_slow_update_ms),
+            "last_apply_slow_update_bytes": int(self._last_apply_slow_update_bytes),
             "last_apply_mode": self._last_apply_mode or None,
             "last_write_at": self._last_write_at or None,
             "last_write_ago_s": round(max(0.0, now - self._last_write_at), 3) if self._last_write_at else None,
