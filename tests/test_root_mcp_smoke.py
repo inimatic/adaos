@@ -44,3 +44,22 @@ def test_root_mcp_smoke_classifies_auth_and_jsonrpc_errors() -> None:
     assert rpc_ok is False
     assert rpc_classification == "jsonrpc_error"
     assert rpc_error == {"code": -32601}
+
+
+def test_root_mcp_smoke_surfaces_json_error_summary() -> None:
+    step = smoke_mod._make_step(
+        name="foundation",
+        method="GET",
+        url="https://api.inimatic.com/v1/root/mcp/foundation",
+        result=smoke_mod.RootMcpSmokeHttpResult(
+            status_code=401,
+            payload={
+                "error": "client_certificate_required",
+                "message": "Client certificate is required.",
+            },
+        ),
+    )
+
+    assert step.ok is False
+    assert step.classification == "auth_failed"
+    assert step.error == "Client certificate is required."
