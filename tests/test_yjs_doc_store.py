@@ -64,6 +64,38 @@ async def test_async_read_ydoc_collects_timings_without_name_error() -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_apply_updates_yields_between_replay_chunks(monkeypatch) -> None:
+    webspace_id = _webspace_id("apply-yield")
+    store = get_ystore_for_webspace(webspace_id)
+    sleep_calls: list[float] = []
+    applied: list[bytes] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    def _fake_apply_update(_ydoc: object, update: bytes) -> None:
+        applied.append(bytes(update))
+
+    monkeypatch.setattr(ystore_module, "_YSTORE_APPLY_YIELD_BYTES", 3)
+    monkeypatch.setattr(ystore_module, "_YSTORE_APPLY_YIELD_MS", 0.0)
+    monkeypatch.setattr(ystore_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(ystore_module.Y, "apply_update", _fake_apply_update)
+
+    try:
+        store._loaded_from_disk = True
+        store._updates = [(b"aa", b"", 1.0), (b"bb", b"", 2.0), (b"cc", b"", 3.0)]
+
+        await store.apply_updates(object())
+
+        assert applied == [b"aa", b"bb", b"cc"]
+        assert sleep_calls == [0]
+        snapshot = store.runtime_snapshot()
+        assert snapshot["last_apply_yield_total"] == 1
+        assert snapshot["apply_yield_total"] == 1
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_async_get_ydoc_skips_noop_flush() -> None:
     webspace_id = _webspace_id("noop-flush")
     store = get_ystore_for_webspace(webspace_id)

@@ -1820,7 +1820,8 @@ class BootstrapService:
         # Optional: hang watchdog (thread-based) to capture the main thread stack during prolonged
         # event loop stalls. This catches cases where asyncio tasks show "await" positions only.
         try:
-            if os.getenv("ADAOS_LOOP_HANG_WATCHDOG", "0") == "1":
+            hang_watchdog_default = "1" if os.getenv("ADAOS_LOOP_LAG_MONITOR", "0") == "1" else "0"
+            if os.getenv("ADAOS_LOOP_HANG_WATCHDOG", hang_watchdog_default) == "1":
                 try:
                     import threading as _threading
                     import sys as _sys
@@ -1831,7 +1832,11 @@ class BootstrapService:
                     _traceback = None  # type: ignore[assignment]
                 if _threading and _sys and _traceback:
                     try:
-                        hang_ms = float(os.getenv("ADAOS_LOOP_HANG_MS", "3000") or "3000")
+                        hang_ms = float(
+                            os.getenv("ADAOS_LOOP_HANG_MS")
+                            or os.getenv("ADAOS_LOOP_LAG_DUMP_MS")
+                            or "3000"
+                        )
                     except Exception:
                         hang_ms = 3000.0
                     try:
