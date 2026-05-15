@@ -18,6 +18,7 @@ from adaos.apps.cli.git_status import (
     compute_path_status,
     ensure_remote,
     fetch_remote,
+    ref_exists,
     render_diff,
     resolve_base_ref,
     render_noindex_diff,
@@ -170,18 +171,47 @@ def _resolve_list_skill_git_flags(
         workspace_root,
         workspace_skills_root,
     )
+    base_ref = resolve_base_ref(source_workdir) if source_kind in {"workspace", "repo_workspace_fallback"} else None
     try:
         path_status = compute_path_status(
             workdir=source_workdir,
             path=source_path,
-            base_ref="HEAD" if source_kind == "workspace" else None,
+            base_ref=base_ref,
         )
     except Exception:
         return []
+    return _git_path_flags(path_status)
+
+
+def _status_value(status: object, key: str, default: object = None) -> object:
+    if isinstance(status, dict):
+        return status.get(key, default)
+    return getattr(status, key, default)
+
+
+def _positive_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except Exception:
+        return 0
+
+
+def _git_path_flags(status: object) -> list[str]:
     flags: list[str] = []
-    if path_status.dirty:
+    error = str(_status_value(status, "error", "") or "").strip()
+    if error:
+        flags.append("git-error")
+    dirty = bool(_status_value(status, "dirty", False))
+    changed = bool(_status_value(status, "changed_vs_base", False))
+    ahead = _positive_int(_status_value(status, "ahead_count", 0))
+    behind = _positive_int(_status_value(status, "behind_count", 0))
+    if dirty:
         flags.append("dirty")
-    if path_status.changed_vs_base:
+    if changed and ahead:
+        flags.append("ahead")
+    if changed and behind:
+        flags.append("behind")
+    if changed and not ahead and not behind:
         flags.append("diff")
     return flags
 
@@ -1268,16 +1298,24 @@ def status(
 
     if space == "workspace":
         # Ensure expected remote exists; allow user override via --remote/--ref.
+        using_default_registry_ref = False
         if remote == "origin" and not ref:
             ensure_remote(workspace_root, name=REGISTRY_REMOTE, url=REGISTRY_URL)
             remote = REGISTRY_REMOTE
             ref = f"{REGISTRY_REMOTE}/{REGISTRY_BRANCH}"
+            using_default_registry_ref = True
         if fetch:
             err = fetch_remote(workspace_root, remote=remote)
             if err:
                 typer.secho(f"git fetch failed: {err}", fg=typer.colors.YELLOW)
 
         base_ref = (ref or "").strip() or resolve_base_ref(workspace_root, remote=remote)
+        if using_default_registry_ref and base_ref and not ref_exists(workspace_root, base_ref):
+            base_ref = (
+                resolve_base_ref(workspace_root, remote=REGISTRY_REMOTE)
+                or resolve_base_ref(workspace_root, remote="origin")
+                or base_ref
+            )
     else:
         # Dev: compare local dev folder with the Root backend draft state (API).
         base_ref = None
@@ -1393,8 +1431,11 @@ def status(
                     "path": path_status.path,
                     "exists": path_status.exists,
                     "dirty": path_status.dirty,
+                    "flags": _git_path_flags(path_status),
                     "base_ref": path_status.base_ref,
                     "changed_vs_base": path_status.changed_vs_base,
+                    "ahead_count": path_status.ahead_count,
+                    "behind_count": path_status.behind_count,
                     "local_last_commit": (
                         {
                             "sha": path_status.local_last_commit.sha,
@@ -1556,12 +1597,12 @@ def status(
             if g.get("error"):
                 typer.secho(f"git: {g.get('error')}", fg=typer.colors.YELLOW)
             else:
-                flags: list[str] = []
-                if g.get("dirty"):
-                    flags.append("dirty")
-                if g.get("changed_vs_base"):
-                    flags.append("diff")
+                flags = _git_path_flags(g)
                 typer.echo("git status: " + (", ".join(flags) if flags else "clean"))
+                ahead = _positive_int(g.get("ahead_count"))
+                behind = _positive_int(g.get("behind_count"))
+                if ahead or behind:
+                    typer.echo(f"git divergence: ahead={ahead} behind={behind}")
                 if g.get("local_last_commit"):
                     lc = g["local_last_commit"]
                     typer.echo(f"last local: {lc.get('sha')} {lc.get('iso') or lc.get('timestamp')} {lc.get('subject')}")
@@ -1610,10 +1651,7 @@ def status(
             if entry.get("version_drift"):
                 flags.append("version-drift")
         if space == "workspace":
-            if g.get("dirty"):
-                flags.append("dirty")
-            if g.get("changed_vs_base"):
-                flags.append("diff")
+            flags.extend(_git_path_flags(g))
         else:
             dc = entry.get("dev_compare") or {}
             if dc.get("changed_vs_base"):

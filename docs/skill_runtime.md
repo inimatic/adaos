@@ -263,6 +263,15 @@ Every install/test/activate/run operation logs under `slots/<slot>/logs/`. `adao
 - Workspace: `adaos skill status <NAME> --fetch --diff` compares `skills/<NAME>` against the workspace registry remote (`adaos-registry.git` main).
 - Dev: `adaos skill status --space dev <NAME> --fetch --diff` compares the dev folder against the hub draft state via Root API (requires hub mTLS keys from the bootstrap `node.yaml`).
 
+Workspace Git markers distinguish uncommitted work from committed-but-unpublished work:
+`dirty` means local filesystem changes are not committed, while `ahead` means
+path-level commits exist locally and still need a registry push. `behind` means
+the registry base has newer path-level commits, and `diff` is the fallback when
+the path differs but Git cannot classify the divergence. `git-error` means the
+CLI could not compute the Git comparison. `version-drift` is separate from Git
+state and means the active runtime slot version is not the same as the workspace
+skill version.
+
 ## Weather skill reference
 
 `.adaos/skills/weather_skill/` demonstrates the complete lifecycle:

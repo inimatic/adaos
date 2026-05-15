@@ -28,6 +28,24 @@ adaos skill gc
 
 For runtime bucket layout, rollback semantics, and the reserved `migrations/data_migration.py` flow, see [Skill Runtime Lifecycle](skill_runtime.md).
 
+`adaos skill list --local` and `adaos skill status <name>` include source
+state markers for workspace skills:
+
+- `dirty`: the skill source has uncommitted filesystem changes.
+- `ahead`: commits touching the skill exist locally but are not in the
+  workspace registry/upstream base yet.
+- `behind`: the workspace registry/upstream base has newer commits touching
+  the skill.
+- `diff`: the source differs from the base, but Git could not classify the
+  path-level divergence as ahead or behind.
+- `git-error`: the CLI could not compute the Git comparison, usually because
+  the base ref is not fetched or the workspace is not a Git repository.
+- `version-drift`: the workspace skill version and active runtime slot version
+  differ. This is a runtime/install/activation signal, not a Git dirty signal.
+
+Use `adaos skill status <name> --fetch --diff` before publishing when you need
+the exact comparison against the registry base.
+
 For browser-facing or LLM-authored skills, follow
 [LLM-Safe Skill Development Guide](guides/llm-skill-development.md). That guide
 defines the current Yjs, stream, projection, details, and guard/quarantine

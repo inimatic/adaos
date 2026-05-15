@@ -23,6 +23,8 @@ def _fake_path_status(path: str):
             self.dirty = False
             self.base_ref = "HEAD"
             self.changed_vs_base = False
+            self.ahead_count = 0
+            self.behind_count = 0
             self.local_last_commit = None
             self.base_last_commit = None
             self.error = None
@@ -386,6 +388,124 @@ def test_skill_list_shows_dirty_flag_and_json_flags(tmp_base_dir, monkeypatch):
     json_result = CliRunner().invoke(skill_cmd.app, ["list", "--local", "--json"])
     assert json_result.exit_code == 0
     assert '"flags": ["dirty"]' in json_result.stdout
+
+
+def test_skill_list_shows_ahead_flag_for_committed_workspace_diff(tmp_base_dir, monkeypatch):
+    skill_root = tmp_base_dir / "workspace" / "skills" / "demo_skill"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text("id: demo_skill\nversion: '1.1.0'\n", encoding="utf-8")
+
+    class _Paths:
+        def workspace_dir(self):
+            return tmp_base_dir / "workspace"
+
+        def skills_workspace_dir(self):
+            return tmp_base_dir / "workspace" / "skills"
+
+        def dev_skills_dir(self):
+            return tmp_base_dir / "skills-dev"
+
+    class _Ctx:
+        paths = _Paths()
+        sql = object()
+
+    class _Row:
+        name = "demo_skill"
+        installed = True
+        active_version = "1.1.0"
+
+    class _Mgr:
+        @staticmethod
+        def list_installed():
+            return [_Row()]
+
+    def _ahead_status(**kwargs):
+        status = _fake_path_status("skills/demo_skill")
+        status.base_ref = kwargs.get("base_ref")
+        status.changed_vs_base = True
+        status.ahead_count = 1
+        return status
+
+    seen_base_refs: list[str | None] = []
+
+    def _compute_path_status(**kwargs):
+        seen_base_refs.append(kwargs.get("base_ref"))
+        return _ahead_status(**kwargs)
+
+    monkeypatch.setattr(skill_cmd, "get_ctx", lambda: _Ctx())
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(skill_cmd, "resolve_base_ref", lambda *args, **kwargs: "origin/main")
+    monkeypatch.setattr(skill_cmd, "compute_path_status", _compute_path_status)
+    monkeypatch.setattr(
+        skill_cmd,
+        "list_workspace_registry_entries",
+        lambda *args, **kwargs: [{"name": "demo_skill", "version": "1.1.0"}],
+    )
+
+    text_result = CliRunner().invoke(skill_cmd.app, ["list", "--local"])
+    assert text_result.exit_code == 0
+    assert "[ahead]" in text_result.stdout
+    assert seen_base_refs == ["origin/main"]
+
+    json_result = CliRunner().invoke(skill_cmd.app, ["list", "--local", "--json"])
+    assert json_result.exit_code == 0
+    assert '"flags": ["ahead"]' in json_result.stdout
+
+
+def test_skill_status_reports_path_ahead_divergence(tmp_base_dir, monkeypatch):
+    skill_root = tmp_base_dir / "workspace" / "skills" / "demo_skill"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text("id: demo_skill\nversion: '1.1.0'\n", encoding="utf-8")
+
+    class _Paths:
+        def workspace_dir(self):
+            return tmp_base_dir / "workspace"
+
+        def skills_workspace_dir(self):
+            return tmp_base_dir / "workspace" / "skills"
+
+        def dev_skills_dir(self):
+            return tmp_base_dir / "skills-dev"
+
+    class _Ctx:
+        paths = _Paths()
+        sql = object()
+
+    class _Row:
+        name = "demo_skill"
+        installed = True
+
+    class _Registry:
+        def __init__(self, _sql):
+            pass
+
+        def list(self):
+            return [_Row()]
+
+    def _ahead_status(**kwargs):
+        status = _fake_path_status("skills/demo_skill")
+        status.base_ref = kwargs.get("base_ref")
+        status.changed_vs_base = True
+        status.ahead_count = 1
+        return status
+
+    monkeypatch.setattr(skill_cmd, "SqliteSkillRegistry", _Registry)
+    monkeypatch.setattr(skill_cmd, "get_ctx", lambda: _Ctx())
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: types.SimpleNamespace(runtime_status=lambda _name: {"version": "1.1.0", "active_slot": "B", "ready": True}))
+    monkeypatch.setattr(skill_cmd, "ensure_remote", lambda *args, **kwargs: None)
+    monkeypatch.setattr(skill_cmd, "resolve_base_ref", lambda *args, **kwargs: "origin/main")
+    monkeypatch.setattr(skill_cmd, "compute_path_status", _ahead_status)
+    monkeypatch.setattr(
+        skill_cmd,
+        "list_workspace_registry_entries",
+        lambda *args, **kwargs: [{"name": "demo_skill", "version": "1.1.0"}],
+    )
+
+    result = CliRunner().invoke(skill_cmd.app, ["status", "demo_skill"])
+
+    assert result.exit_code == 0
+    assert "git status: ahead" in result.stdout
+    assert "git divergence: ahead=1 behind=0" in result.stdout
 
 
 def test_scenario_status_reports_empty_when_registry_and_workspace_are_empty(tmp_path, monkeypatch):
