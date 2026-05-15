@@ -46,6 +46,11 @@ For Codex/operator smoke checks, native mode is the expected route. If smoke
 returns `502`, treat it as endpoint/upstream health first, not as proof that the
 bearer is invalid.
 
+If the response body contains `adaos_root_mcp_upstream_failed`, the request was
+handled by the legacy upstream proxy rather than the native Root MCP handler.
+Check that the deployed backend includes the native route-order hardening and
+that `ROOT_MCP_LEGACY_UPSTREAM_PROXY` is not being used as the primary route.
+
 If you want to verify the issued bearer before wiring Codex, test it directly:
 
 ```powershell
