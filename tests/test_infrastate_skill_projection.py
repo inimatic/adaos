@@ -1015,6 +1015,7 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
     )
     monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: SimpleNamespace(list=lambda: [_SkillRecord("infrastate_skill", "0.18.0")]))
     monkeypatch.setattr(mod, "SkillManager", lambda **kwargs: SimpleNamespace(runtime_status=lambda name: {"active_slot": "A"}))
+    monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
     monkeypatch.setattr(
         mod,
         "_marketplace_catalog_entries",
@@ -1237,6 +1238,8 @@ def test_infrastate_marketplace_catalog_prefers_remote_registry_and_local_scan(m
         "get_ctx",
         lambda: SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace)),
     )
+    monkeypatch.setattr(mod, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(mod, "_registry_payload_from_url", lambda: None)
     monkeypatch.setattr(mod, "list_workspace_registry_entries", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         mod.subprocess,
@@ -1264,6 +1267,8 @@ def test_infrastate_marketplace_catalog_uses_ttl_cache(monkeypatch, tmp_path: Pa
         "get_ctx",
         lambda: SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace)),
     )
+    monkeypatch.setattr(mod, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(mod, "_registry_payload_from_url", lambda: None)
     monkeypatch.setattr(mod, "list_workspace_registry_entries", lambda *args, **kwargs: [])
     monkeypatch.setattr(mod, "_MARKETPLACE_CACHE_TTL_S", 30.0)
     mod._marketplace_catalog_cache.clear()
@@ -1352,12 +1357,12 @@ def test_infrastate_realtime_items_include_semantic_state_plane_cards():
 
 def test_infrastate_project_async_skips_snapshot_with_only_timestamp_changes(monkeypatch):
     mod = _load_infrastate_module()
-    applied: list[tuple[str | None, str]] = []
+    applied: list[tuple[str | None, str, object]] = []
     mod._projection_fingerprints.clear()
     mod._projection_diag.update({"apply_total": 0, "skip_total": 0, "cache_hit_total": 0})
 
     async def _fake_set_async(slot, value, *, user_id=None, webspace_id=None):
-        applied.append((webspace_id, str(value.get("summary", {}).get("value") or "")))
+        applied.append((webspace_id, slot, value))
 
     monkeypatch.setattr(mod, "ctx_subnet", SimpleNamespace(set_async=_fake_set_async))
     monkeypatch.setattr(mod, "_projection_webspace_ids", lambda webspace_id=None: ["default"])
@@ -1379,14 +1384,14 @@ def test_infrastate_project_async_skips_snapshot_with_only_timestamp_changes(mon
     asyncio.run(mod._project_async(first, webspace_id="default"))
     asyncio.run(mod._project_async(second, webspace_id="default"))
 
-    assert applied == [("default", "ready")]
+    assert applied == [("default", "infrastate.summary", {"value": "ready"})]
     assert mod._projection_diag["apply_total"] == 1
     assert mod._projection_diag["skip_total"] == 1
 
 
 def test_infrastate_project_async_uses_throttled_interval_when_yjs_policy_requires(monkeypatch):
     mod = _load_infrastate_module()
-    applied: list[tuple[str | None, str]] = []
+    applied: list[tuple[str | None, str, object]] = []
     mod._projection_fingerprints.clear()
     mod._projection_last_applied_at.clear()
     mod._projection_diag.update(
@@ -1404,7 +1409,7 @@ def test_infrastate_project_async_uses_throttled_interval_when_yjs_policy_requir
     )
 
     async def _fake_set_async(slot, value, *, user_id=None, webspace_id=None):
-        applied.append((webspace_id, str(value.get("summary", {}).get("value") or "")))
+        applied.append((webspace_id, slot, value))
 
     monkeypatch.setattr(mod, "ctx_subnet", SimpleNamespace(set_async=_fake_set_async))
     monkeypatch.setattr(mod, "_projection_webspace_ids", lambda webspace_id=None: ["default"])
@@ -1423,7 +1428,7 @@ def test_infrastate_project_async_uses_throttled_interval_when_yjs_policy_requir
     asyncio.run(mod._project_async(first, webspace_id="default"))
     asyncio.run(mod._project_async(second, webspace_id="default"))
 
-    assert applied == [("default", "ready-1")]
+    assert applied == [("default", "infrastate.summary", {"value": "ready-1"})]
     assert mod._projection_diag["apply_total"] == 1
     assert mod._projection_diag["rate_limited_total"] == 1
 
@@ -1481,13 +1486,13 @@ def test_infrastate_project_async_blocks_primary_yjs_projection_but_keeps_stream
 
 def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch):
     mod = _load_infrastate_module()
-    projected: list[dict[str, object]] = []
+    projected: list[tuple[str, object]] = []
     published: list[tuple[str, object, str | None]] = []
     mod._projection_fingerprints.clear()
     mod._projection_diag.update({"apply_total": 0, "skip_total": 0, "cache_hit_total": 0})
 
     async def _fake_set_async(slot, value, *, user_id=None, webspace_id=None):
-        projected.append(value)
+        projected.append((slot, value))
 
     monkeypatch.setattr(mod, "ctx_subnet", SimpleNamespace(set_async=_fake_set_async))
     monkeypatch.setattr(mod, "_projection_webspace_ids", lambda webspace_id=None: ["default"])
@@ -1508,20 +1513,11 @@ def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch)
     asyncio.run(mod._project_async(snapshot, webspace_id="default"))
 
     assert projected == [
-        {
-            "summary": {"value": "ready"},
-            "operations": {"active": [{"id": "op-1"}]},
-        }
+        ("infrastate.summary", {"value": "ready"}),
+        ("infrastate.operations.active", [{"id": "op-1"}]),
     ]
     assert published == [
         ("infrastate.operations.active", [{"id": "op-1"}], "default"),
-        ("infrastate.logs.recent", [{"id": "log-1"}], "default"),
-        ("infrastate.events.recent", [{"id": "evt-1"}], "default"),
-        (
-            "infrastate.yjs.load_mark",
-            [{"root": "data", "kind": "root", "id": "data", "display": "data"}],
-            "default",
-        ),
     ]
 
 
@@ -1571,8 +1567,8 @@ def test_infrastate_stream_snapshot_request_publishes_requested_receiver(monkeyp
     )
     monkeypatch.setattr(
         mod,
-        "_publish_stream_payload",
-        lambda *, receiver, data, webspace_id=None, force=False: published.append((receiver, data, webspace_id)),
+        "stream_publish",
+        lambda receiver, data, _meta=None, **kwargs: published.append((receiver, data, (_meta or {}).get("webspace_id"))) or {"ok": True},
     )
 
     mod.on_webio_stream_snapshot_requested(
@@ -1588,6 +1584,44 @@ def test_infrastate_stream_snapshot_request_publishes_requested_receiver(monkeyp
         ("infrastate.logs.recent", [{"id": "log-1"}], "default"),
     ]
     assert cache_flags == [True]
+
+
+def test_infrastate_operations_stream_request_uses_direct_sdk_builder(monkeypatch):
+    mod = _load_infrastate_module()
+    published: list[tuple[str, object, str | None]] = []
+
+    monkeypatch.setattr(
+        mod,
+        "_snapshot_or_fallback_cached",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("operations stream should not build full snapshot")),
+    )
+    monkeypatch.setattr(
+        mod,
+        "get_operation_manager",
+        lambda: SimpleNamespace(
+            snapshot=lambda webspace_id=None: {
+                "active_items": [{"id": "op-1", "webspace_id": webspace_id}],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "stream_publish",
+        lambda receiver, data, _meta=None, **kwargs: published.append((receiver, data, (_meta or {}).get("webspace_id"))) or {"ok": True},
+    )
+
+    mod.on_webio_stream_snapshot_requested(
+        SimpleNamespace(
+            payload={
+                "receiver": "infrastate.operations.active",
+                "webspace_id": "default",
+            }
+        )
+    )
+
+    assert published == [
+        ("infrastate.operations.active", [{"id": "op-1", "webspace_id": "default"}], "default"),
+    ]
 
 
 def test_infrastate_stream_snapshot_request_bypasses_noncritical_guardrail(monkeypatch):
@@ -1676,8 +1710,8 @@ def test_infrastate_stream_snapshot_request_supports_yjs_load_mark(monkeypatch):
     )
     monkeypatch.setattr(
         mod,
-        "_publish_stream_payload",
-        lambda *, receiver, data, webspace_id=None, force=False: published.append((receiver, data, webspace_id)),
+        "stream_publish",
+        lambda receiver, data, _meta=None, **kwargs: published.append((receiver, data, (_meta or {}).get("webspace_id"))) or {"ok": True},
     )
 
     mod.on_webio_stream_snapshot_requested(
@@ -1721,8 +1755,8 @@ def test_infrastate_stream_snapshot_request_supports_yjs_load_mark_from_reliabil
     )
     monkeypatch.setattr(
         mod,
-        "_publish_stream_payload",
-        lambda *, receiver, data, webspace_id=None, force=False: published.append((receiver, data, webspace_id)),
+        "stream_publish",
+        lambda receiver, data, _meta=None, **kwargs: published.append((receiver, data, (_meta or {}).get("webspace_id"))) or {"ok": True},
     )
 
     mod.on_webio_stream_snapshot_requested(

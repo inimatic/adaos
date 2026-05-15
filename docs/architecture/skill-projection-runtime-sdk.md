@@ -203,22 +203,32 @@ onto the shared helper layer.
 `infrastate_skill` should be the first heavy operational-skill migration after
 the SDK slice exists.
 
-The target is to replace the single `infrastate.snapshot` projection with
-section slots such as:
+The first migration pass replaces the single `infrastate.snapshot` durable
+projection with section slots while keeping the existing WebUI paths stable.
+Durable Yjs sections are now declared and written as:
 
 - `infrastate.summary`
 - `infrastate.actions`
 - `infrastate.nodes`
-- `infrastate.selected_node`
+- `infrastate.node_editor`
 - `infrastate.operations.active`
-- `infrastate.runtime.status`
-- `infrastate.yjs.pressure`
-- `infrastate.sync.status`
-- `infrastate.marketplace.summary`
+- `infrastate.core_actions`
+- `infrastate.yjs_actions`
+- `infrastate.update_actions`
+- `infrastate.core_update_diag_actions`
+- `infrastate.ui_state`
+- `infrastate.fallback`
+- `infrastate.errors`
+- `infrastate.projection_diag`
 
-Heavy logs, event history, core-update diagnostics, marketplace details, and
-operation details should move to stream/request-only surfaces unless a compact
-summary is explicitly needed for reconnect recovery.
+Heavy logs, event history, core-update diagnostics, marketplace rows, build
+details, runtime channel details, skill/scenario tables, and per-item details
+are stream/request-only surfaces. `infrastate.operations.active` remains both a
+compact durable slot for reconnect recovery and an eager stream for live UI
+updates. The current stream migration uses direct builders for operations,
+events, installed skills/scenarios, and marketplace tables; remaining complex
+diagnostic receivers still fall back to the bounded cached snapshot until their
+section builders are split out.
 
 ## Implementation Checklist
 
@@ -255,12 +265,16 @@ summary is explicitly needed for reconnect recovery.
 - [x] `sdk.stream_rate_limit`: add shared per-receiver rate limits
 - [x] `sdk.active_receiver_registry`: expose active receiver state for
   diagnostics
+- [x] `sdk.stream_runtime_reset`: reset stream fingerprints/demand by
+  webspace/receiver during webspace reloads
 
 ### 3. Dirty Router and Section Cache
 
 - [x] `sdk.dirty_router`: map event topics to sections/projection slots
 - [x] `sdk.single_flight_refresh`: coalesce refresh work per skill/webspace
 - [x] `sdk.section_cache`: add bounded section cache with TTL and invalidation
+- [x] `sdk.projection_slot_rate_limit`: support per-slot projection write
+  throttling and diagnostics
 - [ ] `sdk.event_pressure_counters`: preserve coalesced/superseded/dropped
   evidence
 - [ ] `sdk.restore_active_demand`: restore active projection/stream demand on
@@ -280,16 +294,18 @@ summary is explicitly needed for reconnect recovery.
 
 ### 5. `infrastate_skill` Migration
 
-- [ ] `infrastate.section_inventory`: inventory current snapshot sections and
+- [x] `infrastate.section_inventory`: inventory current snapshot sections and
   classify each as projection, stream-only, action, or internal cache
-- [ ] `infrastate.slot_map`: replace `infrastate.snapshot` with section slots
+- [x] `infrastate.slot_map`: replace `infrastate.snapshot` with section slots
   while keeping compatibility consumers working
 - [ ] `infrastate.event_routing`: route operations, browser, registry, update,
   Yjs, and webspace events to minimal dirty sections
-- [ ] `infrastate.stream_only_heavy`: move logs, histories, diagnostics, and
+- [x] `infrastate.stream_only_heavy`: move logs, histories, diagnostics, and
   details to stream/request-only surfaces
 - [ ] `infrastate.no_full_snapshot_for_stream`: ensure one stream receiver does
   not build the full operational snapshot
+- [x] `infrastate.tests_section_slot_writes`: test durable refresh writes
+  section slots instead of the legacy monolithic snapshot
 - [ ] `infrastate.tests_minimal_writes`: test event-specific refresh writes only
   the affected slots
 - [ ] `infrastate.memory_soak`: run stand soak and verify Yjs load marks and RSS
