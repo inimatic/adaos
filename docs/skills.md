@@ -28,20 +28,24 @@ adaos skill gc
 
 For runtime bucket layout, rollback semantics, and the reserved `migrations/data_migration.py` flow, see [Skill Runtime Lifecycle](skill_runtime.md).
 
-`adaos skill list --local` and `adaos skill status <name>` include source
-state markers for workspace skills:
+`adaos skill list --local` and `adaos skill status <name>` include state
+markers for workspace skills:
 
-- `dirty`: the skill source has uncommitted filesystem changes.
-- `ahead`: commits touching the skill exist locally but are not in the
+- `git-dirty`: the skill source has uncommitted filesystem changes.
+- `git-ahead`: commits touching the skill exist locally but are not in the
   workspace registry/upstream base yet.
-- `behind`: the workspace registry/upstream base has newer commits touching
+- `git-behind`: the workspace registry/upstream base has newer commits touching
   the skill.
-- `diff`: the source differs from the base, but Git could not classify the
+- `git-different`: the source differs from the base, but Git could not classify the
   path-level divergence as ahead or behind.
 - `git-error`: the CLI could not compute the Git comparison, usually because
   the base ref is not fetched or the workspace is not a Git repository.
-- `version-drift`: the workspace skill version and active runtime slot version
-  differ. This is a runtime/install/activation signal, not a Git dirty signal.
+- `runtime-ahead`: the workspace skill version is ahead of the active runtime
+  slot version, so install/activate is needed before runtime catches up.
+- `runtime-behind`: the active runtime slot version is newer than the workspace
+  skill version.
+- `runtime-different`: the workspace and active runtime versions differ, but
+  the CLI could not order the versions.
 
 Use `adaos skill status <name> --fetch --diff` before publishing when you need
 the exact comparison against the registry base.
@@ -75,12 +79,12 @@ That split is important when reading older documentation.
 
 `adaos skill push` has two workspace modes:
 
-- `adaos skill push`: push already committed `ahead` changes under
+- `adaos skill push`: push already committed `git-ahead` changes under
   `skills/*` for all workspace skills. This does not bump versions and does not
   create a new commit.
 - `adaos skill push <name> -m "message"`: update that skill's registry entry,
   bump the manifest version, commit `skills/<name>` plus `registry.json`, and
   push.
 
-Use the no-argument form after `adaos skill list --local` shows `[ahead]` for
+Use the no-argument form after `adaos skill list --local` shows `[git-ahead]` for
 one or more skills and the source is already committed.
