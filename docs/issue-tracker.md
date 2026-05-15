@@ -1151,6 +1151,44 @@ Actions:
   and run the smoke against the fresh
   `ProfileOpsRead` session and record the target/tool result here.
 
+#### F3M-006D: Split public API and mTLS API surfaces
+
+Status: planned.
+
+Context:
+
+- The current MVP uses one `api.inimatic.com` nginx server with
+  `ssl_verify_client optional`. This keeps public browser/bootstrap endpoints
+  reachable while still forwarding `$ssl_client_verify` and certificate headers
+  to backend routes that enforce mTLS.
+- nginx chooses `ssl_verify_client` during TLS handshake, before a URI-specific
+  `location` is selected. That means we cannot safely express "do not request a
+  client cert for this public path" with `ssl_verify_client off` inside
+  `location`; nginx rejects that config.
+- For now, public routes rely on server-level `optional`, and protected routes
+  enforce mTLS in backend/nginx routing by checking `$ssl_client_verify`.
+
+Target architecture:
+
+- Keep public browser/bootstrap/operator endpoints on a host that does not ask
+  for client certificates during TLS handshake.
+- Move hub/node mTLS-only endpoints to a separate hostname or separate nginx
+  server block, for example `mtls.api.inimatic.com` or a dedicated zone-local
+  mTLS host.
+- Make backend route policy explicit: public bearer/JWT routes and mTLS routes
+  should be distinguishable by host/surface, not only by path conventions.
+
+Checklist:
+
+- [ ] Choose canonical mTLS hostname and zone naming convention.
+- [ ] Add nginx/vhost templates for the mTLS hostname with
+  `ssl_verify_client optional` or `on` at server scope.
+- [ ] Move hub/node mTLS routes and client config defaults to the mTLS host.
+- [ ] Keep public API/browser/bootstrap routes on the non-mTLS public host.
+- [ ] Add deploy smoke that runs `nginx -t` and validates both public and mTLS
+  host routing before slot cutover.
+- [ ] Update bootstrap/node docs once the host split is live.
+
 #### F3M-007: First-3-minute memory footprint
 
 Status: closed for the current 3-minute goal.
