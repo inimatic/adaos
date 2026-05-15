@@ -37,6 +37,7 @@ Current target-state control-plane extensions are documented in:
 - [Named Entities and Canonical Naming](named-entities.md): target architecture and roadmap for display names, localized labels, observed names, aliases, canonical refs, and NLU entity canonicalization
 - [Web UI Architecture](web-ui-architecture.md): target stable browser-client architecture over `webui.v1`, semantic views, typed actions, Taiga renderers, and Ionic shell concerns
 - [Operational Event Model](operational-event-model.md): target event, demand, lifecycle, and Yjs materialization contract for browser-facing projections
+- [Operational Event Model Reference Plan](operational-event-model-reference-plan.md): top-level coverage gates, required contract shapes, review checklist, and completion definition for implementing the event model correctly
 - [Operational Event Model Roadmap](operational-event-model-roadmap.md): master implementation order across communication, runtime contracts, Yjs shape, client adapters, platform emitters, and skill pilots
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md): priority checklist for moving skills and scenarios to demand-driven per-webspace projections
 - [Skill Projection and Stream Boundary](skill-projection-and-stream-boundary.md): current stabilization status and target roadmap for skill-owned Yjs projections, stream data, node-aware addressing, and temporary per-skill bridges

@@ -1,20 +1,44 @@
 # Projection Subscription Roadmap
 
-This roadmap is the priority delivery track for moving AdaOS runtime interaction, browser-facing skills, and scenarios from monolithic Yjs snapshots and ad hoc refresh logic to demand-driven projections.
+This roadmap is the detailed delivery checklist for moving AdaOS runtime
+interaction, browser-facing skills, and scenarios from monolithic Yjs snapshots
+and ad hoc refresh logic to demand-driven projections.
 
-It is intentionally separate from the broader target-state architecture documents so that implementation work can start with a focused checklist.
+It is intentionally narrower than the broader target-state architecture
+documents so implementation work has a focused checklist.
 
 The target architecture is defined in [Operational Event Model](operational-event-model.md).
-The master implementation order across adjacent workstreams is defined in
+The master implementation order across all adjacent workstreams is defined in
 [Operational Event Model Roadmap](operational-event-model-roadmap.md).
 
-## Priority Rule
+## Ownership Rule
 
-This roadmap now takes precedence for browser-facing projection work.
+Snapshot date: 2026-05-15.
 
-Before adding more large scenario snapshots, new widget-specific caches, or more ad hoc event debouncing, AdaOS should establish the shared projection/subscription runtime contract described here.
+This document no longer owns an independent priority order.
+It expands the projection-specific parts of the master
+[Operational Event Model Roadmap](operational-event-model-roadmap.md).
+
+Use it as the detailed checklist for:
+
+- Phase 3: projection record shape, client subscription shape, node-aware Yjs
+  envelope, and compatibility rules
+- Phase 4: browser projection subscription runtime and client adapter
+- Phase 5: shared dispatcher behavior
+- Phase 7: Infrascope migration slice
+- Phase 8: follow-up pilots
+- Phase 9: cross-skill rollout and cleanup
+
+Before adding more large scenario snapshots, new widget-specific caches, or
+more ad hoc event debouncing, AdaOS should establish the shared
+projection/subscription runtime contract described here.  However, this work
+should be started only when it is the next active slice in the master roadmap
+or when it removes a blocker for that slice.
 
 This contract is intended as an architectural layer above the communication model, not as a one-off adaptation for one skill.
+
+If this checklist and the master roadmap disagree, the master roadmap wins.
+Update this document instead of creating a second delivery track.
 
 ## Goals
 
@@ -37,25 +61,47 @@ This contract is intended as an architectural layer above the communication mode
 
 ### 0. Communication and Runtime Ordering
 
-- [ ] `ordering.fixed`: place this projection/event work explicitly after node-browser and runtime communication hardening
-- [ ] `ordering.runtime_first`: treat the new model as a core/skill/platform interaction contract first, and a browser materialization contract second
-- [ ] `ordering.aligned_with_comm_phases`: align the implementation order with the communication phases described in the runtime reliability roadmap
+- [x] `ordering.fixed`: place this projection/event work explicitly after node-browser and runtime communication hardening
+- [x] `ordering.runtime_first`: treat the new model as a core/skill/platform interaction contract first, and a browser materialization contract second
+- [x] `ordering.aligned_with_comm_phases`: align the implementation order with the communication phases described in the runtime reliability roadmap
+
+Current status:
+
+- the communication prerequisite ordering is closed in the master roadmap
+- deeper sidecar continuity and media work remain follow-on reliability work,
+  not hidden blockers for the current projection ABI slice
 
 ### 1. Architectural Fixation
 
-- [ ] `arch.event_model_published`: publish `Operational Event Model` as the shared target-state contract for runtime and browser projection work
-- [ ] `arch.event_taxonomy_fixed`: define the canonical distinction between `domain events`, `core-skill interaction events`, `projection demand`, `projection lifecycle`, `ui intent`, and `platform operational events`
-- [ ] `arch.webspace_scope_fixed`: define `projection scope` as `per-webspace`
-- [ ] `arch.node_scope_reserved`: define room for `node scope` inside shared Yjs state
-- [ ] `arch.audience_contract_fixed`: define the MVP access/audience metadata contract with `shared`, `owner`, `guest`, and `dev`
-- [ ] `arch.shared_payload_rule_fixed`: explicitly freeze the MVP rule that owner and guest do not get separate payload branches
+- [x] `arch.event_model_published`: publish `Operational Event Model` as the shared target-state contract for runtime and browser projection work
+- [x] `arch.event_taxonomy_fixed`: define the canonical distinction between `domain events`, `core-skill interaction events`, `projection demand`, `projection lifecycle`, `ui intent`, and `platform operational events`
+- [x] `arch.webspace_scope_fixed`: define `projection scope` as `per-webspace`
+- [x] `arch.node_scope_reserved`: define room for `node scope` inside shared Yjs state
+- [x] `arch.audience_contract_fixed`: define the MVP access/audience metadata contract with `shared`, `owner`, `guest`, and `dev`
+- [x] `arch.shared_payload_rule_fixed`: explicitly freeze the MVP rule that owner and guest do not get separate payload branches
+
+Current status:
+
+- architectural fixation is complete for this checklist
+- unresolved work now belongs to ABI and implementation phases, not to
+  vocabulary debate
 
 ### 2. Core and Shared Runtime ABI
 
+- [ ] `runtime.event_envelope_abi`: align with the master roadmap's shared event envelope before adding projection-specific metadata
 - [ ] `runtime.core_skill_contract`: define the core-to-skill invalidation and refresh contract before browser-specific consumption logic
 - [ ] `runtime.ownership_split`: define which runtime transitions are core-owned and which projection rebuilds are skill-owned
 - [ ] `runtime.platform_emitters_defined`: define platform-emitted projections for notifications, warnings, diagnostics, and system errors
 - [ ] `runtime.restore_demand_from_yjs`: define startup restoration rules for core and skills reading active demand from Yjs
+
+Current status:
+
+- named-entity ABI is already implemented enough to serve as a model for
+  contract-first runtime work
+- eventbus backpressure exists for selected hot paths, but does not replace
+  the event envelope or dispatcher ABI
+- status-card ABI should be treated as the first platform-emitter family and
+  kept aligned with this projection contract
 
 ### 3. Projection ABI
 
@@ -64,6 +110,14 @@ This contract is intended as an architectural layer above the communication mode
 - [ ] `abi.client_subscription_shape`: define the browser-written client subscription record shape
 - [ ] `abi.node_aware_yjs_envelope`: define the node-scoped top-level Yjs envelope so shared subnet state can preserve multiple node emitters
 - [ ] `abi.pinned_consumer_semantics`: define `pinned` consumer semantics
+
+Next active projection task:
+
+- lock `abi.projection_record_shape` and `abi.client_subscription_shape`
+  together; either shape without the other will recreate the current
+  compatibility drift
+- include platform status cards and named-entity registry as reference
+  examples, not only skill-owned projections
 
 ### 4. Client Subscription Runtime
 
@@ -74,6 +128,14 @@ This contract is intended as an architectural layer above the communication mode
 - [ ] `client.node_multiplicity_ready`: prepare the browser to consume node multiplicity from shared Yjs instead of assuming one anonymous node view
 - [ ] `client.soft_session_sanitation`: keep stale-client cleanup as a soft client/session sanitation mechanism, not as projection activity logic
 
+Current status:
+
+- node-aware stream receiver hints and compatibility-era node ownership metadata
+  already exist in the browser/runtime path
+- a general browser-written subscription registry is still not implemented
+- avoid adding another browser-local cache or modal-specific registry before
+  the shared subscription shape is locked
+
 ### 5. Skill, Scenario, and Platform Dispatcher
 
 - [ ] `dispatcher.shared_pattern`: add a shared dispatcher pattern for `domain/core/platform event -> in-memory update -> demanded projection refresh`
@@ -81,6 +143,14 @@ This contract is intended as an architectural layer above the communication mode
 - [ ] `dispatcher.no_cross_webspace_churn`: prevent one webspace from forcing writes into unrelated webspaces
 - [ ] `dispatcher.memory_richer_than_yjs`: allow skills and platform services to keep richer semantic caches in memory than they publish into Yjs
 - [ ] `dispatcher.lifecycle_exposed`: expose projection lifecycle transitions through the shared projection record
+- [ ] `dispatcher.pressure_observable`: preserve eventbus/rebuild/stream pressure counters when dispatcher coalesces or suppresses work
+
+Current status:
+
+- selected eventbus hot topics are already bounded/coalesced as incident
+  guardrails
+- the dispatcher still needs to own demanded projection refresh, not merely
+  reduce duplicate async work
 
 ### 6. Yjs Granularity and Client Adapter
 
@@ -89,9 +159,11 @@ This contract is intended as an architectural layer above the communication mode
 - [ ] `yjs.reuse_cached_views`: reuse cached payloads when switching back to recently materialized views
 - [ ] `yjs.reduce_broad_observers`: avoid broad `observeDeep(data)` patterns where a stable nested projection path is available
 - [ ] `yjs.legacy_compat_rules`: document the compatibility rules for legacy plain-JSON projection branches during migration
+- [ ] `yjs.named_entity_registry_reference`: use `registry.named_entities` as an implemented read-only compatibility reference for projection fingerprinting and privacy limits
 
 ### 7. Early Pilot Sequence
 
+- [ ] `pilot.status_cards_first`: implement status cards as the first small platform-emitter projection family
 - [ ] `pilot.platform_surfaces_first`: prepare `web_desktop` and the shared platform surfaces first: notifications, diagnostics, workspace manager, and related modals
 - [ ] `pilot.platform_emitter_validated`: validate platform-as-emitter semantics before migrating one heavy skill
 - [ ] `pilot.infrascope_after_prereqs`: migrate `Infrascope` only after the core/runtime and client projection contracts are in place
@@ -165,6 +237,12 @@ Current status of that validation target:
 Counter-example:
 
 - simple low-churn skills with one small projection do not need to be forced onto this model immediately
+
+Execution note:
+
+- preparatory inventory for Infrascope is allowed before the platform pilot
+- Infrascope must not introduce its own projection ABI, subscription record, or
+  lifecycle contract ahead of phases 3-6 in the master roadmap
 
 ## Acceptance Criteria
 

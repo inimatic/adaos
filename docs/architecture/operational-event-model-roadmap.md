@@ -19,6 +19,9 @@ Use these documents as the authoritative sources for detailed design:
 
 - [Operational Event Model](operational-event-model.md)
   Event taxonomy, ownership, node scope, projection lifecycle, Yjs envelope, and platform emitters.
+- [Operational Event Model Reference Plan](operational-event-model-reference-plan.md)
+  Top-level coverage gates, required contract shapes, review checklist, and
+  completion definition for implementing the model correctly.
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md)
   Detailed checklist for projection ABI, client demand registration, dispatcher behavior, and migration work.
 - [Infrascope Roadmap](infrascope-roadmap.md)
@@ -50,6 +53,38 @@ Without a shared roadmap, these tracks can easily fork into:
 
 This roadmap defines one implementation order across all those branches.
 
+## Roadmap Ownership
+
+Snapshot date: 2026-05-15.
+
+This document is the single authoritative delivery track for the operational
+event model.
+
+The companion [Projection Subscription Roadmap](projection-subscription-roadmap.md)
+is now a subordinate detail checklist.  It owns the detailed browser
+subscription, projection ABI, Yjs adapter, and dispatcher work items, but it
+does not own a separate priority order.  When the two documents appear to
+disagree, this roadmap wins and the projection checklist should be updated to
+match this sequence.
+
+Use the documents this way:
+
+- `Operational Event Model` defines the target architecture and vocabulary.
+- `Operational Event Model Reference Plan` defines the coverage gates,
+  required contract shapes, review checklist, and completion definition for
+  implementing the model correctly.
+- `Operational Event Model Roadmap` defines the implementation order and phase
+  gates.
+- `Projection Subscription Roadmap` expands phases 3, 4, 5, 7, 8, and 9 into
+  concrete client/projection/dispatcher checklists.
+- `issue-tracker.md` records current execution tasks, incidents, and acceptance
+  evidence.
+
+Do not start a heavy skill migration just because the projection checklist has
+an attractive local task.  A projection task enters active work only when it is
+the next item in this master sequence or when it closes a blocker for that
+sequence.
+
 ## Guiding Rules
 
 - contracts before migrations
@@ -64,14 +99,33 @@ This roadmap defines one implementation order across all those branches.
 The intended order across all workstreams is:
 
 1. communication prerequisites
-2. core/runtime event contract
-3. node-aware Yjs envelope
-4. client projection adapter and subscription runtime
-5. shared dispatcher for demanded projection refresh
-6. platform-emitted projections
-7. heavy-skill pilots such as `Infrascope`
-8. cross-skill rollout
-9. cleanup and hardening
+2. event envelope and runtime ownership contract
+3. named-entity and status-plane ABI alignment
+4. node-aware Yjs and projection record shape
+5. client projection adapter and subscription runtime
+6. shared dispatcher for demanded projection refresh
+7. platform-emitted projections
+8. heavy-skill pilots such as `Infrascope`
+9. cross-skill rollout
+10. cleanup and hardening
+
+## Current Execution Slice
+
+The next coherent slice is `Phase 1 -> Phase 2 -> Phase 3` as one ABI pass:
+
+1. freeze a minimal shared event envelope for runtime events
+2. update SDK/core emit helpers to preserve envelope metadata without forcing
+   every producer to understand every field
+3. mark the named-entity ABI as current foundation and finish its invalidation
+   and operator-diagnostic gaps
+4. define status cards as the first platform-emitter family, aligned with the
+   projection lifecycle model
+5. lock the projection record and client subscription shapes before adding more
+   browser-specific compatibility paths
+
+This is deliberately smaller than "migrate Infrascope" and larger than "add one
+more debounce".  It creates the contract layer needed for both projection work
+and platform operational emitters.
 
 ## Checklist
 
@@ -110,12 +164,28 @@ References:
 
 ### Phase 1. Event Model Fixation
 
-- [ ] `phase1.master_event_taxonomy`: freeze the shared taxonomy from the Operational Event Model
+- [x] `phase1.master_event_taxonomy`: freeze the shared taxonomy from the Operational Event Model
 - [ ] `phase1.core_skill_contract`: define the core-skill interaction contract as a first-class runtime layer
-- [ ] `phase1.named_entity_contract`: freeze name, localized label, alias, conflict, registry-changed, and resolver-diagnostic events
+- [x] `phase1.named_entity_contract`: freeze name, localized label, alias, conflict, registry-changed, and resolver-diagnostic events
 - [ ] `phase1.platform_emitters`: define the platform as a first-class emitter of notifications, diagnostics, and system errors
-- [ ] `phase1.scope_model`: freeze `per-webspace` projection scope plus reserved `node scope`
-- [ ] `phase1.access_contract`: freeze MVP access metadata with `shared`, `owner`, `guest`, and `dev`
+- [x] `phase1.scope_model`: freeze `per-webspace` projection scope plus reserved `node scope`
+- [x] `phase1.access_contract`: freeze MVP access metadata with `shared`, `owner`, `guest`, and `dev`
+- [ ] `phase1.event_envelope`: define the minimal shared event envelope fields and compatibility rules for existing `Event(type, payload, source, ts)` producers
+
+Current checkpoint as of 2026-05-15:
+
+- the taxonomy is stable in the architecture document and should no longer be
+  redefined independently by projection, Infrascope, or status-plane work
+- named-entity topic constants and lifecycle envelopes exist in code, including
+  observed, draft-name, display-name, alias add/remove/deprecate, conflict, and
+  registry-changed events
+- the remaining named-entity work is consumer migration and operator
+  diagnostics, not basic event vocabulary
+- eventbus backpressure and incident observability are implemented for selected
+  hot topics, but this is a guardrail over the current bus, not yet the shared
+  event envelope contract
+- platform emitters remain partially defined through diagnostics and the
+  planned status-card work; they need one explicit ABI before migration
 
 Primary source:
 
@@ -123,11 +193,27 @@ Primary source:
 
 ### Phase 2. Shared Runtime ABI
 
+- [ ] `phase2.event_envelope_abi`: implement helpers for event id, trace/cause, actor/source authority, scope, priority, schema/version, and timestamp metadata without breaking legacy publishers
 - [ ] `phase2.runtime_ownership_split`: define which invalidations are core-owned and which rebuilds are skill-owned
 - [ ] `phase2.refresh_contract`: define the shared invalidation and refresh contract before browser-specific migration
 - [ ] `phase2.restore_demand`: define startup restoration from Yjs demand state for core and skills
-- [ ] `phase2.platform_projection_families`: define the initial platform-owned projection families
-- [ ] `phase2.named_entity_runtime_abi`: define `NamedEntityRecord`, localized label metadata, `EntityResolutionResult`, and `entity.registry.changed` invalidation semantics
+- [ ] `phase2.platform_projection_families`: define the initial platform-owned projection families, starting with status cards and runtime diagnostics
+- [x] `phase2.named_entity_runtime_abi`: define `NamedEntityRecord`, localized label metadata, `EntityResolutionResult`, and `entity.registry.changed` invalidation semantics
+- [ ] `phase2.status_card_abi`: align the shared status-card contract with projection lifecycle, platform emitters, and thin reliability summaries
+
+Current checkpoint as of 2026-05-15:
+
+- `NamedEntityRecord`, `EntityResolutionResult`, localized label metadata,
+  compact registry payloads, fingerprints, and governed alias write contracts
+  exist
+- access-link backed browser/member entity changes now publish lifecycle events
+  and registry invalidation envelopes
+- Root MCP and SDK named-entity helpers exist for read paths and governed alias
+  add/remove/deprecate paths
+- the core runtime still uses a minimal event object; envelope metadata is
+  carried inconsistently in payload `_meta`
+- status-card work in `issue-tracker.md` should become the first explicit
+  platform-emitter ABI instead of a separate monitoring-only feature
 
 Primary sources:
 
@@ -140,10 +226,10 @@ Primary sources:
 - [ ] `phase3.projection_record_shape`: lock the canonical projection record shape
 - [ ] `phase3.client_subscription_shape`: lock the client-written subscription shape
 - [ ] `phase3.node_top_level_reserved`: add a reserved node-aware top-level envelope in shared Yjs state
-- [ ] `phase3.named_entity_projection_path`: lock the read-only named-entity projection path and privacy constraints
+- [x] `phase3.named_entity_projection_path`: lock the read-only named-entity projection path and privacy constraints
 - [ ] `phase3.compat_layer_defined`: define compatibility rules for legacy skill/scenario JSON branches
 
-Current checkpoint as of 2026-05-02:
+Current checkpoint as of 2026-05-15:
 
 - browser/platform surfaces in `web_desktop` now already propagate lightweight
   node ownership metadata for catalog items, pinned widgets, workspace labels,
@@ -166,6 +252,12 @@ Current checkpoint as of 2026-05-02:
   Yjs documents; node-aware ownership is now carried by catalog items,
   stream routes, and persisted `home_scenario_ref` metadata rather than by
   making the webspace container node-owned
+- the compact named-entity registry path is implemented as
+  `registry.named_entities` and should be treated as the current read-only
+  compatibility projection
+- the general projection record shape, client subscription shape, and
+  top-level node-owned envelope remain the blocking ABI work before broad
+  dispatcher/client migration
 
 Primary sources:
 
@@ -202,6 +294,14 @@ Current checkpoint as of 2026-05-02:
   subscription registry and projection lifecycle ABI for all consumers are not
   complete yet
 
+Next gate:
+
+- do not add another client-local projection cache format before
+  `phase3.projection_record_shape` and `phase3.client_subscription_shape` are
+  locked
+- the first implementation should support page, modal, widget, and pinned panel
+  consumers through the same subscription record shape
+
 Primary source:
 
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md)
@@ -212,6 +312,17 @@ Primary source:
 - [ ] `phase5.per_webspace_dispatch`: ensure dispatch runs per webspace
 - [ ] `phase5.no_cross_webspace_churn`: ensure one webspace cannot force unrelated Yjs churn
 - [ ] `phase5.memory_vs_yjs_boundary`: preserve the rule that runtime memory may be richer than published Yjs projections
+- [ ] `phase5.eventbus_guardrail_tests`: add regression coverage for bounded hot-topic queues, supersede/drop counters, and backlog snapshots so dispatcher work can rely on observable pressure behavior
+
+Current checkpoint as of 2026-05-15:
+
+- selected hot topics are bounded in `LocalEventBus`, including stream snapshot
+  requests, stream subscription changes, and subnet member snapshot changes
+- webspace rebuild and stream snapshot storm coalescing exists in several
+  local hot paths
+- this reduces incident amplification, but it is not a replacement for the
+  shared dispatcher; the dispatcher still needs to decide which demanded
+  projections refresh per webspace
 
 Primary sources:
 
@@ -220,12 +331,13 @@ Primary sources:
 
 ### Phase 6. Platform Emitters First
 
+- [ ] `phase6.status_cards_pilot`: implement shared status cards as the first small platform-emitter family
 - [ ] `phase6.notifications_pilot`: migrate notifications through the shared projection contract
 - [ ] `phase6.diagnostics_pilot`: migrate diagnostics and operator-visible failures through the shared projection contract
 - [ ] `phase6.workspace_manager_pilot`: migrate shared workspace-manager and similar platform surfaces
 - [ ] `phase6.emitter_validation`: validate that platform emitters exercise the architecture before one heavy skill is migrated
 
-Current checkpoint as of 2026-05-02:
+Current checkpoint as of 2026-05-15:
 
 - `web_desktop` now acts as an early node-aware platform pilot:
   workspace manager surfaces show node ownership,
@@ -260,6 +372,10 @@ Current checkpoint as of 2026-05-02:
 - this means the pilot has started, but the roadmap item should remain open
   until the same semantics are emitted through the shared dispatcher/projection
   ABI instead of compatibility-era catalog/runtime branches
+- the `STATUS-*` issue-tracker track should be executed here, not as a separate
+  monitoring-only roadmap: status cards are the smallest useful platform-owned
+  projections and should prove fingerprinting, versioning, thin reads, and
+  push/delta consumption before Infrascope migration
 
 Why this comes first:
 
@@ -274,7 +390,7 @@ Primary sources:
 
 ### Phase 7. Heavy Skill Pilot
 
-- [ ] `phase7.infrascope_gate`: do not start `Infrascope` migration before Phases 0-6 are materially in place
+- [ ] `phase7.infrascope_gate`: do not start `Infrascope` migration before Phases 0-6 are materially in place, except for preparatory inventory and tests that do not create a parallel projection contract
 - [ ] `phase7.infrascope_split`: migrate `Infrascope` from monolithic snapshots to projection families
 - [ ] `phase7.infrascope_platform_errors_outside_skill`: keep platform-originated diagnostics separate from skill-owned payloads
 - [ ] `phase7.infrascope_access_metadata`: validate shared payload plus access metadata behavior for owner/guest/dev audiences
