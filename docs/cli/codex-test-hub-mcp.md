@@ -4,7 +4,7 @@ This document describes the current flow for connecting Codex in VS Code to a te
 
 ## Recommended VS Code Setup
 
-For the current VS Code Codex workflow, prefer direct remote MCP over the root-published HTTP endpoint:
+For the current VS Code Codex workflow, use the public Root MCP endpoint directly:
 
 - MCP URL: `https://<zone>.api.inimatic.com/v1/root/mcp`
 - bearer token env var: `ADAOS_ROOT_MCP_AUTH`
@@ -27,7 +27,24 @@ Important:
 - `setx` updates the user environment for new processes only.
 - already running VS Code, Codex, terminals, and MCP helper processes keep the old bearer
 - after rotating the bearer, fully restart VS Code if Codex keeps using the previous token
-- after switching a zone from the legacy backend-local Root MCP surface to the canonical proxied root surface, issue a fresh bearer; old backend-local MCP session leases are not expected to remain valid
+- after switching a zone from the legacy backend-local Root MCP proxy to the native public Root MCP surface, issue a fresh bearer; old backend-local MCP session leases are not expected to remain valid
+
+### Endpoint modes
+
+The public backend serves `/v1/root/mcp` as a native Root MCP HTTP/JSON-RPC
+surface by default. It should not require direct HTTP access from the public
+backend to a developer laptop's `127.0.0.1:8777`.
+
+The old upstream proxy remains available only as an explicit escape hatch:
+
+```powershell
+$env:ROOT_MCP_LEGACY_UPSTREAM_PROXY = "1"
+```
+
+Use that mode only when deliberately validating the historical bridge behavior.
+For Codex/operator smoke checks, native mode is the expected route. If smoke
+returns `502`, treat it as endpoint/upstream health first, not as proof that the
+bearer is invalid.
 
 If you want to verify the issued bearer before wiring Codex, test it directly:
 
@@ -67,13 +84,15 @@ It exits non-zero when any step fails and classifies common failure modes:
 - `upstream_unavailable`: root/proxy/upstream returned `5xx`, including `502`
 - `jsonrpc_error`: HTTP transport worked, but the MCP server returned a JSON-RPC error
 
-## Local Bridge MVP
+## Local Bridge Compatibility Path
 
-The current implementation is intentionally a local `stdio` bridge:
+A local `stdio` bridge remains available for workspaces that cannot use the
+remote HTTP endpoint or that need workspace-local profile/token files:
 
 `Codex in VS Code -> local bridge -> RootMcpClient -> Root MCP API -> managed test hub`
 
-This keeps SDK internals private, avoids exposing a fake direct SDK path, and fits the current Phase 1 state of `Root MCP Foundation`.
+This keeps SDK internals private and preserves the original Phase 1
+`Root MCP Foundation` workflow while the direct remote endpoint matures.
 
 ## What This MVP Covers
 
@@ -110,11 +129,15 @@ The bridge currently exposes these tools:
 - `get_subnet_timeline`
 - `get_subnet_diagnostics`
 
-## Why This Is a Local Bridge
+## Why Keep The Local Bridge
 
-Codex can register MCP servers directly, but the current AdaOS root surface is still a Root MCP API foundation, not a full remote MCP transport. In addition, AdaOS scope is currently represented by `root_url + subnet_id + zone + bounded access token`, while Codex's native remote HTTP MCP setup is better suited to `url + bearer`.
+Codex can register MCP servers directly, and the public backend now exposes the
+native remote Root MCP HTTP endpoint. The local bridge is still useful when
+testing workspace-local SDK behavior, using local profile files, or comparing
+remote endpoint results with the embedded local registry path.
 
-For that reason, the current MVP uses a local bridge process started by Codex. The bridge reads a workspace-local profile and token file, then translates MCP tool calls into `RootMcpClient` calls.
+The bridge reads a workspace-local profile and token file, then translates MCP
+tool calls into `RootMcpClient` calls.
 
 ## Prerequisites
 
@@ -253,7 +276,6 @@ Session-management views now normalize expired MCP session leases on read, so or
 
 This MVP intentionally does not yet provide:
 
-- direct remote MCP transport from root to Codex
 - arbitrary shell access
 - unrestricted deploy or rollback operations
 - a public SDK import path for external MCP clients
