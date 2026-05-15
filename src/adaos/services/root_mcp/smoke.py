@@ -51,6 +51,16 @@ def classify_mcp_smoke_response(result: RootMcpSmokeHttpResult) -> tuple[bool, s
     return True, "ok", None
 
 
+def _payload_error_summary(payload: Any) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    for key in ("message", "detail", "error", "code"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value[:500]
+    return None
+
+
 def _http_request(
     *,
     method: str,
@@ -89,7 +99,9 @@ def _make_step(
         method=method,
         url=url,
         status_code=result.status_code,
-        error=result.error or (result.body if not ok and result.body else None),
+        error=result.error or (
+            _payload_error_summary(result.payload) if not ok else None
+        ) or (result.body if not ok and result.body else None),
         jsonrpc_error=jsonrpc_error,
     )
 

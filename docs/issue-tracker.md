@@ -1125,6 +1125,20 @@ Resolution:
   aligned with the Python Root MCP profile shape, including `hub.get_status`,
   `hub.get_runtime_summary`, `hub.get_operational_surface`, activity/capability
   summaries, and memory read tools.
+- After the route repair deployed, direct public smoke advanced from `502` to
+  `401`, which confirms the public request is reaching an auth-gated Root MCP
+  handler instead of the removed legacy upstream proxy. The failing bearer had
+  an `rmcp_session_*` prefix produced by the local SDK/`infra_access_skill`
+  embedded session issuer, while the public backend native route stores and
+  validates its own `mcp_*` session leases in backend Redis. A local hub-issued
+  `rmcp_session_*` token is therefore valid for the local/embedded Root MCP
+  context, but not for direct public `https://api.inimatic.com/v1/root/mcp`
+  smoke.
+- The backend auth fallback previously returned `client_certificate_required`
+  for any unrecognized Root MCP credential. That made a bearer issuer mismatch
+  look like an mTLS problem. The backend now reports `invalid_token` when an
+  auth header is present but not accepted; the CLI smoke also surfaces JSON
+  error/message bodies so operators can see the real rejection reason.
 
 Verification:
 
@@ -1134,6 +1148,10 @@ Verification:
 - The 2026-05-15 live response body
   `{"error":"adaos_root_mcp_upstream_failed","detail":"fetch failed"}`
   identifies the legacy proxy path rather than the native Root MCP handler.
+- The later 2026-05-15 live response body
+  `{"error":"client_certificate_required","message":"Client certificate is required."}`
+  is auth-gated native behavior before the improved backend error text is
+  deployed; with an unrecognized bearer it should become `invalid_token`.
 - Manual check to repeat after backend/root route work:
   `adaos dev root mcp smoke --mcp-http-url https://ru.api.inimatic.com/v1/root/mcp --auth-env-var ADAOS_ROOT_MCP_AUTH`.
 
@@ -1146,10 +1164,17 @@ Actions:
 - [x] Remove the legacy Root MCP upstream proxy from the backend MVP.
 - [x] Remove invalid location-level `ssl_verify_client off` directives from
   API nginx vhost templates so reverse-proxy health can pass.
-- [ ] Deploy the backend route repair to the target zone.
+- [x] Deploy the backend route repair to the target zone.
+- [x] Surface JSON error bodies in `adaos dev root mcp smoke` output.
+- [x] Return `invalid_token` instead of `client_certificate_required` when the
+  public Root MCP route receives an auth header that does not resolve.
+- [ ] Align Infra Access `Fresh Bearer Token` issuance with the selected
+  endpoint: local bridge flows may keep `rmcp_session_*`, while direct public
+  Root MCP smoke must use backend-native `mcp_*` sessions or a backend-accepted
+  owner bearer.
 - [ ] After deployment, issue a fresh backend-native `ProfileOpsRead` session
-  and run the smoke against the fresh
-  `ProfileOpsRead` session and record the target/tool result here.
+  and run the smoke against the fresh session, then record the target/tool
+  result here.
 
 #### F3M-006D: Split public API and mTLS API surfaces
 
