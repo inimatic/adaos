@@ -35,6 +35,17 @@ def _frames_zip(path: Path) -> None:
         zf.writestr("frame_001.png", _png_bytes((40, 40, 40)))
 
 
+def test_new_face_vision_engine_snapshot_imports_without_image_dependencies(tmp_path: Path) -> None:
+    engine_cls = _load_engine_class()
+    engine = engine_cls(tmp_path / "state")
+
+    snapshot = engine.snapshot()
+
+    assert snapshot["ok"] is True
+    assert snapshot["status"] == "init"
+    assert snapshot["history"] == []
+
+
 def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
     engine_cls = _load_engine_class()
