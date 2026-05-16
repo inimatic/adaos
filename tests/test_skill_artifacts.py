@@ -6,6 +6,7 @@ import pytest
 
 from adaos.services.skill.artifacts import (
     safe_upload_relative_path,
+    skill_upload_max_bytes,
     skill_upload_dir,
     store_skill_upload,
 )
@@ -15,6 +16,16 @@ def test_safe_upload_relative_path_removes_traversal() -> None:
     assert safe_upload_relative_path("../../model final.pth").as_posix() == "model_final.pth"
     assert safe_upload_relative_path("nested\\frames.zip").as_posix() == "nested/frames.zip"
     assert safe_upload_relative_path("").as_posix() == "upload.bin"
+
+
+def test_skill_upload_max_bytes_defaults_to_large_local_dataset_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADAOS_SKILL_UPLOAD_MAX_BYTES", raising=False)
+    assert skill_upload_max_bytes() == 1024 * 1024 * 1024
+
+
+def test_skill_upload_max_bytes_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADAOS_SKILL_UPLOAD_MAX_BYTES", "12345")
+    assert skill_upload_max_bytes() == 12345
 
 
 @pytest.mark.anyio
