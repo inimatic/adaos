@@ -22,6 +22,14 @@ def _load_engine_class():
     return NewFaceVisionEngine
 
 
+def _load_engine_module():
+    if str(SKILL_ROOT) not in sys.path:
+        sys.path.insert(0, str(SKILL_ROOT))
+    from service import engine as engine_module
+
+    return engine_module
+
+
 def _png_bytes(color: tuple[int, int, int]) -> bytes:
     Image = pytest.importorskip("PIL.Image")
     buf = io.BytesIO()
@@ -76,6 +84,27 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
     assert metrics_payload["series"]["pred_ratio"] == second["pred_ratio"]
 
 
+def test_new_face_vision_errors_are_normalized_and_projectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    engine_module = _load_engine_module()
+    monkeypatch.setattr(engine_module, "Image", object(), raising=False)
+    monkeypatch.setattr(engine_module, "np", object(), raising=False)
+    engine = engine_module.NewFaceVisionEngine(tmp_path / "state")
+
+    result = engine.process_frame()
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "frames_missing"
+    assert result["error"]["message"] == "No frames loaded"
+    assert result["error"]["retryable"] is False
+
+    snapshot = engine.snapshot()
+    assert snapshot["status"] == "error"
+    assert snapshot["error"]["code"] == "frames_missing"
+    assert snapshot["operation"]["id"] == "process_frame"
+    assert snapshot["operation"]["error"]["code"] == "frames_missing"
+    assert "preview_base64" not in snapshot["latest"]
+
+
 SUPPORTED_CLIENT_WIDGET_TYPES = {
     "collection.grid",
     "collection.tree",
@@ -94,9 +123,13 @@ SUPPORTED_CLIENT_WIDGET_TYPES = {
     "item.codeViewer",
     "item.details",
     "input.commandBar",
+    "input.fileUpload",
     "input.text",
     "input.selector",
     "desktop.widgets",
+    "visual.frameViewer",
+    "visual.image",
+    "visual.timeseriesChart",
     "media.videoBrowser",
     "host.webspaceControls",
 }
