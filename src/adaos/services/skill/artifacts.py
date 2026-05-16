@@ -11,7 +11,7 @@ import anyio
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
-_DEFAULT_MAX_BYTES = 512 * 1024 * 1024
+_DEFAULT_MAX_BYTES = 1024 * 1024 * 1024
 
 
 def skill_upload_max_bytes() -> int:
