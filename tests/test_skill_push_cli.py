@@ -38,77 +38,62 @@ def test_skill_push_rejoins_split_message(monkeypatch, tmp_path: Path) -> None:
     assert "done" in result.output.lower() or "rev-1" in result.output
 
 
-def test_skill_push_without_message_pushes_committed_ahead_skills(monkeypatch, tmp_path: Path) -> None:
+def test_skill_push_without_message_releases_changed_skills(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
-    workspace = tmp_path / "workspace"
-    (workspace / ".git").mkdir(parents=True)
-    pushed: list[tuple[str, str, str | None]] = []
-    required: list[tuple[str, ...]] = []
+    pushed: list[tuple[str, str, bool]] = []
 
-    class _Caps:
-        def require(self, *args: str) -> None:
-            required.append(tuple(args))
+    class _Mgr:
+        def push(self, skill_name: str, message: str, signoff: bool = False) -> str:
+            pushed.append((skill_name, message, signoff))
+            return f"rev-{skill_name}"
 
-    class _Git:
-        def push(self, root: str, remote: str = "origin", branch: str | None = None) -> None:
-            pushed.append((root, remote, branch))
-
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
     monkeypatch.setattr(
         skill_cmd,
-        "get_ctx",
-        lambda: SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace), git=_Git()),
+        "_collect_skill_release_candidates",
+        lambda **kwargs: {
+            "base_ref": "origin/main",
+            "ahead_count": 2,
+            "behind_count": 0,
+            "skills": [
+                {"name": "browsers_skill", "reasons": ["git-ahead"]},
+                {"name": "infrastate_skill", "reasons": ["registry-version"]},
+            ],
+        },
     )
-    monkeypatch.setattr(skill_cmd, "_mgr", lambda: SimpleNamespace(caps=_Caps()))
-    monkeypatch.setattr(skill_cmd, "resolve_base_ref", lambda *args, **kwargs: "origin/main")
-    monkeypatch.setattr(skill_cmd, "ref_exists", lambda *args, **kwargs: True)
-    monkeypatch.setattr(skill_cmd, "read_path_divergence", lambda *args, **kwargs: (2, 0))
-    monkeypatch.setattr(
-        skill_cmd,
-        "list_changed_paths",
-        lambda *args, **kwargs: [
-            "skills/browsers_skill/skill.yaml",
-            "skills/infrastate_skill/handlers/main.py",
-        ],
-    )
-    monkeypatch.setattr(skill_cmd, "current_branch", lambda *args, **kwargs: "main")
-    monkeypatch.setattr(skill_cmd, "compute_path_status", lambda **kwargs: SimpleNamespace(dirty=False))
 
-    result = runner.invoke(skill_cmd.app, ["push"])
+    result = runner.invoke(skill_cmd.app, ["push", "--signoff"])
 
     assert result.exit_code == 0, result.output
-    assert pushed == [(str(workspace), "origin", "main")]
-    assert required == [("core", "skills.manage", "git.write", "net.git")]
+    assert pushed == [
+        ("browsers_skill", "chore(browsers_skill): release workspace changes", True),
+        ("infrastate_skill", "chore(infrastate_skill): release workspace changes", True),
+    ]
+    assert "released skill changes" in result.output
     assert "browsers_skill, infrastate_skill" in result.output
 
 
-def test_skill_push_without_message_reports_when_named_skill_is_not_ahead(monkeypatch, tmp_path: Path) -> None:
+def test_skill_push_without_message_reports_when_named_skill_has_no_release_changes(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
-    workspace = tmp_path / "workspace"
-    (workspace / ".git").mkdir(parents=True)
-    skill_dir = workspace / "skills" / "infrastate_skill"
-    skill_dir.mkdir(parents=True)
     pushed: list[str] = []
 
-    monkeypatch.setattr(skill_cmd, "_resolve_skill_path", lambda target: skill_dir)
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: SimpleNamespace(push=lambda *args, **kwargs: pushed.append("push")))
     monkeypatch.setattr(
         skill_cmd,
-        "get_ctx",
-        lambda: SimpleNamespace(
-            paths=SimpleNamespace(workspace_dir=lambda: workspace),
-            git=SimpleNamespace(push=lambda *args, **kwargs: pushed.append("push")),
-        ),
+        "_collect_skill_release_candidates",
+        lambda **kwargs: {
+            "base_ref": "origin/main",
+            "ahead_count": 1,
+            "behind_count": 0,
+            "skills": [],
+        },
     )
-    monkeypatch.setattr(skill_cmd, "_mgr", lambda: SimpleNamespace(caps=SimpleNamespace(require=lambda *args: None)))
-    monkeypatch.setattr(skill_cmd, "resolve_base_ref", lambda *args, **kwargs: "origin/main")
-    monkeypatch.setattr(skill_cmd, "ref_exists", lambda *args, **kwargs: True)
-    monkeypatch.setattr(skill_cmd, "read_path_divergence", lambda *args, **kwargs: (1, 0))
-    monkeypatch.setattr(skill_cmd, "list_changed_paths", lambda *args, **kwargs: ["skills/browsers_skill/skill.yaml"])
 
     result = runner.invoke(skill_cmd.app, ["push", "infrastate_skill"])
 
     assert result.exit_code == 0, result.output
     assert pushed == []
-    assert "infrastate_skill has no committed ahead changes" in result.output
+    assert "infrastate_skill has no release changes" in result.output
 
 
 def test_skill_push_message_requires_skill_name(monkeypatch) -> None:

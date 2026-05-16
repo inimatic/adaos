@@ -273,6 +273,13 @@ means the workspace skill version is ahead of the active runtime slot,
 `runtime-behind` means the active slot is newer than the workspace source, and
 `runtime-different` means the versions differ but cannot be ordered.
 
+`adaos skill push` without a skill name is a batch release command, not a raw
+Git transport command. It finds skills with dirty files, committed `git-ahead`
+changes, or an explicit manifest-vs-registry version drift, then runs the same
+version bump, registry update, commit, and push flow used by
+`adaos skill push <name> -m ...`. Batch release commits use the standard message
+`chore(<skill>): release workspace changes`.
+
 ## Weather skill reference
 
 `.adaos/skills/weather_skill/` demonstrates the complete lifecycle:
