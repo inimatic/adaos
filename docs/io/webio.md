@@ -753,6 +753,17 @@ Recommended to add this to the top of every `webui.json`:
 }
 ```
 
+`webui.v1` now enumerates the client-supported widget renderer types. The
+first reusable stream/file widgets are:
+
+* `visual.frameViewer` - renders a stream-backed image/frame payload with
+  optional status badges and metric chips
+* `visual.image` - image-only alias for the frame viewer renderer
+* `visual.timeseriesChart` - MVP line chart over a stream/Yjs point array,
+  configured with `inputs.xKey` and `inputs.yKey`
+* `input.fileUpload` - uploads a browser-selected file to the core
+  skill-owned file store and dispatches `uploaded` actions with `artifact_ref`
+
 The schema also supports coarse staged-readiness hints on page/widget/modal
 and catalog surfaces via a `load` object:
 
