@@ -16,7 +16,6 @@ from adaos.sdk.data.i18n import _
 from adaos.apps.cli.active_control import probe_control_api, resolve_control_base_url, resolve_control_token
 from adaos.apps.cli.git_status import (
     compute_path_status,
-    current_branch,
     ensure_remote,
     fetch_remote,
     list_changed_paths,
@@ -340,7 +339,28 @@ def _skill_names_from_paths(paths: list[str]) -> list[str]:
     return sorted(names)
 
 
-def _push_committed_skill_ahead(
+def _default_skill_release_message(skill_name: str) -> str:
+    safe_name = str(skill_name or "skill").strip() or "skill"
+    return f"chore({safe_name}): release workspace changes"
+
+
+def _registry_release_reasons(
+    *,
+    source_path: Path,
+    registry_meta: dict[str, object] | None,
+) -> list[str]:
+    reasons: list[str] = []
+    workspace_version = _read_local_artifact_version("skills", source_path)
+    registry_version = _clean_version_text((registry_meta or {}).get("version") if isinstance(registry_meta, dict) else None)
+    if workspace_version:
+        if not registry_version:
+            reasons.append("registry-missing")
+        elif workspace_version != registry_version:
+            reasons.append("registry-version")
+    return reasons
+
+
+def _collect_skill_release_candidates(
     *,
     skill_name: str | None = None,
     remote: str = "origin",
@@ -359,49 +379,115 @@ def _push_committed_skill_ahead(
         _resolve_skill_path(skill_name)
 
     base_ref = resolve_base_ref(workspace_root, remote=remote)
-    if not base_ref or not ref_exists(workspace_root, base_ref):
-        raise RuntimeError(f"cannot resolve workspace base ref for remote {remote!r}")
+    if base_ref and not ref_exists(workspace_root, base_ref):
+        base_ref = None
 
-    ahead, behind = read_path_divergence(workspace_root, base_ref=base_ref, path="skills")
+    ahead: int | None = 0
+    behind: int | None = 0
+    if base_ref:
+        ahead, behind = read_path_divergence(workspace_root, base_ref=base_ref, path="skills")
     ahead_count = _positive_int(ahead)
     behind_count = _positive_int(behind)
-    changed_paths = list_changed_paths(workspace_root, base_ref=base_ref, path="skills")
-    changed_skills = _skill_names_from_paths(changed_paths)
+    reasons_by_skill: dict[str, set[str]] = {}
 
-    if skill_name and skill_name not in changed_skills:
-        return {
-            "pushed": False,
-            "reason": "skill-not-ahead",
-            "base_ref": base_ref,
-            "ahead_count": ahead_count,
-            "behind_count": behind_count,
-            "skills": changed_skills,
-        }
-    if ahead_count <= 0 or not changed_skills:
-        return {
-            "pushed": False,
-            "reason": "nothing-ahead",
-            "base_ref": base_ref,
-            "ahead_count": ahead_count,
-            "behind_count": behind_count,
-            "skills": changed_skills,
-        }
+    if base_ref:
+        changed_paths = list_changed_paths(workspace_root, base_ref=base_ref, path="skills")
+        for name in _skill_names_from_paths(changed_paths):
+            reasons_by_skill.setdefault(name, set()).add("git-ahead")
 
-    dirty_status = compute_path_status(
-        workdir=workspace_root,
-        path=workspace_root / "skills",
-        base_ref=base_ref,
-    )
-    branch = current_branch(workspace_root)
-    ctx.git.push(str(workspace_root), remote=remote, branch=branch)
+    try:
+        dirty_paths = list(ctx.git.changed_files(str(workspace_root), subpath="skills"))
+    except Exception:
+        dirty_paths = []
+    for name in _skill_names_from_paths(dirty_paths):
+        reasons_by_skill.setdefault(name, set()).add("git-dirty")
+
+    workspace_skills_root = workspace_root / "skills"
+    registry_by_name: dict[str, dict[str, object]] = {}
+    try:
+        registry_items = list_workspace_registry_entries(workspace_root, kind="skills", fallback_to_scan=True)
+    except Exception:
+        registry_items = []
+    for item in registry_items:
+        if not isinstance(item, dict):
+            continue
+        item_name = str(item.get("name") or item.get("id") or "").strip()
+        if item_name:
+            registry_by_name[item_name] = item
+
+    release_names = set(registry_by_name)
+    release_names.update(_workspace_child_names(workspace_skills_root))
+    if skill_name:
+        release_names = {skill_name}
+    for name in sorted(release_names):
+        source_path = workspace_skills_root / name
+        if not source_path.exists():
+            continue
+        for reason in _registry_release_reasons(
+            source_path=source_path,
+            registry_meta=registry_by_name.get(name),
+        ):
+            reasons_by_skill.setdefault(name, set()).add(reason)
+
+    if skill_name:
+        reasons_by_skill = {skill_name: reasons for name, reasons in reasons_by_skill.items() if name == skill_name}
+
+    candidates = [
+        {"name": name, "reasons": sorted(reasons)}
+        for name, reasons in sorted(reasons_by_skill.items())
+        if reasons
+    ]
     return {
-        "pushed": True,
         "base_ref": base_ref,
-        "branch": branch,
         "ahead_count": ahead_count,
         "behind_count": behind_count,
-        "skills": changed_skills,
-        "dirty": bool(dirty_status.dirty),
+        "skills": candidates,
+    }
+
+
+def _release_changed_skills(
+    *,
+    skill_name: str | None = None,
+    remote: str = "origin",
+    signoff: bool = False,
+) -> dict[str, object]:
+    candidates = _collect_skill_release_candidates(skill_name=skill_name, remote=remote)
+    candidate_items = [item for item in candidates.get("skills") or [] if isinstance(item, dict)]
+
+    if skill_name and not candidate_items:
+        return {
+            "pushed": False,
+            "reason": "skill-no-release-changes",
+            **candidates,
+        }
+    if not candidate_items:
+        return {
+            "pushed": False,
+            "reason": "nothing-to-release",
+            **candidates,
+        }
+
+    mgr = _mgr()
+    released: list[dict[str, object]] = []
+    for item in candidate_items:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        message = _default_skill_release_message(name)
+        revision = mgr.push(name, message, signoff=signoff)
+        released.append(
+            {
+                "name": name,
+                "revision": revision,
+                "message": message,
+                "reasons": list(item.get("reasons") or []),
+            }
+        )
+
+    return {
+        "pushed": True,
+        **candidates,
+        "released": released,
     }
 
 
@@ -1030,11 +1116,11 @@ def push_command(
     skill_name: Optional[str] = typer.Argument(None, help=_("cli.skill.push.name_help")),
     message: Optional[str] = typer.Option(None, "--message", "-m", help=_("cli.commit_message.help")),
     signoff: bool = typer.Option(False, "--signoff", help=_("cli.option.signoff")),
-    remote: str = typer.Option("origin", "--remote", help="workspace git remote for committed ahead pushes"),
+    remote: str = typer.Option("origin", "--remote", help="workspace git remote for release candidate comparison"),
 ):
     """
-    Push committed ahead workspace skill changes, or commit one skill when
-    --message/-m is provided.
+    Release workspace skill changes through manifest version bump, registry
+    update, commit, and push.
     """
     extra = [str(item) for item in getattr(ctx, "args", []) or []]
     if extra:
@@ -1044,31 +1130,29 @@ def push_command(
 
     if message is None:
         try:
-            result = _push_committed_skill_ahead(skill_name=skill_name, remote=remote)
+            result = _release_changed_skills(skill_name=skill_name, remote=remote, signoff=signoff)
         except Exception as exc:
             typer.secho(f"push failed: {exc}", fg=typer.colors.RED)
             raise typer.Exit(1) from exc
         if not bool(result.get("pushed")):
-            reason = str(result.get("reason") or "nothing-ahead")
-            if reason == "skill-not-ahead" and skill_name:
-                typer.echo(f"skill {skill_name} has no committed ahead changes to push.")
+            reason = str(result.get("reason") or "nothing-to-release")
+            if reason == "skill-no-release-changes" and skill_name:
+                typer.echo(f"skill {skill_name} has no release changes to push.")
             else:
-                typer.echo("No committed ahead skill changes to push.")
+                typer.echo("No skill release changes to push.")
             return
-        skills = ", ".join(str(item) for item in result.get("skills") or []) or "(unknown)"
+        released = [item for item in result.get("released") or [] if isinstance(item, dict)]
+        skill_names = ", ".join(str(item.get("name") or "") for item in released if str(item.get("name") or "").strip()) or "(unknown)"
         base_ref = str(result.get("base_ref") or "(none)")
-        branch = str(result.get("branch") or "HEAD")
         ahead = _positive_int(result.get("ahead_count"))
         behind = _positive_int(result.get("behind_count"))
-        typer.echo(
-            f"pushed committed skill changes: {skills} "
-            f"(branch={branch}, base={base_ref}, ahead={ahead}, behind={behind})"
-        )
-        if bool(result.get("dirty")):
-            typer.secho(
-                "workspace still has uncommitted skill changes; only committed ahead changes were pushed.",
-                fg=typer.colors.YELLOW,
-            )
+        typer.echo(f"released skill changes: {skill_names} (base={base_ref}, ahead={ahead}, behind={behind})")
+        for item in released:
+            name = str(item.get("name") or "").strip()
+            revision = str(item.get("revision") or "").strip()
+            reasons = ", ".join(str(reason) for reason in item.get("reasons") or [])
+            suffix = f" [{reasons}]" if reasons else ""
+            typer.echo(f"- {name}: {revision}{suffix}")
         return
 
     if not skill_name:

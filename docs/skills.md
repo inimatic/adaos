@@ -79,12 +79,14 @@ That split is important when reading older documentation.
 
 `adaos skill push` has two workspace modes:
 
-- `adaos skill push`: push already committed `git-ahead` changes under
-  `skills/*` for all workspace skills. This does not bump versions and does not
-  create a new commit.
+- `adaos skill push`: release every workspace skill with pending source changes
+  through the normal publication rails. For each candidate skill it bumps the
+  manifest version, updates `registry.json`, commits with the standard message
+  `chore(<skill>): release workspace changes`, and pushes.
 - `adaos skill push <name> -m "message"`: update that skill's registry entry,
   bump the manifest version, commit `skills/<name>` plus `registry.json`, and
   push.
 
-Use the no-argument form after `adaos skill list --local` shows `[git-ahead]` for
-one or more skills and the source is already committed.
+Use the no-argument form when one or more skills show `git-dirty`, `git-ahead`,
+or when `skill.yaml` and `registry.json` disagree on the skill version. Use the
+named `-m` form when a human-authored release message matters.
