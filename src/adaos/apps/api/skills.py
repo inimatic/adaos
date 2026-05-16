@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from starlette.requests import ClientDisconnect
 
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.apps.api.auth import require_token
@@ -534,6 +535,8 @@ async def upload_skill_file(
             content_type=metadata.get("content_type"),
             max_bytes=max_bytes,
         )
+    except ClientDisconnect as exc:
+        raise HTTPException(status_code=499, detail="upload client disconnected") from exc
     except ValueError as exc:
         raise HTTPException(status_code=413 if "max size" in str(exc) else 400, detail=str(exc)) from exc
 
