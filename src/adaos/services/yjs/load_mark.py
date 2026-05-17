@@ -240,6 +240,52 @@ def _zero_stale_row_metrics(row: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _row_has_recent_activity(row: dict[str, Any]) -> bool:
+    for key in ("avg_bps", "peak_bps", "avg_wps", "peak_wps", "recent_bytes", "recent_writes"):
+        try:
+            if float(row.get(key) or 0.0) > 0.0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _stream_heartbeat_mark_ts(now_ts: float) -> float:
+    interval = _STREAM_UNCHANGED_KEEPALIVE_SEC or _STREAM_PUBLISH_MIN_INTERVAL_SEC or _STREAM_TICK_INTERVAL_SEC
+    interval = max(float(interval or 0.0), 1.0)
+    now = float(now_ts)
+    if now < interval:
+        return now
+    return now - (now % interval)
+
+
+def _stream_heartbeat_row(webspace_id: str, *, now_ts: float) -> dict[str, Any]:
+    mark_ts = _stream_heartbeat_mark_ts(now_ts)
+    return {
+        "kind": "activity",
+        "id": "_activity/stream_heartbeat",
+        "display": "stream heartbeat",
+        "status": "nominal",
+        "avg_bps": 0.0,
+        "peak_bps": 0.0,
+        "avg_wps": round(1.0 / max(float(_WINDOW_SEC), 1.0), 3),
+        "peak_wps": round(1.0 / max(float(_BUCKET_SEC), 1.0), 3),
+        "recent_bytes": 0,
+        "recent_writes": 1,
+        "lifetime_bytes": 0,
+        "sample_total": 0,
+        "write_total": 0,
+        "current_size_bytes": 0,
+        "byte_status": "idle",
+        "write_status": "nominal",
+        "last_source": "load_mark.stream_ticker",
+        "last_channel": _STREAM_RECEIVER,
+        "last_changed_at": mark_ts,
+        "last_changed_ago_s": round(max(0.0, float(now_ts) - mark_ts), 3),
+        "webspace_id": _webspace_token(webspace_id),
+    }
+
+
 def _stream_payload_items_locked(webspace_id: str, *, now_ts: float, last_published_at: float = 0.0) -> list[dict[str, Any]]:
     key = _webspace_token(webspace_id)
     state = _ensure_webspace_state(key)
@@ -276,6 +322,10 @@ def _stream_payload_items_locked(webspace_id: str, *, now_ts: float, last_publis
             str(entry.get("display") or ""),
         )
     )
+    if _has_active_stream_subscription_locked(key) and not any(_row_has_recent_activity(row) for row in rows):
+        if _STREAM_TOP_N > 0:
+            rows = rows[: max(0, _STREAM_TOP_N - 1)]
+        rows.append(_stream_heartbeat_row(key, now_ts=now_ts))
     if _STREAM_TOP_N > 0:
         return rows[:_STREAM_TOP_N]
     return rows
