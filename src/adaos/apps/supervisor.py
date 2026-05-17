@@ -1216,6 +1216,14 @@ def _process_family_rss_bytes(pid: int | None) -> tuple[int | None, int | None]:
     return root_rss, family_rss if family_rss > 0 else root_rss
 
 
+def _positive_int_or_none(value: Any) -> int | None:
+    try:
+        item = int(value)
+    except Exception:
+        return None
+    return item if item > 0 else None
+
+
 def _format_slot_value(template: str, values: dict[str, str]) -> str:
     fields = {field_name for _, field_name, _, _ in Formatter().parse(template) if field_name}
     payload = dict(values)
@@ -2343,11 +2351,12 @@ class SupervisorManager:
             if self._memory_last_available_bytes is not None and total_memory_bytes not in {None, 0}
             else None
         )
-        if self._memory_baseline_family_rss_bytes is None:
-            self._memory_baseline_family_rss_bytes = int(family_rss_bytes)
-        elif family_rss_bytes < self._memory_baseline_family_rss_bytes:
-            self._memory_baseline_family_rss_bytes = int(family_rss_bytes)
-        growth_bytes = max(0, int(family_rss_bytes) - int(self._memory_baseline_family_rss_bytes or 0))
+        family_rss_value = int(family_rss_bytes)
+        baseline_family_rss = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
+        if family_rss_value > 0 and (baseline_family_rss is None or family_rss_value < baseline_family_rss):
+            baseline_family_rss = family_rss_value
+        self._memory_baseline_family_rss_bytes = baseline_family_rss
+        growth_bytes = max(0, family_rss_value - baseline_family_rss) if baseline_family_rss is not None else 0
         tail = read_memory_telemetry_tail(limit=256)
         window_start = now - _memory_telemetry_window_sec()
         window = [item for item in tail if float(item.get("sampled_at") or 0.0) >= window_start]
@@ -3815,6 +3824,7 @@ class SupervisorManager:
 
     def _memory_runtime_state_payload(self) -> dict[str, Any]:
         ensure_memory_store()
+        self._memory_baseline_family_rss_bytes = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
         current_slot = str(active_slot() or "").strip().upper() or None
         managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
         managed_pid = managed.get("managed_pid")
