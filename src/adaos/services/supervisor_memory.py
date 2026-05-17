@@ -13,6 +13,9 @@ from adaos.services.runtime_paths import current_state_dir
 MEMORY_CONTRACT_VERSION = "1"
 MEMORY_OPERATION_CONTRACT_VERSION = "1"
 DEFAULT_PROFILER_ADAPTER = "tracemalloc"
+JSONL_TAIL_CHUNK_BYTES = 64 * 1024
+JSONL_TAIL_MAX_BYTES = 4 * 1024 * 1024
+JSONL_TAIL_BYTES_PER_LINE = 2048
 IMPLEMENTED_PROFILE_MODES = ("normal", "sampled_profile", "trace_profile")
 PLANNED_PROFILE_MODES = ("normal", "sampled_profile", "trace_profile")
 IMPLEMENTED_PROFILER_ADAPTERS = ("tracemalloc",)
@@ -83,6 +86,11 @@ def _int(value: Any) -> int | None:
         return None
 
 
+def _positive_int(value: Any) -> int | None:
+    item = _int(value)
+    return item if item is not None and item > 0 else None
+
+
 def _string_tuple(values: Any, *, default: tuple[str, ...]) -> tuple[str, ...]:
     if not isinstance(values, (list, tuple)):
         return default
@@ -110,6 +118,38 @@ def _write_json(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
+
+
+def _read_jsonl_tail_lines(path: Path, *, limit: int = 50) -> list[str]:
+    normalized_limit = max(1, int(limit or 1))
+    max_bytes = max(
+        JSONL_TAIL_CHUNK_BYTES,
+        min(JSONL_TAIL_MAX_BYTES, normalized_limit * JSONL_TAIL_BYTES_PER_LINE),
+    )
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            position = handle.tell()
+            chunks: list[bytes] = []
+            newline_count = 0
+            read_total = 0
+            while position > 0 and newline_count <= normalized_limit and read_total < max_bytes:
+                read_size = min(JSONL_TAIL_CHUNK_BYTES, position, max_bytes - read_total)
+                position -= read_size
+                handle.seek(position)
+                chunk = handle.read(read_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+                read_total += read_size
+    except Exception:
+        return []
+    data = b"".join(reversed(chunks))
+    if position > 0:
+        first_newline = data.find(b"\n")
+        if first_newline < 0:
+            return []
+        data = data[first_newline + 1 :]
+    return [line.decode("utf-8", errors="replace") for line in data.splitlines()[-normalized_limit:]]
 
 
 def supervisor_memory_state_dir() -> Path:
@@ -278,7 +318,7 @@ class MemoryTelemetrySample:
             process_rss_bytes=_int(source.get("process_rss_bytes")),
             family_rss_bytes=_int(source.get("family_rss_bytes")),
             available_memory_bytes=_int(source.get("available_memory_bytes")),
-            baseline_rss_bytes=_int(source.get("baseline_rss_bytes")),
+            baseline_rss_bytes=_positive_int(source.get("baseline_rss_bytes")),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
             sample_source=_string(source.get("sample_source"), default="supervisor"),
@@ -350,7 +390,7 @@ class MemorySessionSummary:
             trigger_source=_optional_string(source.get("trigger_source")),
             trigger_reason=_optional_string(source.get("trigger_reason")),
             trigger_threshold=_optional_string(source.get("trigger_threshold")),
-            baseline_rss_bytes=_int(source.get("baseline_rss_bytes")),
+            baseline_rss_bytes=_positive_int(source.get("baseline_rss_bytes")),
             peak_rss_bytes=_int(source.get("peak_rss_bytes")),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             requested_at=_float(source.get("requested_at")),
@@ -549,7 +589,7 @@ class MemoryRuntimeState:
             telemetry_interval_sec=_float(source.get("telemetry_interval_sec")),
             telemetry_window_sec=_float(source.get("telemetry_window_sec")),
             telemetry_samples_total=max(0, int(_int(source.get("telemetry_samples_total")) or 0)),
-            baseline_family_rss_bytes=_int(source.get("baseline_family_rss_bytes")),
+            baseline_family_rss_bytes=_positive_int(source.get("baseline_family_rss_bytes")),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
             suspicion_growth_threshold_bytes=_int(source.get("suspicion_growth_threshold_bytes")),
@@ -660,12 +700,11 @@ def read_memory_session_operations(session_id: str, limit: int = 50) -> list[dic
     if not path.exists():
         return []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = _read_jsonl_tail_lines(path, limit=limit)
     except Exception:
         return []
-    tail = lines[-max(1, int(limit or 1)) :]
     items: list[dict[str, Any]] = []
-    for line in tail:
+    for line in lines:
         try:
             payload = json.loads(line)
         except Exception:
@@ -688,12 +727,11 @@ def read_memory_telemetry_tail(limit: int = 50) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = _read_jsonl_tail_lines(path, limit=limit)
     except Exception:
         return []
-    tail = lines[-max(1, int(limit or 1)) :]
     items: list[dict[str, Any]] = []
-    for line in tail:
+    for line in lines:
         try:
             payload = json.loads(line)
         except Exception:
