@@ -142,6 +142,42 @@ def test_load_mark_stream_payload_zeroes_stale_rows_between_snapshots() -> None:
     assert stale_owner["status"] == "idle"
 
 
+def test_load_mark_stream_payload_adds_heartbeat_for_active_idle_subscription() -> None:
+    _reset_load_mark_state()
+
+    with load_mark_module._LOCK:
+        load_mark_module._ACTIVE_STREAM_SUBSCRIPTIONS["default"] = 1
+
+    rows = load_mark_module._stream_payload_items_locked("default", now_ts=45.0, last_published_at=44.0)
+    mark_ts = load_mark_module._stream_heartbeat_mark_ts(45.0)
+
+    assert rows == [
+        {
+            "kind": "activity",
+            "id": "_activity/stream_heartbeat",
+            "display": "stream heartbeat",
+            "status": "nominal",
+            "avg_bps": 0.0,
+            "peak_bps": 0.0,
+            "avg_wps": round(1.0 / max(float(load_mark_module._WINDOW_SEC), 1.0), 3),
+            "peak_wps": round(1.0 / max(float(load_mark_module._BUCKET_SEC), 1.0), 3),
+            "recent_bytes": 0,
+            "recent_writes": 1,
+            "lifetime_bytes": 0,
+            "sample_total": 0,
+            "write_total": 0,
+            "current_size_bytes": 0,
+            "byte_status": "idle",
+            "write_status": "nominal",
+            "last_source": "load_mark.stream_ticker",
+            "last_channel": "infrastate.yjs.load_mark",
+            "last_changed_at": mark_ts,
+            "last_changed_ago_s": round(45.0 - mark_ts, 3),
+            "webspace_id": "default",
+        }
+    ]
+
+
 def test_load_mark_gateway_owner_peak_only_burst_does_not_warn(monkeypatch) -> None:
     _reset_load_mark_state()
     calls = []
