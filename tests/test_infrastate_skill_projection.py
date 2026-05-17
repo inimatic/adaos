@@ -101,11 +101,42 @@ def test_infrastate_node_tabs_keep_offline_member_selected():
     }
 
     tabs, selected = mod._node_tabs(_Conf(), {"selected_node_id": "member-1"}, reliability)
+    local_tab = next(item for item in tabs if item["id"] == "hub-1")
+    member_tab = next(item for item in tabs if item["id"] == "member-1")
 
     assert any(item["id"] == "member-1" for item in tabs)
     assert selected["node_id"] == "member-1"
     assert selected["kind"] == "member"
     assert selected["connected"] is False
+    assert local_tab["node_status"] == "online"
+    assert member_tab["node_status"] == "offline"
+
+
+def test_infrastate_compact_summary_keeps_full_description():
+    mod = _load_infrastate_module()
+
+    description = "state=" + ("ready|" * 1000)
+    compact = mod._compact_summary_for_yjs({"description": description})
+
+    assert compact["description"] == description
+    assert "truncated; full diagnostics" not in compact["description"]
+
+
+def test_infrastate_compact_snapshot_excludes_yjs_controls():
+    mod = _load_infrastate_module()
+
+    compact = mod._compact_snapshot_for_yjs(
+        {
+            "summary": {"description": "ok"},
+            "core_actions": [{"id": "refresh", "title": "Refresh"}],
+            "yjs_actions": [{"id": "yjs_reset", "title": "Yjs reset"}],
+            "yjs_webspaces": [{"id": "default", "label": "default *"}],
+        }
+    )
+
+    assert "core_actions" in compact
+    assert "yjs_actions" not in compact
+    assert "yjs_webspaces" not in compact
 
 
 def test_infrastate_update_actions_use_member_label():
@@ -975,11 +1006,17 @@ def test_infrastate_scenario_items_only_show_installed_registry_entries(monkeypa
             ]
         ),
     )
+    monkeypatch.setattr(
+        mod,
+        "get_local_capacity",
+        lambda: {"scenarios": [{"name": "delta", "version": "4.0.0", "active": True, "updated_at": 4.0}]},
+    )
 
     items = mod._scenario_items()
 
     assert items == [
         {"name": "alpha", "version": "1.2.3", "updated_at": 1.0, "uninstall_disabled": False},
+        {"name": "delta", "version": "4.0.0", "updated_at": 4.0, "uninstall_disabled": False},
         {"name": "gamma", "version": "3.0.0", "updated_at": 2.0, "uninstall_disabled": False},
     ]
 
@@ -1018,6 +1055,13 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
     monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
     monkeypatch.setattr(
         mod,
+        "_registry_json_catalog_entries",
+        lambda kind, workspace_root: [{"id": "infrastate_skill", "name": "infrastate_skill", "version": "0.20.0"}]
+        if kind == "skills"
+        else [],
+    )
+    monkeypatch.setattr(
+        mod,
         "_marketplace_catalog_entries",
         lambda kind: [{"id": "infrastate_skill", "name": "infrastate_skill", "version": "0.20.0"}] if kind == "skills" else [],
     )
@@ -1027,9 +1071,9 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
     assert items == [
         {
             "name": "infrastate_skill",
-            "display_name": "infrastate_skill *",
+            "display_name": "infrastate_skill",
             "version": "0.19.0",
-            "version_display": "0.19.0 (0.20.0)",
+            "version_display": "0.19.0* (0.20.0)",
             "slot": "A",
             "active": True,
             "can_activate": True,
@@ -1038,11 +1082,12 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
             "uninstall_disabled": False,
             "remote_version": "0.20.0",
             "update_available": True,
+            "registry_mismatch": True,
         }
     ]
 
 
-def test_infrastate_skill_items_skip_remote_version_probe_by_default(monkeypatch, tmp_path: Path):
+def test_infrastate_skill_items_skip_remote_version_probe_when_disabled(monkeypatch, tmp_path: Path):
     mod = _load_infrastate_module()
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "infrastate_skill"
@@ -1080,6 +1125,8 @@ def test_infrastate_skill_items_skip_remote_version_probe_by_default(monkeypatch
 
     assert items[0]["remote_version"] == ""
     assert items[0]["update_available"] is False
+    assert items[0]["registry_mismatch"] is False
+    assert items[0]["version_display"] == "0.19.0"
 
 
 def test_infrastate_marketplace_catalog_skips_remote_url_fetch_on_member(monkeypatch, tmp_path: Path):
