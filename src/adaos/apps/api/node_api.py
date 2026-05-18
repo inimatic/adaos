@@ -244,6 +244,14 @@ def _compact_runtime_reliability_payload(payload: dict[str, Any], *, webspace_id
     state_sync = _coerce_dict(runtime.get("state_sync"))
     replay = _coerce_dict(state_sync.get("replay"))
     yjs_pressure = _coerce_dict(runtime.get("yjs_pressure"))
+    webio_stream_guard = _coerce_dict(runtime.get("webio_stream_guard"))
+    webio_stream_guard_totals = _coerce_dict(webio_stream_guard.get("totals"))
+    webio_stream_guard_items = _coerce_list(webio_stream_guard.get("items"))
+    webio_stream_guard_top = _coerce_dict(
+        webio_stream_guard_items[0] if webio_stream_guard_items else {}
+    )
+    eventbus_backlog = _coerce_dict(runtime.get("eventbus_backlog"))
+    webio_control_items = _coerce_list(eventbus_backlog.get("top_webio_stream_controls"))
     resolved_webspace_id = _coerce_node_webspace_id(
         webspace_id
         or runtime.get("webspace_id")
@@ -348,6 +356,55 @@ def _compact_runtime_reliability_payload(payload: dict[str, Any], *, webspace_id
             "reason": str(yjs_pressure.get("reason") or "").strip() or None,
             "blockedRoots": _coerce_list(yjs_pressure.get("blocked_roots")),
             "observedState": str(yjs_pressure.get("observed_state") or "idle").strip() or "idle",
+        },
+        "webioStreamGuard": {
+            "available": bool(webio_stream_guard.get("available")),
+            "webspaceId": str(webio_stream_guard.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
+            "total": int(webio_stream_guard.get("total") or 0),
+            "totals": {
+                "attempted": int(webio_stream_guard_totals.get("attempted") or 0),
+                "published": int(webio_stream_guard_totals.get("published") or 0),
+                "suppressed": int(webio_stream_guard_totals.get("suppressed") or 0),
+                "throttled": int(webio_stream_guard_totals.get("throttled") or 0),
+                "publishedFanout": int(webio_stream_guard_totals.get("published_fanout") or 0),
+            },
+            "top": {
+                "receiver": str(webio_stream_guard_top.get("receiver") or "").strip() or None,
+                "owner": str(webio_stream_guard_top.get("owner") or "").strip() or None,
+                "surface": str(webio_stream_guard_top.get("surface") or "").strip() or None,
+                "attempted": int(webio_stream_guard_top.get("attempted_total") or 0),
+                "published": int(webio_stream_guard_top.get("published_total") or 0),
+                "suppressed": int(webio_stream_guard_top.get("suppressed_total") or 0),
+                "throttled": int(webio_stream_guard_top.get("throttled_total") or 0),
+                "declaredMaxPayloadBytes": _coerce_optional_int(
+                    webio_stream_guard_top.get("declared_max_payload_bytes")
+                ),
+                "lastReason": str(webio_stream_guard_top.get("last_reason") or "").strip() or None,
+            },
+        },
+        "eventbusBacklog": {
+            "available": bool(eventbus_backlog.get("available")),
+            "pendingTasks": int(eventbus_backlog.get("pending_tasks") or 0),
+            "pendingPeak": int(eventbus_backlog.get("pending_peak") or 0),
+            "boundedQueueTotal": int(eventbus_backlog.get("bounded_queue_total") or 0),
+            "boundedQueuePeak": int(eventbus_backlog.get("bounded_queue_peak") or 0),
+            "boundedActiveWorkers": int(eventbus_backlog.get("bounded_active_workers") or 0),
+            "topWebioStreamControls": [
+                {
+                    "eventType": str(item.get("event_type") or "").strip() or None,
+                    "webspaceId": str(item.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
+                    "targetNodeId": str(item.get("target_node_id") or "").strip() or None,
+                    "receiver": str(item.get("receiver") or "").strip() or None,
+                    "source": str(item.get("source") or "").strip() or None,
+                    "incoming": int(item.get("incoming_total") or 0),
+                    "queued": int(item.get("queued_total") or 0),
+                    "superseded": int(item.get("superseded_total") or 0),
+                    "dropped": int(item.get("dropped_total") or 0),
+                    "lastAction": str(item.get("last_action") or "").strip() or None,
+                }
+                for item in webio_control_items[:5]
+                if isinstance(item, dict)
+            ],
         },
         "supervisorRuntime": supervisor_runtime,
         "phase0Communication": _compact_phase0_checkpoint(runtime.get("event_model_phase0_communication")),
