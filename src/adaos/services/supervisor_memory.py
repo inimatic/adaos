@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 import time
@@ -16,6 +17,8 @@ DEFAULT_PROFILER_ADAPTER = "tracemalloc"
 JSONL_TAIL_CHUNK_BYTES = 64 * 1024
 JSONL_TAIL_MAX_BYTES = 4 * 1024 * 1024
 JSONL_TAIL_BYTES_PER_LINE = 2048
+MEMORY_TELEMETRY_MAX_BYTES_DEFAULT = 16 * 1024 * 1024
+MEMORY_TELEMETRY_COMPACT_KEEP_LINES_DEFAULT = 5000
 IMPLEMENTED_PROFILE_MODES = ("normal", "sampled_profile", "trace_profile")
 PLANNED_PROFILE_MODES = ("normal", "sampled_profile", "trace_profile")
 IMPLEMENTED_PROFILER_ADAPTERS = ("tracemalloc",)
@@ -150,6 +153,41 @@ def _read_jsonl_tail_lines(path: Path, *, limit: int = 50) -> list[str]:
             return []
         data = data[first_newline + 1 :]
     return [line.decode("utf-8", errors="replace") for line in data.splitlines()[-normalized_limit:]]
+
+
+def _memory_telemetry_max_bytes() -> int:
+    try:
+        raw = str(os.getenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_MAX_BYTES") or str(MEMORY_TELEMETRY_MAX_BYTES_DEFAULT)).strip()
+        return max(0, int(raw))
+    except Exception:
+        return MEMORY_TELEMETRY_MAX_BYTES_DEFAULT
+
+
+def _memory_telemetry_compact_keep_lines() -> int:
+    try:
+        raw = str(
+            os.getenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_COMPACT_KEEP_LINES")
+            or str(MEMORY_TELEMETRY_COMPACT_KEEP_LINES_DEFAULT)
+        ).strip()
+        return max(1, int(raw))
+    except Exception:
+        return MEMORY_TELEMETRY_COMPACT_KEEP_LINES_DEFAULT
+
+
+def _compact_memory_telemetry_if_needed(path: Path) -> None:
+    max_bytes = _memory_telemetry_max_bytes()
+    if max_bytes <= 0:
+        return
+    try:
+        if not path.exists() or path.stat().st_size < max_bytes:
+            return
+        lines = _read_jsonl_tail_lines(path, limit=_memory_telemetry_compact_keep_lines())
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        text = "\n".join(lines)
+        tmp.write_text((text + "\n") if text else "", encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        return
 
 
 def supervisor_memory_state_dir() -> Path:
@@ -717,6 +755,7 @@ def append_memory_telemetry_sample(payload: MemoryTelemetrySample | Mapping[str,
     sample = payload if isinstance(payload, MemoryTelemetrySample) else MemoryTelemetrySample.from_dict(payload)
     path = supervisor_memory_telemetry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    _compact_memory_telemetry_if_needed(path)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(sample.to_dict(), ensure_ascii=False) + "\n")
     return sample.to_dict()
