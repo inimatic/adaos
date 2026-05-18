@@ -1118,6 +1118,38 @@ def test_infrastate_inventory_stream_honors_drift_only_toggle(monkeypatch):
     assert [item["name"] for item in drift_rows] == ["behind"]
 
 
+def test_infrastate_catalog_record_exposes_source_and_commit(monkeypatch, tmp_path: Path):
+    mod = _load_infrastate_module()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    mod._registry_catalog_cache.clear()
+    mod._registry_catalog_meta_cache.clear()
+
+    monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
+    monkeypatch.setattr(mod, "_allow_marketplace_remote_fetch", lambda: False)
+    monkeypatch.setattr(mod, "_allow_marketplace_git_ref_lookup", lambda: True)
+    monkeypatch.setattr(
+        mod,
+        "_registry_payload_from_git_ref",
+        lambda workspace_root: {"skills": [{"id": "demo_skill", "version": "1.2.3"}]},
+    )
+    monkeypatch.setattr(mod, "_registry_ref_config", lambda: ("origin", "main"))
+    monkeypatch.setattr(mod, "_registry_git_ref_commit", lambda workspace_root, *, remote, branch: "abc123")
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace)),
+    )
+
+    record = mod._read_catalog_record(kind_plural="skills", artifact_id="demo_skill")
+
+    assert record == {
+        "version": "1.2.3",
+        "catalog_source": "git_ref:origin/main",
+        "catalog_commit": "abc123",
+    }
+
+
 def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch, tmp_path: Path):
     mod = _load_infrastate_module()
     workspace = tmp_path / "workspace"
@@ -1148,7 +1180,13 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
         ),
     )
     monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: SimpleNamespace(list=lambda: [_SkillRecord("infrastate_skill", "0.18.0")]))
-    monkeypatch.setattr(mod, "SkillManager", lambda **kwargs: SimpleNamespace(runtime_status=lambda name: {"active_slot": "A", "version": "0.19.0"}))
+    monkeypatch.setattr(
+        mod,
+        "SkillManager",
+        lambda **kwargs: SimpleNamespace(
+            runtime_status=lambda name: {"active_slot": "A", "version": "0.19.0", "runtime_bucket": "v0.19"}
+        ),
+    )
     monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
     monkeypatch.setattr(
         mod,
@@ -1172,6 +1210,9 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
     assert item["active_version"] == "0.19.0"
     assert item["workspace_source_version"] == "0.19.0"
     assert item["catalog_version"] == "0.20.0"
+    assert item["catalog_source"] == "registry_json"
+    assert item["catalog_commit"] == ""
+    assert item["runtime_bucket"] == "v0.19"
     assert item["version_display"] == "0.19.0* (0.20.0)"
     assert item["slot"] == "A"
     assert item["remote_version"] == "0.20.0"
@@ -1210,7 +1251,13 @@ def test_infrastate_skill_items_compare_remote_against_active_runtime_version(mo
         ),
     )
     monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: SimpleNamespace(list=lambda: [_SkillRecord()]))
-    monkeypatch.setattr(mod, "SkillManager", lambda **kwargs: SimpleNamespace(runtime_status=lambda name: {"active_slot": "A", "version": "0.19.0"}))
+    monkeypatch.setattr(
+        mod,
+        "SkillManager",
+        lambda **kwargs: SimpleNamespace(
+            runtime_status=lambda name: {"active_slot": "A", "version": "0.19.0", "runtime_bucket": "v0.19"}
+        ),
+    )
     monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
     monkeypatch.setattr(
         mod,
@@ -1227,6 +1274,8 @@ def test_infrastate_skill_items_compare_remote_against_active_runtime_version(mo
     assert items[0]["active_version"] == "0.19.0"
     assert items[0]["workspace_source_version"] == "0.20.0"
     assert items[0]["catalog_version"] == "0.20.0"
+    assert items[0]["catalog_source"] == "registry_json"
+    assert items[0]["runtime_bucket"] == "v0.19"
     assert items[0]["version_display"] == "0.19.0* (0.20.0)"
     assert items[0]["registry_mismatch"] is True
     assert items[0]["has_drift"] is True
