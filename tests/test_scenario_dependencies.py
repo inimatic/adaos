@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from adaos.services.scenario import manager as scenario_manager
 
 
@@ -80,3 +82,76 @@ def test_bootstrap_dependencies_reports_structured_lifecycle_results(monkeypatch
     assert "activate_for_space:ok_skill:ok_skill-1.0.0:B:default:desktop" in calls
     assert events[-1].type == "scenario.dependencies.bootstrapped"
     assert events[-1].payload["failed"] == ["install_bad", "prepare_bad", "activate_bad"]
+
+
+def test_install_with_deps_blocks_projection_when_required_dependency_fails_in_prod(monkeypatch) -> None:
+    sync_calls: list[str] = []
+    dep_result = {
+        "ok": False,
+        "scenario_id": "demo_scene",
+        "webspace_id": "desktop",
+        "required": ["bad_skill"],
+        "items": [{"name": "bad_skill", "ok": False, "error": "prepare failed"}],
+        "succeeded": [],
+        "failed": ["bad_skill"],
+        "error": "RuntimeError: prepare failed",
+    }
+    mgr = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=object(),
+        git=object(),
+        paths=object(),
+        bus=SimpleNamespace(publish=lambda evt: None),
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.setattr(
+        mgr,
+        "install",
+        lambda name, pin=None: SimpleNamespace(id=SimpleNamespace(value=name), name=name, version="0.1.0", path="/scenarios/demo_scene"),
+    )
+    monkeypatch.setattr(mgr, "bootstrap_dependencies", lambda scenario_id, webspace_id=None: dict(dep_result))
+    monkeypatch.setattr(mgr, "sync_to_yjs", lambda scenario_id, webspace_id=None: sync_calls.append(scenario_id))
+
+    with pytest.raises(scenario_manager.ScenarioDependencyLifecycleError) as excinfo:
+        mgr.install_with_deps("demo_scene", webspace_id="desktop")
+
+    assert excinfo.value.result["failed"] == ["bad_skill"]
+    assert mgr.last_dependency_bootstrap_result["failed"] == ["bad_skill"]
+    assert sync_calls == []
+
+
+def test_install_with_deps_allows_degraded_projection_in_dev(monkeypatch) -> None:
+    sync_calls: list[str] = []
+    dep_result = {
+        "ok": False,
+        "scenario_id": "demo_scene",
+        "webspace_id": "desktop",
+        "required": ["bad_skill"],
+        "items": [{"name": "bad_skill", "ok": False, "error": "prepare failed"}],
+        "succeeded": [],
+        "failed": ["bad_skill"],
+        "error": "RuntimeError: prepare failed",
+    }
+    mgr = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=object(),
+        git=object(),
+        paths=object(),
+        bus=SimpleNamespace(publish=lambda evt: None),
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setenv("ENV_TYPE", "dev")
+    monkeypatch.setattr(
+        mgr,
+        "install",
+        lambda name, pin=None: SimpleNamespace(id=SimpleNamespace(value=name), name=name, version="0.1.0", path="/scenarios/demo_scene"),
+    )
+    monkeypatch.setattr(mgr, "bootstrap_dependencies", lambda scenario_id, webspace_id=None: dict(dep_result))
+    monkeypatch.setattr(mgr, "sync_to_yjs", lambda scenario_id, webspace_id=None: sync_calls.append(scenario_id))
+
+    meta = mgr.install_with_deps("demo_scene", webspace_id="desktop")
+
+    assert getattr(meta.id, "value") == "demo_scene"
+    assert mgr.last_dependency_bootstrap_result["failed"] == ["bad_skill"]
+    assert sync_calls == ["demo_scene"]

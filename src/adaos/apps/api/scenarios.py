@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from adaos.apps.api.auth import require_token
@@ -8,7 +8,12 @@ from adaos.services.agent_context import get_ctx, AgentContext
 from adaos.services.node_config import load_config
 from adaos.services.node_display import node_display_from_config, node_display_from_directory_node
 from adaos.services.registry.subnet_directory import get_directory
-from adaos.services.scenario.manager import ScenarioManager
+from adaos.services.scenario.manager import (
+    ScenarioDependencyLifecycleError,
+    ScenarioManager,
+    dependency_failure_blocks_scenario_activation,
+    dependency_failure_message,
+)
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
 from adaos.adapters.db import SqliteScenarioRegistry
 from adaos.services.operations import submit_install_operation, submit_update_operation
@@ -198,7 +203,10 @@ async def install(body: InstallReq, mgr: ScenarioManager = Depends(_get_manager)
             "operation": operation,
         }
     webspace_id = body.webspace_id or default_webspace_id()
-    meta = mgr.install_with_deps(body.name, pin=body.pin, webspace_id=webspace_id)
+    try:
+        meta = mgr.install_with_deps(body.name, pin=body.pin, webspace_id=webspace_id)
+    except ScenarioDependencyLifecycleError as exc:
+        raise _dependency_failure_http_exception(exc.result) from exc
     try:
         await rebuild_webspace_from_sources(
             webspace_id,
@@ -249,6 +257,8 @@ async def update(body: UpdateReq, mgr: ScenarioManager = Depends(_get_manager)):
             "failed": [],
             "error": f"{type(exc).__name__}: {exc}",
         }
+    if dependency_failure_blocks_scenario_activation(dependency_bootstrap):
+        raise _dependency_failure_http_exception(dependency_bootstrap)
     meta = None
     try:
         for item in list(mgr.list_present() or []):
@@ -279,6 +289,18 @@ async def update(body: UpdateReq, mgr: ScenarioManager = Depends(_get_manager)):
         },
         "dependency_bootstrap": dependency_bootstrap,
     }
+
+
+def _dependency_failure_http_exception(result: dict[str, Any] | None) -> HTTPException:
+    payload = dict(result or {})
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "scenario_dependency_lifecycle_failed",
+            "message": dependency_failure_message(payload),
+            "dependency_bootstrap": payload,
+        },
+    )
 
 
 @router.delete("/{name}")

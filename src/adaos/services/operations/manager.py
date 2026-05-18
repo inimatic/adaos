@@ -16,7 +16,11 @@ from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.domain import Event
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.io_web.toast import WebToastService
-from adaos.services.scenario.manager import ScenarioManager
+from adaos.services.scenario.manager import (
+    ScenarioManager,
+    dependency_failure_blocks_scenario_activation,
+    dependency_failure_message,
+)
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
 from adaos.services.skill.manager import SkillManager
 from adaos.services.yjs.doc import async_get_ydoc, get_ydoc
@@ -828,6 +832,16 @@ def submit_install_operation(
             warning = str(dependency_bootstrap.get("error") or "scenario dependency bootstrap reported failures")
             if warning not in warnings:
                 warnings.append(warning)
+        if dependency_failure_blocks_scenario_activation(dependency_bootstrap):
+            handle.failed(
+                message=dependency_failure_message(dependency_bootstrap),
+                error={
+                    "type": "ScenarioDependencyLifecycleError",
+                    "message": dependency_failure_message(dependency_bootstrap),
+                    "dependency_bootstrap": dependency_bootstrap,
+                },
+            )
+            return
         warnings.extend(
             await _best_effort_phase(
                 timeout_env="ADAOS_SCENARIO_SYNC_TIMEOUT_S",
