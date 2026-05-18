@@ -55,6 +55,13 @@ For browser-facing or LLM-authored skills, follow
 defines the current Yjs, stream, projection, details, and guard/quarantine
 contracts for skills.
 
+Browser-facing skills can now declare a reviewable `skill.yaml:data_routes`
+section. Use it to record the chosen route for each surface (`yjs`, `stream`,
+`tool/details`, `skill-local`, or `disk/360log`), first-paint/recovery behavior,
+budgets, and guard visibility. `data_routes` documents intent; actual Yjs
+materialization still uses `data_projections`, and live variables still use
+`webui.json:webio.receivers`.
+
 ## Service-type skills
 
 Some skills are exposed through the service supervisor:

@@ -77,6 +77,30 @@ def test_webui_schema_accepts_stream_receivers_and_stream_data_sources() -> None
                     "maxItems": 120,
                     "initialState": {"items": []},
                     "transport": "hub",
+                    "snapshotPolicy": "on_subscribe",
+                    "sequenceField": "seq",
+                    "updatedAtField": "updated_at",
+                    "budget": {
+                        "maxPayloadBytes": 8192,
+                        "maxPublishHz": 2,
+                        "coalesceMs": 250,
+                        "maxFanout": 8,
+                        "maxSnapshotHz": 0.2,
+                    },
+                    "guardVisibility": {
+                        "degradedState": "Telemetry stream paused",
+                        "log": "service.telemetry_skill.runtime.log",
+                        "quarantine": True,
+                        "metric": "webio.stream.telemetry_feed.suppressed",
+                    },
+                    "route": {
+                        "kind": "stream",
+                        "surface": "widget:telemetry",
+                        "owner": "telemetry_skill",
+                        "firstPaint": "empty telemetry list",
+                        "recovery": "request bounded snapshot on subscribe",
+                        "updateSource": ["telemetry.sampled"],
+                    },
                 }
             }
         },
@@ -95,6 +119,45 @@ def test_webui_schema_accepts_stream_receivers_and_stream_data_sources() -> None
     }
 
     Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_rejects_invalid_stream_route_metadata() -> None:
+    schema = _load_schema()
+    payload = {
+        "webio": {
+            "receivers": {
+                "telemetry_feed": {
+                    "mode": "replace",
+                    "route": {
+                        "kind": "yjs",
+                        "surface": "widget:telemetry",
+                    },
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_rejects_invalid_stream_budget() -> None:
+    schema = _load_schema()
+    payload = {
+        "webio": {
+            "receivers": {
+                "telemetry_feed": {
+                    "mode": "replace",
+                    "budget": {
+                        "maxPayloadBytes": 0,
+                    },
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
 
 
 def test_webui_schema_rejects_scheduler_specific_load_details() -> None:
