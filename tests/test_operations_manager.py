@@ -394,6 +394,74 @@ def test_submit_scenario_update_operation_reports_dependency_bootstrap(monkeypat
     assert rebuilds == [("default", "scenario_update_sync", "scenario_projection", "demo_scene")]
 
 
+def test_submit_scenario_update_operation_blocks_failed_dependencies_in_prod(monkeypatch) -> None:
+    docs: dict[str, _FakeYDoc] = {}
+    calls: list[str] = []
+    rebuilds: list[tuple[str, str, str, str | None]] = []
+
+    @contextmanager
+    def _get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    @asynccontextmanager
+    async def _async_get_ydoc(webspace_id: str):
+        yield docs.setdefault(webspace_id, _FakeYDoc())
+
+    class _FakeScenarioManager:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        def sync(self) -> None:
+            calls.append("sync")
+
+        def list_present(self):
+            calls.append("list_present")
+            return [SimpleNamespace(id=SimpleNamespace(value="demo_scene"), version="0.2.0", path="/scenarios/demo_scene")]
+
+        def bootstrap_dependencies(self, name: str, *, webspace_id: str | None = None):
+            calls.append(f"bootstrap_dependencies:{name}:{webspace_id}")
+            return {
+                "ok": False,
+                "scenario_id": name,
+                "webspace_id": webspace_id,
+                "required": ["bad_skill"],
+                "items": [{"name": "bad_skill", "ok": False, "error": "prepare failed"}],
+                "succeeded": [],
+                "failed": ["bad_skill"],
+                "error": "RuntimeError: prepare failed",
+            }
+
+        def sync_to_yjs(self, name: str, *, webspace_id: str | None = None, emit_event: bool = True):
+            calls.append(f"sync_to_yjs:{name}:{webspace_id}:{int(bool(emit_event))}")
+
+    async def _rebuild(webspace_id: str, *, action: str = "rebuild", scenario_id: str | None = None, source_of_truth: str = "workspace"):
+        rebuilds.append((webspace_id, action, source_of_truth, scenario_id))
+
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.setattr(operations_manager, "get_ydoc", _get_ydoc)
+    monkeypatch.setattr(operations_manager, "async_get_ydoc", _async_get_ydoc)
+    monkeypatch.setattr(operations_manager, "WebToastService", _FakeToastService)
+    monkeypatch.setattr(operations_manager, "ScenarioManager", _FakeScenarioManager)
+    monkeypatch.setattr(operations_manager, "SqliteScenarioRegistry", lambda sql: object())
+    monkeypatch.setattr(operations_manager, "_MANAGERS", {})
+    monkeypatch.setattr(operations_manager, "rebuild_webspace_from_sources", _rebuild)
+
+    ctx = _make_ctx()
+    result = operations_manager.submit_update_operation(
+        target_kind="scenario",
+        target_id="demo_scene",
+        webspace_id="default",
+        ctx=ctx,
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "ScenarioDependencyLifecycleError"
+    assert result["error"]["dependency_bootstrap"]["failed"] == ["bad_skill"]
+    assert "bootstrap_dependencies:demo_scene:default" in calls
+    assert not any(call.startswith("sync_to_yjs:") for call in calls)
+    assert rebuilds == []
+
+
 def test_submit_install_operation_uses_isolated_subprocess_when_enabled(monkeypatch) -> None:
     docs: dict[str, _FakeYDoc] = {}
     spawned: list[dict[str, object]] = []
