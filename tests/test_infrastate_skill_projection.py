@@ -321,6 +321,73 @@ def test_infrastate_compact_snapshot_keeps_semantic_state_plane_contracts():
     assert runtime["yjs_pressure"]["policy_state"] == "throttle"
 
 
+def test_infrastate_reliability_compaction_strips_heavy_runtime_payloads():
+    mod = _load_infrastate_module()
+
+    compact = mod._compact_reliability_for_infrastate(
+        {
+            "ok": True,
+            "runtime": {
+                "sync_runtime": {
+                    "selected_webspace_id": "desktop",
+                    "assessment": {"state": "pressure"},
+                    "transport": {"room_total": 1},
+                    "load_mark": {
+                        "assessment": {"state": "critical"},
+                        "selected_webspace": {"recent_bytes_total": 42},
+                        "webspaces": {"desktop": {"owners": {"huge": "tree"}}},
+                    },
+                    "webspaces": {
+                        "desktop": {
+                            "webspace_id": "desktop",
+                            "update_log_entries": 7,
+                            "oversized": {"x": list(range(20))},
+                        },
+                        "other": {"update_log_entries": 99},
+                    },
+                    "selected_webspace": {
+                        "webspace_id": "desktop",
+                        "rebuild": {
+                            "status": "ready",
+                            "materialization": {
+                                "ready": True,
+                                "registry": {"large": "omitted"},
+                                "catalog_counts": {"apps": 3},
+                            },
+                        },
+                    },
+                },
+                "hub_member_connection_state": {
+                    "role": "hub",
+                    "known_members": [
+                        {
+                            "node_id": "member-1",
+                            "connected": True,
+                            "node_snapshot": {
+                                "build": {"version": "1"},
+                                "desktop_catalog": {
+                                    "apps": [{"id": "a"}],
+                                    "registry": {"modals": {"m": {"very": "large"}}},
+                                },
+                            },
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
+    sync = compact["runtime"]["sync_runtime"]
+    assert sync["webspaces"] == {"desktop": {"webspace_id": "desktop", "update_log_entries": 7}}
+    assert "webspaces" not in sync["load_mark"]
+    assert sync["selected_webspace"]["rebuild"]["materialization"] == {
+        "ready": True,
+        "catalog_counts": {"apps": 3},
+    }
+    member_snapshot = compact["runtime"]["hub_member_connection_state"]["known_members"][0]["node_snapshot"]
+    assert member_snapshot["desktop_catalog"] == {"apps_total": 1, "modal_total": 1, "captured_at": None}
+
+
 def test_infrastate_reliability_summary_note_prefers_semantic_state_plane_contracts():
     mod = _load_infrastate_module()
 
@@ -1529,6 +1596,29 @@ def test_infrastate_project_async_blocks_primary_yjs_projection_but_keeps_stream
     assert applied == []
     assert published == ["ready"]
     assert mod._projection_diag["blocked_total"] == 1
+
+
+def test_infrastate_get_snapshot_project_false_does_not_project_fallback(monkeypatch):
+    mod = _load_infrastate_module()
+
+    monkeypatch.setattr(
+        mod,
+        "_snapshot_or_fallback_cached",
+        lambda **_kwargs: {
+            "fallback": True,
+            "summary": {"value": "degraded"},
+            "projection_diag": {},
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_project",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("project should not run")),
+    )
+
+    result = mod.get_snapshot(webspace_id="desktop", project=False)
+
+    assert result["summary"]["value"] == "degraded"
 
 
 def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch):
