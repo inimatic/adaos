@@ -136,6 +136,32 @@ def test_browsers_skill_projection_refresh_skips_unchanged_yjs_writes(monkeypatc
     assert len(writes) == first_write_count
 
 
+def test_browsers_skill_browser_tiles_include_online_flag(monkeypatch) -> None:
+    mod = _load_browsers_skill_module()
+    monkeypatch.setattr(mod.sdk_access_links, "lifetime_label", lambda _entry: "Permanent")
+
+    tiles = mod._browser_tiles([
+        {
+            "id": "browser-1",
+            "display_name": "Dev Browser",
+            "access_class": "device",
+            "online": True,
+        },
+        {
+            "id": "browser-2",
+            "display_name": "Old Browser",
+            "access_class": "device",
+            "online": False,
+        },
+    ])
+
+    assert tiles[0]["title"] == "Dev Browser"
+    assert tiles[0]["online"] is True
+    assert tiles[0]["status"] == "online"
+    assert tiles[1]["online"] is False
+    assert tiles[1]["status"] == "offline"
+
+
 def test_browsers_skill_explicit_refresh_recomputes_without_rewriting_identical_yjs(monkeypatch) -> None:
     mod = _load_browsers_skill_module()
     mod._SELECTED_BROWSER_BY_WS.clear()
