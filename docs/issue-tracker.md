@@ -540,9 +540,9 @@ Implementation notes:
 
 #### RCMS-004: Treat scenario dependencies as lifecycle operations
 
-Status: in progress.
+Status: completed.
 
-Progress: 75%.
+Progress: 100%.
 
 Actions:
 
@@ -559,7 +559,7 @@ Actions:
   operation payloads.
 - [x] Include dependent skill lifecycle results in async scenario update
   operation payloads.
-- [ ] Surface dependency lifecycle failures in Infrastructure State and
+- [x] Surface dependency lifecycle failures in Infrastructure State and
   Operations details only when they affect active scenarios.
 - [x] Add tests for dependency lifecycle result reporting.
 - [x] Add tests for scenario install/update that pulls a dependent skill forward
@@ -583,6 +583,12 @@ Implementation notes:
   dependent skill through source install, runtime prepare, and activation
   before Yjs projection; async install/update operation payloads preserve the
   same per-skill lifecycle flags.
+- Infrastructure State now marks active scenario rows with a dependency
+  lifecycle warning only when a recent scenario operation reports failed
+  required dependencies; inactive/unprojected scenarios stay quiet.
+- Operation detail streams expose the captured `dependency_bootstrap` payload so
+  an operator can inspect the failed skill lifecycle stage without dumping the
+  full operation history into the main table.
 
 #### RCMS-005: Make production CLI/control commands slot-bound
 
