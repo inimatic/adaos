@@ -425,7 +425,9 @@ runtime publishing, and future LLM development in `.adaos/dev`.
 
 #### RCMS-001: Enforce git policy by role and deployment mode
 
-Status: planned.
+Status: in progress.
+
+Progress: 10%.
 
 Actions:
 
@@ -441,6 +443,16 @@ Actions:
   makes a displayed drift result stale.
 - [ ] Add tests for hub/dev git-required behavior and member no-git archive
   install/update behavior.
+- [x] Keep `skill push` / `scenario push` workspaces clean after a rebase
+  content conflict by aborting the interrupted rebase and surfacing an
+  actionable conflict diagnostic.
+
+Implementation notes:
+
+- This is a guardrail before LLM-assisted conflict resolution: a detected git
+  conflict now leaves the local commit intact and the worktree clean, so a
+  future root/LLM resolver can build a bounded conflict pack from a stable
+  repository state.
 
 #### RCMS-002: Separate catalog, workspace source, and active runtime versions
 
