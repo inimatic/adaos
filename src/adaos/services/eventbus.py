@@ -14,6 +14,10 @@ from adaos.ports import EventBus
 Handler = Callable[[Event], Any] | Callable[[Event], Awaitable[Any]]
 
 _log = logging.getLogger("adaos.eventbus")
+_WEBIO_STREAM_CONTROL_EVENTS = {
+    "webio.stream.snapshot.requested",
+    "webio.stream.subscription.changed",
+}
 
 
 def _trace_subscribe_enabled() -> bool:
@@ -172,6 +176,7 @@ class LocalEventBus(EventBus):
         self._bounded_superseded_by_topic: DefaultDict[str, int] = defaultdict(int)
         self._bounded_superseded_by_type: DefaultDict[str, int] = defaultdict(int)
         self._bounded_queue_peak = 0
+        self._webio_stream_control_stats: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
 
     def _bounded_topic_key(self, event_type: str) -> str | None:
         for spec in self._bounded_topics:
@@ -217,17 +222,62 @@ class LocalEventBus(EventBus):
         return None
 
     def _bounded_supersede_key(self, event_type: str, event: Event) -> tuple[Any, ...] | None:
-        if event_type == "webio.stream.snapshot.requested":
-            webspace_id = str(self._event_field(event, "webspace_id") or "default").strip() or "default"
-            target_node_id = str(self._event_field(event, "target_node_id", "node_id") or "").strip()
-            stream_id = str(self._event_field(event, "stream_id", "receiver") or "").strip()
-            source = str(self._event_field(event, "source") or "").strip()
-            return (event_type, webspace_id, target_node_id, stream_id, source)
+        if event_type in _WEBIO_STREAM_CONTROL_EVENTS:
+            return self._webio_stream_control_key(event_type, event)
         if event_type == "subnet.member.snapshot.changed":
             node_id = str(self._event_field(event, "target_node_id", "node_id", "member_id") or "").strip()
             webspace_id = str(self._event_field(event, "webspace_id") or "").strip()
             return (event_type, node_id, webspace_id)
         return None
+
+    def _webio_stream_control_key(
+        self,
+        event_type: str,
+        event: Event,
+    ) -> tuple[str, str, str, str, str] | None:
+        if event_type not in _WEBIO_STREAM_CONTROL_EVENTS:
+            return None
+        webspace_id = str(self._event_field(event, "webspace_id") or "default").strip() or "default"
+        target_node_id = str(self._event_field(event, "target_node_id", "node_id") or "").strip()
+        stream_id = str(self._event_field(event, "stream_id", "receiver", "id") or "").strip()
+        source = str(self._event_field(event, "source") or getattr(event, "source", "") or "").strip()
+        return (event_type, webspace_id, target_node_id, stream_id, source)
+
+    def _prune_webio_stream_control_stats_locked(self, *, limit: int = 500) -> None:
+        if len(self._webio_stream_control_stats) <= limit:
+            return
+        stale = sorted(
+            self._webio_stream_control_stats.items(),
+            key=lambda item: float(item[1].get("last_at") or 0.0),
+        )
+        for key, _item in stale[: max(0, len(stale) - limit)]:
+            self._webio_stream_control_stats.pop(key, None)
+
+    def _record_webio_stream_control_locked(
+        self,
+        event_type: str,
+        event: Event,
+        field: str,
+        *,
+        handler_name: str | None = None,
+    ) -> None:
+        key = self._webio_stream_control_key(event_type, event)
+        if key is None:
+            return
+        current = dict(self._webio_stream_control_stats.get(key) or {})
+        current["event_type"] = key[0]
+        current["webspace_id"] = key[1]
+        current["target_node_id"] = key[2] or None
+        current["receiver"] = key[3] or None
+        current["source"] = key[4] or None
+        current["last_action"] = str(self._event_field(event, "action", "change") or "").strip() or None
+        if handler_name:
+            current["last_handler"] = handler_name
+        current["last_at"] = time.time()
+        counter = f"{field}_total"
+        current[counter] = int(current.get(counter) or 0) + 1
+        self._webio_stream_control_stats[key] = current
+        self._prune_webio_stream_control_stats_locked()
 
     def _bounded_remove_superseded_locked(
         self,
@@ -253,6 +303,12 @@ class LocalEventBus(EventBus):
         removed_type = self._bounded_decrement_queued_locked(removed)
         self._bounded_superseded_by_topic[topic_key] += 1
         self._bounded_superseded_by_type[removed_type] += 1
+        self._record_webio_stream_control_locked(
+            removed_type,
+            removed[2],
+            "superseded",
+            handler_name=removed[4],
+        )
         return removed[0]
 
     def _bounded_decrement_queued_locked(
@@ -294,6 +350,12 @@ class LocalEventBus(EventBus):
             removed_type = self._bounded_decrement_queued_locked(item)
             self._bounded_superseded_by_topic[topic_key] += 1
             self._bounded_superseded_by_type[removed_type] += 1
+            self._record_webio_stream_control_locked(
+                removed_type,
+                item[2],
+                "superseded",
+                handler_name=item[4],
+            )
         return [item[0] for item in removed]
 
     def _pending_backlog_snapshot_locked(self) -> dict[str, Any]:
@@ -341,6 +403,16 @@ class LocalEventBus(EventBus):
             ((event_type, count) for event_type, count in self._incoming_by_type.items() if count > 0),
             key=lambda item: (-item[1], item[0]),
         )[:5]
+        top_webio_stream_controls = sorted(
+            (dict(item) for item in self._webio_stream_control_stats.values()),
+            key=lambda item: (
+                -int(item.get("superseded_total") or 0),
+                -int(item.get("dropped_total") or 0),
+                -int(item.get("incoming_total") or 0),
+                str(item.get("event_type") or ""),
+                str(item.get("receiver") or ""),
+            ),
+        )[:10]
         return {
             "pending_tasks": len(self._pending_tasks),
             "pending_peak": int(self._pending_peak),
@@ -361,6 +433,7 @@ class LocalEventBus(EventBus):
             "top_bounded_drops": top_bounded_drops,
             "top_bounded_superseded_topics": top_bounded_superseded_topics,
             "top_bounded_superseded_types": top_bounded_superseded_types,
+            "top_webio_stream_controls": top_webio_stream_controls,
         }
 
     def backlog_snapshot(self) -> dict[str, Any]:
@@ -514,6 +587,7 @@ class LocalEventBus(EventBus):
         with self._lock:
             self._incoming_total += 1
             self._incoming_by_type[event_type] += 1
+            self._record_webio_stream_control_locked(event_type, event, "incoming")
             pairs = [(p, hs[:]) for p, hs in self._subs.items()]
 
         if _log.isEnabledFor(logging.DEBUG):
@@ -573,11 +647,23 @@ class LocalEventBus(EventBus):
                                 if len(queue) >= self._bounded_queue_limit:
                                     self._bounded_dropped_by_topic[topic_key] += 1
                                     self._bounded_dropped_by_type[event_type] += 1
+                                    self._record_webio_stream_control_locked(
+                                        event_type,
+                                        event,
+                                        "dropped",
+                                        handler_name=handler_name,
+                                    )
                                     dropped_total = int(self._bounded_dropped_by_topic[topic_key] or 0)
                                 else:
                                     queue.append((res, h, event, event_type, handler_name, supersede_key))
                                     self._bounded_queued_by_type[event_type] += 1
                                     self._bounded_queued_by_handler[handler_name] += 1
+                                    self._record_webio_stream_control_locked(
+                                        event_type,
+                                        event,
+                                        "queued",
+                                        handler_name=handler_name,
+                                    )
                                     bounded_total = sum(len(items) for items in self._bounded_queues.values())
                                     if bounded_total > self._bounded_queue_peak:
                                         self._bounded_queue_peak = bounded_total
