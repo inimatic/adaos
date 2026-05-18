@@ -381,6 +381,10 @@ Success means:
 - Infrastructure State shows the full installed skills/scenarios inventory by
   default, with a shared `Drift only` toggle for focused divergence review and
   compact status icons with tooltips.
+- Infrastructure State is a thin operator surface, not the authority for
+  inventory, drift, action eligibility, lifecycle health, or quarantine
+  decisions. The same core-owned contracts must be reusable by other skills and
+  future MCP/LLM developer surfaces.
 - Scenario installation and update paths apply the skill lifecycle to required
   skill dependencies and expose dependency failures as structured operation
   results.
@@ -420,6 +424,13 @@ runtime publishing, and future LLM development in `.adaos/dev`.
   rebuild as one operation.
 - Dev workspace flows are explicit and scoped to `.adaos/dev`; they may expose
   source/runtime divergence intentionally.
+- `infrastate_skill` may format labels, icons, streams, modal details, and
+  local UI state. It must not be the long-term owner of catalog lookup, drift
+  classification, lifecycle policy, action gating, scenario health, or
+  operation artifact retention.
+- Any operator-facing inventory or lifecycle action exposed in `infrastate` must
+  have a corresponding core/API contract that can also be exposed through MCP
+  for LLM-assisted development.
 
 ### Tasks
 
@@ -642,6 +653,57 @@ Actions:
 - [ ] Surface member catalog staleness only when it affects installed
   skill/scenario drift or update actions.
 - [ ] Add tests for no-git member drift calculation from a hub snapshot.
+
+#### RCMS-007: Keep operator interfaces thin over core contracts
+
+Status: planned.
+
+Goal:
+
+Make `infrastate_skill` a reference operator interface rather than a source of
+truth. The same inventory, diagnostics, health, and action contracts must be
+usable by other skills, web surfaces, CLI flows, and future MCP/LLM developer
+tools.
+
+Boundaries:
+
+- Core owns catalog/workspace/runtime inventory, drift classification, action
+  eligibility, scenario dependency health, quarantine state, and durable
+  operation artifacts.
+- Interfaces own presentation: filtering, sorting, icons/tooltips, local view
+  state, stream subscriptions, and modal layout.
+- MCP exposes the same core read/action contracts as the UI; it should not
+  scrape `infrastate` snapshots to understand system state.
+
+Actions:
+
+- [ ] Introduce a core `ArtifactInventoryService` for skills and scenarios that
+  returns catalog/workspace/runtime versions, drift statuses, catalog freshness,
+  git availability impact, and action eligibility.
+- [ ] Move catalog lookup, stale-catalog classification, and no-git diagnostics
+  out of `infrastate_skill` into the inventory service.
+- [ ] Introduce a core scenario health model for active scenarios:
+  `ok`, `degraded`, `blocked`, and rollout `quarantined`, including failed
+  dependency lifecycle artifacts.
+- [ ] Persist operation diagnostics needed by operators and LLM developers
+  beyond the in-memory `OperationManager` retention window.
+- [ ] Expose inventory, scenario health, operation details, and log/detail
+  resources through stable API and Root MCP surfaces.
+- [ ] Refactor `infrastate_skill` to consume the core inventory/health/detail
+  payloads and keep only presentation logic.
+- [ ] Add contract tests proving `infrastate`, API, and MCP read the same core
+  payloads for drift, action eligibility, and dependency lifecycle failures.
+
+Implementation notes:
+
+- RCMS-004 already follows the intended direction for scenario dependency
+  lifecycle: `ScenarioManager`, API, and `OperationManager` own the structured
+  `dependency_bootstrap` payload; `infrastate_skill` only renders it.
+- RCMS-002 still has transitional logic inside `infrastate_skill` for drift and
+  action visibility. That is acceptable while proving the product behavior, but
+  the target is to migrate those calculations into the core inventory contract.
+- RCMS-006 supplies the member-side catalog snapshot foundation needed before
+  no-git member drift can become a core-owned, MCP-readable truth.
 
 ## Hub Memory Growth Under Snapshot and Webspace Fanout
 
