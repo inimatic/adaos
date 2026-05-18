@@ -481,7 +481,7 @@ Actions:
 
 Status: in progress.
 
-Progress: 30%.
+Progress: 40%.
 
 Actions:
 
@@ -495,6 +495,11 @@ Actions:
 - [ ] Restrict lightweight `runtime_update` source-copy behavior to dev/debug
   flows where source/runtime drift is expected and visible.
 - [x] Make API update success require active runtime convergence in production.
+- [x] Make unqualified `adaos skill activate <skill>` prepare and activate the
+  workspace source version when it differs from the active runtime.
+- [x] Correct CLI runtime drift direction so a newer workspace source reports
+  `runtime-behind`, and semantically equal `v0.75.6` / `0.75.6` versions do not
+  show drift.
 - [x] Add tests around update failure and drift visibility.
 - [ ] Add rollback-to-previous-active coverage for partial activation failures.
 
