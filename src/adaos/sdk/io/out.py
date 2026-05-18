@@ -7,6 +7,8 @@ outputs (chat history, TTS queues, etc.) based on `_meta`.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from typing import Any, Mapping
 
@@ -18,7 +20,7 @@ from adaos.services.eventbus import emit as _emit
 from adaos.services.node_config import load_config
 from adaos.services.webspace_id import coerce_webspace_id
 
-__all__ = ["chat_append", "say", "media_route", "stream_publish"]
+__all__ = ["chat_append", "say", "media_route", "stream_publish", "stream_variable_publish"]
 
 
 def _publish(topic: str, payload: dict, *, source: str) -> None:
@@ -74,6 +76,14 @@ def _local_node_id() -> str:
     except Exception:
         pass
     return ""
+
+
+def _json_fingerprint(value: Any) -> str:
+    try:
+        raw = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        raw = repr(value)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
 @tool(
@@ -250,3 +260,46 @@ def stream_publish(
 
     _publish("io.out.stream.publish", payload, source="sdk.io.out")
     return {"ok": True}
+
+
+def stream_variable_publish(
+    receiver: str | None,
+    value: Any = None,
+    *,
+    var_id: str | None = None,
+    seq: int | None = None,
+    updated_at: float | None = None,
+    fingerprint: str | None = None,
+    ttl_ms: int | None = None,
+    ts: float | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> Mapping[str, bool]:
+    """Publish one bounded replace-mode stream variable.
+
+    The receiver still controls client-side rendering. This helper only gives
+    stream producers a consistent envelope for freshness, stale-event rejection,
+    and unchanged-payload dedupe.
+    """
+
+    receiver_id = str(receiver or "").strip()
+    if not receiver_id:
+        return {"ok": False}
+    event_ts = float(ts) if ts is not None else time.time()
+    variable_id = str(var_id or receiver_id).strip() or receiver_id
+    payload: dict[str, Any] = {
+        "id": variable_id,
+        "value": value,
+        "seq": int(seq) if seq is not None else time.time_ns(),
+        "updated_at": float(updated_at) if updated_at is not None else event_ts,
+        "fingerprint": str(fingerprint or _json_fingerprint(value)),
+    }
+    if ttl_ms is not None:
+        try:
+            ttl_value = int(ttl_ms)
+            if ttl_value > 0:
+                payload["ttl_ms"] = ttl_value
+        except Exception:
+            pass
+    meta = dict(_meta or {})
+    meta.setdefault("stream_semantics", "replace_variable")
+    return stream_publish(receiver_id, payload, ts=event_ts, _meta=meta)

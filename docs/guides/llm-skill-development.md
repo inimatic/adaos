@@ -28,8 +28,8 @@ Preferred data-plane choices:
 
 - `data_projections` plus `ctx_subnet.set()` / `ctx_subnet.set_async()` for
   compact reconnect-stable bootstrap/control state.
-- `stream_publish()` and `webio.receivers` for high-churn or append-heavy live
-  data and operator-facing variables.
+- `stream_variable_publish()`, `stream_publish()`, and `webio.receivers` for
+  high-churn live variables, append-heavy data, and operator-facing variables.
 - skill-local storage for private durable skill state.
 - tool/detail endpoints for explicit user-requested details.
 - 360log or disk snapshots for later diagnostics, not browser steady-state
@@ -263,7 +263,15 @@ Declare receivers in `webui.json`:
 Publish from the skill:
 
 ```python
-from adaos.sdk.io import stream_publish
+from adaos.sdk.io import stream_publish, stream_variable_publish
+
+stream_variable_publish(
+    "voice_chat.status",
+    {"state": "ready", "peer_count": 1},
+    var_id="status",
+    ttl_ms=30000,
+    _meta={"webspace_id": webspace_id},
+)
 
 stream_publish(
     "voice_chat.messages",
@@ -280,6 +288,9 @@ Stream rules:
 - coalesce repeated snapshot requests per receiver/webspace/node
 - include `updated_at`, `seq`, stable ids, or a content fingerprint when the
   receiver needs to reject stale or duplicate payloads
+- prefer `stream_variable_publish()` for replace-mode current-state variables;
+  it wraps `id`, `value`, `seq`, `updated_at`, `fingerprint`, and optional
+  `ttl_ms` consistently
 - use `mode: "replace"` for current-state variables and include a complete
   bounded current value in each snapshot
 - use `mode: "append"` only for true tails, with `maxItems`, `dedupeBy`, and
