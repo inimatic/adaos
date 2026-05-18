@@ -755,11 +755,19 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"path={yjs_pressure.get('quarantine_path') or '-'}"
             )
         if yjs_pressure.get("last_reason") or yjs_pressure.get("last_path"):
+            last_route = yjs_pressure.get("last_route") if isinstance(yjs_pressure.get("last_route"), dict) else {}
+            last_projection = (
+                yjs_pressure.get("last_projection")
+                if isinstance(yjs_pressure.get("last_projection"), dict)
+                else {}
+            )
             typer.echo(
                 "yjs_pressure.last: "
                 f"policy={yjs_pressure.get('last_policy_state') or '-'} "
                 f"reason={yjs_pressure.get('last_reason') or '-'} "
-                f"path={yjs_pressure.get('last_path') or '-'}"
+                f"path={yjs_pressure.get('last_path') or '-'} "
+                f"route={last_route.get('kind') or '-'} "
+                f"surface={last_route.get('surface') or last_projection.get('slot') or '-'}"
             )
     if webio_stream_guard:
         guard_totals = webio_stream_guard.get("totals") if isinstance(webio_stream_guard.get("totals"), dict) else {}

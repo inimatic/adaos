@@ -1879,7 +1879,7 @@ Success means:
 
 Snapshot date: 2026-05-18.
 
-Overall completion: 23%. First implementation slices landed the ABI/schema
+Overall completion: 27%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1889,8 +1889,10 @@ guard policy metadata, `webio_stream_guard_snapshot(...)`, and
 `stream_variable_publish(...)`. The reliability full snapshot, compact summary,
 and CLI now also expose stream-guard publish/suppress counters plus eventbus
 `webio.stream.snapshot.requested` / `webio.stream.subscription.changed`
-control-pressure counters by receiver. Full status-plane helpers are still
-pending before `infrastate_skill` conversion should start.
+control-pressure counters by receiver. ProjectionService/Yjs governance now
+records the projection route (`scope`, `slot`, `path`, `root`) behind the last
+primary-doc pressure event. Full status-plane helpers are still pending before
+`infrastate_skill` conversion should start.
 
 Problem statement:
 
@@ -1949,7 +1951,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 75%.
+Progress: 85%.
 
 Purpose:
 
@@ -1971,7 +1973,7 @@ Actions:
 - [x] Expose stream receiver route metadata in router guard diagnostics so logs
   and owner-guard policy can say which skill, surface, route, and receiver
   created pressure.
-- [ ] Extend the same route metadata into ProjectionService/Yjs projection
+- [x] Extend the same route metadata into ProjectionService/Yjs projection
   diagnostics.
 - [x] Define stream-variable delivery semantics in the ABI: replace vs append,
   snapshot-on-subscribe, freshness/TTL, duplicate suppression, stale-event
@@ -2018,10 +2020,13 @@ Human verification:
   `eventbus.webio_control.top`; for `infrastate` bursts the top control row
   should identify the receiver, source, incoming, queued, superseded, and
   dropped counts.
+- Trigger a skill-owned Yjs projection under pressure and then run
+  `adaos node reliability`. The `yjs_pressure.last` line should include the
+  projection route kind and surface/slot, so the noisy `scope.slot` can be
+  mapped back to the skill route plan.
 
 Next steps:
 
-- Wire route metadata into ProjectionService/Yjs projection diagnostics.
 - Use those helpers to prepare the `infrastate_skill` data-route plan before
   moving active variables out of Yjs.
 - Start the shared status-card contract and SDK helpers so `infrastate_skill`
@@ -2246,7 +2251,9 @@ Actions:
   receiver.
   Reliability now carries the source counters for published/suppressed/fanout
   and snapshot-requested/queued/superseded/dropped by receiver; the remaining
-  work is to run the soak and record the result.
+  work is to run the soak and record the result. Yjs projection pressure now
+  also reports the last projection route/surface through governance and
+  `yjs_pressure.last`.
 - [ ] Run a 180-second acceptance with browser attached.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.

@@ -197,7 +197,7 @@ def test_projection_service_passes_target_root_to_async_get_ydoc(monkeypatch) ->
 
     asyncio.run(service.apply("runtime", "weather", {"city": "Moscow"}, webspace_id="ws-test"))
 
-    assert calls == [{"load_mark_roots": ["data"]}]
+    assert calls == [{"load_mark_roots": ["data"], "governed": True}]
 
 
 def test_merge_nested_path_clones_y_like_arrays_before_rewriting_node_scoped_roots() -> None:
@@ -266,11 +266,12 @@ def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> 
             "source": "projection_service",
             "owner": "skill:infrastate_skill",
             "channel": "projection.yjs",
+            "governed": True,
         }
     ]
 
 
-def test_projection_service_skips_live_room_fast_path_for_skill_owned_writes(monkeypatch) -> None:
+def test_projection_service_uses_live_room_fast_path_for_skill_owned_writes(monkeypatch) -> None:
     fake_state = {"data": _FakeMap()}
     calls: list[dict[str, object]] = []
     mutate_calls: list[str] = []
@@ -289,7 +290,7 @@ def test_projection_service_skips_live_room_fast_path_for_skill_owned_writes(mon
     monkeypatch.setattr(
         projection_service_module,
         "mutate_live_room",
-        lambda ws, _mutator: mutate_calls.append(ws) or True,
+        lambda ws, _mutator, **_kwargs: mutate_calls.append(ws) or True,
     )
     monkeypatch.setattr(
         projection_service_module,
@@ -305,8 +306,8 @@ def test_projection_service_skips_live_room_fast_path_for_skill_owned_writes(mon
 
     asyncio.run(service.apply("subnet", "infra_access.snapshot", {"ok": True}, webspace_id="ws-test"))
 
-    assert mutate_calls == []
-    assert calls == [{"load_mark_roots": ["data"]}]
+    assert mutate_calls == ["ws-test"]
+    assert calls == []
 
 
 def test_projection_service_throttles_skill_owned_primary_doc_writes_when_policy_is_critical(monkeypatch) -> None:
@@ -345,14 +346,23 @@ def test_projection_service_throttles_skill_owned_primary_doc_writes_when_policy
 
     asyncio.run(service.apply("subnet", "infrastate.snapshot", {"ok": True}, webspace_id="ws-test"))
 
-    assert throttle_calls == [
-        {
-            "policy": {"policy_state": "throttle", "observed_state": "critical"},
-            "webspace_id": "ws-test",
-            "path": "data/nodes/hub/infrastate",
-            "owner": "skill:infrastate_skill",
-        }
-    ]
+    assert len(throttle_calls) == 1
+    call = throttle_calls[0]
+    assert call["webspace_id"] == "ws-test"
+    assert call["path"] == "data/nodes/hub/infrastate"
+    assert call["owner"] == "skill:infrastate_skill"
+    policy = call["policy"]
+    assert policy["policy_state"] == "throttle"
+    assert policy["observed_state"] == "critical"
+    assert policy["route"] == {
+        "kind": "yjs_projection",
+        "surface": "subnet.infrastate.snapshot",
+        "backend": "yjs",
+        "path": "data/nodes/hub/infrastate",
+        "root": "data",
+    }
+    assert policy["projection"]["scope"] == "subnet"
+    assert policy["projection"]["slot"] == "infrastate.snapshot"
 
 
 def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_requires(monkeypatch) -> None:
@@ -392,26 +402,47 @@ def test_projection_service_blocks_skill_owned_primary_doc_writes_when_policy_re
 
     asyncio.run(service.apply("subnet", "infrastate.snapshot", {"ok": True}, webspace_id="ws-test"))
 
-    assert calls == [
-        {
-            "policy": {"policy_state": "block", "observed_state": "critical", "blocked_roots": ["data"]},
-            "webspace_id": "ws-test",
-            "path": "data/nodes/hub/infrastate",
-            "owner": "skill:infrastate_skill",
-        }
-    ]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["webspace_id"] == "ws-test"
+    assert call["path"] == "data/nodes/hub/infrastate"
+    assert call["owner"] == "skill:infrastate_skill"
+    policy = call["policy"]
+    assert policy["policy_state"] == "block"
+    assert policy["observed_state"] == "critical"
+    assert policy["blocked_roots"] == ["data"]
+    assert policy["route"]["kind"] == "yjs_projection"
+    assert policy["route"]["surface"] == "subnet.infrastate.snapshot"
+    assert policy["projection"]["slot"] == "infrastate.snapshot"
     assert async_get_calls == []
     assert fake_state["data"] == {}
 
 
 def test_projection_service_governance_snapshot_tracks_throttle_and_block_events(monkeypatch) -> None:
     projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
+    from adaos.services.yjs import governance as yjs_governance
+    from adaos.services.yjs import owner_guard
+
+    with yjs_governance._LOCK:
+        yjs_governance._STATS.clear()
+    with owner_guard._LOCK:
+        owner_guard._DECISIONS.clear()
+        owner_guard._QUARANTINES.clear()
+        owner_guard._QUARANTINE_INCIDENTS.clear()
+        owner_guard._QUARANTINE_TOTAL = 0
+        owner_guard._DENIED_TOTAL = 0
+    monkeypatch.setattr(owner_guard, "admit_owner_work", lambda **_kwargs: {"allowed": True})
 
     monkeypatch.setattr(projection_service_module.time, "time", lambda: 1778055331.0)
 
     asyncio.run(
         projection_service_module._govern_primary_doc_write(
-            policy={"policy_state": "throttle", "reason": "write_amplification"},
+            policy={
+                "policy_state": "throttle",
+                "reason": "write_amplification",
+                "route": {"kind": "yjs_projection", "surface": "subnet.infrastate.snapshot"},
+                "projection": {"scope": "subnet", "slot": "infrastate.snapshot", "root": "data"},
+            },
             webspace_id="desktop",
             path="data/infrastate",
             owner="skill:infrastate_skill",
@@ -419,7 +450,13 @@ def test_projection_service_governance_snapshot_tracks_throttle_and_block_events
     )
     asyncio.run(
         projection_service_module._govern_primary_doc_write(
-            policy={"policy_state": "block", "reason": "write_amplification_blocked", "blocked_roots": ["data"]},
+            policy={
+                "policy_state": "block",
+                "reason": "write_amplification_blocked",
+                "blocked_roots": ["data"],
+                "route": {"kind": "yjs_projection", "surface": "subnet.infrastate.snapshot"},
+                "projection": {"scope": "subnet", "slot": "infrastate.snapshot", "root": "data"},
+            },
             webspace_id="desktop",
             path="data/infrastate",
             owner="skill:infrastate_skill",
@@ -437,3 +474,6 @@ def test_projection_service_governance_snapshot_tracks_throttle_and_block_events
     assert snapshot["last_reason"] == "write_amplification_blocked"
     assert snapshot["last_path"] == "data/infrastate"
     assert snapshot["last_blocked_roots"] == ["data"]
+    assert snapshot["last_route"]["kind"] == "yjs_projection"
+    assert snapshot["last_route"]["surface"] == "subnet.infrastate.snapshot"
+    assert snapshot["last_projection"]["slot"] == "infrastate.snapshot"

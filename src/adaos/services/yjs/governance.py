@@ -127,6 +127,15 @@ def _record_event(
         current["last_channel"] = str(channel or "").strip() or None
         current["last_roots"] = list(root_names)
         current["last_update_bytes"] = int(update_bytes or 0)
+        current["last_route"] = dict(policy.get("route")) if isinstance(policy.get("route"), dict) else {}
+        current["last_projection"] = (
+            dict(policy.get("projection")) if isinstance(policy.get("projection"), dict) else {}
+        )
+        current["last_guard_visibility"] = (
+            dict(policy.get("guard_visibility")) if isinstance(policy.get("guard_visibility"), dict) else {}
+        )
+        current["last_correlation_id"] = str(policy.get("correlation_id") or "").strip() or None
+        current["last_generation_id"] = str(policy.get("generation_id") or "").strip() or None
         current["last_at"] = now
         current["last_blocked_roots"] = list(policy.get("blocked_roots") or [])
         current["last_throttled_roots"] = list(policy.get("throttled_roots") or [])
@@ -162,7 +171,7 @@ def _maybe_log_decision(stats: dict[str, Any], *, policy: dict[str, Any], decisi
     level = logging.WARNING if decision == "block" else logging.INFO
     _log.log(
         level,
-        "%s YJS primary-doc write webspace=%s owner=%s roots=%s path=%s source=%s channel=%s reason=%s update_bytes=%s total=%s",
+        "%s YJS primary-doc write webspace=%s owner=%s roots=%s path=%s source=%s channel=%s route=%s surface=%s reason=%s update_bytes=%s total=%s",
         "blocked" if decision == "block" else "throttled",
         str(stats.get("webspace_id") or "default"),
         str(stats.get("owner") or "unknown"),
@@ -170,6 +179,8 @@ def _maybe_log_decision(stats: dict[str, Any], *, policy: dict[str, Any], decisi
         str(stats.get("last_path") or "-"),
         str(stats.get("last_source") or "-"),
         str(stats.get("last_channel") or "-"),
+        str((stats.get("last_route") if isinstance(stats.get("last_route"), dict) else {}).get("kind") or "-"),
+        str((stats.get("last_route") if isinstance(stats.get("last_route"), dict) else {}).get("surface") or "-"),
         str(policy.get("reason") or "write_amplification"),
         int(stats.get("last_update_bytes") or 0),
         total,
@@ -392,6 +403,20 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
         )
     except Exception:
         owner_guard = {}
+    owner_guard_route = owner_guard.get("last_route") if isinstance(owner_guard.get("last_route"), dict) else {}
+    if not owner_guard_route:
+        owner_guard_route = (
+            owner_guard.get("quarantine_route") if isinstance(owner_guard.get("quarantine_route"), dict) else {}
+        )
+    owner_guard_projection = (
+        owner_guard.get("last_projection") if isinstance(owner_guard.get("last_projection"), dict) else {}
+    )
+    if not owner_guard_projection:
+        owner_guard_projection = (
+            owner_guard.get("quarantine_projection")
+            if isinstance(owner_guard.get("quarantine_projection"), dict)
+            else {}
+        )
     return {
         "enabled": bool(_ENABLED),
         "throttle_sec": float(_THROTTLE_SEC),
@@ -407,6 +432,23 @@ def primary_doc_governance_snapshot(*, webspace_id: str | None = None, owner: st
         "last_path": str(selected.get("last_path") or "").strip() or None,
         "last_source": str(selected.get("last_source") or "").strip() or None,
         "last_channel": str(selected.get("last_channel") or "").strip() or None,
+        "last_route": (
+            dict(selected.get("last_route"))
+            if isinstance(selected.get("last_route"), dict) and selected.get("last_route")
+            else dict(owner_guard_route)
+        ),
+        "last_projection": (
+            dict(selected.get("last_projection"))
+            if isinstance(selected.get("last_projection"), dict) and selected.get("last_projection")
+            else dict(owner_guard_projection)
+        ),
+        "last_guard_visibility": (
+            dict(selected.get("last_guard_visibility"))
+            if isinstance(selected.get("last_guard_visibility"), dict)
+            else {}
+        ),
+        "last_correlation_id": str(selected.get("last_correlation_id") or "").strip() or None,
+        "last_generation_id": str(selected.get("last_generation_id") or "").strip() or None,
         "last_at": float(selected.get("last_at") or 0.0) or None,
         "last_update_bytes": int(selected.get("last_update_bytes") or 0),
         "last_roots": list(selected.get("last_roots") or []),

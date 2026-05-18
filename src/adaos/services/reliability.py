@@ -5706,6 +5706,16 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
                 "last_policy_state": str(governance.get("last_policy_state") or "").strip() or None,
                 "last_reason": str(governance.get("last_reason") or "").strip() or None,
                 "last_path": str(governance.get("last_path") or "").strip() or None,
+                "last_source": str(governance.get("last_source") or "").strip() or None,
+                "last_channel": str(governance.get("last_channel") or "").strip() or None,
+                "last_route": dict(governance.get("last_route")) if isinstance(governance.get("last_route"), dict) else {},
+                "last_projection": (
+                    dict(governance.get("last_projection"))
+                    if isinstance(governance.get("last_projection"), dict)
+                    else {}
+                ),
+                "last_correlation_id": str(governance.get("last_correlation_id") or "").strip() or None,
+                "last_generation_id": str(governance.get("last_generation_id") or "").strip() or None,
                 "last_at": float(governance.get("last_at") or 0.0) or None,
                 "last_blocked_roots": list(governance.get("last_blocked_roots") or []),
                 "last_throttled_roots": list(governance.get("last_throttled_roots") or []),
@@ -5741,6 +5751,12 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
         "last_policy_state": None,
         "last_reason": None,
         "last_path": None,
+        "last_source": None,
+        "last_channel": None,
+        "last_route": {},
+        "last_projection": {},
+        "last_correlation_id": None,
+        "last_generation_id": None,
         "last_at": None,
         "last_blocked_roots": [],
         "last_throttled_roots": [],

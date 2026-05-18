@@ -182,6 +182,13 @@ def _quarantine_public_row(row: Mapping[str, Any], *, now: float) -> dict[str, A
         "tool": str(row.get("tool") or "").strip() or None,
         "incident_count": int(row.get("incident_count") or 0) or None,
         "root_names": list(row.get("root_names") or []),
+        "route": dict(row.get("route")) if isinstance(row.get("route"), dict) else {},
+        "projection": dict(row.get("projection")) if isinstance(row.get("projection"), dict) else {},
+        "guard_visibility": (
+            dict(row.get("guard_visibility")) if isinstance(row.get("guard_visibility"), dict) else {}
+        ),
+        "correlation_id": str(row.get("correlation_id") or "").strip() or None,
+        "generation_id": str(row.get("generation_id") or "").strip() or None,
     }
 
 
@@ -277,6 +284,15 @@ def _record_decision_locked(
     current["last_work_kind"] = str(work_kind or "").strip() or None
     current["last_tool"] = str(tool or "").strip() or None
     current["last_roots"] = list(root_names)
+    current["last_route"] = dict(policy.get("route")) if isinstance(policy.get("route"), dict) else {}
+    current["last_projection"] = (
+        dict(policy.get("projection")) if isinstance(policy.get("projection"), dict) else {}
+    )
+    current["last_guard_visibility"] = (
+        dict(policy.get("guard_visibility")) if isinstance(policy.get("guard_visibility"), dict) else {}
+    )
+    current["last_correlation_id"] = str(policy.get("correlation_id") or "").strip() or None
+    current["last_generation_id"] = str(policy.get("generation_id") or "").strip() or None
     current["last_at"] = now
     if decision == "deny":
         current["denied_total"] = int(current.get("denied_total") or 0) + 1
@@ -335,6 +351,13 @@ def _activate_quarantine_locked(
         "work_kind": str(work_kind or "").strip() or None,
         "tool": str(tool or "").strip() or None,
         "root_names": list(root_names),
+        "route": dict(policy.get("route")) if isinstance(policy.get("route"), dict) else {},
+        "projection": dict(policy.get("projection")) if isinstance(policy.get("projection"), dict) else {},
+        "guard_visibility": (
+            dict(policy.get("guard_visibility")) if isinstance(policy.get("guard_visibility"), dict) else {}
+        ),
+        "correlation_id": str(policy.get("correlation_id") or "").strip() or None,
+        "generation_id": str(policy.get("generation_id") or "").strip() or None,
         "updated_at": now,
     }
     _QUARANTINES[key] = row
@@ -673,6 +696,7 @@ def owner_guard_snapshot(*, webspace_id: str | None = None, owner: str | None = 
     rows.sort(key=lambda item: float(item.get("last_at") or 0.0), reverse=True)
     quarantines.sort(key=lambda item: float(item.get("quarantine_until") or 0.0), reverse=True)
     active = quarantines[0] if quarantines else {}
+    selected = rows[0] if rows else {}
     remaining_s = max(0.0, float(active.get("quarantine_until") or 0.0) - now) if active else 0.0
     return {
         "enabled": bool(_ENABLED),
@@ -688,7 +712,22 @@ def owner_guard_snapshot(*, webspace_id: str | None = None, owner: str | None = 
         "quarantine_trigger": str(active.get("trigger") or "").strip() or None,
         "quarantine_path": str(active.get("path") or "").strip() or None,
         "quarantine_tool": str(active.get("tool") or "").strip() or None,
+        "quarantine_route": dict(active.get("route")) if isinstance(active.get("route"), dict) else {},
+        "quarantine_projection": (
+            dict(active.get("projection")) if isinstance(active.get("projection"), dict) else {}
+        ),
         "quarantine_incident_count": int(active.get("incident_count") or 0) or None,
+        "last_route": dict(selected.get("last_route")) if isinstance(selected.get("last_route"), dict) else {},
+        "last_projection": (
+            dict(selected.get("last_projection")) if isinstance(selected.get("last_projection"), dict) else {}
+        ),
+        "last_guard_visibility": (
+            dict(selected.get("last_guard_visibility"))
+            if isinstance(selected.get("last_guard_visibility"), dict)
+            else {}
+        ),
+        "last_correlation_id": str(selected.get("last_correlation_id") or "").strip() or None,
+        "last_generation_id": str(selected.get("last_generation_id") or "").strip() or None,
         "active_quarantines": quarantines[:20],
         "rows": rows[:50],
     }
