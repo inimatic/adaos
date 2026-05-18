@@ -4,6 +4,7 @@ from typing import Any, Callable
 from pathlib import Path
 import asyncio
 import json
+import threading
 import time
 import requests
 import os
@@ -38,6 +39,8 @@ _log = logging.getLogger("adaos.router.service")
 
 
 _WEBIO_RECEIVER_METADATA_CACHE_TTL_S = 2.0
+_WEBIO_STREAM_GUARD_STATS_LOCK = threading.Lock()
+_WEBIO_STREAM_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
 
 def _webio_stream_guard_enabled() -> bool:
@@ -94,6 +97,102 @@ def _receiver_declared_owner(receiver_meta: dict[str, Any]) -> str:
     route = receiver_meta.get("route") if isinstance(receiver_meta.get("route"), dict) else {}
     owner = str(route.get("owner") or receiver_meta.get("owner") or "").strip()
     return owner
+
+
+def _webio_stream_stats_key(webspace_id: str, receiver: str, owner: str) -> str:
+    return "\0".join(
+        [
+            str(webspace_id or "").strip() or "default",
+            str(receiver or "").strip() or "unknown",
+            str(owner or "").strip() or "unknown",
+        ]
+    )
+
+
+def _record_webio_stream_guard_event(
+    *,
+    webspace_id: str,
+    receiver: str,
+    owner: str,
+    event: str,
+    payload_bytes: int,
+    fanout_total: int,
+    effective_bytes: int,
+    policy_state: str = "ok",
+    reason: str = "healthy",
+    receiver_meta: dict[str, Any] | None = None,
+) -> None:
+    receiver_meta = receiver_meta or {}
+    route_meta = receiver_meta.get("route") if isinstance(receiver_meta.get("route"), dict) else {}
+    budget = receiver_meta.get("budget") if isinstance(receiver_meta.get("budget"), dict) else {}
+    token_event = str(event or "").strip().lower()
+    if not token_event:
+        return
+    token_ws = str(webspace_id or "").strip() or "default"
+    token_receiver = str(receiver or "").strip() or "unknown"
+    token_owner = str(owner or "").strip() or "unknown"
+    now = time.time()
+    key = _webio_stream_stats_key(token_ws, token_receiver, token_owner)
+    with _WEBIO_STREAM_GUARD_STATS_LOCK:
+        current = dict(_WEBIO_STREAM_GUARD_STATS.get(key) or {})
+        current["webspace_id"] = token_ws
+        current["receiver"] = token_receiver
+        current["owner"] = token_owner
+        current["last_at"] = now
+        current["last_event"] = token_event
+        current["last_policy_state"] = str(policy_state or "").strip() or "ok"
+        current["last_reason"] = str(reason or "").strip() or None
+        current["last_payload_bytes"] = max(0, int(payload_bytes or 0))
+        current["last_fanout_total"] = max(1, int(fanout_total or 1))
+        current["last_effective_bytes"] = max(0, int(effective_bytes or 0))
+        current["surface"] = str(route_meta.get("surface") or "").strip() or None
+        current["route_kind"] = str(route_meta.get("kind") or "").strip() or None
+        current["receiver_origin"] = str(receiver_meta.get("origin") or "").strip() or None
+        current["receiver_mode"] = str(receiver_meta.get("mode") or "").strip() or None
+        current["snapshot_policy"] = str(receiver_meta.get("snapshotPolicy") or "").strip() or None
+        current["declared_max_payload_bytes"] = _positive_int(
+            budget.get("maxPayloadBytes")
+            or budget.get("max_payload_bytes")
+            or receiver_meta.get("maxPayloadBytes")
+        )
+        field = f"{token_event}_total"
+        current[field] = int(current.get(field) or 0) + 1
+        if token_event == "published":
+            current["published_fanout_total"] = int(current.get("published_fanout_total") or 0) + max(1, int(fanout_total or 1))
+        _WEBIO_STREAM_GUARD_STATS[key] = current
+
+
+def webio_stream_guard_snapshot(
+    *,
+    webspace_id: str | None = None,
+    receiver: str | None = None,
+    owner: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    token_ws = str(webspace_id or "").strip()
+    token_receiver = str(receiver or "").strip()
+    token_owner = str(owner or "").strip()
+    try:
+        max_items = max(1, min(500, int(limit)))
+    except Exception:
+        max_items = 50
+    with _WEBIO_STREAM_GUARD_STATS_LOCK:
+        rows = [dict(item) for item in _WEBIO_STREAM_GUARD_STATS.values()]
+    if token_ws:
+        rows = [row for row in rows if str(row.get("webspace_id") or "") == token_ws]
+    if token_receiver:
+        rows = [row for row in rows if str(row.get("receiver") or "") == token_receiver]
+    if token_owner:
+        rows = [row for row in rows if str(row.get("owner") or "") == token_owner]
+    rows.sort(key=lambda item: float(item.get("last_at") or 0.0), reverse=True)
+    return {
+        "schema": "adaos.webio_stream_guard.v1",
+        "webspace_id": token_ws or None,
+        "receiver": token_receiver or None,
+        "owner": token_owner or None,
+        "items": rows[:max_items],
+        "total": len(rows),
+    }
 
 
 async def _read_webio_receiver_metadata(webspace_id: str, receiver: str) -> dict[str, Any]:
@@ -175,9 +274,33 @@ def _webio_stream_admit(
             if declared_max_payload
             else "browser_stream_payload_pressure"
         )
+    _record_webio_stream_guard_event(
+        webspace_id=webspace_id,
+        receiver=receiver,
+        owner=owner,
+        event="attempted",
+        payload_bytes=payload_bytes,
+        fanout_total=fanout_total,
+        effective_bytes=effective_bytes,
+        policy_state=policy_state,
+        reason=reason,
+        receiver_meta=receiver_meta,
+    )
     if policy_state == "ok":
         return True
     if not owner:
+        _record_webio_stream_guard_event(
+            webspace_id=webspace_id,
+            receiver=receiver,
+            owner=owner,
+            event="suppressed",
+            payload_bytes=payload_bytes,
+            fanout_total=fanout_total,
+            effective_bytes=effective_bytes,
+            policy_state=policy_state,
+            reason=reason,
+            receiver_meta=receiver_meta,
+        )
         _log.warning(
             "webio stream dropped by payload guard webspace=%s receiver=%s surface=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s owner=unknown",
             webspace_id,
@@ -221,6 +344,18 @@ def _webio_stream_admit(
             },
         )
         if not bool(admission.get("allowed", True)):
+            _record_webio_stream_guard_event(
+                webspace_id=webspace_id,
+                receiver=receiver,
+                owner=admission.get("owner") or owner,
+                event="suppressed",
+                payload_bytes=payload_bytes,
+                fanout_total=fanout_total,
+                effective_bytes=effective_bytes,
+                policy_state=policy_state,
+                reason=admission.get("reason") or reason,
+                receiver_meta=receiver_meta,
+            )
             _log.warning(
                 "webio stream denied by owner guard webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s retry_after_s=%s",
                 webspace_id,
@@ -236,6 +371,18 @@ def _webio_stream_admit(
             )
             return False
         if bool(admission.get("throttled")):
+            _record_webio_stream_guard_event(
+                webspace_id=webspace_id,
+                receiver=receiver,
+                owner=admission.get("owner") or owner,
+                event="throttled",
+                payload_bytes=payload_bytes,
+                fanout_total=fanout_total,
+                effective_bytes=effective_bytes,
+                policy_state=policy_state,
+                reason=admission.get("reason") or reason,
+                receiver_meta=receiver_meta,
+            )
             _log.warning(
                 "webio stream allowed under pressure webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s",
                 webspace_id,
@@ -250,6 +397,18 @@ def _webio_stream_admit(
             )
         return True
     except Exception:
+        _record_webio_stream_guard_event(
+            webspace_id=webspace_id,
+            receiver=receiver,
+            owner=owner,
+            event="suppressed",
+            payload_bytes=payload_bytes,
+            fanout_total=fanout_total,
+            effective_bytes=effective_bytes,
+            policy_state=policy_state,
+            reason=reason,
+            receiver_meta=receiver_meta,
+        )
         _log.warning(
             "webio stream dropped after guard failure webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s",
             webspace_id,
@@ -1672,6 +1831,18 @@ class RouterService:
                     event_payload,
                     source=str(ev.source or "router"),
                     ts=event_ts,
+                )
+                _record_webio_stream_guard_event(
+                    webspace_id=ws,
+                    receiver=receiver,
+                    owner=effective_owner,
+                    event="published",
+                    payload_bytes=payload_bytes,
+                    fanout_total=fanout_total,
+                    effective_bytes=payload_bytes * fanout_total,
+                    policy_state="ok",
+                    reason="published",
+                    receiver_meta=receiver_meta,
                 )
 
         async def _on_browser_session_changed(ev: Event) -> None:
