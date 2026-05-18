@@ -18,6 +18,7 @@ import yaml
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
+from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 _log = logging.getLogger("adaos.skill.service")
@@ -853,8 +854,13 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         subprocess.run([*base, "pip"], check=False)
         if spec.requirements_file:
             subprocess.run([*base, "-r", str(spec.requirements_file)], check=True)
-        if spec.dependencies:
-            subprocess.run([*base, *spec.dependencies], check=True)
+        dependency_args = resolve_skill_dependency_args(
+            spec.dependencies,
+            skill_dir=spec.skill_root,
+            repo_root=_optional_path_value(self._ctx.paths, "repo_root"),
+        )
+        if dependency_args:
+            subprocess.run([*base, *dependency_args], check=True)
 
     @staticmethod
     def _build_command(python: Path, argv: list[str]) -> list[str]:
