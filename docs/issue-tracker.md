@@ -427,7 +427,7 @@ runtime publishing, and future LLM development in `.adaos/dev`.
 
 Status: in progress.
 
-Progress: 10%.
+Progress: 15%.
 
 Actions:
 
@@ -446,6 +446,8 @@ Actions:
 - [x] Keep `skill push` / `scenario push` workspaces clean after a rebase
   content conflict by aborting the interrupted rebase and surfacing an
   actionable conflict diagnostic.
+- [x] Bound sparse-checkout stale-file recovery so production auto-cleanup can
+  remove repeated stale blockers without entering an unbounded retry loop.
 
 Implementation notes:
 
@@ -453,6 +455,9 @@ Implementation notes:
   conflict now leaves the local commit intact and the worktree clean, so a
   future root/LLM resolver can build a bounded conflict pack from a stable
   repository state.
+- Sparse-checkout stale blocker recovery is now iterative but capped through
+  `ADAOS_SPARSE_CHECKOUT_BLOCKER_RETRIES`, preserving deterministic failure when
+  the workspace cannot be safely repaired.
 
 #### RCMS-002: Separate catalog, workspace source, and active runtime versions
 
