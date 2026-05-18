@@ -542,7 +542,7 @@ Implementation notes:
 
 Status: in progress.
 
-Progress: 55%.
+Progress: 75%.
 
 Actions:
 
@@ -562,7 +562,7 @@ Actions:
 - [ ] Surface dependency lifecycle failures in Infrastructure State and
   Operations details only when they affect active scenarios.
 - [x] Add tests for dependency lifecycle result reporting.
-- [ ] Add tests for scenario install/update that pulls a dependent skill forward
+- [x] Add tests for scenario install/update that pulls a dependent skill forward
   and applies its lifecycle through the full operation path.
 
 Implementation notes:
@@ -579,6 +579,10 @@ Implementation notes:
 - Dependency bootstrap timeout/exception paths produce explicit
   `dependency_bootstrap.ok=false` diagnostics instead of dropping dependency
   lifecycle visibility from the operation result.
+- Regression coverage now pins that scenario install refreshes a stale
+  dependent skill through source install, runtime prepare, and activation
+  before Yjs projection; async install/update operation payloads preserve the
+  same per-skill lifecycle flags.
 
 #### RCMS-005: Make production CLI/control commands slot-bound
 

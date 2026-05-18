@@ -276,7 +276,17 @@ def test_submit_scenario_install_operation_rebuilds_target_webspace(monkeypatch)
                 "scenario_id": name,
                 "webspace_id": webspace_id,
                 "required": ["demo_skill"],
-                "items": [{"name": "demo_skill", "ok": True, "version": "1.2.3", "slot": "B"}],
+                "items": [
+                    {
+                        "name": "demo_skill",
+                        "ok": True,
+                        "installed": True,
+                        "prepared": True,
+                        "activated": True,
+                        "version": "1.2.3",
+                        "slot": "B",
+                    }
+                ],
                 "succeeded": ["demo_skill"],
                 "failed": [],
             }
@@ -312,6 +322,9 @@ def test_submit_scenario_install_operation_rebuilds_target_webspace(monkeypatch)
     assert result["result"]["dependency_bootstrap"]["ok"] is True
     assert result["result"]["dependency_bootstrap"]["succeeded"] == ["demo_skill"]
     assert result["result"]["dependency_bootstrap"]["items"][0]["version"] == "1.2.3"
+    assert result["result"]["dependency_bootstrap"]["items"][0]["installed"] is True
+    assert result["result"]["dependency_bootstrap"]["items"][0]["prepared"] is True
+    assert result["result"]["dependency_bootstrap"]["items"][0]["activated"] is True
     assert rebuilds == [("default", "scenario_install_sync", "scenario_projection", "demo_scene")]
 
 
@@ -353,7 +366,17 @@ def test_submit_scenario_update_operation_reports_dependency_bootstrap(monkeypat
                 "scenario_id": name,
                 "webspace_id": webspace_id,
                 "required": ["demo_skill"],
-                "items": [{"name": "demo_skill", "ok": True, "version": "1.2.4", "slot": "A"}],
+                "items": [
+                    {
+                        "name": "demo_skill",
+                        "ok": True,
+                        "installed": True,
+                        "prepared": True,
+                        "activated": True,
+                        "version": "1.2.4",
+                        "slot": "A",
+                    }
+                ],
                 "succeeded": ["demo_skill"],
                 "failed": [],
             }
@@ -391,6 +414,9 @@ def test_submit_scenario_update_operation_reports_dependency_bootstrap(monkeypat
     assert result["result"]["version"] == "0.2.0"
     assert result["result"]["dependency_bootstrap"]["ok"] is True
     assert result["result"]["dependency_bootstrap"]["items"][0]["version"] == "1.2.4"
+    assert result["result"]["dependency_bootstrap"]["items"][0]["installed"] is True
+    assert result["result"]["dependency_bootstrap"]["items"][0]["prepared"] is True
+    assert result["result"]["dependency_bootstrap"]["items"][0]["activated"] is True
     assert rebuilds == [("default", "scenario_update_sync", "scenario_projection", "demo_scene")]
 
 
