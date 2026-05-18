@@ -1079,13 +1079,19 @@ def test_infrastate_scenario_items_only_show_installed_registry_entries(monkeypa
         lambda: {"scenarios": [{"name": "delta", "version": "4.0.0", "active": True, "updated_at": 4.0}]},
     )
 
-    items = mod._scenario_items()
+    monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", False)
 
-    assert items == [
-        {"name": "alpha", "version": "1.2.3", "updated_at": 1.0, "uninstall_disabled": False},
-        {"name": "delta", "version": "4.0.0", "updated_at": 4.0, "uninstall_disabled": False},
-        {"name": "gamma", "version": "3.0.0", "updated_at": 2.0, "uninstall_disabled": False},
+    all_items = mod._scenario_items(include_all=True)
+    assert [(item["name"], item["version"]) for item in all_items] == [
+        ("alpha", "1.0.0"),
+        ("delta", "4.0.0"),
+        ("gamma", "3.0.0"),
     ]
+    assert all_items[0]["workspace_source_version"] == "1.2.3"
+    assert all_items[0]["has_drift"] is True
+
+    drift_items = mod._scenario_items()
+    assert [item["name"] for item in drift_items] == ["alpha"]
 
 
 def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch, tmp_path: Path):
@@ -1135,23 +1141,22 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
 
     items = mod._skills_items()
 
-    assert items == [
-        {
-            "name": "infrastate_skill",
-            "display_name": "infrastate_skill",
-            "version": "0.19.0",
-            "version_display": "0.19.0* (0.20.0)",
-            "slot": "A",
-            "active": True,
-            "can_activate": True,
-            "can_test": True,
-            "used_by_scenarios": [],
-            "uninstall_disabled": False,
-            "remote_version": "0.20.0",
-            "update_available": True,
-            "registry_mismatch": True,
-        }
-    ]
+    assert len(items) == 1
+    item = items[0]
+    assert item["name"] == "infrastate_skill"
+    assert item["version"] == "0.19.0"
+    assert item["active_version"] == "0.19.0"
+    assert item["workspace_source_version"] == "0.19.0"
+    assert item["catalog_version"] == "0.20.0"
+    assert item["version_display"] == "0.19.0* (0.20.0)"
+    assert item["slot"] == "A"
+    assert item["remote_version"] == "0.20.0"
+    assert item["update_available"] is True
+    assert item["registry_mismatch"] is True
+    assert item["has_drift"] is True
+    assert item["status"] == "behind_catalog"
+    assert item["status_icon"] == "cloud-download-outline"
+    assert "behind catalog" in item["status_tooltip"]
 
 
 def test_infrastate_skill_items_compare_remote_against_active_runtime_version(monkeypatch, tmp_path: Path):
@@ -1194,8 +1199,12 @@ def test_infrastate_skill_items_compare_remote_against_active_runtime_version(mo
 
     assert items[0]["version"] == "0.19.0"
     assert items[0]["remote_version"] == "0.20.0"
+    assert items[0]["active_version"] == "0.19.0"
+    assert items[0]["workspace_source_version"] == "0.20.0"
+    assert items[0]["catalog_version"] == "0.20.0"
     assert items[0]["version_display"] == "0.19.0* (0.20.0)"
     assert items[0]["registry_mismatch"] is True
+    assert items[0]["has_drift"] is True
 
 
 def test_infrastate_skill_items_skip_remote_version_probe_when_disabled(monkeypatch, tmp_path: Path):
@@ -1238,6 +1247,9 @@ def test_infrastate_skill_items_skip_remote_version_probe_when_disabled(monkeypa
     assert items[0]["update_available"] is False
     assert items[0]["registry_mismatch"] is False
     assert items[0]["version_display"] == "0.18.0"
+    assert items[0]["workspace_source_version"] == "0.19.0"
+    assert items[0]["has_drift"] is True
+    assert items[0]["status"] == "workspace_runtime_differs"
 
 
 def test_infrastate_marketplace_catalog_skips_remote_url_fetch_on_member(monkeypatch, tmp_path: Path):
