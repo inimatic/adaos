@@ -1056,6 +1056,30 @@ def test_resolve_webspace_merges_webio_receivers_into_compact_runtime_contract(m
                                 "collectionKey": "items",
                                 "maxItems": 50,
                                 "initialState": {"items": []},
+                                "snapshotPolicy": "on_subscribe",
+                                "ttlMs": 30000,
+                                "sequenceField": "seq",
+                                "updatedAtField": "updated_at",
+                                "budget": {
+                                    "maxPayloadBytes": 8192,
+                                    "maxPublishHz": 2,
+                                    "coalesceMs": 250,
+                                    "maxFanout": 8,
+                                },
+                                "guardVisibility": {
+                                    "degradedState": "Telemetry stream paused",
+                                    "log": "service.telemetry_skill.runtime.log",
+                                    "quarantine": True,
+                                    "metric": "webio.stream.telemetry_feed.suppressed",
+                                },
+                                "route": {
+                                    "kind": "stream",
+                                    "surface": "widget:telemetry",
+                                    "owner": "telemetry_skill",
+                                    "firstPaint": "empty telemetry list",
+                                    "recovery": "request bounded snapshot on subscribe",
+                                    "updateSource": ["telemetry.sampled"],
+                                },
                             }
                         }
                     },
@@ -1073,6 +1097,30 @@ def test_resolve_webspace_merges_webio_receivers_into_compact_runtime_contract(m
                 "collectionKey": "items",
                 "maxItems": 50,
                 "initialState": {"items": []},
+                "snapshotPolicy": "on_subscribe",
+                "ttlMs": 30000,
+                "sequenceField": "seq",
+                "updatedAtField": "updated_at",
+                "budget": {
+                    "maxPayloadBytes": 8192,
+                    "maxPublishHz": 2,
+                    "coalesceMs": 250,
+                    "maxFanout": 8,
+                },
+                "guardVisibility": {
+                    "degradedState": "Telemetry stream paused",
+                    "log": "service.telemetry_skill.runtime.log",
+                    "quarantine": True,
+                    "metric": "webio.stream.telemetry_feed.suppressed",
+                },
+                "route": {
+                    "kind": "stream",
+                    "surface": "widget:telemetry",
+                    "owner": "telemetry_skill",
+                    "firstPaint": "empty telemetry list",
+                    "recovery": "request bounded snapshot on subscribe",
+                    "updateSource": ["telemetry.sampled"],
+                },
                 "origin": "skill:telemetry_skill",
             }
         }

@@ -1879,11 +1879,12 @@ Success means:
 
 Snapshot date: 2026-05-18.
 
-Overall completion: 8%. First implementation slice is the ABI/schema contract:
-`skill.yaml:data_routes`, stream receiver budget/guard metadata, validator
-schema coverage, and LLM skill-template guidance. Runtime guard diagnostics and
-SDK helpers are still pending before `infrastate_skill` conversion should
-start.
+Overall completion: 10%. First implementation slices landed the ABI/schema
+contract and runtime preservation of receiver route metadata: `skill.yaml:
+data_routes`, stream receiver budget/guard metadata, validator schema coverage,
+LLM skill-template guidance, and materialized `data.webio` receiver metadata.
+Runtime guard diagnostics and SDK helpers are still pending before
+`infrastate_skill` conversion should start.
 
 Problem statement:
 
@@ -1942,7 +1943,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 25%.
+Progress: 35%.
 
 Purpose:
 
@@ -1959,6 +1960,8 @@ Actions:
   from stream receivers and details tools.
 - [x] Add WebUI receiver schema metadata for route, stream budget, snapshot
   policy, freshness fields, and guard visibility.
+- [x] Preserve WebUI receiver route/budget/guard metadata in the compact
+  materialized `data.webio` runtime contract.
 - [ ] Expose route metadata in projection/receiver diagnostics so logs can say
   which skill, surface, route, and receiver created pressure.
 - [x] Define stream-variable delivery semantics in the ABI: replace vs append,

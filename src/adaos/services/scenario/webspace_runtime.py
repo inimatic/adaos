@@ -1772,6 +1772,27 @@ def _normalize_webio_receiver(node: Any) -> Dict[str, Any]:
     transport = str(item.get("transport") or "").strip().lower()
     if transport in {"auto", "member", "hub"}:
         out["transport"] = transport
+    snapshot_policy = str(item.get("snapshotPolicy") or "").strip().lower()
+    if snapshot_policy in {"none", "on_subscribe", "on_subscribe_if_stale", "manual"}:
+        out["snapshotPolicy"] = snapshot_policy
+    ttl_ms = item.get("ttlMs")
+    try:
+        if ttl_ms is not None and int(ttl_ms) > 0:
+            out["ttlMs"] = int(ttl_ms)
+    except Exception:
+        pass
+    sequence_field = str(item.get("sequenceField") or "").strip()
+    if sequence_field:
+        out["sequenceField"] = sequence_field
+    updated_at_field = str(item.get("updatedAtField") or "").strip()
+    if updated_at_field:
+        out["updatedAtField"] = updated_at_field
+    for key in ("budget", "guardVisibility", "route"):
+        value = item.get(key)
+        if isinstance(value, Mapping):
+            out[key] = _clone_json_like(value)
+        elif key == "guardVisibility" and isinstance(value, str) and value.strip():
+            out[key] = value.strip()
     if "initialState" in item:
         out["initialState"] = _clone_json_like(item.get("initialState"))
     return out
