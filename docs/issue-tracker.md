@@ -542,7 +542,7 @@ Implementation notes:
 
 Status: in progress.
 
-Progress: 35%.
+Progress: 45%.
 
 Actions:
 
@@ -557,7 +557,7 @@ Actions:
   API payloads.
 - [x] Include dependent skill lifecycle results in async scenario install
   operation payloads.
-- [ ] Include dependent skill lifecycle results in async scenario update
+- [x] Include dependent skill lifecycle results in async scenario update
   operation payloads.
 - [ ] Surface dependency lifecycle failures in Infrastructure State and
   Operations details only when they affect active scenarios.
@@ -570,6 +570,9 @@ Implementation notes:
 - Async scenario install operations now persist the structured
   `dependency_bootstrap` result in the operation result payload, matching the
   synchronous scenario install API surface.
+- Sync and async scenario update operations now run dependency bootstrap before
+  Yjs projection rebuild and include the same `dependency_bootstrap` payload in
+  the operation/result surface.
 - Dependency bootstrap timeout/exception paths produce explicit
   `dependency_bootstrap.ok=false` diagnostics instead of dropping dependency
   lifecycle visibility from the operation result.
