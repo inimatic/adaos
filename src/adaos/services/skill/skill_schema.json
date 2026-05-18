@@ -95,9 +95,79 @@
 				"required": ["scope", "slot"]
 			}
 		},
+		"data_routes": {
+			"description": "Reviewable browser-facing data route plan. Each entry states whether a surface uses Yjs, stream, details/tool, skill-local storage, or diagnostic logs, plus the expected budget and guard visibility.",
+			"type": "array",
+			"items": { "$ref": "#/$defs/dataRoute" }
+		},
 		"nlu": {
 			"type": "object",
 			"additionalProperties": true
+		}
+	},
+	"$defs": {
+		"dataRoute": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"surface": { "type": "string", "minLength": 1 },
+				"route": {
+					"type": "string",
+					"enum": ["yjs", "stream", "tool", "details", "tool/details", "skill-local", "disk", "360log", "disk/360log"]
+				},
+				"owner": { "type": "string", "minLength": 1 },
+				"path": { "type": "string", "minLength": 1 },
+				"receiver": { "type": "string", "minLength": 1 },
+				"projection_slot": { "type": "string", "minLength": 1 },
+				"first_paint": { "type": "string", "minLength": 1 },
+				"recovery": { "type": "string", "minLength": 1 },
+				"update_source": {
+					"oneOf": [
+						{ "type": "string", "minLength": 1 },
+						{
+							"type": "array",
+							"items": { "type": "string", "minLength": 1 },
+							"minItems": 1
+						}
+					]
+				},
+				"budget": { "$ref": "#/$defs/dataRouteBudget" },
+				"guard_visibility": { "$ref": "#/$defs/guardVisibility" },
+				"notes": { "type": "string" }
+			},
+			"required": ["surface", "route"]
+		},
+		"dataRouteBudget": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"max_payload_bytes": { "type": "integer", "minimum": 1 },
+				"max_publish_hz": { "type": "number", "exclusiveMinimum": 0 },
+				"coalesce_ms": { "type": "integer", "minimum": 0 },
+				"max_fanout": { "type": "integer", "minimum": 1 },
+				"max_items": { "type": "integer", "minimum": 1 },
+				"ttl_ms": { "type": "integer", "minimum": 1 },
+				"snapshot_policy": {
+					"type": "string",
+					"enum": ["none", "on_subscribe", "on_subscribe_if_stale", "manual"]
+				}
+			}
+		},
+		"guardVisibility": {
+			"oneOf": [
+				{ "type": "string", "minLength": 1 },
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"degraded_state": { "type": "string", "minLength": 1 },
+						"log": { "type": "string", "minLength": 1 },
+						"quarantine": { "type": "boolean" },
+						"metric": { "type": "string", "minLength": 1 },
+						"correlation_id": { "type": "string", "minLength": 1 }
+					}
+				}
+			]
 		}
 	},
 	"additionalProperties": true

@@ -27,24 +27,75 @@ explicitly capability-gated, not the default authoring model.
 Preferred data-plane choices:
 
 - `data_projections` plus `ctx_subnet.set()` / `ctx_subnet.set_async()` for
-  compact reconnect-stable shared state.
+  compact reconnect-stable bootstrap/control state.
 - `stream_publish()` and `webio.receivers` for high-churn or append-heavy live
-  data.
+  data and operator-facing variables.
 - skill-local storage for private durable skill state.
 - tool/detail endpoints for explicit user-requested details.
 - 360log or disk snapshots for later diagnostics, not browser steady-state
   rendering.
 
+## Responsibility model
+
+The skill author chooses the data route. The runtime does not silently move a
+skill's data between Yjs and streams.
+
+That choice is part of the skill design and must be visible in `skill.yaml`,
+`webui.json`, handler code, and tests. For LLM-authored work, the route choice
+must be treated as a reviewable implementation decision, not an accidental
+side effect of the helper API used.
+
+Runtime guardrails still enforce shared safety:
+
+- Yjs owner guards count attempted and applied Yjs writes, attribute pressure to
+  the skill owner, and may warn, throttle, block, or quarantine unsafe owners.
+- Stream guards bound payload size, publish rate, snapshot request bursts, and
+  receiver fanout, and must log suppressions or degraded delivery.
+- Guards emit diagnostics and quarantine records so the UI and future LLM repair
+  loops can explain the failure.
+- Guards are emergency control, not a replacement for a well-designed data
+  route.
+
+The desired failure mode is explicit: a badly routed skill should become
+visible as a design defect and be returned for repair. It should not be hidden
+by runtime magic that makes the browser appear healthy while the skill keeps
+producing unsafe data.
+
+## Required data route plan
+
+Before editing a browser-facing skill, write down the route plan. A concise
+comment in the implementation notes, PR description, or adjacent docs is
+enough, but the design must be explicit.
+
+For every widget, modal section, status row, and detail view, answer:
+
+- `surface`: what browser surface consumes this data?
+- `route`: `yjs`, `stream`, `tool/details`, `skill-local`, or `disk/360log`.
+- `why`: reconnect-stable bootstrap, live variable, explicit drill-down,
+  private durable cache, or diagnostic evidence.
+- `first_paint`: what does the user see before live data arrives?
+- `recovery`: how does the surface recover after room rebuild, reconnect, or
+  stream resubscribe?
+- `update_source`: which events or commands can update it?
+- `budget`: expected payload size, event rate, coalescing window, and maximum
+  fanout.
+- `guard_visibility`: what warning, degraded state, or incident is shown when
+  the route is throttled, blocked, or quarantined?
+
+If a route cannot answer these questions, do not add it yet.
+
 ## Data-plane decision table
 
 | Need | Use | Avoid |
 | --- | --- | --- |
-| Small current fact shown by widgets | Yjs projection | Returning full snapshot from every action |
-| Selected ids, UI summary, latest status | Yjs projection | Rewriting `data`, `ui`, or `registry` broadly |
-| Active operations, logs, telemetry, chat/event tail | Stream receiver | Unbounded arrays in Yjs |
+| Bootstrap/control state needed for first paint | Yjs projection | Full operational snapshot in Yjs |
+| Selected ids, compact health badge, latest stable status | Yjs projection | Rewriting `data`, `ui`, or `registry` broadly |
+| Operator-facing variables, active operations, logs, telemetry, chat/event tail | Stream receiver | Unbounded arrays in Yjs |
 | Big diagnostics or object inspector payload | Details tool / stream snapshot / disk snapshot | Embedding full diagnostics in primary Yjs |
 | Durable private skill cache | Skill-local files or DB | Hidden browser-only state as source of truth |
 | Command from UI to runtime | `callHost` / tool with small ack | Large command response used as data transport |
+| Raw high-frequency evidence | Stream or disk/360log | Smoothed Yjs status that loses diagnostic truth |
+| Smoothed operator status | Debounced stream or compact Yjs badge | Flickering every raw transport event |
 
 ## Skill manifest checklist
 
@@ -52,17 +103,45 @@ Every browser-facing skill should make its data contract explicit.
 
 Use `skill.yaml` to declare:
 
+- `data_routes` for the reviewable route plan: surface, route, first paint,
+  recovery, budget, and guard visibility.
 - `tools` with stable input and output schema.
 - `exports.tools` for callable public tools.
 - `events.subscribe` for command or domain events.
-- `data_projections` for every browser-visible Yjs branch the skill owns.
+- `data_projections` only for browser-visible Yjs branches the skill owns.
+- `webui.receivers` in `webui.json` for live stream variables.
 - optional lifecycle hooks such as `healthcheck`, `drain`, `dispose`, and
   `onQuarantine` / `on_quarantine` when the skill can clean up or explain a
   guard action.
 
+Every declared Yjs projection should have a reason to be reconnect-stable.
+Every stream receiver should have bounded delivery semantics and an initial or
+snapshot-on-subscribe story.
+
 Example:
 
 ```yaml
+data_routes:
+- surface: widget:weather_status
+  route: yjs
+  projection_slot: weather.snapshot
+  first_paint: cached compact weather status
+  recovery: Yjs replay restores the latest compact status
+  update_source: [weather.refresh.completed]
+  budget:
+    max_payload_bytes: 4096
+    max_publish_hz: 0.2
+    snapshot_policy: on_subscribe
+  guard_visibility:
+    degraded_state: weather status shows stale/degraded
+    log: service.weather_skill.runtime.log
+    quarantine: true
+- surface: modal:weather_history
+  route: stream
+  receiver: weather.history
+  first_paint: empty history with loading state
+  recovery: bounded stream snapshot requested on subscribe
+
 data_projections:
 - scope: subnet
   slot: weather.snapshot
@@ -95,6 +174,11 @@ tools:
 
 Use logical slots, not raw paths, in handler code.
 
+Yjs is for the minimum reconnect-stable state needed to bootstrap the surface,
+preserve collaborative/control state, and explain health. It is not the normal
+transport for changing variables, diagnostic tables, event tails, or raw
+runtime evidence.
+
 Preferred:
 
 ```python
@@ -125,6 +209,8 @@ Avoid in normal skills:
 - direct `y_py` transactions
 - replacing broad roots such as `data`, `ui`, `registry`,
   `data.catalog`, `data.installed`, or `data.desktop`
+- writing hot telemetry, logs, session churn, transport events, or stream tails
+  into Yjs because a widget needs to see them
 
 If a legacy skill still needs direct Yjs access, document why and keep it on a
 short migration path toward `ProjectionService` / `ctx_subnet`.
@@ -141,9 +227,20 @@ Do not fan out routine projection refreshes to every webspace by default.
 Target the webspace from event metadata or the UI action. Reserve all-webspace
 fanout for boot, activation, migration, or explicit resync events.
 
+Yjs payloads should be small enough to inspect in logs and reason about in code
+review. If a projection is hard to summarize in one short schema paragraph, it
+is probably too large for Yjs and should be split into stream variables or
+details.
+
 ## Stream data
 
-Use streams for data that changes often or grows by appending.
+Use streams for data that changes often, grows by appending, or represents
+operator-facing variables that should not be durable collaborative state.
+
+Streams are not a free replacement for Yjs. They are active volatile delivery:
+messages can be missed during reconnect, subscriptions can flap, and duplicate
+or out-of-order payloads can happen around recovery. Design every stream as a
+bounded replace or append channel with explicit recovery.
 
 Declare receivers in `webui.json`:
 
@@ -181,10 +278,57 @@ Stream rules:
 - dedupe events with stable ids
 - provide snapshot-on-subscribe for widgets that should not open empty
 - coalesce repeated snapshot requests per receiver/webspace/node
+- include `updated_at`, `seq`, stable ids, or a content fingerprint when the
+  receiver needs to reject stale or duplicate payloads
+- use `mode: "replace"` for current-state variables and include a complete
+  bounded current value in each snapshot
+- use `mode: "append"` only for true tails, with `maxItems`, `dedupeBy`, and
+  a clear truncation policy
+- provide an honest `initialState` such as `loading`, `stale`, `degraded`, or
+  an empty bounded collection
 - do not eager-publish a replace stream for the same state that the widget is
   already reading from Yjs; use streams for separate high-churn state or
   snapshot-on-subscribe recovery
 - do not copy stream tails back into Yjs just to make them visible
+
+Stream variables should be demand-aware. A stream receiver that is not
+subscribed should not keep rebuilding full snapshots just in case a browser
+opens later. Prefer receiver-specific builders over one monolithic skill
+snapshot.
+
+## Hot events and smoothing
+
+Some events are useful evidence but terrible UI clocks. Examples include:
+
+- `browser.session.changed`
+- `device.registered`
+- `webrtc.peer.state.changed`
+- YWS open, close, guard, quarantine, and reconnect events
+- network route flaps
+- fast operation progress ticks
+
+Handle these as two different products:
+
+- Raw evidence goes to diagnostics streams, bounded logs, or 360log so the
+  operator and LLM repair loop can see what really happened.
+- Operator-facing state is smoothed through debounce, coalescing, or a small
+  state machine so short transport bumps do not shake the UI.
+
+Recommended rules:
+
+- coalesce by the narrowest useful key, usually
+  `(webspace_id, device_id, receiver)` or `(webspace_id, node_id, section)`
+- set an explicit burst window, for example 10-15 seconds for browser session
+  churn
+- publish the latest stable state, plus counters such as `flap_count`,
+  `last_raw_state`, and `last_raw_at` when useful
+- let hard states bypass smoothing: revoked, denied, auth required, guard
+  quarantined, explicit user disconnect, or admin shutdown
+- never trigger a full skill snapshot rebuild for each raw hot event
+- do not write raw hot-event churn into Yjs
+
+This smoothing is part of the skill design. Runtime guards may limit abusive
+bursts, but they should not be the main mechanism that keeps the UI calm.
 
 ## Minimal UI plus details
 
@@ -193,16 +337,18 @@ render the surface and explain whether it is healthy.
 
 For heavy skills, prefer this split:
 
-- summary in Yjs
-- active rows or event tails in stream receivers
+- minimal bootstrap/control state in Yjs
+- operator-facing variables, active rows, and event tails in stream receivers
 - details behind a `Details` action or modal
 - full diagnostic evidence in disk snapshots or 360log
 
 Good shape:
 
 ```text
-data/infrastate/summary
-data/infrastate/nodes
+data/infrastate/state
+data/infrastate/subscriptions
+stream:infrastate.summary
+stream:infrastate.nodes
 stream:infrastate.operations.active
 tool:infrastate.get_details(section="logs")
 ```
@@ -314,8 +460,8 @@ Localization rules for generated skills:
 
 ## Guarding and quarantine
 
-The runtime may warn, throttle, block, or quarantine a skill owner when it
-applies unsafe pressure.
+The runtime may warn, throttle, block, or quarantine a skill owner when either
+Yjs or stream routes apply unsafe pressure.
 
 Generated skills must not hide that state.
 
@@ -328,9 +474,21 @@ Recommended behavior:
 - return structured errors such as `skill_owner_quarantined`
 - let the Web UI render disabled/quarantined state instead of silently
   pretending the action succeeded
+- expose which route was guarded: `yjs`, `stream`, `tool`, or `mixed`
+- include the affected slot or receiver when safe to disclose
+- keep enough local context to repair the data route, not just the symptom
 
 The runtime owns the shared quarantine projection, for example `data.yjs_qrnt`.
 Skills should not write that service branch directly.
+
+Guard responsibilities:
+
+- Yjs guard protects the primary document from oversized, too frequent, or
+  poorly attributed writes.
+- Stream guard protects event delivery from oversized payloads, receiver fanout,
+  snapshot request storms, and publish loops.
+- Both guards should produce bounded logs and operator-visible degraded state.
+- Neither guard decides the normal data route for the skill.
 
 ## Observability rules
 
@@ -360,10 +518,13 @@ Before coding:
 - read `skill.yaml`
 - read `webui.json`
 - identify every browser-visible state branch
+- write the data route plan for every browser-visible branch or receiver
 - choose Yjs projection, stream, details tool, or skill-local storage for each
-  branch
+  branch, and record why
 - check whether the skill is node-aware
 - define size and frequency expectations
+- identify hot events and define debounce/budget behavior before writing
+  handlers
 
 When coding:
 
@@ -372,17 +533,26 @@ When coding:
 - make updates idempotent
 - fingerprint or coalesce heavy projections
 - keep arrays bounded
+- build stream payloads per receiver when possible, rather than rebuilding the
+  whole skill snapshot
+- keep raw diagnostic evidence separate from smoothed operator state
 - accept routing metadata and unknown keyword args
 - preserve owner attribution where helper APIs require it
 
 Before publishing:
 
+- verify `data_routes` exists for browser-facing Yjs, stream, details, or
+  diagnostic surfaces
 - verify `data_projections` exist for Yjs state
 - verify stream receivers have bounded modes and snapshot-on-subscribe behavior
+- verify stream receivers have `initialState`, freshness metadata, and a
+  recovery path after resubscribe
 - verify no handler rewrites broad Yjs roots
+- verify hot events have debounce/budget tests
+- verify stream request bursts cannot rebuild every skill section by default
 - verify no action returns a large payload when a projection/stream is the
   real data path
-- verify quarantine/guard errors are visible to the UI
+- verify Yjs and stream guard errors are visible to the UI
 
 ## Anti-patterns
 
@@ -402,6 +572,9 @@ Treat these as defects in LLM-generated skills:
 - controlling WebRTC/Yjs channel lifecycle from business logic
 - doing continuous profiling, deep JSON normalization, or full snapshot
   serialization inside hot handlers
+- treating stream delivery as durable state without snapshot-on-subscribe
+- letting subscription flaps rewrite Yjs on every subscribe/unsubscribe
+- using runtime quarantine as the normal way to quiet a noisy skill
 
 ## Current migration priorities
 

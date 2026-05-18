@@ -1859,8 +1859,16 @@ Success means:
   `/api/node/reliability/summary` for badge/status UI.
 - Core services and skills can publish small versioned status cards through one
   common SDK/service contract.
+- Browser-facing skills make the Yjs vs stream vs details route explicit before
+  implementation; the runtime enforces budgets but does not silently reroute
+  badly designed data flows.
+- Primary Yjs carries only reconnect-stable bootstrap/control state and the
+  current subscription/control surface. Operator-facing variables, active rows,
+  telemetry, logs, and event tails move through bounded stream receivers.
 - Heavy diagnostic data stays behind lazy streams, explicit details requests, or
   debug-only full snapshots.
+- Yjs and stream guards expose limits, suppressions, quarantine, and correlation
+  context as operator-visible diagnostics instead of hiding overload.
 - `infrastate_skill` and `infrascope_skill` use the same reusable status
   projection pattern instead of maintaining parallel ad-hoc debounce,
   fingerprint, stream snapshot, and last-good-cache logic.
@@ -1869,9 +1877,13 @@ Success means:
 
 ### Current Status
 
-Snapshot date: 2026-04-29.
+Snapshot date: 2026-05-18.
 
-Overall completion: 0% for the new status-plane goal.
+Overall completion: 8%. First implementation slice is the ABI/schema contract:
+`skill.yaml:data_routes`, stream receiver budget/guard metadata, validator
+schema coverage, and LLM skill-template guidance. Runtime guard diagnostics and
+SDK helpers are still pending before `infrastate_skill` conversion should
+start.
 
 Problem statement:
 
@@ -1882,17 +1894,102 @@ Problem statement:
   diagnostic noise during the realtime startup window.
 - `infrastate_skill` and `infrascope_skill` already demonstrate the desired
   split: compact Yjs state plus heavy webio stream receivers, but each skill
-  implements its own projection helpers.
+  implements its own projection helpers and local guard-aware behavior.
+- The 2026-05 Yjs stability work showed that stream variables are the right
+  route for high-churn operator data, but streams still need explicit
+  first-paint, snapshot-on-subscribe, dedupe, freshness, rate, payload, and
+  fanout rules.
+- A noisy skill must become visible as a design defect through guard logs and
+  quarantine. The target is not a runtime controller that invents routes; the
+  LLM/developer owns the data-route decision and reviews it as part of skill
+  design.
 
 Design direction:
 
 - Treat monitoring as a materialized status plane, not as repeated full
   snapshot construction.
-- Use small status cards for hot UI state, stream receivers for warm/cold
-  details, and explicit debug endpoints/tools for raw full diagnostics.
+- Use small status cards for stable operator summaries, stream receivers for
+  live variables and warm/cold details, and explicit debug endpoints/tools for
+  raw full diagnostics.
+- Treat primary Yjs as bootstrap/control state: interface shape, small current
+  status, selected ids, degraded/quarantine badges, and subscription metadata.
+- Keep stream data bounded and recoverable: replace-mode variables for current
+  state, append-mode receivers only for true tails, stable ids, `seq` /
+  `updated_at`, dedupe keys, and honest initial/snapshot semantics.
+- Give hot transport/session events such as `browser.session.changed`, route
+  reconnects, YWS open/close, and guard/quarantine transitions their own
+  debounce/budget before they become operator status.
+- Make guards observable but not architectural owners: Yjs guard protects the
+  primary document, stream guard protects publish/snapshot/fanout pressure, and
+  both write logs and quarantine context that a future LLM repair loop can
+  inspect.
 - Make the pattern reusable for current and future skills.
 
+Execution order:
+
+1. Lock the YJS|Stream data-route contract and guard visibility in core/SDK.
+2. Add shared status-card and stream-variable helpers on top of that contract.
+3. Move core-owned inventory, health, quarantine, lifecycle, and operation
+   details behind stable API/MCP contracts as tracked by `RCMS-007`.
+4. Convert `infrastate_skill` from broad local projection helpers to thin
+   presentation over those contracts.
+5. Re-run browser-load/Yjs stability soaks and record whether the YJS indicator
+   stays stable under `Mobile` and multi-browser load.
+
 ### Tasks
+
+#### STATUS-000: Lock the YJS|Stream data-route contract
+
+Status: in progress.
+
+Progress: 25%.
+
+Purpose:
+
+Establish the preparatory core/SDK boundary before converting heavy operator
+skills. Skill authors and LLM agents choose routes at design time; runtime
+guards enforce safety and explain failures.
+
+Actions:
+
+- [x] Define a small data-route schema for browser-facing surfaces:
+  `surface`, `route`, `owner`, `first_paint`, `recovery`, `update_source`,
+  `budget`, and `guard_visibility`.
+- [x] Add manifest/schema guidance for declaring Yjs projections separately
+  from stream receivers and details tools.
+- [x] Add WebUI receiver schema metadata for route, stream budget, snapshot
+  policy, freshness fields, and guard visibility.
+- [ ] Expose route metadata in projection/receiver diagnostics so logs can say
+  which skill, surface, route, and receiver created pressure.
+- [x] Define stream-variable delivery semantics in the ABI: replace vs append,
+  snapshot-on-subscribe, freshness/TTL, duplicate suppression, stale-event
+  rejection, maximum payload, maximum publish rate, and maximum fanout.
+- [ ] Extend guard diagnostics to cover both Yjs and stream routes with common
+  fields: owner, webspace, receiver/path, budget, observed pressure,
+  suppression count, quarantine TTL, and correlation/generation id.
+- [x] Add contract tests proving a skill can expose a status/card plus stream
+  variables without writing broad primary-doc Yjs branches.
+- [x] Update LLM skill templates and review checklist so every new
+  browser-facing skill includes a route plan before implementation.
+
+Human verification:
+
+- In a browser-facing skill, add `data_routes` to `skill.yaml` and stream
+  `budget` / `snapshotPolicy` / `guardVisibility` to `webui.json`, then run
+  `adaos skill validate <skill>`. The manifest should validate without any
+  runtime behavior change.
+- Intentionally set `route: magic_runtime_autoroute` or
+  `budget.maxPayloadBytes: 0`; validation should fail and point to the schema
+  violation.
+
+Next steps:
+
+- Wire route metadata into ProjectionService/webio stream diagnostics and guard
+  logs.
+- Add SDK helpers that publish bounded replace-mode stream variables with
+  `seq`, `updated_at`, fingerprint, and declared budget metadata.
+- Use those helpers to prepare the `infrastate_skill` data-route plan before
+  moving active variables out of Yjs.
 
 #### STATUS-001: Define the shared status card contract
 
@@ -1909,6 +2006,9 @@ Target shape:
 - A status card can point to details without embedding them:
   `details_ref.kind`, `details_ref.receiver`, `details_ref.path`, or
   `details_ref.tool`.
+- A status card can identify the data route backing its details:
+  `route.kind`, `route.receiver`, `route.path`, `route.snapshot_policy`, and
+  optional `guard_ref`.
 
 Actions:
 
@@ -1917,6 +2017,10 @@ Actions:
 - [ ] Define JSON schema or typed dataclass for status cards.
 - [ ] Define staleness semantics when `ttl_ms` expires.
 - [ ] Define how cards map to incidents and active warnings.
+- [ ] Define how status cards reference stream variables and detail tools
+  without embedding live rows or diagnostic tails.
+- [ ] Define compact degraded/quarantine card shape for Yjs and stream guard
+  states.
 - [ ] Document examples for core, `infrastate_skill`, `infrascope_skill`, and a
   future third-party skill.
 
@@ -1951,6 +2055,8 @@ Expected API:
 - `publish_status(...)` publishes one card.
 - `publish_status_many(...)` publishes a small batch.
 - `publish_status_stream(...)` binds a card to an existing webio stream receiver.
+- `publish_stream_variable(...)` or equivalent helper publishes a bounded
+  replace-mode live variable with freshness, sequence, and fingerprint metadata.
 - Helpers normalize status tokens, compute fingerprints, and preserve
   skill/handler ownership.
 
@@ -1959,25 +2065,49 @@ Actions:
 - [ ] Add `adaos.sdk.status` or equivalent SDK module.
 - [ ] Preserve current skill identity in status ownership metadata.
 - [ ] Provide helpers for `details_ref` pointing to webio stream receivers.
+- [ ] Provide receiver helpers that coalesce unchanged payloads, attach
+  `seq` / `updated_at`, enforce declared budgets, and surface stream-guard
+  suppressions.
+- [ ] Provide a shared debounce/budget helper for hot event-to-status paths,
+  starting with `browser.session.changed`, route reconnect, YWS open/close, and
+  quarantine transitions.
 - [ ] Add tests showing a skill can publish status without touching Yjs or
   rebuilding a full snapshot.
 - [ ] Add migration notes for skill authors.
 
-#### STATUS-004: Convert `infrastate_skill` to the shared status plane
+#### STATUS-004: Convert `infrastate_skill` to the shared status/data-route plane
 
 Status: planned.
 
-Current useful pattern:
+Current useful pattern and target:
 
-- Compact durable UI data is projected into `infrastate.snapshot`.
+- The current transitional implementation projects compact but still broad UI
+  data into `infrastate.snapshot`.
+- Target Yjs content is smaller: interface/bootstrap state, selected ids,
+  small degraded/quarantine badges, and the current receiver/subscription list.
 - High-churn sections use stream receivers such as
   `infrastate.operations.active`, `infrastate.realtime`,
   `infrastate.yjs.load_mark`, and `infrastate.core_update_diagnostics`.
 - Projection helpers already perform fingerprinting and rate limiting, but the
   logic is local to the skill.
+- Operator-facing variables should become stream-backed rows/cards with bounded
+  first-paint and snapshot-on-subscribe behavior, while raw evidence stays in
+  diagnostics streams, detail tools, disk snapshots, or `360log`.
 
 Actions:
 
+- [ ] Write the `infrastate` data-route plan before code changes, listing every
+  widget, modal section, current stream receiver, Yjs branch, detail tool, and
+  expected budget.
+- [ ] Shrink primary Yjs usage to minimal bootstrap/control state and remove
+  variable/diagnostic tables that can be served by streams or details.
+- [ ] Move current operator variables to replace-mode stream receivers with
+  stable ids, fingerprints, freshness, and snapshot-on-subscribe semantics.
+- [ ] Keep append-mode streams only for true event/log tails with explicit
+  maxItems, truncation, and duplicate suppression.
+- [ ] Add dedicated debounce/budget handling for `browser.session.changed`, YWS
+  open/close/reconnect, route pressure, and guard/quarantine events before they
+  update operator status.
 - [ ] Identify `infrastate` status cards: runtime, route/realtime, Yjs,
   operations, core update, marketplace, and skill/scenario registry.
 - [ ] Publish those cards through the shared SDK helpers.
@@ -1985,7 +2115,8 @@ Actions:
 - [ ] Remove or reduce duplicated local projection bookkeeping where the shared
   helper covers it.
 - [ ] Confirm existing `infrastate` UI still receives current streams.
-- [ ] Add regression tests around unchanged snapshot/card dedupe.
+- [ ] Add regression tests around unchanged snapshot/card dedupe, stream
+  resubscribe recovery, and guard-visible suppression/quarantine.
 
 #### STATUS-005: Convert `infrascope_skill` to the shared status plane
 
@@ -2058,10 +2189,14 @@ Acceptance criteria:
 
 - Repeated first-3-minute run shows no high-frequency large
   `/api/node/reliability/summary` responses.
+- Browser attach with `Mobile` and a second browser does not produce sustained
+  red/green YJS indicator flapping from `infrastate` stream or projection work.
 - Thin status payload size is bounded and recorded.
 - Full details remain available on demand.
 - `infrastate_skill` and `infrascope_skill` both publish status cards through
   the shared path.
+- Yjs and stream guard logs show route, owner, receiver/path, suppression
+  counts, and quarantine TTL when limits are hit.
 - Existing realtime stability criteria from `Realtime First 3 Minutes` remain
   green.
 
@@ -2070,7 +2205,12 @@ Actions:
 - [ ] Add log/metric for reliability summary mode, response bytes, and
   unchanged/304 counts.
 - [ ] Add status registry diagnostics to the final soak analysis.
+- [ ] Add stream guard diagnostics to the final soak analysis: published,
+  unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
+  receiver.
 - [ ] Run a 180-second acceptance with browser attached.
+- [ ] Run a focused `infrastate` two-browser soak after conversion and capture
+  Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.
 - [ ] Close this goal only after logs confirm no large repeated monitoring
   responses during normal UI operation.
