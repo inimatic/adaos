@@ -463,7 +463,7 @@ Implementation notes:
 
 Status: in progress.
 
-Progress: 55%.
+Progress: 60%.
 
 Actions:
 
@@ -473,8 +473,9 @@ Actions:
   authoritative inventory model.
 - [x] Classify behind/ahead/different drift independently for catalog vs
   workspace and catalog vs active runtime.
-- [ ] Add explicit unknown, unavailable, stale-catalog, and no-git drift
-  classifications.
+- [x] Add explicit unknown, unavailable, and no-git drift classifications.
+- [ ] Add explicit stale-catalog drift classification once catalog snapshot
+  freshness metadata is persisted.
 - [ ] Treat workspace source as a fallback only when explicitly marked
   `source=workspace_fallback`.
 - [x] Return Installed skills/scenarios to the full inventory view and add a

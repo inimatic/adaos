@@ -1147,7 +1147,61 @@ def test_infrastate_catalog_record_exposes_source_and_commit(monkeypatch, tmp_pa
         "version": "1.2.3",
         "catalog_source": "git_ref:origin/main",
         "catalog_commit": "abc123",
+        "catalog_state": "available",
     }
+
+
+def test_infrastate_catalog_record_reports_no_git(monkeypatch, tmp_path: Path):
+    mod = _load_infrastate_module()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    mod._registry_catalog_cache.clear()
+    mod._registry_catalog_meta_cache.clear()
+
+    monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
+    monkeypatch.setattr(mod, "_allow_marketplace_remote_fetch", lambda: False)
+    monkeypatch.setattr(mod, "_allow_marketplace_git_ref_lookup", lambda: True)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(mod, "_marketplace_catalog_entries", lambda kind: [])
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace)),
+    )
+
+    record = mod._read_catalog_record(kind_plural="skills", artifact_id="demo_skill")
+
+    assert record["version"] == ""
+    assert record["catalog_source"] == "no_git"
+    assert record["catalog_state"] == "no_git"
+
+
+def test_infrastate_version_status_marks_catalog_unknown_and_no_git():
+    mod = _load_infrastate_module()
+
+    unknown = mod._version_status(
+        artifact_kind="skill",
+        catalog_version="",
+        catalog_source="git_ref:origin/main",
+        catalog_state="unknown",
+        workspace_source_version="1.0.0",
+        active_version="1.0.0",
+        active=True,
+    )
+    no_git = mod._version_status(
+        artifact_kind="skill",
+        catalog_version="",
+        catalog_source="no_git",
+        catalog_state="no_git",
+        workspace_source_version="1.0.0",
+        active_version="1.0.0",
+        active=True,
+    )
+
+    assert unknown["status"] == "catalog_unknown"
+    assert unknown["has_drift"] is True
+    assert no_git["status"] == "git_unavailable"
+    assert no_git["has_drift"] is True
 
 
 def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch, tmp_path: Path):
@@ -1212,6 +1266,7 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
     assert item["catalog_version"] == "0.20.0"
     assert item["catalog_source"] == "registry_json"
     assert item["catalog_commit"] == ""
+    assert item["catalog_state"] == "available"
     assert item["runtime_bucket"] == "v0.19"
     assert item["version_display"] == "0.19.0* (0.20.0)"
     assert item["slot"] == "A"
@@ -1275,6 +1330,7 @@ def test_infrastate_skill_items_compare_remote_against_active_runtime_version(mo
     assert items[0]["workspace_source_version"] == "0.20.0"
     assert items[0]["catalog_version"] == "0.20.0"
     assert items[0]["catalog_source"] == "registry_json"
+    assert items[0]["catalog_state"] == "available"
     assert items[0]["runtime_bucket"] == "v0.19"
     assert items[0]["version_display"] == "0.19.0* (0.20.0)"
     assert items[0]["registry_mismatch"] is True
