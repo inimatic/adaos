@@ -55,13 +55,17 @@ def refresh_skill_runtime(
     source_version: str | None = None,
     migrate_runtime: bool = True,
     ensure_installed: bool = False,
+    require_active_version: bool = False,
 ) -> dict[str, Any]:
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
+    expected_version = str(source_version or "").strip()
     payload: dict[str, Any] = {
         "skill": str(skill_name or "").strip(),
         "webspace_id": target_webspace,
+        "source_version": expected_version,
         "runtime_updated": False,
         "runtime_migrated": False,
+        "active_converged": False,
     }
     runtime_status_before: dict[str, Any] = {}
     try:
@@ -69,6 +73,8 @@ def refresh_skill_runtime(
     except Exception:
         runtime_status_before = {}
     runtime_version_before = str(runtime_status_before.get("version") or "").strip()
+    payload["active_version_before"] = runtime_version_before
+    payload["active_slot_before"] = str(runtime_status_before.get("active_slot") or "").strip()
     try:
         runtime_result = mgr.runtime_update(skill_name, space="workspace")
         payload["runtime_updated"] = True
@@ -97,4 +103,21 @@ def refresh_skill_runtime(
         payload["runtime_migrated"] = True
         payload["migrated_version"] = version
         payload["migrated_slot"] = active_slot
+    runtime_status_after: dict[str, Any] = {}
+    try:
+        runtime_status_after = mgr.runtime_status(skill_name)
+    except Exception:
+        runtime_status_after = {}
+    runtime_version_after = str(runtime_status_after.get("version") or "").strip()
+    payload["active_version_after"] = runtime_version_after
+    payload["active_slot_after"] = str(runtime_status_after.get("active_slot") or "").strip()
+    if expected_version:
+        payload["active_converged"] = runtime_version_after == expected_version
+    else:
+        payload["active_converged"] = bool(runtime_version_after)
+    if require_active_version and expected_version and runtime_version_after != expected_version:
+        raise RuntimeError(
+            "runtime active version did not converge after skill update: "
+            f"skill={skill_name} expected={expected_version} active={runtime_version_after or 'none'}"
+        )
     return payload

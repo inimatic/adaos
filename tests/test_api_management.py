@@ -48,6 +48,8 @@ class _Meta:
 class _FakeSkillManager:
     def __init__(self) -> None:
         self.calls: List[str] = []
+        self.active_slot = "A"
+        self.active_version = "1.0.0"
 
     def list_installed(self) -> list[_Record]:
         self.calls.append("list_installed")
@@ -70,7 +72,7 @@ class _FakeSkillManager:
 
     def runtime_status(self, name: str):
         self.calls.append(f"runtime_status:{name}")
-        return {"active_slot": "A", "version": "1.0.0"}
+        return {"active_slot": self.active_slot, "version": self.active_version}
 
     def runtime_update(self, name: str, *, space: str = "workspace"):
         self.calls.append(f"runtime_update:{name}:{space}")
@@ -82,6 +84,8 @@ class _FakeSkillManager:
 
     def activate_for_space(self, name: str, *, version: str | None = None, slot: str | None = None, space: str = "default", webspace_id: str = "default"):
         self.calls.append(f"activate_for_space:{name}:{version}:{slot}:{webspace_id}")
+        self.active_version = version or self.active_version
+        self.active_slot = slot or self.active_slot
         return slot or "B"
 
     def uninstall(self, name: str, **kwargs: Any) -> None:
@@ -288,6 +292,47 @@ def test_skill_update_refreshes_runtime_when_source_version_changed(monkeypatch)
     assert "runtime_update:demo:workspace" in skill_mgr.calls
     assert "prepare_runtime:demo" in skill_mgr.calls
     assert any(call.startswith("activate_for_space:demo:2.0.0:B:default") for call in skill_mgr.calls)
+
+
+def test_skill_update_fails_when_active_runtime_does_not_converge(monkeypatch) -> None:
+    skill_mgr = _FakeSkillManager()
+    scenario_mgr = _FakeScenarioManager()
+    client = _make_client(skill_mgr, scenario_mgr)
+    bus_events: list[tuple[str, dict[str, Any], str]] = []
+    rebuilds: list[dict[str, Any]] = []
+
+    class _Service:
+        def __init__(self, ctx) -> None:
+            self.ctx = ctx
+
+        def request_update(self, skill_id: str, *, dry_run: bool = False):
+            return SimpleNamespace(updated=True, version="2.0.0")
+
+    def _activate_without_state_change(
+        name: str,
+        *,
+        version: str | None = None,
+        slot: str | None = None,
+        space: str = "default",
+        webspace_id: str = "default",
+    ):
+        skill_mgr.calls.append(f"activate_for_space:{name}:{version}:{slot}:{webspace_id}")
+        return slot or "B"
+
+    monkeypatch.setattr(skill_mgr, "activate_for_space", _activate_without_state_change)
+    monkeypatch.setattr(skills, "SkillUpdateService", _Service)
+    monkeypatch.setattr(skills, "_get_manager", lambda ctx: skill_mgr)
+    monkeypatch.setattr(skills, "bus_emit", lambda bus, typ, payload, source: bus_events.append((typ, payload, source)))
+    monkeypatch.setattr(skills, "_schedule_webspace_rebuild", lambda **kwargs: rebuilds.append(dict(kwargs)))
+
+    resp = client.post("/api/skills/update", json={"name": "demo", "webspace_id": "default"})
+
+    assert resp.status_code == 409
+    assert "did not converge" in resp.json()["detail"]
+    assert "runtime_update:demo:workspace" in skill_mgr.calls
+    assert "prepare_runtime:demo" in skill_mgr.calls
+    assert bus_events == []
+    assert rebuilds == []
 
 
 def test_skill_update_can_defer_webspace_rebuild_until_batch_finalize(monkeypatch) -> None:
