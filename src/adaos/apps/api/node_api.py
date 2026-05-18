@@ -356,6 +356,8 @@ def _compact_runtime_reliability_payload(payload: dict[str, Any], *, webspace_id
             "reason": str(yjs_pressure.get("reason") or "").strip() or None,
             "blockedRoots": _coerce_list(yjs_pressure.get("blocked_roots")),
             "observedState": str(yjs_pressure.get("observed_state") or "idle").strip() or "idle",
+            "lastRoute": _coerce_dict(yjs_pressure.get("last_route")),
+            "lastProjection": _coerce_dict(yjs_pressure.get("last_projection")),
         },
         "webioStreamGuard": {
             "available": bool(webio_stream_guard.get("available")),

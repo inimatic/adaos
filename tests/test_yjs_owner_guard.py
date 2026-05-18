@@ -74,3 +74,31 @@ def test_read_only_skill_tool_admission_bypasses_active_quarantine(monkeypatch) 
     assert allowed["policy_state"] == "read_only"
     with owner_guard._LOCK:
         assert owner_guard._DENIED_TOTAL == 0
+
+
+def test_owner_guard_snapshot_preserves_projection_route_metadata(monkeypatch) -> None:
+    _reset_owner_guard_state()
+    monkeypatch.setattr(owner_guard, "_publish_quarantine_service_node", lambda _webspace_id: None)
+
+    result = owner_guard.admit_owner_work(
+        webspace_id="desktop",
+        owner="skill:infrastate_skill",
+        root_names=["data"],
+        path="data/infrastate",
+        source="projection_service",
+        channel="projection.yjs",
+        work_kind="yjs_write",
+        policy={
+            "policy_state": "block",
+            "reason": "write_amplification_blocked",
+            "route": {"kind": "yjs_projection", "surface": "subnet.infrastate.snapshot"},
+            "projection": {"scope": "subnet", "slot": "infrastate.snapshot", "root": "data"},
+        },
+    )
+    snapshot = owner_guard.owner_guard_snapshot(webspace_id="desktop", owner="skill:infrastate_skill")
+
+    assert result["allowed"] is False
+    assert result["quarantine"]["route"]["kind"] == "yjs_projection"
+    assert snapshot["last_route"]["surface"] == "subnet.infrastate.snapshot"
+    assert snapshot["quarantine_route"]["surface"] == "subnet.infrastate.snapshot"
+    assert snapshot["last_projection"]["slot"] == "infrastate.snapshot"
