@@ -542,7 +542,7 @@ Implementation notes:
 
 Status: in progress.
 
-Progress: 45%.
+Progress: 55%.
 
 Actions:
 
@@ -550,7 +550,7 @@ Actions:
   instead of silently continuing after dependency lifecycle failures.
 - [x] For each required skill dependency, run install/source sync,
   `prepare_runtime`, and `activate_for_space`.
-- [ ] Decide and implement production policy for required dependency failure:
+- [x] Decide and implement production policy for required dependency failure:
   block scenario activation or activate the scenario as degraded with an
   explicit operation warning.
 - [x] Include dependent skill lifecycle results in synchronous scenario install
@@ -573,6 +573,9 @@ Implementation notes:
 - Sync and async scenario update operations now run dependency bootstrap before
   Yjs projection rebuild and include the same `dependency_bootstrap` payload in
   the operation/result surface.
+- Production scenario install/update now blocks scenario projection when
+  required dependency lifecycle fails; dev mode may continue as degraded for
+  explicit development workflows.
 - Dependency bootstrap timeout/exception paths produce explicit
   `dependency_bootstrap.ok=false` diagnostics instead of dropping dependency
   lifecycle visibility from the operation result.

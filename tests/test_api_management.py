@@ -304,6 +304,47 @@ def test_scenario_api_matches_service_surface() -> None:
     assert any(call.startswith("push:") for call in scenario_mgr.calls)
 
 
+def test_scenario_api_blocks_failed_dependencies_before_projection() -> None:
+    skill_mgr = _FakeSkillManager()
+    scenario_mgr = _FakeScenarioManager()
+    rebuilds: list[tuple[str, str, str, str | None]] = []
+    dep_result = {
+        "ok": False,
+        "scenario_id": "scene",
+        "webspace_id": "desktop",
+        "required": ["bad_skill"],
+        "items": [{"name": "bad_skill", "ok": False, "error": "prepare failed"}],
+        "succeeded": [],
+        "failed": ["bad_skill"],
+        "error": "RuntimeError: prepare failed",
+    }
+
+    def _bootstrap_dependencies(name: str, *, webspace_id: str | None = None):
+        scenario_mgr.calls.append(f"bootstrap_dependencies:{name}:{webspace_id}")
+        return dict(dep_result)
+
+    def _sync_to_yjs(name: str, *, webspace_id: str | None = None, emit_event: bool = True):
+        scenario_mgr.calls.append(f"sync_to_yjs:{name}:{webspace_id}:{int(bool(emit_event))}")
+
+    async def _rebuild(webspace_id: str, *, action: str = "rebuild", scenario_id: str | None = None, source_of_truth: str = "workspace"):
+        rebuilds.append((webspace_id, action, source_of_truth, scenario_id))
+
+    scenario_mgr.bootstrap_dependencies = _bootstrap_dependencies  # type: ignore[method-assign]
+    scenario_mgr.sync_to_yjs = _sync_to_yjs  # type: ignore[method-assign]
+    scenarios.rebuild_webspace_from_sources = _rebuild
+    client = _make_client(skill_mgr, scenario_mgr)
+
+    resp = client.post("/api/scenarios/update", json={"name": "scene", "webspace_id": "desktop"})
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "scenario_dependency_lifecycle_failed"
+    assert detail["dependency_bootstrap"]["failed"] == ["bad_skill"]
+    assert "bootstrap_dependencies:scene:desktop" in scenario_mgr.calls
+    assert not any(call.startswith("sync_to_yjs:") for call in scenario_mgr.calls)
+    assert rebuilds == []
+
+
 def test_skill_installed_status_uses_registry_catalog_version(monkeypatch) -> None:
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()
