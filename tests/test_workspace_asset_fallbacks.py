@@ -464,6 +464,26 @@ def test_skill_manager_activate_runtime_refreshes_when_workspace_version_changed
     assert status["version"] == "1.1.0"
     assert "runtime-v2" in runtime_handler.read_text(encoding="utf-8")
 
+    (repo_skill / "handlers" / "main.py").write_text(
+        'MARKER = "runtime-v3"\n'
+        'def handle(payload=None):\n'
+        '    return payload or {}\n',
+        encoding="utf-8",
+    )
+    (repo_skill / "skill.yaml").write_text(
+        "name: infrastate_skill\nversion: '1.1.1'\nentry: handlers/main.py\n",
+        encoding="utf-8",
+    )
+    env.active_version_marker().write_text("1.1.1", encoding="utf-8")
+
+    third_slot = manager.activate_runtime("infrastate_skill")
+    status = manager.runtime_status("infrastate_skill")
+    runtime_handler = env.ensure_current_link("1.1.1") / "src" / "skills" / "infrastate_skill" / "handlers" / "main.py"
+
+    assert third_slot in {"A", "B"}
+    assert status["version"] == "1.1.1"
+    assert "runtime-v3" in runtime_handler.read_text(encoding="utf-8")
+
 
 def test_skills_loader_imports_repo_workspace_handler_when_workspace_missing(tmp_path: Path, monkeypatch) -> None:
     runtime_base = tmp_path / "runtime"

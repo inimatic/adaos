@@ -481,7 +481,7 @@ Actions:
 
 Status: in progress.
 
-Progress: 60%.
+Progress: 65%.
 
 Actions:
 
@@ -497,6 +497,9 @@ Actions:
 - [x] Make API update success require active runtime convergence in production.
 - [x] Make unqualified `adaos skill activate <skill>` prepare and activate the
   workspace source version when it differs from the active runtime.
+- [x] Refresh same-runtime-bucket prepared sources when the workspace patch
+  version advances, even if an earlier activation already moved the active
+  version marker.
 - [x] Correct CLI runtime drift direction so a newer workspace source reports
   `runtime-behind`, and semantically equal `v0.75.6` / `0.75.6` versions do not
   show drift.
@@ -513,6 +516,9 @@ Implementation notes:
 - Existing runtime activation tests cover smoke-import failures before slot
   switch and `rehydrate` failures after slot switch, including rollback to the
   previous active version.
+- Regression coverage now includes the `v0.75.6` -> `0.75.7` style case where
+  both versions share one runtime bucket but the active slot still needs fresh
+  workspace sources.
 
 #### RCMS-004: Treat scenario dependencies as lifecycle operations
 
