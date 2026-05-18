@@ -489,23 +489,28 @@ Actions:
 
 #### RCMS-004: Treat scenario dependencies as lifecycle operations
 
-Status: planned.
+Status: in progress.
+
+Progress: 25%.
 
 Actions:
 
-- [ ] Make scenario dependency bootstrap return structured per-skill results
+- [x] Make scenario dependency bootstrap return structured per-skill results
   instead of silently continuing after dependency lifecycle failures.
-- [ ] For each required skill dependency, run install/source sync,
+- [x] For each required skill dependency, run install/source sync,
   `prepare_runtime`, and `activate_for_space`.
 - [ ] Decide and implement production policy for required dependency failure:
   block scenario activation or activate the scenario as degraded with an
   explicit operation warning.
-- [ ] Include dependent skill lifecycle results in scenario install/update
+- [x] Include dependent skill lifecycle results in synchronous scenario install
+  API payloads.
+- [ ] Include dependent skill lifecycle results in async scenario install/update
   operation payloads.
 - [ ] Surface dependency lifecycle failures in Infrastructure State and
   Operations details only when they affect active scenarios.
+- [x] Add tests for dependency lifecycle result reporting.
 - [ ] Add tests for scenario install/update that pulls a dependent skill forward
-  and applies its lifecycle.
+  and applies its lifecycle through the full operation path.
 
 #### RCMS-005: Make production CLI/control commands slot-bound
 

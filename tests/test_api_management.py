@@ -100,6 +100,7 @@ class _FakeSkillManager:
 class _FakeScenarioManager:
     def __init__(self) -> None:
         self.calls: List[str] = []
+        self.last_dependency_bootstrap_result: dict[str, Any] | None = None
 
     def list_installed(self) -> list[_Record]:
         self.calls.append("list_installed")
@@ -118,6 +119,15 @@ class _FakeScenarioManager:
 
     def install_with_deps(self, name: str, *, pin: str | None = None, webspace_id: str | None = None):
         self.calls.append(f"install_with_deps:{name}:{pin}:{webspace_id}")
+        self.last_dependency_bootstrap_result = {
+            "ok": True,
+            "scenario_id": name,
+            "webspace_id": webspace_id,
+            "required": ["demo"],
+            "items": [{"name": "demo", "ok": True}],
+            "succeeded": ["demo"],
+            "failed": [],
+        }
         return _Meta(id=type("Id", (), {"value": name})(), name=name, version="0.1.0", path=f"/scenarios/{name}")
 
     def uninstall(self, name: str) -> None:
@@ -234,6 +244,8 @@ def test_scenario_api_matches_service_surface() -> None:
     resp = client.post("/api/scenarios/install", json={"name": "scene"})
     assert resp.status_code == 200
     assert resp.json()["scenario"]["id"] == "scene"
+    assert resp.json()["dependency_bootstrap"]["ok"] is True
+    assert resp.json()["dependency_bootstrap"]["succeeded"] == ["demo"]
     assert ("desktop", "scenario_install_sync", "scenario_projection", "scene") in rebuilds
 
     resp = client.post("/api/scenarios/install", json={"name": "scene", "async_operation": True, "webspace_id": "default"})
