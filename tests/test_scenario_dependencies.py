@@ -98,6 +98,86 @@ def test_bootstrap_dependencies_reports_structured_lifecycle_results(monkeypatch
     assert events[-1].payload["failed"] == ["install_bad", "prepare_bad", "activate_bad"]
 
 
+def test_install_with_deps_pulls_dependency_forward_before_projection(monkeypatch) -> None:
+    calls: list[str] = []
+    workspace_versions = {"media_skill": "1.0.0"}
+    active_versions = {"media_skill": "0.9.0"}
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def install(self, name: str) -> None:
+            calls.append(f"install:{name}:catalog=1.1.0")
+            workspace_versions[name] = "1.1.0"
+
+        def prepare_runtime(self, name: str, run_tests: bool = False):
+            calls.append(f"prepare_runtime:{name}:{workspace_versions[name]}:{int(run_tests)}")
+            return SimpleNamespace(version=workspace_versions[name], slot="B")
+
+        def activate_for_space(
+            self,
+            name: str,
+            *,
+            version: str | None = None,
+            slot: str | None = None,
+            space: str = "default",
+            webspace_id: str = "default",
+        ) -> None:
+            calls.append(f"activate_for_space:{name}:{version}:{slot}:{space}:{webspace_id}")
+            active_versions[name] = version or active_versions[name]
+
+    def _install_scenario(name: str, pin: str | None = None):
+        calls.append(f"scenario_install:{name}:{pin}")
+        return SimpleNamespace(id=SimpleNamespace(value=name), name=name, version="0.2.0", path=f"/scenarios/{name}")
+
+    def _sync_to_yjs(scenario_id: str, *, webspace_id: str | None = None, emit_event: bool = True):
+        calls.append(f"sync_to_yjs:{scenario_id}:{webspace_id}:{int(bool(emit_event))}")
+
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.setattr(
+        scenario_manager,
+        "get_ctx",
+        lambda: SimpleNamespace(sql=object(), skills_repo=object(), git=object(), paths=object(), caps=object()),
+    )
+    monkeypatch.setattr(scenario_manager, "read_manifest", lambda scenario_id: {"depends": ["media_skill"]})
+    monkeypatch.setattr(scenario_manager, "SqliteSkillRegistry", lambda sql: object())
+    monkeypatch.setattr(scenario_manager, "SkillManager", _FakeSkillManager)
+
+    mgr = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=object(),
+        git=object(),
+        paths=object(),
+        bus=SimpleNamespace(publish=lambda evt: None),
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(mgr, "install", _install_scenario)
+    monkeypatch.setattr(mgr, "sync_to_yjs", _sync_to_yjs)
+
+    meta = mgr.install_with_deps("media_scene", webspace_id="desktop")
+    result = mgr.last_dependency_bootstrap_result
+
+    assert getattr(meta.id, "value") == "media_scene"
+    assert workspace_versions["media_skill"] == "1.1.0"
+    assert active_versions["media_skill"] == "1.1.0"
+    assert result is not None
+    assert result["ok"] is True
+    assert result["succeeded"] == ["media_skill"]
+    assert result["items"][0]["installed"] is True
+    assert result["items"][0]["prepared"] is True
+    assert result["items"][0]["activated"] is True
+    assert result["items"][0]["version"] == "1.1.0"
+    assert result["items"][0]["slot"] == "B"
+    assert calls == [
+        "scenario_install:media_scene:None",
+        "install:media_skill:catalog=1.1.0",
+        "prepare_runtime:media_skill:1.1.0:0",
+        "activate_for_space:media_skill:1.1.0:B:default:desktop",
+        "sync_to_yjs:media_scene:desktop:1",
+    ]
+
+
 def test_install_with_deps_blocks_projection_when_required_dependency_fails_in_prod(monkeypatch) -> None:
     sync_calls: list[str] = []
     dep_result = {
