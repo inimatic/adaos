@@ -185,6 +185,13 @@ def webio_stream_guard_snapshot(
     if token_owner:
         rows = [row for row in rows if str(row.get("owner") or "") == token_owner]
     rows.sort(key=lambda item: float(item.get("last_at") or 0.0), reverse=True)
+    totals = {
+        "attempted": sum(int(row.get("attempted_total") or 0) for row in rows),
+        "published": sum(int(row.get("published_total") or 0) for row in rows),
+        "suppressed": sum(int(row.get("suppressed_total") or 0) for row in rows),
+        "throttled": sum(int(row.get("throttled_total") or 0) for row in rows),
+        "published_fanout": sum(int(row.get("published_fanout_total") or 0) for row in rows),
+    }
     return {
         "schema": "adaos.webio_stream_guard.v1",
         "webspace_id": token_ws or None,
@@ -192,6 +199,7 @@ def webio_stream_guard_snapshot(
         "owner": token_owner or None,
         "items": rows[:max_items],
         "total": len(rows),
+        "totals": totals,
     }
 
 

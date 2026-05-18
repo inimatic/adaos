@@ -1601,6 +1601,8 @@ def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) 
     assert payload["runtime"]["connectivity"]["required_upstream_link"]["kind"] == "hub_root"
     assert payload["runtime"]["state_sync"]["replay"]["mode"] == "snapshot_plus_diff"
     assert payload["runtime"]["yjs_pressure"]["target"] == "primary_shared_doc"
+    assert payload["runtime"]["webio_stream_guard"]["schema"] == "adaos.webio_stream_guard.v1"
+    assert "top_webio_stream_controls" in payload["runtime"]["eventbus_backlog"]
 
 
 def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monkeypatch) -> None:
@@ -1702,6 +1704,53 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
                     "blocked_roots": [],
                     "observed_state": "critical",
                 },
+                "webio_stream_guard": {
+                    "available": True,
+                    "webspace_id": "desktop",
+                    "items": [
+                        {
+                            "receiver": "infrastate.realtime",
+                            "owner": "skill:infrastate_skill",
+                            "surface": "widget:realtime",
+                            "attempted_total": 4,
+                            "published_total": 2,
+                            "suppressed_total": 1,
+                            "throttled_total": 1,
+                            "declared_max_payload_bytes": 4096,
+                            "last_reason": "browser_stream_declared_payload_budget_pressure",
+                        }
+                    ],
+                    "total": 1,
+                    "totals": {
+                        "attempted": 4,
+                        "published": 2,
+                        "suppressed": 1,
+                        "throttled": 1,
+                        "published_fanout": 2,
+                    },
+                },
+                "eventbus_backlog": {
+                    "available": True,
+                    "pending_tasks": 1,
+                    "pending_peak": 3,
+                    "bounded_queue_total": 2,
+                    "bounded_queue_peak": 5,
+                    "bounded_active_workers": 1,
+                    "top_webio_stream_controls": [
+                        {
+                            "event_type": "webio.stream.snapshot.requested",
+                            "webspace_id": "desktop",
+                            "target_node_id": "node-1",
+                            "receiver": "infrastate.realtime",
+                            "source": "events_ws",
+                            "incoming_total": 9,
+                            "queued_total": 5,
+                            "superseded_total": 4,
+                            "dropped_total": 0,
+                            "last_action": "snapshot",
+                        }
+                    ],
+                },
                 "event_model_phase0_communication": {
                     "state": "complete",
                     "ready": True,
@@ -1746,6 +1795,10 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["connectivity"]["requiredUpstreamLink"]["transitionState"] == "waiting_restart"
     assert payload["stateSync"]["replay"]["cursor"] == "3/32"
     assert payload["yjsPressure"]["policyState"] == "warn"
+    assert payload["webioStreamGuard"]["totals"]["attempted"] == 4
+    assert payload["webioStreamGuard"]["top"]["receiver"] == "infrastate.realtime"
+    assert payload["eventbusBacklog"]["boundedQueueTotal"] == 2
+    assert payload["eventbusBacklog"]["topWebioStreamControls"][0]["superseded"] == 4
     assert payload["phase0Communication"]["tasks"]["nodeBrowserReady"]["status"] == "done"
 
 
@@ -2047,6 +2100,52 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                         "last_reason": "write_amplification_blocked",
                         "last_path": "data/infrastate",
                     },
+                    "webio_stream_guard": {
+                        "available": True,
+                        "webspace_id": "desktop",
+                        "items": [
+                            {
+                                "receiver": "infrastate.realtime",
+                                "owner": "skill:infrastate_skill",
+                                "surface": "widget:realtime",
+                                "attempted_total": 6,
+                                "published_total": 3,
+                                "suppressed_total": 2,
+                                "throttled_total": 1,
+                                "declared_max_payload_bytes": 4096,
+                                "last_reason": "browser_stream_payload_pressure",
+                            }
+                        ],
+                        "total": 1,
+                        "totals": {
+                            "attempted": 6,
+                            "published": 3,
+                            "suppressed": 2,
+                            "throttled": 1,
+                            "published_fanout": 3,
+                        },
+                    },
+                    "eventbus_backlog": {
+                        "available": True,
+                        "pending_tasks": 1,
+                        "pending_peak": 3,
+                        "bounded_queue_total": 2,
+                        "bounded_queue_peak": 4,
+                        "bounded_active_workers": 1,
+                        "top_webio_stream_controls": [
+                            {
+                                "event_type": "webio.stream.snapshot.requested",
+                                "webspace_id": "desktop",
+                                "target_node_id": "node-1",
+                                "receiver": "infrastate.realtime",
+                                "source": "events_ws",
+                                "incoming_total": 11,
+                                "queued_total": 7,
+                                "superseded_total": 4,
+                                "dropped_total": 0,
+                            }
+                        ],
+                    },
                 },
             },
         ),
@@ -2064,6 +2163,10 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "yjs_pressure: webspace=desktop owner=_by_owner/skill_infrastate_skill state=high policy=warn" in result.output
     assert "throttled=3 blocked=1" in result.output
     assert "yjs_pressure.last: policy=block reason=write_amplification_blocked path=data/infrastate" in result.output
+    assert "webio_stream_guard: webspace=desktop total=1 attempted=6 published=3 suppressed=2 throttled=1 fanout=3" in result.output
+    assert "webio_stream_guard.top: receiver=infrastate.realtime owner=skill:infrastate_skill" in result.output
+    assert "eventbus: pending=1 bounded_queue=2 peak=4 active=1" in result.output
+    assert "eventbus.webio_control.top: type=webio.stream.snapshot.requested receiver=infrastate.realtime" in result.output
 
 
 def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -> None:

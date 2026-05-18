@@ -449,6 +449,10 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
     connectivity = runtime.get("connectivity") if isinstance(runtime.get("connectivity"), dict) else {}
     state_sync = runtime.get("state_sync") if isinstance(runtime.get("state_sync"), dict) else {}
     yjs_pressure = runtime.get("yjs_pressure") if isinstance(runtime.get("yjs_pressure"), dict) else {}
+    webio_stream_guard = (
+        runtime.get("webio_stream_guard") if isinstance(runtime.get("webio_stream_guard"), dict) else {}
+    )
+    eventbus_backlog = runtime.get("eventbus_backlog") if isinstance(runtime.get("eventbus_backlog"), dict) else {}
     media_runtime = runtime.get("media_runtime") if isinstance(runtime.get("media_runtime"), dict) else {}
     supervisor_runtime = runtime.get("supervisor_runtime") if isinstance(runtime.get("supervisor_runtime"), dict) else {}
     strategy_assessment = strategy.get("assessment") if isinstance(strategy.get("assessment"), dict) else {}
@@ -756,6 +760,59 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"policy={yjs_pressure.get('last_policy_state') or '-'} "
                 f"reason={yjs_pressure.get('last_reason') or '-'} "
                 f"path={yjs_pressure.get('last_path') or '-'}"
+            )
+    if webio_stream_guard:
+        guard_totals = webio_stream_guard.get("totals") if isinstance(webio_stream_guard.get("totals"), dict) else {}
+        typer.echo(
+            "webio_stream_guard: "
+            f"webspace={webio_stream_guard.get('webspace_id') or '-'} "
+            f"total={webio_stream_guard.get('total') or 0} "
+            f"attempted={guard_totals.get('attempted') or 0} "
+            f"published={guard_totals.get('published') or 0} "
+            f"suppressed={guard_totals.get('suppressed') or 0} "
+            f"throttled={guard_totals.get('throttled') or 0} "
+            f"fanout={guard_totals.get('published_fanout') or 0}"
+        )
+        guard_items = webio_stream_guard.get("items") if isinstance(webio_stream_guard.get("items"), list) else []
+        guard_top = guard_items[0] if guard_items and isinstance(guard_items[0], dict) else {}
+        if guard_top:
+            typer.echo(
+                "webio_stream_guard.top: "
+                f"receiver={guard_top.get('receiver') or '-'} "
+                f"owner={guard_top.get('owner') or '-'} "
+                f"surface={guard_top.get('surface') or '-'} "
+                f"attempted={guard_top.get('attempted_total') or 0} "
+                f"published={guard_top.get('published_total') or 0} "
+                f"suppressed={guard_top.get('suppressed_total') or 0} "
+                f"throttled={guard_top.get('throttled_total') or 0} "
+                f"budget={guard_top.get('declared_max_payload_bytes') or '-'} "
+                f"reason={guard_top.get('last_reason') or '-'}"
+            )
+    if eventbus_backlog:
+        typer.echo(
+            "eventbus: "
+            f"pending={eventbus_backlog.get('pending_tasks') or 0} "
+            f"bounded_queue={eventbus_backlog.get('bounded_queue_total') or 0} "
+            f"peak={eventbus_backlog.get('bounded_queue_peak') or 0} "
+            f"active={eventbus_backlog.get('bounded_active_workers') or 0}"
+        )
+        controls = (
+            eventbus_backlog.get("top_webio_stream_controls")
+            if isinstance(eventbus_backlog.get("top_webio_stream_controls"), list)
+            else []
+        )
+        control_top = controls[0] if controls and isinstance(controls[0], dict) else {}
+        if control_top:
+            typer.echo(
+                "eventbus.webio_control.top: "
+                f"type={control_top.get('event_type') or '-'} "
+                f"receiver={control_top.get('receiver') or '-'} "
+                f"webspace={control_top.get('webspace_id') or '-'} "
+                f"source={control_top.get('source') or '-'} "
+                f"incoming={control_top.get('incoming_total') or 0} "
+                f"queued={control_top.get('queued_total') or 0} "
+                f"superseded={control_top.get('superseded_total') or 0} "
+                f"dropped={control_top.get('dropped_total') or 0}"
             )
     if media_runtime:
         assessment = media_runtime.get("assessment") if isinstance(media_runtime.get("assessment"), dict) else {}

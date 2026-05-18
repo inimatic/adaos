@@ -5748,6 +5748,63 @@ def _yjs_pressure_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any
     }
 
 
+def _webio_stream_guard_runtime_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
+    runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
+    selected_webspace_id = str(runtime.get("selected_webspace_id") or "").strip() or None
+    try:
+        from adaos.services.router.service import webio_stream_guard_snapshot
+
+        payload = webio_stream_guard_snapshot(webspace_id=selected_webspace_id, limit=20)
+        if isinstance(payload, dict):
+            result = dict(payload)
+            result["available"] = True
+            result.setdefault("totals", {})
+            return result
+    except Exception:
+        pass
+    return {
+        "schema": "adaos.webio_stream_guard.v1",
+        "available": False,
+        "webspace_id": selected_webspace_id,
+        "receiver": None,
+        "owner": None,
+        "items": [],
+        "total": 0,
+        "totals": {
+            "attempted": 0,
+            "published": 0,
+            "suppressed": 0,
+            "throttled": 0,
+            "published_fanout": 0,
+        },
+    }
+
+
+def _eventbus_backlog_runtime_snapshot() -> dict[str, Any]:
+    try:
+        ctx = get_ctx()
+        bus = getattr(ctx, "bus", None)
+        snapshot_fn = getattr(bus, "backlog_snapshot", None)
+        if callable(snapshot_fn):
+            payload = snapshot_fn()
+            if isinstance(payload, dict):
+                result = dict(payload)
+                result["available"] = True
+                result.setdefault("top_webio_stream_controls", [])
+                return result
+    except Exception:
+        pass
+    return {
+        "available": False,
+        "pending_tasks": 0,
+        "pending_peak": 0,
+        "bounded_queue_total": 0,
+        "bounded_queue_peak": 0,
+        "bounded_active_workers": 0,
+        "top_webio_stream_controls": [],
+    }
+
+
 def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         payload = {
@@ -6697,6 +6754,8 @@ def reliability_snapshot(
     )
     state_sync = _state_sync_snapshot(sync_runtime)
     yjs_pressure = _yjs_pressure_snapshot(sync_runtime)
+    webio_stream_guard = _webio_stream_guard_runtime_snapshot(sync_runtime)
+    eventbus_backlog = _eventbus_backlog_runtime_snapshot()
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
         sidecar_runtime=sidecar_runtime,
@@ -6739,6 +6798,8 @@ def reliability_snapshot(
             "connectivity": connectivity,
             "state_sync": state_sync,
             "yjs_pressure": yjs_pressure,
+            "webio_stream_guard": webio_stream_guard,
+            "eventbus_backlog": eventbus_backlog,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,
             "event_model_phase0_communication": event_model_phase0_communication,

@@ -1879,15 +1879,18 @@ Success means:
 
 Snapshot date: 2026-05-18.
 
-Overall completion: 18%. First implementation slices landed the ABI/schema
+Overall completion: 23%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
 stream receiver budget/guard metadata, validator schema coverage, LLM
 skill-template guidance, materialized `data.webio` receiver metadata, router
 guard policy metadata, `webio_stream_guard_snapshot(...)`, and
-`stream_variable_publish(...)`. Full status-plane helpers are still pending
-before `infrastate_skill` conversion should start.
+`stream_variable_publish(...)`. The reliability full snapshot, compact summary,
+and CLI now also expose stream-guard publish/suppress counters plus eventbus
+`webio.stream.snapshot.requested` / `webio.stream.subscription.changed`
+control-pressure counters by receiver. Full status-plane helpers are still
+pending before `infrastate_skill` conversion should start.
 
 Problem statement:
 
@@ -1946,7 +1949,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 65%.
+Progress: 75%.
 
 Purpose:
 
@@ -1982,6 +1985,12 @@ Actions:
 - [x] Add per-receiver stream guard counters for attempted, published,
   suppressed, throttled, fanout, payload bytes, last reason, route surface, and
   declared budget.
+- [x] Expose stream guard counters through reliability full snapshot, compact
+  summary, and `adaos node reliability`.
+- [x] Add receiver-scoped eventbus counters for stream control pressure:
+  incoming, queued, superseded, and dropped
+  `webio.stream.snapshot.requested` / `webio.stream.subscription.changed`
+  work.
 - [x] Add contract tests proving a skill can expose a status/card plus stream
   variables without writing broad primary-doc Yjs branches.
 - [x] Update LLM skill templates and review checklist so every new
@@ -2004,17 +2013,19 @@ Human verification:
 - Inspect `webio_stream_guard_snapshot(...)` from a local Python/debug context
   after stream activity; the row for the receiver should show attempted,
   published or suppressed totals, fanout, last reason, and declared budget.
+- Run `adaos node reliability` after stream activity. The output should include
+  `webio_stream_guard`, `webio_stream_guard.top`, `eventbus`, and
+  `eventbus.webio_control.top`; for `infrastate` bursts the top control row
+  should identify the receiver, source, incoming, queued, superseded, and
+  dropped counts.
 
 Next steps:
 
 - Wire route metadata into ProjectionService/Yjs projection diagnostics.
-- Expose `webio_stream_guard_snapshot(...)` through reliability/diagnostic
-  surfaces used by final soaks.
-- Add snapshot-requested/coalesced counters from the stream control path so
-  final soaks can report both publish pressure and snapshot pressure by
-  receiver.
 - Use those helpers to prepare the `infrastate_skill` data-route plan before
   moving active variables out of Yjs.
+- Start the shared status-card contract and SDK helpers so `infrastate_skill`
+  can migrate without growing another local projection framework.
 
 #### STATUS-001: Define the shared status card contract
 
@@ -2233,6 +2244,9 @@ Actions:
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
   unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
   receiver.
+  Reliability now carries the source counters for published/suppressed/fanout
+  and snapshot-requested/queued/superseded/dropped by receiver; the remaining
+  work is to run the soak and record the result.
 - [ ] Run a 180-second acceptance with browser attached.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
