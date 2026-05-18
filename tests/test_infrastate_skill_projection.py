@@ -1101,6 +1101,84 @@ def test_infrastate_scenario_items_only_show_installed_registry_entries(monkeypa
     assert [item["name"] for item in drift_items] == ["alpha"]
 
 
+def test_infrastate_scenario_items_surface_dependency_failures_for_active_scenarios(monkeypatch, tmp_path: Path):
+    mod = _load_infrastate_module()
+    workspace = tmp_path / "workspace"
+    for name in ("alpha", "beta"):
+        scenario_dir = workspace / "scenarios" / name
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        (scenario_dir / "scenario.yaml").write_text(f"id: {name}\nversion: '1.0.0'\n", encoding="utf-8")
+
+    class _ScenarioRecord:
+        def __init__(self, name: str, active_version: str):
+            self.name = name
+            self.active_version = active_version
+            self.last_updated = 1.0
+
+    dependency_bootstrap = {
+        "ok": False,
+        "failed": ["bad_skill"],
+        "items": [{"name": "bad_skill", "ok": False, "error": "prepare failed"}],
+        "error": "RuntimeError: prepare failed",
+    }
+    operations = {
+        "by_id": {
+            "op-alpha": {
+                "operation_id": "op-alpha",
+                "kind": "scenario.update",
+                "target_kind": "scenario",
+                "target_id": "alpha",
+                "status": "failed",
+                "error": {
+                    "type": "ScenarioDependencyLifecycleError",
+                    "message": "required scenario dependencies failed: bad_skill",
+                    "dependency_bootstrap": dependency_bootstrap,
+                },
+            },
+            "op-beta": {
+                "operation_id": "op-beta",
+                "kind": "scenario.update",
+                "target_kind": "scenario",
+                "target_id": "beta",
+                "status": "failed",
+                "error": {
+                    "type": "ScenarioDependencyLifecycleError",
+                    "dependency_bootstrap": dependency_bootstrap,
+                },
+            },
+        }
+    }
+
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(sql=object(), paths=SimpleNamespace(workspace_dir=lambda: workspace), git=object()),
+    )
+    monkeypatch.setattr(
+        mod,
+        "SqliteScenarioRegistry",
+        lambda sql: SimpleNamespace(
+            list=lambda: [
+                _ScenarioRecord("alpha", "1.0.0"),
+                _ScenarioRecord("beta", ""),
+            ]
+        ),
+    )
+    monkeypatch.setattr(mod, "get_local_capacity", lambda: {"scenarios": []})
+    monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", False)
+
+    items = {item["name"]: item for item in mod._scenario_items(include_all=True, operations=operations)}
+
+    assert items["alpha"]["dependency_lifecycle_failed"] is True
+    assert items["alpha"]["dependency_failure_operation_id"] == "op-alpha"
+    assert items["alpha"]["dependency_failure_failed"] == ["bad_skill"]
+    assert items["alpha"]["status"] == "dependency_lifecycle_failed"
+    assert items["alpha"]["status_icon"] == "warning-outline"
+    assert "bad_skill" in items["alpha"]["status_tooltip"]
+    assert items["beta"]["dependency_lifecycle_failed"] is False
+    assert items["beta"]["status"] != "dependency_lifecycle_failed"
+
+
 def test_infrastate_inventory_stream_honors_drift_only_toggle(monkeypatch):
     mod = _load_infrastate_module()
     rows = [
@@ -1946,6 +2024,39 @@ def test_infrastate_operations_stream_request_uses_direct_sdk_builder(monkeypatc
     assert published == [
         ("infrastate.operations.active", [{"id": "op-1", "webspace_id": "default"}], "default"),
     ]
+
+
+def test_infrastate_operation_details_include_dependency_bootstrap():
+    mod = _load_infrastate_module()
+    snapshot = {
+        "operations": {
+            "by_id": {
+                "op-1": {
+                    "operation_id": "op-1",
+                    "kind": "scenario.update",
+                    "target_kind": "scenario",
+                    "target_id": "alpha",
+                    "status": "failed",
+                    "message": "required scenario dependencies failed: bad_skill",
+                    "error": {
+                        "type": "ScenarioDependencyLifecycleError",
+                        "dependency_bootstrap": {
+                            "ok": False,
+                            "failed": ["bad_skill"],
+                            "items": [{"name": "bad_skill", "ok": False, "error": "prepare failed"}],
+                        },
+                    },
+                }
+            }
+        }
+    }
+
+    detail = mod._detail_payload_for_receiver(snapshot, "infrastate.details.operations.op-1")
+
+    assert detail["id"] == "op-1"
+    assert detail["status"] == "failed"
+    assert "dependency_bootstrap" in detail["content"]
+    assert "bad_skill" in detail["content"]
 
 
 def test_infrastate_stream_snapshot_request_bypasses_noncritical_guardrail(monkeypatch):
