@@ -253,6 +253,56 @@ def _compact_projection_payload(value: Any) -> Any:
     return _clone_json_like(value)
 
 
+def _projection_policy_metadata(
+    *,
+    scope: str,
+    slot: str,
+    target: ProjectionTarget,
+    path: str,
+    root_name: str,
+) -> dict[str, Any]:
+    surface = ".".join(part for part in (str(scope or "").strip(), str(slot or "").strip()) if part)
+    return {
+        "route": {
+            "kind": "yjs_projection",
+            "surface": surface or None,
+            "backend": str(target.backend or "yjs"),
+            "path": str(path or "").strip() or None,
+            "root": str(root_name or "").strip() or None,
+        },
+        "projection": {
+            "scope": str(scope or "").strip() or None,
+            "slot": str(slot or "").strip() or None,
+            "backend": str(target.backend or "yjs"),
+            "webspace_id": str(target.webspace_id or "").strip() or None,
+            "path": str(path or "").strip() or None,
+            "root": str(root_name or "").strip() or None,
+        },
+    }
+
+
+def _enrich_projection_policy(
+    policy: dict[str, Any],
+    *,
+    scope: str,
+    slot: str,
+    target: ProjectionTarget,
+    path: str,
+    root_name: str,
+) -> dict[str, Any]:
+    result = dict(policy or {})
+    metadata = _projection_policy_metadata(
+        scope=scope,
+        slot=slot,
+        target=target,
+        path=path,
+        root_name=root_name,
+    )
+    for key, value in metadata.items():
+        result.setdefault(key, value)
+    return result
+
+
 def _json_like_equal(current: Any, next_value: Any) -> bool:
     if current is next_value:
         return True
@@ -353,7 +403,7 @@ class ProjectionService:
             return
         for t in targets:
             if t.backend == "yjs":
-                await self._apply_yjs(t, value, scope=scope, user_id=user_id, webspace_id=webspace_id)
+                await self._apply_yjs(t, value, scope=scope, slot=slot, user_id=user_id, webspace_id=webspace_id)
             elif t.backend == "kv":
                 self._apply_kv(scope, slot, value, user_id=user_id)
             else:
@@ -366,6 +416,7 @@ class ProjectionService:
         value: Any,
         *,
         scope: str,
+        slot: str,
         user_id: Optional[str],
         webspace_id: Optional[str],
     ) -> None:
@@ -397,6 +448,14 @@ class ProjectionService:
         # YStore writes remain the fallback when no room is active.
         prefer_live_room = True
         policy = _yjs_primary_doc_policy_state(webspace_id=ws_id, owner=owner, root_name=root_name)
+        policy = _enrich_projection_policy(
+            policy,
+            scope=scope,
+            slot=slot,
+            target=target,
+            path=path,
+            root_name=root_name,
+        )
         if not await _govern_primary_doc_write(policy=policy, webspace_id=ws_id, path=path, owner=owner):
             return
         projected_value = _compact_projection_payload(value)
