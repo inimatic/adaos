@@ -276,8 +276,8 @@ def _runtime_version_flags(
     if order is None or order == 0:
         return ["runtime-different"]
     if order > 0:
-        return ["runtime-ahead"]
-    return ["runtime-behind"]
+        return ["runtime-behind"]
+    return ["runtime-ahead"]
 
 
 def _resolve_workspace_skill_versions(
@@ -292,7 +292,10 @@ def _resolve_workspace_skill_versions(
     runtime_version = None
     if isinstance(runtime_state, dict):
         runtime_version = _clean_version_text(runtime_state.get("version"))
-    version_drift = bool(workspace_version and runtime_version and workspace_version != runtime_version)
+    version_drift = False
+    if workspace_version and runtime_version:
+        order = _compare_versions(workspace_version, runtime_version)
+        version_drift = (workspace_version != runtime_version) if order is None else order != 0
     return workspace_version, runtime_version, version_drift
 
 

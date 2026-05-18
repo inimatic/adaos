@@ -291,7 +291,7 @@ def test_skill_status_prefers_workspace_version_over_runtime_version(tmp_base_di
 
     assert result.exit_code == 0
     assert "demo_skill: v1.1.0 slot=A" in result.stdout
-    assert "runtime-ahead" in result.stdout
+    assert "runtime-behind" in result.stdout
 
 
 def test_skill_list_prefers_workspace_version_over_runtime_version(tmp_base_dir, monkeypatch):
@@ -383,12 +383,65 @@ def test_skill_list_shows_dirty_flag_and_json_flags(tmp_base_dir, monkeypatch):
 
     text_result = CliRunner().invoke(skill_cmd.app, ["list", "--local"])
     assert text_result.exit_code == 0
-    assert "runtime-ahead" in text_result.stdout
+    assert "runtime-behind" in text_result.stdout
     assert "git-dirty" in text_result.stdout
 
     json_result = CliRunner().invoke(skill_cmd.app, ["list", "--local", "--json"])
     assert json_result.exit_code == 0
-    assert '"flags": ["runtime-ahead", "git-dirty"]' in json_result.stdout
+    assert '"flags": ["runtime-behind", "git-dirty"]' in json_result.stdout
+
+
+def test_skill_status_does_not_flag_v_prefixed_equivalent_runtime(tmp_base_dir, monkeypatch):
+    skill_root = tmp_base_dir / "workspace" / "skills" / "demo_skill"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text("id: demo_skill\nversion: '0.75.6'\n", encoding="utf-8")
+
+    class _Row:
+        name = "demo_skill"
+        installed = True
+
+    class _Registry:
+        def __init__(self, _sql):
+            pass
+
+        def list(self):
+            return [_Row()]
+
+    class _Paths:
+        def workspace_dir(self):
+            return tmp_base_dir / "workspace"
+
+        def skills_workspace_dir(self):
+            return tmp_base_dir / "workspace" / "skills"
+
+        def dev_skills_dir(self):
+            return tmp_base_dir / "skills-dev"
+
+    class _Ctx:
+        paths = _Paths()
+        sql = object()
+
+    class _Mgr:
+        @staticmethod
+        def runtime_status(_name: str):
+            return {"version": "v0.75.6", "active_slot": "A", "ready": True}
+
+    monkeypatch.setattr(skill_cmd, "SqliteSkillRegistry", _Registry)
+    monkeypatch.setattr(skill_cmd, "ensure_remote", lambda *args, **kwargs: None)
+    monkeypatch.setattr(skill_cmd, "resolve_base_ref", lambda *args, **kwargs: "HEAD")
+    monkeypatch.setattr(skill_cmd, "compute_path_status", lambda **kwargs: _fake_path_status("skills/demo_skill"))
+    monkeypatch.setattr(skill_cmd, "get_ctx", lambda: _Ctx())
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(
+        skill_cmd,
+        "list_workspace_registry_entries",
+        lambda *args, **kwargs: [{"name": "demo_skill", "version": "0.75.6"}],
+    )
+
+    result = CliRunner().invoke(skill_cmd.app, ["status", "demo_skill"])
+
+    assert result.exit_code == 0
+    assert "runtime status:" not in result.stdout
 
 
 def test_skill_list_shows_ahead_flag_for_committed_workspace_diff(tmp_base_dir, monkeypatch):
