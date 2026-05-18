@@ -458,13 +458,13 @@ Implementation notes:
 
 Status: in progress.
 
-Progress: 50%.
+Progress: 55%.
 
 Actions:
 
 - [x] Extend Infrastructure State skill/scenario rows with `catalog_version`,
   `workspace_source_version`, `active_version`, and skill `slot`.
-- [ ] Add `catalog_commit`, `catalog_source`, and `runtime_bucket` to the
+- [x] Add `catalog_commit`, `catalog_source`, and `runtime_bucket` to the
   authoritative inventory model.
 - [x] Classify behind/ahead/different drift independently for catalog vs
   workspace and catalog vs active runtime.
