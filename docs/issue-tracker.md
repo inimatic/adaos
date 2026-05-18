@@ -378,8 +378,9 @@ Success means:
   `.adaos/dev` LLM-assisted development.
 - Production updates do not report success until the active runtime has been
   prepared and activated, not merely refreshed in source workspace.
-- Infrastructure State shows only divergence/degradation by default, using
-  compact status icons with tooltips instead of noisy healthy rows.
+- Infrastructure State shows the full installed skills/scenarios inventory by
+  default, with a shared `Drift only` toggle for focused divergence review and
+  compact status icons with tooltips.
 - Scenario installation and update paths apply the skill lifecycle to required
   skill dependencies and expose dependency failures as structured operation
   results.
@@ -405,9 +406,9 @@ runtime publishing, and future LLM development in `.adaos/dev`.
 
 ### Product Rules
 
-- Infrastructure State shows only drift/degraded cases by default. In-sync
-  skills, scenarios, and nodes stay out of the compact view unless the operator
-  opens details.
+- Infrastructure State shows full Installed skills/scenarios by default so the
+  operator keeps the complete picture. A shared `Drift only` control filters the
+  same inventory to divergence/degradation rows when needed.
 - Status is represented with icons and tooltips:
   `behind catalog`, `ahead of catalog`, `workspace differs`, `active runtime
   differs`, `catalog unavailable`, `git unavailable`, `runtime inactive`, and
@@ -445,7 +446,7 @@ Actions:
 
 Status: in progress.
 
-Progress: 35%.
+Progress: 50%.
 
 Actions:
 
@@ -459,10 +460,20 @@ Actions:
   classifications.
 - [ ] Treat workspace source as a fallback only when explicitly marked
   `source=workspace_fallback`.
-- [x] Update Infrastructure State to show only rows with divergence or degraded
-  status in the compact view.
-- [x] Render drift statuses as icons with tooltips.
-- [ ] Add a details-on-demand view for the full healthy installed inventory.
+- [x] Return Installed skills/scenarios to the full inventory view and add a
+  shared `Drift only` toggle.
+- [x] Order inventory columns by source flow: Catalog, Workspace, workspace
+  actions, Runtime, runtime actions.
+- [x] Register renderer table icons and render drift statuses as icons with
+  tooltips.
+- [x] Limit skill `Activate` visibility to missing runtime or
+  workspace/runtime divergence.
+- [x] Add a push-comment modal for skill workspace publish actions.
+- [ ] Add row-level details/logs modal wiring so the current Logs icon opens the
+  relevant skill diagnostics instead of only returning paths in the action
+  result.
+- [ ] Extend scenario source/runtime action buttons once scenario update/push
+  lifecycle has the same safe operation surface as skills.
 - [x] Add a regression proving a source refresh cannot clear a drift marker
   unless the active runtime version also changes.
 
