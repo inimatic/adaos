@@ -67,6 +67,53 @@ def _is_adaos_workspace_repo(dir: StrOrPath) -> bool:
     return any(part == ".adaos" for part in parts)
 
 
+def _git_path_exists(dir: StrOrPath, git_path: str) -> bool:
+    resolved = _safe_git(dir, ["rev-parse", "--git-path", git_path])
+    if not resolved:
+        return False
+    return Path(dir, resolved).exists()
+
+
+def _rebase_in_progress(dir: StrOrPath) -> bool:
+    return _git_path_exists(dir, "rebase-merge") or _git_path_exists(dir, "rebase-apply")
+
+
+def _abort_rebase_if_needed(dir: StrOrPath) -> bool:
+    if not _rebase_in_progress(dir):
+        return False
+    try:
+        _run_git(["rebase", "--abort"], cwd=dir)
+        return True
+    except GitError as exc:
+        _log.warning("git rebase abort failed repo=%s err=%s", str(Path(dir)), exc)
+        return False
+
+
+def _is_rebase_conflict_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(
+        marker in msg
+        for marker in (
+            "conflict (content)",
+            "could not apply",
+            "resolve all conflicts manually",
+            "you have unmerged files",
+            "fix them up in the work tree",
+            "exiting because of an unresolved conflict",
+        )
+    )
+
+
+def _format_rebase_push_conflict(exc: BaseException, *, aborted: bool) -> str:
+    suffix = (
+        "The interrupted rebase was aborted and the workspace is back at the local commit. "
+        "Resolve the merge conflict or retry after the remote branch is reconciled."
+        if aborted
+        else "A merge conflict interrupted the rebase. Check the workspace before retrying."
+    )
+    return f"{exc}\n\n{suffix}"
+
+
 def _truncate(text: str, *, limit: int = 12000) -> str:
     if text is None:
         return ""
@@ -538,13 +585,23 @@ class CliGitClient(GitClient):
             #    но shallow-репо могут не иметь базовой истории → разшалловим и повторим
             try:
                 _run_git(["-c", "rebase.autoStash=true", "pull", "--rebase", remote, branch], cwd=dir)
-            except GitError:
+            except GitError as rebase_exc:
+                if _is_rebase_conflict_error(rebase_exc):
+                    aborted = _abort_rebase_if_needed(dir)
+                    raise GitError(_format_rebase_push_conflict(rebase_exc, aborted=aborted)) from rebase_exc
+                _abort_rebase_if_needed(dir)
                 # попытка «расшалловить» историю и снова rebase
                 try:
                     _run_git(["fetch", "--prune", "--unshallow", remote], cwd=dir)
                 except GitError:
                     # если git старый и не знает --unshallow, просто увеличим глубину
                     _run_git(["fetch", "--prune", "--depth=50", remote], cwd=dir)
-                _run_git(["-c", "rebase.autoStash=true", "pull", "--rebase", remote, branch], cwd=dir)
+                try:
+                    _run_git(["-c", "rebase.autoStash=true", "pull", "--rebase", remote, branch], cwd=dir)
+                except GitError as retry_exc:
+                    aborted = _abort_rebase_if_needed(dir)
+                    if _is_rebase_conflict_error(retry_exc):
+                        raise GitError(_format_rebase_push_conflict(retry_exc, aborted=aborted)) from retry_exc
+                    raise
         # 3) когда локальная ветка на вершине origin/<branch> — пушим
         _run_git(["push", remote, branch], cwd=dir)
