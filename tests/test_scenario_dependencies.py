@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import sys
+import types
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+if "y_py" not in sys.modules:
+    sys.modules["y_py"] = types.SimpleNamespace(YDoc=type("YDoc", (), {}))
+if "ypy_websocket.ystore" not in sys.modules:
+    ystore_module = types.ModuleType("ypy_websocket.ystore")
+    ystore_module.BaseYStore = type("BaseYStore", (), {})
+    ystore_module.YDocNotFound = type("YDocNotFound", (Exception,), {})
+    sys.modules["ypy_websocket.ystore"] = ystore_module
+if "ypy_websocket" not in sys.modules:
+    pkg = types.ModuleType("ypy_websocket")
+    pkg.ystore = sys.modules["ypy_websocket.ystore"]
+    sys.modules["ypy_websocket"] = pkg
 
 from adaos.services.scenario import manager as scenario_manager
 
