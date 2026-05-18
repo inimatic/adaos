@@ -509,12 +509,16 @@ Actions:
 
 #### RCMS-005: Make production CLI/control commands slot-bound
 
-Status: planned.
+Status: in progress.
+
+Progress: 20%.
 
 Actions:
 
-- [ ] Add a slot-bound CLI launcher or self-reexec path so production commands
+- [x] Add a slot-bound CLI launcher/self-reexec path so production commands can
   run from the active core slot venv and code.
+- [x] Apply active slot manifest env/cwd when the CLI is already running under
+  the slot Python but `tools/slot-shell.sh` was not sourced.
 - [ ] Refuse or warn for state-changing production commands when the current
   interpreter, repo root, or package path does not match the active slot
   manifest.
@@ -524,8 +528,9 @@ Actions:
   production slot-bound commands.
 - [ ] Add a `slot_shell_required` diagnostic only when command context is unsafe,
   not as normal Infrastructure State noise.
-- [ ] Add tests for the forgotten `tools/slot-shell.sh` case and for the allowed
-  dev override.
+- [x] Add tests for the forgotten `tools/slot-shell.sh` case.
+- [ ] Add tests for unsafe state-changing command refusal and allowed dev
+  override.
 
 #### RCMS-006: Sync catalog snapshots from hub/root to members
 
