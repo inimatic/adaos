@@ -1529,9 +1529,12 @@ class SkillManager:
             source_path = None
             source_version = ""
         prepared_version = self._latest_prepared_version(env)
-        target_version = version or prepared_version or previous_active_version
-        if version is None and source_version and source_version != str(previous_active_version or "").strip():
+        if version:
+            target_version = version
+        elif source_version:
             target_version = source_version
+        else:
+            target_version = prepared_version or previous_active_version
         if not target_version:
             if source_path is None:
                 raise RuntimeError("no installed versions")
@@ -1547,7 +1550,17 @@ class SkillManager:
         slot_meta = metadata.get("slots", {}).get(target_slot, {})
         manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
         target_manifest: dict[str, Any] = {}
-        if not manifest_path.exists():
+        slot_version = str(slot_meta.get("version") or "").strip()
+        needs_prepare = not manifest_path.exists()
+        if (
+            not needs_prepare
+            and source_path is not None
+            and source_version
+            and source_version == str(target_version or "").strip()
+            and slot_version != str(target_version or "").strip()
+        ):
+            needs_prepare = True
+        if needs_prepare:
             if source_path is None:
                 raise RuntimeError(
                     f"slot {target_slot} of version {target_version} is not prepared; "
