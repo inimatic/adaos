@@ -682,9 +682,11 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
                 source_version=source_version,
                 migrate_runtime=True,
                 ensure_installed=False,
+                require_active_version=True,
             )
-        except Exception:
+        except Exception as exc:
             log.exception("runtime refresh failed after skill update: %s", body.name)
+            raise HTTPException(status_code=409, detail=f"runtime refresh failed after skill update: {exc}") from exc
         bus = getattr(ctx, "bus", None)
         if bus is not None:
             bus_emit(
