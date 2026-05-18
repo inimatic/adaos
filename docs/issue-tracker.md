@@ -481,16 +481,16 @@ Actions:
 
 Status: in progress.
 
-Progress: 40%.
+Progress: 60%.
 
 Actions:
 
 - [x] Replace the API `skills.update` production path with source refresh,
   inactive-slot prepare, lifecycle activation, and webspace/projection rebuild.
-- [ ] Keep the previous active runtime if prepare or activation fails.
+- [x] Keep the previous active runtime if prepare or activation fails.
 - [x] Return an operation result containing source version, active before/after
   version, active before/after slot, and migration result.
-- [ ] Include explicit prepared version, lifecycle stage list, and failure
+- [x] Include explicit prepared version, lifecycle stage list, and failure
   reason in a stable operation schema.
 - [ ] Restrict lightweight `runtime_update` source-copy behavior to dev/debug
   flows where source/runtime drift is expected and visible.
@@ -501,7 +501,18 @@ Actions:
   `runtime-behind`, and semantically equal `v0.75.6` / `0.75.6` versions do not
   show drift.
 - [x] Add tests around update failure and drift visibility.
-- [ ] Add rollback-to-previous-active coverage for partial activation failures.
+- [x] Add rollback-to-previous-active coverage for partial activation failures.
+
+Implementation notes:
+
+- `refresh_skill_runtime` now returns a stable operation schema with
+  `prepared_version`, `prepared_slot`, `activated_slot`, `failed_stage`,
+  `failure_reason`, and ordered `lifecycle_stages`.
+- API `skills.update` returns the same runtime refresh payload on convergence
+  failures through the `409.detail.runtime_refresh` diagnostic object.
+- Existing runtime activation tests cover smoke-import failures before slot
+  switch and `rehydrate` failures after slot switch, including rollback to the
+  previous active version.
 
 #### RCMS-004: Treat scenario dependencies as lifecycle operations
 

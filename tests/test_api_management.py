@@ -300,10 +300,24 @@ def test_skill_update_refreshes_runtime_when_source_version_changed(monkeypatch)
 
     resp = client.post("/api/skills/update", json={"name": "demo", "webspace_id": "default"})
     assert resp.status_code == 200
-    assert resp.json()["updated"] is True
+    payload = resp.json()
+    refresh = payload["runtime_refresh"]
+    assert payload["updated"] is True
     assert "runtime_update:demo:workspace" in skill_mgr.calls
     assert "prepare_runtime:demo" in skill_mgr.calls
     assert any(call.startswith("activate_for_space:demo:2.0.0:B:default") for call in skill_mgr.calls)
+    assert refresh["ok"] is True
+    assert refresh["prepared_version"] == "2.0.0"
+    assert refresh["prepared_slot"] == "B"
+    assert refresh["activated_slot"] == "B"
+    assert refresh["failed_stage"] == ""
+    assert refresh["failure_reason"] == ""
+    assert [stage["stage"] for stage in refresh["lifecycle_stages"]] == [
+        "runtime_update",
+        "prepare",
+        "activate",
+        "converge",
+    ]
 
 
 def test_skill_update_fails_when_active_runtime_does_not_converge(monkeypatch) -> None:
@@ -340,7 +354,12 @@ def test_skill_update_fails_when_active_runtime_does_not_converge(monkeypatch) -
     resp = client.post("/api/skills/update", json={"name": "demo", "webspace_id": "default"})
 
     assert resp.status_code == 409
-    assert "did not converge" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "did not converge" in detail["message"]
+    assert detail["runtime_refresh"]["failed_stage"] == "converge"
+    assert "did not converge" in detail["runtime_refresh"]["failure_reason"]
+    assert detail["runtime_refresh"]["prepared_version"] == "2.0.0"
+    assert detail["runtime_refresh"]["prepared_slot"] == "B"
     assert "runtime_update:demo:workspace" in skill_mgr.calls
     assert "prepare_runtime:demo" in skill_mgr.calls
     assert bus_events == []

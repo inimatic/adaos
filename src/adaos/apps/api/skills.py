@@ -21,7 +21,7 @@ from adaos.services.skill.artifacts import (
 from adaos.services.skill.update import SkillUpdateService
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
-from adaos.services.runtime_refresh import rebuild_webspace_projection, refresh_skill_runtime
+from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 from adaos.services.workspace_registry import build_registry_entry, find_workspace_registry_entry, list_workspace_registry_entries
 from adaos.services.yjs.webspace import default_webspace_id
@@ -684,6 +684,15 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
                 ensure_installed=False,
                 require_active_version=True,
             )
+        except RuntimeRefreshError as exc:
+            log.exception("runtime refresh failed after skill update: %s", body.name)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": f"runtime refresh failed after skill update: {exc}",
+                    "runtime_refresh": exc.payload,
+                },
+            ) from exc
         except Exception as exc:
             log.exception("runtime refresh failed after skill update: %s", body.name)
             raise HTTPException(status_code=409, detail=f"runtime refresh failed after skill update: {exc}") from exc
