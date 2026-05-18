@@ -518,7 +518,7 @@ Implementation notes:
 
 Status: in progress.
 
-Progress: 25%.
+Progress: 35%.
 
 Actions:
 
@@ -531,13 +531,24 @@ Actions:
   explicit operation warning.
 - [x] Include dependent skill lifecycle results in synchronous scenario install
   API payloads.
-- [ ] Include dependent skill lifecycle results in async scenario install/update
+- [x] Include dependent skill lifecycle results in async scenario install
+  operation payloads.
+- [ ] Include dependent skill lifecycle results in async scenario update
   operation payloads.
 - [ ] Surface dependency lifecycle failures in Infrastructure State and
   Operations details only when they affect active scenarios.
 - [x] Add tests for dependency lifecycle result reporting.
 - [ ] Add tests for scenario install/update that pulls a dependent skill forward
   and applies its lifecycle through the full operation path.
+
+Implementation notes:
+
+- Async scenario install operations now persist the structured
+  `dependency_bootstrap` result in the operation result payload, matching the
+  synchronous scenario install API surface.
+- Dependency bootstrap timeout/exception paths produce explicit
+  `dependency_bootstrap.ok=false` diagnostics instead of dropping dependency
+  lifecycle visibility from the operation result.
 
 #### RCMS-005: Make production CLI/control commands slot-bound
 
