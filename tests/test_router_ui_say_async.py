@@ -168,3 +168,106 @@ async def test_webio_stream_guard_denied_owner_does_not_crash(monkeypatch) -> No
         is False
     )
 
+
+async def test_webio_stream_guard_uses_declared_receiver_budget(monkeypatch) -> None:
+    import adaos.services.yjs.owner_guard as owner_guard
+
+    captured: dict[str, object] = {}
+
+    def _admit_owner_work(**kwargs):
+        captured.update(kwargs)
+        return {
+            "allowed": False,
+            "owner": kwargs["owner"],
+            "reason": kwargs["policy"]["reason"],
+            "retry_after_s": 30.0,
+        }
+
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_WARN_BYTES", "65536")
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_BLOCK_BYTES", "262144")
+    monkeypatch.setattr(owner_guard, "admit_owner_work", _admit_owner_work)
+
+    result = router_service_module._webio_stream_admit(
+        webspace_id="desktop",
+        receiver="telemetry_feed",
+        owner="skill:telemetry_skill",
+        payload_bytes=2048,
+        fanout_total=1,
+        receiver_meta={
+            "mode": "replace",
+            "origin": "skill:telemetry_skill",
+            "snapshotPolicy": "on_subscribe",
+            "budget": {"maxPayloadBytes": 1024, "maxFanout": 4},
+            "guardVisibility": {"degradedState": "Telemetry stream paused", "quarantine": True},
+            "route": {
+                "kind": "stream",
+                "surface": "widget:telemetry",
+                "owner": "telemetry_skill",
+            },
+        },
+    )
+
+    assert result is False
+    assert captured["path"] == "stream/telemetry_feed"
+    assert captured["owner"] == "skill:telemetry_skill"
+    policy = captured["policy"]
+    assert policy["policy_state"] == "block"
+    assert policy["reason"] == "browser_stream_declared_payload_budget_exceeded"
+    assert policy["declared_max_payload_bytes"] == 1024
+    assert policy["receiver_origin"] == "skill:telemetry_skill"
+    assert policy["receiver_mode"] == "replace"
+    assert policy["snapshot_policy"] == "on_subscribe"
+    assert policy["route"]["surface"] == "widget:telemetry"
+    assert policy["guard_visibility"]["degradedState"] == "Telemetry stream paused"
+
+
+async def test_router_stream_publish_uses_materialized_receiver_owner(monkeypatch) -> None:
+    import adaos.services.yjs.owner_guard as owner_guard
+
+    captured: dict[str, object] = {}
+
+    def _admit_owner_work(**kwargs):
+        captured.update(kwargs)
+        return {
+            "allowed": False,
+            "owner": kwargs["owner"],
+            "reason": kwargs["policy"]["reason"],
+            "retry_after_s": 30.0,
+        }
+
+    async def _receiver_metadata(_webspace_id: str, _receiver: str):
+        return {
+            "origin": "skill:telemetry_skill",
+            "budget": {"maxPayloadBytes": 64},
+            "route": {"kind": "stream", "surface": "widget:telemetry"},
+        }
+
+    bus = LocalEventBus()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_WARN_BYTES", "65536")
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_BLOCK_BYTES", "262144")
+    monkeypatch.setattr(owner_guard, "admit_owner_work", _admit_owner_work)
+    monkeypatch.setattr(router, "_webio_receiver_metadata", _receiver_metadata)
+
+    await router.start()
+
+    seen: list[object] = []
+    bus.subscribe("webio.stream.desktop.telemetry_feed", lambda ev: seen.append(ev))
+    bus.publish(
+        Event(
+            type="io.out.stream.publish",
+            source="test",
+            ts=123.0,
+            payload={
+                "receiver": "telemetry_feed",
+                "data": {"value": "x" * 128},
+                "_meta": {"webspace_id": "desktop"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert seen == []
+    assert captured["owner"] == "skill:telemetry_skill"
+    assert captured["policy"]["route"]["surface"] == "widget:telemetry"
+

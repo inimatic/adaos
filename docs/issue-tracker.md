@@ -1879,13 +1879,14 @@ Success means:
 
 Snapshot date: 2026-05-18.
 
-Overall completion: 12%. First implementation slices landed the ABI/schema
-contract, runtime preservation of receiver route metadata, and the first SDK
-helper for replace-mode stream variables: `skill.yaml:data_routes`, stream
-receiver budget/guard metadata, validator schema coverage, LLM skill-template
-guidance, materialized `data.webio` receiver metadata, and
-`stream_variable_publish(...)`. Runtime guard diagnostics and full status-plane
-helpers are still pending before `infrastate_skill` conversion should start.
+Overall completion: 15%. First implementation slices landed the ABI/schema
+contract, runtime preservation of receiver route metadata, router stream-guard
+use of declared receiver budgets, and the first SDK helper for replace-mode
+stream variables: `skill.yaml:data_routes`, stream receiver budget/guard
+metadata, validator schema coverage, LLM skill-template guidance, materialized
+`data.webio` receiver metadata, router guard policy metadata, and
+`stream_variable_publish(...)`. Full status-plane helpers are still pending
+before `infrastate_skill` conversion should start.
 
 Problem statement:
 
@@ -1944,7 +1945,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 45%.
+Progress: 55%.
 
 Purpose:
 
@@ -1963,14 +1964,20 @@ Actions:
   policy, freshness fields, and guard visibility.
 - [x] Preserve WebUI receiver route/budget/guard metadata in the compact
   materialized `data.webio` runtime contract.
-- [ ] Expose route metadata in projection/receiver diagnostics so logs can say
-  which skill, surface, route, and receiver created pressure.
+- [x] Expose stream receiver route metadata in router guard diagnostics so logs
+  and owner-guard policy can say which skill, surface, route, and receiver
+  created pressure.
+- [ ] Extend the same route metadata into ProjectionService/Yjs projection
+  diagnostics.
 - [x] Define stream-variable delivery semantics in the ABI: replace vs append,
   snapshot-on-subscribe, freshness/TTL, duplicate suppression, stale-event
   rejection, maximum payload, maximum publish rate, and maximum fanout.
 - [ ] Extend guard diagnostics to cover both Yjs and stream routes with common
   fields: owner, webspace, receiver/path, budget, observed pressure,
   suppression count, quarantine TTL, and correlation/generation id.
+- [x] Enforce declared receiver `budget.maxPayloadBytes` in the router stream
+  guard and pass budget, route, snapshot policy, and guard visibility into
+  owner-guard policy.
 - [x] Add contract tests proving a skill can expose a status/card plus stream
   variables without writing broad primary-doc Yjs branches.
 - [x] Update LLM skill templates and review checklist so every new
@@ -1987,13 +1994,16 @@ Human verification:
 - Intentionally set `route: magic_runtime_autoroute` or
   `budget.maxPayloadBytes: 0`; validation should fail and point to the schema
   violation.
+- Set a low receiver `budget.maxPayloadBytes`, rebuild the webspace, publish a
+  larger stream payload, and confirm logs/guard diagnostics include receiver,
+  owner, surface, route, budget, and quarantine retry context.
 
 Next steps:
 
-- Wire route metadata into ProjectionService/webio stream diagnostics and guard
-  logs.
-- Extend stream helper/runtime integration so declared receiver budgets can be
-  enforced and surfaced by guard diagnostics.
+- Wire route metadata into ProjectionService/Yjs projection diagnostics.
+- Add per-receiver publish/suppress counters so final soaks can report
+  published, unchanged, coalesced, suppressed, snapshot-requested, and fanout
+  counts by receiver.
 - Use those helpers to prepare the `infrastate_skill` data-route plan before
   moving active variables out of Yjs.
 
