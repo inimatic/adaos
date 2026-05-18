@@ -1118,7 +1118,7 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
         ),
     )
     monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: SimpleNamespace(list=lambda: [_SkillRecord("infrastate_skill", "0.18.0")]))
-    monkeypatch.setattr(mod, "SkillManager", lambda **kwargs: SimpleNamespace(runtime_status=lambda name: {"active_slot": "A"}))
+    monkeypatch.setattr(mod, "SkillManager", lambda **kwargs: SimpleNamespace(runtime_status=lambda name: {"active_slot": "A", "version": "0.19.0"}))
     monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
     monkeypatch.setattr(
         mod,
@@ -1152,6 +1152,50 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
             "registry_mismatch": True,
         }
     ]
+
+
+def test_infrastate_skill_items_compare_remote_against_active_runtime_version(monkeypatch, tmp_path: Path):
+    mod = _load_infrastate_module()
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "infrastate_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "skill.yaml").write_text("id: infrastate_skill\nversion: '0.20.0'\n", encoding="utf-8")
+
+    class _SkillRecord:
+        name = "infrastate_skill"
+        active_version = "0.19.0"
+        installed = True
+
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            sql=object(),
+            git=object(),
+            paths=SimpleNamespace(workspace_dir=lambda: workspace),
+            bus=None,
+            caps=object(),
+            settings=object(),
+            skills_repo=object(),
+        ),
+    )
+    monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: SimpleNamespace(list=lambda: [_SkillRecord()]))
+    monkeypatch.setattr(mod, "SkillManager", lambda **kwargs: SimpleNamespace(runtime_status=lambda name: {"active_slot": "A", "version": "0.19.0"}))
+    monkeypatch.setattr(mod, "_REMOTE_VERSION_PROBE_ENABLED", True)
+    monkeypatch.setattr(
+        mod,
+        "_registry_json_catalog_entries",
+        lambda kind, workspace_root: [{"id": "infrastate_skill", "name": "infrastate_skill", "version": "0.20.0"}]
+        if kind == "skills"
+        else [],
+    )
+
+    items = mod._skills_items()
+
+    assert items[0]["version"] == "0.19.0"
+    assert items[0]["remote_version"] == "0.20.0"
+    assert items[0]["version_display"] == "0.19.0* (0.20.0)"
+    assert items[0]["registry_mismatch"] is True
 
 
 def test_infrastate_skill_items_skip_remote_version_probe_when_disabled(monkeypatch, tmp_path: Path):
@@ -1193,7 +1237,7 @@ def test_infrastate_skill_items_skip_remote_version_probe_when_disabled(monkeypa
     assert items[0]["remote_version"] == ""
     assert items[0]["update_available"] is False
     assert items[0]["registry_mismatch"] is False
-    assert items[0]["version_display"] == "0.19.0"
+    assert items[0]["version_display"] == "0.18.0"
 
 
 def test_infrastate_marketplace_catalog_skips_remote_url_fetch_on_member(monkeypatch, tmp_path: Path):
