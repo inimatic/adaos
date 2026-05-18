@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 
@@ -65,3 +66,159 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
     assert status is not None
     assert status["port"] == 1113
     assert status["venv_dir"].endswith(str(Path("v0.1") / "venv"))
+
+
+def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill import service_supervisor as mod
+
+    ctx = get_ctx()
+    root = Path(ctx.paths.skills_dir()) / "rasa_nlu_service_skill"
+    root.mkdir(parents=True, exist_ok=True)
+    spec = mod.ServiceSpec(
+        skill="rasa_nlu_service_skill",
+        skill_root=root,
+        host="127.0.0.1",
+        port=18092,
+        command=["-m", "handlers.main"],
+        workdir=root,
+        env_mode="venv",
+        python_selector="3.11",
+        venv_dir=None,
+        dependencies=[],
+        requirements_file=None,
+        health_path="/health",
+        health_timeout_ms=1000,
+        self_managed_enabled=False,
+        crash_max_in_window=3,
+        crash_window_s=60,
+        crash_cooloff_s=60,
+        health_interval_s=10,
+        health_failures_before_issue=3,
+        hook_on_issue=None,
+        hook_on_self_heal=None,
+        hook_timeout_s=10.0,
+        doctor_enabled=False,
+        doctor_cooldown_s=300,
+        doctor_issue_types=[],
+        doctor_include_log_tail_lines=0,
+    )
+
+    popen_called = False
+
+    def _popen_should_not_run(*args, **kwargs):
+        nonlocal popen_called
+        popen_called = True
+        raise AssertionError("healthy untracked service endpoint should not be spawned again")
+
+    monkeypatch.setattr(mod, "_http_get", lambda url, *, timeout_ms: (200, '{"ok": true}'))
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda service_spec: {
+            "pid": 4242,
+            "cwd": str(service_spec.workdir),
+            "workdir_matches": True,
+        },
+    )
+    monkeypatch.setattr(mod.subprocess, "Popen", _popen_should_not_run)
+
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor._specs[spec.skill] = spec
+    supervisor.ensure_discovered = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    asyncio.run(supervisor.ensure_started(spec.skill, spec, force=True))
+
+    assert popen_called is False
+    status = supervisor.status(spec.skill, check_health=True)
+    assert status is not None
+    assert status["running"] is False
+    assert status["pid"] is None
+    assert status["health_ok"] is True
+    assert status["external_ready"] is True
+
+
+def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill import service_supervisor as mod
+
+    ctx = get_ctx()
+    root = Path(ctx.paths.skills_dir()) / ".runtime" / "rasa_nlu_service_skill" / "v0.2" / "slots" / "B" / "src" / "skills" / "rasa_nlu_service_skill"
+    root.mkdir(parents=True, exist_ok=True)
+    old_root = Path(ctx.paths.skills_dir()) / ".runtime" / "rasa_nlu_service_skill" / "v0.1" / "slots" / "A" / "src" / "skills" / "rasa_nlu_service_skill"
+    old_root.mkdir(parents=True, exist_ok=True)
+    spec = mod.ServiceSpec(
+        skill="rasa_nlu_service_skill",
+        skill_root=root,
+        host="127.0.0.1",
+        port=18092,
+        command=["-m", "handlers.main"],
+        workdir=root,
+        env_mode="global",
+        python_selector=None,
+        venv_dir=None,
+        dependencies=[],
+        requirements_file=None,
+        health_path="/health",
+        health_timeout_ms=1000,
+        self_managed_enabled=False,
+        crash_max_in_window=3,
+        crash_window_s=60,
+        crash_cooloff_s=60,
+        health_interval_s=10,
+        health_failures_before_issue=3,
+        hook_on_issue=None,
+        hook_on_self_heal=None,
+        hook_timeout_s=10.0,
+        doctor_enabled=False,
+        doctor_cooldown_s=300,
+        doctor_issue_types=[],
+        doctor_include_log_tail_lines=0,
+    )
+
+    stale_alive = True
+    terminated: list[int] = []
+    spawned: list[list[str]] = []
+
+    class _Proc:
+        pid = 5252
+
+        def poll(self):
+            return None
+
+    def _health_ok(_spec):
+        return stale_alive
+
+    def _terminate(pid, *, timeout_s):
+        nonlocal stale_alive
+        terminated.append(pid)
+        stale_alive = False
+        return True
+
+    def _popen(cmd, **kwargs):
+        spawned.append(list(cmd))
+        return _Proc()
+
+    monkeypatch.setattr(mod, "_service_health_ok", _health_ok)
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda _spec: {
+            "pid": 4242,
+            "cwd": str(old_root),
+            "workdir_matches": False,
+        },
+    )
+    monkeypatch.setattr(mod, "_terminate_process_tree", _terminate)
+    monkeypatch.setattr(mod.subprocess, "Popen", _popen)
+
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor._specs[spec.skill] = spec
+    supervisor.ensure_discovered = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    supervisor._wait_ready = lambda _spec: asyncio.sleep(0)  # type: ignore[method-assign]
+
+    asyncio.run(supervisor.ensure_started(spec.skill, spec, force=True))
+
+    assert terminated == [4242]
+    assert spawned
+    assert supervisor.status(spec.skill)["running"] is True

@@ -252,6 +252,93 @@ def _http_get(url: str, *, timeout_ms: int) -> tuple[int, str]:
         return int(resp.status), body
 
 
+def _service_health_ok(spec: ServiceSpec) -> bool:
+    try:
+        status_code, _ = _http_get(spec.base_url + spec.health_path, timeout_ms=spec.health_timeout_ms)
+    except Exception:
+        return False
+    return 200 <= status_code < 300
+
+
+def _listener_host_matches(expected: str, actual: str) -> bool:
+    expected_token = str(expected or "").strip().lower()
+    actual_token = str(actual or "").strip().lower()
+    if expected_token in {"", "0.0.0.0", "::"} or actual_token in {"0.0.0.0", "::"}:
+        return True
+    aliases = {
+        "localhost": {"localhost", "127.0.0.1", "::1"},
+        "127.0.0.1": {"localhost", "127.0.0.1", "::1"},
+        "::1": {"localhost", "127.0.0.1", "::1"},
+    }
+    return actual_token in aliases.get(expected_token, {expected_token})
+
+
+def _service_listener_snapshot(spec: ServiceSpec) -> dict[str, Any]:
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return {"pid": None, "error": "psutil_unavailable"}
+
+    for conn in psutil.net_connections(kind="inet"):
+        try:
+            if getattr(conn, "status", "") != psutil.CONN_LISTEN:
+                continue
+            laddr = getattr(conn, "laddr", None)
+            host = str(getattr(laddr, "ip", "") or (laddr[0] if laddr else "")).strip()
+            port = int(getattr(laddr, "port", 0) or (laddr[1] if laddr else 0))
+        except Exception:
+            continue
+        if port != int(spec.port) or not _listener_host_matches(spec.host, host):
+            continue
+        pid = getattr(conn, "pid", None)
+        snapshot: dict[str, Any] = {"pid": int(pid) if pid else None, "host": host, "port": port}
+        if not pid:
+            return snapshot
+        try:
+            proc = psutil.Process(int(pid))
+            cwd = proc.cwd()
+            snapshot["cwd"] = cwd
+            snapshot["cmdline"] = proc.cmdline()
+            snapshot["workdir_matches"] = Path(cwd).expanduser().resolve() == spec.workdir.expanduser().resolve()
+        except Exception as exc:
+            snapshot["error"] = f"{type(exc).__name__}: {exc}"
+            snapshot["workdir_matches"] = False
+        return snapshot
+    return {"pid": None, "error": "listener_not_found"}
+
+
+def _terminate_process_tree(pid: int, *, timeout_s: float = 3.0) -> bool:
+    if int(pid or 0) <= 0 or int(pid) == os.getpid():
+        return False
+    try:
+        import psutil  # type: ignore
+        proc = psutil.Process(int(pid))
+    except Exception:
+        return False
+
+    targets = []
+    try:
+        targets.extend(proc.children(recursive=True))
+    except Exception:
+        pass
+    targets.append(proc)
+    for target in targets:
+        try:
+            target.terminate()
+        except Exception:
+            pass
+    try:
+        _, alive = psutil.wait_procs(targets, timeout=max(0.1, timeout_s))
+    except Exception:
+        alive = []
+    for target in alive:
+        try:
+            target.kill()
+        except Exception:
+            pass
+    return True
+
+
 def _path_value(value: Any) -> Path:
     resolved = value() if callable(value) else value
     return Path(resolved).expanduser().resolve()
@@ -292,6 +379,8 @@ class ServiceSkillSupervisor:
         self._next_health_check_at: dict[str, float] = {}
         self._doctor_cooldown_until: dict[str, float] = {}
         self._doctor_requests_cache: dict[str, list[dict[str, Any]]] = {}
+        self._external_ready_specs: dict[str, tuple[Any, ...]] = {}
+        self._external_ready_at: dict[str, float] = {}
         self._discover_lock = threading.Lock()
         self._discover_last_at = 0.0
         self._manifest_state: dict[str, tuple[Any, ...]] = {}
@@ -373,6 +462,8 @@ class ServiceSkillSupervisor:
         running = bool(proc and proc.poll() is None)
         pid = int(proc.pid) if proc and proc.pid else None
         code = None if running else (proc.poll() if proc else None)
+        spec_key = self._spec_key(spec)
+        external_ready = self._external_ready_specs.get(name) == spec_key and not running
 
         payload: dict[str, Any] = {
             "name": name,
@@ -408,16 +499,27 @@ class ServiceSkillSupervisor:
                 },
             },
             "cooloff_until": self._cooloff_until.get(name),
+            "external_ready": external_ready,
+            "external_ready_at": self._external_ready_at.get(name) if external_ready else None,
         }
 
         if check_health:
-            ok = False
-            try:
-                status_code, _ = _http_get(spec.base_url + spec.health_path, timeout_ms=spec.health_timeout_ms)
-                ok = 200 <= status_code < 300
-            except Exception:
-                ok = False
+            ok = _service_health_ok(spec)
             payload["health_ok"] = ok
+            if ok and not running:
+                listener = _service_listener_snapshot(spec)
+                payload["external_listener"] = listener
+                if bool(listener.get("workdir_matches")) or external_ready:
+                    self._external_ready_specs[name] = spec_key
+                    if not external_ready:
+                        self._external_ready_at[name] = time.time()
+                    else:
+                        self._external_ready_at.setdefault(name, time.time())
+                    payload["external_ready"] = True
+                    payload["external_ready_at"] = self._external_ready_at.get(name)
+            elif not ok:
+                self._external_ready_specs.pop(name, None)
+                self._external_ready_at.pop(name, None)
 
         return payload
 
@@ -430,6 +532,8 @@ class ServiceSkillSupervisor:
         self._ensure_background_tasks()
 
     async def stop(self, name: str, *, timeout_s: float = 3.0) -> None:
+        self._external_ready_specs.pop(name, None)
+        self._external_ready_at.pop(name, None)
         proc = self._procs.get(name)
         if not proc:
             return
@@ -518,11 +622,72 @@ class ServiceSkillSupervisor:
         if not force and now < cooloff_until:
             return
 
+        external_already_marked = self._external_ready_specs.get(name) == spec_key
+        endpoint_healthy = await asyncio.to_thread(_service_health_ok, spec)
+        if endpoint_healthy:
+            listener = await asyncio.to_thread(_service_listener_snapshot, spec)
+            if bool(listener.get("workdir_matches")) or external_already_marked:
+                self._external_ready_specs[name] = spec_key
+                if not external_already_marked:
+                    self._external_ready_at[name] = time.time()
+                else:
+                    self._external_ready_at.setdefault(name, time.time())
+                if not external_already_marked:
+                    emit(
+                        self._ctx.bus,
+                        "skill.service.ready",
+                        {"skill": name, "pid": listener.get("pid"), "external": True},
+                        source="skill.service",
+                    )
+                return
+
+            stale_pid = int(listener.get("pid") or 0)
+            if stale_pid > 0:
+                await self._record_issue(
+                    name,
+                    issue_type="stale_service_endpoint",
+                    message="service endpoint is healthy but belongs to a different runtime location; restarting it",
+                    severity="warning",
+                    details={
+                        "pid": stale_pid,
+                        "cwd": listener.get("cwd"),
+                        "expected_workdir": str(spec.workdir),
+                        "host": spec.host,
+                        "port": spec.port,
+                    },
+                )
+                await asyncio.to_thread(_terminate_process_tree, stale_pid, timeout_s=3.0)
+                deadline = time.time() + 3.0
+                while time.time() < deadline and await asyncio.to_thread(_service_health_ok, spec):
+                    await asyncio.sleep(0.1)
+                if await asyncio.to_thread(_service_health_ok, spec):
+                    await self._record_issue(
+                        name,
+                        issue_type="stale_service_endpoint_still_alive",
+                        message="service endpoint remained healthy after terminating the stale listener; refusing duplicate start",
+                        severity="error",
+                        details={"pid": stale_pid, "host": spec.host, "port": spec.port},
+                    )
+                    return
+            else:
+                await self._record_issue(
+                    name,
+                    issue_type="service_endpoint_identity_unknown",
+                    message="service endpoint is healthy but its runtime location cannot be verified; refusing duplicate start",
+                    severity="error",
+                    details={"listener": listener, "expected_workdir": str(spec.workdir), "host": spec.host, "port": spec.port},
+                )
+                return
+        self._external_ready_specs.pop(name, None)
+        self._external_ready_at.pop(name, None)
+
         python = self._select_python(spec)
         env = os.environ.copy()
         env["ADAOS_SERVICE_SKILL"] = name
         env["ADAOS_SERVICE_HOST"] = spec.host
         env["ADAOS_SERVICE_PORT"] = str(spec.port)
+        env["ADAOS_SERVICE_ROOT"] = str(spec.skill_root)
+        env["ADAOS_SERVICE_WORKDIR"] = str(spec.workdir)
         env.setdefault("ADAOS_BASE_DIR", str(_path_value(self._ctx.paths.base_dir())))
         for env_name, path_value in (
             ("ADAOS_PACKAGE_DIR", _optional_path_value(self._ctx.paths, "package_path", "package_dir")),
@@ -556,6 +721,18 @@ class ServiceSkillSupervisor:
         emit(self._ctx.bus, "skill.service.started", {"skill": name, "pid": proc.pid}, source="skill.service")
 
         await self._wait_ready(spec)
+        if proc.poll() is not None and await asyncio.to_thread(_service_health_ok, spec):
+            self._procs.pop(name, None)
+            self._proc_specs.pop(name, None)
+            self._external_ready_specs[name] = spec_key
+            self._external_ready_at.setdefault(name, time.time())
+            emit(
+                self._ctx.bus,
+                "skill.service.ready",
+                {"skill": name, "pid": None, "external": True},
+                source="skill.service",
+            )
+            return
         emit(self._ctx.bus, "skill.service.ready", {"skill": name, "pid": proc.pid}, source="skill.service")
 
     async def shutdown(self) -> None:
@@ -566,6 +743,8 @@ class ServiceSkillSupervisor:
                 pass
             self._procs.pop(name, None)
             self._proc_specs.pop(name, None)
+            self._external_ready_specs.pop(name, None)
+            self._external_ready_at.pop(name, None)
         if self._task:
             try:
                 self._task.cancel()
