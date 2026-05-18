@@ -40,7 +40,32 @@ _SCENARIO_MANIFEST_NAMES = ("scenario.yaml", "scenario.yml", "scenario.json")
 
 
 def _env_type() -> str:
-    return str(os.getenv("ENV_TYPE", "prod") or "prod").strip().lower()
+    return str(os.getenv("ENV_TYPE") or os.getenv("ADAOS_ENV_TYPE") or "prod").strip().lower()
+
+
+def dependency_bootstrap_failed(result: dict[str, Any] | None) -> bool:
+    return isinstance(result, dict) and not bool(result.get("ok", True))
+
+
+def dependency_failure_blocks_scenario_activation(result: dict[str, Any] | None) -> bool:
+    return dependency_bootstrap_failed(result) and _env_type() != "dev"
+
+
+def dependency_failure_message(result: dict[str, Any] | None) -> str:
+    if isinstance(result, dict):
+        error = str(result.get("error") or "").strip()
+        if error:
+            return error
+        failed = [str(item or "").strip() for item in list(result.get("failed") or []) if str(item or "").strip()]
+        if failed:
+            return f"required scenario dependencies failed: {', '.join(failed)}"
+    return "required scenario dependencies failed"
+
+
+class ScenarioDependencyLifecycleError(RuntimeError):
+    def __init__(self, result: dict[str, Any] | None):
+        self.result = dict(result or {})
+        super().__init__(dependency_failure_message(self.result))
 
 
 def _local_node_id() -> str:
@@ -237,6 +262,8 @@ class ScenarioManager:
                 "error": f"{type(exc).__name__}: {exc}",
             }
         self.last_dependency_bootstrap_result = dep_result
+        if dependency_failure_blocks_scenario_activation(dep_result):
+            raise ScenarioDependencyLifecycleError(dep_result)
         try:
             self.sync_to_yjs(meta.id.value, webspace_id=target_webspace)
         except Exception:
