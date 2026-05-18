@@ -1879,12 +1879,13 @@ Success means:
 
 Snapshot date: 2026-05-18.
 
-Overall completion: 10%. First implementation slices landed the ABI/schema
-contract and runtime preservation of receiver route metadata: `skill.yaml:
-data_routes`, stream receiver budget/guard metadata, validator schema coverage,
-LLM skill-template guidance, and materialized `data.webio` receiver metadata.
-Runtime guard diagnostics and SDK helpers are still pending before
-`infrastate_skill` conversion should start.
+Overall completion: 12%. First implementation slices landed the ABI/schema
+contract, runtime preservation of receiver route metadata, and the first SDK
+helper for replace-mode stream variables: `skill.yaml:data_routes`, stream
+receiver budget/guard metadata, validator schema coverage, LLM skill-template
+guidance, materialized `data.webio` receiver metadata, and
+`stream_variable_publish(...)`. Runtime guard diagnostics and full status-plane
+helpers are still pending before `infrastate_skill` conversion should start.
 
 Problem statement:
 
@@ -1943,7 +1944,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 35%.
+Progress: 45%.
 
 Purpose:
 
@@ -1974,6 +1975,8 @@ Actions:
   variables without writing broad primary-doc Yjs branches.
 - [x] Update LLM skill templates and review checklist so every new
   browser-facing skill includes a route plan before implementation.
+- [x] Add the first SDK helper for bounded replace-mode stream variables with
+  `id`, `value`, `seq`, `updated_at`, `fingerprint`, and optional `ttl_ms`.
 
 Human verification:
 
@@ -1989,8 +1992,8 @@ Next steps:
 
 - Wire route metadata into ProjectionService/webio stream diagnostics and guard
   logs.
-- Add SDK helpers that publish bounded replace-mode stream variables with
-  `seq`, `updated_at`, fingerprint, and declared budget metadata.
+- Extend stream helper/runtime integration so declared receiver budgets can be
+  enforced and surfaced by guard diagnostics.
 - Use those helpers to prepare the `infrastate_skill` data-route plan before
   moving active variables out of Yjs.
 

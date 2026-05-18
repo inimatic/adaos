@@ -155,6 +155,7 @@ The first usable SDK slice should expose:
 - `ProjectionContext`
 - `set_projection_if_changed(...)`
 - `refresh_dirty(...)`
+- `publish_stream_variable(...)` for bounded replace-mode current-state streams
 - `publish_stream_snapshot(...)`
 
 Suggested usage:
