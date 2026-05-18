@@ -1879,12 +1879,13 @@ Success means:
 
 Snapshot date: 2026-05-18.
 
-Overall completion: 15%. First implementation slices landed the ABI/schema
+Overall completion: 18%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
-use of declared receiver budgets, and the first SDK helper for replace-mode
-stream variables: `skill.yaml:data_routes`, stream receiver budget/guard
-metadata, validator schema coverage, LLM skill-template guidance, materialized
-`data.webio` receiver metadata, router guard policy metadata, and
+use of declared receiver budgets, per-receiver stream guard counters, and the
+first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
+stream receiver budget/guard metadata, validator schema coverage, LLM
+skill-template guidance, materialized `data.webio` receiver metadata, router
+guard policy metadata, `webio_stream_guard_snapshot(...)`, and
 `stream_variable_publish(...)`. Full status-plane helpers are still pending
 before `infrastate_skill` conversion should start.
 
@@ -1945,7 +1946,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 55%.
+Progress: 65%.
 
 Purpose:
 
@@ -1978,6 +1979,9 @@ Actions:
 - [x] Enforce declared receiver `budget.maxPayloadBytes` in the router stream
   guard and pass budget, route, snapshot policy, and guard visibility into
   owner-guard policy.
+- [x] Add per-receiver stream guard counters for attempted, published,
+  suppressed, throttled, fanout, payload bytes, last reason, route surface, and
+  declared budget.
 - [x] Add contract tests proving a skill can expose a status/card plus stream
   variables without writing broad primary-doc Yjs branches.
 - [x] Update LLM skill templates and review checklist so every new
@@ -1997,13 +2001,18 @@ Human verification:
 - Set a low receiver `budget.maxPayloadBytes`, rebuild the webspace, publish a
   larger stream payload, and confirm logs/guard diagnostics include receiver,
   owner, surface, route, budget, and quarantine retry context.
+- Inspect `webio_stream_guard_snapshot(...)` from a local Python/debug context
+  after stream activity; the row for the receiver should show attempted,
+  published or suppressed totals, fanout, last reason, and declared budget.
 
 Next steps:
 
 - Wire route metadata into ProjectionService/Yjs projection diagnostics.
-- Add per-receiver publish/suppress counters so final soaks can report
-  published, unchanged, coalesced, suppressed, snapshot-requested, and fanout
-  counts by receiver.
+- Expose `webio_stream_guard_snapshot(...)` through reliability/diagnostic
+  surfaces used by final soaks.
+- Add snapshot-requested/coalesced counters from the stream control path so
+  final soaks can report both publish pressure and snapshot pressure by
+  receiver.
 - Use those helpers to prepare the `infrastate_skill` data-route plan before
   moving active variables out of Yjs.
 

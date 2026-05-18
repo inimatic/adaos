@@ -173,6 +173,8 @@ async def test_webio_stream_guard_uses_declared_receiver_budget(monkeypatch) -> 
     import adaos.services.yjs.owner_guard as owner_guard
 
     captured: dict[str, object] = {}
+    with router_service_module._WEBIO_STREAM_GUARD_STATS_LOCK:
+        router_service_module._WEBIO_STREAM_GUARD_STATS.clear()
 
     def _admit_owner_work(**kwargs):
         captured.update(kwargs)
@@ -219,12 +221,25 @@ async def test_webio_stream_guard_uses_declared_receiver_budget(monkeypatch) -> 
     assert policy["snapshot_policy"] == "on_subscribe"
     assert policy["route"]["surface"] == "widget:telemetry"
     assert policy["guard_visibility"]["degradedState"] == "Telemetry stream paused"
+    snapshot = router_service_module.webio_stream_guard_snapshot(
+        webspace_id="desktop",
+        receiver="telemetry_feed",
+        owner="skill:telemetry_skill",
+    )
+    assert snapshot["total"] == 1
+    row = snapshot["items"][0]
+    assert row["attempted_total"] == 1
+    assert row["suppressed_total"] == 1
+    assert row["declared_max_payload_bytes"] == 1024
+    assert row["surface"] == "widget:telemetry"
 
 
 async def test_router_stream_publish_uses_materialized_receiver_owner(monkeypatch) -> None:
     import adaos.services.yjs.owner_guard as owner_guard
 
     captured: dict[str, object] = {}
+    with router_service_module._WEBIO_STREAM_GUARD_STATS_LOCK:
+        router_service_module._WEBIO_STREAM_GUARD_STATS.clear()
 
     def _admit_owner_work(**kwargs):
         captured.update(kwargs)
@@ -270,4 +285,55 @@ async def test_router_stream_publish_uses_materialized_receiver_owner(monkeypatc
     assert seen == []
     assert captured["owner"] == "skill:telemetry_skill"
     assert captured["policy"]["route"]["surface"] == "widget:telemetry"
+    snapshot = router_service_module.webio_stream_guard_snapshot(receiver="telemetry_feed")
+    assert snapshot["items"][0]["suppressed_total"] == 1
+    assert snapshot["items"][0]["owner"] == "skill:telemetry_skill"
+
+
+async def test_router_stream_guard_snapshot_tracks_published_receiver(monkeypatch) -> None:
+    with router_service_module._WEBIO_STREAM_GUARD_STATS_LOCK:
+        router_service_module._WEBIO_STREAM_GUARD_STATS.clear()
+
+    async def _receiver_metadata(_webspace_id: str, _receiver: str):
+        return {
+            "origin": "skill:telemetry_skill",
+            "budget": {"maxPayloadBytes": 4096},
+            "route": {"kind": "stream", "surface": "widget:telemetry"},
+        }
+
+    bus = LocalEventBus()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    monkeypatch.setattr(router, "_webio_receiver_metadata", _receiver_metadata)
+
+    await router.start()
+
+    seen: list[object] = []
+    bus.subscribe("webio.stream.desktop.telemetry_feed", lambda ev: seen.append(ev))
+    bus.publish(
+        Event(
+            type="io.out.stream.publish",
+            source="test",
+            ts=123.0,
+            payload={
+                "receiver": "telemetry_feed",
+                "data": {"value": 42},
+                "_meta": {"webspace_id": "desktop"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert len(seen) == 1
+    snapshot = router_service_module.webio_stream_guard_snapshot(
+        webspace_id="desktop",
+        receiver="telemetry_feed",
+        owner="skill:telemetry_skill",
+    )
+    assert snapshot["total"] == 1
+    row = snapshot["items"][0]
+    assert row["attempted_total"] == 1
+    assert row["published_total"] == 1
+    assert row["published_fanout_total"] == 1
+    assert row["surface"] == "widget:telemetry"
+    assert row["last_event"] == "published"
 
