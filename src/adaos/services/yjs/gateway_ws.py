@@ -1941,6 +1941,22 @@ def _active_yws_connection_total_for_client(webspace_id: str, dev_id: str) -> in
         )
 
 
+def _active_yws_connection_total_for_device(dev_id: str) -> int:
+    device_key = str(dev_id or "").strip() or "unknown"
+    if not device_key or device_key == "unknown":
+        return 0
+    total = 0
+    with _ACTIVE_YWS_LOCK:
+        for clients in _ACTIVE_YWS_CLIENTS.values():
+            if isinstance(clients, dict):
+                total += max(0, int(clients.get(device_key) or 0))
+    return total
+
+
+def _should_mark_yws_browser_session_offline(dev_id: str) -> bool:
+    return _active_yws_connection_total_for_device(dev_id) <= 0
+
+
 def _active_yws_client_rows() -> list[dict[str, Any]]:
     with _ACTIVE_YWS_LOCK:
         clients = {
@@ -3885,28 +3901,37 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     finally:
         _untrack_yws_connection(webspace_id, websocket)
         _transport_mark_close("yws")
-        try:
-            from adaos.services.access_links import touch_browser_session
+        mark_offline = _should_mark_yws_browser_session_offline(dev_id)
+        if mark_offline:
+            try:
+                from adaos.services.access_links import touch_browser_session
 
-            touch_browser_session(
-                dev_id,
-                webspace_id=webspace_id,
-                connection_state="closed",
-                online=False,
-                **browser_metadata,
+                touch_browser_session(
+                    dev_id,
+                    webspace_id=webspace_id,
+                    connection_state="closed",
+                    online=False,
+                    **browser_metadata,
+                )
+            except Exception:
+                _ylog.debug("browser access registry close update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
+            _publish_runtime_event(
+                "browser.session.changed",
+                {
+                    "device_id": dev_id,
+                    "webspace_id": webspace_id,
+                    "connection_state": "closed",
+                    "yjs_channel_state": "closed",
+                    "source": "yws.gateway",
+                },
             )
-        except Exception:
-            _ylog.debug("browser access registry close update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
-        _publish_runtime_event(
-            "browser.session.changed",
-            {
-                "device_id": dev_id,
-                "webspace_id": webspace_id,
-                "connection_state": "closed",
-                "yjs_channel_state": "closed",
-                "source": "yws.gateway",
-            },
-        )
+        else:
+            _ylog.debug(
+                "yws connection closed but browser session remains active webspace=%s dev=%s active_sessions=%s",
+                webspace_id,
+                dev_id,
+                _active_yws_connection_total_for_device(dev_id),
+            )
         _ylog.info("yws connection closed webspace=%s dev=%s", webspace_id, dev_id)
         if _ws_trace_enabled():
             try:

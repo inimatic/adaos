@@ -1196,6 +1196,24 @@ def test_active_browser_session_snapshot_tracks_yws_clients() -> None:
     assert gateway_module.active_browser_session_snapshot(now_ts=123.0)["peers"] == []
 
 
+def test_yws_close_preserves_online_state_when_device_has_replacement_session() -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+
+    old_ws = SimpleNamespace(query_params={"dev": "dev-2"})
+    new_ws = SimpleNamespace(query_params={"dev": "dev-2"})
+    gateway_module._track_yws_connection("ops", old_ws, device_id="dev-2")
+    gateway_module._track_yws_connection("desktop", new_ws, device_id="dev-2")
+
+    gateway_module._untrack_yws_connection("ops", old_ws)
+
+    assert gateway_module._active_yws_connection_total_for_device("dev-2") == 1
+    assert gateway_module._should_mark_yws_browser_session_offline("dev-2") is False
+
+    gateway_module._untrack_yws_connection("desktop", new_ws)
+    assert gateway_module._should_mark_yws_browser_session_offline("dev-2") is True
+
+
 def test_yws_guard_replaces_existing_client_sessions(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
