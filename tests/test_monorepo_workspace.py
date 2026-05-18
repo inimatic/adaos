@@ -222,9 +222,11 @@ def test_sparse_set_auto_stashes_dirty_worktree(monkeypatch, monorepo, paths):
 def test_sparse_set_removes_stale_blocker_in_non_dev(monkeypatch, tmp_path):
     monkeypatch.setenv("ENV_TYPE", "prod")
     root = tmp_path / ".adaos" / "workspace"
-    blocker = root / "skills" / "news_skill" / "skill.yaml"
-    blocker.parent.mkdir(parents=True, exist_ok=True)
-    blocker.write_text("local stale file\n", encoding="utf-8")
+    blocker_one = root / "skills" / "news_skill" / "skill.yaml"
+    blocker_two = root / "skills" / "news_skill" / "handlers" / "__init__.py"
+    for blocker in (blocker_one, blocker_two):
+        blocker.parent.mkdir(parents=True, exist_ok=True)
+        blocker.write_text("local stale file\n", encoding="utf-8")
     attempts = 0
 
     def fake_run_git(args, cwd=None):
@@ -238,6 +240,11 @@ def test_sparse_set_removes_stale_blocker_in_non_dev(monkeypatch, tmp_path):
                     "git sparse-checkout set failed: error: Working tree file "
                     "'skills/news_skill/skill.yaml' would be overwritten by sparse checkout update."
                 )
+            if attempts == 2:
+                raise cli_git_module.GitError(
+                    "git sparse-checkout set failed: error: Working tree file "
+                    "'skills/news_skill/handlers/__init__.py' would be overwritten by sparse checkout update."
+                )
             return ""
         if args and args[0] in {"status", "log"}:
             return ""
@@ -247,8 +254,9 @@ def test_sparse_set_removes_stale_blocker_in_non_dev(monkeypatch, tmp_path):
 
     CliGitClient(depth=0).sparse_set(str(root), ["skills/news_skill"], no_cone=True)
 
-    assert attempts == 2
-    assert not blocker.exists()
+    assert attempts == 3
+    assert not blocker_one.exists()
+    assert not blocker_two.exists()
 
 
 def test_sparse_checkout_ignores_cli_flags(monkeypatch, monorepo, paths):

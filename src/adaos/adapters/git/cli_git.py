@@ -244,6 +244,13 @@ def _sparse_checkout_overwrite_paths(message: str) -> list[str]:
     return paths
 
 
+def _sparse_checkout_blocker_retry_limit() -> int:
+    try:
+        return max(1, int(str(os.getenv("ADAOS_SPARSE_CHECKOUT_BLOCKER_RETRIES") or "200").strip()))
+    except Exception:
+        return 200
+
+
 def _remove_sparse_checkout_blockers(dir: StrOrPath, paths: Sequence[str]) -> list[str]:
     root = Path(dir).resolve()
     removed: list[str] = []
@@ -392,7 +399,8 @@ class CliGitClient(GitClient):
         args = ["sparse-checkout", "init"]
         if cone:
             args.append("--cone")
-        if _is_adaos_workspace_repo(dir):
+        is_workspace = _is_adaos_workspace_repo(dir)
+        if is_workspace:
             env_type = str(os.getenv("ENV_TYPE", "prod") or "prod").strip().lower()
             if env_type != "dev":
                 dirty = self.changed_files(dir)
@@ -418,7 +426,9 @@ class CliGitClient(GitClient):
         args = ["sparse-checkout", "set"]
         if no_cone:
             args.append("--no-cone")
-        if _is_adaos_workspace_repo(dir):
+        is_workspace = _is_adaos_workspace_repo(dir)
+        env_type = str(os.getenv("ENV_TYPE", "prod") or "prod").strip().lower()
+        if is_workspace:
             dirty = self.changed_files(dir)
             if dirty:
                 repo_path = str(Path(dir))
@@ -436,35 +446,46 @@ class CliGitClient(GitClient):
             if _sanitize_sparse_checkout_file(dir):
                 self.sparse_reapply(dir)
 
-        try:
-            _apply_sparse_set()
-        except GitError as exc:
-            lowered = str(exc).lower()
-            if _is_adaos_workspace_repo(dir) and "unstaged changes" in lowered and "sparse-checkout" in lowered:
-                repo_path = str(Path(dir))
-                _log.warning("git sparse-checkout set blocked by dirty worktree; auto-stashing repo=%s", repo_path)
-                _log_git_snapshot(dir)
-                stash_ref = self.stash_push(str(dir), "adaos:auto-stash sparse-checkout set", include_untracked=True)
-                if stash_ref:
-                    _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
+        stashed_after_error = False
+        removed_blockers = 0
+        blocker_retry_limit = _sparse_checkout_blocker_retry_limit()
+        while True:
+            try:
                 _apply_sparse_set()
                 return
-            overwrite_paths = _sparse_checkout_overwrite_paths(str(exc))
-            env_type = str(os.getenv("ENV_TYPE", "prod") or "prod").strip().lower()
-            if _is_adaos_workspace_repo(dir) and overwrite_paths and env_type != "dev":
-                repo_path = str(Path(dir))
-                _log.warning(
-                    "git sparse-checkout set blocked by stale workspace files; removing blockers repo=%s env_type=%s files=%s",
-                    repo_path,
-                    env_type,
-                    len(overwrite_paths),
-                )
-                _log_git_snapshot(dir)
-                removed = _remove_sparse_checkout_blockers(dir, overwrite_paths)
-                _log.warning("git sparse-checkout stale blockers removed repo=%s files=%s", repo_path, removed)
-                _apply_sparse_set()
-                return
-            raise
+            except GitError as exc:
+                lowered = str(exc).lower()
+                if is_workspace and "unstaged changes" in lowered and "sparse-checkout" in lowered and not stashed_after_error:
+                    repo_path = str(Path(dir))
+                    _log.warning("git sparse-checkout set blocked by dirty worktree; auto-stashing repo=%s", repo_path)
+                    _log_git_snapshot(dir)
+                    stash_ref = self.stash_push(str(dir), "adaos:auto-stash sparse-checkout set", include_untracked=True)
+                    if stash_ref:
+                        _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
+                    stashed_after_error = True
+                    continue
+                overwrite_paths = _sparse_checkout_overwrite_paths(str(exc))
+                if is_workspace and overwrite_paths and env_type != "dev":
+                    repo_path = str(Path(dir))
+                    if removed_blockers + len(overwrite_paths) > blocker_retry_limit:
+                        raise GitError(
+                            f"{exc}\n\nSparse checkout blocker recovery exceeded "
+                            f"{blocker_retry_limit} file(s); refusing to continue."
+                        ) from exc
+                    _log.warning(
+                        "git sparse-checkout set blocked by stale workspace files; removing blockers repo=%s env_type=%s files=%s",
+                        repo_path,
+                        env_type,
+                        len(overwrite_paths),
+                    )
+                    _log_git_snapshot(dir)
+                    removed = _remove_sparse_checkout_blockers(dir, overwrite_paths)
+                    if not removed:
+                        raise
+                    removed_blockers += len(removed)
+                    _log.warning("git sparse-checkout stale blockers removed repo=%s files=%s", repo_path, removed)
+                    continue
+                raise
 
     def sparse_add(self, dir: StrOrPath, path: str) -> None:
         try:
