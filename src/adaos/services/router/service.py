@@ -37,6 +37,9 @@ from adaos.sdk.io.context import io_meta
 _log = logging.getLogger("adaos.router.service")
 
 
+_WEBIO_RECEIVER_METADATA_CACHE_TTL_S = 2.0
+
+
 def _webio_stream_guard_enabled() -> bool:
     return str(os.getenv("ADAOS_WEBIO_STREAM_GUARD_ENABLE") or "1").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -60,6 +63,55 @@ def _webio_stream_payload_bytes(payload: Any) -> int:
         return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
     except Exception:
         return 0
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        try:
+            decoded = to_json()
+            if isinstance(decoded, dict):
+                return dict(decoded)
+        except Exception:
+            return {}
+    return {}
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    except Exception:
+        return None
+
+
+def _receiver_declared_owner(receiver_meta: dict[str, Any]) -> str:
+    origin = str(receiver_meta.get("origin") or "").strip()
+    if origin:
+        return origin
+    route = receiver_meta.get("route") if isinstance(receiver_meta.get("route"), dict) else {}
+    owner = str(route.get("owner") or receiver_meta.get("owner") or "").strip()
+    return owner
+
+
+async def _read_webio_receiver_metadata(webspace_id: str, receiver: str) -> dict[str, Any]:
+    try:
+        async with async_get_ydoc(webspace_id, read_only=True, load_mark_roots=["data"]) as ydoc:
+            data = _as_dict(ydoc.get_map("data"))
+            webio = data.get("webio") if isinstance(data.get("webio"), dict) else {}
+            receivers = webio.get("receivers") if isinstance(webio.get("receivers"), dict) else {}
+            row = receivers.get(receiver) if isinstance(receivers, dict) else None
+            return dict(row) if isinstance(row, dict) else {}
+    except Exception:
+        _log.debug(
+            "failed to read webio receiver metadata webspace=%s receiver=%s",
+            webspace_id,
+            receiver,
+            exc_info=True,
+        )
+        return {}
 
 
 def _webio_stream_owner(payload: dict[str, Any], meta: dict[str, Any]) -> str:
@@ -89,30 +141,52 @@ def _webio_stream_admit(
     owner: str,
     payload_bytes: int,
     fanout_total: int = 1,
+    receiver_meta: dict[str, Any] | None = None,
 ) -> bool:
     if not _webio_stream_guard_enabled():
         return True
+    receiver_meta = receiver_meta or {}
+    route_meta = receiver_meta.get("route") if isinstance(receiver_meta.get("route"), dict) else {}
+    budget = receiver_meta.get("budget") if isinstance(receiver_meta.get("budget"), dict) else {}
+    declared_max_payload = _positive_int(
+        budget.get("maxPayloadBytes")
+        or budget.get("max_payload_bytes")
+        or receiver_meta.get("maxPayloadBytes")
+    )
     warn_bytes = _webio_stream_warn_bytes()
     block_bytes = _webio_stream_block_bytes()
+    if declared_max_payload:
+        block_bytes = min(block_bytes, declared_max_payload)
+        warn_bytes = min(warn_bytes, max(1, int(declared_max_payload * 0.8)))
     effective_bytes = max(0, int(payload_bytes or 0)) * max(1, int(fanout_total or 1))
     policy_state = "ok"
     reason = "healthy"
     if effective_bytes >= block_bytes:
         policy_state = "block"
-        reason = "browser_stream_payload_blocked"
+        reason = (
+            "browser_stream_declared_payload_budget_exceeded"
+            if declared_max_payload and effective_bytes >= declared_max_payload
+            else "browser_stream_payload_blocked"
+        )
     elif effective_bytes >= warn_bytes:
         policy_state = "throttle"
-        reason = "browser_stream_payload_pressure"
+        reason = (
+            "browser_stream_declared_payload_budget_pressure"
+            if declared_max_payload
+            else "browser_stream_payload_pressure"
+        )
     if policy_state == "ok":
         return True
     if not owner:
         _log.warning(
-            "webio stream dropped by payload guard webspace=%s receiver=%s bytes=%s fanout=%s effective_bytes=%s reason=%s owner=unknown",
+            "webio stream dropped by payload guard webspace=%s receiver=%s surface=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s owner=unknown",
             webspace_id,
             receiver,
+            str(route_meta.get("surface") or "").strip() or "-",
             payload_bytes,
             fanout_total,
             effective_bytes,
+            declared_max_payload or "-",
             reason,
         )
         return False
@@ -135,44 +209,57 @@ def _webio_stream_admit(
                 "payload_bytes": payload_bytes,
                 "fanout_total": fanout_total,
                 "effective_bytes": effective_bytes,
+                "budget": dict(budget) if budget else {},
+                "declared_max_payload_bytes": declared_max_payload,
+                "receiver_origin": str(receiver_meta.get("origin") or "").strip() or None,
+                "receiver_mode": str(receiver_meta.get("mode") or "").strip() or None,
+                "snapshot_policy": str(receiver_meta.get("snapshotPolicy") or "").strip() or None,
+                "route": dict(route_meta) if route_meta else {},
+                "guard_visibility": receiver_meta.get("guardVisibility"),
                 "blocked_roots": ["stream"] if policy_state == "block" else [],
                 "throttled_roots": ["stream"] if policy_state == "throttle" else [],
             },
         )
         if not bool(admission.get("allowed", True)):
             _log.warning(
-                "webio stream denied by owner guard webspace=%s receiver=%s owner=%s bytes=%s fanout=%s effective_bytes=%s reason=%s retry_after_s=%s",
+                "webio stream denied by owner guard webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s retry_after_s=%s",
                 webspace_id,
                 receiver,
+                str(route_meta.get("surface") or "").strip() or "-",
                 admission.get("owner") or owner,
                 payload_bytes,
                 fanout_total,
                 effective_bytes,
+                declared_max_payload or "-",
                 admission.get("reason") or reason,
                 admission.get("retry_after_s") or 0,
             )
             return False
         if bool(admission.get("throttled")):
             _log.warning(
-                "webio stream allowed under pressure webspace=%s receiver=%s owner=%s bytes=%s fanout=%s effective_bytes=%s reason=%s",
+                "webio stream allowed under pressure webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s",
                 webspace_id,
                 receiver,
+                str(route_meta.get("surface") or "").strip() or "-",
                 admission.get("owner") or owner,
                 payload_bytes,
                 fanout_total,
                 effective_bytes,
+                declared_max_payload or "-",
                 admission.get("reason") or reason,
             )
         return True
     except Exception:
         _log.warning(
-            "webio stream dropped after guard failure webspace=%s receiver=%s owner=%s bytes=%s fanout=%s effective_bytes=%s reason=%s",
+            "webio stream dropped after guard failure webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s",
             webspace_id,
             receiver,
+            str(route_meta.get("surface") or "").strip() or "-",
             owner,
             payload_bytes,
             fanout_total,
             effective_bytes,
+            declared_max_payload or "-",
             reason,
             exc_info=True,
         )
@@ -191,6 +278,7 @@ class RouterService:
         self._tg_reply_via_root_http = str(os.getenv("HUB_TG_REPLY_VIA_ROOT_HTTP") or "").strip() == "1"
         self._media_route_webspaces: set[str] = set()
         self._notify_tasks: set[asyncio.Task[None]] = set()
+        self._webio_receiver_metadata_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
     def _router_yjs_write_meta(self):
         return ystore_write_metadata(
@@ -199,6 +287,23 @@ class RouterService:
             owner="core:router",
             channel="core.router.async",
         )
+
+    async def _webio_receiver_metadata(self, webspace_id: str, receiver: str) -> dict[str, Any]:
+        ws = coerce_webspace_id(webspace_id, fallback="default")
+        receiver_id = str(receiver or "").strip()
+        if not receiver_id:
+            return {}
+        now = time.monotonic()
+        key = (ws, receiver_id)
+        cached = self._webio_receiver_metadata_cache.get(key)
+        if cached and cached[0] > now:
+            return dict(cached[1])
+        metadata = await _read_webio_receiver_metadata(ws, receiver_id)
+        self._webio_receiver_metadata_cache[key] = (
+            now + _WEBIO_RECEIVER_METADATA_CACHE_TTL_S,
+            dict(metadata),
+        )
+        return metadata
 
     def _pick_target_node(self, desired_io: str, this_node: str) -> str:
         node = this_node
@@ -1535,12 +1640,15 @@ class RouterService:
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
                 fanout_total = 1 + (2 if node_id else 0)
+                receiver_meta = await self._webio_receiver_metadata(ws, receiver)
+                effective_owner = owner or _receiver_declared_owner(receiver_meta)
                 if not _webio_stream_admit(
                     webspace_id=ws,
                     receiver=receiver,
-                    owner=owner,
+                    owner=effective_owner,
                     payload_bytes=payload_bytes,
                     fanout_total=fanout_total,
+                    receiver_meta=receiver_meta,
                 ):
                     continue
                 event_payload = {
