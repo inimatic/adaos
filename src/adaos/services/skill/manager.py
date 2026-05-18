@@ -1515,13 +1515,23 @@ class SkillManager:
         previous_active_version = env.resolve_active_version()
         previous_active_slot = env.read_active_slot(previous_active_version) if previous_active_version else None
         previous_deactivation = env.read_deactivation()
+        source_version = ""
         try:
             candidate, _source_kind = self._resolve_runtime_update_source(name, space="workspace")
             if candidate.exists():
                 source_path = candidate
+                try:
+                    source_manifest = self._load_manifest(source_path)
+                except FileNotFoundError:
+                    source_manifest = {}
+                source_version = str(source_manifest.get("version") or "").strip()
         except Exception:
             source_path = None
-        target_version = version or self._latest_prepared_version(env) or env.resolve_active_version()
+            source_version = ""
+        prepared_version = self._latest_prepared_version(env)
+        target_version = version or prepared_version or previous_active_version
+        if version is None and source_version and source_version != str(previous_active_version or "").strip():
+            target_version = source_version
         if not target_version:
             if source_path is None:
                 raise RuntimeError("no installed versions")
