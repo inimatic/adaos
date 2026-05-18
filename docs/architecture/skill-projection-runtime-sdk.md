@@ -33,8 +33,9 @@ fingerprinted, demand-aware projection refresh.
 
 ## Target Shape
 
-Skills describe projection and stream surfaces declaratively. The SDK/core
-runtime owns the mechanics:
+Skills describe projection and stream surfaces declaratively. The skill author
+chooses which data belongs in Yjs, which data belongs in streams, and which
+data should stay behind tools/details. The SDK/core runtime owns the mechanics:
 
 - per-webspace refresh selection
 - event-to-dirty-section routing
@@ -49,11 +50,17 @@ runtime owns the mechanics:
 Skill code should focus on building semantic section payloads and performing
 domain actions. It should not open-code projection scheduling.
 
+The SDK must not silently reroute a skill's data between Yjs and streams.
+Runtime guardrails may warn, throttle, block, quarantine, and log pressure, but
+route ownership remains a design-time skill responsibility.
+
 ## Core Concepts
 
 ### Projection Slot
 
-A projection slot is a named, compact, browser-facing materialization unit.
+A projection slot is a named, compact, browser-facing materialization unit for
+reconnect-stable bootstrap/control state. It should not be used for hot
+diagnostics, event tails, large tables, or routine telemetry variables.
 
 Example shape:
 
@@ -84,6 +91,10 @@ hatches, but skill-owned browser projections should prefer this API.
 A stream receiver is an active, volatile consumer. It is appropriate for detail
 panels, logs, recent events, large diagnostics, and live operational state that
 should not be stored in Yjs by default.
+
+Stream receivers are not durable projections. They need bounded payloads,
+initial state, snapshot-on-subscribe, duplicate/stale suppression, and explicit
+rate limits.
 
 Example shape:
 
@@ -179,6 +190,11 @@ must not.
 - One webspace must not cause projection churn in unrelated webspaces.
 - Heavy diagnostics, logs, large histories, and detail panels are stream-only
   unless a compact summary projection is explicitly declared.
+- Hot transport/session events must be routed through explicit debounce or
+  budget rules before they affect operator-facing status.
+- Raw hot-event evidence and smoothed operator state should be separate
+  sections or receivers.
+- Subscription flaps must not cause unbounded Yjs writes.
 - Projection lifecycle and pressure decisions must be observable.
 - Skill-local thread pools and event-loop bridges are transition shims.
 
@@ -203,32 +219,25 @@ onto the shared helper layer.
 `infrastate_skill` should be the first heavy operational-skill migration after
 the SDK slice exists.
 
-The first migration pass replaces the single `infrastate.snapshot` durable
-projection with section slots while keeping the existing WebUI paths stable.
-Durable Yjs sections are now declared and written as:
+The earlier migration step split one large durable `infrastate.snapshot` into
+multiple Yjs section slots. That was useful as a compatibility stabilizer, but
+it is no longer the target shape. The target is stream-first:
 
-- `infrastate.summary`
-- `infrastate.actions`
-- `infrastate.nodes`
-- `infrastate.node_editor`
-- `infrastate.operations.active`
-- `infrastate.core_actions`
-- `infrastate.yjs_actions`
-- `infrastate.update_actions`
-- `infrastate.core_update_diag_actions`
-- `infrastate.ui_state`
-- `infrastate.fallback`
-- `infrastate.errors`
-- `infrastate.projection_diag`
+- Yjs keeps only minimal reconnect-stable bootstrap/control state, such as
+  current readiness, selected node, last refresh marker, degraded/error badge,
+  and a compact subscription summary.
+- Operator-facing variables are stream receivers: summary rows, action lists,
+  nodes, active operations, build state, runtime channels, marketplace rows,
+  skills/scenarios, Yjs load marks, and recent events.
+- Details and large evidence stay behind detail tools, requested stream
+  snapshots, disk snapshots, or 360log.
+- Hot inputs such as `browser.session.changed`, `device.registered`,
+  `webrtc.peer.state.changed`, and YWS guard/open/close events must have
+  explicit debounce/budget behavior. Raw evidence remains available in
+  diagnostics streams while operator-facing status is smoothed.
 
-Heavy logs, event history, core-update diagnostics, marketplace rows, build
-details, runtime channel details, skill/scenario tables, and per-item details
-are stream/request-only surfaces. `infrastate.operations.active` remains both a
-compact durable slot for reconnect recovery and an eager stream for live UI
-updates. The current stream migration uses direct builders for operations,
-events, installed skills/scenarios, and marketplace tables; remaining complex
-diagnostic receivers still fall back to the bounded cached snapshot until their
-section builders are split out.
+This keeps the operational skill useful after reconnect while preventing its
+diagnostic surface from becoming a primary Yjs pressure source.
 
 ## Implementation Checklist
 

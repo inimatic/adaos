@@ -369,6 +369,93 @@
           "type": "string",
           "enum": ["auto", "member", "hub"],
           "description": "Default transport for widgets observing this receiver."
+        },
+        "snapshotPolicy": {
+          "type": "string",
+          "enum": ["none", "on_subscribe", "on_subscribe_if_stale", "manual"],
+          "description": "How the receiver recovers initial state after subscribe/resubscribe."
+        },
+        "ttlMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Freshness TTL for replace-mode stream variables."
+        },
+        "sequenceField": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Field used to reject stale or duplicate stream payloads."
+        },
+        "updatedAtField": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Field carrying the producer timestamp for freshness checks."
+        },
+        "budget": {
+          "$ref": "#/$defs/streamBudget",
+          "description": "Declared receiver budget used by review, diagnostics, and future stream guards."
+        },
+        "guardVisibility": {
+          "$ref": "#/$defs/guardVisibility",
+          "description": "Operator-visible degraded/quarantine behavior when receiver budgets are exceeded."
+        },
+        "route": {
+          "$ref": "#/$defs/streamRoute",
+          "description": "Reviewable data-route metadata for this receiver."
+        }
+      }
+    },
+
+    "streamBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxPayloadBytes": { "type": "integer", "minimum": 1 },
+        "maxPublishHz": { "type": "number", "exclusiveMinimum": 0 },
+        "coalesceMs": { "type": "integer", "minimum": 0 },
+        "maxFanout": { "type": "integer", "minimum": 1 },
+        "maxSnapshotHz": { "type": "number", "exclusiveMinimum": 0 },
+        "maxItems": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "guardVisibility": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "degradedState": { "type": "string", "minLength": 1 },
+            "log": { "type": "string", "minLength": 1 },
+            "quarantine": { "type": "boolean" },
+            "metric": { "type": "string", "minLength": 1 },
+            "correlationId": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+
+    "streamRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "stream"
+        },
+        "surface": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "firstPaint": { "type": "string", "minLength": 1 },
+        "recovery": { "type": "string", "minLength": 1 },
+        "updateSource": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1
+            }
+          ]
         }
       }
     },

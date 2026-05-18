@@ -70,6 +70,8 @@ def _normalize_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
         s["events"]["publish"] = []
     if not isinstance(s.get("data_projections"), list):
         s["data_projections"] = []
+    if not isinstance(s.get("data_routes"), list):
+        s["data_routes"] = []
     return s
 
 

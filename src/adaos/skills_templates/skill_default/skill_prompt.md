@@ -159,6 +159,10 @@ The skill must consist of **two files only**, formatted exactly as shown below:
   * `permissions` — minimal set of required permissions (e.g., `network.http`, `audio.speak`).
   * `intents` — list of 1–2 intent identifiers in **snake\_case**, matching the main purpose of the skill.
   * `dependencies` — Python packages required for the skill.
+  * `data_routes` — required for browser-facing output; declare whether each
+    surface uses `yjs`, `stream`, `tool/details`, `skill-local`, or
+    `disk/360log`, including first-paint, recovery, budget, and guard
+    visibility.
 
 ---
 
@@ -217,6 +221,9 @@ The skill must consist of **two files only**, formatted exactly as shown below:
 * Do not generate files other than `manifest.yaml` and `handler.py`.
 * The handler must work correctly in the MVP runtime environment.
 * Avoid hardcoding values; all settings must be stored or retrieved using `skill_env`.
+* For browser-facing state, write the `data_routes` plan before choosing Yjs or
+  stream helpers. Use Yjs only for compact bootstrap/control state and streams
+  for live variables or event tails.
 * Default language for `lang_res()` is **English only**.
 
 ---
