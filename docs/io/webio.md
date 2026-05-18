@@ -260,8 +260,16 @@ state lives in `desktop`.
 ## Snapshot-on-Subscribe
 
 Streams are live transports, not implicit persistent state. To avoid blank
-widgets on first subscribe, the browser now requests an initial snapshot when
-it subscribes to `webio.stream.*`.
+widgets on first subscribe, the browser requests an initial snapshot when it
+subscribes to `webio.stream.*`. The gateway also emits the same request when it
+observes the websocket subscription, so initial materialization has two
+independent triggers instead of depending on one subscribe-side effect.
+
+Receivers whose first value is loaded asynchronously should use an explicit
+`initialState` envelope such as `{ "status": "init", "message": "Loading data...", "items": [] }`.
+Widgets can then show a loading/data-not-delivered state until the first
+snapshot arrives, rather than rendering an empty collection as if the source had
+successfully reported "no rows".
 
 The server emits `webio.stream.snapshot.requested` with:
 
