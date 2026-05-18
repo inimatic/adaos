@@ -29,6 +29,7 @@ from adaos.services.git.safe_commit import sanitize_message, check_no_denied
 from adaos.services.git.workspace_guard import ensure_clean
 from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext, get_ctx, use_ctx
+from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
 from adaos.services.skill.tests_runner import TestResult, run_tests
 from adaos.skills.runtime_runner import execute_tool
@@ -2678,7 +2679,11 @@ class SkillManager:
             return []
 
         requirements_file = skill_dir / "requirements.in"
-        dependencies = self._collect_dependencies(manifest)
+        dependencies = resolve_skill_dependency_args(
+            self._collect_dependencies(manifest),
+            skill_dir=skill_dir,
+            repo_root=self._repo_root_for_dependency_resolution(),
+        )
         python_args: list[str] = []
         if requirements_file.exists():
             python_args.extend(["-r", str(requirements_file)])
@@ -2797,6 +2802,19 @@ class SkillManager:
             if candidate.exists():
                 return candidate
         return None
+
+    def _repo_root_for_dependency_resolution(self) -> Path | None:
+        repo_root_attr = getattr(self.ctx.paths, "repo_root", None)
+        try:
+            repo_root = repo_root_attr() if callable(repo_root_attr) else repo_root_attr
+        except Exception:
+            return None
+        if not repo_root:
+            return None
+        try:
+            return Path(repo_root).expanduser().resolve()
+        except Exception:
+            return None
 
     def _collect_dependencies(self, manifest: Mapping[str, Any]) -> list[str]:
         deps = manifest.get("dependencies") or []
