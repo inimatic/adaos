@@ -1090,8 +1090,32 @@ def test_infrastate_scenario_items_only_show_installed_registry_entries(monkeypa
     assert all_items[0]["workspace_source_version"] == "1.2.3"
     assert all_items[0]["has_drift"] is True
 
-    drift_items = mod._scenario_items()
+    default_items = mod._scenario_items()
+    assert [(item["name"], item["version"]) for item in default_items] == [
+        ("alpha", "1.0.0"),
+        ("delta", "4.0.0"),
+        ("gamma", "3.0.0"),
+    ]
+
+    drift_items = mod._filter_inventory_drift(default_items, drift_only=True)
     assert [item["name"] for item in drift_items] == ["alpha"]
+
+
+def test_infrastate_inventory_stream_honors_drift_only_toggle(monkeypatch):
+    mod = _load_infrastate_module()
+    rows = [
+        {"name": "aligned", "has_drift": False},
+        {"name": "behind", "has_drift": True},
+    ]
+    monkeypatch.setattr(mod, "_skills_items", lambda *, include_all=True: list(rows))
+    monkeypatch.setattr(mod, "_ui_state", lambda: {"inventory_drift_only": False})
+
+    all_rows = mod._build_stream_payload_for_receiver(mod._skills_receiver())
+    assert [item["name"] for item in all_rows] == ["aligned", "behind"]
+
+    monkeypatch.setattr(mod, "_ui_state", lambda: {"inventory_drift_only": True})
+    drift_rows = mod._build_stream_payload_for_receiver(mod._skills_receiver())
+    assert [item["name"] for item in drift_rows] == ["behind"]
 
 
 def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch, tmp_path: Path):
@@ -1154,6 +1178,7 @@ def test_infrastate_skill_items_use_registry_and_workspace_versions(monkeypatch,
     assert item["update_available"] is True
     assert item["registry_mismatch"] is True
     assert item["has_drift"] is True
+    assert item["can_activate"] is False
     assert item["status"] == "behind_catalog"
     assert item["status_icon"] == "cloud-download-outline"
     assert "behind catalog" in item["status_tooltip"]
@@ -1205,6 +1230,7 @@ def test_infrastate_skill_items_compare_remote_against_active_runtime_version(mo
     assert items[0]["version_display"] == "0.19.0* (0.20.0)"
     assert items[0]["registry_mismatch"] is True
     assert items[0]["has_drift"] is True
+    assert items[0]["can_activate"] is True
 
 
 def test_infrastate_skill_items_skip_remote_version_probe_when_disabled(monkeypatch, tmp_path: Path):
