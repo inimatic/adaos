@@ -231,6 +231,21 @@ must not.
 - Projection lifecycle and pressure decisions must be observable.
 - Skill-local thread pools and event-loop bridges are transition shims.
 
+## Control-Plane HTTP Fallbacks
+
+Root-routed HTTP reads and tool calls are recovery and diagnostic paths, not a
+replacement for declared Yjs or stream data routes. A browser may still receive
+`/api/node/infrastate/snapshot` while its local Yjs provider is red; that is a
+fallback read path and must stay compact/read-only unless a caller explicitly
+requests projection. It should not be used as a hidden live-state channel.
+
+The same boundary applies to `/api/tools/call`: it can serve details, actions,
+and fallback reads, but route ownership still belongs to the skill's declared
+Yjs, stream, or detail route. The hub-route local hop must choose the active
+runtime process first, give `tools/call` a timeout budget compatible with Root's
+outer budget, and avoid retrying a mutating/read-timed-out request against a
+different slot port.
+
 ## Reference Skills
 
 ### `browsers_skill`

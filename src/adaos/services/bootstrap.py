@@ -371,11 +371,9 @@ def _active_runtime_state_local_http_bases(ctx: Any | None = None) -> list[str]:
     """Return supervisor-advertised local runtime bases without network probing.
 
     Route handlers run on the runtime event loop and must not synchronously probe
-    localhost on the hot path. During slot switches the shared dotenv may still
-    point at the legacy configured port (often 8777), while supervisor state and
-    node_runtime.json already know the live slot port. Resolve those paths from
-    ctx first; env/home are only fallbacks for early bootstrap paths where ctx is
-    not ready yet.
+    localhost on the hot path. Supervisor state and node_runtime.json are useful
+    fallbacks during early bootstrap and slot transitions, but they are persisted
+    files and can briefly lag behind the process that is handling this message.
     """
     state_dir = _route_state_dir_from_ctx(ctx) or _route_state_dir_fallback()
     if state_dir is None:
@@ -411,6 +409,37 @@ def _active_runtime_state_local_http_bases(ctx: Any | None = None) -> list[str]:
 
     seen: set[str] = set()
     return [b for b in bases if (b not in seen and not seen.add(b))]
+
+
+def _append_local_http_base(bases: list[str], value: str | None) -> None:
+    base = str(value or "").strip().rstrip("/")
+    if base and _is_local_http_base(base):
+        bases.append(base)
+
+
+def _hub_route_local_http_timeout(path: str) -> tuple[float, float]:
+    path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
+    if path_norm in ("/api/node/status", "/api/ping", "/healthz"):
+        return (0.5, 1.2)
+    if path_norm == "/api/tools/call":
+        # Root allows tools/call to take up to 60s. Keep the local hop below
+        # that ceiling, but do not make member-link tools fail under normal
+        # cross-node latency.
+        return (1.5, 55.0)
+    return (1.5, 2.5)
+
+
+def _hub_route_should_retry_http_upstream_error(
+    *, method: str, path: str, error_kind: str
+) -> bool:
+    path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
+    method_norm = str(method or "").strip().upper()
+    kind = str(error_kind or "").strip()
+    if kind == "ReadTimeout" and (
+        method_norm not in {"GET", "HEAD"} or path_norm == "/api/tools/call"
+    ):
+        return False
+    return True
 
 
 def _probe_runtime_http_base(sess: Any, *, base: str, timeout_s: float) -> bool:
@@ -597,35 +626,20 @@ def _build_hub_route_http_bases(
 
     if _hub_route_prefers_supervisor_public_status(path_norm, method):
         bases.extend(_supervisor_local_bases())
-    else:
-        bases.extend(state_bases)
-        if runtime_port_base:
-            _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
-            bases.append(runtime_port_base)
-        if cfg_base and _is_local_http_base(cfg_base):
-            bases.append(cfg_base.rstrip("/"))
-        if runtime_port.isdigit():
-            bases.append(f"http://127.0.0.1:{runtime_port}")
-        if env_base:
-            bases.append(env_base.rstrip("/"))
-        if not runtime_port_base and not state_bases:
-            active_runtime_base = _discover_active_runtime_local_base()
-            if active_runtime_base:
-                bases.append(active_runtime_base.rstrip("/"))
-    if _hub_route_prefers_supervisor_public_status(path_norm, method):
-        bases.extend(state_bases)
-        if runtime_port_base:
-            bases.append(runtime_port_base)
-        if cfg_base and _is_local_http_base(cfg_base):
-            bases.append(cfg_base.rstrip("/"))
-        if runtime_port.isdigit():
-            bases.append(f"http://127.0.0.1:{runtime_port}")
-        if env_base:
-            bases.append(env_base.rstrip("/"))
-        else:
-            active_runtime_base = _discover_active_runtime_local_base()
-            if active_runtime_base:
-                bases.append(active_runtime_base.rstrip("/"))
+
+    if runtime_port_base:
+        _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
+        bases.append(runtime_port_base)
+    if runtime_port.isdigit():
+        bases.append(f"http://127.0.0.1:{runtime_port}")
+    _append_local_http_base(bases, env_base)
+    _append_local_http_base(bases, cfg_base)
+    bases.extend(state_bases)
+
+    if not runtime_port_base and not state_bases:
+        active_runtime_base = _discover_active_runtime_local_base()
+        if active_runtime_base:
+            _append_local_http_base(bases, active_runtime_base)
 
     # Keep runtime ports as fallback even for the browser-safe supervisor status path.
     bases.extend(["http://127.0.0.1:8778", "http://127.0.0.1:8777"])
@@ -654,8 +668,6 @@ def _build_hub_route_ws_bases(
     runtime_port_base = _runtime_port_local_http_base()
     state_bases = _active_runtime_state_local_http_bases(ctx)
 
-    for state_base in state_bases:
-        bases.append(_http_base_to_ws_base(state_base))
     if runtime_port_base:
         _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
         bases.append(_http_base_to_ws_base(runtime_port_base))
@@ -663,6 +675,8 @@ def _build_hub_route_ws_bases(
         bases.append(_http_base_to_ws_base(env_base))
     if cfg_base and _is_local_http_base(cfg_base):
         bases.append(_http_base_to_ws_base(cfg_base))
+    for state_base in state_bases:
+        bases.append(_http_base_to_ws_base(state_base))
 
     if not runtime_port_base and not state_bases:
         active_runtime_base = _discover_active_runtime_local_base()
@@ -7159,8 +7173,7 @@ class BootstrapService:
                                                             # short and, critically, run them off the event loop
                                                             # thread because the local hub HTTP server lives in this
                                                             # same process.
-                                                            is_probe = path in ("/api/node/status", "/api/ping", "/healthz")
-                                                            timeout = (0.5, 1.2) if is_probe else (1.5, 2.5)
+                                                            timeout = _hub_route_local_http_timeout(path)
                                                             resp = sess.request(method, url_try, data=body, headers=h2, timeout=timeout)
                                                             last_exc = None
                                                             break
@@ -7173,6 +7186,12 @@ class BootstrapService:
                                                                     )
                                                                 except Exception:
                                                                     pass
+                                                            if not _hub_route_should_retry_http_upstream_error(
+                                                                method=method,
+                                                                path=path,
+                                                                error_kind=type(e).__name__,
+                                                            ):
+                                                                break
                                                     if resp is None:
                                                         raise last_exc or RuntimeError("http upstream failed")
                                                     raw = resp.content or b""

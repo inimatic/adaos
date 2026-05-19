@@ -169,7 +169,7 @@ def test_build_hub_route_ws_bases_ignores_remote_hub_url(monkeypatch) -> None:
     ]
 
 
-def test_build_hub_route_ws_bases_prefers_local_env_base(monkeypatch) -> None:
+def test_build_hub_route_ws_bases_prefers_process_runtime_port(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_SELF_BASE_URL", "http://127.0.0.1:8779")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8780")
     monkeypatch.setattr(bootstrap_mod, "_discover_active_runtime_local_base", lambda **_: None)
@@ -177,11 +177,55 @@ def test_build_hub_route_ws_bases_prefers_local_env_base(monkeypatch) -> None:
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
     assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg) == [
-        "ws://127.0.0.1:8779",
         "ws://127.0.0.1:8780",
+        "ws://127.0.0.1:8779",
         "ws://127.0.0.1:8778",
         "ws://127.0.0.1:8777",
     ]
+
+
+def test_build_hub_route_http_bases_prefers_process_runtime_port_over_stale_state(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_active_runtime_state_local_http_bases",
+        lambda ctx=None: ["http://127.0.0.1:8778"],
+    )
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_discover_active_runtime_local_base",
+        lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+    )
+
+    cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
+
+    assert bootstrap_mod._build_hub_route_http_bases(
+        path_norm="/api/tools/call",
+        method="POST",
+        cfg=cfg,
+    )[:2] == [
+        "http://127.0.0.1:8777",
+        "http://127.0.0.1:8778",
+    ]
+
+
+def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
+    assert bootstrap_mod._hub_route_local_http_timeout("/api/tools/call") == (1.5, 55.0)
+    assert bootstrap_mod._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
+
+
+def test_hub_route_tools_call_does_not_retry_after_read_timeout() -> None:
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/tools/call",
+        error_kind="ReadTimeout",
+    ) is False
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/tools/call",
+        error_kind="ConnectionError",
+    ) is True
 
 
 def test_build_hub_route_http_bases_prefers_supervisor_active_runtime(monkeypatch) -> None:
