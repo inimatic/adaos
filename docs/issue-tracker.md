@@ -1879,7 +1879,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 56%. First implementation slices landed the ABI/schema
+Overall completion: 58%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1905,7 +1905,10 @@ ETag/`If-None-Match`, so polling clients can avoid rebuilding or downloading
 the compatibility summary when status cards are unchanged. The Angular
 communication runtime now uses that contract: it probes `mode=thin` with a
 cached ETag and only downloads `mode=full` when the status snapshot changed or
-when the thin response cannot be interpreted as a runtime snapshot.
+when the thin response cannot be interpreted as a runtime snapshot. Summary
+responses now expose cache/body-size headers and
+`/api/node/reliability/summary/metrics` so soak checks can count thin/full
+responses, bytes, and `304` reuse.
 
 Problem statement:
 
@@ -2351,7 +2354,9 @@ Human verification:
 
 #### STATUS-008: Acceptance and observability
 
-Status: planned.
+Status: in progress.
+
+Progress: 20%.
 
 Acceptance criteria:
 
@@ -2370,7 +2375,7 @@ Acceptance criteria:
 
 Actions:
 
-- [ ] Add log/metric for reliability summary mode, response bytes, and
+- [x] Add log/metric for reliability summary mode, response bytes, and
   unchanged/304 counts.
 - [ ] Add status registry diagnostics to the final soak analysis.
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
@@ -2381,6 +2386,16 @@ Actions:
   work is to run the soak and record the result. Yjs projection pressure now
   also reports the last projection route/surface through governance and
   `yjs_pressure.last`.
+
+Human verification:
+
+- Request `GET /api/node/reliability/summary?mode=thin&webspace_id=desktop`
+  and check `X-AdaOS-Summary-Mode`, `X-AdaOS-Summary-Cache`, and
+  `X-AdaOS-Summary-Body-Bytes`.
+- Repeat with `If-None-Match`; the `304` response should report
+  `X-AdaOS-Summary-Cache: hit` and body bytes `0`.
+- Request `GET /api/node/reliability/summary/metrics` and verify
+  `metrics.modes.thin.not_modified_total` increases during unchanged polling.
 - [ ] Run a 180-second acceptance with browser attached.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.

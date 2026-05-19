@@ -6,6 +6,7 @@ import logging
 import gc
 import os
 import time
+import threading
 import tracemalloc
 from functools import partial
 from typing import Any, Mapping, Optional
@@ -90,6 +91,19 @@ from adaos.services.yjs.webspace import coerce_webspace_id, default_webspace_id
 
 router = APIRouter()
 _log = logging.getLogger("adaos.api.node_api")
+
+_RELIABILITY_SUMMARY_METRICS_LOCK = threading.RLock()
+_RELIABILITY_SUMMARY_METRICS: dict[str, Any] = {
+    "schema": "adaos.reliability_summary.metrics.v1",
+    "started_at": time.time(),
+    "updated_at": None,
+    "total": {
+        "response_total": 0,
+        "not_modified_total": 0,
+        "body_bytes_total": 0,
+    },
+    "modes": {},
+}
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -333,6 +347,50 @@ def _etag_matches(header: str | None, etag: str) -> bool:
     return "*" in tokens or etag in tokens
 
 
+def _summary_body_size(payload: Mapping[str, Any]) -> int:
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+        return len(raw.encode("utf-8"))
+    except Exception:
+        return 0
+
+
+def _record_reliability_summary_metric(
+    *,
+    mode: str,
+    status_code: int,
+    body_bytes: int,
+    cache_hit: bool,
+    etag: str,
+) -> None:
+    now = time.time()
+    mode_id = str(mode or "unknown").strip() or "unknown"
+    with _RELIABILITY_SUMMARY_METRICS_LOCK:
+        total = _coerce_dict(_RELIABILITY_SUMMARY_METRICS.get("total"))
+        total["response_total"] = int(total.get("response_total") or 0) + 1
+        total["not_modified_total"] = int(total.get("not_modified_total") or 0) + (1 if status_code == 304 else 0)
+        total["body_bytes_total"] = int(total.get("body_bytes_total") or 0) + max(0, int(body_bytes or 0))
+        modes = _coerce_dict(_RELIABILITY_SUMMARY_METRICS.get("modes"))
+        row = _coerce_dict(modes.get(mode_id))
+        row["response_total"] = int(row.get("response_total") or 0) + 1
+        row["not_modified_total"] = int(row.get("not_modified_total") or 0) + (1 if status_code == 304 else 0)
+        row["body_bytes_total"] = int(row.get("body_bytes_total") or 0) + max(0, int(body_bytes or 0))
+        row["last_status_code"] = int(status_code)
+        row["last_body_bytes"] = max(0, int(body_bytes or 0))
+        row["last_cache_hit"] = bool(cache_hit)
+        row["last_etag"] = str(etag or "").strip() or None
+        row["last_at"] = now
+        modes[mode_id] = row
+        _RELIABILITY_SUMMARY_METRICS["total"] = total
+        _RELIABILITY_SUMMARY_METRICS["modes"] = modes
+        _RELIABILITY_SUMMARY_METRICS["updated_at"] = now
+
+
+def _reliability_summary_metrics_snapshot() -> dict[str, Any]:
+    with _RELIABILITY_SUMMARY_METRICS_LOCK:
+        return json.loads(json.dumps(_RELIABILITY_SUMMARY_METRICS, ensure_ascii=True, default=str))
+
+
 def _json_response_with_etag(
     payload: dict[str, Any],
     *,
@@ -340,12 +398,30 @@ def _json_response_with_etag(
     mode: str,
 ) -> Response:
     etag = _summary_etag(payload)
+    cache_hit = _etag_matches(if_none_match, etag)
+    body_bytes = 0 if cache_hit else _summary_body_size(payload)
     headers = {
         "Cache-Control": "no-cache",
         "ETag": etag,
         "X-AdaOS-Summary-Mode": mode,
+        "X-AdaOS-Summary-Cache": "hit" if cache_hit else "miss",
+        "X-AdaOS-Summary-Body-Bytes": str(body_bytes),
     }
-    if _etag_matches(if_none_match, etag):
+    _record_reliability_summary_metric(
+        mode=mode,
+        status_code=304 if cache_hit else 200,
+        body_bytes=body_bytes,
+        cache_hit=cache_hit,
+        etag=etag,
+    )
+    _log.debug(
+        "reliability summary response mode=%s status=%s bytes=%s cache=%s",
+        mode,
+        304 if cache_hit else 200,
+        body_bytes,
+        "hit" if cache_hit else "miss",
+    )
+    if cache_hit:
         return Response(status_code=304, headers=headers)
     return JSONResponse(content=payload, headers=headers)
 
@@ -1560,6 +1636,14 @@ async def node_reliability_summary(
         if_none_match=if_none_match,
         mode=str(payload["mode"]),
     )
+
+
+@router.get("/reliability/summary/metrics", dependencies=[Depends(require_token)])
+async def node_reliability_summary_metrics() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "metrics": _reliability_summary_metrics_snapshot(),
+    }
 
 
 @router.get("/status/cards", dependencies=[Depends(require_token)])
