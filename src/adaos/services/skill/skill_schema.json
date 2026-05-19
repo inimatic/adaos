@@ -113,7 +113,8 @@
 				"surface": { "type": "string", "minLength": 1 },
 				"route": {
 					"type": "string",
-					"enum": ["yjs", "stream", "tool", "details", "tool/details", "skill-local", "disk", "360log", "disk/360log"]
+					"enum": ["yjs", "stream", "tool", "details", "tool/details", "skill-local", "disk", "360log", "disk/360log"],
+					"description": "Status cards/statusPlane are compact indexes over these routes, not valid data routes."
 				},
 				"owner": { "type": "string", "minLength": 1 },
 				"path": { "type": "string", "minLength": 1 },

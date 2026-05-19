@@ -1878,6 +1878,10 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
         "cardCount",
         "staleCount",
         "derivedCardCount",
+        "maxCardBytes",
+        "maxCardBytesObserved",
+        "oversizedCardTotal",
+        "lastOversizedCard",
         "lastChangedAt",
     }
     assert payload["statusPlane"]["cards"][0]["detailsRef"]["receiver"] == "infrastate.runtime"

@@ -188,6 +188,12 @@ must not.
   low-level repair operation.
 - A forced refresh may force recomputation, but it must not force an identical
   Yjs write.
+- Status cards are not data transport. They may carry compact state,
+  freshness, guard context, and references, but live rows, inventories,
+  operation tables, logs, and diagnostic tails must stay in declared Yjs,
+  stream, or details routes.
+- `statusPlane` and thin reliability summaries are bootstrap/migration indexes,
+  not legal `data_routes[*].route` values.
 - Stream snapshots are not durable Yjs projections.
 - A stream request for one receiver must not rebuild every skill section by
   default.
@@ -315,6 +321,9 @@ diagnostic surface from becoming a primary Yjs pressure source.
   hits, and `304` reuse for soak verification
 - [x] `status.hot_event_budget`: add a shared debounce/window budget helper
   for hot event-to-status paths before skill-specific migrations
+- [x] `status.compact_boundary_diagnostics`: expose max card bytes, observed
+  max card bytes, oversized card count, and last oversized card identity so
+  accidental use of status cards as payload transport is visible
 
 ### 4. `browsers_skill` Migration
 
