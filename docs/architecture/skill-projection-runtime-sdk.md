@@ -54,6 +54,29 @@ The SDK must not silently reroute a skill's data between Yjs and streams.
 Runtime guardrails may warn, throttle, block, quarantine, and log pressure, but
 route ownership remains a design-time skill responsibility.
 
+## Pressure-Fixture Policy
+
+Some existing skills are intentionally left noisy during the core guard rollout.
+They are not the target behavior, but they are valuable pressure fixtures for
+proving that the shared runtime survives inefficient skill code.
+
+Until the guard-observability acceptance checks pass, `browsers_skill`,
+`infrastate_skill`, `infrascope_skill`, and similarly chatty operational skills
+should be treated as load generators before they are treated as optimization
+targets. The core must:
+
+- keep the runtime alive and the primary desktop recoverable
+- attribute pressure to skill, route, receiver/path, webspace, and observed
+  owner bucket
+- warn, throttle, block, or quarantine with explicit TTL and retry context
+- keep compact operator status available when allowed by policy
+- preserve raw evidence in logs, guard cards, streams, or 360log-style
+  diagnostics
+
+Do not hide a core weakness by prematurely quieting the skill. Skill migration
+starts after the core can prove it protected itself and logged enough evidence
+to send the skill back for design-time route correction.
+
 ## Core Concepts
 
 ### Projection Slot
@@ -213,7 +236,10 @@ must not.
 ### `browsers_skill`
 
 `browsers_skill` is the first compatibility-era reference for the desired
-shape:
+shape, but during the current guard rollout it also remains a deliberate
+pressure fixture. Its `browser.session.changed` and device/session refresh paths
+are useful for proving quarantine, route attribution, and hot-event budgeting
+before the skill is fully optimized.
 
 - small projection slots instead of one `data/browsers` object
 - per-slot fingerprint suppression
@@ -227,7 +253,10 @@ onto the shared helper layer.
 ### `infrastate_skill`
 
 `infrastate_skill` should be the first heavy operational-skill migration after
-the SDK slice exists.
+the SDK slice exists and the core guard evidence is good enough to trust. Until
+then, its broad runtime/update/browser event subscriptions remain a useful
+pressure source for validating Yjs owner guards, stream guards, status cards,
+and quarantine diagnostics.
 
 The earlier migration step split one large durable `infrastate.snapshot` into
 multiple Yjs section slots. That was useful as a compatibility stabilizer, but
