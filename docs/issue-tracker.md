@@ -1892,7 +1892,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 61%. First implementation slices landed the ABI/schema
+Overall completion: 63%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1925,6 +1925,14 @@ responses, bytes, and `304` reuse. Status registry diagnostics now expose the
 status-card compact-boundary budget (`maxCardBytes`, observed max bytes, and
 oversized-card counters) so misuse of `statusPlane` as a data payload route is
 visible during reviews and soaks.
+The `infrastate_skill` migration now has a first data-route plan in
+`docs/architecture/infrastate-data-route-plan.md`, plus matching
+`skill.yaml:data_routes` and `webui.json` receiver budget/guard metadata in the
+workspace skill; this is intentionally metadata-first and does not move runtime
+payloads yet. Validation also restored the intended pressure split inside
+`infrastate_skill`: Yjs `block` stops primary-doc projection, while Yjs
+`throttle` stretches the projection interval and still lets stream snapshots
+serve current variables.
 Checkpoint on `.30` confirmed a boundary bug: Yjs owner quarantine had been
 blocking stream-control subscription handlers, leaving `infrastate.skills` and
 `infrastate.scenarios` in their loading initial state. The core subscription
@@ -2227,7 +2235,9 @@ Human verification:
 
 #### STATUS-004: Convert `infrastate_skill` to the shared status/data-route plane
 
-Status: planned.
+Status: in progress.
+
+Progress: 28%.
 
 Current useful pattern and target:
 
@@ -2246,9 +2256,16 @@ Current useful pattern and target:
 
 Actions:
 
-- [ ] Write the `infrastate` data-route plan before code changes, listing every
+- [x] Write the `infrastate` data-route plan before code changes, listing every
   widget, modal section, current stream receiver, Yjs branch, detail tool, and
   expected budget.
+- [x] Add `skill.yaml:data_routes` for current browser-facing `infrastate`
+  surfaces without changing runtime behavior.
+- [x] Add `webui.json` stream receiver budget, route, and guard visibility
+  metadata for current `infrastate.*` receivers.
+- [x] Preserve the YJS|Stream pressure split in `infrastate_skill`: `block`
+  stops Yjs projection, `throttle` uses the longer Yjs projection interval, and
+  stream snapshots continue to publish through the stream guard.
 - [ ] Shrink primary Yjs usage to minimal bootstrap/control state and remove
   variable/diagnostic tables that can be served by streams or details.
 - [ ] Move current operator variables to replace-mode stream receivers with
@@ -2267,6 +2284,19 @@ Actions:
 - [ ] Confirm existing `infrastate` UI still receives current streams.
 - [ ] Add regression tests around unchanged snapshot/card dedupe, stream
   resubscribe recovery, and guard-visible suppression/quarantine.
+
+Human verification:
+
+- Run `adaos skill validate infrastate_skill`; manifest and `webui.json`
+  metadata should validate without behavior changes.
+- Under synthetic Yjs `policy_state=throttle`, the first compact Yjs projection
+  may write, close repeats are rate-limited, and stream snapshots still publish.
+- Open `[homepoint] Infrastructure State`; installed skills/scenarios should
+  still first paint from `initialState` and then fill from
+  `infrastate.skills` / `infrastate.scenarios` streams.
+- Request `GET /api/node/reliability/summary?mode=thin&webspace_id=desktop`;
+  `statusPlane.diagnostics.oversizedCardTotal` should remain `0` during normal
+  use.
 
 #### STATUS-005: Convert `infrascope_skill` to the shared status plane
 
