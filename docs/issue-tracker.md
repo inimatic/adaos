@@ -1922,7 +1922,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 75%. First implementation slices landed the ABI/schema
+Overall completion: 76%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -2599,7 +2599,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 90%.
+Progress: 92%.
 
 Acceptance criteria:
 
@@ -2978,6 +2978,13 @@ Actions:
   the remaining bypass can also come from runtime `/api/admin/update/start`
   callers, so the runtime endpoint is now guarded as a supervisor-first shim on
   managed autostart.
+- Rollout of `d954e540904d429f53195e94a5466b2c63b0e3a0` converged on both
+  `.30` and `.40` to slot `B`. `.30` required clearing the stale runtime-only
+  countdown once, then completed root promotion and restart; `.40` completed
+  via supervisor prepare/launch. A direct same-target probe against runtime
+  `/api/admin/update/start` on both stands returned `_served_by=supervisor`,
+  `deduplicated=True`, and `state=succeeded`, proving the compatibility shim no
+  longer creates countdown-only pending restarts on managed autostart.
 
 Human verification:
 
@@ -3005,10 +3012,10 @@ Human verification:
   a docs-only update should either converge or remain active until real
   transition evidence appears, not fail immediately from an old targetless
   `succeeded/validate`.
-- [ ] Verify the member-follow supervisor-route fix on `.30` and `.40`; a
+- [x] Verify the member-follow supervisor-route fix on `.30` and `.40`; a
   member-follow docs-only update should prepare the inactive slot before any
   runtime restart.
-- [ ] Verify the runtime admin compatibility shim on `.30` and `.40`; direct
+- [x] Verify the runtime admin compatibility shim on `.30` and `.40`; direct
   `/api/admin/update/start` on managed autostart should return a supervisor
   response and should not create a countdown-only pending restart.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
