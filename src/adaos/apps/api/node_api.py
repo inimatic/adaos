@@ -84,6 +84,7 @@ from adaos.services.system_model.service import (
     current_topology_projection,
     route_info,
 )
+from adaos.services.system_model.projections import compact_overview_projection_dict
 from adaos.services.status.guard_cards import guard_status_cards_from_runtime
 from adaos.services.yjs.doc import async_read_ydoc
 from adaos.services.yjs.store import get_ystore_for_webspace
@@ -1533,9 +1534,14 @@ async def node_control_plane_reliability_projection(webspace_id: str | None = No
 
 
 @router.get("/control-plane/projections/overview", dependencies=[Depends(require_token)])
-async def node_control_plane_overview_projection(webspace_id: str | None = None) -> dict[str, Any]:
+async def node_control_plane_overview_projection(webspace_id: str | None = None, mode: str = "compact") -> dict[str, Any]:
     projection = current_overview_projection(webspace_id=webspace_id)
-    return {"ok": True, "projection": projection.to_dict()}
+    token = str(mode or "compact").strip().lower()
+    if token in {"compact", "thin"}:
+        return {"ok": True, "mode": "compact", "projection": compact_overview_projection_dict(projection)}
+    if token in {"full", "compat"}:
+        return {"ok": True, "mode": "full", "projection": projection.to_dict()}
+    raise HTTPException(status_code=400, detail="mode must be compact or full")
 
 
 @router.get("/control-plane/projections/inventory", dependencies=[Depends(require_token)])

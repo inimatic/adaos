@@ -1892,7 +1892,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 65%. First implementation slices landed the ABI/schema
+Overall completion: 67%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1943,7 +1943,10 @@ The same checkpoint identified the next `infrascope` pressure source:
 payload in about 3.4 seconds because overview rows embedded full object
 details, especially member/device `actual_state`. The current slice keeps
 overview rows as compact route references and leaves full object state behind
-inspector/detail streams.
+inspector/detail streams. The follow-up core slice makes the overview API
+compact by default: first-paint reads no longer serialize top-level `objects`,
+heavy `details`, or the duplicated `representations.operator`; explicit
+`mode=full` remains available for debugging.
 
 Problem statement:
 
@@ -2308,7 +2311,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 18%.
+Progress: 32%.
 
 Current useful pattern:
 
@@ -2325,17 +2328,25 @@ Actions:
   `health_strip` details dominated by member/device `actual_state`.
 - [x] Stop embedding heavy object details in canonical overview rows; use
   `details_ref` / object ids so Overview can remain a compact index.
+- [x] Make the control-plane Overview API compact by default, omitting
+  first-paint `objects`, heavy details, and duplicated
+  `representations.operator`; keep `mode=full` as an explicit debug route.
 - [x] Strip legacy heavy `details` fields in `infrascope_skill` overview rows
   before they enter stream/tool payloads.
 - [x] Declare first `infrascope_skill` data routes and receiver budgets for
   summary, overview streams, inventory, operations, and inspector streams.
+- [x] Route `webio.stream.snapshot.requested` for overview, inventory,
+  operations, and inspector receivers through per-receiver compact builders
+  before falling back to the monolithic snapshot cache.
 - [ ] Identify `infrascope` status cards: overview, active incidents,
   inventory, browser/runtime state, registry, and operations.
 - [ ] Publish cards through the shared SDK helpers.
 - [ ] Keep overview/inventory/inspector streams as details targets.
 - [ ] Ensure inspector data stays lazy and is not embedded in status cards.
-- [ ] Add tests proving the overview badge can update without full inventory
-  reconstruction.
+- [x] Add tests proving overview/inventory stream snapshots can publish without
+  building a full Infrascope snapshot.
+- [ ] Add byte-size instrumentation for compact overview sections and direct
+  receiver builders.
 
 Human verification:
 
@@ -2343,9 +2354,10 @@ Human verification:
   summary and fill health/incidents/operations from streams without a multi-MB
   overview payload.
 - Recheck `.30`: `GET /api/node/control-plane/projections/overview` should be
-  materially smaller than the 2026-05-19 baseline, and stream guard counters
-  should still show `infrascope.overview.*` as stream traffic rather than Yjs
-  pressure.
+  materially smaller than the 2026-05-19 baseline. Use `mode=full` only when
+  intentionally debugging raw canonical object state.
+- Reopen Overview after reconnect; `infrascope.overview.*` streams should fill
+  without waiting for the full `infrascope.snapshot` rebuild.
 
 #### STATUS-005B: Convert `browsers_skill` after core guard observability
 

@@ -3,8 +3,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
-import threading
-import time
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -424,6 +422,7 @@ def test_infrascope_stream_snapshot_request_publishes_requested_receiver(monkeyp
             }
         },
     )
+    monkeypatch.setattr(mod, "list_inventory", lambda kind, webspace_id=None: [{"id": "member-1"}])
 
     mod.on_webio_stream_snapshot_requested(
         {
@@ -500,57 +499,91 @@ def test_infrascope_large_detail_stream_payload_is_truncated(monkeypatch):
     assert "too large" in payload["warning"]
 
 
-def test_infrascope_stream_snapshot_requests_coalesce_initial_snapshot(monkeypatch):
+def test_infrascope_stream_snapshot_request_uses_direct_receiver_builders(monkeypatch):
     mod = _load_infrascope_module()
 
-    published: list[str] = []
-    started = threading.Event()
-    release = threading.Event()
-    calls = {"total": 0}
+    published: list[tuple[str, object]] = []
+    calls = {"snapshot": 0}
 
     monkeypatch.setattr(
         mod,
         "stream_publish",
-        lambda receiver, data=None, **kwargs: published.append(receiver) or {"ok": True},
+        lambda receiver, data=None, **kwargs: published.append((receiver, data)) or {"ok": True},
     )
     monkeypatch.setattr(mod, "_last_good_snapshots", {})
+    monkeypatch.setattr(mod, "list_inventory", lambda kind, webspace_id=None: [{"id": "member-1", "details": {"large": "payload"}}])
+    monkeypatch.setattr(mod, "_operation_rows", lambda webspace_id=None: [{"id": "op-1"}])
 
     def _fake_snapshot_or_fallback(webspace_id=None, task_goal=None):
-        calls["total"] += 1
-        started.set()
-        release.wait(timeout=2.0)
-        snapshot = {
-            "inventory": {"members": [{"id": "member-1"}]},
-            "operations": {"items": [{"id": "op-1"}]},
-            "inspectors": {},
-        }
-        mod._last_good_snapshots[mod._snapshot_cache_key(webspace_id=webspace_id)] = snapshot
-        return snapshot
+        calls["snapshot"] += 1
+        raise AssertionError("direct stream receivers must not build a full snapshot")
 
     monkeypatch.setattr(mod, "_snapshot_or_fallback", _fake_snapshot_or_fallback)
 
-    first = threading.Thread(
-        target=mod.on_webio_stream_snapshot_requested,
-        args=({"webspace_id": "ws-1", "receiver": "infrascope.inventory.members"},),
+    mod.on_webio_stream_snapshot_requested(
+        {"webspace_id": "ws-1", "receiver": "infrascope.inventory.members"},
     )
-    second = threading.Thread(
-        target=mod.on_webio_stream_snapshot_requested,
-        args=({"webspace_id": "ws-1", "receiver": "infrascope.operations.active"},),
+    mod.on_webio_stream_snapshot_requested(
+        {"webspace_id": "ws-1", "receiver": "infrascope.operations.active"},
     )
 
-    first.start()
-    assert started.wait(timeout=1.0)
-    second.start()
-    time.sleep(0.05)
-    release.set()
-    first.join(timeout=1.0)
-    second.join(timeout=1.0)
-
-    assert calls["total"] == 1
-    assert sorted(published) == [
+    assert calls["snapshot"] == 0
+    assert [item[0] for item in published] == [
         "infrascope.inventory.members",
         "infrascope.operations.active",
     ]
+    inventory_payload = published[0][1]
+    assert inventory_payload == [
+        {
+            "id": "member-1",
+            "object_id": "member-1",
+            "details_receiver": "infrascope.inspector.member-1",
+            "has_details": True,
+        }
+    ]
+
+
+def test_infrascope_overview_stream_snapshot_uses_compact_direct_builder(monkeypatch):
+    mod = _load_infrascope_module()
+
+    local = _FakeCanonicalObject("hub:local", "hub", "Local hub", status="online")
+    member = _FakeCanonicalObject("member-1", "member", "Kitchen member", status="warning", summary="link flaps")
+    projection = SimpleNamespace(
+        subject=local,
+        objects=[member],
+        context={
+            "health_strip": [
+                {
+                    "id": "health:members",
+                    "object_id": "member-1",
+                    "title": "Members",
+                    "summary": "Issues: Kitchen member",
+                    "details": [{"large": "payload"}],
+                }
+            ],
+        },
+    )
+    published: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(mod, "current_overview_projection", lambda webspace_id=None: projection)
+    monkeypatch.setattr(
+        mod,
+        "stream_publish",
+        lambda receiver, data=None, **kwargs: published.append((receiver, data)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        mod,
+        "_snapshot_or_fallback",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("overview stream must not build full snapshot")),
+    )
+
+    mod.on_webio_stream_snapshot_requested(
+        {"webspace_id": "ws-1", "receiver": "infrascope.overview.health_strip"},
+    )
+
+    assert published[0][0] == "infrascope.overview.health_strip"
+    assert "details" not in published[0][1][0]
+    assert published[0][1][0]["details_receiver"] == "infrascope.inspector.member-1"
 
 
 def test_infrascope_adds_skill_migration_operation_row(monkeypatch):

@@ -170,6 +170,12 @@ that heavier data on demand. This keeps first paint fast and preserves the
 Yjs/stream split: Yjs carries durable summary state, streams carry live rows,
 and details routes carry cold or large object context.
 
+The node control-plane Overview API follows the same rule. Its default response
+is compact and omits top-level `objects` plus the duplicated
+`representations.operator` block; callers that need raw canonical object state
+must ask for the explicit full/debug mode. Browser first paint must consume the
+compact shape and stream receivers, not the full canonical dump.
+
 ### Object Projection
 
 Standard typed envelope for a single object.

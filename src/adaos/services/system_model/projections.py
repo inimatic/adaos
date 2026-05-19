@@ -293,6 +293,22 @@ def _object_details_ref(obj: CanonicalObject) -> dict[str, Any]:
     return compact_mapping({"kind": "control_plane_object", "object_id": token})
 
 
+def _object_ref(obj: Any) -> dict[str, Any]:
+    token = str(getattr(obj, "id", "") or "").strip()
+    if not token:
+        return {}
+    return compact_mapping(
+        {
+            "id": token,
+            "kind": str(getattr(obj, "kind", "") or "").strip(),
+            "title": str(getattr(obj, "title", "") or token).strip() or token,
+            "status": _status_token(getattr(obj, "status", None)),
+            "summary": str(getattr(obj, "summary", "") or "").strip(),
+            "details_ref": _object_details_ref(obj),
+        }
+    )
+
+
 def _collection_details_ref(bucket: str, items: list[CanonicalObject]) -> dict[str, Any]:
     object_ids = [str(getattr(item, "id", "") or "").strip() for item in items]
     object_ids = [item_id for item_id in object_ids if item_id]
@@ -1116,6 +1132,32 @@ def canonical_overview_projection(
     )
 
 
+def compact_overview_projection_dict(projection: CanonicalProjection) -> dict[str, Any]:
+    """Return the first-paint/control-plane overview without heavy object dumps."""
+    objects = list(getattr(projection, "objects", []) or [])
+    incidents = list(getattr(projection, "incidents", []) or [])
+    representations = coerce_mapping(getattr(projection, "representations", {}))
+    payload = compact_mapping(
+        {
+            "id": getattr(projection, "id", ""),
+            "kind": getattr(projection, "kind", "overview"),
+            "title": getattr(projection, "title", "Overview"),
+            "subject": _object_ref(getattr(projection, "subject", None)),
+            "summary": getattr(projection, "summary", None),
+            "context": coerce_mapping(getattr(projection, "context", {})),
+            "object_refs": [_object_ref(item) for item in objects],
+            "object_total": len(objects) + 1,
+            "incident_total": len(incidents),
+            "representations": compact_mapping({"llm": coerce_mapping(representations.get("llm"))}),
+        }
+    )
+    audit = getattr(projection, "audit", None)
+    if audit is not None:
+        audit_dict = getattr(audit, "to_dict", None)
+        payload["audit"] = audit_dict() if callable(audit_dict) else coerce_mapping(audit)
+    return payload
+
+
 def canonical_object_projection(
     subject: CanonicalObject,
     objects: list[CanonicalObject],
@@ -1409,4 +1451,5 @@ __all__ = [
     "canonical_task_packet",
     "canonical_topology_projection",
     "canonical_projection_from_reliability_snapshot",
+    "compact_overview_projection_dict",
 ]
