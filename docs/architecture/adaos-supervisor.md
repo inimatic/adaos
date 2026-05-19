@@ -407,7 +407,17 @@ Rules:
 - root promotion is allowed only after the candidate is proven in a slot
 - production runtime still restarts from the active slot after root promotion
 - root promotion should use the same validated candidate source, not a fresh mutable branch tip
-- current implementation promotes bootstrap-managed files into the explicit validated root target recorded for that slot, writes a backup snapshot plus restore metadata, refreshes the autostart wrapper so the next supervisor process uses the stable root checkout/root `.venv`, records an explicit supervisor attempt state while waiting for restart, and on autostart-managed Linux deployments requests the service restart automatically so the new supervisor/bootstrap code becomes active
+- current implementation promotes bootstrap-managed and operator-control files
+  into the explicit validated root target recorded for that slot, writes a
+  backup snapshot plus restore metadata, refreshes the autostart wrapper so the
+  next supervisor process uses the stable root checkout/root `.venv`, records
+  an explicit supervisor attempt state while waiting for restart, and on
+  autostart-managed Linux deployments requests the service restart
+  automatically so the new supervisor/bootstrap code becomes active
+- root promotion checks effective root parity, not only the candidate manifest:
+  if the current bootstrap/operator-control path list changes between
+  rollouts, stale root files such as `adaos node` diagnostics are detected and
+  promoted before acceptance tooling is trusted
 - if another transition request arrives before that restart completes, it is queued as `subsequent_transition` on the supervisor attempt instead of being dropped or run concurrently
 - manual `adaos autostart update-complete` remains the compatibility and retry path for older supervisors or environments where self-requested restart is unavailable
 

@@ -181,6 +181,54 @@ def test_projection_runtime_coalesces_concurrent_refreshes() -> None:
     assert {first.coalesced, second.coalesced} == {False, True}
 
 
+def test_projection_runtime_records_event_pressure_counters() -> None:
+    subnet = _FakeSubnet()
+    build_calls = 0
+
+    async def _run() -> dict[str, object]:
+        nonlocal build_calls
+
+        async def _build(_context):
+            nonlocal build_calls
+            build_calls += 1
+            await asyncio.sleep(0.01)
+            return {"build_calls": build_calls}
+
+        runtime = ProjectionRuntime(
+            "browsers_skill",
+            ctx_subnet=subnet,
+            projections=[
+                ProjectionSlot(
+                    "browsers.summary",
+                    build=_build,
+                    events=("browser.*",),
+                )
+            ],
+        )
+        await runtime.refresh_dirty("skills.registry.changed", webspace_id="desktop")
+        await asyncio.gather(
+            runtime.refresh_dirty("browser.session.changed", webspace_id="desktop"),
+            runtime.refresh_dirty("browser.session.changed", webspace_id="desktop"),
+        )
+        return runtime.diagnostics_snapshot()
+
+    diagnostics = asyncio.run(_run())
+    by_event = diagnostics["by_event"]
+
+    assert diagnostics["refresh_requested_total"] == 3
+    assert diagnostics["refresh_started_total"] == 1
+    assert diagnostics["refresh_coalesced_total"] == 1
+    assert diagnostics["refresh_no_dirty_total"] == 1
+    assert diagnostics["refresh_superseded_total"] == 0
+    assert diagnostics["refresh_dropped_total"] == 0
+    assert by_event["skills.registry.changed"]["no_dirty_total"] == 1
+    assert by_event["browser.session.changed"]["requested_total"] == 2
+    assert by_event["browser.session.changed"]["started_total"] == 1
+    assert by_event["browser.session.changed"]["coalesced_total"] == 1
+    assert by_event["browser.session.changed"]["last_sections"] == ["browsers.summary"]
+    assert diagnostics["last_refresh_event"]["topic"] == "browser.session.changed"
+
+
 def test_section_cache_expires_and_invalidates_by_webspace() -> None:
     clock = [10.0]
     cache = SectionCache(default_ttl_s=5.0, max_entries=4, clock=lambda: clock[0])

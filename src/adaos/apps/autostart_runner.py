@@ -35,9 +35,9 @@ from adaos.services.core_update import (
     clear_plan,
     execute_pending_update,
     finalize_runtime_boot_status,
-    manifest_requires_root_promotion,
     read_plan,
     read_status,
+    resolved_root_promotion_requirement,
     rollback_installed_skill_runtimes,
     write_status,
 )
@@ -882,7 +882,7 @@ def _launch_active_slot_if_needed(args: argparse.Namespace, *, host: str, port: 
                         },
                     }
                 if ok:
-                    root_promotion_required, bootstrap_update = manifest_requires_root_promotion(manifest)
+                    root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
                     status_state = "validated" if root_promotion_required else "succeeded"
                     status_phase = "root_promotion_pending" if root_promotion_required else "validate"
                     status_message = (
