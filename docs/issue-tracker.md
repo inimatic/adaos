@@ -2501,7 +2501,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 43%.
+Progress: 46%.
 
 Expected behavior:
 
@@ -2532,10 +2532,12 @@ Actions:
 - [x] Keep supervisor transition fallback probing available after the control
   events websocket is lost, so a missed restart event can still become an
   operator-visible informer.
-- [ ] Deduplicate same-target core update requests during countdown/validation
+- [x] Deduplicate same-target core update requests during countdown/validation
   and expose passive-candidate cleanup/reaping state, so manual retries do not
   schedule a redundant same-commit slot transition or leave confusing defunct
-  runner processes in diagnostics.
+  runner processes in diagnostics. Same-target requests are now accepted as
+  deduplicated instead of queued, and same-target queued follow-up transitions
+  are dropped after the completed transition is validated.
 - [ ] Classify member-follow update expiry separately from Yjs/provider
   failures: if a member reports `pending update expired before autostart runner
   picked it up`, hub/status UI must surface stale member-update state and keep

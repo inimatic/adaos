@@ -1391,6 +1391,56 @@ def test_supervisor_start_update_queues_subsequent_transition_while_active(monke
     assert attempt["subsequent_transition_request"]["target_version"] == "1.2.3"
 
 
+def test_supervisor_start_update_deduplicates_same_target_subsequent_transition(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 600.0)
+    write_status(
+        {
+            "state": "countdown",
+            "phase": "countdown",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "671903ec01044b16865a366c81bf27f758823595",
+            "reason": "test.active",
+            "scheduled_for": 630.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "671903e",
+            "reason": "test.active",
+            "scheduled_for": 630.0,
+            "updated_at": 600.0,
+        }
+    )
+
+    result = asyncio.run(
+        manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version="671903ec01044b16865a366c81bf27f758823595",
+            reason="test.same-target",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["deduplicated"] is True
+    assert result["same_target"] is True
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt.get("subsequent_transition") is not True
+    status = read_status()
+    assert status["same_target_subsequent_deduped_reason"] == "active_transition_same_target"
+
+
 def test_supervisor_monitor_runs_subsequent_transition_once_after_completion(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -1438,6 +1488,62 @@ def test_supervisor_monitor_runs_subsequent_transition_once_after_completion(mon
     assert len(calls) == 1
     assert calls[0]["target_version"] == "1.2.3"
     assert calls[0]["bypass_min_period"] is True
+
+
+def test_supervisor_monitor_drops_same_target_subsequent_transition(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 900.0)
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "671903ec01044b16865a366c81bf27f758823595",
+            "updated_at": 899.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "completed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "671903e",
+            "subsequent_transition": True,
+            "subsequent_transition_requested_at": 880.0,
+            "subsequent_transition_request": {
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "671903ec01044b16865a366c81bf27f758823595",
+                "reason": "test.same-target",
+                "countdown_sec": 0.0,
+                "drain_timeout_sec": 10.0,
+                "signal_delay_sec": 0.25,
+                "requested_at": 880.0,
+            },
+            "updated_at": 899.0,
+        }
+    )
+    calls: list[dict[str, object]] = []
+
+    async def _capture(**kwargs):
+        calls.append(dict(kwargs))
+        return {"ok": True, "accepted": True}
+
+    monkeypatch.setattr(manager, "start_update", _capture)
+
+    asyncio.run(manager._maybe_resume_or_continue_transition())
+
+    assert calls == []
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["subsequent_transition"] is False
+    assert not attempt.get("subsequent_transition_request")
+    status = read_status()
+    assert status["subsequent_transition"] is False
+    assert status["same_target_subsequent_deduped_reason"] == "completed_transition_same_target"
 
 
 def test_supervisor_start_update_queues_subsequent_transition(monkeypatch, tmp_path) -> None:

@@ -792,6 +792,65 @@ def _subsequent_transition_request(attempt: dict[str, Any] | None) -> dict[str, 
     return dict(queued) if isinstance(queued, dict) and queued else None
 
 
+def _target_version_matches(left: Any, right: Any) -> bool:
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
+
+
+def _transition_request_same_target(request: dict[str, Any] | None, other: dict[str, Any] | None) -> bool:
+    req = request if isinstance(request, dict) else {}
+    cur = other if isinstance(other, dict) else {}
+    req_action = str(req.get("action") or "update").strip().lower()
+    cur_action = str(cur.get("action") or "update").strip().lower()
+    if req_action != cur_action:
+        return False
+    if _target_version_matches(req.get("target_version"), cur.get("target_version")):
+        return True
+    req_rev = str(req.get("target_rev") or "").strip()
+    cur_rev = str(cur.get("target_rev") or "").strip()
+    return bool(req_rev and cur_rev and req_rev == cur_rev and not req.get("target_version") and not cur.get("target_version"))
+
+
+def _clear_same_target_subsequent_transition(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+    queued: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    now = time.time()
+    attempt_payload = dict(attempt or {})
+    if attempt_payload:
+        attempt_payload["subsequent_transition"] = False
+        attempt_payload["subsequent_transition_requested_at"] = None
+        attempt_payload.pop("subsequent_transition_request", None)
+        attempt_payload["same_target_subsequent_deduped_at"] = now
+        attempt_payload["same_target_subsequent_deduped_reason"] = reason
+        attempt_payload["same_target_subsequent_target_version"] = str(queued.get("target_version") or "")
+        attempt_payload["updated_at"] = now
+        _write_update_attempt(attempt_payload)
+
+    status_payload = dict(status or read_core_update_status() or {})
+    status_payload["subsequent_transition"] = False
+    status_payload["subsequent_transition_requested_at"] = None
+    status_payload["same_target_subsequent_deduped_at"] = now
+    status_payload["same_target_subsequent_deduped_reason"] = reason
+    status_payload["same_target_subsequent_target_version"] = str(queued.get("target_version") or "")
+    for key in (
+        "subsequent_transition_action",
+        "subsequent_transition_target_rev",
+        "subsequent_transition_target_version",
+    ):
+        status_payload.pop(key, None)
+    status_payload["updated_at"] = now
+    return write_core_update_status(status_payload)
+
+
 def _last_update_completion_at(status: dict[str, Any] | None, attempt: dict[str, Any] | None) -> float:
     attempt_map = attempt if isinstance(attempt, dict) else {}
     if str(attempt_map.get("action") or "").strip().lower() == "update":
@@ -5570,6 +5629,32 @@ class SupervisorManager:
                 "last_status": dict(current_status or {}),
             }
         previous = _subsequent_transition_request(attempt)
+        if _transition_request_same_target(queued, attempt) or _transition_request_same_target(queued, current_status):
+            status = dict(current_status or read_core_update_status() or {})
+            status["same_target_subsequent_deduped_at"] = now
+            status["same_target_subsequent_deduped_reason"] = "active_transition_same_target"
+            status["same_target_subsequent_target_version"] = str(queued.get("target_version") or "")
+            status["updated_at"] = now
+            status = write_core_update_status(status)
+            return {
+                "ok": True,
+                "accepted": True,
+                "deduplicated": True,
+                "same_target": True,
+                "status": status,
+                "_served_by": "supervisor",
+            }
+        if previous and _transition_request_same_target(queued, previous):
+            return {
+                "ok": True,
+                "accepted": True,
+                "deferred": True,
+                "deduplicated": True,
+                "same_target": True,
+                "subsequent_transition": True,
+                "status": dict(current_status or read_core_update_status() or {}),
+                "_served_by": "supervisor",
+            }
         if previous:
             queued["first_requested_at"] = _epoch(previous.get("first_requested_at")) or _epoch(previous.get("requested_at")) or now
         attempt["subsequent_transition"] = True
@@ -5666,6 +5751,14 @@ class SupervisorManager:
 
         queued = _subsequent_transition_request(attempt)
         if queued and _is_terminal_update_status(status):
+            if _transition_request_same_target(queued, status) or _transition_request_same_target(queued, attempt):
+                _clear_same_target_subsequent_transition(
+                    status=status,
+                    attempt=attempt,
+                    queued=queued,
+                    reason="completed_transition_same_target",
+                )
+                return
             await self._cleanup_candidate_runtime(reason="supervisor.candidate.before_subsequent_transition")
             await self.start_update(
                 action=str(queued.get("action") or "update"),
