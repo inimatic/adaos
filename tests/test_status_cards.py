@@ -142,6 +142,38 @@ def test_register_status_registry_consumes_sdk_status_events(monkeypatch) -> Non
     assert changed[0].payload["card"]["id"] == "runtime"
 
 
+def test_agent_context_status_registry_registers_bus_subscription(tmp_path) -> None:
+    from adaos.services.eventbus import emit
+    from adaos.services.testing.bootstrap import bootstrap_test_ctx
+
+    slot_dir = tmp_path / ".adaos" / "skills" / "infrastate_skill" / "slots" / "dev"
+    slot_dir.mkdir(parents=True)
+    handle = bootstrap_test_ctx(skill_name="infrastate_skill", skill_slot_dir=slot_dir, secrets={})
+    try:
+        registry = handle.ctx.status_registry
+        emit(
+            handle.ctx.bus,
+            "adaos.status.card.single",
+            {
+                "card": {
+                    "id": "runtime",
+                    "owner": "skill:infrastate_skill",
+                    "kind": "runtime",
+                    "scope": "infrastate",
+                    "status": "ready",
+                }
+            },
+            "test",
+        )
+
+        snapshot = registry.snapshot()
+
+        assert snapshot["total"] == 1
+        assert snapshot["cards"][0]["status"] == "online"
+    finally:
+        handle.teardown()
+
+
 def test_publish_status_stream_publishes_card_and_stream_variable(monkeypatch) -> None:
     bus = LocalEventBus()
     seen_status: list[Event] = []

@@ -529,6 +529,7 @@ async def lifespan(app: FastAPI):
         app.state.core_update_task = None
         app.state.restart_marker = _consume_restart_marker(os.getenv("ADAOS_SELF_BASE_URL"))
         app.state.realtime_sidecar_proc = None
+        app.state.status_registry = app.state.ctx.status_registry
     except Exception:
         pass
 

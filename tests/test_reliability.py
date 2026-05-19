@@ -1606,7 +1606,9 @@ def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) 
 
 
 def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monkeypatch) -> None:
+    from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router
+    from adaos.services.status import StatusRegistry
 
     monkeypatch.setattr(
         "adaos.apps.api.node_api.current_reliability_payload",
@@ -1773,6 +1775,21 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
             }
         },
     )
+    registry = StatusRegistry()
+    registry.publish(
+        {
+            "id": "runtime",
+            "owner": "skill:infrastate_skill",
+            "kind": "runtime",
+            "scope": "infrastate",
+            "status": "warning",
+            "summary": "route reconnecting",
+            "webspace_id": "desktop",
+            "ttl_ms": 30000,
+            "details_ref": {"kind": "stream", "receiver": "infrastate.runtime"},
+        }
+    )
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(status_registry=registry))
 
     app = FastAPI()
     app.dependency_overrides[require_token] = lambda: True
@@ -1800,6 +1817,55 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["eventbusBacklog"]["boundedQueueTotal"] == 2
     assert payload["eventbusBacklog"]["topWebioStreamControls"][0]["superseded"] == 4
     assert payload["phase0Communication"]["tasks"]["nodeBrowserReady"]["status"] == "done"
+    assert payload["statusPlane"]["available"] is True
+    assert payload["statusPlane"]["diagnostics"]["cardCount"] == 1
+    assert payload["statusPlane"]["cards"][0]["detailsRef"]["receiver"] == "infrastate.runtime"
+
+
+def test_node_status_cards_endpoint_reads_registry(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.node_api import require_token, router
+    from adaos.services.status import StatusRegistry
+
+    registry = StatusRegistry()
+    registry.publish(
+        {
+            "id": "runtime",
+            "owner": "skill:infrastate_skill",
+            "kind": "runtime",
+            "scope": "infrastate",
+            "status": "ready",
+            "summary": "ready",
+            "webspace_id": "desktop",
+        }
+    )
+    registry.publish(
+        {
+            "id": "other",
+            "owner": "skill:other",
+            "kind": "runtime",
+            "scope": "infrastate",
+            "status": "ready",
+            "summary": "ready",
+            "webspace_id": "other",
+        }
+    )
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(status_registry=registry))
+
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(router, prefix="/api/node")
+    client = TestClient(app)
+
+    response = client.get("/api/node/status/cards?webspace_id=desktop&owner=skill%3Ainfrastate_skill")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "api.node.status.cards"
+    assert payload["available"] is True
+    assert payload["total"] == 1
+    assert payload["cards"][0]["id"] == "runtime"
+    assert payload["cards"][0]["status"] == "online"
 
 
 def test_state_sync_keeps_ready_semantics_for_bounded_replay_maintenance_pressure() -> None:
