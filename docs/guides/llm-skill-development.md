@@ -61,13 +61,6 @@ visible as a design defect and be returned for repair. It should not be hidden
 by runtime magic that makes the browser appear healthy while the skill keeps
 producing unsafe data.
 
-During guard-rollout work, some known chatty skills may be left unchanged on
-purpose and used as pressure fixtures. In that mode, do not "fix" the skill just
-to make the run quiet. First verify that the core survives, attributes pressure
-to owner/route/receiver, applies warn/throttle/block/quarantine policy, and
-logs retry/TTL context. Skill route repair starts after that evidence is good
-enough to guide the redesign.
-
 ## Required data route plan
 
 Before editing a browser-facing skill, write down the route plan. A concise
