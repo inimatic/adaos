@@ -23,6 +23,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
 SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
     "src/adaos/services/realtime_sidecar.py",
     "src/adaos/services/nats_config.py",
+    "src/adaos/services/nats_errors.py",
     "src/adaos/services/nats_ws_transport.py",
     "src/adaos/services/node_runtime_state.py",
     "src/adaos/services/runtime_dotenv.py",
