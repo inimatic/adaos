@@ -18,7 +18,7 @@ import requests
 from adaos.build_info import BUILD_INFO
 from adaos.services.agent_context import AgentContext
 from adaos.services.core_slots import active_slot, activate_slot, read_slot_manifest, slot_dir
-from adaos.services.runtime_paths import current_state_dir
+from adaos.services.runtime_paths import current_control_python, current_control_repo_root, current_state_dir, is_core_slot_path
 from adaos.services.node_config import load_config
 from adaos.services.settings import Settings, _parse_env_file
 
@@ -108,8 +108,11 @@ def default_spec(
     service_settings = _service_settings(ctx)
     base_dir = service_settings.base_dir
     profile = getattr(service_settings, "profile", getattr(ctx.settings, "profile", "default"))
+    shared_dotenv = _shared_dotenv_path(ctx)
+    repo_root = _repo_root(ctx, shared_dotenv=shared_dotenv)
+    control_python = current_control_python(repo_root)
     argv = (
-        sys.executable,
+        str(control_python),
         "-m",
         "adaos.apps.supervisor",
         "--host",
@@ -122,12 +125,15 @@ def default_spec(
         "ADAOS_PROFILE": str(profile),
         "ADAOS_AUTOSTART_MANAGED": "1",
     }
-    shared_dotenv = _shared_dotenv_path(ctx)
     if shared_dotenv:
         env["ADAOS_SHARED_DOTENV_PATH"] = str(shared_dotenv)
-    repo_root = _repo_root(ctx)
     if repo_root is not None:
         env["ADAOS_ROOT_REPO_ROOT"] = str(repo_root)
+        pythonpath_entries = [str(repo_root / "src")]
+        existing_pythonpath = str(os.getenv("PYTHONPATH") or "").strip()
+        if existing_pythonpath:
+            pythonpath_entries.append(existing_pythonpath)
+        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(entry for entry in pythonpath_entries if str(entry).strip()))
     env.setdefault("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
     env.setdefault("ADAOS_SUPERVISOR_PORT", "8776")
     resolved_token = str(token or _default_control_token() or "").strip()
@@ -161,17 +167,33 @@ def _default_control_token() -> str | None:
     return token or None
 
 
-def _repo_root(ctx: AgentContext) -> Path | None:
+def _repo_root(ctx: AgentContext, *, shared_dotenv: Path | None = None) -> Path | None:
+    context_repo_root = None
+    context_package_path = None
     try:
         repo_root = ctx.paths.repo_root()
-        return repo_root() if callable(repo_root) else repo_root
+        context_repo_root = repo_root() if callable(repo_root) else repo_root
     except Exception:
         try:
             package = ctx.paths.package_path()
-            package = package() if callable(package) else package
-            return Path(package).resolve().parents[1]
+            context_package_path = package() if callable(package) else package
+        except Exception:
+            context_package_path = None
+    resolved = current_control_repo_root(
+        shared_dotenv_path=shared_dotenv,
+        context_repo_root=context_repo_root,
+        context_package_path=context_package_path,
+    )
+    if resolved is not None:
+        return resolved
+    if context_repo_root is not None:
+        return Path(context_repo_root).expanduser().resolve()
+    if context_package_path is not None:
+        try:
+            return Path(context_package_path).expanduser().resolve().parents[1]
         except Exception:
             return None
+    return None
 
 
 def _shared_dotenv_path(ctx: AgentContext) -> Path | None:
@@ -204,7 +226,7 @@ def _bootstrap_core_slot(ctx: AgentContext, *, token: str | None = None) -> None
         raise RuntimeError("cannot initialize core slot: repo root is not available")
     slot = current or "A"
     cmd = [
-        sys.executable,
+        str(current_control_python(repo_root)),
         "-m",
         "adaos.apps.core_update_apply",
         "--slot",
@@ -654,6 +676,35 @@ def _parse_wrapper_env(wrapper: Path) -> dict[str, str]:
     return env
 
 
+def _parse_wrapper_python(wrapper: Path) -> str | None:
+    try:
+        text = wrapper.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    m = re.search(r"^\$py\s*=\s*(['\"])(.*)\1\s*$", text, flags=re.MULTILINE)
+    if m:
+        value = m.group(2)
+        if m.group(1) == "'":
+            value = value.replace("''", "'")
+        return value.strip() or None
+    m = re.search(r"^exec\s+(['\"])(.*?)\1(?:\s|$)", text, flags=re.MULTILINE)
+    if m:
+        return m.group(2).replace("'\"'\"'", "'").strip() or None
+    return None
+
+
+def _wrapper_control_plane_payload(wrapper: Path, *, base_dir: Path | str | None) -> dict[str, object]:
+    python_raw = _parse_wrapper_python(wrapper) if wrapper.exists() else None
+    if not python_raw:
+        return {}
+    payload: dict[str, object] = {"wrapper_python": python_raw}
+    try:
+        payload["wrapper_python_is_core_slot"] = is_core_slot_path(python_raw, base_dir=Path(base_dir).expanduser().resolve() if base_dir else None)
+    except Exception:
+        payload["wrapper_python_is_core_slot"] = is_core_slot_path(python_raw)
+    return payload
+
+
 def _windows_task_name() -> str:
     return "AdaOS"
 
@@ -1091,6 +1142,40 @@ def enable(
     raise RuntimeError(f"autostart is not supported on platform: {platform.platform()}")
 
 
+def refresh_wrapper(ctx: AgentContext, spec: AutostartSpec) -> dict[str, object]:
+    """Rewrite the existing autostart wrapper without changing service state."""
+    base_dir = _base_dir_from_spec(ctx, spec)
+    platform_name = "windows" if _is_windows() else ("linux" if _is_linux() else ("macos" if _is_macos() else "unknown"))
+    try:
+        info = status(ctx)
+    except Exception:
+        info = {}
+    wrapper_raw = str(info.get("wrapper") or "").strip() if isinstance(info, dict) else ""
+    if wrapper_raw:
+        wrapper = Path(wrapper_raw).expanduser().resolve()
+    elif _is_windows():
+        wrapper = (base_dir / "bin" / "adaos-autostart.ps1").resolve()
+    else:
+        wrapper = (base_dir / "bin" / "adaos-autostart.sh").resolve()
+    before = _wrapper_control_plane_payload(wrapper, base_dir=base_dir)
+    if _is_windows():
+        _write_wrapper_windows(wrapper, argv=spec.argv, env=spec.env)
+    elif _is_linux() or _is_macos():
+        _write_wrapper_sh(wrapper, argv=spec.argv, env=spec.env)
+    else:
+        raise RuntimeError(f"autostart wrapper refresh is not supported on platform: {platform.platform()}")
+    after = _wrapper_control_plane_payload(wrapper, base_dir=base_dir)
+    return {
+        "ok": True,
+        "platform": platform_name,
+        "wrapper": str(wrapper),
+        "scope": str(info.get("scope") or "") if isinstance(info, dict) else "",
+        "before": before,
+        "after": after,
+        "changed": before != after,
+    }
+
+
 def disable(ctx: AgentContext) -> dict:
     base_dir = ctx.paths.base_dir()
     bin_dir = (base_dir / "bin").resolve()
@@ -1210,6 +1295,7 @@ def status(ctx: AgentContext) -> dict:
             supervisor_port = str(wrapper_env.get("ADAOS_SUPERVISOR_PORT") or "").strip()
             if supervisor_port:
                 payload["supervisor_url"] = f"http://{supervisor_host or '127.0.0.1'}:{supervisor_port}"
+        payload.update(_wrapper_control_plane_payload(wrapper, base_dir=payload.get("base_dir") or ctx.paths.base_dir()))
         core_update_status = _core_update_status_from_base_dir(payload.get("base_dir") or ctx.paths.base_dir())
         if core_update_status:
             payload["core_update_status"] = core_update_status
@@ -1331,6 +1417,7 @@ def status(ctx: AgentContext) -> dict:
             supervisor_port = str(wrapper_env.get("ADAOS_SUPERVISOR_PORT") or "").strip()
             if supervisor_port:
                 payload["supervisor_url"] = f"http://{supervisor_host or '127.0.0.1'}:{supervisor_port}"
+        payload.update(_wrapper_control_plane_payload(wrapper, base_dir=payload.get("base_dir") or ctx.paths.base_dir()))
         payload["user_service_exists"] = user_service_path.exists()
         payload["system_service_exists"] = system_service_path.exists()
         payload["system_scope_preferred"] = _linux_should_prefer_system_scope("auto")
@@ -1383,6 +1470,7 @@ def status(ctx: AgentContext) -> dict:
             supervisor_port = str(wrapper_env.get("ADAOS_SUPERVISOR_PORT") or "").strip()
             if supervisor_port:
                 payload["supervisor_url"] = f"http://{supervisor_host or '127.0.0.1'}:{supervisor_port}"
+        payload.update(_wrapper_control_plane_payload(wrapper, base_dir=payload.get("base_dir") or ctx.paths.base_dir()))
         core_update_status = _core_update_status_from_base_dir(payload.get("base_dir") or ctx.paths.base_dir())
         if core_update_status:
             payload["core_update_status"] = core_update_status

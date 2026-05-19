@@ -3169,6 +3169,7 @@ def test_supervisor_schedule_service_restart_requests_self_exit(monkeypatch, tmp
     monkeypatch.setattr(supervisor, "_autostart_self_restart_supported", lambda: True)
     monkeypatch.setattr(supervisor, "_root_restart_delay_sec", lambda: 0.1)
     monkeypatch.setattr(supervisor.os, "getpid", lambda: 4321)
+    monkeypatch.setattr(manager, "_refresh_autostart_wrapper", lambda reason: {"ok": True, "reason": reason})
 
     sleeps: list[float] = []
     kills: list[tuple[int, int]] = []
@@ -3184,6 +3185,7 @@ def test_supervisor_schedule_service_restart_requests_self_exit(monkeypatch, tmp
 
     assert payload["requested"] is True
     assert payload["mode"] == "self_exit"
+    assert payload["wrapper_refresh"] == {"ok": True, "reason": "test.root_restart"}
     assert sleeps == [0.1]
     assert kills == [(4321, supervisor.signal.SIGTERM)]
 

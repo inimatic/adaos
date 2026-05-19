@@ -26,7 +26,7 @@ from adaos.services.core_slots import (
     rollback_to_previous_slot,
     slot_dir,
 )
-from adaos.services.runtime_paths import current_base_dir, current_repo_root
+from adaos.services.runtime_paths import current_base_dir, current_control_python, current_repo_root
 
 
 def _base_dir() -> Path:
@@ -809,6 +809,7 @@ def _shared_dotenv_path() -> str:
 
 def _format_update_command(template: str, plan: dict[str, Any]) -> str:
     repo_root = _repo_root()
+    control_python = current_control_python(repo_root)
     values = {
         "target_rev": str(plan.get("target_rev") or ""),
         "target_version": str(plan.get("target_version") or ""),
@@ -819,7 +820,7 @@ def _format_update_command(template: str, plan: dict[str, Any]) -> str:
         "active_slot_dir": str(plan.get("active_slot_dir") or ""),
         "reason": str(plan.get("reason") or ""),
         "base_dir": str(_base_dir()),
-        "python": sys.executable,
+        "python": str(control_python),
         "repo_root": str(repo_root or ""),
         "source_repo_root": str(repo_root or ""),
         "shared_dotenv_path": _shared_dotenv_path(),
