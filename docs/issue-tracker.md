@@ -1879,7 +1879,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 52%. First implementation slices landed the ABI/schema
+Overall completion: 56%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1902,7 +1902,10 @@ pressure, while `HotEventBudget` provides the shared debounce/window primitive
 for converting hot raw events into stable operator status. The reliability
 summary now has a migration-safe thin mode backed by `statusPlane` and
 ETag/`If-None-Match`, so polling clients can avoid rebuilding or downloading
-the compatibility summary when status cards are unchanged.
+the compatibility summary when status cards are unchanged. The Angular
+communication runtime now uses that contract: it probes `mode=thin` with a
+cached ETag and only downloads `mode=full` when the status snapshot changed or
+when the thin response cannot be interpreted as a runtime snapshot.
 
 Problem statement:
 
@@ -2312,7 +2315,9 @@ Human verification:
 
 #### STATUS-007: Move client monitoring from polling to push/delta
 
-Status: planned.
+Status: in progress.
+
+Progress: 35%.
 
 Expected behavior:
 
@@ -2322,13 +2327,27 @@ Expected behavior:
 
 Actions:
 
-- [ ] Identify the current caller(s) polling
+- [x] Identify the current caller(s) polling
   `/api/node/reliability/summary`.
-- [ ] Replace badge/status polling with thin status snapshot plus updates.
+- [x] Replace the communication-runtime reliability poll with
+  `mode=thin` + `If-None-Match` and fetch `mode=full` only when status changed
+  or a full runtime snapshot is still needed.
 - [ ] Wire existing webio stream receivers as lazy detail sources.
-- [ ] Add client-side cache keyed by status card version.
+- [x] Add client-side cache keyed by thin-summary ETag.
+- [ ] Move badge/status UI to status-card versions once the cards cover all
+  currently used runtime fields.
 - [ ] Verify the client no longer requests large summary payloads repeatedly
   during the first 3 minutes.
+
+Human verification:
+
+- Open the browser dev tools network tab on a connected stand.
+- The repeated runtime health probe should call
+  `/api/node/reliability/summary?mode=thin&webspace_id=<id>` with
+  `If-None-Match` after the first response.
+- When status cards are unchanged, the response should be `304`; `mode=full`
+  should appear only after status changes, first bootstrap, or explicit debug
+  reads.
 
 #### STATUS-008: Acceptance and observability
 
