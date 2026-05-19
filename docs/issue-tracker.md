@@ -2595,7 +2595,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 81%.
+Progress: 82%.
 
 Acceptance criteria:
 
@@ -2883,6 +2883,12 @@ Actions:
   were checked against the current active slot before slot preparation could
   run. Runtime boot target validation now applies only during boot/validate
   phases, not while an update is merely planned or counting down.
+- Manual `.30` catch-up to `ff9fec41667304f2bd850acd79a50d6b31f44bb4`
+  exposed a second root-promotion lifecycle edge: auto-complete could request
+  another service restart while an earlier `awaiting_root_restart` attempt was
+  still waiting for runtime boot validation. Supervisor now treats a recorded
+  `restart_requested_at` as evidence that the restart is already in flight and
+  waits for validation/timeout instead of restarting in a loop.
   Both stands keep supervisor under `/root/adaos/.venv/...` and runtime under
   the active slot venv; thin reliability summaries return `ok=true`.
 
