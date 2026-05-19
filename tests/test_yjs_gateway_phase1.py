@@ -1288,6 +1288,10 @@ def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     assert gateway_module._TRANSPORT_STATE["yws"]["active_connections"] == 0
     assert gateway_module._ACTIVE_YWS_CONNECTIONS == {}
     assert gateway_module._ACTIVE_YWS_CLIENTS == {}
+    attempts = gateway_module._yws_storm_snapshot(time.time())["attempts"]
+    assert attempts["last_room_timeout_attempt_id"]
+    assert attempts["last_close_attempt_id"] == attempts["last_room_timeout_attempt_id"]
+    assert attempts["last_close_reason"] == "room_ready_timeout"
 
 
 def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypatch) -> None:
@@ -1346,8 +1350,11 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
     assert touched[0]["connection_state"] == "yws_guard_active_limit"
     assert events[0][0] == "browser.session.changed"
     assert events[0][1]["yjs_channel_state"] == "rejected"
+    assert events[0][1]["yjs_attempt_id"]
     assert events[0][1]["reason"] == "active_limit"
     assert gateway_module._YWS_GUARD_DIAG["last_reject_reason"] == "active_limit"
+    attempts = gateway_module._yws_storm_snapshot(time.time())["attempts"]
+    assert attempts["last_guard_reject_attempt_id"] == events[0][1]["yjs_attempt_id"]
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
 
@@ -1552,6 +1559,7 @@ def test_yws_impl_cleans_up_after_first_message_timeout(monkeypatch) -> None:
     ]
     assert events[0][1]["connection_state"] == "connected"
     assert events[1][1]["connection_state"] == "closed"
+    assert events[0][1]["yjs_attempt_id"] == events[1][1]["yjs_attempt_id"]
     assert gateway_module._TRANSPORT_STATE["yws"]["active_connections"] == 0
     assert gateway_module._TRANSPORT_STATE["yws"]["open_total"] == 1
     assert gateway_module._TRANSPORT_STATE["yws"]["close_total"] == 1
