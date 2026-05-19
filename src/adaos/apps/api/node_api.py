@@ -391,9 +391,334 @@ def _record_reliability_summary_metric(
         _RELIABILITY_SUMMARY_METRICS["updated_at"] = now
 
 
-def _reliability_summary_metrics_snapshot() -> dict[str, Any]:
+def _compact_status_registry_metrics(snapshot: dict[str, Any], *, webspace_id: str | None = None) -> dict[str, Any]:
+    diagnostics = _coerce_dict(snapshot.get("diagnostics"))
+    return {
+        "schema": "adaos.status_registry.acceptance_metrics.v1",
+        "available": bool(snapshot.get("available", True)),
+        "webspace_id": str(webspace_id or "").strip() or None,
+        "total": int(snapshot.get("total") or 0),
+        "diagnostics": {
+            "card_count": int(diagnostics.get("card_count") or 0),
+            "publish_total": int(diagnostics.get("publish_total") or 0),
+            "changed_total": int(diagnostics.get("changed_total") or 0),
+            "unchanged_total": int(diagnostics.get("unchanged_total") or 0),
+            "stale_count": int(diagnostics.get("stale_count") or 0),
+            "max_card_bytes": _coerce_optional_int(diagnostics.get("max_card_bytes")),
+            "max_card_bytes_observed": int(diagnostics.get("max_card_bytes_observed") or 0),
+            "oversized_card_total": int(diagnostics.get("oversized_card_total") or 0),
+            "last_oversized_card": _coerce_dict(diagnostics.get("last_oversized_card")),
+            "last_publish_latency_ms": float(diagnostics.get("last_publish_latency_ms") or 0.0),
+            "last_changed_at": diagnostics.get("last_changed_at"),
+        },
+        "error": str(snapshot.get("error") or "").strip() or None,
+    }
+
+
+def _current_webio_stream_guard_metrics(
+    *,
+    webspace_id: str | None = None,
+    receiver: str | None = None,
+    owner: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    try:
+        from adaos.services.router.service import webio_stream_guard_snapshot
+
+        payload = webio_stream_guard_snapshot(
+            webspace_id=webspace_id,
+            receiver=receiver,
+            owner=owner,
+            limit=limit,
+        )
+        result = dict(payload) if isinstance(payload, dict) else {}
+        result["available"] = True
+        result.setdefault("items", [])
+        result.setdefault("totals", {})
+        return result
+    except Exception as exc:
+        return {
+            "schema": "adaos.webio_stream_guard.v1",
+            "available": False,
+            "webspace_id": str(webspace_id or "").strip() or None,
+            "receiver": str(receiver or "").strip() or None,
+            "owner": str(owner or "").strip() or None,
+            "items": [],
+            "total": 0,
+            "totals": {
+                "attempted": 0,
+                "published": 0,
+                "suppressed": 0,
+                "throttled": 0,
+                "published_fanout": 0,
+            },
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _compact_webio_stream_guard_metrics(payload: dict[str, Any], *, limit: int = 20) -> dict[str, Any]:
+    totals = _coerce_dict(payload.get("totals"))
+    rows = [
+        {
+            "webspace_id": str(row.get("webspace_id") or "").strip() or None,
+            "receiver": str(row.get("receiver") or "").strip() or None,
+            "owner": str(row.get("owner") or "").strip() or None,
+            "surface": str(row.get("surface") or "").strip() or None,
+            "attempted": int(row.get("attempted_total") or 0),
+            "published": int(row.get("published_total") or 0),
+            "suppressed": int(row.get("suppressed_total") or 0),
+            "throttled": int(row.get("throttled_total") or 0),
+            "published_fanout": int(row.get("published_fanout_total") or 0),
+            "last_fanout": int(row.get("last_fanout_total") or 0),
+            "last_payload_bytes": int(row.get("last_payload_bytes") or 0),
+            "last_effective_bytes": int(row.get("last_effective_bytes") or 0),
+            "declared_max_payload_bytes": _coerce_optional_int(row.get("declared_max_payload_bytes")),
+            "last_policy_state": str(row.get("last_policy_state") or "").strip() or None,
+            "last_reason": str(row.get("last_reason") or "").strip() or None,
+            "last_at": row.get("last_at"),
+        }
+        for row in _coerce_list(payload.get("items"))[: max(0, min(int(limit or 20), 100))]
+        if isinstance(row, dict)
+    ]
+    return {
+        "schema": "adaos.webio_stream_guard.acceptance_metrics.v1",
+        "available": bool(payload.get("available", True)),
+        "webspace_id": str(payload.get("webspace_id") or "").strip() or None,
+        "receiver": str(payload.get("receiver") or "").strip() or None,
+        "owner": str(payload.get("owner") or "").strip() or None,
+        "total": int(payload.get("total") or len(rows)),
+        "totals": {
+            "attempted": int(totals.get("attempted") or 0),
+            "published": int(totals.get("published") or 0),
+            "suppressed": int(totals.get("suppressed") or 0),
+            "throttled": int(totals.get("throttled") or 0),
+            "published_fanout": int(totals.get("published_fanout") or 0),
+        },
+        "items": rows,
+        "error": str(payload.get("error") or "").strip() or None,
+    }
+
+
+def _current_eventbus_backlog_metrics() -> dict[str, Any]:
+    try:
+        bus = getattr(get_ctx(), "bus", None)
+        snapshot_fn = getattr(bus, "backlog_snapshot", None)
+        if callable(snapshot_fn):
+            payload = snapshot_fn()
+            result = dict(payload) if isinstance(payload, dict) else {}
+            result["available"] = True
+            result.setdefault("top_webio_stream_controls", [])
+            return result
+    except Exception as exc:
+        return {
+            "available": False,
+            "top_webio_stream_controls": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "available": False,
+        "top_webio_stream_controls": [],
+    }
+
+
+def _compact_webio_stream_control_metrics(
+    backlog: dict[str, Any],
+    *,
+    webspace_id: str | None = None,
+    receiver: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    token_ws = str(webspace_id or "").strip()
+    token_receiver = str(receiver or "").strip()
+    rows: list[dict[str, Any]] = []
+    for raw in _coerce_list(backlog.get("top_webio_stream_controls")):
+        if not isinstance(raw, dict):
+            continue
+        row_ws = str(raw.get("webspace_id") or "").strip()
+        row_receiver = str(raw.get("receiver") or "").strip()
+        if token_ws and row_ws != token_ws:
+            continue
+        if token_receiver and row_receiver != token_receiver:
+            continue
+        event_type = str(raw.get("event_type") or "").strip()
+        incoming = int(raw.get("incoming_total") or 0)
+        superseded = int(raw.get("superseded_total") or 0)
+        rows.append(
+            {
+                "event_type": event_type or None,
+                "webspace_id": row_ws or None,
+                "target_node_id": str(raw.get("target_node_id") or "").strip() or None,
+                "receiver": row_receiver or None,
+                "source": str(raw.get("source") or "").strip() or None,
+                "incoming": incoming,
+                "snapshot_requested": incoming if event_type == "webio.stream.snapshot.requested" else 0,
+                "queued": int(raw.get("queued_total") or 0),
+                "coalesced": superseded,
+                "superseded": superseded,
+                "dropped": int(raw.get("dropped_total") or 0),
+                "last_action": str(raw.get("last_action") or "").strip() or None,
+                "last_handler": str(raw.get("last_handler") or "").strip() or None,
+                "last_at": raw.get("last_at"),
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("coalesced") or 0),
+            -int(item.get("dropped") or 0),
+            -int(item.get("snapshot_requested") or 0),
+            str(item.get("receiver") or ""),
+        )
+    )
+    max_items = max(0, min(int(limit or 20), 100))
+    limited = rows[:max_items]
+    return {
+        "schema": "adaos.webio_stream_control.acceptance_metrics.v1",
+        "available": bool(backlog.get("available")),
+        "webspace_id": token_ws or None,
+        "receiver": token_receiver or None,
+        "pending_tasks": int(backlog.get("pending_tasks") or 0),
+        "pending_peak": int(backlog.get("pending_peak") or 0),
+        "bounded_queue_total": int(backlog.get("bounded_queue_total") or 0),
+        "bounded_queue_peak": int(backlog.get("bounded_queue_peak") or 0),
+        "bounded_active_workers": int(backlog.get("bounded_active_workers") or 0),
+        "totals": {
+            "incoming": sum(int(item.get("incoming") or 0) for item in rows),
+            "snapshot_requested": sum(int(item.get("snapshot_requested") or 0) for item in rows),
+            "queued": sum(int(item.get("queued") or 0) for item in rows),
+            "coalesced": sum(int(item.get("coalesced") or 0) for item in rows),
+            "superseded": sum(int(item.get("superseded") or 0) for item in rows),
+            "dropped": sum(int(item.get("dropped") or 0) for item in rows),
+        },
+        "items": limited,
+        "error": str(backlog.get("error") or "").strip() or None,
+    }
+
+
+def _stream_receiver_acceptance_metrics(
+    *,
+    stream_guard: dict[str, Any],
+    stream_controls: dict[str, Any],
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def _receiver_row(webspace_id: Any, receiver: Any) -> dict[str, Any]:
+        key = (
+            str(webspace_id or "").strip(),
+            str(receiver or "").strip(),
+        )
+        if key not in rows:
+            rows[key] = {
+                "webspace_id": key[0] or None,
+                "receiver": key[1] or None,
+                "owner": None,
+                "surface": None,
+                "attempted": 0,
+                "published": 0,
+                "suppressed": 0,
+                "throttled": 0,
+                "published_fanout": 0,
+                "snapshot_requested": 0,
+                "queued": 0,
+                "coalesced": 0,
+                "superseded": 0,
+                "dropped": 0,
+            }
+        return rows[key]
+
+    for item in _coerce_list(stream_guard.get("items")):
+        if not isinstance(item, dict):
+            continue
+        row = _receiver_row(item.get("webspace_id"), item.get("receiver"))
+        row["owner"] = row.get("owner") or item.get("owner")
+        row["surface"] = row.get("surface") or item.get("surface")
+        for field in ("attempted", "published", "suppressed", "throttled", "published_fanout"):
+            row[field] = int(row.get(field) or 0) + int(item.get(field) or 0)
+
+    for item in _coerce_list(stream_controls.get("items")):
+        if not isinstance(item, dict):
+            continue
+        row = _receiver_row(item.get("webspace_id"), item.get("receiver"))
+        for field in ("snapshot_requested", "queued", "coalesced", "superseded", "dropped"):
+            row[field] = int(row.get(field) or 0) + int(item.get(field) or 0)
+
+    result = list(rows.values())
+    result.sort(
+        key=lambda item: (
+            -int(item.get("suppressed") or 0),
+            -int(item.get("coalesced") or 0),
+            -int(item.get("snapshot_requested") or 0),
+            -int(item.get("published_fanout") or 0),
+            str(item.get("receiver") or ""),
+        )
+    )
+    return result[: max(0, min(int(limit or 20), 100))]
+
+
+def _acceptance_observability_metrics(
+    *,
+    webspace_id: str | None = None,
+    receiver: str | None = None,
+    owner: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    resolved_webspace_id = _coerce_node_webspace_id(webspace_id) if webspace_id is not None else None
+    max_items = max(1, min(int(limit or 20), 100))
+    status_registry = _compact_status_registry_metrics(
+        _current_status_registry_snapshot(webspace_id=resolved_webspace_id),
+        webspace_id=resolved_webspace_id,
+    )
+    stream_guard = _compact_webio_stream_guard_metrics(
+        _current_webio_stream_guard_metrics(
+            webspace_id=resolved_webspace_id,
+            receiver=receiver,
+            owner=owner,
+            limit=max_items,
+        ),
+        limit=max_items,
+    )
+    stream_controls = _compact_webio_stream_control_metrics(
+        _current_eventbus_backlog_metrics(),
+        webspace_id=resolved_webspace_id,
+        receiver=receiver,
+        limit=max_items,
+    )
+    return {
+        "schema": "adaos.reliability_summary.acceptance_metrics.v1",
+        "webspace_id": resolved_webspace_id,
+        "receiver": str(receiver or "").strip() or None,
+        "owner": str(owner or "").strip() or None,
+        "status_registry": status_registry,
+        "stream_guard": stream_guard,
+        "stream_controls": stream_controls,
+        "stream_receivers": _stream_receiver_acceptance_metrics(
+            stream_guard=stream_guard,
+            stream_controls=stream_controls,
+            limit=max_items,
+        ),
+        "notes": {
+            "unchanged_source": "status_registry.unchanged_total and summary not_modified_total; router cannot observe skill-side unchanged stream dedupe unless the skill publishes that diagnostic",
+            "coalesced_source": "eventbus bounded superseded controls are reported as coalesced for soak readability",
+        },
+    }
+
+
+def _reliability_summary_metrics_snapshot(
+    *,
+    webspace_id: str | None = None,
+    receiver: str | None = None,
+    owner: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
     with _RELIABILITY_SUMMARY_METRICS_LOCK:
-        return json.loads(json.dumps(_RELIABILITY_SUMMARY_METRICS, ensure_ascii=True, default=str))
+        payload = json.loads(json.dumps(_RELIABILITY_SUMMARY_METRICS, ensure_ascii=True, default=str))
+    payload["acceptance"] = _acceptance_observability_metrics(
+        webspace_id=webspace_id,
+        receiver=receiver,
+        owner=owner,
+        limit=limit,
+    )
+    return payload
 
 
 def _json_response_with_etag(
@@ -1653,10 +1978,20 @@ async def node_reliability_summary(
 
 
 @router.get("/reliability/summary/metrics", dependencies=[Depends(require_token)])
-async def node_reliability_summary_metrics() -> dict[str, Any]:
+async def node_reliability_summary_metrics(
+    webspace_id: str | None = None,
+    receiver: str | None = None,
+    owner: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
     return {
         "ok": True,
-        "metrics": _reliability_summary_metrics_snapshot(),
+        "metrics": _reliability_summary_metrics_snapshot(
+            webspace_id=webspace_id,
+            receiver=receiver,
+            owner=owner,
+            limit=limit,
+        ),
     }
 
 
