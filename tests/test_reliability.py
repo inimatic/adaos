@@ -2426,6 +2426,108 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "eventbus.webio_control.top: type=webio.stream.snapshot.requested receiver=infrastate.realtime" in result.output
 
 
+def test_node_reliability_metrics_cli_prints_acceptance_summary(monkeypatch) -> None:
+    node_cli = importlib.import_module("adaos.apps.cli.commands.node")
+    seen_paths: list[str] = []
+    monkeypatch.setattr(node_cli, "load_config", lambda: SimpleNamespace(token="dev-token", role="hub", hub_url=None))
+
+    def _fake_get_json(**kwargs):
+        seen_paths.append(kwargs["path"])
+        return (
+            200,
+            {
+                "ok": True,
+                "metrics": {
+                    "total": {
+                        "response_total": 8,
+                        "not_modified_total": 5,
+                        "body_bytes_total": 2048,
+                    },
+                    "modes": {
+                        "thin": {
+                            "response_total": 6,
+                            "not_modified_total": 5,
+                            "body_bytes_total": 512,
+                            "last_status_code": 304,
+                            "last_body_bytes": 0,
+                            "last_cache_hit": True,
+                        }
+                    },
+                    "acceptance": {
+                        "webspace_id": "desktop",
+                        "receiver": "infrastate.realtime",
+                        "owner": None,
+                        "status_registry": {
+                            "available": True,
+                            "diagnostics": {
+                                "card_count": 4,
+                                "publish_total": 9,
+                                "changed_total": 3,
+                                "unchanged_total": 6,
+                                "stale_count": 0,
+                                "oversized_card_total": 0,
+                                "max_card_bytes_observed": 1024,
+                            },
+                        },
+                        "stream_guard": {
+                            "available": True,
+                            "total": 1,
+                            "totals": {
+                                "attempted": 7,
+                                "published": 4,
+                                "suppressed": 2,
+                                "throttled": 1,
+                                "published_fanout": 8,
+                            },
+                        },
+                        "stream_controls": {
+                            "available": True,
+                            "pending_tasks": 1,
+                            "bounded_queue_total": 2,
+                            "totals": {
+                                "snapshot_requested": 5,
+                                "queued": 3,
+                                "coalesced": 2,
+                                "dropped": 0,
+                            },
+                        },
+                        "stream_receivers": [
+                            {
+                                "webspace_id": "desktop",
+                                "receiver": "infrastate.realtime",
+                                "owner": "skill:infrastate_skill",
+                                "attempted": 7,
+                                "published": 4,
+                                "suppressed": 2,
+                                "published_fanout": 8,
+                                "snapshot_requested": 5,
+                                "coalesced": 2,
+                                "dropped": 0,
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+    monkeypatch.setattr(node_cli, "_control_get_json", _fake_get_json)
+
+    result = CliRunner().invoke(
+        node_cli.app,
+        ["reliability-metrics", "--webspace", "desktop", "--receiver", "infrastate.realtime"],
+    )
+
+    assert result.exit_code == 0
+    assert "webspace_id=desktop" in seen_paths[0]
+    assert "receiver=infrastate.realtime" in seen_paths[0]
+    assert "summary_metrics: responses=8 not_modified=5 bytes=2048" in result.output
+    assert "summary_metrics.thin: responses=6 not_modified=5 bytes=512 last_status=304" in result.output
+    assert "acceptance.status_registry: available=yes cards=4 published=9 changed=3 unchanged=6" in result.output
+    assert "acceptance.stream_guard: available=yes total=1 attempted=7 published=4 suppressed=2" in result.output
+    assert "acceptance.stream_controls: available=yes pending=1 bounded_queue=2 snapshot_requested=5" in result.output
+    assert "acceptance.receiver.1: webspace=desktop receiver=infrastate.realtime owner=skill:infrastate_skill" in result.output
+
+
 def test_node_reliability_cli_prints_sidecar_scope_and_sync_owner(monkeypatch) -> None:
     node_cli = importlib.import_module("adaos.apps.cli.commands.node")
     monkeypatch.setattr(node_cli, "load_config", lambda: SimpleNamespace(token="dev-token", role="hub", hub_url=None))
