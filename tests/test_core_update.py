@@ -91,6 +91,39 @@ def test_core_update_status_keeps_rollout_metadata_across_validate(monkeypatch, 
     assert read_last_result()["target_version"] == "0.1.0+77.d7d79d5"
 
 
+def test_finalize_runtime_boot_status_rejects_active_slot_target_mismatch(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    write_slot_manifest(
+        "B",
+        {
+            "slot": "B",
+            "target_version": "1111111111111111111111111111111111111111",
+            "git_commit": "1111111111111111111111111111111111111111",
+            "git_short_commit": "1111111",
+        },
+    )
+    activate_slot("B")
+    write_status(
+        {
+            "state": "restarting",
+            "phase": "launch",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "2222222222222222222222222222222222222222",
+            "target_slot": "B",
+        }
+    )
+
+    status = finalize_runtime_boot_status()
+
+    assert status["state"] == "failed"
+    assert status["phase"] == "validate"
+    assert status["active_slot_target_mismatch"] is True
+    assert status["target_version"] == "2222222222222222222222222222222222222222"
+    assert status["manifest"]["git_short_commit"] == "1111111"
+    assert read_last_result()["active_slot_target_mismatch"] is True
+
+
 def test_core_update_status_publishes_bus_event(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     published: list[object] = []

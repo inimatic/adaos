@@ -2589,7 +2589,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 72%.
+Progress: 76%.
 
 Acceptance criteria:
 
@@ -2621,6 +2621,9 @@ Acceptance criteria:
   slot venv.
 - When watchdog is re-enabled, it exposes the same source-path diagnostic and
   reports false for any slot-bound Python/source check.
+- Terminal update success is rejected when the active slot manifest does not
+  match the requested `target_version`; false-positive `succeeded/validate`
+  must become a failed validation with the active manifest attached.
 
 Actions:
 
@@ -2635,6 +2638,10 @@ Actions:
   `adaos node reliability-metrics --webspace desktop --receiver <receiver>`
   prints summary response/cache counters, status registry diagnostics, stream
   guard counters, stream-control coalescing, and per-receiver pressure rows.
+- [x] Reject false-positive terminal core update success when the active slot
+  does not match the requested target version. Runtime boot finalization and
+  supervisor reconciliation now fail validation instead of completing the
+  attempt as `succeeded`.
 - [ ] Add status registry diagnostics to the final soak analysis.
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
   unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
@@ -2722,6 +2729,12 @@ Actions:
   one low-cost endpoint without replacing the Yjs or stream-data route.
 - `adaos node reliability-metrics` provides the matching operator-facing view,
   so final soak notes can quote stable lines instead of pasting large JSON.
+- Stand `.30` exposed a rollout-status blind spot: root checkout was at
+  `437c31c2`, but the active runtime slot still served `1987ea1b` while
+  update-status reported the newer target as `succeeded`. Core now treats that
+  active-slot/target mismatch as failed validation; after rollout, re-run
+  update-status before acceptance soaks and require active slot manifest ==
+  target version.
 
 2026-05-19 checkpoint:
 

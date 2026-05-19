@@ -64,6 +64,57 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _target_version_matches(left: Any, right: Any) -> bool:
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
+
+
+def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_version: Any) -> bool:
+    expected = str(target_version or "").strip()
+    if not expected:
+        return True
+    data = manifest if isinstance(manifest, dict) else {}
+    for key in ("target_version", "git_commit", "git_short_commit"):
+        if _target_version_matches(expected, data.get(key)):
+            return True
+    return False
+
+
+def _runtime_boot_target_mismatch_status(
+    current: dict[str, Any],
+    *,
+    slot: str,
+    manifest: dict[str, Any] | None,
+) -> dict[str, Any]:
+    now = time.time()
+    failed = dict(current)
+    failed.update(
+        {
+            "state": "failed",
+            "phase": "validate",
+            "message": "runtime boot validation refused because active slot does not match requested target",
+            "target_slot": slot or str(current.get("target_slot") or ""),
+            "manifest": manifest if isinstance(manifest, dict) else {},
+            "active_slot_target_mismatch": True,
+            "active_slot_target_mismatch_reason": "active_slot_target_mismatch",
+            "finished_at": now,
+            "validated_at": None,
+            "scheduled_for": None,
+            "candidate_prewarm_state": None,
+            "candidate_prewarm_message": None,
+            "candidate_prewarm_ready_at": None,
+        }
+    )
+    finalized = write_status(failed)
+    clear_plan()
+    return finalized
+
+
 def _update_command_output_tail_chars() -> int:
     try:
         return max(1, int(str(os.getenv("ADAOS_CORE_UPDATE_OUTPUT_TAIL_CHARS") or "8000").strip() or "8000"))
@@ -561,6 +612,11 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
     current = read_status()
     state = str(current.get("state") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
+    slot = str(current.get("target_slot") or active_slot() or "").strip().upper()
+    manifest = read_slot_manifest(slot) if slot else None
+    target_version = str(current.get("target_version") or "").strip()
+    if target_version and not _manifest_matches_target_version(manifest, target_version):
+        return _runtime_boot_target_mismatch_status(current, slot=slot, manifest=manifest)
     if state == "succeeded" and phase == "validate":
         return current
     root_restart_pending = state == "succeeded" and phase == "root_promoted"
@@ -570,8 +626,6 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
         return None
 
     now = time.time()
-    slot = str(current.get("target_slot") or active_slot() or "").strip().upper()
-    manifest = read_slot_manifest(slot) if slot else None
     payload = dict(current)
     payload["state"] = "succeeded"
     payload["phase"] = "validate"
