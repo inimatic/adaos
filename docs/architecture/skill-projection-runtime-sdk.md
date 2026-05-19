@@ -265,7 +265,8 @@ The client therefore exports bounded diagnostic evidence through
   changes, control-WS state, slow/error HTTP calls, and skill call failures
 - `runtime_debug.cursor` heartbeat: latest retained seq, exported seq, estimated
   dropped events, last YJS provider/sync/close state, last materialization
-  state, and last control-WS state
+  state, last control-WS state, current computed YJS indicator state/reason, and
+  compact supervisor transition/probe/suppression breadcrumbs
 
 This diagnostic export is not a data route. It does not replace Yjs, stream
 variables, tool details, or status cards. Its only job is to make browser-side
