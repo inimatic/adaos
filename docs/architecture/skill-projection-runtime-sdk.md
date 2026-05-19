@@ -157,6 +157,9 @@ The first usable SDK slice should expose:
 - `refresh_dirty(...)`
 - `publish_stream_variable(...)` for bounded replace-mode current-state streams
 - `publish_stream_snapshot(...)`
+- `StatusCard`, `StatusRegistry`, `publish_status(...)`,
+  `publish_status_many(...)`, and `publish_status_stream(...)` for small
+  operator status summaries that point to streams/tools for details
 
 Suggested usage:
 
@@ -289,6 +292,21 @@ diagnostic surface from becoming a primary Yjs pressure source.
   evidence
 - [ ] `sdk.restore_active_demand`: restore active projection/stream demand on
   startup where available
+
+### 3a. Status Plane
+
+- [x] `status.card_contract`: define `StatusCard` with canonical status,
+  severity, TTL, fingerprint, version, `details_ref`, `route`, and `guard_ref`
+- [x] `status.registry_first_slice`: add in-memory registry with fingerprint
+  dedupe, version increments, stale diagnostics, and changed events
+- [x] `status.sdk_publish`: add `adaos.sdk.status.publish_status`,
+  `publish_status_many`, and `publish_status_stream`
+- [ ] `status.bootstrap_registry`: wire the registry into normal API/server
+  bootstrap so thin summaries can read it without test setup
+- [ ] `status.guard_cards`: publish compact Yjs/stream guard degraded cards
+  through the shared path
+- [ ] `status.summary_endpoint`: expose registry-backed thin status snapshots
+  through `/api/node/reliability/summary` or its successor
 
 ### 4. `browsers_skill` Migration
 
