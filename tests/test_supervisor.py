@@ -269,6 +269,112 @@ def test_reconcile_update_status_self_heals_stale_awaiting_root_restart_when_run
     assert attempt["completion_reason"] == "root restart completed"
 
 
+def test_reconcile_update_status_finalizes_stale_launch_when_runtime_is_ready(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    write_status(
+        {
+            "state": "restarting",
+            "phase": "launch",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_slot": "B",
+            "reason": "test.launch",
+            "updated_at": 10.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "completed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "requested_at": 0.0,
+            "transitioned_at": 10.0,
+            "updated_at": 11.0,
+        }
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "finalize_runtime_boot_status",
+        lambda: {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_slot": "B",
+            "validated_at": 120.0,
+            "updated_at": 120.0,
+        },
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "runtime": {
+                "runtime_state": "ready",
+                "runtime_api_ready": True,
+                "listener_running": True,
+                "active_slot": "B",
+            },
+            "_served_by": "supervisor_monitor",
+        }
+    )
+
+    assert payload["status"]["state"] == "succeeded"
+    assert payload["status"]["phase"] == "validate"
+    assert payload["_served_by"] == "supervisor_runtime_ready_finalize"
+    attempt = payload.get("attempt")
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "completed"
+
+
+def test_reconcile_update_status_does_not_finalize_ready_runtime_for_other_slot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    write_status(
+        {
+            "state": "restarting",
+            "phase": "launch",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_slot": "B",
+            "reason": "test.launch",
+            "updated_at": 10.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "completed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "requested_at": 0.0,
+            "transitioned_at": 10.0,
+            "updated_at": 11.0,
+        }
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "finalize_runtime_boot_status",
+        lambda: (_ for _ in ()).throw(AssertionError("should not finalize a different active slot")),
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "runtime": {
+                "runtime_state": "ready",
+                "runtime_api_ready": True,
+                "listener_running": True,
+                "active_slot": "A",
+            },
+            "_served_by": "supervisor_monitor",
+        }
+    )
+
+    assert payload["status"]["state"] == "restarting"
+    assert payload["_served_by"] == "supervisor_monitor"
+
+
 def test_reconcile_update_status_clears_stale_candidate_prewarm_fields_when_root_restart_completes(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
