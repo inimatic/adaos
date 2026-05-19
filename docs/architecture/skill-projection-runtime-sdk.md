@@ -247,12 +247,12 @@ outer budget, and avoid retrying a mutating/read-timed-out request against a
 different slot port.
 
 The YWS session guard follows the same rule. Pressure can reject invalid,
-unauthorized, or globally over-limit connections, but a single reconnecting
-browser is treated as diagnostic pressure and replacement/backoff input rather
-than a reason to quarantine that browser for the full cooldown. A red Yjs
-indicator plus a successful HTTP snapshot therefore means "fallback path is
-alive, realtime path still needs YWS diagnostics", not "Yjs was replaced by
-HTTP".
+unauthorized, or globally over-limit connections, but reconnect storms are
+treated as diagnostic pressure and replacement/backoff input rather than a
+reason to quarantine a browser or the whole webspace for the full cooldown. A
+red Yjs indicator plus a successful HTTP snapshot therefore means "fallback
+path is alive, realtime path still needs YWS diagnostics", not "Yjs was
+replaced by HTTP".
 
 ## Reference Skills
 
