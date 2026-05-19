@@ -2553,6 +2553,14 @@ Actions:
   watchdog may observe and restart slot runtimes, but its own wrapper,
   interpreter, source root, and diagnostics must remain rooted in the stable
   root checkout/root `.venv`.
+- [x] Resume due planned core updates through the prepare/slot-validation path
+  instead of the legacy countdown-only path. A planned update that wakes after
+  the minimum-update-period guard must still prepare an inactive slot, activate
+  that slot, validate runtime boot, and only then complete root promotion.
+- [x] Refuse root-promotion completion when the active slot manifest does not
+  match the update target version. This prevents a false `succeeded/validate`
+  state that reports a newer target while the runtime is still serving an older
+  slot.
 - [ ] Classify member-follow update expiry separately from Yjs/provider
   failures: if a member reports `pending update expired before autostart runner
   picked it up`, hub/status UI must surface stale member-update state and keep
@@ -2780,6 +2788,13 @@ Actions:
 - The disabled watchdog is explicitly classified under the same future
   control-plane rule. Re-enabling it must add a watchdog-specific source
   diagnostic rather than inheriting a slot venv by convenience.
+- Stand checkpoint after scheduling `9c7e221b` exposed a false-positive update
+  completion: both `.30` and `.40` reported `succeeded/validate` for target
+  `9c7e221b`, while active slots were still older (`2ba8453` and `e85fada`).
+  Root `.venv` control-plane launch was correct, but planned-update resume used
+  the countdown-only path and skipped inactive-slot preparation. The supervisor
+  now resumes due planned updates through prepare, and root promotion refuses
+  to complete if the active slot commit does not match the target.
 
 Human verification:
 

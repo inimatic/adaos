@@ -802,6 +802,17 @@ def _target_version_matches(left: Any, right: Any) -> bool:
     return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
 
 
+def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_version: Any) -> bool:
+    expected = str(target_version or "").strip()
+    if not expected:
+        return True
+    data = manifest if isinstance(manifest, dict) else {}
+    for key in ("target_version", "git_commit", "git_short_commit"):
+        if _target_version_matches(expected, data.get(key)):
+            return True
+    return False
+
+
 def _transition_request_same_target(request: dict[str, Any] | None, other: dict[str, Any] | None) -> bool:
     req = request if isinstance(request, dict) else {}
     cur = other if isinstance(other, dict) else {}
@@ -5859,7 +5870,10 @@ class SupervisorManager:
                         current_attempt=attempt,
                     )
                 else:
-                    self._begin_countdown_transition(request)
+                    if str(request.get("action") or "update").strip().lower() == "update":
+                        self._begin_prepare_transition(request)
+                    else:
+                        self._begin_countdown_transition(request)
             return
 
         if attempt_state == "active" and str(status.get("state") or "").strip().lower() == "preparing":
@@ -6547,9 +6561,30 @@ class SupervisorManager:
 
     async def promote_root(self, *, reason: str) -> dict[str, Any]:
         current_status = read_core_update_status()
+        current_attempt = _read_update_attempt() or {}
         state = str(current_status.get("state") or "").strip().lower()
         phase = str(current_status.get("phase") or "").strip().lower()
         manifest = active_slot_manifest()
+        expected_target_version = str(
+            current_status.get("target_version") or current_attempt.get("target_version") or ""
+        ).strip()
+        if expected_target_version and not _manifest_matches_target_version(manifest, expected_target_version):
+            status = write_core_update_status(
+                {
+                    "state": "failed",
+                    "phase": "validate",
+                    "message": "active slot does not match requested update target; refusing root promotion completion",
+                    "target_rev": str(current_status.get("target_rev") or current_attempt.get("target_rev") or ""),
+                    "target_version": expected_target_version,
+                    "target_slot": str((manifest or {}).get("slot") or active_slot() or ""),
+                    "manifest": manifest,
+                    "root_promotion_refused": True,
+                    "root_promotion_refused_reason": "active_slot_target_mismatch",
+                    "finished_at": time.time(),
+                }
+            )
+            _complete_update_attempt(state="failed", status=status, reason="active slot target mismatch")
+            return {"ok": False, "accepted": False, "status": status, "_served_by": "supervisor"}
         root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
         if state not in {"validated", "succeeded"} and phase != "root_promotion_pending" and not root_promotion_required:
             raise HTTPException(status_code=409, detail="root promotion requires a validated slot runtime")
