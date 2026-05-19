@@ -2623,6 +2623,11 @@ Actions:
   failure showed the hub-route fallback error for stale `127.0.0.1:8778`, which
   masked the first active-port local hop timing out under the old 2.5s read
   budget.
+- During manual rollout verification, a duplicate update request with short
+  `target_version=a9725121` exposed an update-prepare edge case: the checker
+  treated short SHAs as commit targets but required exact 40-character equality
+  during validation. The core updater now accepts a short SHA only when it is a
+  prefix of the resolved full commit.
 - Current conclusion: the working snapshot endpoint is a control-plane fallback
   and does not prove Yjs health by itself. Server-side reliability/YWS
   diagnostics must be checked separately; client-side `YJS Red` needs exported
