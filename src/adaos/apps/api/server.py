@@ -435,6 +435,70 @@ async def _core_update_countdown_worker(
         raise
 
 
+def _truthy_env(name: str) -> bool:
+    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_admin_supervisor_bases() -> list[str]:
+    explicit_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip().rstrip("/")
+    explicit_host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "").strip()
+    explicit_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip()
+    if not (
+        _truthy_env("ADAOS_SUPERVISOR_ENABLED")
+        or _truthy_env("ADAOS_AUTOSTART_MANAGED")
+        or explicit_url
+        or explicit_host
+        or explicit_port
+    ):
+        return []
+    candidates: list[str] = []
+    if explicit_url:
+        candidates.append(explicit_url)
+    host = explicit_host or "127.0.0.1"
+    port = explicit_port or "8776"
+    candidates.append(f"http://{host}:{port}")
+    candidates.append("http://127.0.0.1:8776")
+    unique: list[str] = []
+    for item in candidates:
+        if item and item not in unique:
+            unique.append(item)
+    return unique
+
+
+def _try_forward_update_start_to_supervisor(body: "CoreUpdateStartRequest") -> dict[str, Any] | None:
+    if str(os.getenv("ADAOS_RUNTIME_ADMIN_SUPERVISOR_SHIM", "1")).strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    payload = {
+        "target_rev": str(body.target_rev or ""),
+        "target_version": str(body.target_version or ""),
+        "reason": body.reason,
+        "countdown_sec": float(body.countdown_sec),
+        "drain_timeout_sec": float(body.drain_timeout_sec),
+        "signal_delay_sec": float(body.signal_delay_sec),
+    }
+    token = str(getattr(get_ctx().config, "token", "") or os.getenv("ADAOS_TOKEN") or "dev-local-token")
+    headers = {"X-AdaOS-Token": token, "Accept": "application/json"}
+    for base in _runtime_admin_supervisor_bases():
+        try:
+            import requests as _requests
+
+            response = _requests.post(
+                base.rstrip("/") + "/api/supervisor/update/start",
+                headers=headers,
+                json=payload,
+                timeout=8.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict):
+                data.setdefault("_served_by", "supervisor")
+                return data
+            return {"ok": True, "response": data, "_served_by": "supervisor"}
+        except Exception:
+            continue
+    return None
+
+
 def _api_state_dir() -> Path:
     raw = get_ctx().paths.state_dir()
     path = raw() if callable(raw) else raw
@@ -1270,6 +1334,9 @@ async def admin_update_start(body: CoreUpdateStartRequest):
             "reason": disabled_reason,
             "status": read_core_update_status(),
         }
+    supervisor_payload = _try_forward_update_start_to_supervisor(body)
+    if supervisor_payload is not None:
+        return supervisor_payload
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
         return {"ok": True, "accepted": False, "status": read_core_update_status()}

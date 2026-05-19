@@ -2640,6 +2640,9 @@ Acceptance criteria:
 - Member-follow core update control must enter through the supervisor update
   contract when autostart is managed, not through the runtime-only
   `/api/admin/update/start` countdown path.
+- Runtime `/api/admin/update/start` must behave as a compatibility shim in
+  managed autostart, forwarding to `/api/supervisor/update/start` before using
+  its legacy countdown-only fallback.
 
 Actions:
 
@@ -2672,6 +2675,9 @@ Actions:
 - [x] Route member-follow update/cancel/rollback admin calls through
   `/api/supervisor/update/*` when a managed supervisor is available, falling
   back to runtime admin only if the supervisor route cannot be reached.
+- [x] Add the same supervisor-first compatibility guard to runtime
+  `/api/admin/update/start`, so older callers and root release reconciliation
+  cannot bypass inactive-slot preparation on managed autostart nodes.
 - [ ] Add status registry diagnostics to the final soak analysis.
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
   unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
@@ -2966,6 +2972,12 @@ Actions:
   target `d798f73`. The fix keeps runtime admin as fallback, but managed
   autostart members now try the supervisor update route first so member-follow
   uses the same prepare/warm-switch contract as local operator updates.
+- `.40` then converged to `38dfc15835590bd8599ce09c1eed9211620cb7c4` through
+  the supervisor prepare path after the bad queued SHA probe was cleared and
+  the planned transition was moved forward. `.30` independently confirmed that
+  the remaining bypass can also come from runtime `/api/admin/update/start`
+  callers, so the runtime endpoint is now guarded as a supervisor-first shim on
+  managed autostart.
 
 Human verification:
 
@@ -2996,6 +3008,9 @@ Human verification:
 - [ ] Verify the member-follow supervisor-route fix on `.30` and `.40`; a
   member-follow docs-only update should prepare the inactive slot before any
   runtime restart.
+- [ ] Verify the runtime admin compatibility shim on `.30` and `.40`; direct
+  `/api/admin/update/start` on managed autostart should return a supervisor
+  response and should not create a countdown-only pending restart.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.

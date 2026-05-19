@@ -167,6 +167,41 @@ def test_candidate_runtime_rejects_mutating_update_calls(monkeypatch, callable_n
     assert detail["runtime"]["admin_mutation_allowed"] is False
 
 
+def test_admin_update_start_forwards_to_supervisor_when_autostart_managed(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
+    monkeypatch.setenv("ADAOS_TOKEN", "dev-token")
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+    calls: list[tuple[str, str, str]] = []
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True, "accepted": True, "_served_by": "supervisor"}
+
+    def _post(url: str, headers=None, json=None, timeout=None):
+        calls.append((url, headers["X-AdaOS-Token"], json["target_version"]))
+        return _Resp()
+
+    monkeypatch.setattr("requests.post", _post)
+
+    payload = asyncio.run(
+        api_server.admin_update_start(
+            api_server.CoreUpdateStartRequest(
+                target_rev="rev2026",
+                target_version="abc123",
+                reason="test.supervisor",
+            )
+        )
+    )
+
+    assert payload["_served_by"] == "supervisor"
+    assert calls == [("http://127.0.0.1:8776/api/supervisor/update/start", "dev-token", "abc123")]
+
+
 def test_admin_update_status_includes_runtime_identity(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
