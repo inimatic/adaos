@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from adaos.sdk.core import decorators
 from adaos.services.workspace_registry import write_workspace_registry
@@ -104,3 +105,52 @@ def test_register_subscriptions_replaces_skill_generation(monkeypatch) -> None:
     asyncio.run(registered[1](SimpleNamespace(payload={})))
 
     assert calls == ["old", "new"]
+
+
+def test_stream_control_subscriptions_bypass_yjs_owner_guard(monkeypatch) -> None:
+    fake_guard = ModuleType("adaos.services.yjs.owner_guard")
+
+    def fail_admission(**_kwargs):
+        raise AssertionError("YJS owner guard should not govern stream-control subscriptions")
+
+    fake_guard.admit_owner_work = fail_admission  # type: ignore[attr-defined]
+    fake_guard.skill_owner = lambda skill: f"skill:{skill}"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "adaos.services.yjs.owner_guard", fake_guard)
+
+    for topic in ("webio.stream.snapshot.requested", "webio.stream.subscription.changed"):
+        admission = decorators._admit_skill_subscription_yjs_work(
+            "demo_skill",
+            topic,
+            SimpleNamespace(payload={"webspace_id": "desktop"}),
+        )
+
+        assert admission == {
+            "allowed": True,
+            "governed": False,
+            "reason": "stream_control_uses_stream_guard",
+        }
+
+
+def test_non_stream_subscription_still_uses_yjs_owner_guard(monkeypatch) -> None:
+    calls: list[dict] = []
+    fake_guard = ModuleType("adaos.services.yjs.owner_guard")
+
+    def admit_owner_work(**kwargs):
+        calls.append(kwargs)
+        return {"allowed": False, "reason": "owner_quarantined"}
+
+    fake_guard.admit_owner_work = admit_owner_work  # type: ignore[attr-defined]
+    fake_guard.skill_owner = lambda skill: f"skill:{skill}"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "adaos.services.yjs.owner_guard", fake_guard)
+
+    admission = decorators._admit_skill_subscription_yjs_work(
+        "demo_skill",
+        "infrastate.refresh",
+        SimpleNamespace(payload={"webspace_id": "desktop"}),
+    )
+
+    assert admission == {"allowed": False, "reason": "owner_quarantined"}
+    assert calls
+    assert calls[0]["owner"] == "skill:demo_skill"
+    assert calls[0]["root_names"] == ["data"]
+    assert calls[0]["path"] == "event/infrastate.refresh"

@@ -27,6 +27,10 @@ _LOG = logging.getLogger("adaos.sdk.subscriptions")
 _SUBSCRIPTION_DENY_LOG_AT: Dict[str, float] = {}
 _SUBSCRIPTION_DENY_LOG_INTERVAL_S = 5.0
 _SKILL_SUBSCRIPTION_GENERATIONS: Dict[str, int] = {}
+_STREAM_CONTROL_SUBSCRIPTION_TOPICS = {
+    "webio.stream.snapshot.requested",
+    "webio.stream.subscription.changed",
+}
 
 
 def _topic_matches_any(topic: str, patterns: str) -> bool:
@@ -127,6 +131,12 @@ def _webspace_id_from_event(evt: object) -> str:
 def _admit_skill_subscription_yjs_work(skill_name: str | None, topic: str, evt: object) -> dict[str, Any]:
     if not skill_name:
         return {"allowed": True, "governed": False, "reason": "not_a_skill_subscription"}
+    if str(topic or "").strip() in _STREAM_CONTROL_SUBSCRIPTION_TOPICS:
+        return {
+            "allowed": True,
+            "governed": False,
+            "reason": "stream_control_uses_stream_guard",
+        }
     try:
         from adaos.services.yjs.owner_guard import admit_owner_work, skill_owner
 

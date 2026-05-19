@@ -993,7 +993,12 @@ in `block` or sustained `throttle`. Wave 10 fixes the first live regression in
 that containment layer: implicit webspace events now publish quarantine service
 state to the configured desktop webspace, and hot browser stream events are
 coalesced by handler so stale queued subscription work cannot keep growing
-after pressure has already been detected.
+after pressure has already been detected. Wave 11 fixes the live regression
+seen on `.30`: Yjs owner quarantine no longer suppresses
+`webio.stream.snapshot.requested` / `webio.stream.subscription.changed`
+handlers, so a quarantined skill can still serve bounded stream variables while
+Yjs writes remain blocked by the primary-doc guard and stream payloads remain
+covered by the stream guard.
 
 Principle:
 
@@ -1050,6 +1055,11 @@ Actions:
   and supersede stale queued `webio.stream.snapshot.requested` /
   `webio.stream.subscription.changed` work by handler before it can accumulate
   into memory pressure.
+- [x] Exempt stream-control subscriptions from Yjs owner-guard quarantine:
+  `webio.stream.snapshot.requested` and
+  `webio.stream.subscription.changed` stay on the stream-control plane, while
+  actual Yjs writes and stream payload publication remain governed at their own
+  boundaries.
 - [ ] Keep operator-visible correlation IDs or generation IDs across snapshot,
   rebuild, route, and Yjs stages.
   First wave landed for member snapshot rebuild pressure and incident summary;
@@ -1879,7 +1889,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 58%. First implementation slices landed the ABI/schema
+Overall completion: 59%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1909,6 +1919,11 @@ when the thin response cannot be interpreted as a runtime snapshot. Summary
 responses now expose cache/body-size headers and
 `/api/node/reliability/summary/metrics` so soak checks can count thin/full
 responses, bytes, and `304` reuse.
+Checkpoint on `.30` confirmed a boundary bug: Yjs owner quarantine had been
+blocking stream-control subscription handlers, leaving `infrastate.skills` and
+`infrastate.scenarios` in their loading initial state. The core subscription
+guard now keeps these control events on the stream plane instead of treating
+them as Yjs writes.
 
 Problem statement:
 
