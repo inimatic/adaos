@@ -61,7 +61,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-root", default="")
     parser.add_argument("--source-repo-root", default="")
     parser.add_argument("--shared-dotenv-path", default="")
-    parser.add_argument("--repo-url", default=os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/stipot-com/adaos.git"))
+    parser.add_argument("--repo-url", default=os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/inimatic/adaos.git"))
     return parser.parse_args()
 
 
@@ -583,7 +583,7 @@ def prepare_slot(
     target_rev = str(target_rev or "").strip()
     target_version = str(target_version or "").strip()
     if repo_url is None:
-        repo_url = str(os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/stipot-com/adaos.git")).strip()
+        repo_url = str(os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/inimatic/adaos.git")).strip()
     else:
         repo_url = str(repo_url).strip()
     source_repo_dir = Path(str(source_repo_root or "")).expanduser().resolve() if str(source_repo_root or "").strip() else None

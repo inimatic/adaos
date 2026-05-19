@@ -188,7 +188,7 @@ def status(
         typer.secho("--diff requires a specific scenario name", fg=typer.colors.RED)
         raise typer.Exit(2)
 
-    REGISTRY_URL = os.getenv("ADAOS_WORKSPACE_REGISTRY_REPO", "https://github.com/stipot-com/adaos-registry.git")
+    REGISTRY_URL = os.getenv("ADAOS_WORKSPACE_REGISTRY_REPO", "https://github.com/inimatic/adaos-registry.git")
     REGISTRY_REMOTE = os.getenv("ADAOS_WORKSPACE_REGISTRY_REMOTE", "registry")
     REGISTRY_BRANCH = os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH", "main")
 

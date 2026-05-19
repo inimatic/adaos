@@ -416,7 +416,7 @@ def test_prepare_checkout_repo_falls_back_to_remote_when_local_source_misses_tar
     source_kind = mod._prepare_checkout_repo(
         checkout_dir=checkout_dir,
         source_repo_dir=source_repo,
-        repo_url="https://github.com/stipot-com/adaos.git",
+        repo_url="https://github.com/inimatic/adaos.git",
         target_rev="rev2026",
         target_version=target_version,
     )

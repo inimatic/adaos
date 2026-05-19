@@ -1,14 +1,14 @@
 #Requires -Version 5.1
 # Minimal "download & bootstrap" entrypoint (Windows PowerShell 5.1+).
 # Served from GitHub raw:
-#   https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1
+#   https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1
 # Zone arguments are passed through to tools/bootstrap.ps1, for example: -ZoneId ru -Dev
 
 [CmdletBinding(PositionalBinding = $false)]
 param(
   [string]$Dest = "$HOME\\adaos",
   [string]$Rev = "rev2026",
-  [string]$RepoOwner = "stipot-com",
+  [string]$RepoOwner = "inimatic",
   [string]$RepoName = "adaos",
   [string]$UseGitFrom = "",
   [Alias("UseWorkspaceRegistryFrom")]
