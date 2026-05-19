@@ -172,6 +172,10 @@ class _CtxHolder:
             object.__setattr__(ctx, "config", load_config(ctx=ctx))
         except Exception:
             pass
+        try:
+            ctx.status_registry
+        except Exception:
+            pass
         return ctx
 
 

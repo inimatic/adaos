@@ -301,11 +301,11 @@ diagnostic surface from becoming a primary Yjs pressure source.
   dedupe, version increments, stale diagnostics, and changed events
 - [x] `status.sdk_publish`: add `adaos.sdk.status.publish_status`,
   `publish_status_many`, and `publish_status_stream`
-- [ ] `status.bootstrap_registry`: wire the registry into normal API/server
+- [x] `status.bootstrap_registry`: wire the registry into normal API/server
   bootstrap so thin summaries can read it without test setup
 - [ ] `status.guard_cards`: publish compact Yjs/stream guard degraded cards
   through the shared path
-- [ ] `status.summary_endpoint`: expose registry-backed thin status snapshots
+- [x] `status.summary_endpoint`: expose registry-backed thin status snapshots
   through `/api/node/reliability/summary` or its successor
 
 ### 4. `browsers_skill` Migration

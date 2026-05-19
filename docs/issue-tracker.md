@@ -1879,7 +1879,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 36%. First implementation slices landed the ABI/schema
+Overall completion: 42%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1893,7 +1893,10 @@ control-pressure counters by receiver. ProjectionService/Yjs governance now
 records the projection route (`scope`, `slot`, `path`, `root`) behind the last
 primary-doc pressure event. The first status-plane slice now provides
 `StatusCard`, `StatusRegistry`, and `adaos.sdk.status` helpers for small
-versioned status summaries that point to stream/tool details.
+versioned status summaries that point to stream/tool details. The API bootstrap
+now registers the shared status registry, `/api/node/status/cards` exposes
+cheap filtered reads, and `/api/node/reliability/summary` includes a
+compatibility `statusPlane` block.
 
 Problem statement:
 
@@ -2078,9 +2081,9 @@ Human verification:
 
 #### STATUS-002: Add a materialized status registry/service
 
-Status: in progress.
+Status: completed.
 
-Progress: 80%.
+Progress: 100%.
 
 Expected behavior:
 
@@ -2099,7 +2102,16 @@ Actions:
 - [x] Add compact registry diagnostics: card count, changed count, stale count,
   and last publish latency.
 - [x] Add unit tests for dedupe, versioning, TTL expiry, and owner scoping.
-- [ ] Wire the registry into API/server bootstrap and expose a read endpoint.
+- [x] Wire the registry into API/server bootstrap and expose a read endpoint.
+
+Human verification:
+
+- Publish a card through `adaos.sdk.status.publish_status(...)`, then request
+  `GET /api/node/status/cards?webspace_id=<id>`. The response should include
+  `source=api.node.status.cards`, `diagnostics.cardCount`, and the compact card.
+- Request `GET /api/node/reliability/summary?webspace_id=<id>` and verify the
+  response still omits full `runtime`/`model` payloads while including
+  `statusPlane.cards`.
 
 #### STATUS-003: Add skill-facing SDK helpers
 
@@ -2200,7 +2212,9 @@ Actions:
 
 #### STATUS-006: Make `/api/node/reliability/summary` thin and versioned
 
-Status: planned.
+Status: in progress.
+
+Progress: 20%.
 
 Expected behavior:
 
@@ -2212,6 +2226,8 @@ Expected behavior:
 Actions:
 
 - [ ] Measure current response size and polling frequency.
+- [x] Expose registry-backed `statusPlane` data inside the compatibility
+  summary response and through `/api/node/status/cards`.
 - [ ] Add `mode=thin` or make thin mode the default with a compatibility flag
   for full mode.
 - [ ] Add `ETag` / `If-None-Match` support or `since_version`.

@@ -87,6 +87,7 @@ class AgentContext:
     _scenarios_repo: Optional[GitScenarioRepository] = field(default=None, init=False, repr=False)
     _skill_ctx_port: Optional[SkillContextPort] = field(default=None, init=False, repr=False)
     _projection_registry: Optional[object] = field(default=None, init=False, repr=False)
+    _status_registry: Optional[object] = field(default=None, init=False, repr=False)
 
     @property
     def skills_repo(self) -> GitSkillRepository:
@@ -135,6 +136,16 @@ class AgentContext:
 
             registry = ProjectionRegistry()
             object.__setattr__(self, "_projection_registry", registry)
+        return registry
+
+    @property
+    def status_registry(self):
+        registry = self._status_registry
+        if registry is None:
+            from adaos.services.status import register_status_registry
+
+            registry = register_status_registry(self.bus)
+            object.__setattr__(self, "_status_registry", registry)
         return registry
 
     def reload_repos(self) -> None:
