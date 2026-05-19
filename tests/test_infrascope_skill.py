@@ -99,6 +99,7 @@ def test_infrascope_skill_projects_overview_summary_and_incident_rows(monkeypatc
                     "id": "health:member-1",
                     "object_id": "member-1",
                     "summary": "Link is degraded",
+                    "details": {"large": "payload"},
                 }
             ],
             "active_incidents": [
@@ -132,20 +133,16 @@ def test_infrascope_skill_projects_overview_summary_and_incident_rows(monkeypatc
             "severity": "high",
             "status": "degraded",
             "icon": "git-branch-outline",
-            "details": {
-                "incident": {
-                    "id": "incident:member-1",
-                    "object_id": "member-1",
-                    "title": "Kitchen member",
-                    "severity": "high",
-                    "summary": "Link is degraded",
-                },
-                "object": member.to_dict(),
+            "details_ref": {
+                "kind": "stream",
+                "receiver": "infrascope.inspector.member-1",
             },
         }
     ]
     assert health[0]["object_id"] == "member-1"
     assert health[0]["icon"] == "git-branch-outline"
+    assert "details" not in health[0]
+    assert health[0]["details_ref"]["receiver"] == "infrascope.inspector.member-1"
 
 
 def test_infrascope_skill_inventory_and_inspector_shape(monkeypatch):
@@ -387,8 +384,8 @@ def test_infrascope_scenario_declares_inventory_drilldown_and_inspector_flow():
     assert incidents["actions"][0]["params"]["inspectorTab"] == "incidents"
     assert operations["dataSource"]["kind"] == "stream"
     assert operations["dataSource"]["receiver"] == "infrascope.operations.active"
-    assert summary["dataSource"]["kind"] == "y"
-    assert summary["dataSource"]["path"] == "data/infrascope/inspectors/$state.selectedObjectId"
+    assert summary["dataSource"]["kind"] == "stream"
+    assert summary["dataSource"]["receiver"] == "infrascope.inspector.$state.selectedObjectId"
     assert widgets["overview-summary"]["dataSource"]["path"] == "data/infrascope/summary"
     assert mode["inputs"]["selectedStateKey"] == "infrascopeMode"
     assert inventory_tabs["inputs"]["selectedStateKey"] == "inventoryKind"

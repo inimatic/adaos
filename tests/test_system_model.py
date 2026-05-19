@@ -1141,9 +1141,14 @@ def test_canonical_overview_projection_builds_health_strip_runtime_and_recent_ch
     assert projection["id"] == "projection:hub:alpha/overview"
     assert projection["context"]["summary_tile"]["value"] == "degraded"
     assert projection["context"]["health_strip"][0]["object_id"] == "hub:alpha"
+    assert "details" not in projection["context"]["health_strip"][0]
+    assert projection["context"]["health_strip"][0]["details_ref"]["kind"] == "control_plane_collection"
     assert projection["context"]["quota_summary"][0]["object_id"] == "quota:telegram-outbox"
+    assert projection["context"]["quota_summary"][0]["details_ref"]["object_id"] == "quota:telegram-outbox"
     assert projection["context"]["active_runtimes"][0]["object_id"] == "runtime:hub:alpha/yjs-sync"
+    assert projection["context"]["active_runtimes"][0]["details_ref"]["object_id"] == "runtime:hub:alpha/yjs-sync"
     assert any(item["category"] == "drift" for item in projection["context"]["recent_changes"])
+    assert all("details" not in item for item in projection["context"]["recent_changes"])
 
 
 def test_canonical_object_from_supervisor_runtime_surfaces_transition_state() -> None:
