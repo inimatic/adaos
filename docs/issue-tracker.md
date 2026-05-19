@@ -112,11 +112,9 @@ Snapshot date: 2026-05-13.
 Implemented baseline is documented in
 `docs/architecture/ui-runtime-diagnostics.md`.
 Additional checkpoint on 2026-05-19: browser `RuntimeDebugService` keeps a
-bounded ring in `localStorage` under `adaos.runtime_debug.logs.v1`, but the node
-currently ingests only UI notification diagnostics through
-`/api/node/ui/diagnostics`. That means Dev Browser breadcrumbs exist in the
-browser, while LLM/node-side investigation can still miss them unless the user
-exports them manually. The export path must remain diagnostic-only and must not
+bounded ring in `localStorage` under `adaos.runtime_debug.logs.v1`, and the
+node ingests bounded runtime-debug breadcrumbs through
+`/api/node/ui/diagnostics`. The export path remains diagnostic-only and does not
 write browser logs into primary Yjs state.
 
 ### Tasks
@@ -136,7 +134,7 @@ Actions:
   `service.<skill>.*.log`.
 - [ ] Add widget-level ownership metadata for renderer failures that are not
   modal-owned.
-- [ ] Add bounded export/ingest for `adaos.runtime_debug.logs.v1` so node-side
+- [x] Add bounded export/ingest for `adaos.runtime_debug.logs.v1` so node-side
   tools can read Dev Browser breadcrumbs through skill/runtime diagnostic logs.
 - [ ] Add a typed ABI schema for UI diagnostic payloads.
 - [ ] Add rate limiting and duplicate suppression for repeated renderer errors.
@@ -2736,6 +2734,11 @@ Actions:
   server-side guard decision. The runtime now assigns `yws_attempt_id` to each
   YWS attempt, includes it in `browser.session.changed`, open/close logs,
   guard reject logs, and `transport.attempts`.
+- [x] Add browser identity and client provider-attempt correlation to UI runtime
+  diagnostics. The node-side log now carries browser `device_id`, family, OS,
+  form factor, runtime-debug session/tab ids, and `client_yws_attempt_id` so a
+  red Mobile/Opera tab can be matched to gateway `yws_attempt_id` logs without
+  guessing from timestamps.
 - [x] Export a compact browser runtime heartbeat/cursor to node diagnostics:
   last Yjs provider state, control-WS state, last close reason/code, last export
   time, and dropped-log counts. The current bounded log export proves failures
@@ -2768,8 +2771,9 @@ Actions:
   fields, and hard bootstrap outcomes add a blocker such as
   `room_bootstrap_timeout:<yroom>/<yws>`.
 - Browser runtime-debug cursor now carries the current computed YJS indicator
-  state/reason plus supervisor transition/probe/suppression breadcrumbs, so the
-  node can explain a red indicator without opening DevTools.
+  state/reason, browser identity, client YWS provider attempt id, and supervisor
+  transition/probe/suppression breadcrumbs, so the node can explain a red
+  indicator without opening DevTools or guessing which device produced it.
 - This improves investigation of YJS Red / red-green flicker without changing
   the Yjs or stream data route. Remaining acceptance work is a pressure/soak run
   that records status registry and stream guard diagnostics while known noisy
@@ -3054,9 +3058,9 @@ Human verification:
 - [ ] After the critical control-plane subscription budget rollout, open Dev
   Browser and verify that Infra State converges to the active slot/status even
   when `infrastate_skill` is blocked or quarantined.
-- [ ] Check node-side UI runtime logs for `yjs.signal` in
-  `runtime_debug.cursor`; the cursor should match the visible red/green
-  indicator, not only raw provider status.
+- [ ] Check node-side UI runtime logs for `yjs.signal`, `browser_identity`, and
+  `client_yws_attempt_id` in `runtime_debug.cursor`; the cursor should match
+  the visible red/green indicator and identify the exact browser device.
 - [ ] Verify `.40` reliability summary no longer throws `FileNotFoundError`
   from `realtime_sidecar_diag_path()` after the next rollout.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
