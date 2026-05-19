@@ -2553,7 +2553,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 35%.
+Progress: 37%.
 
 Acceptance criteria:
 
@@ -2609,6 +2609,11 @@ Actions:
   current process `ADAOS_RUNTIME_PORT` over persisted stale runtime state, use a
   `tools/call` timeout budget that fits Root's 60s outer budget, and avoid
   retrying a read-timed-out POST against a different slot port.
+- [x] Bound read-only member snapshot RPC fallback: `get_snapshot` calls routed
+  to a target member now use a shorter default member-link timeout and reuse the
+  unavailable-cache even while the link still appears connected, preventing a
+  slow/offline member from holding the browser control-plane for roughly a
+  minute.
 - [ ] Add a room-bootstrap attempt id to Yjs gateway logs and reliability
   diagnostics so `room ready timeout`, `stale bootstrap recovery`,
   `apply_updates cancelled`, and later `room ready` can be correlated without
@@ -2628,6 +2633,11 @@ Actions:
   treated short SHAs as commit targets but required exact 40-character equality
   during validation. The core updater now accepts a short SHA only when it is a
   prefix of the resolved full commit.
+- After the route fix, the same public `tools/call` stopped returning `502` but
+  took about 58.5s and returned degraded
+  `target_member_unavailable`. This identified a separate member-link fallback
+  budget issue, not a Yjs issue: hub-route was repaired, but readonly snapshot
+  proxying could still wait for a slow connected member RPC.
 - Current conclusion: the working snapshot endpoint is a control-plane fallback
   and does not prove Yjs health by itself. Server-side reliability/YWS
   diagnostics must be checked separately; client-side `YJS Red` needs exported
