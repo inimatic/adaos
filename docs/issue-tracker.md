@@ -407,6 +407,13 @@ Code review confirms that git is already optional in the install/materialization
 path through GitHub archive fallback. That is appropriate for member nodes, but
 hub/dev operation needs a stricter policy because the hub owns catalog refresh,
 runtime publishing, and future LLM development in `.adaos/dev`.
+The 2026-05-19 memory checkpoint also found a service-skill observability
+issue: `rasa_nlu_service_skill` health checks were successful, but the embedded
+HTTP server wrote every `/health` probe to `service.rasa_nlu_service_skill.log`
+every two seconds. That did not explain the core runtime RSS growth, but it
+created a 162 MiB service log and unnecessary cache/journald pressure. The
+service skill now suppresses `/health` access logs while keeping non-health
+request/error logs visible.
 
 ### Product Rules
 
@@ -534,6 +541,8 @@ Actions:
   show drift.
 - [x] Add tests around update failure and drift visibility.
 - [x] Add rollback-to-previous-active coverage for partial activation failures.
+- [x] Suppress noisy `/health` access logs in `rasa_nlu_service_skill` and
+  verify service-skill reinstall/restart picks up the new runtime code.
 
 Implementation notes:
 
