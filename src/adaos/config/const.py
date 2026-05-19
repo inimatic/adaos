@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 # ЖЁСТКИЕ значения по умолчанию (меняются разработчиками в коде/сборке)
-REGISTRY_URL: str = "https://github.com/stipot-com/adaos-registry.git"
+REGISTRY_URL: str = "https://github.com/inimatic/adaos-registry.git"
 
 SKILLS_MONOREPO_URL: str | None = REGISTRY_URL
 SKILLS_MONOREPO_BRANCH: str | None = "main"

@@ -60,7 +60,8 @@ def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
     assert payload["runtime"]["environment"]["envType"] == "dev"
 
 
-def test_private_network_access_middleware_allows_cross_origin_loopback_probe() -> None:
+@pytest.mark.parametrize("origin", ["https://inimatic.web.app", "https://inimatic.com"])
+def test_private_network_access_middleware_allows_cross_origin_loopback_probe(origin: str) -> None:
     scope = {
         "type": "http",
         "http_version": "1.1",
@@ -70,7 +71,7 @@ def test_private_network_access_middleware_allows_cross_origin_loopback_probe() 
         "raw_path": b"/api/ping",
         "query_string": b"",
         "headers": [
-            (b"origin", b"https://myinimatic.web.app"),
+            (b"origin", origin.encode("ascii")),
             (b"access-control-request-method", b"GET"),
             (b"access-control-request-private-network", b"true"),
         ],
@@ -86,7 +87,7 @@ def test_private_network_access_middleware_allows_cross_origin_loopback_probe() 
     )
 
     assert response.status_code == 204
-    assert response.headers["Access-Control-Allow-Origin"] == "https://myinimatic.web.app"
+    assert response.headers["Access-Control-Allow-Origin"] == origin
     assert response.headers["Access-Control-Allow-Methods"] == "GET"
     assert response.headers["Access-Control-Allow-Private-Network"] == "true"
     assert response.headers["Vary"] == "Origin"

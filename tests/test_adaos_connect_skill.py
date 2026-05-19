@@ -90,8 +90,8 @@ def test_browser_current_uses_zone_and_new_app_domain(monkeypatch, tmp_path: Pat
             )
             return {
                 "user_code": "PAIR1234",
-                "verification_uri": "https://myinimatic.web.app/?mode=registration",
-                "verification_uri_complete": "https://myinimatic.web.app/?mode=registration&user_code=PAIR1234&zone=ru",
+                "verification_uri": "https://inimatic.web.app/?mode=registration",
+                "verification_uri_complete": "https://inimatic.web.app/?mode=registration&user_code=PAIR1234&zone=ru",
                 "expires_at": expires_at,
             }
 
@@ -109,8 +109,8 @@ def test_browser_current_uses_zone_and_new_app_domain(monkeypatch, tmp_path: Pat
         }
     ]
     assert current["status"] == "ready"
-    assert current["app_base_url"] == "https://myinimatic.web.app"
-    assert current["link"] == "https://myinimatic.web.app/?mode=registration&user_code=PAIR1234&zone=ru"
+    assert current["app_base_url"] == "https://inimatic.web.app"
+    assert current["link"] == "https://inimatic.web.app/?mode=registration&user_code=PAIR1234&zone=ru"
     assert current["qr_text"] == current["link"]
     assert current["expires_at_epoch"] == expires_at
     assert current["expires_at"] == mod._format_expiry_iso(expires_at)
@@ -182,12 +182,12 @@ def test_node_current_falls_back_to_root_token_and_embeds_zone_bootstrap_args(mo
     assert calls[1]["headers"] == {"X-Root-Token": "root-secret"}
     assert current["status"] == "ready"
     assert current["code"] == "ABCD-EFGH"
-    assert "raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh" in current["linux_command"]
+    assert "raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh" in current["linux_command"]
     assert "--zone ru" in current["linux_command"]
     assert "https://ru.api.inimatic.com" in current["linux_command"]
-    assert "raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1" in current["windows_ps_command"]
+    assert "raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1" in current["windows_ps_command"]
     assert "-ZoneId 'ru'" in current["windows_ps_command"]
-    assert "raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1" in current["windows_cmd_command"]
+    assert "raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1" in current["windows_cmd_command"]
     assert "init.bat" not in current["windows_cmd_command"]
     assert '-RootUrl "https://ru.api.inimatic.com"' in current["windows_cmd_command"]
     assert '-ZoneId "ru"' in current["windows_cmd_command"]
@@ -211,7 +211,7 @@ async def test_on_prepare_writes_pending_before_background_result(monkeypatch):
             "verify": True,
             "cert_tuple": None,
             "root_base_url": "https://ru.api.inimatic.com",
-            "app_base_url": "https://myinimatic.web.app",
+            "app_base_url": "https://inimatic.web.app",
         },
     )
 
@@ -264,7 +264,7 @@ async def test_on_prepare_reuses_cached_result_while_code_is_alive(monkeypatch):
             "verify": True,
             "cert_tuple": None,
             "root_base_url": "https://ru.api.inimatic.com",
-            "app_base_url": "https://myinimatic.web.app",
+            "app_base_url": "https://inimatic.web.app",
         },
     )
     monkeypatch.setattr(mod.time, "time", lambda: now["value"])
@@ -318,7 +318,7 @@ async def test_on_prepare_renews_code_after_cache_expires(monkeypatch):
             "verify": True,
             "cert_tuple": None,
             "root_base_url": "https://ru.api.inimatic.com",
-            "app_base_url": "https://myinimatic.web.app",
+            "app_base_url": "https://inimatic.web.app",
         },
     )
     monkeypatch.setattr(mod.time, "time", lambda: now["value"])

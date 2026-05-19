@@ -3,11 +3,11 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 rem Minimal bootstrap entrypoint (Windows CMD).
 rem Served from GitHub raw:
-rem   https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.bat
+rem   https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.bat
 rem It downloads and runs init.ps1 (PowerShell) so users can double-click a single file.
 rem Zone arguments are passed through as-is, for example: init.bat -ZoneId ru
 
-set "URL=https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1"
+set "URL=https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1"
 set "TMP=%TEMP%\\adaos_init_%RANDOM%_%RANDOM%.ps1"
 
 echo [*] Downloading %URL%

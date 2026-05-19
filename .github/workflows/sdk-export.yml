@@ -33,7 +33,7 @@ jobs:
         shell: bash
         env:
           ADAOS_TESTING: 1
-          MONOREPO_URL: https://github.com/stipot/adaoskills.git
+          MONOREPO_URL: https://github.com/inimatic/adaoskills.git
         run: |
           adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q
 
@@ -42,6 +42,6 @@ jobs:
         shell: pwsh
         env:
           ADAOS_TESTING: 1
-          MONOREPO_URL: https://github.com/stipot/adaoskills.git
+          MONOREPO_URL: https://github.com/inimatic/adaoskills.git
         run: |
           adaos tests run --only-sdk -- --junitxml=reports/sdk-junit.xml -q

@@ -14,7 +14,7 @@
 ## Клонирование
 
 ```bash
-git clone -b rev2026 https://github.com/stipot-com/adaos.git
+git clone -b rev2026 https://github.com/inimatic/adaos.git
 cd adaos
 ```
 
@@ -28,7 +28,7 @@ git submodule update --init --recursive \
   src/adaos/integrations/rasa-port
 ```
 
-`rasa-port` is optional but recommended when working on NLU locally. If it is absent, AdaOS installs `adaos-rasa-nlu` for the Rasa service-skill from `https://github.com/stipot-com/rasa-port.git`.
+`rasa-port` is optional but recommended when working on NLU locally. If it is absent, AdaOS installs `adaos-rasa-nlu` for the Rasa service-skill from `https://github.com/inimatic/rasa-port.git`.
 
 ## Bootstrap
 

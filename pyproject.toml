@@ -56,7 +56,7 @@ dependencies = [
 adaos = "adaos.apps.cli.app:app"
 
 [project.urls]
-Homepage = "https://github.com/stipot-com/adaos"
+Homepage = "https://github.com/inimatic/adaos"
 
 [tool.setuptools]
 include-package-data = true

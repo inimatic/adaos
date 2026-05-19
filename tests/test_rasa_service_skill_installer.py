@@ -81,7 +81,7 @@ def test_rasa_port_dependency_initializes_declared_submodule(monkeypatch, tmp_pa
         """
 [submodule "src/adaos/integrations/rasa-port"]
     path = src/adaos/integrations/rasa-port
-    url = https://github.com/stipot-com/rasa-port.git
+    url = https://github.com/inimatic/rasa-port.git
 """.strip(),
         encoding="utf-8",
     )
@@ -129,7 +129,7 @@ def test_rasa_port_dependency_falls_back_to_git_requirement(monkeypatch):
 
     assert deps == [
         "--no-deps",
-        "adaos-rasa-nlu @ git+https://github.com/stipot-com/rasa-port.git@main",
+        "adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main",
     ]
 
 

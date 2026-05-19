@@ -1,9 +1,9 @@
 strict: true
 site_name: AdaOS
 site_description: "AdaOS developer and runtime documentation"
-site_url: https://stipot-com.github.io/adaos/
-repo_url: https://github.com/stipot-com/adaos
-repo_name: stipot-com/adaos
+site_url: https://inimatic.github.io/adaos/
+repo_url: https://github.com/inimatic/adaos
+repo_name: inimatic/adaos
 edit_uri: edit/main/docs/
 
 theme:
@@ -39,7 +39,7 @@ theme:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/stipot-com/adaos
+      link: https://github.com/inimatic/adaos
   alternate:
     - name: English
       link: /

@@ -336,7 +336,7 @@ print_next_steps() {
   echo "     Stop:              ${ADAOS_PY} -m adaos api stop"
   echo "     Restart:           ${ADAOS_PY} -m adaos api restart"
   echo "  4) Web UI:"
-  echo "     Open https://myinimatic.web.app/ and connect to your local node (ports 8777/8778)."
+  echo "     Open https://inimatic.web.app/ or https://inimatic.com/ and connect to your local node (ports 8777/8778)."
   if [[ "${role:-}" == "member" ]]; then
     echo "  5) Member → hub connectivity:"
     echo "     connected_to_hub=${connected_to_hub:-unknown}"
@@ -344,7 +344,7 @@ print_next_steps() {
   fi
   echo
   echo "Docs:"
-  echo "  https://stipot-com.github.io/adaos/"
+  echo "  https://inimatic.github.io/adaos/"
   if ! have qrencode; then
     echo
     echo "Tip: install 'qrencode' to show QR codes in terminal."
