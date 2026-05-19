@@ -1802,6 +1802,7 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
 
     assert "runtime" not in payload
     assert "model" not in payload
+    assert payload["mode"] == "compat"
     assert payload["source"] == "api.node.reliability.summary"
     assert payload["hubRootHardening"]["coveredFlows"] == 6
     assert payload["sidecarEnablement"]["enabled"] is True
@@ -1826,6 +1827,69 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert cards_by_id["guard:yjs_pressure"]["severity"] == "high"
     assert cards_by_id["guard:webio_stream"]["guardRef"]["receiver"] == "infrastate.realtime"
     assert cards_by_id["guard:webio_stream_control"]["status"] == "warning"
+
+    full_response = client.get("/api/node/reliability/summary?mode=full")
+    assert full_response.status_code == 200
+    full_payload = full_response.json()
+    assert full_payload["mode"] == "full"
+    assert full_payload["hubRootHardening"]["coveredFlows"] == 6
+
+
+def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.node_api import require_token, router
+    from adaos.services.status import StatusRegistry
+
+    def _unexpected_reliability(*args, **kwargs):
+        raise AssertionError("thin summary must not build the full reliability payload")
+
+    monkeypatch.setattr("adaos.apps.api.node_api.current_reliability_payload", _unexpected_reliability)
+    registry = StatusRegistry()
+    runtime_card = {
+        "id": "runtime",
+        "owner": "skill:infrastate_skill",
+        "kind": "runtime",
+        "scope": "infrastate",
+        "status": "ready",
+        "summary": "ready",
+        "webspace_id": "desktop",
+        "details_ref": {"kind": "stream", "receiver": "infrastate.runtime"},
+    }
+    registry.publish(runtime_card)
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(status_registry=registry))
+
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(router, prefix="/api/node")
+    client = TestClient(app)
+
+    response = client.get("/api/node/reliability/summary?mode=thin&webspace_id=desktop")
+    assert response.status_code == 200
+    assert response.headers["x-adaos-summary-mode"] == "thin"
+    etag = response.headers["etag"]
+    payload = response.json()
+
+    assert payload["mode"] == "thin"
+    assert payload["schema"] == "adaos.reliability_summary.thin.v1"
+    assert payload["statusPlane"]["total"] == 1
+    assert set(payload["statusPlane"]["diagnostics"]) == {
+        "cardCount",
+        "staleCount",
+        "derivedCardCount",
+        "lastChangedAt",
+    }
+    assert payload["statusPlane"]["cards"][0]["detailsRef"]["receiver"] == "infrastate.runtime"
+    assert "hubRootHardening" not in payload
+    assert payload["detailsRef"]["summaryFull"] == "/api/node/reliability/summary?mode=full"
+
+    registry.publish(runtime_card)
+    unchanged = client.get(
+        "/api/node/reliability/summary?mode=thin&webspace_id=desktop",
+        headers={"If-None-Match": etag},
+    )
+    assert unchanged.status_code == 304
+    assert unchanged.headers["etag"] == etag
+    assert unchanged.content == b""
 
 
 def test_node_status_cards_endpoint_reads_registry(monkeypatch) -> None:
