@@ -184,6 +184,7 @@ _YWS_MAX_ACTIVE_PER_WEBSPACE = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_WEBSPACE", 6, 
 _YWS_MAX_ACTIVE_PER_CLIENT = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_CLIENT", 1, minimum=1)
 _YWS_GUARD_RECENT_OPEN_10S = _env_int("ADAOS_YWS_GUARD_RECENT_OPEN_10S", 8, minimum=1)
 _YWS_GUARD_CLIENT_OPEN_15S = _env_int("ADAOS_YWS_GUARD_CLIENT_OPEN_15S", 4, minimum=1)
+_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S = _env_int("ADAOS_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2, minimum=1)
 _YWS_GUARD_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_COOLDOWN_S", 300.0, minimum=0.0)
 _YWS_GUARD_MAX_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_MAX_COOLDOWN_S", 1800.0, minimum=0.0)
 _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S", 3600.0, minimum=1.0)
@@ -2111,6 +2112,57 @@ def _yws_guard_should_notify(*, webspace_id: str, dev_id: str, reason: str) -> b
     return True
 
 
+def _yws_client_recent_open_counts_locked(webspace_key: str, now: float) -> tuple[int, int]:
+    recent_10s = 0
+    distinct_clients_10s = 0
+    for client_key, queue in _YWS_CLIENT_OPEN_HISTORY.items():
+        client_webspace, _, _client_dev = str(client_key or "").partition("::")
+        if (client_webspace or "default") != webspace_key:
+            continue
+        client_recent_10s = sum(1 for ts in queue if ts >= now - 10.0)
+        if client_recent_10s <= 0:
+            continue
+        recent_10s += client_recent_10s
+        distinct_clients_10s += 1
+    return recent_10s, distinct_clients_10s
+
+
+def _yws_guard_note_client_storm(
+    *,
+    webspace_id: str,
+    dev_id: str,
+    active_total: int,
+    client_15s: int,
+    webspace_recent_10s: int,
+    webspace_distinct_clients_10s: int,
+) -> None:
+    now = time.time()
+    with _YWS_STORM_LOCK:
+        _YWS_GUARD_DIAG["client_reconnect_storm_observed_total"] = int(
+            _YWS_GUARD_DIAG.get("client_reconnect_storm_observed_total") or 0
+        ) + 1
+        _YWS_GUARD_DIAG["last_client_reconnect_storm_at"] = now
+        _YWS_GUARD_DIAG["last_client_reconnect_storm_webspace_id"] = webspace_id
+        _YWS_GUARD_DIAG["last_client_reconnect_storm_dev_id"] = dev_id
+        _YWS_GUARD_DIAG["last_client_reconnect_storm_open_15s"] = client_15s
+        _YWS_GUARD_DIAG["last_webspace_recent_open_10s"] = webspace_recent_10s
+        _YWS_GUARD_DIAG["last_webspace_distinct_clients_10s"] = webspace_distinct_clients_10s
+        log_key = f"{webspace_id}:{dev_id}:client_reconnect_storm_observed"
+        last = float(_YWS_GUARD_LAST_LOG_AT.get(log_key) or 0.0)
+        if now - last < 5.0:
+            return
+        _YWS_GUARD_LAST_LOG_AT[log_key] = now
+    _ylog.warning(
+        "yws guard observed client reconnect storm webspace=%s dev=%s action=allow_reconnect active=%s client_open_15s=%s webspace_open_10s=%s webspace_clients_10s=%s",
+        webspace_id,
+        dev_id,
+        active_total,
+        client_15s,
+        webspace_recent_10s,
+        webspace_distinct_clients_10s,
+    )
+
+
 def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[str, Any]]:
     webspace_key = str(webspace_id or "").strip() or "default"
     dev_key = str(dev_id or "").strip() or "unknown"
@@ -2118,7 +2170,10 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
     active_total = _active_yws_connection_total_for_webspace(webspace_key)
     reason = ""
     recent_10s = 0
+    webspace_distinct_clients_10s = 0
     client_15s = 0
+    client_reconnect_storm = False
+    cleared_client_quarantine = False
     quarantine_until = 0.0
     quarantine_ttl_s: float | None = None
     quarantine_incident_count: int | None = None
@@ -2137,25 +2192,49 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
         for key0 in list(_YWS_GUARD_QUARANTINE_UNTIL.keys()):
             if float(_YWS_GUARD_QUARANTINE_UNTIL.get(key0) or 0.0) <= now:
                 _YWS_GUARD_QUARANTINE_UNTIL.pop(key0, None)
-        recent_10s = sum(1 for ts in _YWS_OPEN_HISTORY if ts >= now - 10.0)
+        recent_10s, webspace_distinct_clients_10s = _yws_client_recent_open_counts_locked(webspace_key, now)
         client_key = _yws_guard_quarantine_key(webspace_key, dev_key)
         client_queue = _YWS_CLIENT_OPEN_HISTORY.get(client_key) or deque()
         client_15s = sum(1 for ts in client_queue if ts >= now - 15.0)
-        quarantine_until = max(
-            float(_YWS_GUARD_QUARANTINE_UNTIL.get(client_key) or 0.0),
-            float(_YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0),
+        client_quarantine_until = float(_YWS_GUARD_QUARANTINE_UNTIL.get(client_key) or 0.0)
+        webspace_quarantine_until = float(
+            _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
-        if quarantine_until > now:
+        if client_quarantine_until > now:
+            # Older builds used a destructive per-client reconnect quarantine.
+            # Reconnect storms are still diagnostic pressure, but a single
+            # client should be replaced/backed off by the browser, not locked
+            # out of the shared Yjs channel for the full cooldown window.
+            _YWS_GUARD_QUARANTINE_UNTIL.pop(client_key, None)
+            cleared_client_quarantine = True
+            _YWS_GUARD_DIAG["last_cleared_client_quarantine_at"] = now
+            _YWS_GUARD_DIAG["last_cleared_client_quarantine_webspace_id"] = webspace_key
+            _YWS_GUARD_DIAG["last_cleared_client_quarantine_dev_id"] = dev_key
+            _YWS_GUARD_DIAG["last_cleared_client_quarantine_remaining_s"] = max(
+                0.0,
+                client_quarantine_until - now,
+            )
+        quarantine_until = webspace_quarantine_until
+        if webspace_quarantine_until > now:
             reason = "quarantined"
         elif active_total >= _YWS_MAX_ACTIVE_PER_WEBSPACE:
             reason = "active_limit"
-        elif client_15s >= _YWS_GUARD_CLIENT_OPEN_15S:
-            reason = "client_reconnect_storm"
-            quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
-                client_key,
-                now,
-            )
-        elif recent_10s >= _YWS_GUARD_RECENT_OPEN_10S:
+        else:
+            client_reconnect_storm = client_15s >= _YWS_GUARD_CLIENT_OPEN_15S
+            if client_reconnect_storm:
+                _yws_guard_note_client_storm(
+                    webspace_id=webspace_key,
+                    dev_id=dev_key,
+                    active_total=active_total,
+                    client_15s=client_15s,
+                    webspace_recent_10s=recent_10s,
+                    webspace_distinct_clients_10s=webspace_distinct_clients_10s,
+                )
+        if (
+            not reason
+            and recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
+            and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
+        ):
             reason = "webspace_reconnect_storm"
             quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
                 _yws_guard_quarantine_key(webspace_key),
@@ -2174,7 +2253,10 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
     diag = {
         "active_total": active_total,
         "recent_open_10s": recent_10s,
+        "webspace_distinct_clients_10s": webspace_distinct_clients_10s,
         "client_open_15s": client_15s,
+        "client_reconnect_storm": client_reconnect_storm,
+        "client_quarantine_cleared": cleared_client_quarantine,
         "quarantine_until": quarantine_until,
         "quarantine_ttl_s": quarantine_ttl_s,
         "quarantine_incident_count": quarantine_incident_count,
@@ -2204,10 +2286,17 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
         incident_total = len(_YWS_GUARD_INCIDENTS)
         guard_diag = dict(_YWS_GUARD_DIAG)
         hot_clients: list[dict[str, Any]] = []
+        distinct_hot_clients_10s = 0
+        client_reconnect_storm_detected = False
         for key, queue in _YWS_CLIENT_OPEN_HISTORY.items():
+            client_recent_10s = sum(1 for ts in queue if ts >= now - 10.0)
+            if client_recent_10s > 0:
+                distinct_hot_clients_10s += 1
             recent_15s = sum(1 for ts in queue if ts >= now - 15.0)
             if recent_15s <= 0:
                 continue
+            if recent_15s >= _YWS_GUARD_CLIENT_OPEN_15S:
+                client_reconnect_storm_detected = True
             webspace_id, _, dev_id = key.partition("::")
             hot_clients.append(
                 {
@@ -2220,7 +2309,10 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
     return {
         "recent_open_10s": recent_10s,
         "recent_open_60s": recent_60s,
-        "storm_detected": recent_10s >= 8,
+        "distinct_hot_clients_10s": distinct_hot_clients_10s,
+        "storm_detected": recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
+        and distinct_hot_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S,
+        "client_reconnect_storm_detected": client_reconnect_storm_detected,
         "hot_clients": hot_clients[:3],
         "active_clients": active_clients[:8],
         "guard": {
@@ -2228,6 +2320,7 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
             "max_active_per_client": _YWS_MAX_ACTIVE_PER_CLIENT,
             "recent_open_10s_limit": _YWS_GUARD_RECENT_OPEN_10S,
             "client_open_15s_limit": _YWS_GUARD_CLIENT_OPEN_15S,
+            "webspace_min_clients_10s": _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S,
             "cooldown_s": _YWS_GUARD_COOLDOWN_S,
             "max_cooldown_s": _YWS_GUARD_MAX_COOLDOWN_S,
             "escalation_window_s": _YWS_GUARD_ESCALATION_WINDOW_S,
