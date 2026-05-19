@@ -1,16 +1,16 @@
 [submodule "src/adaos/integrations/adaos-client"]
 	path = src/adaos/integrations/adaos-client
-	url = https://github.com/stipot-com/adaos-client.git
+	url = https://github.com/inimatic/adaos-client.git
 	branch = main
 [submodule "src/adaos/integrations/adaos-backend"]
 	path = src/adaos/integrations/adaos-backend
-	url = https://github.com/stipot-com/adaos-backend.git
+	url = https://github.com/inimatic/adaos-backend.git
 	branch = main
 [submodule "src/adaos/integrations/infra-inimatic"]
 	path = src/adaos/integrations/infra-inimatic
-	url = https://github.com/stipot-com/infra-inimatic.git
+	url = https://github.com/inimatic/infra-inimatic.git
 	branch = main
 [submodule "src/adaos/integrations/rasa-port"]
 	path = src/adaos/integrations/rasa-port
-	url = https://github.com/stipot-com/rasa-port.git
+	url = https://github.com/inimatic/rasa-port.git
 	branch = main

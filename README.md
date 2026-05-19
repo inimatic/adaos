@@ -1,10 +1,10 @@
 # AdaOS
 
-![AdaOS CI](https://github.com/stipot-com/adaos/actions/workflows/ci.yml/badge.svg)
+![AdaOS CI](https://github.com/inimatic/adaos/actions/workflows/ci.yml/badge.svg)
 
 AdaOS is an environment for personal digital assistants. It turns devices, agents, skills, applications, and interfaces into one assistant environment while keeping the lower-level subnet, scenario, widget, and hub/member machinery available for diagnostics and developer workflows.
 
-[Documentation](https://stipot-com.github.io/adaos/)
+[Documentation](https://inimatic.github.io/adaos/)
 
 ## Overview
 
@@ -61,21 +61,21 @@ With AdaOS you can:
 
 ```bash
 # use optional key to join member to subnet: --zone ru --join-code CODE 
-curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru|us|eu
+curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru|us|eu
 # if your PATH points at a uv shim, force a real interpreter path:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --python /usr/bin/python3.11 --zone ru
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --python /usr/bin/python3.11 --zone ru
 # set a friendly node name that will be shown in the desktop:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --node-name "Codespace Member" --zone ru
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --node-name "Codespace Member" --zone ru
 # disable hub/member core updates from CI/CD signals for this node:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --no-core-update --zone ru
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --no-core-update --zone ru
 # bootstrap from a fork instead of the upstream core repo:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
 # use a fork of the workspace registry repo:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
 # in GitHub Codespaces, reuse the current checkout directly and keep core updates manual:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
 # or install directly into the current directory:
-# curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dest . --zone ru
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dest . --zone ru
 ```
 
 ### Windows (PowerShell)
@@ -83,15 +83,15 @@ curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init
 ```powershell
 # requires Windows PowerShell 5.1+ or PowerShell 7+
 # use optional key to join member to subnet: -JoinCode CODE
-& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content))
+& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content))
 # pick zone explicitly when needed:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
+# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
 # bootstrap from a fork instead of the upstream core repo:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content)) -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
+# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
 # use a fork of the workspace registry repo:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content)) -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
+# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
 # enable dev bootstrap when needed:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru -Dev
+# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru -Dev
 ```
 
 ### Windows (CMD)
@@ -99,15 +99,15 @@ curl -fsSL https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init
 ```bat
 REM requires Windows PowerShell 5.1+ or PowerShell 7+
 # use optional key to join member to subnet: -JoinCode CODE
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -JoinCode CODE
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -JoinCode CODE
 REM pick zone explicitly when needed:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru
 REM bootstrap from a fork instead of the upstream core repo:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
 REM use a fork of the workspace registry repo:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
 REM enable dev bootstrap when needed:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/stipot-com/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru -Dev
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru -Dev
 ```
 
 ## Переключить текущий shell на runtime активного core slot, не трогая корневой `.venv`, используйте source-able script из `tools/`
@@ -193,10 +193,12 @@ runtime_pid = 26718 runtime_process.pid
 
 # Web client URL parameters:
 # Full list: src/adaos/integrations/adaos-client/README.md#client-url-parameters
-# https://myinimatic.web.app/?zone=ru&mode=login&auto_login=1
-# https://myinimatic.web.app/?boot_debug=1
-# https://myinimatic.web.app/?runtime_debug=0
-# https://myinimatic.web.app/?yjs_persist=0
+# https://inimatic.web.app/?zone=ru&mode=login&auto_login=1
+# https://inimatic.web.app/?boot_debug=1
+# https://inimatic.web.app/?runtime_debug=0
+# https://inimatic.web.app/?yjs_persist=0
+# Alternative Firebase custom domain:
+# https://inimatic.com/?zone=ru&mode=login&auto_login=1
 
 ```
 
@@ -205,7 +207,7 @@ runtime_pid = 26718 runtime_process.pid
 ### Clone
 
 ```bash
-git clone -b rev2026 https://github.com/stipot-com/adaos.git
+git clone -b rev2026 https://github.com/inimatic/adaos.git
 cd adaos
 ```
 
@@ -266,7 +268,7 @@ Local API runtime notes:
 - `adaos api serve` starts the local hub/runtime HTTP API directly, without the slot supervisor.
 - In development, an explicit `--port` is persisted into `.adaos/node.yaml` as `local_api_url`, and the next `adaos api serve` reuses it.
 - `8777` and `8778` are the normal browser-discoverable local hub ports.
-- Use a different port such as `8779` when you do not want `https://myinimatic.web.app/` to auto-attach to the local runtime and prefer it to stay on Root.
+- Use a different port such as `8779` when you do not want `https://inimatic.web.app/` or `https://inimatic.com/` to auto-attach to the local runtime and prefer it to stay on Root.
 - Supervisor-managed runtime mode is separate: it owns port `8776`, manages slots, and sets `ADAOS_SUPERVISOR_ENABLED=1`.
 - Development runtimes with `ENV_TYPE=dev` do not follow hub/root core-update signals by default; set `ADAOS_DEV_ALLOW_CORE_UPDATE=1` only when deliberately testing the update machinery.
 - Use the same hub-to-root NATS-over-WS defaults on Windows and Linux. Leave `HUB_NATS_WS_PROXY` unset or set to `auto`; use `HUB_NATS_WS_PROXY=none` only when deliberately diagnosing direct-route failures.

@@ -43,7 +43,7 @@ The CLI builds the Rasa project from installed skill/scenario training content, 
 If `src/adaos/integrations/rasa-port` exists, AdaOS installs it into the service venv as editable local source. Otherwise the service-skill uses:
 
 ```text
-adaos-rasa-nlu @ git+https://github.com/stipot-com/rasa-port.git@main
+adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main
 ```
 
 Override with:
