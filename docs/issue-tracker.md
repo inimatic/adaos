@@ -111,6 +111,13 @@ Snapshot date: 2026-05-13.
 
 Implemented baseline is documented in
 `docs/architecture/ui-runtime-diagnostics.md`.
+Additional checkpoint on 2026-05-19: browser `RuntimeDebugService` keeps a
+bounded ring in `localStorage` under `adaos.runtime_debug.logs.v1`, but the node
+currently ingests only UI notification diagnostics through
+`/api/node/ui/diagnostics`. That means Dev Browser breadcrumbs exist in the
+browser, while LLM/node-side investigation can still miss them unless the user
+exports them manually. The export path must remain diagnostic-only and must not
+write browser logs into primary Yjs state.
 
 ### Tasks
 
@@ -129,6 +136,8 @@ Actions:
   `service.<skill>.*.log`.
 - [ ] Add widget-level ownership metadata for renderer failures that are not
   modal-owned.
+- [ ] Add bounded export/ingest for `adaos.runtime_debug.logs.v1` so node-side
+  tools can read Dev Browser breadcrumbs through skill/runtime diagnostic logs.
 - [ ] Add a typed ABI schema for UI diagnostic payloads.
 - [ ] Add rate limiting and duplicate suppression for repeated renderer errors.
 - [ ] Feed skill logs into the future LLM skill-debugging MCP workflow.
@@ -2270,7 +2279,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 28%.
+Progress: 32%.
 
 Current useful pattern and target:
 
@@ -2283,6 +2292,9 @@ Current useful pattern and target:
   `infrastate.yjs.load_mark`, and `infrastate.core_update_diagnostics`.
 - Projection helpers already perform fingerprinting and rate limiting, but the
   logic is local to the skill.
+- Compact status projection is allowed during `warn`/`throttle` pressure so the
+  widget can refresh first-paint status, while `block` still suppresses Yjs
+  writes and streams/details remain the route for large sections.
 - Operator-facing variables should become stream-backed rows/cards with bounded
   first-paint and snapshot-on-subscribe behavior, while raw evidence stays in
   diagnostics streams, detail tools, disk snapshots, or `360log`.
@@ -2299,6 +2311,9 @@ Actions:
 - [x] Preserve the YJS|Stream pressure split in `infrastate_skill`: `block`
   stops Yjs projection, `throttle` uses the longer Yjs projection interval, and
   stream snapshots continue to publish through the stream guard.
+- [x] Keep `get_snapshot(project=true)` from starving the widget under
+  `warn`/`throttle`: admit compact Yjs status projection into the existing
+  throttled projection path, but continue to suppress on `block`.
 - [ ] Shrink primary Yjs usage to minimal bootstrap/control state and remove
   variable/diagnostic tables that can be served by streams or details.
 - [ ] Move current operator variables to replace-mode stream receivers with
@@ -2324,6 +2339,8 @@ Human verification:
   metadata should validate without behavior changes.
 - Under synthetic Yjs `policy_state=throttle`, the first compact Yjs projection
   may write, close repeats are rate-limited, and stream snapshots still publish.
+- Under synthetic Yjs `policy_state=block`, `get_snapshot(project=true)` should
+  return the HTTP snapshot but not write compact Yjs state.
 - Open `[homepoint] Infrastructure State`; installed skills/scenarios should
   still first paint from `initialState` and then fill from
   `infrastate.skills` / `infrastate.scenarios` streams.
@@ -2530,7 +2547,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 28%.
+Progress: 31%.
 
 Acceptance criteria:
 
@@ -2551,6 +2568,9 @@ Acceptance criteria:
   green.
 - Yjs room bootstrap cancellation is visible as a cancellation and does not
   continue as an empty-doc seed attempt.
+- Dev Browser runtime breadcrumbs from `adaos.runtime_debug.logs.v1` are
+  available to node-side diagnostics as bounded logs, not only in browser
+  localStorage.
 
 Actions:
 
@@ -2571,6 +2591,9 @@ Actions:
 - [ ] Add browser-side breadcrumbs for transition visibility: last supervisor
   transition source, suppression reason, fallback probe URL/result, and current
   Yjs red reason.
+- [ ] Add bounded node ingest/export for the browser runtime-debug ring
+  (`adaos.runtime_debug.logs.v1`) and include it in the standard skill/runtime
+  log retrieval path.
 - [ ] Add a room-bootstrap attempt id to Yjs gateway logs and reliability
   diagnostics so `room ready timeout`, `stale bootstrap recovery`,
   `apply_updates cancelled`, and later `room ready` can be correlated without

@@ -1886,6 +1886,91 @@ def test_infrastate_get_snapshot_project_false_does_not_project_fallback(monkeyp
     assert result["summary"]["value"] == "degraded"
 
 
+def test_infrastate_get_snapshot_allows_compact_projection_under_yjs_throttle(monkeypatch):
+    mod = _load_infrastate_module()
+    projected: list[str | None] = []
+    mod._projection_diag.update(
+        {
+            "tool_project_admitted_under_pressure_total": 0,
+            "tool_project_suppressed_total": 0,
+            "last_tool_project_suppressed_reason": "",
+        }
+    )
+
+    monkeypatch.setattr(
+        mod,
+        "_snapshot_or_fallback_cached",
+        lambda **_kwargs: {
+            "summary": {"value": "succeeded", "subtitle": "slot B | abc123"},
+            "actions": [{"id": "refresh", "title": "Refresh"}],
+            "logs": [{"id": "heavy-log"}],
+        },
+    )
+    monkeypatch.setattr(mod, "_snapshot_projection_is_current", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        mod,
+        "_projection_pressure_policy",
+        lambda webspace_id=None: {
+            "policy_state": "throttle",
+            "observed_state": "critical",
+            "throttled_roots": ["data"],
+            "reason": "write_amplification",
+        },
+    )
+    monkeypatch.setattr(mod, "_project", lambda snapshot, webspace_id=None: projected.append(webspace_id))
+
+    result = mod.get_snapshot(webspace_id="desktop", project=True)
+
+    assert projected == ["desktop"]
+    assert result["summary"]["value"] == "succeeded"
+    assert "logs" not in result
+    assert mod._projection_diag["tool_project_admitted_under_pressure_total"] == 1
+    assert mod._projection_diag["tool_project_suppressed_total"] == 0
+
+
+def test_infrastate_get_snapshot_suppresses_compact_projection_when_yjs_blocked(monkeypatch):
+    mod = _load_infrastate_module()
+    mod._projection_diag.update(
+        {
+            "tool_project_admitted_under_pressure_total": 0,
+            "tool_project_suppressed_total": 0,
+            "last_tool_project_suppressed_reason": "",
+            "last_tool_project_suppressed_policy_state": "",
+            "last_tool_project_suppressed_observed_state": "",
+        }
+    )
+
+    monkeypatch.setattr(
+        mod,
+        "_snapshot_or_fallback_cached",
+        lambda **_kwargs: {"summary": {"value": "succeeded"}},
+    )
+    monkeypatch.setattr(mod, "_snapshot_projection_is_current", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        mod,
+        "_projection_pressure_policy",
+        lambda webspace_id=None: {
+            "policy_state": "block",
+            "observed_state": "critical",
+            "blocked_roots": ["data"],
+            "reason": "quarantined",
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_project",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("blocked YJS projection should not run")),
+    )
+
+    result = mod.get_snapshot(webspace_id="desktop", project=True)
+
+    assert result["summary"]["value"] == "succeeded"
+    assert mod._projection_diag["tool_project_suppressed_total"] == 1
+    assert mod._projection_diag["last_tool_project_suppressed_reason"] == "tool.get_snapshot"
+    assert mod._projection_diag["last_tool_project_suppressed_policy_state"] == "block"
+    assert mod._projection_diag["tool_project_admitted_under_pressure_total"] == 0
+
+
 def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch):
     mod = _load_infrastate_module()
     projected: list[tuple[str, object]] = []
