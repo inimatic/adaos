@@ -2605,6 +2605,10 @@ Actions:
   log retrieval path. The client now exports a capped `ui.runtime_debug` tail to
   `/api/node/ui/diagnostics`, filtering its own diagnostics transport events so
   the export cannot self-amplify.
+- [x] Reduce node-side browser breadcrumb noise: the browser keeps the full
+  runtime-debug ring in localStorage, while node ingest skips normal
+  `http.request` / fast `http.response` polling and keeps Yjs/control events,
+  HTTP errors, slow responses, and tool/snapshot responses.
 - [x] Fix the root-routed local HTTP hop for `/api/tools/call`: prefer the
   current process `ADAOS_RUNTIME_PORT` over persisted stale runtime state, use a
   `tools/call` timeout budget that fits Root's 60s outer budget, and avoid
@@ -2638,6 +2642,12 @@ Actions:
   `target_member_unavailable`. This identified a separate member-link fallback
   budget issue, not a Yjs issue: hub-route was repaired, but readonly snapshot
   proxying could still wait for a slow connected member RPC.
+- Runtime-debug export is now confirmed on `.30`:
+  `/root/.adaos/logs/service.__ui_runtime__.ui_runtime.log` captured
+  `yjs.provider.connection_close` with `reason=hub_open_ack_timeout`, followed
+  by `yjs.provider.status=disconnected`. This is enough to distinguish a
+  client provider/open-ack problem from server-side Yjs materialization, which
+  was `attached/complete/ready/fresh` at the same time.
 - Current conclusion: the working snapshot endpoint is a control-plane fallback
   and does not prove Yjs health by itself. Server-side reliability/YWS
   diagnostics must be checked separately; client-side `YJS Red` needs exported
