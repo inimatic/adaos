@@ -1892,7 +1892,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 67%. First implementation slices landed the ABI/schema
+Overall completion: 68%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1946,7 +1946,13 @@ overview rows as compact route references and leaves full object state behind
 inspector/detail streams. The follow-up core slice makes the overview API
 compact by default: first-paint reads no longer serialize top-level `objects`,
 heavy `details`, or the duplicated `representations.operator`; explicit
-`mode=full` remains available for debugging.
+`mode=full` remains available for debugging. A `.40`/`.30` memory checkpoint
+then showed the compact response was smaller but still cost about 3 seconds to
+build because the shared control-plane object cache was timestamped before the
+expensive build; when the build exceeded the 1 second TTL, the cache entry was
+stale on arrival. The cache is now stamped after build completion and protected
+by per-webspace build locks so compact Overview/API and direct stream snapshot
+bursts reuse the same materialized model instead of rebuilding it in parallel.
 
 Problem statement:
 
@@ -2311,7 +2317,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 32%.
+Progress: 36%.
 
 Current useful pattern:
 
@@ -2338,6 +2344,9 @@ Actions:
 - [x] Route `webio.stream.snapshot.requested` for overview, inventory,
   operations, and inspector receivers through per-receiver compact builders
   before falling back to the monolithic snapshot cache.
+- [x] Fix the core control-plane object cache so slow builds are cached from
+  completion time and concurrent same-webspace requests coalesce behind one
+  builder.
 - [ ] Identify `infrascope` status cards: overview, active incidents,
   inventory, browser/runtime state, registry, and operations.
 - [ ] Publish cards through the shared SDK helpers.
@@ -2358,6 +2367,9 @@ Human verification:
   intentionally debugging raw canonical object state.
 - Reopen Overview after reconnect; `infrascope.overview.*` streams should fill
   without waiting for the full `infrascope.snapshot` rebuild.
+- Repeat `GET /api/node/control-plane/projections/overview?webspace_id=desktop`
+  several times in one second; after the first build, immediate repeats should
+  reuse the control-plane cache instead of taking the full multi-second path.
 
 #### STATUS-005B: Convert `browsers_skill` after core guard observability
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ from adaos.services.system_model.projections import (
 
 _CONTROL_PLANE_CACHE_TTL_S = 1.0
 _CONTROL_PLANE_CACHE: dict[str, tuple[float, list[Any]]] = {}
+_CONTROL_PLANE_CACHE_LOCK = threading.Lock()
+_CONTROL_PLANE_CACHE_BUILD_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -299,26 +302,43 @@ def current_control_plane_objects(*, webspace_id: str | None = None) -> list[Any
         if now - cached_at <= _CONTROL_PLANE_CACHE_TTL_S:
             return list(cached_objects)
 
-    subject = current_node_object()
-    inventory = current_inventory_projection()
-    reliability = current_reliability_projection(webspace_id=webspace_id)
-    neighborhood = _current_node_neighborhood_projection(webspace_id=webspace_id)
-    supervisor_runtime = current_supervisor_runtime_object()
-    objects: list[Any] = []
-    seen: set[str] = set()
-    for item in [
-        subject,
-        inventory.subject,
-        reliability.subject,
-        neighborhood.subject,
-        supervisor_runtime,
-        *inventory.objects,
-        *reliability.objects,
-        *neighborhood.objects,
-    ]:
-        _append_unique(objects, item, seen)
-    _CONTROL_PLANE_CACHE[cache_key] = (now, list(objects))
-    return objects
+    with _CONTROL_PLANE_CACHE_LOCK:
+        build_lock = _CONTROL_PLANE_CACHE_BUILD_LOCKS.get(cache_key)
+        if build_lock is None:
+            build_lock = threading.Lock()
+            _CONTROL_PLANE_CACHE_BUILD_LOCKS[cache_key] = build_lock
+
+    with build_lock:
+        now = time.monotonic()
+        cached = _CONTROL_PLANE_CACHE.get(cache_key)
+        if cached is not None:
+            cached_at, cached_objects = cached
+            if now - cached_at <= _CONTROL_PLANE_CACHE_TTL_S:
+                return list(cached_objects)
+
+        subject = current_node_object()
+        inventory = current_inventory_projection()
+        reliability = current_reliability_projection(webspace_id=webspace_id)
+        neighborhood = _current_node_neighborhood_projection(webspace_id=webspace_id)
+        supervisor_runtime = current_supervisor_runtime_object()
+        objects: list[Any] = []
+        seen: set[str] = set()
+        for item in [
+            subject,
+            inventory.subject,
+            reliability.subject,
+            neighborhood.subject,
+            supervisor_runtime,
+            *inventory.objects,
+            *reliability.objects,
+            *neighborhood.objects,
+        ]:
+            _append_unique(objects, item, seen)
+        # Stamp the cache after the expensive build.  If the build takes longer
+        # than the TTL, stamping before it makes the entry stale immediately and
+        # every compact overview/stream request rebuilds the same model.
+        _CONTROL_PLANE_CACHE[cache_key] = (time.monotonic(), list(objects))
+        return objects
 
 
 def current_overview_projection(*, webspace_id: str | None = None):
