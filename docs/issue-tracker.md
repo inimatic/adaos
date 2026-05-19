@@ -1877,9 +1877,9 @@ Success means:
 
 ### Current Status
 
-Snapshot date: 2026-05-18.
+Snapshot date: 2026-05-19.
 
-Overall completion: 27%. First implementation slices landed the ABI/schema
+Overall completion: 36%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1891,8 +1891,9 @@ and CLI now also expose stream-guard publish/suppress counters plus eventbus
 `webio.stream.snapshot.requested` / `webio.stream.subscription.changed`
 control-pressure counters by receiver. ProjectionService/Yjs governance now
 records the projection route (`scope`, `slot`, `path`, `root`) behind the last
-primary-doc pressure event. Full status-plane helpers are still pending before
-`infrastate_skill` conversion should start.
+primary-doc pressure event. The first status-plane slice now provides
+`StatusCard`, `StatusRegistry`, and `adaos.sdk.status` helpers for small
+versioned status summaries that point to stream/tool details.
 
 Problem statement:
 
@@ -2034,7 +2035,9 @@ Next steps:
 
 #### STATUS-001: Define the shared status card contract
 
-Status: planned.
+Status: in progress.
+
+Progress: 70%.
 
 Target shape:
 
@@ -2053,21 +2056,31 @@ Target shape:
 
 Actions:
 
-- [ ] Define status values and normalization rules shared with
+- [x] Define status values and normalization rules shared with
   `CanonicalStatus`.
-- [ ] Define JSON schema or typed dataclass for status cards.
-- [ ] Define staleness semantics when `ttl_ms` expires.
-- [ ] Define how cards map to incidents and active warnings.
-- [ ] Define how status cards reference stream variables and detail tools
+- [x] Define JSON schema or typed dataclass for status cards.
+- [x] Define staleness semantics when `ttl_ms` expires.
+- [x] Define how cards map to incidents and active warnings.
+- [x] Define how status cards reference stream variables and detail tools
   without embedding live rows or diagnostic tails.
 - [ ] Define compact degraded/quarantine card shape for Yjs and stream guard
   states.
-- [ ] Document examples for core, `infrastate_skill`, `infrascope_skill`, and a
+- [x] Document examples for core, `infrastate_skill`, `infrascope_skill`, and a
   future third-party skill.
+
+Human verification:
+
+- In a skill handler, call `publish_status(...)` with `status="ready"` and
+  `ttl_ms=30000`; a registered `StatusRegistry` should expose an
+  `online`/`info` card with stable `fingerprint` and `version=1`.
+- Change only `updated_at`; the registry should keep the same version. Change
+  `status` or `summary`; the version should increment.
 
 #### STATUS-002: Add a materialized status registry/service
 
-Status: planned.
+Status: in progress.
+
+Progress: 80%.
 
 Expected behavior:
 
@@ -2079,17 +2092,20 @@ Expected behavior:
 
 Actions:
 
-- [ ] Add a core status registry service.
-- [ ] Add per-card fingerprinting that ignores volatile fields such as
+- [x] Add a core status registry service.
+- [x] Add per-card fingerprinting that ignores volatile fields such as
   `updated_at`, `_age_s`, and `_ago_s`.
-- [ ] Add TTL/staleness sweep.
-- [ ] Add compact registry diagnostics: card count, changed count, stale count,
+- [x] Add TTL/staleness sweep.
+- [x] Add compact registry diagnostics: card count, changed count, stale count,
   and last publish latency.
-- [ ] Add unit tests for dedupe, versioning, TTL expiry, and owner scoping.
+- [x] Add unit tests for dedupe, versioning, TTL expiry, and owner scoping.
+- [ ] Wire the registry into API/server bootstrap and expose a read endpoint.
 
 #### STATUS-003: Add skill-facing SDK helpers
 
-Status: planned.
+Status: in progress.
+
+Progress: 65%.
 
 Expected API:
 
@@ -2103,18 +2119,18 @@ Expected API:
 
 Actions:
 
-- [ ] Add `adaos.sdk.status` or equivalent SDK module.
-- [ ] Preserve current skill identity in status ownership metadata.
-- [ ] Provide helpers for `details_ref` pointing to webio stream receivers.
-- [ ] Provide receiver helpers that coalesce unchanged payloads, attach
+- [x] Add `adaos.sdk.status` or equivalent SDK module.
+- [x] Preserve current skill identity in status ownership metadata.
+- [x] Provide helpers for `details_ref` pointing to webio stream receivers.
+- [x] Provide receiver helpers that coalesce unchanged payloads, attach
   `seq` / `updated_at`, enforce declared budgets, and surface stream-guard
   suppressions.
 - [ ] Provide a shared debounce/budget helper for hot event-to-status paths,
   starting with `browser.session.changed`, route reconnect, YWS open/close, and
   quarantine transitions.
-- [ ] Add tests showing a skill can publish status without touching Yjs or
+- [x] Add tests showing a skill can publish status without touching Yjs or
   rebuilding a full snapshot.
-- [ ] Add migration notes for skill authors.
+- [x] Add migration notes for skill authors.
 
 #### STATUS-004: Convert `infrastate_skill` to the shared status/data-route plane
 

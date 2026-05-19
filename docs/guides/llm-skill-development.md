@@ -307,6 +307,55 @@ subscribed should not keep rebuilding full snapshots just in case a browser
 opens later. Prefer receiver-specific builders over one monolithic skill
 snapshot.
 
+## Status cards
+
+Use status cards for small operator summaries that must be cheap to poll,
+stream, or project. A card is not a detail payload. It carries identity,
+current state, freshness, and a pointer to the details route.
+
+```python
+from adaos.sdk.status import publish_status, publish_status_stream
+
+publish_status(
+    id="runtime",
+    kind="runtime",
+    scope="infrastate",
+    status="ready",
+    summary="runtime ready",
+    ttl_ms=30000,
+    details_ref={"kind": "stream", "receiver": "infrastate.runtime"},
+    route={"kind": "stream", "receiver": "infrastate.runtime"},
+    webspace_id=webspace_id,
+)
+
+publish_status_stream(
+    "infrastate.runtime",
+    id="runtime",
+    kind="runtime",
+    scope="infrastate",
+    status="warning",
+    summary="route reconnecting",
+    ttl_ms=30000,
+    webspace_id=webspace_id,
+    _meta={"webspace_id": webspace_id},
+)
+```
+
+Status card rules:
+
+- use `status` values that normalize through `CanonicalStatus`: `ready`,
+  `online`, `warning`, `degraded`, `down`, `offline`, or `unknown`
+- keep `summary` short and operator-facing
+- include `ttl_ms` for live runtime cards so stale UI can degrade honestly
+- use `incident_id` only when the card represents a real active warning or
+  incident
+- put stream/tool references in `details_ref`; do not embed logs, tables,
+  inventories, or tails into the card
+- put the design-time data route in `route` so guard diagnostics can map
+  pressure back to the skill route plan
+- use `publish_status_stream()` when the card itself should also be available
+  as a replace-mode stream variable
+
 ## Hot events and smoothing
 
 Some events are useful evidence but terrible UI clocks. Examples include:
@@ -561,6 +610,8 @@ Before publishing:
 - verify no handler rewrites broad Yjs roots
 - verify hot events have debounce/budget tests
 - verify stream request bursts cannot rebuild every skill section by default
+- verify status cards stay small and point to details instead of embedding
+  detail payloads
 - verify no action returns a large payload when a projection/stream is the
   real data path
 - verify Yjs and stream guard errors are visible to the UI
