@@ -813,6 +813,34 @@ def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_ver
     return False
 
 
+def _terminal_status_belongs_to_attempt(status: dict[str, Any], attempt: dict[str, Any]) -> bool:
+    attempt_action = str(attempt.get("action") or "").strip().lower()
+    status_action = str(status.get("action") or "").strip().lower()
+    if attempt_action and status_action and attempt_action != status_action:
+        return False
+
+    attempt_version = str(attempt.get("target_version") or "").strip()
+    status_version = str(status.get("target_version") or "").strip()
+    if attempt_version:
+        if status_version:
+            return _target_version_matches(attempt_version, status_version)
+        status_at = _status_updated_at(status)
+        transition_at = _attempt_transition_at(attempt)
+        if not status_at or not transition_at or status_at < transition_at:
+            return False
+        try:
+            manifest = active_slot_manifest()
+        except Exception:
+            manifest = None
+        return _manifest_matches_target_version(manifest, attempt_version)
+
+    attempt_rev = str(attempt.get("target_rev") or "").strip()
+    status_rev = str(status.get("target_rev") or "").strip()
+    if attempt_rev:
+        return bool(status_rev and status_rev == attempt_rev)
+    return True
+
+
 def _transition_request_same_target(request: dict[str, Any] | None, other: dict[str, Any] | None) -> bool:
     req = request if isinstance(request, dict) else {}
     cur = other if isinstance(other, dict) else {}
@@ -977,9 +1005,7 @@ def _active_slot_target_mismatch_status(status: dict[str, Any], attempt: dict[st
     status_map = status if isinstance(status, dict) else {}
     if str(status_map.get("state") or "").strip().lower() != "succeeded":
         return None
-    expected_target_version = str(
-        status_map.get("target_version") or (attempt or {}).get("target_version") or ""
-    ).strip()
+    expected_target_version = str(status_map.get("target_version") or "").strip()
     if not expected_target_version:
         return None
     try:
@@ -1102,6 +1128,9 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     if _is_terminal_update_status(status):
+        if not _terminal_status_belongs_to_attempt(status, attempt):
+            payload["_served_by"] = "supervisor_stale_terminal_status_ignored"
+            return payload
         if bool(status.get("active_slot_target_mismatch")):
             payload["attempt"] = _complete_update_attempt(
                 state="failed",
