@@ -102,6 +102,18 @@ the transition and make rollback decisions.
 This keeps slot switching fast, keeps production runtime independent from root
 checkout drift, and keeps the control-plane independent from slot mutation.
 
+When the watchdog is re-enabled, it follows the same rule as supervisor:
+
+- its service wrapper or launch spec uses the stable root checkout and root
+  `.venv`
+- it may observe, stop, or restart slot runtimes, but it is not itself
+  slot-bound
+- watchdog diagnostics must expose the effective Python/source path the same
+  way autostart status exposes `wrapper_python_is_core_slot`
+
+The watchdog is allowed to act on slot runtime health; it must not depend on a
+slot runtime interpreter to remain alive.
+
 For runtime processes, slot resolution is process-local first:
 
 - if `ADAOS_ACTIVE_CORE_SLOT` is set in the runtime environment, that process treats the slot as its effective runtime source

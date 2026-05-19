@@ -2549,7 +2549,10 @@ Actions:
   now resolves the stable root checkout from the shared `.env`/root context,
   launches supervisor from the root `.venv`, refreshes the wrapper before a
   self-restart, and exposes `wrapper_python_is_core_slot` in autostart status.
-  The same source rule applies to future watchdog/control-plane helpers.
+  The same source rule applies to future watchdog/control-plane helpers:
+  watchdog may observe and restart slot runtimes, but its own wrapper,
+  interpreter, source root, and diagnostics must remain rooted in the stable
+  root checkout/root `.venv`.
 - [ ] Classify member-follow update expiry separately from Yjs/provider
   failures: if a member reports `pending update expired before autostart runner
   picked it up`, hub/status UI must surface stale member-update state and keep
@@ -2608,6 +2611,8 @@ Acceptance criteria:
 - Autostart/supervisor diagnostics reveal whether the always-on control-plane
   wrapper uses a stable root `.venv` or is accidentally coupled to a runtime
   slot venv.
+- When watchdog is re-enabled, it exposes the same source-path diagnostic and
+  reports false for any slot-bound Python/source check.
 
 Actions:
 
@@ -2772,6 +2777,9 @@ Actions:
   root checkout is available, refreshes the wrapper before self-restart, and
   autostart status exposes `wrapper_python_is_core_slot` for stand
   verification.
+- The disabled watchdog is explicitly classified under the same future
+  control-plane rule. Re-enabling it must add a watchdog-specific source
+  diagnostic rather than inheriting a slot venv by convenience.
 
 Human verification:
 
