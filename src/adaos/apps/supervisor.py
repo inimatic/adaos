@@ -2760,6 +2760,29 @@ class SupervisorManager:
                 "_served_by": "supervisor",
             }
 
+        restart_requested_at = _epoch(attempt.get("restart_requested_at") or status.get("restart_requested_at"))
+        if auto and _is_root_restart_pending_attempt(attempt) and restart_requested_at > 0.0:
+            return {
+                "ok": True,
+                "accepted": False,
+                "noop": True,
+                "auto": True,
+                "restart_required": True,
+                "status": status,
+                "attempt": attempt,
+                "runtime": runtime,
+                "promotion": promotion,
+                "restart": {
+                    "ok": True,
+                    "requested": False,
+                    "mode": str(attempt.get("restart_mode") or status.get("restart_mode") or "already_requested"),
+                    "already_requested": True,
+                    "restart_requested_at": restart_requested_at,
+                },
+                "message": "root promotion restart was already requested; waiting for runtime boot validation",
+                "_served_by": "supervisor",
+            }
+
         restart = self._schedule_service_restart(reason=reason)
         now = time.time()
         status_payload = dict(status)
