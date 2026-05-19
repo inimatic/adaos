@@ -2748,6 +2748,10 @@ Actions:
 - [x] Export the actual client-computed YJS indicator signal (`yjs.signal`) into
   the browser runtime-debug cursor, so node-side diagnostics can distinguish
   provider/sync green from the red/green indicator the operator sees.
+- [x] Split YJS indicator truth from lagging status projection truth on the
+  client: when the local provider is connected, synced, and materialized, keep
+  the visible YJS signal green while still showing stale `state-sync` metadata
+  in the diagnostic reason/cursor.
 - [x] Add a bounded critical control-plane subscription budget: core update
   status, hub update status, subnet member link/snapshot/update-result events
   can pass owner-guard starvation with debounce/window limits, while hot
@@ -3061,6 +3065,9 @@ Human verification:
 - [ ] Check node-side UI runtime logs for `yjs.signal`, `browser_identity`, and
   `client_yws_attempt_id` in `runtime_debug.cursor`; the cursor should match
   the visible red/green indicator and identify the exact browser device.
+- [ ] After the local-document YJS indicator split rollout, verify Dev Browser,
+  Mobile, and Opera/macOS report `local-doc=synced:ready` when the document is
+  healthy, even if `state-sync` status metadata is stale.
 - [ ] Verify `.40` reliability summary no longer throws `FileNotFoundError`
   from `realtime_sidecar_diag_path()` after the next rollout.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture

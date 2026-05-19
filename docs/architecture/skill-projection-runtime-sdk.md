@@ -297,6 +297,15 @@ variables, tool details, or status cards. Its only job is to make browser-side
 transport truth visible from the node when investigating red/green flicker or a
 stale widget.
 
+The visible YJS indicator should be computed from the local browser Yjs
+provider/document first: if the provider is connected, the provider has synced,
+and the desktop document materialized, the indicator may be green even while a
+status/reliability projection still reports stale `state-sync` metadata. The
+stale status fact must remain visible in the indicator title and semantic/link
+diagnostics, but it must not turn a healthy Yjs document into a false transport
+failure. This keeps `status/control communication` separate from the
+skill/status projections that can be delayed by pressure guards.
+
 YWS server diagnostics must carry the same correlation boundary. Every accepted
 or rejected YWS attempt receives a `yws_attempt_id`; the id appears in
 `browser.session.changed`, server open/close/guard logs, and
@@ -446,6 +455,10 @@ diagnostic surface from becoming a primary Yjs pressure source.
   normal hot refresh events remain guarded
 - [x] `status.browser_yjs_signal_export`: export the actual client-computed
   YJS indicator signal in runtime-debug cursor diagnostics
+- [x] `status.browser_yjs_local_doc_truth`: keep the visible YJS indicator green
+  when the local browser provider has synced and materialized the document even
+  if a compact status/reliability projection is stale; expose both facts in the
+  diagnostic title/cursor
 - [x] `update.active_slot_target_validation`: reject terminal update success
   when the active slot manifest does not match the requested target version,
   so acceptance soaks cannot accidentally measure an old runtime
