@@ -63,6 +63,41 @@ class _FakeStore:
         self.encoded_state = self._capture_state(ydoc)
 
 
+def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
+    class _CancelledStore(_FakeStore):
+        async def apply_updates(self, ydoc: Y.YDoc) -> None:  # noqa: ARG002
+            self.apply_updates_calls += 1
+            raise asyncio.CancelledError()
+
+    class _UnexpectedManager:
+        def project_scenario_to_doc(self, *args, **kwargs) -> None:  # noqa: ARG002
+            raise AssertionError("cancelled bootstrap must not project scenario data")
+
+        async def sync_to_yjs_async(self, *args, **kwargs) -> None:  # noqa: ARG002
+            raise AssertionError("cancelled bootstrap must not sync scenario data")
+
+    store = _CancelledStore()
+    monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: _UnexpectedManager())
+
+    try:
+        asyncio.run(
+            bootstrap_module.ensure_webspace_seeded_from_scenario(
+                store,
+                webspace_id="desktop",
+                default_scenario_id="web_desktop",
+            )
+        )
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("CancelledError should propagate to the room bootstrap timeout")
+
+    assert store.start_calls == 1
+    assert store.apply_updates_calls == 1
+    assert store.write_calls == 0
+    assert store.encode_calls == 0
+
+
 def test_bootstrap_seed_fallback_projects_compat_seed_without_effective_writes(monkeypatch) -> None:
     class _FailingManager:
         async def sync_to_yjs_async(self, *args, **kwargs) -> None:  # noqa: ARG002

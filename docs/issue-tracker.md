@@ -2478,7 +2478,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 35%.
+Progress: 42%.
 
 Expected behavior:
 
@@ -2487,6 +2487,8 @@ Expected behavior:
 - Client requests full details only when a panel/inspector is opened.
 - Client must not treat `statusPlane` or thin summary as a replacement source
   for live variables, tables, inventory rows, or diagnostic tails.
+- Active core update transitions (`applying`, `restarting`) remain visible even
+  on dev-like stands; only planned/countdown noise is suppressed there.
 
 Actions:
 
@@ -2502,6 +2504,11 @@ Actions:
 - [ ] Replace remaining badge/status polling with push/delta once the status
   stream/realtime channel is available; keep thin polling as the migration
   bridge, not the final transport.
+- [x] Keep active hub restart badges visible in dev runtime while continuing
+  to suppress planned/countdown update chatter.
+- [x] Keep supervisor transition fallback probing available after the control
+  events websocket is lost, so a missed restart event can still become an
+  operator-visible informer.
 - [ ] Verify the client no longer requests large summary payloads repeatedly
   during the first 3 minutes.
 
@@ -2514,12 +2521,16 @@ Human verification:
 - When status cards are unchanged, the response should be `304`; `mode=full`
   should appear only after status changes, first bootstrap, or explicit debug
   reads.
+- During a core update on a dev-like stand, disconnect/reconnect the browser or
+  watch a natural runtime restart; the UI should show `hub restarting` /
+  `applying update` when the transition is active, even if the websocket event
+  was missed and the state is learned through fallback probing.
 
 #### STATUS-008: Acceptance and observability
 
 Status: in progress.
 
-Progress: 20%.
+Progress: 28%.
 
 Acceptance criteria:
 
@@ -2538,6 +2549,8 @@ Acceptance criteria:
   counts, and quarantine TTL when limits are hit.
 - Existing realtime stability criteria from `Realtime First 3 Minutes` remain
   green.
+- Yjs room bootstrap cancellation is visible as a cancellation and does not
+  continue as an empty-doc seed attempt.
 
 Actions:
 
@@ -2552,6 +2565,16 @@ Actions:
   work is to run the soak and record the result. Yjs projection pressure now
   also reports the last projection route/surface through governance and
   `yjs_pressure.last`.
+- [x] Preserve `asyncio.CancelledError` during Yjs bootstrap instead of treating
+  a cancelled `apply_updates` as an empty persisted document; this keeps update
+  restarts from turning bootstrap timeout into a misleading seed/repair path.
+- [ ] Add browser-side breadcrumbs for transition visibility: last supervisor
+  transition source, suppression reason, fallback probe URL/result, and current
+  Yjs red reason.
+- [ ] Add a room-bootstrap attempt id to Yjs gateway logs and reliability
+  diagnostics so `room ready timeout`, `stale bootstrap recovery`,
+  `apply_updates cancelled`, and later `room ready` can be correlated without
+  manually stitching timestamps.
 
 Human verification:
 

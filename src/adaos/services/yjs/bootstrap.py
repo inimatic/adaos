@@ -323,6 +323,13 @@ async def ensure_webspace_seeded_from_scenario(
     try:
         await ystore.apply_updates(target_doc)
     except BaseException as exc:  # catch PanicException and similar
+        if isinstance(exc, asyncio.CancelledError):
+            _log.warning(
+                "apply_updates cancelled for webspace=%s; aborting bootstrap",
+                webspace_id,
+                exc_info=True,
+            )
+            raise
         _log.warning(
             "apply_updates failed for webspace=%s (treating as empty, exc=%r, type=%s)",
             webspace_id,
