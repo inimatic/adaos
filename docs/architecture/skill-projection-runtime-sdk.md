@@ -254,6 +254,14 @@ red Yjs indicator plus a successful HTTP snapshot therefore means "fallback
 path is alive, realtime path still needs YWS diagnostics", not "Yjs was
 replaced by HTTP".
 
+Control-plane status events have one extra rule: they must remain bounded, but
+they must not disappear behind a noisy skill's Yjs-owner quarantine. Core update
+status, hub update status, member link up/down, member snapshot change, and
+member update result subscriptions may pass through a tiny hot-event budget even
+when the owner guard is blocking normal skill work. Hot browser/session refresh
+events are not in this exception; they stay governed by the normal guard and
+their own debounce/budget design.
+
 ## Browser And YWS Diagnostics
 
 The browser runtime keeps the full `adaos.runtime_debug.logs.v1` ring in
@@ -265,7 +273,7 @@ The client therefore exports bounded diagnostic evidence through
   changes, control-WS state, slow/error HTTP calls, and skill call failures
 - `runtime_debug.cursor` heartbeat: latest retained seq, exported seq, estimated
   dropped events, last YJS provider/sync/close state, last materialization
-  state, last control-WS state, current computed YJS indicator state/reason, and
+  state, last control-WS state, last computed YJS indicator state/reason, and
   compact supervisor transition/probe/suppression breadcrumbs
 
 This diagnostic export is not a data route. It does not replace Yjs, stream
@@ -414,6 +422,11 @@ diagnostic surface from becoming a primary Yjs pressure source.
 - [x] `status.yjs_guard_acceptance`: include attempted/allowed/blocked/
   throttled counts, active quarantine, TTL/retry, denied count, and last
   guarded path/tool in the low-cost acceptance surface
+- [x] `status.critical_control_plane_budget`: allow bounded critical
+  update/member status subscriptions to pass owner-guard starvation while
+  normal hot refresh events remain guarded
+- [x] `status.browser_yjs_signal_export`: export the actual client-computed
+  YJS indicator signal in runtime-debug cursor diagnostics
 - [x] `update.active_slot_target_validation`: reject terminal update success
   when the active slot manifest does not match the requested target version,
   so acceptance soaks cannot accidentally measure an old runtime

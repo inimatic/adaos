@@ -2742,6 +2742,13 @@ Actions:
   well, but a quiet stable period should also be visible without inferring it
   from absence of new log rows. The client now emits `runtime_debug.cursor` to
   `/api/node/ui/diagnostics` on a bounded heartbeat.
+- [x] Export the actual client-computed YJS indicator signal (`yjs.signal`) into
+  the browser runtime-debug cursor, so node-side diagnostics can distinguish
+  provider/sync green from the red/green indicator the operator sees.
+- [x] Add a bounded critical control-plane subscription budget: core update
+  status, hub update status, subnet member link/snapshot/update-result events
+  can pass owner-guard starvation with debounce/window limits, while hot
+  `browser.session.changed` refreshes remain normally governed.
 
 2026-05-19 implementation checkpoint:
 
@@ -2985,6 +2992,15 @@ Actions:
   `/api/admin/update/start` on both stands returned `_served_by=supervisor`,
   `deduplicated=True`, and `state=succeeded`, proving the compatibility shim no
   longer creates countdown-only pending restarts on managed autostart.
+- The next browser checkpoint showed both stands on current autostart state, but
+  Dev Browser still displayed stale Infra State cards (`ed61941` on one card,
+  older `d954e54/restarting` on another) and YJS Red. Logs showed the YWS
+  provider did reconnect, while the Yjs owner guard skipped
+  `infrastate_skill` control-plane subscriptions such as `core.update.status`,
+  `hub.core_update.status`, and `subnet.member.snapshot.changed`. This was a
+  protection-side starvation bug, not a slot rollback. Core now lets only those
+  critical status subscriptions through a bounded hot-event budget and records
+  the actual browser YJS indicator as `yjs.signal`.
 
 Human verification:
 
@@ -3018,6 +3034,12 @@ Human verification:
 - [x] Verify the runtime admin compatibility shim on `.30` and `.40`; direct
   `/api/admin/update/start` on managed autostart should return a supervisor
   response and should not create a countdown-only pending restart.
+- [ ] After the critical control-plane subscription budget rollout, open Dev
+  Browser and verify that Infra State converges to the active slot/status even
+  when `infrastate_skill` is blocked or quarantined.
+- [ ] Check node-side UI runtime logs for `yjs.signal` in
+  `runtime_debug.cursor`; the cursor should match the visible red/green
+  indicator, not only raw provider status.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.

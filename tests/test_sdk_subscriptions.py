@@ -6,6 +6,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from adaos.sdk.core import decorators
+from adaos.services.status.hot_events import HotEventBudget
 from adaos.services.workspace_registry import write_workspace_registry
 
 
@@ -154,3 +155,113 @@ def test_non_stream_subscription_still_uses_yjs_owner_guard(monkeypatch) -> None
     assert calls[0]["owner"] == "skill:demo_skill"
     assert calls[0]["root_names"] == ["data"]
     assert calls[0]["path"] == "event/infrastate.refresh"
+
+
+def test_critical_control_plane_subscription_uses_bounded_bypass(monkeypatch) -> None:
+    fake_guard = ModuleType("adaos.services.yjs.owner_guard")
+
+    def admit_owner_work(**kwargs):
+        return {
+            "allowed": False,
+            "reason": "owner_quarantined",
+            "owner": kwargs["owner"],
+            "webspace_id": kwargs["webspace_id"],
+            "policy_state": "block",
+        }
+
+    fake_guard.admit_owner_work = admit_owner_work  # type: ignore[attr-defined]
+    fake_guard.skill_owner = lambda skill: f"skill:{skill}"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "adaos.services.yjs.owner_guard", fake_guard)
+    monkeypatch.setattr(
+        decorators,
+        "_CRITICAL_CONTROL_PLANE_BUDGET",
+        HotEventBudget(debounce_ms=1000, window_ms=5000, max_events=2),
+    )
+
+    admission = decorators._admit_skill_subscription_yjs_work(
+        "infrastate_skill",
+        "core.update.status",
+        SimpleNamespace(
+            type="core.update.status",
+            payload={
+                "webspace_id": "desktop",
+                "state": "succeeded",
+                "phase": "validate",
+                "target_version": "rev1",
+                "active_slot": "A",
+                "active_git_short_commit": "abc1234",
+            },
+        ),
+    )
+
+    assert admission["allowed"] is True
+    assert admission["reason"] == "critical_control_plane_budget"
+    assert admission["critical_control_plane"] is True
+    assert admission["owner_guard_allowed"] is False
+    assert admission["owner_guard_reason"] == "owner_quarantined"
+    assert admission["hot_event"]["reason"] == "admitted"
+    assert admission["owner"] == "skill:infrastate_skill"
+
+
+def test_critical_control_plane_bypass_is_debounced(monkeypatch) -> None:
+    fake_guard = ModuleType("adaos.services.yjs.owner_guard")
+    fake_guard.admit_owner_work = lambda **kwargs: {  # type: ignore[attr-defined]
+        "allowed": False,
+        "reason": "write_amplification_blocked",
+        "owner": kwargs["owner"],
+        "webspace_id": kwargs["webspace_id"],
+    }
+    fake_guard.skill_owner = lambda skill: f"skill:{skill}"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "adaos.services.yjs.owner_guard", fake_guard)
+    monkeypatch.setattr(
+        decorators,
+        "_CRITICAL_CONTROL_PLANE_BUDGET",
+        HotEventBudget(debounce_ms=1000, window_ms=5000, max_events=2),
+    )
+
+    evt = SimpleNamespace(
+        type="core.update.status",
+        payload={
+            "webspace_id": "desktop",
+            "state": "restarting",
+            "phase": "restart",
+            "target_version": "rev1",
+            "active_slot": "B",
+        },
+    )
+
+    first = decorators._admit_skill_subscription_yjs_work("infrastate_skill", "core.update.status", evt)
+    second = decorators._admit_skill_subscription_yjs_work("infrastate_skill", "core.update.status", evt)
+
+    assert first["allowed"] is True
+    assert second["allowed"] is False
+    assert second["reason"] == "critical_control_plane_debounce"
+    assert second["critical_control_plane"] is True
+    assert second["retry_after_s"] > 0
+
+
+def test_browser_session_changed_remains_governed_by_owner_guard(monkeypatch) -> None:
+    fake_guard = ModuleType("adaos.services.yjs.owner_guard")
+    fake_guard.admit_owner_work = lambda **kwargs: {  # type: ignore[attr-defined]
+        "allowed": False,
+        "reason": "owner_quarantined",
+        "owner": kwargs["owner"],
+        "webspace_id": kwargs["webspace_id"],
+    }
+    fake_guard.skill_owner = lambda skill: f"skill:{skill}"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "adaos.services.yjs.owner_guard", fake_guard)
+    monkeypatch.setattr(
+        decorators,
+        "_CRITICAL_CONTROL_PLANE_BUDGET",
+        HotEventBudget(debounce_ms=1000, window_ms=5000, max_events=2),
+    )
+
+    admission = decorators._admit_skill_subscription_yjs_work(
+        "infrastate_skill",
+        "browser.session.changed",
+        SimpleNamespace(payload={"webspace_id": "desktop"}),
+    )
+
+    assert admission["allowed"] is False
+    assert admission["reason"] == "owner_quarantined"
+    assert "critical_control_plane" not in admission
