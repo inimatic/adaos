@@ -2749,6 +2749,14 @@ Actions:
   status, hub update status, subnet member link/snapshot/update-result events
   can pass owner-guard starvation with debounce/window limits, while hot
   `browser.session.changed` refreshes remain normally governed.
+- [ ] Split logical status/control communication from skill communication in
+  core: system-owned status/control events must feed compact status cards and
+  epochs directly, while skills remain consumers/renderers whose Yjs/stream
+  work can be throttled without hiding update/member truth.
+- [x] Make realtime sidecar diagnostic/log paths independent of process cwd.
+  Slot switch can remove the runtime cwd while ASGI still serves reliability
+  diagnostics; default `.adaos/diagnostics/...` paths now resolve under
+  `ADAOS_BASE_DIR` instead of calling `Path.cwd()`.
 
 2026-05-19 implementation checkpoint:
 
@@ -3001,6 +3009,15 @@ Actions:
   protection-side starvation bug, not a slot rollback. Core now lets only those
   critical status subscriptions through a bounded hot-event budget and records
   the actual browser YJS indicator as `yjs.signal`.
+- The same rollout confirmed the architectural direction: the bounded budget is
+  a stabilization valve, while the target fix is to split `status/control`
+  communication from `skill` communication. A noisy operational skill should be
+  quarantinable without blocking active-slot/member-status truth.
+- Stand `.40` exposed an unrelated reliability endpoint crash after slot switch:
+  `realtime_sidecar_diag_path()` called `Path.cwd()`, but the runtime cwd had
+  been removed during slot lifecycle cleanup. This caused ASGI
+  `FileNotFoundError` responses and could mask YJS diagnostics. The path helper
+  now resolves default realtime diagnostics under stable `ADAOS_BASE_DIR`.
 
 Human verification:
 
@@ -3040,6 +3057,8 @@ Human verification:
 - [ ] Check node-side UI runtime logs for `yjs.signal` in
   `runtime_debug.cursor`; the cursor should match the visible red/green
   indicator, not only raw provider status.
+- [ ] Verify `.40` reliability summary no longer throws `FileNotFoundError`
+  from `realtime_sidecar_diag_path()` after the next rollout.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.
