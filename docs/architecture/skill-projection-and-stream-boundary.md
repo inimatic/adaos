@@ -127,6 +127,9 @@ Private skill checklists are tracked next to each skill:
 - `.adaos/workspace/skills/infrascope_skill/TODO.md`
 - `.adaos/workspace/skills/mediaserver/TODO.md`
 
+The tracked `infrastate` migration route plan lives in
+[Infrastate Data Route Plan](infrastate-data-route-plan.md).
+
 ## Current Progress
 
 Overall status: stabilization in progress.

@@ -631,7 +631,7 @@ def test_infrastate_get_snapshot_projects_fallback_when_snapshot_crashes(monkeyp
     )
     monkeypatch.setattr(mod, "_event_state", lambda: [])
 
-    snapshot = mod.get_snapshot(webspace_id="default")
+    snapshot = mod.get_snapshot(webspace_id="default", project=True)
 
     assert snapshot["fallback"] is True
     assert "sync_runtime" in snapshot["errors"][0]
