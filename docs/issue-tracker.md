@@ -2532,6 +2532,10 @@ Actions:
 - [x] Keep supervisor transition fallback probing available after the control
   events websocket is lost, so a missed restart event can still become an
   operator-visible informer.
+- [ ] Deduplicate same-target core update requests during countdown/validation
+  and expose passive-candidate cleanup/reaping state, so manual retries do not
+  schedule a redundant same-commit slot transition or leave confusing defunct
+  runner processes in diagnostics.
 - [ ] Verify the client no longer requests large summary payloads repeatedly
   during the first 3 minutes.
 
@@ -2553,7 +2557,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 40%.
+Progress: 42%.
 
 Acceptance criteria:
 
@@ -2630,6 +2634,11 @@ Actions:
 - [ ] Add YWS connection-attempt correlation to browser breadcrumbs and server
   guard logs, including the close code/reason seen by the browser and the
   server-side guard decision.
+- [ ] Export a compact browser runtime heartbeat/cursor to node diagnostics:
+  last Yjs provider state, control-WS state, last close reason/code, last export
+  time, and dropped-log counts. The current bounded log export proves failures
+  well, but a quiet stable period should also be visible without inferring it
+  from absence of new log rows.
 
 2026-05-19 checkpoint:
 
@@ -2668,6 +2677,27 @@ Actions:
   The guard now treats reconnect storms as observable pressure rather than a
   destructive quarantine; auth/policy denials and active-limit violations still
   reject the websocket.
+- Stand rollout of `0b32b4f` on `.30` validated the corrected YWS behavior:
+  active slot `B`, active runtime `8778`, `active_yws_connections=1`,
+  `recent_open_60s=0`, `storm_detected=false`, `quarantined_total=0`,
+  `incident_total=0`, `reject_total=0`, active client
+  `dev_fcb0c380-64ad-4ed8-905b-9cfead2ca09f`.
+- Server-side materialization stayed healthy after the fix:
+  `ready=true`, `snapshot_source=live_ydoc`, no missing branches. Full
+  reliability reported `transportState=attached`, `firstSyncState=complete`,
+  `semanticState=ready`, `freshnessState=fresh`, `fallbackMode=off`, and
+  `yjsPressure.policyState=ok`.
+- Local fallback checks on `.30` behaved as intended:
+  `/api/node/infrastate/snapshot?webspace_id=desktop` returned `200` with a
+  compact roughly 12 KB payload. Local `/api/tools/call` returned `200`
+  degraded by `skill_owner_quarantined/write_amplification` rather than route
+  `502`, confirming the remaining degradation is skill/Yjs-owner pressure, not
+  hub-route failure.
+- The same rollout exposed a lifecycle/observability gap: repeated same-target
+  update requests can schedule a redundant prepared transition, and an old
+  candidate runner may appear as a defunct process until the supervisor reaps
+  it. That did not leave two listening runtimes, but the status plane should
+  classify it instead of making operators infer safety from `ps`/`ss`.
 
 Human verification:
 
