@@ -1922,7 +1922,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 72%. First implementation slices landed the ABI/schema
+Overall completion: 73%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -2599,7 +2599,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 84%.
+Progress: 86%.
 
 Acceptance criteria:
 
@@ -2910,6 +2910,22 @@ Actions:
   `reliability-metrics` only printed status/stream counters. Acceptance metrics
   now include compact Yjs owner-guard counters and quarantine context alongside
   stream/status counters, without changing Yjs or stream data routes.
+- Rollout of `d34864240d02d61fa0f211747e0928d37334eea9` converged on both
+  `.30` and `.40`. `.30` runs active slot `B` and `.40` runs active slot `A`;
+  both report `succeeded/validate`, `wrapper_python_is_core_slot=false`, root
+  `/root/adaos/.venv/bin/adaos node reliability-metrics` works, and active
+  runtimes still use slot venvs. The new `acceptance.yjs_guard` line was
+  verified on both stands. `.30` reported `owner=skill:infrastate_skill`,
+  `throttled=1`, `quarantined=yes`, `quarantine_total=1`, and TTL countdown;
+  `.40` reported the same owner with `blocked=1`, `throttled=3`, and active
+  quarantine context.
+- Post-rollout `.30` 180-second acceptance with attached browsers stayed in
+  `succeeded/validate`; supervisor/root CLI remained stable, runtime RSS moved
+  roughly `464 MiB -> 478 MiB`, and `acceptance.yjs_guard` retained the
+  causal owner/path/tool/TTL evidence while the noisy skill remained
+  quarantined. This is enough to move from core guard/observability hardening
+  into the planned skill optimization phase, while longer plateau/memory soaks
+  remain useful during the skill migrations themselves.
 
 Human verification:
 
@@ -2920,17 +2936,17 @@ Human verification:
   `X-AdaOS-Summary-Cache: hit` and body bytes `0`.
 - Request `GET /api/node/reliability/summary/metrics` and verify
   `metrics.modes.thin.not_modified_total` increases during unchanged polling.
-- [ ] Run a 180-second acceptance with browser attached.
-- [ ] Run a pressure-fixture soak without first optimizing
+- [x] Run a 180-second acceptance with browser attached.
+- [x] Run a pressure-fixture soak without first optimizing
   `browsers_skill`/`infrastate_skill`/`infrascope_skill`; record whether the
   core survives and whether guard/status/log evidence is sufficient for later
   skill repair.
-- [ ] Verify `.30` and `.40` after the next rollout: supervisor process command
+- [x] Verify `.30` and `.40` after the next rollout: supervisor process command
   should use `/root/adaos/.venv/...python` and
   `adaos autostart status --json` should report
   `wrapper_python_is_core_slot=false`; active runtimes should still come from
   the active slot venv.
-- [ ] Verify after the next rollout that root
+- [x] Verify after the next rollout that root
   `/root/adaos/.venv/bin/adaos node reliability-metrics` is available without
   falling back to the slot-local CLI.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
