@@ -2042,7 +2042,9 @@ Execution order:
 4. Finish core guard observability and hot-event budgeting before changing
    skill behavior.
 5. Use current `infrastate_skill`, `browsers_skill`, and `infrascope_skill`
-   behavior as test subjects while the core surfaces mature.
+   behavior as deliberate pressure fixtures while the core surfaces mature:
+   do not quiet those skills just to make a soak green until the core can
+   survive, attribute, throttle/block/quarantine, and log retry/TTL context.
 6. Convert `infrastate_skill` from broad local projection helpers to thin
    presentation over those contracts.
 7. Convert `browsers_skill` and `infrascope_skill` after the shared protection
@@ -2419,6 +2421,10 @@ Dependency:
   `infrastate`/`infrascope` observations are available. Until then,
   `browsers_skill` remains a useful pressure source for proving the core
   diagnostics rather than hiding the problem inside the skill.
+- Treat current browser/session churn as a load-test fixture. If it triggers a
+  guard policy, first record whether core status, logs, and diagnostics identify
+  owner, route, receiver/path, retry, TTL, and quarantine context; optimize the
+  skill only after that evidence is sufficient.
 
 Current useful pattern and target:
 
@@ -2555,6 +2561,9 @@ Acceptance criteria:
   `/api/node/reliability/summary` responses.
 - Browser attach with `Mobile` and a second browser does not produce sustained
   red/green YJS indicator flapping from `infrastate` stream or projection work.
+- Known noisy skills may trigger warnings, throttling, block, or quarantine
+  during stress; that is acceptable only when the runtime stays usable and the
+  evidence identifies owner, route, policy, retry, and TTL.
 - Thin status payload size is bounded and recorded.
 - Full details remain available on demand.
 - `statusPlane.diagnostics.oversizedCardTotal` remains `0`; if it rises, the
@@ -2609,6 +2618,10 @@ Human verification:
 - Request `GET /api/node/reliability/summary/metrics` and verify
   `metrics.modes.thin.not_modified_total` increases during unchanged polling.
 - [ ] Run a 180-second acceptance with browser attached.
+- [ ] Run a pressure-fixture soak without first optimizing
+  `browsers_skill`/`infrastate_skill`/`infrascope_skill`; record whether the
+  core survives and whether guard/status/log evidence is sufficient for later
+  skill repair.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.
