@@ -1922,7 +1922,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 70%. First implementation slices landed the ABI/schema
+Overall completion: 72%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1951,7 +1951,11 @@ cached ETag and only downloads `mode=full` when the status snapshot changed or
 when the thin response cannot be interpreted as a runtime snapshot. Summary
 responses now expose cache/body-size headers and
 `/api/node/reliability/summary/metrics` so soak checks can count thin/full
-responses, bytes, and `304` reuse. Status registry diagnostics now expose the
+responses, bytes, and `304` reuse. The same acceptance surface now includes
+Yjs owner-guard attempted/allowed/blocked/throttled counters, active
+quarantine state, TTL/retry context, and the last guarded path/tool, so a Yjs
+quarantine does not require log scraping before a soak can be interpreted.
+Status registry diagnostics now expose the
 status-card compact-boundary budget (`maxCardBytes`, observed max bytes, and
 oversized-card counters) so misuse of `statusPlane` as a data payload route is
 visible during reviews and soaks. The SDK projection runtime now also records
@@ -2595,7 +2599,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 82%.
+Progress: 84%.
 
 Acceptance criteria:
 
@@ -2640,10 +2644,14 @@ Actions:
   unchanged/card-boundary counters, stream guard attempted/published/
   suppressed/throttled/fanout counters, stream-control snapshot-requested/
   queued/coalesced/dropped counters, and merged per-receiver rows.
+- [x] Add Yjs owner-guard acceptance diagnostics to the same metrics surface:
+  attempted/allowed/blocked/throttled counters, active quarantine state,
+  quarantine TTL/retry context, denied count, and the last guarded path/tool.
 - [x] Add a human-readable acceptance probe:
   `adaos node reliability-metrics --webspace desktop --receiver <receiver>`
-  prints summary response/cache counters, status registry diagnostics, stream
-  guard counters, stream-control coalescing, and per-receiver pressure rows.
+  prints summary response/cache counters, status registry diagnostics, Yjs
+  owner-guard counters, stream guard counters, stream-control coalescing, and
+  per-receiver pressure rows.
 - [x] Add SDK event-pressure counters for dirty projection refreshes so
   acceptance review can distinguish incoming hot-event load from SDK
   coalescing/no-dirty reductions.
@@ -2891,6 +2899,17 @@ Actions:
   waits for validation/timeout instead of restarting in a loop.
   Both stands keep supervisor under `/root/adaos/.venv/...` and runtime under
   the active slot venv; thin reliability summaries return `ok=true`.
+- Rollout of `dfb49eeeb1f1e04f57595ce268e94018ecec44a2` on `.30` converged
+  through slot `A`; root promotion restarted once and completed
+  `succeeded/validate`. A 180-second browser-attached pressure check kept the
+  runtime alive and root `adaos node reliability-metrics` available, while
+  logs attributed boot pressure to `infrastate_skill`, `infrascope_skill`,
+  `browsers_skill`, `gateway_ws`, YStore, and hub-route flushes.
+- The same check found a remaining acceptance blind spot: the log contained
+  `YJS owner quarantined webspace=desktop owner=skill:infrastate_skill`, but
+  `reliability-metrics` only printed status/stream counters. Acceptance metrics
+  now include compact Yjs owner-guard counters and quarantine context alongside
+  stream/status counters, without changing Yjs or stream data routes.
 
 Human verification:
 
