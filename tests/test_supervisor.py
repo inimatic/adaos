@@ -1286,6 +1286,141 @@ def test_supervisor_start_update_schedules_when_min_period_not_elapsed(monkeypat
     assert attempt["scheduled_for"] == 750.0
 
 
+def test_supervisor_start_update_deduplicates_active_slot_before_min_period(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "300")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    target = "4c1806aa70b040db61199707e0b739b244d7af04"
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "target_rev": "rev2026",
+            "target_version": target,
+            "git_commit": target,
+            "git_short_commit": target[:7],
+        },
+    )
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": target,
+            "finished_at": 450.0,
+            "updated_at": 450.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "completed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": target,
+            "completed_at": 450.0,
+            "updated_at": 450.0,
+        }
+    )
+
+    result = asyncio.run(
+        manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version=target,
+            reason="test.same-active",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["deduplicated"] is True
+    assert result["same_target"] is True
+    assert result["planned"] is False
+    status = read_status()
+    assert status["state"] == "succeeded"
+    assert status["same_target_deduped_reason"] == "active_slot_same_target"
+    assert status["scheduled_for"] is None
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "deduplicated"
+    assert supervisor._last_update_completion_at(status, attempt) == 450.0
+
+
+def test_supervisor_active_slot_dedupe_preserves_different_planned_update(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    active_target = "4c1806aa70b040db61199707e0b739b244d7af04"
+    planned_target = "9a9b9c9d00000000000000000000000000000000"
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "target_rev": "rev2026",
+            "target_version": active_target,
+            "git_commit": active_target,
+            "git_short_commit": active_target[:7],
+        },
+    )
+    write_status(
+        {
+            "state": "planned",
+            "phase": "scheduled",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": planned_target,
+            "reason": "test.future",
+            "scheduled_for": 800.0,
+            "planned_reason": "minimum_update_period",
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "planned",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": planned_target,
+            "reason": "test.future",
+            "scheduled_for": 800.0,
+            "planned_reason": "minimum_update_period",
+            "updated_at": 450.0,
+        }
+    )
+
+    result = asyncio.run(
+        manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version=active_target,
+            reason="test.same-active-probe",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["deduplicated"] is True
+    assert result["same_target"] is True
+    assert result["preserved_planned_transition"] is True
+    status = read_status()
+    assert status["state"] == "planned"
+    assert status["target_version"] == planned_target
+    assert status["scheduled_for"] == 800.0
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "planned"
+    assert attempt["target_version"] == planned_target
+
+
 def test_supervisor_start_update_refreshes_existing_planned_update(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "300")

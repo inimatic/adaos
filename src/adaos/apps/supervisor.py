@@ -816,6 +816,41 @@ def _transition_request_same_target(request: dict[str, Any] | None, other: dict[
     return bool(req_rev and cur_rev and req_rev == cur_rev and not req.get("target_version") and not cur.get("target_version"))
 
 
+def _transition_request_matches_active_slot(request: dict[str, Any] | None) -> bool:
+    req = request if isinstance(request, dict) else {}
+    if str(req.get("action") or "update").strip().lower() != "update":
+        return False
+    requested_version = str(req.get("target_version") or "").strip()
+    if not requested_version:
+        return False
+    try:
+        manifest = active_slot_manifest()
+    except Exception:
+        manifest = None
+    manifest = manifest if isinstance(manifest, dict) else {}
+    for key in ("target_version", "git_commit", "git_short_commit"):
+        if _target_version_matches(requested_version, manifest.get(key)):
+            return True
+    return False
+
+
+def _planned_transition_active(status: dict[str, Any] | None, attempt: dict[str, Any] | None) -> bool:
+    status_map = status if isinstance(status, dict) else {}
+    attempt_map = attempt if isinstance(attempt, dict) else {}
+    return (
+        str(attempt_map.get("state") or "").strip().lower() == "planned"
+        or str(status_map.get("state") or "").strip().lower() == "planned"
+    )
+
+
+def _same_target_status_completion_time(status: dict[str, Any]) -> float:
+    return max(
+        _epoch(status.get("root_restart_completed_at")),
+        _epoch(status.get("finished_at")),
+        _epoch(status.get("validated_at")),
+    )
+
+
 def _clear_same_target_subsequent_transition(
     *,
     status: dict[str, Any] | None,
@@ -853,6 +888,8 @@ def _clear_same_target_subsequent_transition(
 
 def _last_update_completion_at(status: dict[str, Any] | None, attempt: dict[str, Any] | None) -> float:
     attempt_map = attempt if isinstance(attempt, dict) else {}
+    if bool(attempt_map.get("same_target_deduped_at")):
+        attempt_map = {}
     if str(attempt_map.get("action") or "").strip().lower() == "update":
         completed_at = _epoch(attempt_map.get("completed_at"))
         if completed_at > 0.0:
@@ -865,6 +902,8 @@ def _last_update_completion_at(status: dict[str, Any] | None, attempt: dict[str,
         return 0.0
     if not _is_terminal_update_status(status_map):
         return 0.0
+    if bool(status_map.get("same_target_deduped_at")):
+        return _same_target_status_completion_time(status_map)
     return max(
         _epoch(status_map.get("root_restart_completed_at")),
         _epoch(status_map.get("finished_at")),
@@ -5610,6 +5649,76 @@ class SupervisorManager:
         _write_update_attempt(payload)
         return {"ok": True, "accepted": True, "planned": True, "status": status, "_served_by": "supervisor"}
 
+    def _deduplicate_active_slot_transition(
+        self,
+        *,
+        request: dict[str, Any],
+        current_status: dict[str, Any] | None,
+        current_attempt: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        now = time.time()
+        basis = read_core_update_last_result() or current_status or {}
+        status_payload = dict(basis if isinstance(basis, dict) else {})
+        status_payload.update(
+            {
+                "state": "succeeded",
+                "phase": "validate",
+                "action": "update",
+                "target_rev": str(request.get("target_rev") or status_payload.get("target_rev") or ""),
+                "target_version": str(request.get("target_version") or status_payload.get("target_version") or ""),
+                "reason": str(request.get("reason") or status_payload.get("reason") or ""),
+                "message": "core update target already active; request deduplicated",
+                "same_target_deduped_at": now,
+                "same_target_deduped_reason": "active_slot_same_target",
+                "same_target_target_version": str(request.get("target_version") or ""),
+                "subsequent_transition": False,
+                "subsequent_transition_requested_at": None,
+                "scheduled_for": None,
+                "candidate_prewarm_state": None,
+                "candidate_prewarm_message": None,
+                "candidate_prewarm_ready_at": None,
+                "updated_at": now,
+            }
+        )
+        for key in (
+            "subsequent_transition_action",
+            "subsequent_transition_target_rev",
+            "subsequent_transition_target_version",
+        ):
+            status_payload.pop(key, None)
+        clear_core_update_plan()
+        status = write_core_update_status(status_payload)
+
+        attempt_payload = dict(current_attempt or {})
+        attempt_payload.update(
+            {
+                "state": "deduplicated",
+                "action": "update",
+                "accepted": True,
+                "deduplicated": True,
+                "same_target": True,
+                "same_target_deduped_at": now,
+                "same_target_deduped_reason": "active_slot_same_target",
+                "target_rev": str(request.get("target_rev") or ""),
+                "target_version": str(request.get("target_version") or ""),
+                "reason": str(request.get("reason") or ""),
+                "scheduled_for": None,
+                "planned_reason": None,
+                "last_status": status,
+                "updated_at": now,
+            }
+        )
+        _write_update_attempt(attempt_payload)
+        return {
+            "ok": True,
+            "accepted": True,
+            "planned": False,
+            "deduplicated": True,
+            "same_target": True,
+            "status": status,
+            "_served_by": "supervisor",
+        }
+
     def _queue_subsequent_transition(
         self,
         *,
@@ -6272,6 +6381,26 @@ class SupervisorManager:
         current_attempt = _read_update_attempt()
         if _is_transition_in_progress(current_status, current_attempt):
             return self._queue_subsequent_transition(
+                request=request,
+                current_status=current_status,
+                current_attempt=current_attempt,
+            )
+        if _transition_request_matches_active_slot(request):
+            if _planned_transition_active(current_status, current_attempt) and not (
+                _transition_request_same_target(request, current_attempt)
+                or _transition_request_same_target(request, current_status)
+            ):
+                return {
+                    "ok": True,
+                    "accepted": True,
+                    "planned": True,
+                    "deduplicated": True,
+                    "same_target": True,
+                    "preserved_planned_transition": True,
+                    "status": dict(current_status or read_core_update_status() or {}),
+                    "_served_by": "supervisor",
+                }
+            return self._deduplicate_active_slot_transition(
                 request=request,
                 current_status=current_status,
                 current_attempt=current_attempt,
