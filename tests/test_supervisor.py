@@ -1352,6 +1352,120 @@ def test_supervisor_start_update_deduplicates_active_slot_before_min_period(monk
     assert supervisor._last_update_completion_at(status, attempt) == 450.0
 
 
+def test_supervisor_planned_update_resumes_through_prepare(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    target = "9c7e221b5157c46d84f64e43822357d5cffec4b0"
+    calls: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(manager, "status", lambda: {})
+    monkeypatch.setattr(manager, "_transition_continuity_guard_decision", lambda operation: None)
+    monkeypatch.setattr(
+        manager,
+        "_begin_prepare_transition",
+        lambda request: calls.append(("prepare", dict(request))) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        manager,
+        "_begin_countdown_transition",
+        lambda request, **kwargs: calls.append(("countdown", dict(request))) or {"ok": True},
+    )
+    write_status(
+        {
+            "state": "planned",
+            "phase": "scheduled",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": target,
+            "scheduled_for": 450.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "planned",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": target,
+            "scheduled_for": 450.0,
+            "updated_at": 400.0,
+        }
+    )
+
+    asyncio.run(manager._maybe_resume_or_continue_transition())
+
+    assert calls == [
+        (
+            "prepare",
+            {
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": target,
+                "reason": "",
+                "countdown_sec": 0.0,
+                "drain_timeout_sec": 10.0,
+                "signal_delay_sec": 0.25,
+                "requested_at": 500.0,
+            },
+        )
+    ]
+
+
+def test_supervisor_promote_root_refuses_active_slot_target_mismatch(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    target = "9c7e221b5157c46d84f64e43822357d5cffec4b0"
+    active = "2ba8453f42daaa8f89fad848d92a1481bd3a6a4d"
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "A",
+            "target_rev": "rev2026",
+            "target_version": active,
+            "git_commit": active,
+            "git_short_commit": active[:7],
+        },
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "resolved_root_promotion_requirement",
+        lambda manifest: (False, {"required": False, "basis": "test"}),
+    )
+    write_status(
+        {
+            "state": "validated",
+            "phase": "root_promotion_pending",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": target,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": target,
+            "updated_at": 400.0,
+        }
+    )
+
+    result = asyncio.run(manager.promote_root(reason="test.root"))
+
+    assert result["ok"] is False
+    status = read_status()
+    assert status["state"] == "failed"
+    assert status["root_promotion_refused_reason"] == "active_slot_target_mismatch"
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "failed"
+    assert attempt["completion_reason"] == "active slot target mismatch"
+
+
 def test_supervisor_active_slot_dedupe_preserves_different_planned_update(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -1921,11 +2035,11 @@ def test_supervisor_monitor_resumes_due_planned_transition(monkeypatch, tmp_path
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
     calls: list[dict] = []
 
-    def _capture(request: dict, *, countdown_sec: float | None = None) -> dict:
-        calls.append({"request": dict(request), "countdown_sec": countdown_sec})
+    def _capture(request: dict) -> dict:
+        calls.append({"request": dict(request)})
         return {"ok": True, "accepted": True}
 
-    monkeypatch.setattr(manager, "_begin_countdown_transition", _capture)
+    monkeypatch.setattr(manager, "_begin_prepare_transition", _capture)
 
     asyncio.run(manager._maybe_resume_or_continue_transition())
 
@@ -3016,6 +3130,9 @@ def test_supervisor_promote_root_marks_update_succeeded(monkeypatch, tmp_path) -
         "active_slot_manifest",
         lambda: {
             "slot": "B",
+            "target_version": "1.2.3",
+            "git_commit": "1.2.3",
+            "git_short_commit": "1.2.3",
             "repo_dir": str(tmp_path / "slots" / "B" / "repo"),
             "bootstrap_update": {
                 "required": True,
@@ -3062,6 +3179,9 @@ def test_supervisor_promote_root_preserves_subsequent_transition_request(monkeyp
         "active_slot_manifest",
         lambda: {
             "slot": "B",
+            "target_version": "1.2.3",
+            "git_commit": "1.2.3",
+            "git_short_commit": "1.2.3",
             "repo_dir": str(tmp_path / "slots" / "B" / "repo"),
             "bootstrap_update": {
                 "required": True,
