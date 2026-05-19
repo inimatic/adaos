@@ -1922,7 +1922,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 68%. First implementation slices landed the ABI/schema
+Overall completion: 70%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1954,7 +1954,10 @@ responses now expose cache/body-size headers and
 responses, bytes, and `304` reuse. Status registry diagnostics now expose the
 status-card compact-boundary budget (`maxCardBytes`, observed max bytes, and
 oversized-card counters) so misuse of `statusPlane` as a data payload route is
-visible during reviews and soaks.
+visible during reviews and soaks. The SDK projection runtime now also records
+per-event refresh pressure counters (`requested`, `started`, `coalesced`,
+`no_dirty`, `superseded`, and `dropped`) so noisy event routing is attributable
+before a skill is optimized.
 The `infrastate_skill` migration now has a first data-route plan in
 `docs/architecture/infrastate-data-route-plan.md`, plus matching
 `skill.yaml:data_routes` and `webui.json` receiver budget/guard metadata in the
@@ -2245,7 +2248,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 80%.
+Progress: 84%.
 
 Expected API:
 
@@ -2268,6 +2271,9 @@ Actions:
 - [x] Provide a shared debounce/budget helper for hot event-to-status paths,
   starting with `browser.session.changed`, route reconnect, YWS open/close, and
   quarantine transitions.
+- [x] Add SDK projection event-pressure diagnostics so dirty refreshes expose
+  per-topic requested, started, coalesced, no-dirty, superseded, and dropped
+  counters before skill-specific optimization hides the pressure source.
 - [x] Add tests showing a skill can publish status without touching Yjs or
   rebuilding a full snapshot.
 - [x] Add migration notes for skill authors.
@@ -2589,7 +2595,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 76%.
+Progress: 80%.
 
 Acceptance criteria:
 
@@ -2638,6 +2644,9 @@ Actions:
   `adaos node reliability-metrics --webspace desktop --receiver <receiver>`
   prints summary response/cache counters, status registry diagnostics, stream
   guard counters, stream-control coalescing, and per-receiver pressure rows.
+- [x] Add SDK event-pressure counters for dirty projection refreshes so
+  acceptance review can distinguish incoming hot-event load from SDK
+  coalescing/no-dirty reductions.
 - [x] Reject false-positive terminal core update success when the active slot
   does not match the requested target version. Runtime boot finalization and
   supervisor reconciliation now fail validation instead of completing the
@@ -2858,6 +2867,17 @@ Actions:
   the fix could run, so it was manually caught up by preparing slot `A` with
   `core_update_apply`, syncing the stable root source, activating slot `A`, and
   restarting `adaos.service`. It now reports active slot `A` at `af22dfb`.
+- Rollout verification for `273562eb48cf93c3691b3df850bd5da6e11f4ffa` on
+  `.30` converged through slot `A` and completed `succeeded/validate` with the
+  active slot matching the target. The slot-local CLI exposed
+  `adaos node reliability-metrics`, and the endpoint returned compact
+  acceptance metrics. The stable root CLI was still stale because
+  `src/adaos/apps/cli/commands/node.py` had not been classified as a root
+  operator-control path.
+- Root promotion now treats `adaos node` diagnostics as operator-control code
+  and checks effective root parity against the current bootstrap path list, not
+  only the historical manifest `changed_paths`. This prevents acceptance soaks
+  from silently using a stale root CLI after the runtime has moved forward.
   Both stands keep supervisor under `/root/adaos/.venv/...` and runtime under
   the active slot venv; thin reliability summaries return `ok=true`.
 
@@ -2880,6 +2900,9 @@ Human verification:
   `adaos autostart status --json` should report
   `wrapper_python_is_core_slot=false`; active runtimes should still come from
   the active slot venv.
+- [ ] Verify after the next rollout that root
+  `/root/adaos/.venv/bin/adaos node reliability-metrics` is available without
+  falling back to the slot-local CLI.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.
