@@ -1982,8 +1982,38 @@ def test_node_reliability_summary_metrics_exposes_acceptance_diagnostics(monkeyp
             ],
         }
 
+    def _yjs_guard_snapshot(**kwargs):
+        assert kwargs["webspace_id"] == "desktop"
+        assert kwargs["owner"] is None
+        return {
+            "enabled": True,
+            "webspace_id": "desktop",
+            "owner": "skill:infrastate_skill",
+            "attempted_total": 9,
+            "allowed_total": 6,
+            "blocked_total": 2,
+            "throttled_total": 1,
+            "last_policy_state": "block",
+            "last_reason": "write_amplification_blocked",
+            "last_path": "event/subnet.member.link.up",
+            "last_source": "skill_manager",
+            "last_channel": "skill.tool",
+            "last_update_bytes": 8192,
+            "quarantined": True,
+            "quarantine_enabled": True,
+            "quarantine_total": 1,
+            "quarantine_denied_total": 3,
+            "quarantine_remaining_s": 120.25,
+            "quarantine_reason": "write_amplification_blocked",
+            "quarantine_trigger": "policy_block",
+            "quarantine_path": "event/subnet.member.link.up",
+            "quarantine_tool": "infrastate_skill:subscribe:subnet.member.link.up",
+            "owner_guard": {"active_quarantines": [{"owner": "skill:infrastate_skill"}]},
+        }
+
     monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(status_registry=registry, bus=_FakeBus()))
     monkeypatch.setattr("adaos.services.router.service.webio_stream_guard_snapshot", _guard_snapshot)
+    monkeypatch.setattr("adaos.services.yjs.governance.primary_doc_governance_snapshot", _yjs_guard_snapshot)
 
     app = FastAPI()
     app.dependency_overrides[require_token] = lambda: True
@@ -1997,6 +2027,13 @@ def test_node_reliability_summary_metrics_exposes_acceptance_diagnostics(monkeyp
     acceptance = response.json()["metrics"]["acceptance"]
 
     assert acceptance["status_registry"]["diagnostics"]["unchanged_total"] == 1
+    assert acceptance["yjs_guard"]["owner"] == "skill:infrastate_skill"
+    assert acceptance["yjs_guard"]["blocked"] == 2
+    assert acceptance["yjs_guard"]["throttled"] == 1
+    assert acceptance["yjs_guard"]["quarantined"] is True
+    assert acceptance["yjs_guard"]["quarantine_total"] == 1
+    assert acceptance["yjs_guard"]["quarantine_denied_total"] == 3
+    assert acceptance["yjs_guard"]["active_quarantine_total"] == 1
     assert acceptance["stream_guard"]["totals"]["published"] == 2
     assert acceptance["stream_guard"]["totals"]["suppressed"] == 1
     assert acceptance["stream_controls"]["totals"]["snapshot_requested"] == 3
@@ -2469,6 +2506,23 @@ def test_node_reliability_metrics_cli_prints_acceptance_summary(monkeypatch) -> 
                                 "max_card_bytes_observed": 1024,
                             },
                         },
+                        "yjs_guard": {
+                            "available": True,
+                            "webspace_id": "desktop",
+                            "owner": "skill:infrastate_skill",
+                            "attempted": 9,
+                            "allowed": 6,
+                            "blocked": 2,
+                            "throttled": 1,
+                            "quarantined": True,
+                            "quarantine_total": 1,
+                            "quarantine_denied_total": 3,
+                            "quarantine_remaining_s": 120.25,
+                            "quarantine_reason": "write_amplification_blocked",
+                            "quarantine_path": "event/subnet.member.link.up",
+                            "quarantine_tool": "infrastate_skill:subscribe:subnet.member.link.up",
+                            "last_policy_state": "block",
+                        },
                         "stream_guard": {
                             "available": True,
                             "total": 1,
@@ -2523,6 +2577,8 @@ def test_node_reliability_metrics_cli_prints_acceptance_summary(monkeypatch) -> 
     assert "summary_metrics: responses=8 not_modified=5 bytes=2048" in result.output
     assert "summary_metrics.thin: responses=6 not_modified=5 bytes=512 last_status=304" in result.output
     assert "acceptance.status_registry: available=yes cards=4 published=9 changed=3 unchanged=6" in result.output
+    assert "acceptance.yjs_guard: available=yes webspace=desktop owner=skill:infrastate_skill attempted=9" in result.output
+    assert "acceptance.yjs_guard.last: policy=block reason=write_amplification_blocked path=event/subnet.member.link.up" in result.output
     assert "acceptance.stream_guard: available=yes total=1 attempted=7 published=4 suppressed=2" in result.output
     assert "acceptance.stream_controls: available=yes pending=1 bounded_queue=2 snapshot_requested=5" in result.output
     assert "acceptance.receiver.1: webspace=desktop receiver=infrastate.realtime owner=skill:infrastate_skill" in result.output

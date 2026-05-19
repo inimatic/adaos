@@ -500,6 +500,62 @@ def _compact_webio_stream_guard_metrics(payload: dict[str, Any], *, limit: int =
     }
 
 
+def _current_yjs_owner_guard_metrics(
+    *,
+    webspace_id: str | None = None,
+    owner: str | None = None,
+) -> dict[str, Any]:
+    try:
+        from adaos.services.yjs.governance import primary_doc_governance_snapshot
+
+        payload = primary_doc_governance_snapshot(webspace_id=webspace_id, owner=owner)
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        return {
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _compact_yjs_owner_guard_metrics(
+    payload: dict[str, Any],
+    *,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    owner_guard = _coerce_dict(data.get("owner_guard"))
+    active_quarantines = _coerce_list(owner_guard.get("active_quarantines"))
+    remaining = data.get("quarantine_remaining_s")
+    return {
+        "schema": "adaos.yjs_owner_guard.acceptance_metrics.v1",
+        "available": bool(data.get("available", bool(data))) and bool(data.get("enabled", True)),
+        "webspace_id": str(data.get("webspace_id") or webspace_id or "").strip() or None,
+        "owner": str(data.get("owner") or "").strip() or None,
+        "attempted": int(data.get("attempted_total") or 0),
+        "allowed": int(data.get("allowed_total") or 0),
+        "blocked": int(data.get("blocked_total") or 0),
+        "throttled": int(data.get("throttled_total") or 0),
+        "quarantined": bool(data.get("quarantined")),
+        "quarantine_enabled": bool(data.get("quarantine_enabled")),
+        "quarantine_total": int(data.get("quarantine_total") or 0),
+        "quarantine_denied_total": int(data.get("quarantine_denied_total") or 0),
+        "active_quarantine_total": len(active_quarantines),
+        "quarantine_remaining_s": round(float(remaining or 0.0), 3) if remaining is not None else None,
+        "quarantine_reason": str(data.get("quarantine_reason") or "").strip() or None,
+        "quarantine_trigger": str(data.get("quarantine_trigger") or "").strip() or None,
+        "quarantine_path": str(data.get("quarantine_path") or "").strip() or None,
+        "quarantine_tool": str(data.get("quarantine_tool") or "").strip() or None,
+        "last_decision": str(data.get("last_decision") or "").strip() or None,
+        "last_policy_state": str(data.get("last_policy_state") or "").strip() or None,
+        "last_reason": str(data.get("last_reason") or "").strip() or None,
+        "last_path": str(data.get("last_path") or "").strip() or None,
+        "last_source": str(data.get("last_source") or "").strip() or None,
+        "last_channel": str(data.get("last_channel") or "").strip() or None,
+        "last_update_bytes": int(data.get("last_update_bytes") or 0),
+        "error": str(data.get("error") or "").strip() or None,
+    }
+
+
 def _current_eventbus_backlog_metrics() -> dict[str, Any]:
     try:
         bus = getattr(get_ctx(), "bus", None)
@@ -678,6 +734,13 @@ def _acceptance_observability_metrics(
         ),
         limit=max_items,
     )
+    yjs_guard = _compact_yjs_owner_guard_metrics(
+        _current_yjs_owner_guard_metrics(
+            webspace_id=resolved_webspace_id,
+            owner=owner,
+        ),
+        webspace_id=resolved_webspace_id,
+    )
     stream_controls = _compact_webio_stream_control_metrics(
         _current_eventbus_backlog_metrics(),
         webspace_id=resolved_webspace_id,
@@ -690,6 +753,7 @@ def _acceptance_observability_metrics(
         "receiver": str(receiver or "").strip() or None,
         "owner": str(owner or "").strip() or None,
         "status_registry": status_registry,
+        "yjs_guard": yjs_guard,
         "stream_guard": stream_guard,
         "stream_controls": stream_controls,
         "stream_receivers": _stream_receiver_acceptance_metrics(
@@ -700,6 +764,7 @@ def _acceptance_observability_metrics(
         "notes": {
             "unchanged_source": "status_registry.unchanged_total and summary not_modified_total; router cannot observe skill-side unchanged stream dedupe unless the skill publishes that diagnostic",
             "coalesced_source": "eventbus bounded superseded controls are reported as coalesced for soak readability",
+            "yjs_guard_source": "primary-doc governance and owner quarantine counters; observability only, not a data-route replacement",
         },
     }
 

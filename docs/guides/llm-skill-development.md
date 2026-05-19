@@ -373,8 +373,8 @@ Status card rules:
   without rebuilding the full reliability payload
 - use `GET /api/node/reliability/summary/metrics` during soak/debug runs to
   verify thin/full mode counts, response bytes, `304` reuse, and the compact
-  `acceptance` block with status-registry, stream guard, stream-control, and
-  per-receiver pressure counters
+  `acceptance` block with status-registry, Yjs owner-guard/quarantine, stream
+  guard, stream-control, and per-receiver pressure counters
 - for a human-readable check, use
   `adaos node reliability-metrics --webspace <id> --receiver <stream>` and
   include the `acceptance.*` lines in soak notes
