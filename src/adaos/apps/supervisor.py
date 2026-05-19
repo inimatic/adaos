@@ -2610,6 +2610,7 @@ class SupervisorManager:
                 "delay_sec": None,
                 "reason": "autostart self-restart is unavailable for the current supervisor process",
             }
+        wrapper_refresh = self._refresh_autostart_wrapper(reason=reason)
         if self._service_restart_pending:
             return {
                 "ok": True,
@@ -2617,6 +2618,7 @@ class SupervisorManager:
                 "mode": "self_exit",
                 "delay_sec": delay_sec,
                 "duplicate": True,
+                "wrapper_refresh": wrapper_refresh,
             }
         self._service_restart_pending = True
         pid = os.getpid()
@@ -2639,7 +2641,32 @@ class SupervisorManager:
         thread = threading.Thread(target=_worker, name="adaos-supervisor-self-restart", daemon=True)
         self._service_restart_thread = thread
         thread.start()
-        return {"ok": True, "requested": True, "mode": "self_exit", "delay_sec": delay_sec}
+        return {
+            "ok": True,
+            "requested": True,
+            "mode": "self_exit",
+            "delay_sec": delay_sec,
+            "wrapper_refresh": wrapper_refresh,
+        }
+
+    def _refresh_autostart_wrapper(self, *, reason: str) -> dict[str, Any]:
+        try:
+            from adaos.services.autostart import default_spec as _default_autostart_spec
+            from adaos.services.autostart import refresh_wrapper as _refresh_autostart_wrapper
+
+            ctx = get_ctx()
+            spec = _default_autostart_spec(ctx, host=self.runtime_host, port=self.runtime_port, token=self.token)
+            payload = _refresh_autostart_wrapper(ctx, spec)
+            payload["reason"] = str(reason or "supervisor.root_restart")
+            return payload
+        except Exception as exc:
+            _LOG.warning("failed to refresh autostart wrapper before self-restart", exc_info=True)
+            return {
+                "ok": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "reason": str(reason or "supervisor.root_restart"),
+            }
 
     async def complete_update(self, *, reason: str, auto: bool = False) -> dict[str, Any]:
         status = read_core_update_status()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -101,6 +102,43 @@ def test_default_autostart_spec_respects_explicit_base_dir_from_shared_dotenv(mo
     assert spec.env["ADAOS_SHARED_DOTENV_PATH"] == str(shared_dotenv.resolve())
 
 
+def test_default_autostart_spec_prefers_stable_root_venv_over_slot_context(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    base_dir = tmp_path / "base"
+    project_root = tmp_path / "adaos"
+    (project_root / "src" / "adaos").mkdir(parents=True)
+    shared_dotenv = project_root / ".env"
+    shared_dotenv.write_text("ADAOS_PROFILE=from-dotenv\n", encoding="utf-8")
+    python_rel = Path("Scripts") / "python.exe" if os.name == "nt" else Path("bin") / "python"
+    root_python = project_root / ".venv" / python_rel
+    root_python.parent.mkdir(parents=True)
+    root_python.write_text("", encoding="utf-8")
+
+    slot_repo = base_dir / "state" / "core_slots" / "slots" / "A" / "repo"
+    (slot_repo / "src" / "adaos").mkdir(parents=True)
+
+    class _Paths(_FakePaths):
+        def repo_root(self) -> Path:
+            return slot_repo
+
+    class _Ctx(_FakeCtx):
+        def __init__(self, base_dir: Path) -> None:
+            self.paths = _Paths(base_dir)
+            self.settings = _FakeSettings()
+
+    monkeypatch.setenv("ADAOS_SHARED_DOTENV_PATH", str(shared_dotenv))
+    monkeypatch.setenv("ADAOS_ROOT_REPO_ROOT", str(slot_repo))
+    monkeypatch.setattr(autostart, "load_config", lambda: SimpleNamespace(token=""))
+
+    spec = default_spec(_Ctx(base_dir), host="127.0.0.1", port=8779, token="t1")
+
+    assert Path(spec.argv[0]).resolve() == root_python.resolve()
+    assert spec.env["ADAOS_ROOT_REPO_ROOT"] == str(project_root.resolve())
+    assert spec.env["ADAOS_SHARED_DOTENV_PATH"] == str(shared_dotenv.resolve())
+    assert str(project_root / "src") in spec.env["PYTHONPATH"].split(os.pathsep)
+
+
 def test_slot_launch_spec_formats_placeholders() -> None:
     argv, command = _slot_launch_spec(
         {
@@ -114,6 +152,26 @@ def test_slot_launch_spec_formats_placeholders() -> None:
     assert command is None
     assert argv is not None
     assert argv[-1] == "8777"
+
+
+def test_parse_wrapper_python_reports_core_slot_source(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    base_dir = tmp_path / "base"
+    wrapper = base_dir / "bin" / "adaos-autostart.sh"
+    wrapper.parent.mkdir(parents=True)
+    slot_python = base_dir / "state" / "core_slots" / "slots" / "A" / "venv" / "bin" / "python"
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"exec '{slot_python}' '-m' 'adaos.apps.supervisor' '--host' '127.0.0.1' '--port' '8777'\n",
+        encoding="utf-8",
+    )
+
+    payload = autostart._wrapper_control_plane_payload(wrapper, base_dir=base_dir)
+
+    assert payload["wrapper_python"] == str(slot_python)
+    assert payload["wrapper_python_is_core_slot"] is True
 
 
 def test_linux_status_without_user_bus_uses_service_file(monkeypatch, tmp_path: Path) -> None:

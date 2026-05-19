@@ -89,10 +89,18 @@ Root checkout is reserved for:
 
 - bootstrap install
 - supervisor/autostart/update-control code
+- watchdog and other always-on control-plane helpers
 - candidate preparation
 - explicit developer-run workflows
 
-This keeps slot switching fast and keeps production runtime independent from root checkout drift.
+Control-plane code must run from a stable root checkout and root virtual
+environment, for example `~/adaos` plus `~/adaos/.venv`. It must not run from
+`state/core_slots/slots/<A|B>/repo` or that slot's `venv`, because an update can
+rewrite or replace a slot while the supervisor/watchdog still needs to survive
+the transition and make rollback decisions.
+
+This keeps slot switching fast, keeps production runtime independent from root
+checkout drift, and keeps the control-plane independent from slot mutation.
 
 For runtime processes, slot resolution is process-local first:
 
@@ -387,11 +395,17 @@ Rules:
 - root promotion is allowed only after the candidate is proven in a slot
 - production runtime still restarts from the active slot after root promotion
 - root promotion should use the same validated candidate source, not a fresh mutable branch tip
-- current implementation promotes bootstrap-managed files into the explicit validated root target recorded for that slot, writes a backup snapshot plus restore metadata, records an explicit supervisor attempt state while waiting for restart, and on autostart-managed Linux deployments requests the service restart automatically so the new supervisor/bootstrap code becomes active
+- current implementation promotes bootstrap-managed files into the explicit validated root target recorded for that slot, writes a backup snapshot plus restore metadata, refreshes the autostart wrapper so the next supervisor process uses the stable root checkout/root `.venv`, records an explicit supervisor attempt state while waiting for restart, and on autostart-managed Linux deployments requests the service restart automatically so the new supervisor/bootstrap code becomes active
 - if another transition request arrives before that restart completes, it is queued as `subsequent_transition` on the supervisor attempt instead of being dropped or run concurrently
 - manual `adaos autostart update-complete` remains the compatibility and retry path for older supervisors or environments where self-requested restart is unavailable
 
 This keeps root updates out of the fast rollback path while preserving the slot-runtime model.
+
+Autostart status should expose the wrapper Python and whether that Python lives
+under `state/core_slots/slots`. `wrapper_python_is_core_slot=true` is a
+control-plane isolation defect: it does not mean the active runtime slot is
+wrong, but it means the next supervisor/watchdog restart is still coupled to a
+mutable runtime slot.
 
 ## Skill runtime migration lifecycle
 
