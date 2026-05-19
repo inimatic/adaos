@@ -35,6 +35,19 @@ _SNAPSHOT_UNAVAILABLE_CACHE_LOCK = threading.RLock()
 _SNAPSHOT_UNAVAILABLE_CACHE: dict[str, tuple[float, Dict[str, Any]]] = {}
 
 
+def _readonly_snapshot_rpc_timeout_s(requested_timeout: float | None) -> float | None:
+    if requested_timeout is not None:
+        return requested_timeout
+    raw = str(os.getenv("ADAOS_TOOL_BRIDGE_READONLY_SNAPSHOT_RPC_TIMEOUT_S") or "8").strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = 8.0
+    if value <= 0.0:
+        return None
+    return max(1.0, min(value, 30.0))
+
+
 def _debug_autosync_enabled() -> bool:
     level = (os.getenv("ADAOS_LOG_LEVEL") or "").strip().upper()
     return not level or level == "DEBUG"
@@ -260,7 +273,7 @@ async def _proxy_tool_call_to_node(
     webspace_id = _resolve_tool_webspace_id(payload)
     readonly_snapshot = _is_readonly_snapshot_tool(body.tool)
     link_connected = bool(target_node_id and link_manager.is_connected(target_node_id))
-    if readonly_snapshot and not link_connected:
+    if readonly_snapshot:
         cached = _snapshot_unavailable_cache_get(
             tool_name=body.tool,
             target_node_id=target_node_id,
@@ -268,6 +281,7 @@ async def _proxy_tool_call_to_node(
         )
         if cached is not None:
             return cached
+    rpc_timeout = _readonly_snapshot_rpc_timeout_s(body.timeout) if readonly_snapshot else body.timeout
     rpc_error: Exception | None = None
     if link_connected:
         try:
@@ -275,7 +289,7 @@ async def _proxy_tool_call_to_node(
                 target_node_id,
                 tool=body.tool,
                 arguments=payload,
-                timeout=body.timeout,
+                timeout=rpc_timeout,
                 dev=body.dev,
             )
             if readonly_snapshot:
