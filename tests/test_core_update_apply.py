@@ -369,6 +369,18 @@ def test_validate_checkout_target_version_rejects_mismatched_sha(monkeypatch, tm
         assert "f7d14e92e38bb6b37f9068c2ee894de61710b92e" in text
 
 
+def test_validate_checkout_target_version_accepts_short_sha_prefix(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    monkeypatch.setattr(mod, "_git_text", lambda *_args: "d7d79d5d08eb12446a4f7bf6069246368df6d4d0")
+
+    mod._validate_checkout_target_version(
+        tmp_path,
+        target_version="d7d79d5",
+        source_label="local source repo",
+    )
+
+
 def test_prepare_checkout_repo_falls_back_to_remote_when_local_source_misses_target_sha(
     monkeypatch, tmp_path: Path
 ) -> None:
