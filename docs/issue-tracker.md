@@ -1922,7 +1922,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 73%. First implementation slices landed the ABI/schema
+Overall completion: 74%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -2599,7 +2599,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 86%.
+Progress: 88%.
 
 Acceptance criteria:
 
@@ -2634,6 +2634,9 @@ Acceptance criteria:
 - Terminal update success is rejected when the active slot manifest does not
   match the requested `target_version`; false-positive `succeeded/validate`
   must become a failed validation with the active manifest attached.
+- Stale terminal status from a previous update must not be allowed to complete
+  or fail a fresh active update attempt unless the terminal status itself
+  carries the attempted target or the active slot already matches it.
 
 Actions:
 
@@ -2659,6 +2662,10 @@ Actions:
   does not match the requested target version. Runtime boot finalization and
   supervisor reconciliation now fail validation instead of completing the
   attempt as `succeeded`.
+- [x] Keep the same guard from overfiring on stale terminal status: supervisor
+  reconciliation now ignores targetless old `succeeded/validate` payloads for a
+  fresh active target instead of borrowing the attempt target and producing a
+  premature `active_slot_target_mismatch`.
 - [ ] Add status registry diagnostics to the final soak analysis.
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
   unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
@@ -2926,6 +2933,14 @@ Actions:
   quarantined. This is enough to move from core guard/observability hardening
   into the planned skill optimization phase, while longer plateau/memory soaks
   remain useful during the skill migrations themselves.
+- The docs-only rollout to `578aceb502a99fc94a478237c817297225529f1a`
+  converged on `.30`, but `.40` stayed healthy on the previous runtime and
+  marked the attempt failed as `active slot target mismatch`. The root cause was
+  a supervisor reconciliation edge: an old targetless terminal status could be
+  interpreted as the fresh active attempt by borrowing the attempt target. The
+  fix keeps real target-bearing mismatch rejection, but ignores stale
+  targetless terminal payloads until the update produces its own target-bearing
+  status or the active slot actually matches.
 
 Human verification:
 
@@ -2949,6 +2964,10 @@ Human verification:
 - [x] Verify after the next rollout that root
   `/root/adaos/.venv/bin/adaos node reliability-metrics` is available without
   falling back to the slot-local CLI.
+- [ ] Verify the stale-terminal-status reconciliation fix on `.30` and `.40`;
+  a docs-only update should either converge or remain active until real
+  transition evidence appears, not fail immediately from an old targetless
+  `succeeded/validate`.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.

@@ -111,6 +111,52 @@ def test_reconcile_update_status_completes_attempt_on_terminal_status(monkeypatc
     assert attempt["last_status"]["state"] == "succeeded"
 
 
+def test_reconcile_update_status_ignores_stale_targetless_terminal_status(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "A",
+            "target_version": "1111111111111111111111111111111111111111",
+            "git_commit": "1111111111111111111111111111111111111111",
+            "git_short_commit": "1111111",
+        },
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "2222222222222222222222222222222222222222",
+            "requested_at": 450.0,
+            "transitioned_at": 460.0,
+            "updated_at": 460.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": {
+                "state": "succeeded",
+                "phase": "validate",
+                "updated_at": 455.0,
+            },
+            "_served_by": "runtime",
+        }
+    )
+
+    assert payload["_served_by"] == "supervisor_stale_terminal_status_ignored"
+    assert payload["status"]["state"] == "succeeded"
+    assert not payload["status"].get("active_slot_target_mismatch")
+    attempt = payload.get("attempt")
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "active"
+    assert attempt.get("completion_reason") is None
+
+
 def test_reconcile_update_status_rejects_terminal_success_for_wrong_active_slot(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
