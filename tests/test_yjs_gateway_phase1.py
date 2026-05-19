@@ -1344,7 +1344,7 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
     touched: list[dict[str, object]] = []
 
     class _FakeWebSocket:
-        query_params = {"dev": "dev-over-limit"}
+        query_params = {"dev": "dev-over-limit", "client_yws_attempt_id": "cyws-over-limit"}
 
         def __init__(self) -> None:
             self.accepted = False
@@ -1379,6 +1379,7 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
     assert events[0][0] == "browser.session.changed"
     assert events[0][1]["yjs_channel_state"] == "rejected"
     assert events[0][1]["yjs_attempt_id"]
+    assert events[0][1]["client_yws_attempt_id"] == "cyws-over-limit"
     assert events[0][1]["reason"] == "active_limit"
     assert gateway_module._YWS_GUARD_DIAG["last_reject_reason"] == "active_limit"
     attempts = gateway_module._yws_storm_snapshot(time.time())["attempts"]
@@ -1551,7 +1552,7 @@ def test_yws_impl_cleans_up_after_first_message_timeout(monkeypatch) -> None:
     events: list[tuple[str, dict[str, object] | None]] = []
 
     class _FakeWebSocket:
-        query_params = {"dev": "dev-first-timeout"}
+        query_params = {"dev": "dev-first-timeout", "client_yws_attempt_id": "cyws-first-timeout"}
         close_code = None
 
         async def accept(self) -> None:
@@ -1588,6 +1589,8 @@ def test_yws_impl_cleans_up_after_first_message_timeout(monkeypatch) -> None:
     assert events[0][1]["connection_state"] == "connected"
     assert events[1][1]["connection_state"] == "closed"
     assert events[0][1]["yjs_attempt_id"] == events[1][1]["yjs_attempt_id"]
+    assert events[0][1]["client_yws_attempt_id"] == "cyws-first-timeout"
+    assert events[1][1]["client_yws_attempt_id"] == "cyws-first-timeout"
     assert gateway_module._TRANSPORT_STATE["yws"]["active_connections"] == 0
     assert gateway_module._TRANSPORT_STATE["yws"]["open_total"] == 1
     assert gateway_module._TRANSPORT_STATE["yws"]["close_total"] == 1

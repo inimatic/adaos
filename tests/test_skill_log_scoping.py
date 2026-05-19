@@ -31,7 +31,20 @@ async def test_ui_runtime_diagnostics_write_skill_scoped_log_and_mcp_can_read_it
                         "code": "modal.not_found",
                         "message": "Modal missing.",
                         "skillId": "browsers_skill",
-                        "details": {"requestedId": "browser_link_settings_modal"},
+                        "details": {
+                            "requestedId": "browser_link_settings_modal",
+                            "browser_identity": {
+                                "device_id": "dev-browser-1",
+                                "browser_family": "Chrome",
+                                "os_name": "Windows",
+                                "form_factor": "Desktop",
+                            },
+                            "runtime_debug": {
+                                "session_id": "brs-1",
+                                "tab_id": "tab-1",
+                                "details": {"client_attempt_id": "cyws-1"},
+                            },
+                        },
                     }
                 ],
             }
@@ -44,6 +57,13 @@ async def test_ui_runtime_diagnostics_write_skill_scoped_log_and_mcp_can_read_it
         assert line["skill_id"] == "browsers_skill"
         assert line["code"] == "modal.not_found"
         assert line["webspace_id"] == "desktop"
+        assert line["browser_device_id"] == "dev-browser-1"
+        assert line["browser_family"] == "Chrome"
+        assert line["browser_os_name"] == "Windows"
+        assert line["browser_form_factor"] == "Desktop"
+        assert line["browser_session_id"] == "brs-1"
+        assert line["browser_tab_id"] == "tab-1"
+        assert line["client_yws_attempt_id"] == "cyws-1"
 
         payload = list_local_logs(
             category="skills",
