@@ -3442,6 +3442,57 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
     assert attempt["restart_requested_at"] > 0
 
 
+def test_supervisor_auto_complete_does_not_repeat_root_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(
+        manager,
+        "status",
+        lambda: {
+            "active_slot": "B",
+            "runtime_state": "starting",
+            "runtime_url": "http://127.0.0.1:8778",
+            "runtime_port": 8778,
+        },
+    )
+    restart_reasons: list[str] = []
+    monkeypatch.setattr(
+        manager,
+        "_schedule_service_restart",
+        lambda *, reason: restart_reasons.append(reason) or {"ok": True, "requested": True},
+    )
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "root_promoted",
+            "action": "update",
+            "target_slot": "B",
+            "restart_requested_at": 431.0,
+            "restart_mode": "self_exit",
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "awaiting_root_restart",
+            "action": "update",
+            "awaiting_restart": True,
+            "restart_required": True,
+            "restart_requested_at": 431.0,
+            "restart_mode": "self_exit",
+            "updated_at": 431.0,
+        }
+    )
+
+    payload = asyncio.run(manager.complete_update(reason="supervisor.auto_update_complete", auto=True))
+
+    assert payload["accepted"] is False
+    assert payload["noop"] is True
+    assert payload["restart"]["already_requested"] is True
+    assert payload["restart"]["restart_requested_at"] == 431.0
+    assert restart_reasons == []
+    assert supervisor._read_update_attempt()["state"] == "awaiting_root_restart"
+
+
 def test_supervisor_maybe_resume_auto_completes_root_promotion_pending(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
