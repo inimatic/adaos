@@ -2795,6 +2795,15 @@ Actions:
   the countdown-only path and skipped inactive-slot preparation. The supervisor
   now resumes due planned updates through prepare, and root promotion refuses
   to complete if the active slot commit does not match the target.
+- Rollout verification for `af22dfb48adfb944ee023b2b5882d29b004f7fcf`:
+  `.30` converged through slot `B` and completed
+  `succeeded/validate` with `root promotion restart completed; runtime boot
+  validated on slot B`. `.40` was caught in the old false-success state before
+  the fix could run, so it was manually caught up by preparing slot `A` with
+  `core_update_apply`, syncing the stable root source, activating slot `A`, and
+  restarting `adaos.service`. It now reports active slot `A` at `af22dfb`.
+  Both stands keep supervisor under `/root/adaos/.venv/...` and runtime under
+  the active slot venv; thin reliability summaries return `ok=true`.
 
 Human verification:
 
