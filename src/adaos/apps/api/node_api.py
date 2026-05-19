@@ -167,6 +167,104 @@ async def _current_reliability_payload_async(*, webspace_id: str | None = None) 
     return await anyio.to_thread.run_sync(partial(current_reliability_payload, webspace_id=webspace_id))
 
 
+def _current_status_registry_snapshot(
+    *,
+    webspace_id: str | None = None,
+    owner: str | None = None,
+    scope: str | None = None,
+    include_stale: bool = True,
+) -> dict[str, Any]:
+    now = time.time()
+    try:
+        registry = get_ctx().status_registry
+        snapshot = registry.snapshot(
+            webspace_id=webspace_id,
+            owner=owner,
+            scope=scope,
+            include_stale=include_stale,
+            now_ts=now,
+        )
+        snapshot["available"] = True
+        return snapshot
+    except Exception as exc:
+        return {
+            "schema": "adaos.status_registry.v1",
+            "available": False,
+            "updated_at": now,
+            "cards": [],
+            "total": 0,
+            "diagnostics": {
+                "schema": "adaos.status_registry.diagnostics.v1",
+                "card_count": 0,
+                "publish_total": 0,
+                "changed_total": 0,
+                "unchanged_total": 0,
+                "stale_count": 0,
+                "last_publish_latency_ms": 0.0,
+                "last_changed_at": None,
+            },
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _compact_status_card(value: Any) -> dict[str, Any]:
+    card = _coerce_dict(value)
+    return {
+        "id": str(card.get("id") or "").strip() or "unknown",
+        "owner": str(card.get("owner") or "").strip() or "unknown",
+        "kind": str(card.get("kind") or "").strip() or "status",
+        "scope": str(card.get("scope") or "").strip() or "runtime",
+        "status": str(card.get("status") or "unknown").strip() or "unknown",
+        "summary": str(card.get("summary") or "").strip() or None,
+        "severity": str(card.get("severity") or "unknown").strip() or "unknown",
+        "webspaceId": str(card.get("webspace_id") or "").strip() or None,
+        "updatedAt": card.get("updated_at"),
+        "ttlMs": _coerce_optional_int(card.get("ttl_ms")),
+        "stale": bool(card.get("stale")),
+        "version": int(card.get("version") or 1),
+        "fingerprint": str(card.get("fingerprint") or "").strip() or None,
+        "changedAt": card.get("changed_at"),
+        "incidentId": str(card.get("incident_id") or "").strip() or None,
+        "detailsRef": _coerce_dict(card.get("details_ref")),
+        "route": _coerce_dict(card.get("route")),
+        "guardRef": _coerce_dict(card.get("guard_ref")),
+    }
+
+
+def _compact_status_registry_payload(
+    snapshot: dict[str, Any],
+    *,
+    webspace_id: str | None = None,
+    limit: int | None = 50,
+    source: str = "api.node.status.cards",
+) -> dict[str, Any]:
+    diagnostics = _coerce_dict(snapshot.get("diagnostics"))
+    cards = [_compact_status_card(card) for card in _coerce_list(snapshot.get("cards")) if isinstance(card, dict)]
+    limit_value = max(0, min(int(limit if limit is not None else 50), 500))
+    cards = cards[:limit_value]
+    return {
+        "ok": True,
+        "available": bool(snapshot.get("available", True)),
+        "schema": str(snapshot.get("schema") or "adaos.status_registry.v1"),
+        "source": source,
+        "webspaceId": str(webspace_id or "").strip() or None,
+        "updatedAt": int(float(snapshot.get("updated_at") or time.time()) * 1000),
+        "total": int(snapshot.get("total") or len(cards)),
+        "returned": len(cards),
+        "diagnostics": {
+            "cardCount": int(diagnostics.get("card_count") or 0),
+            "publishTotal": int(diagnostics.get("publish_total") or 0),
+            "changedTotal": int(diagnostics.get("changed_total") or 0),
+            "unchangedTotal": int(diagnostics.get("unchanged_total") or 0),
+            "staleCount": int(diagnostics.get("stale_count") or 0),
+            "lastPublishLatencyMs": float(diagnostics.get("last_publish_latency_ms") or 0.0),
+            "lastChangedAt": diagnostics.get("last_changed_at"),
+        },
+        "cards": cards,
+        "error": str(snapshot.get("error") or "").strip() or None,
+    }
+
+
 def _compact_phase0_task(value: Any) -> dict[str, Any] | None:
     payload = _coerce_dict(value)
     if not payload:
@@ -226,7 +324,12 @@ def _compact_route_tunnel_state(value: Any) -> str:
     return "unknown"
 
 
-def _compact_runtime_reliability_payload(payload: dict[str, Any], *, webspace_id: str | None = None) -> dict[str, Any]:
+def _compact_runtime_reliability_payload(
+    payload: dict[str, Any],
+    *,
+    webspace_id: str | None = None,
+    status_registry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     runtime = _coerce_dict(payload.get("runtime"))
     hub_root_protocol = _coerce_dict(runtime.get("hub_root_protocol"))
     sidecar_runtime = _coerce_dict(runtime.get("sidecar_runtime"))
@@ -410,6 +513,12 @@ def _compact_runtime_reliability_payload(payload: dict[str, Any], *, webspace_id
         },
         "supervisorRuntime": supervisor_runtime,
         "phase0Communication": _compact_phase0_checkpoint(runtime.get("event_model_phase0_communication")),
+        "statusPlane": _compact_status_registry_payload(
+            status_registry or _current_status_registry_snapshot(webspace_id=resolved_webspace_id),
+            webspace_id=resolved_webspace_id,
+            limit=20,
+            source="api.node.reliability.summary.status_plane",
+        ),
     }
 
 
@@ -1293,9 +1402,33 @@ async def node_reliability() -> dict[str, Any]:
 @router.get("/reliability/summary", dependencies=[Depends(require_token)])
 async def node_reliability_summary(webspace_id: str | None = None) -> dict[str, Any]:
     reliability = await _current_reliability_payload_async(webspace_id=webspace_id)
+    status_registry = _current_status_registry_snapshot(webspace_id=webspace_id)
     return _compact_runtime_reliability_payload(
         reliability,
         webspace_id=webspace_id,
+        status_registry=status_registry,
+    )
+
+
+@router.get("/status/cards", dependencies=[Depends(require_token)])
+async def node_status_cards(
+    webspace_id: str | None = None,
+    owner: str | None = None,
+    scope: str | None = None,
+    include_stale: bool = True,
+    limit: int = 100,
+) -> dict[str, Any]:
+    snapshot = _current_status_registry_snapshot(
+        webspace_id=webspace_id,
+        owner=owner,
+        scope=scope,
+        include_stale=include_stale,
+    )
+    return _compact_status_registry_payload(
+        snapshot,
+        webspace_id=webspace_id,
+        limit=limit,
+        source="api.node.status.cards",
     )
 
 

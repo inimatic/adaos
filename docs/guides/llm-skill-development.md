@@ -355,6 +355,9 @@ Status card rules:
   pressure back to the skill route plan
 - use `publish_status_stream()` when the card itself should also be available
   as a replace-mode stream variable
+- verify cards through `GET /api/node/status/cards`; the compatibility
+  `/api/node/reliability/summary` surface also carries a compact `statusPlane`
+  block for badge/status UI during migration
 
 ## Hot events and smoothing
 
