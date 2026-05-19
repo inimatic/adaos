@@ -51,6 +51,10 @@ does not move data by itself; it documents the route chosen by the skill author:
 - `route: tool/details`, `skill-local`, or `disk/360log` for explicit
   drill-down or diagnostic evidence
 
+`status` and `statusPlane` are intentionally not valid data routes. Status
+cards are compact summaries that reference one of the routes above; they must
+not carry live rows, inventory tables, logs, or diagnostic payloads.
+
 `webui.webio.receivers[*]` can declare stream budgets, freshness fields,
 snapshot policy, and guard visibility so stream pressure is attributable during
 review and later runtime diagnostics.

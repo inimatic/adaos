@@ -60,7 +60,9 @@ section. Use it to record the chosen route for each surface (`yjs`, `stream`,
 `tool/details`, `skill-local`, or `disk/360log`), first-paint/recovery behavior,
 budgets, and guard visibility. `data_routes` documents intent; actual Yjs
 materialization still uses `data_projections`, and live variables still use
-`webui.json:webio.receivers`.
+`webui.json:webio.receivers`. `statusPlane` is not a data route; status cards
+should stay small and point to Yjs, stream, or details routes instead of
+embedding the data itself.
 
 ## Service-type skills
 

@@ -92,6 +92,7 @@ If a route cannot answer these questions, do not add it yet.
 | Selected ids, compact health badge, latest stable status | Yjs projection | Rewriting `data`, `ui`, or `registry` broadly |
 | Operator-facing variables, active operations, logs, telemetry, chat/event tail | Stream receiver | Unbounded arrays in Yjs |
 | Big diagnostics or object inspector payload | Details tool / stream snapshot / disk snapshot | Embedding full diagnostics in primary Yjs |
+| Small operator health/guard summary | Status card pointing to stream/tool/details route | Treating `statusPlane` as a live data route |
 | Durable private skill cache | Skill-local files or DB | Hidden browser-only state as source of truth |
 | Command from UI to runtime | `callHost` / tool with small ack | Large command response used as data transport |
 | Raw high-frequency evidence | Stream or disk/360log | Smoothed Yjs status that loses diagnostic truth |
@@ -313,6 +314,12 @@ Use status cards for small operator summaries that must be cheap to poll,
 stream, or project. A card is not a detail payload. It carries identity,
 current state, freshness, and a pointer to the details route.
 
+`statusPlane` is not a third data route. It is a compact index over the routes
+you already declared in `data_routes`, `data_projections`, and
+`webui.receivers`. If a card needs rows, inventories, logs, diagnostics, or a
+tail, put those values in a stream receiver or details tool and put only the
+reference in the card.
+
 ```python
 from adaos.sdk.status import publish_status, publish_status_stream
 
@@ -351,6 +358,8 @@ Status card rules:
   incident
 - put stream/tool references in `details_ref`; do not embed logs, tables,
   inventories, or tails into the card
+- never declare `route: status` or `route: statusPlane`; the route belongs to
+  Yjs, stream, details/tool, skill-local storage, or diagnostic evidence
 - put the design-time data route in `route` so guard diagnostics can map
   pressure back to the skill route plan
 - use `publish_status_stream()` when the card itself should also be available
@@ -364,6 +373,9 @@ Status card rules:
   without rebuilding the full reliability payload
 - use `GET /api/node/reliability/summary/metrics` during soak/debug runs to
   verify thin/full mode counts, response bytes, and `304` reuse
+- verify `statusPlane.diagnostics.oversizedCardTotal == 0`; a nonzero value
+  means a status card is being used as a payload container and needs a route
+  redesign
 - Yjs pressure, stream guard, and stream-control pressure are also projected as
   compact guard cards in `statusPlane`; use their `guardRef` to map observed
   pressure back to owner, route, receiver/path, budget, and quarantine context
@@ -639,6 +651,9 @@ Before publishing:
 - verify stream request bursts cannot rebuild every skill section by default
 - verify status cards stay small and point to details instead of embedding
   detail payloads
+- verify status-card compact-boundary diagnostics stay clean:
+  `oversizedCardTotal == 0` and observed card bytes are comfortably below the
+  card budget
 - verify no action returns a large payload when a projection/stream is the
   real data path
 - verify Yjs and stream guard errors are visible to the UI

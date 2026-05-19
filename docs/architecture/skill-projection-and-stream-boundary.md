@@ -44,6 +44,10 @@ The target state is:
 - The shared [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md)
   owns per-slot fingerprinting, dirty-section routing, stream receiver handling,
   and the migration path away from skill-local projection runtimes.
+- The shared status plane is a compact index over the declared Yjs, stream, and
+  details routes. It carries small status cards, freshness, guard context, and
+  references; it must not become a replacement route for live rows, inventories,
+  logs, or diagnostic payloads.
 - Skills do not open-code thread pools, event loop bridges, node-scoped Yjs
   paths, or stream subscription routing.
 - Browser UI consumes node-aware data through shared addressing helpers, not
@@ -51,6 +55,9 @@ The target state is:
 - Stream data is for active details and volatile panels; Yjs projections are
   for compact materialized state needed by shell widgets, modal skeletons, and
   reconnect recovery.
+- Thin summary/ETag endpoints are migration and bootstrap aids for badge/status
+  UI. The target browser runtime uses them to discover compact state and then
+  follows the declared Yjs/stream/details route for the actual data.
 
 ## Architectural Fixes Already Started
 
@@ -93,6 +100,9 @@ architecture:
 - [ ] Add diagnostics for projection registry misses:
   `scope`, `slot`, `skill`, `webspace_id`, and whether the skill manifest was
   available.
+- [ ] Keep status-card compact-boundary diagnostics in soak reports:
+  `maxCardBytes`, `maxCardBytesObserved`, `oversizedCardTotal`, and
+  `lastOversizedCard`.
 - [ ] Add a Yjs/write log event when a skill returns `ok` but no projection rule
   exists for the slot it attempted to publish.
 - [ ] Add projection-pressure attribution that distinguishes:
