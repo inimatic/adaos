@@ -1908,6 +1908,111 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     assert thin_metrics["last_body_bytes"] == 0
 
 
+def test_node_reliability_summary_metrics_exposes_acceptance_diagnostics(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.node_api import require_token, router
+    from adaos.services.status import StatusRegistry
+
+    registry = StatusRegistry()
+    card = {
+        "id": "runtime",
+        "owner": "skill:infrastate_skill",
+        "kind": "runtime",
+        "scope": "infrastate",
+        "status": "ready",
+        "summary": "ready",
+        "webspace_id": "desktop",
+    }
+    registry.publish(card)
+    registry.publish(card)
+
+    class _FakeBus:
+        def backlog_snapshot(self):
+            return {
+                "pending_tasks": 1,
+                "pending_peak": 2,
+                "bounded_queue_total": 3,
+                "bounded_queue_peak": 4,
+                "bounded_active_workers": 1,
+                "top_webio_stream_controls": [
+                    {
+                        "event_type": "webio.stream.snapshot.requested",
+                        "webspace_id": "desktop",
+                        "target_node_id": "node-1",
+                        "receiver": "infrastate.realtime",
+                        "source": "events_ws",
+                        "incoming_total": 3,
+                        "queued_total": 2,
+                        "superseded_total": 1,
+                        "dropped_total": 0,
+                        "last_action": "snapshot",
+                    }
+                ],
+            }
+
+    def _guard_snapshot(**kwargs):
+        assert kwargs["webspace_id"] == "desktop"
+        assert kwargs["receiver"] == "infrastate.realtime"
+        return {
+            "schema": "adaos.webio_stream_guard.v1",
+            "webspace_id": "desktop",
+            "receiver": "infrastate.realtime",
+            "owner": None,
+            "total": 1,
+            "totals": {
+                "attempted": 5,
+                "published": 2,
+                "suppressed": 1,
+                "throttled": 1,
+                "published_fanout": 4,
+            },
+            "items": [
+                {
+                    "webspace_id": "desktop",
+                    "receiver": "infrastate.realtime",
+                    "owner": "skill:infrastate_skill",
+                    "surface": "widget:realtime",
+                    "attempted_total": 5,
+                    "published_total": 2,
+                    "suppressed_total": 1,
+                    "throttled_total": 1,
+                    "published_fanout_total": 4,
+                    "last_reason": "browser_stream_payload_pressure",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(status_registry=registry, bus=_FakeBus()))
+    monkeypatch.setattr("adaos.services.router.service.webio_stream_guard_snapshot", _guard_snapshot)
+
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(router, prefix="/api/node")
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/node/reliability/summary/metrics?webspace_id=desktop&receiver=infrastate.realtime"
+    )
+    assert response.status_code == 200
+    acceptance = response.json()["metrics"]["acceptance"]
+
+    assert acceptance["status_registry"]["diagnostics"]["unchanged_total"] == 1
+    assert acceptance["stream_guard"]["totals"]["published"] == 2
+    assert acceptance["stream_guard"]["totals"]["suppressed"] == 1
+    assert acceptance["stream_controls"]["totals"]["snapshot_requested"] == 3
+    assert acceptance["stream_controls"]["totals"]["coalesced"] == 1
+    assert acceptance["stream_controls"]["bounded_queue_total"] == 3
+
+    receiver = acceptance["stream_receivers"][0]
+    assert receiver["receiver"] == "infrastate.realtime"
+    assert receiver["owner"] == "skill:infrastate_skill"
+    assert receiver["published"] == 2
+    assert receiver["suppressed"] == 1
+    assert receiver["published_fanout"] == 4
+    assert receiver["snapshot_requested"] == 3
+    assert receiver["coalesced"] == 1
+
+
 def test_node_status_cards_endpoint_reads_registry(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router

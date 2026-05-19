@@ -2589,7 +2589,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 64%.
+Progress: 68%.
 
 Acceptance criteria:
 
@@ -2626,6 +2626,11 @@ Actions:
 
 - [x] Add log/metric for reliability summary mode, response bytes, and
   unchanged/304 counts.
+- [x] Add compact acceptance diagnostics to
+  `/api/node/reliability/summary/metrics`: status registry publish/change/
+  unchanged/card-boundary counters, stream guard attempted/published/
+  suppressed/throttled/fanout counters, stream-control snapshot-requested/
+  queued/coalesced/dropped counters, and merged per-receiver rows.
 - [ ] Add status registry diagnostics to the final soak analysis.
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
   unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
@@ -2634,7 +2639,11 @@ Actions:
   and snapshot-requested/queued/superseded/dropped by receiver; the remaining
   work is to run the soak and record the result. Yjs projection pressure now
   also reports the last projection route/surface through governance and
-  `yjs_pressure.last`.
+  `yjs_pressure.last`. The acceptance metrics endpoint also documents that
+  skill-side unchanged stream dedupe is not visible to the core router unless
+  the skill publishes that diagnostic; final soak should record
+  `status_registry.unchanged_total` and summary `not_modified_total` as the
+  current unchanged evidence.
 - [x] Preserve `asyncio.CancelledError` during Yjs bootstrap instead of treating
   a cancelled `apply_updates` as an empty persisted document; this keeps update
   restarts from turning bootstrap timeout into a misleading seed/repair path.
@@ -2703,6 +2712,10 @@ Actions:
   the Yjs or stream data route. Remaining acceptance work is a pressure/soak run
   that records status registry and stream guard diagnostics while known noisy
   skills remain useful load fixtures.
+- `/api/node/reliability/summary/metrics` now includes an `acceptance` block
+  that joins the cheap in-memory status registry, browser stream guard, and
+  bounded stream-control eventbus counters. This keeps final soak evidence in
+  one low-cost endpoint without replacing the Yjs or stream-data route.
 
 2026-05-19 checkpoint:
 
