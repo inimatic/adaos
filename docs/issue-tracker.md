@@ -2768,8 +2768,10 @@ Actions:
 - The control-plane source rule is now encoded in code and architecture docs:
   `default_spec` prefers the stable root project derived from
   `ADAOS_SHARED_DOTENV_PATH`, core update commands use that root `.venv`, root
-  promotion refreshes the wrapper before self-restart, and autostart status
-  exposes `wrapper_python_is_core_slot` for stand verification.
+  promotion refuses to treat a slot repo as the effective root when a stable
+  root checkout is available, refreshes the wrapper before self-restart, and
+  autostart status exposes `wrapper_python_is_core_slot` for stand
+  verification.
 
 Human verification:
 

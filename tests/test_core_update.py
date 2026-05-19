@@ -435,6 +435,43 @@ def test_promote_root_from_slot_prefers_manifest_root_repo_root(monkeypatch, tmp
     assert (wrong_root / "src" / "adaos" / "apps" / "supervisor.py").read_text(encoding="utf-8") == "wrong\n"
 
 
+def test_promote_root_from_slot_ignores_slot_manifest_root_when_stable_root_exists(monkeypatch, tmp_path) -> None:
+    from adaos.services.core_update import promote_root_from_slot
+
+    base_dir = tmp_path / "base"
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
+    stable_root = tmp_path / "adaos"
+    manifest_root = base_dir / "state" / "core_slots" / "slots" / "A" / "repo"
+    slot_repo = base_dir / "state" / "core_slots" / "slots" / "B" / "repo"
+    for base in (stable_root, manifest_root, slot_repo):
+        (base / "src" / "adaos" / "apps").mkdir(parents=True, exist_ok=True)
+    (stable_root / "src" / "adaos" / "apps" / "supervisor.py").write_text("old-stable\n", encoding="utf-8")
+    (manifest_root / "src" / "adaos" / "apps" / "supervisor.py").write_text("old-slot-root\n", encoding="utf-8")
+    (slot_repo / "src" / "adaos" / "apps" / "supervisor.py").write_text("new\n", encoding="utf-8")
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: stable_root)
+
+    write_slot_manifest(
+        "B",
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "root_repo_root": str(manifest_root),
+            "bootstrap_update": {
+                "required": True,
+                "changed_paths": ["src/adaos/apps/supervisor.py"],
+            },
+        },
+    )
+    activate_slot("B")
+
+    payload = promote_root_from_slot()
+
+    assert payload["target_root"] == str(stable_root.resolve())
+    assert payload["target_root_basis"] == "runtime_context.stable_root_over_manifest_slot"
+    assert (stable_root / "src" / "adaos" / "apps" / "supervisor.py").read_text(encoding="utf-8") == "new\n"
+    assert (manifest_root / "src" / "adaos" / "apps" / "supervisor.py").read_text(encoding="utf-8") == "old-slot-root\n"
+
+
 def test_resolved_root_promotion_requirement_tracks_current_root_state(monkeypatch, tmp_path) -> None:
     from adaos.services.core_update import promote_root_from_slot, resolved_root_promotion_requirement
 
