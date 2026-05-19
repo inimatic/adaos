@@ -15,6 +15,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/node_config.py",
     "src/adaos/services/realtime_sidecar.py",
     "src/adaos/services/root/memory_profile_sync.py",
+    "src/adaos/services/runtime_environment.py",
     "src/adaos/services/runtime_paths.py",
     "src/adaos/services/supervisor_memory.py",
 )
