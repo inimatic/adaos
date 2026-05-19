@@ -1879,7 +1879,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 48%. First implementation slices landed the ABI/schema
+Overall completion: 52%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1899,7 +1899,10 @@ cheap filtered reads, and `/api/node/reliability/summary` includes a
 compatibility `statusPlane` block. StatusPlane now also carries compact
 derived guard cards for Yjs pressure, stream guard pressure, and stream-control
 pressure, while `HotEventBudget` provides the shared debounce/window primitive
-for converting hot raw events into stable operator status.
+for converting hot raw events into stable operator status. The reliability
+summary now has a migration-safe thin mode backed by `statusPlane` and
+ETag/`If-None-Match`, so polling clients can avoid rebuilding or downloading
+the compatibility summary when status cards are unchanged.
 
 Problem statement:
 
@@ -2274,7 +2277,7 @@ Actions:
 
 Status: in progress.
 
-Progress: 30%.
+Progress: 55%.
 
 Expected behavior:
 
@@ -2290,11 +2293,22 @@ Actions:
   summary response and through `/api/node/status/cards`.
 - [x] Add derived Yjs/stream guard cards to `statusPlane` so thin status
   clients can see pressure without requesting full diagnostics.
-- [ ] Add `mode=thin` or make thin mode the default with a compatibility flag
+- [x] Add `mode=thin` or make thin mode the default with a compatibility flag
   for full mode.
-- [ ] Add `ETag` / `If-None-Match` support or `since_version`.
-- [ ] Keep a migration-safe full snapshot path for existing debug tools.
-- [ ] Add tests for unchanged response behavior and full-mode compatibility.
+- [x] Add `ETag` / `If-None-Match` support or `since_version`.
+- [x] Keep a migration-safe full snapshot path for existing debug tools.
+- [x] Add tests for unchanged response behavior and full-mode compatibility.
+
+Human verification:
+
+- Request `GET /api/node/reliability/summary?mode=thin&webspace_id=desktop`.
+  The response should contain `mode=thin`, `statusPlane`, `ETag`, and
+  `X-AdaOS-Summary-Mode: thin`, without `hubRootHardening` or other
+  compatibility diagnostic blocks.
+- Repeat the same request with `If-None-Match: <etag from the first response>`.
+  If status cards are unchanged, the API should return `304 Not Modified`.
+- Request `GET /api/node/reliability/summary?mode=full&webspace_id=desktop`
+  when a debug panel needs the compatibility summary.
 
 #### STATUS-007: Move client monitoring from polling to push/delta
 
