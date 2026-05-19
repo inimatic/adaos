@@ -162,6 +162,14 @@ At minimum the contract should normalize:
 
 The canonical object is not sent raw to every consumer. `Infrascope` needs stable projections.
 
+Overview and list projections are compact indexes, not object dumps. Rows may
+carry ids, counts, status, summaries, and `details_ref` pointers, but they must
+not embed full `actual_state`, log tails, inspector payloads, or topology data.
+The selected-object inspector, field streams, and explicit details tools own
+that heavier data on demand. This keeps first paint fast and preserves the
+Yjs/stream split: Yjs carries durable summary state, streams carry live rows,
+and details routes carry cold or large object context.
+
 ### Object Projection
 
 Standard typed envelope for a single object.

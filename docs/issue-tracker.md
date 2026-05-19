@@ -1892,7 +1892,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 63%. First implementation slices landed the ABI/schema
+Overall completion: 65%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1938,6 +1938,12 @@ blocking stream-control subscription handlers, leaving `infrastate.skills` and
 `infrastate.scenarios` in their loading initial state. The core subscription
 guard now keeps these control events on the stream plane instead of treating
 them as Yjs writes.
+The same checkpoint identified the next `infrascope` pressure source:
+`/api/node/control-plane/projections/overview` was rebuilding a roughly 1.8 MB
+payload in about 3.4 seconds because overview rows embedded full object
+details, especially member/device `actual_state`. The current slice keeps
+overview rows as compact route references and leaves full object state behind
+inspector/detail streams.
 
 Problem statement:
 
@@ -2300,7 +2306,9 @@ Human verification:
 
 #### STATUS-005: Convert `infrascope_skill` to the shared status plane
 
-Status: planned.
+Status: in progress.
+
+Progress: 18%.
 
 Current useful pattern:
 
@@ -2313,6 +2321,14 @@ Current useful pattern:
 
 Actions:
 
+- [x] Capture `.30` baseline: overview projection around 1.8 MB / 3.4 seconds;
+  `health_strip` details dominated by member/device `actual_state`.
+- [x] Stop embedding heavy object details in canonical overview rows; use
+  `details_ref` / object ids so Overview can remain a compact index.
+- [x] Strip legacy heavy `details` fields in `infrascope_skill` overview rows
+  before they enter stream/tool payloads.
+- [x] Declare first `infrascope_skill` data routes and receiver budgets for
+  summary, overview streams, inventory, operations, and inspector streams.
 - [ ] Identify `infrascope` status cards: overview, active incidents,
   inventory, browser/runtime state, registry, and operations.
 - [ ] Publish cards through the shared SDK helpers.
@@ -2320,6 +2336,16 @@ Actions:
 - [ ] Ensure inspector data stays lazy and is not embedded in status cards.
 - [ ] Add tests proving the overview badge can update without full inventory
   reconstruction.
+
+Human verification:
+
+- Open `[homepoint] Infrascope`; Overview should first paint from compact Yjs
+  summary and fill health/incidents/operations from streams without a multi-MB
+  overview payload.
+- Recheck `.30`: `GET /api/node/control-plane/projections/overview` should be
+  materially smaller than the 2026-05-19 baseline, and stream guard counters
+  should still show `infrascope.overview.*` as stream traffic rather than Yjs
+  pressure.
 
 #### STATUS-005B: Convert `browsers_skill` after core guard observability
 

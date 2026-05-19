@@ -286,6 +286,25 @@ def _representative_object_id(items: list[CanonicalObject]) -> str | None:
     return token or None
 
 
+def _object_details_ref(obj: CanonicalObject) -> dict[str, Any]:
+    token = str(getattr(obj, "id", "") or "").strip()
+    if not token:
+        return {}
+    return compact_mapping({"kind": "control_plane_object", "object_id": token})
+
+
+def _collection_details_ref(bucket: str, items: list[CanonicalObject]) -> dict[str, Any]:
+    object_ids = [str(getattr(item, "id", "") or "").strip() for item in items]
+    object_ids = [item_id for item_id in object_ids if item_id]
+    return compact_mapping(
+        {
+            "kind": "control_plane_collection",
+            "bucket": str(bucket or "").strip(),
+            "object_ids": object_ids,
+        }
+    )
+
+
 def _kind_totals(items: list[CanonicalObject]) -> dict[str, int]:
     totals: dict[str, int] = {}
     for item in items:
@@ -341,7 +360,9 @@ def _health_strip_items(subject: CanonicalObject, objects: list[CanonicalObject]
                     "status": status,
                     "summary": summary,
                     "icon": icon,
-                    "details": [item.to_dict() for item in members],
+                    "object_total": len(members),
+                    "issue_total": len(issue_titles),
+                    "details_ref": _collection_details_ref(bucket_id, members),
                 }
             )
         )
@@ -377,7 +398,7 @@ def _quota_summary_items(objects: list[CanonicalObject]) -> list[dict[str, Any]]
                     "subtitle": ", ".join(parts) if parts else obj.summary,
                     "status": _status_token(obj.status),
                     "summary": obj.summary,
-                    "details": obj.to_dict(),
+                    "details_ref": _object_details_ref(obj),
                 }
             )
         )
@@ -404,7 +425,7 @@ def _runtime_summary_items(objects: list[CanonicalObject]) -> list[dict[str, Any
                     "subtitle": " | ".join(subtitle_bits) if subtitle_bits else obj.summary,
                     "status": _status_token(obj.status),
                     "summary": str(assessment.get("reason") or obj.summary or ""),
-                    "details": obj.to_dict(),
+                    "details_ref": _object_details_ref(obj),
                 }
             )
         )
@@ -430,7 +451,7 @@ def _recent_change_items(subject: CanonicalObject, objects: list[CanonicalObject
                             "subtitle": f"desired {versioning.get('desired') or '-'} | actual {versioning.get('actual') or '-'}",
                             "status": _status_token(obj.status),
                             "summary": obj.summary,
-                            "details": obj.to_dict(),
+                            "details_ref": _object_details_ref(obj),
                         }
                     )
                 )
@@ -457,7 +478,7 @@ def _recent_change_items(subject: CanonicalObject, objects: list[CanonicalObject
                             "subtitle": f"{transition_total} transition(s) in the last 5m",
                             "status": _status_token(obj.status),
                             "summary": obj.summary,
-                            "details": obj.to_dict(),
+                            "details_ref": _object_details_ref(obj),
                         }
                     )
                 )
@@ -477,7 +498,8 @@ def _recent_change_items(subject: CanonicalObject, objects: list[CanonicalObject
                             "subtitle": ", ".join(sorted(gap.keys())[:4]),
                             "status": _status_token(obj.status),
                             "summary": obj.summary,
-                            "details": gap,
+                            "state_gap_keys": sorted(gap.keys())[:12],
+                            "details_ref": _object_details_ref(obj),
                         }
                     )
                 )

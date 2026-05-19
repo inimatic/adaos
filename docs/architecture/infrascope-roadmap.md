@@ -187,6 +187,9 @@ The current Phase 2 checkpoint turns that MVP into an installable operator works
 - supervisor-backed operator projections now also carry scheduled/deferred core-update state, queued follow-up transitions, countdown defer actions, warm-switch admission context (`transition_mode`, candidate runtime URL/port, fallback reason), and runtime instance identity (`runtime_instance_id`, `transition_role`) so operators can see not only when an update is planned but also whether supervisor intends a warm candidate handoff or a stop-and-switch fallback and which process currently owns active vs candidate authority
 - the reusable client-side page runtime now supports richer `visibleIf` expressions and state-driven data reloads for declarative widgets, so one scenario can switch between `overview`, `inventory`, and inspector tabs without bespoke UI code
 - `.adaos/workspace/skills/infrascope_skill/*` provides the UI-facing adapter skill that shapes overview sections, inventory rows, and selected-object inspector payloads for Web Desktop
+- overview rows now stay compact by carrying ids, counts, status, summaries, and
+  `details_ref` pointers instead of embedding full member/device/runtime object
+  state; inspector streams remain the route for details
 - `.adaos/workspace/scenarios/infrascope/*` provides the first desktop `Infrascope` scenario with overview panels, inventory tabs for hubs/members/browsers/devices/skills/scenarios, a unified right-side inspector, and incident-to-object drill-down without leaving context
 - focused tests cover the Phase 2 projections, API facades, SDK helpers, and workspace skill/scenario assets before later topology and impact work expands the UI
 
