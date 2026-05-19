@@ -70,6 +70,10 @@ async def _normalize_event(raw: Mapping[str, Any], *, webspace_id: str) -> dict[
     if not message:
         return None
     details = _sanitize_details(raw.get("details"))
+    browser_identity = _extract_browser_identity(details)
+    runtime_debug = _coerce_dict(details.get("runtime_debug"))
+    runtime_debug_details = _coerce_dict(runtime_debug.get("details"))
+    runtime_debug_cursor = _coerce_dict(details.get("runtime_debug_cursor"))
     level = _normalize_level(raw.get("level"))
     source = _compact_string(raw.get("source"), max_chars=120) or "ui.runtime"
     code = _compact_string(raw.get("code"), max_chars=160) or None
@@ -107,6 +111,38 @@ async def _normalize_event(raw: Mapping[str, Any], *, webspace_id: str) -> dict[
         "skill_id": skill_id,
         "webspace_id": webspace_id,
         "current_scenario": current_scenario,
+        "browser_device_id": _first_string(
+            browser_identity.get("device_id"),
+            runtime_debug_details.get("device_id"),
+            runtime_debug_cursor.get("browser_identity", {}).get("device_id")
+            if isinstance(runtime_debug_cursor.get("browser_identity"), Mapping)
+            else None,
+        ),
+        "browser_family": _first_string(
+            browser_identity.get("browser_family"),
+            runtime_debug_details.get("browser_family"),
+        ),
+        "browser_os_name": _first_string(
+            browser_identity.get("os_name"),
+            runtime_debug_details.get("os_name"),
+        ),
+        "browser_form_factor": _first_string(
+            browser_identity.get("form_factor"),
+            runtime_debug_details.get("form_factor"),
+        ),
+        "browser_session_id": _first_string(
+            runtime_debug.get("session_id"),
+            runtime_debug_cursor.get("session_id"),
+        ),
+        "browser_tab_id": _first_string(
+            runtime_debug.get("tab_id"),
+            runtime_debug_cursor.get("tab_id"),
+        ),
+        "client_yws_attempt_id": _first_string(
+            runtime_debug_details.get("client_attempt_id"),
+            _coerce_dict(runtime_debug_cursor.get("yjs_provider")).get("client_attempt_id"),
+            _coerce_dict(runtime_debug_cursor.get("yjs_close")).get("client_attempt_id"),
+        ),
         "node_id": node_id,
         "modal_id": modal_id,
         "widget_id": _first_string(raw.get("widgetId"), raw.get("widget_id"), _detail_value(details, "widgetId"), _detail_value(details, "widget_id")),
@@ -227,6 +263,18 @@ def _sanitize_details(value: Any) -> dict[str, Any]:
         "_bytes": len(encoded.encode("utf-8")),
         "summary": encoded[: min(len(encoded), 2000)],
     }
+
+
+def _extract_browser_identity(details: Mapping[str, Any]) -> dict[str, Any]:
+    direct = details.get("browser_identity")
+    if isinstance(direct, Mapping):
+        return dict(direct)
+    cursor = details.get("runtime_debug_cursor")
+    if isinstance(cursor, Mapping):
+        nested = cursor.get("browser_identity")
+        if isinstance(nested, Mapping):
+            return dict(nested)
+    return {}
 
 
 def _json_safe(value: Any, *, depth: int) -> Any:

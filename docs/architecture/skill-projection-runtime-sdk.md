@@ -288,6 +288,9 @@ The client therefore exports bounded diagnostic evidence through
   dropped events, last YJS provider/sync/close state, last materialization
   state, last control-WS state, last computed YJS indicator state/reason, and
   compact supervisor transition/probe/suppression breadcrumbs
+- browser correlation fields: `device_id`, browser family, OS, form factor,
+  runtime-debug `session_id`/`tab_id`, and the current client YWS provider
+  attempt id
 
 This diagnostic export is not a data route. It does not replace Yjs, stream
 variables, tool details, or status cards. Its only job is to make browser-side
@@ -297,9 +300,12 @@ stale widget.
 YWS server diagnostics must carry the same correlation boundary. Every accepted
 or rejected YWS attempt receives a `yws_attempt_id`; the id appears in
 `browser.session.changed`, server open/close/guard logs, and
-`transport.attempts` in the YWS runtime snapshot. Browser close code/reason and
-server-side guard decisions can then be stitched by id instead of by loose
-timestamps.
+`transport.attempts` in the YWS runtime snapshot. The browser also sends a
+`client_yws_attempt_id` for the current provider instance; server logs and
+browser runtime-debug events carry that id so a red Mobile/Opera tab can be
+matched to the corresponding server-side attempts without relying on loose
+timestamps. Browser close code/reason and server-side guard decisions can then
+be stitched by these ids instead of by time alone.
 
 Room bootstrap has its own nested correlation id. When a YWS attempt waits for
 room creation, the gateway records a `yroom-*` bootstrap attempt with the

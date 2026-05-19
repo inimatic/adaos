@@ -4168,17 +4168,22 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     dev_id = params.get("dev") or "unknown"
     attempt_id = _next_yws_attempt_id(webspace_id, dev_id)
     _set_websocket_yws_attempt_id(websocket, attempt_id)
+    client_attempt_id = _clean_browser_metadata_value(
+        params.get("client_yws_attempt_id") or params.get("client_attempt_id"),
+        max_len=128,
+    ) or ""
     browser_metadata = _browser_session_metadata(params)
 
     if _ws_trace_enabled():
         try:
             token_present = "token" in params
             _ylog.info(
-                "yws trace open client=%s webspace=%s dev=%s attempt=%s token=%s",
+                "yws trace open client=%s webspace=%s dev=%s attempt=%s client_attempt=%s token=%s",
                 _ws_client_str(websocket),
                 webspace_id,
                 dev_id,
                 attempt_id,
+                client_attempt_id or None,
                 token_present,
             )
         except Exception:
@@ -4226,10 +4231,11 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         state_token = f"yws_guard_{guard_reason}"
         _remember_yws_attempt(attempt_id, "guard_reject")
         _ylog.warning(
-            "yws guard rejected connection webspace=%s dev=%s attempt=%s reason=%s active=%s recent_open_10s=%s client_open_15s=%s",
+            "yws guard rejected connection webspace=%s dev=%s attempt=%s client_attempt=%s reason=%s active=%s recent_open_10s=%s client_open_15s=%s",
             webspace_id,
             dev_id,
             attempt_id,
+            client_attempt_id or None,
             guard_reason,
             guard_diag.get("active_total"),
             guard_diag.get("recent_open_10s"),
@@ -4256,6 +4262,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
                     "connection_state": state_token,
                     "yjs_channel_state": "rejected",
                     "yjs_attempt_id": attempt_id,
+                    "client_yws_attempt_id": client_attempt_id or None,
                     "reason": guard_reason,
                     "active_yws": guard_diag.get("active_total"),
                     "recent_open_10s": guard_diag.get("recent_open_10s"),
@@ -4271,17 +4278,18 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         return
     if guard_diag.get("client_reconnect_storm") or guard_diag.get("webspace_reconnect_storm"):
         _ylog.warning(
-            "yws guard allowed reconnect storm webspace=%s dev=%s attempt=%s client_storm=%s webspace_storm=%s active=%s recent_open_10s=%s client_open_15s=%s",
+            "yws guard allowed reconnect storm webspace=%s dev=%s attempt=%s client_attempt=%s client_storm=%s webspace_storm=%s active=%s recent_open_10s=%s client_open_15s=%s",
             webspace_id,
             dev_id,
             attempt_id,
+            client_attempt_id or None,
             bool(guard_diag.get("client_reconnect_storm")),
             bool(guard_diag.get("webspace_reconnect_storm")),
             guard_diag.get("active_total"),
             guard_diag.get("recent_open_10s"),
             guard_diag.get("client_open_15s"),
         )
-    _ylog.info("yws connection open webspace=%s dev=%s attempt=%s", webspace_id, dev_id, attempt_id)
+    _ylog.info("yws connection open webspace=%s dev=%s attempt=%s client_attempt=%s", webspace_id, dev_id, attempt_id, client_attempt_id or None)
     await start_y_server()
 
     adapter: YWebsocket = FastAPIWebsocketAdapter(websocket, path=webspace_id)
@@ -4327,6 +4335,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             "connection_state": "connected",
             "yjs_channel_state": "open",
             "yjs_attempt_id": attempt_id,
+            "client_yws_attempt_id": client_attempt_id or None,
             "source": "yws.gateway",
         },
     )
@@ -4368,15 +4377,17 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
                     "connection_state": "closed",
                     "yjs_channel_state": "closed",
                     "yjs_attempt_id": attempt_id,
+                    "client_yws_attempt_id": client_attempt_id or None,
                     "source": "yws.gateway",
                 },
             )
         else:
             _ylog.debug(
-                "yws connection closed but browser session remains active webspace=%s dev=%s attempt=%s active_sessions=%s",
+                "yws connection closed but browser session remains active webspace=%s dev=%s attempt=%s client_attempt=%s active_sessions=%s",
                 webspace_id,
                 dev_id,
                 attempt_id,
+                client_attempt_id or None,
                 _active_yws_connection_total_for_device(dev_id),
             )
         close_code = None
@@ -4391,15 +4402,16 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         except Exception:
             close_reason = ""
         _remember_yws_attempt(attempt_id, "closed", close_code=close_code, close_reason=close_reason)
-        _ylog.info("yws connection closed webspace=%s dev=%s attempt=%s code=%s reason=%s", webspace_id, dev_id, attempt_id, close_code, close_reason)
+        _ylog.info("yws connection closed webspace=%s dev=%s attempt=%s client_attempt=%s code=%s reason=%s", webspace_id, dev_id, attempt_id, client_attempt_id or None, close_code, close_reason)
         if _ws_trace_enabled():
             try:
                 _ylog.info(
-                    "yws trace closed client=%s webspace=%s dev=%s attempt=%s code=%s",
+                    "yws trace closed client=%s webspace=%s dev=%s attempt=%s client_attempt=%s code=%s",
                     _ws_client_str(websocket),
                     webspace_id,
                     dev_id,
                     attempt_id,
+                    client_attempt_id or None,
                     close_code,
                 )
             except Exception:
