@@ -622,9 +622,6 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
     phase = str(current.get("phase") or "").strip().lower()
     slot = str(current.get("target_slot") or active_slot() or "").strip().upper()
     manifest = read_slot_manifest(slot) if slot else None
-    target_version = str(current.get("target_version") or "").strip()
-    if target_version and not _manifest_matches_target_version(manifest, target_version):
-        return _runtime_boot_target_mismatch_status(current, slot=slot, manifest=manifest)
     if state == "succeeded" and phase == "validate":
         return current
     root_restart_pending = state == "succeeded" and phase == "root_promoted"
@@ -632,6 +629,9 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
         state == "succeeded" and phase in {"", "apply", "launch", "shutdown", "root_promoted"}
     ):
         return None
+    target_version = str(current.get("target_version") or "").strip()
+    if target_version and not _manifest_matches_target_version(manifest, target_version):
+        return _runtime_boot_target_mismatch_status(current, slot=slot, manifest=manifest)
 
     now = time.time()
     payload = dict(current)

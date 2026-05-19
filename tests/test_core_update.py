@@ -124,6 +124,38 @@ def test_finalize_runtime_boot_status_rejects_active_slot_target_mismatch(monkey
     assert read_last_result()["active_slot_target_mismatch"] is True
 
 
+def test_finalize_runtime_boot_status_does_not_reject_pending_target_mismatch(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    write_slot_manifest(
+        "A",
+        {
+            "slot": "A",
+            "target_version": "1111111111111111111111111111111111111111",
+            "git_commit": "1111111111111111111111111111111111111111",
+            "git_short_commit": "1111111",
+        },
+    )
+    activate_slot("A")
+    write_status(
+        {
+            "state": "planned",
+            "phase": "scheduled",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "2222222222222222222222222222222222222222",
+            "target_slot": "B",
+        }
+    )
+
+    status = finalize_runtime_boot_status()
+
+    assert status is None
+    current = read_status()
+    assert current["state"] == "planned"
+    assert current["phase"] == "scheduled"
+    assert not current.get("active_slot_target_mismatch")
+
+
 def test_core_update_status_publishes_bus_event(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     published: list[object] = []

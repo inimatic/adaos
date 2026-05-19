@@ -2595,7 +2595,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 80%.
+Progress: 81%.
 
 Acceptance criteria:
 
@@ -2878,6 +2878,11 @@ Actions:
   and checks effective root parity against the current bootstrap path list, not
   only the historical manifest `changed_paths`. This prevents acceptance soaks
   from silently using a stale root CLI after the runtime has moved forward.
+- The first `4a9bf507` rollout attempt on `.30` proved the active-slot guard
+  but also exposed an over-eager validation edge: pending/countdown statuses
+  were checked against the current active slot before slot preparation could
+  run. Runtime boot target validation now applies only during boot/validate
+  phases, not while an update is merely planned or counting down.
   Both stands keep supervisor under `/root/adaos/.venv/...` and runtime under
   the active slot venv; thin reliability summaries return `ok=true`.
 
