@@ -372,7 +372,9 @@ Status card rules:
   `If-None-Match` on the next request; unchanged snapshots return `304`
   without rebuilding the full reliability payload
 - use `GET /api/node/reliability/summary/metrics` during soak/debug runs to
-  verify thin/full mode counts, response bytes, and `304` reuse
+  verify thin/full mode counts, response bytes, `304` reuse, and the compact
+  `acceptance` block with status-registry, stream guard, stream-control, and
+  per-receiver pressure counters
 - verify `statusPlane.diagnostics.oversizedCardTotal == 0`; a nonzero value
   means a status card is being used as a payload container and needs a route
   redesign

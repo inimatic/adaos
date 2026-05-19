@@ -405,6 +405,9 @@ diagnostic surface from becoming a primary Yjs pressure source.
   communication runtime before requesting full compatibility details
 - [x] `status.summary_metrics`: expose summary mode, response bytes, cache
   hits, and `304` reuse for soak verification
+- [x] `status.acceptance_metrics`: extend summary metrics with compact
+  status-registry diagnostics, stream guard counters, stream-control
+  snapshot/coalescing counters, and merged per-receiver rows for pressure soaks
 - [x] `status.hot_event_budget`: add a shared debounce/window budget helper
   for hot event-to-status paths before skill-specific migrations
 - [x] `status.compact_boundary_diagnostics`: expose max card bytes, observed
