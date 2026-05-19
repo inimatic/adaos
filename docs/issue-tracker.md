@@ -2589,7 +2589,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 68%.
+Progress: 72%.
 
 Acceptance criteria:
 
@@ -2631,6 +2631,10 @@ Actions:
   unchanged/card-boundary counters, stream guard attempted/published/
   suppressed/throttled/fanout counters, stream-control snapshot-requested/
   queued/coalesced/dropped counters, and merged per-receiver rows.
+- [x] Add a human-readable acceptance probe:
+  `adaos node reliability-metrics --webspace desktop --receiver <receiver>`
+  prints summary response/cache counters, status registry diagnostics, stream
+  guard counters, stream-control coalescing, and per-receiver pressure rows.
 - [ ] Add status registry diagnostics to the final soak analysis.
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
   unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
@@ -2716,6 +2720,8 @@ Actions:
   that joins the cheap in-memory status registry, browser stream guard, and
   bounded stream-control eventbus counters. This keeps final soak evidence in
   one low-cost endpoint without replacing the Yjs or stream-data route.
+- `adaos node reliability-metrics` provides the matching operator-facing view,
+  so final soak notes can quote stable lines instead of pasting large JSON.
 
 2026-05-19 checkpoint:
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import platform
 import time
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlencode, urlparse, urlunparse
 from typing import Any
 
 import requests
@@ -1208,6 +1208,104 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
     ):
         item = matrix.get(name) if isinstance(matrix.get(name), dict) else {}
         typer.echo(f"{name}: {'allowed' if item.get('allowed') else 'blocked'}")
+
+
+def _print_reliability_metrics_summary(payload: dict[str, Any]) -> None:
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else payload
+    total = metrics.get("total") if isinstance(metrics.get("total"), dict) else {}
+    modes = metrics.get("modes") if isinstance(metrics.get("modes"), dict) else {}
+    typer.echo(
+        "summary_metrics: "
+        f"responses={total.get('response_total') or 0} "
+        f"not_modified={total.get('not_modified_total') or 0} "
+        f"bytes={total.get('body_bytes_total') or 0}"
+    )
+    for mode, row in sorted(modes.items()):
+        if not isinstance(row, dict):
+            continue
+        typer.echo(
+            f"summary_metrics.{mode}: "
+            f"responses={row.get('response_total') or 0} "
+            f"not_modified={row.get('not_modified_total') or 0} "
+            f"bytes={row.get('body_bytes_total') or 0} "
+            f"last_status={row.get('last_status_code') or '-'} "
+            f"last_bytes={row.get('last_body_bytes') or 0} "
+            f"cache={'hit' if row.get('last_cache_hit') else 'miss'}"
+        )
+
+    acceptance = metrics.get("acceptance") if isinstance(metrics.get("acceptance"), dict) else {}
+    if not acceptance:
+        return
+    typer.echo(
+        "acceptance: "
+        f"webspace={acceptance.get('webspace_id') or '-'} "
+        f"receiver={acceptance.get('receiver') or '-'} "
+        f"owner={acceptance.get('owner') or '-'}"
+    )
+    status_registry = (
+        acceptance.get("status_registry") if isinstance(acceptance.get("status_registry"), dict) else {}
+    )
+    status_diag = (
+        status_registry.get("diagnostics") if isinstance(status_registry.get("diagnostics"), dict) else {}
+    )
+    if status_registry:
+        typer.echo(
+            "acceptance.status_registry: "
+            f"available={'yes' if status_registry.get('available') else 'no'} "
+            f"cards={status_diag.get('card_count') or 0} "
+            f"published={status_diag.get('publish_total') or 0} "
+            f"changed={status_diag.get('changed_total') or 0} "
+            f"unchanged={status_diag.get('unchanged_total') or 0} "
+            f"stale={status_diag.get('stale_count') or 0} "
+            f"oversized={status_diag.get('oversized_card_total') or 0} "
+            f"max_observed={status_diag.get('max_card_bytes_observed') or 0}"
+        )
+
+    stream_guard = acceptance.get("stream_guard") if isinstance(acceptance.get("stream_guard"), dict) else {}
+    guard_totals = stream_guard.get("totals") if isinstance(stream_guard.get("totals"), dict) else {}
+    if stream_guard:
+        typer.echo(
+            "acceptance.stream_guard: "
+            f"available={'yes' if stream_guard.get('available') else 'no'} "
+            f"total={stream_guard.get('total') or 0} "
+            f"attempted={guard_totals.get('attempted') or 0} "
+            f"published={guard_totals.get('published') or 0} "
+            f"suppressed={guard_totals.get('suppressed') or 0} "
+            f"throttled={guard_totals.get('throttled') or 0} "
+            f"fanout={guard_totals.get('published_fanout') or 0}"
+        )
+
+    controls = acceptance.get("stream_controls") if isinstance(acceptance.get("stream_controls"), dict) else {}
+    control_totals = controls.get("totals") if isinstance(controls.get("totals"), dict) else {}
+    if controls:
+        typer.echo(
+            "acceptance.stream_controls: "
+            f"available={'yes' if controls.get('available') else 'no'} "
+            f"pending={controls.get('pending_tasks') or 0} "
+            f"bounded_queue={controls.get('bounded_queue_total') or 0} "
+            f"snapshot_requested={control_totals.get('snapshot_requested') or 0} "
+            f"queued={control_totals.get('queued') or 0} "
+            f"coalesced={control_totals.get('coalesced') or 0} "
+            f"dropped={control_totals.get('dropped') or 0}"
+        )
+
+    receivers = acceptance.get("stream_receivers") if isinstance(acceptance.get("stream_receivers"), list) else []
+    for index, receiver in enumerate(receivers[:5], start=1):
+        if not isinstance(receiver, dict):
+            continue
+        typer.echo(
+            f"acceptance.receiver.{index}: "
+            f"webspace={receiver.get('webspace_id') or '-'} "
+            f"receiver={receiver.get('receiver') or '-'} "
+            f"owner={receiver.get('owner') or '-'} "
+            f"attempted={receiver.get('attempted') or 0} "
+            f"published={receiver.get('published') or 0} "
+            f"suppressed={receiver.get('suppressed') or 0} "
+            f"fanout={receiver.get('published_fanout') or 0} "
+            f"snapshot_requested={receiver.get('snapshot_requested') or 0} "
+            f"coalesced={receiver.get('coalesced') or 0} "
+            f"dropped={receiver.get('dropped') or 0}"
+        )
 
 
 def _print_yjs_runtime_summary(payload: dict[str, Any]) -> None:
@@ -2563,6 +2661,47 @@ def node_reliability(
                 f"reliability.control: requested={control0} selected={selected_control} reason={selected_reason}"
             )
         _print_reliability_summary(payload)
+
+
+@app.command("reliability-metrics")
+def node_reliability_metrics(
+    control: str | None = typer.Option(None, "--control", help="Control API base URL (default: active server)"),
+    webspace: str | None = typer.Option(None, "--webspace", help="Filter acceptance counters by webspace"),
+    receiver: str | None = typer.Option(None, "--receiver", help="Filter stream counters by receiver"),
+    owner: str | None = typer.Option(None, "--owner", help="Filter stream guard counters by owner"),
+    limit: int = typer.Option(20, "--limit", min=1, max=100, help="Maximum stream receiver rows"),
+    json_output: bool = typer.Option(False, "--json", help="JSON output"),
+):
+    cfg = load_config()
+    control0 = _resolve_node_control_base_url(explicit=control)
+    query: dict[str, Any] = {"limit": max(1, min(int(limit or 20), 100))}
+    if webspace:
+        query["webspace_id"] = webspace
+    if receiver:
+        query["receiver"] = receiver
+    if owner:
+        query["owner"] = owner
+    path = "/api/node/reliability/summary/metrics"
+    if query:
+        path += "?" + urlencode(query)
+    status_code, payload = _control_get_json(
+        control=control0,
+        path=path,
+        token=_resolved_local_control_token(control0, cfg),
+        timeout=5.0,
+    )
+    if status_code is None:
+        typer.secho(_control_error_message("reliability metrics probe", payload), fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+    if status_code != 200 or not isinstance(payload, dict):
+        typer.secho(f"[AdaOS] reliability metrics probe failed: HTTP {status_code}", fg=typer.colors.RED)
+        if payload:
+            typer.echo(payload)
+        raise typer.Exit(code=1)
+    if json_output:
+        _print(payload, json_output=True)
+    else:
+        _print_reliability_metrics_summary(payload)
 
 
 @app.command("members")
