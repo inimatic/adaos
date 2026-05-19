@@ -245,6 +245,12 @@ Supervisor responsibilities:
 - apply restart/rollback only on critical limits, cooldown, and policy checks
 - avoid automatic profiling loops that can become their own overload source
 
+The same source rule applies to the future watchdog process. If watchdog is
+re-enabled as a separate always-on guard, it must launch from the stable root
+checkout and root `.venv`, not from `state/core_slots/slots/<A|B>`. Watchdog may
+observe or restart slot runtimes, but it must not depend on the slot interpreter
+whose failure, rewrite, or rollback it is responsible for surviving.
+
 ## CPU guard design
 
 CPU guarding needs two layers.
