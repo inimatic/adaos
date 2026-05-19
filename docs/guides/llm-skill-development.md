@@ -362,6 +362,8 @@ Status card rules:
   `GET /api/node/reliability/summary?mode=thin&webspace_id=<id>` and send
   `If-None-Match` on the next request; unchanged snapshots return `304`
   without rebuilding the full reliability payload
+- use `GET /api/node/reliability/summary/metrics` during soak/debug runs to
+  verify thin/full mode counts, response bytes, and `304` reuse
 - Yjs pressure, stream guard, and stream-control pressure are also projected as
   compact guard cards in `statusPlane`; use their `guardRef` to map observed
   pressure back to owner, route, receiver/path, budget, and quarantine context

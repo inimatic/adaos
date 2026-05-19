@@ -1866,6 +1866,8 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     response = client.get("/api/node/reliability/summary?mode=thin&webspace_id=desktop")
     assert response.status_code == 200
     assert response.headers["x-adaos-summary-mode"] == "thin"
+    assert response.headers["x-adaos-summary-cache"] == "miss"
+    assert int(response.headers["x-adaos-summary-body-bytes"]) > 0
     etag = response.headers["etag"]
     payload = response.json()
 
@@ -1889,7 +1891,17 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     )
     assert unchanged.status_code == 304
     assert unchanged.headers["etag"] == etag
+    assert unchanged.headers["x-adaos-summary-cache"] == "hit"
+    assert unchanged.headers["x-adaos-summary-body-bytes"] == "0"
     assert unchanged.content == b""
+
+    metrics_response = client.get("/api/node/reliability/summary/metrics")
+    assert metrics_response.status_code == 200
+    metrics = metrics_response.json()["metrics"]
+    thin_metrics = metrics["modes"]["thin"]
+    assert thin_metrics["not_modified_total"] >= 1
+    assert thin_metrics["last_status_code"] == 304
+    assert thin_metrics["last_body_bytes"] == 0
 
 
 def test_node_status_cards_endpoint_reads_registry(monkeypatch) -> None:

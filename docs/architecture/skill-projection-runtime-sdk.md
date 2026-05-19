@@ -311,6 +311,8 @@ diagnostic surface from becoming a primary Yjs pressure source.
   for unchanged polling responses
 - [x] `status.summary_client_cache`: use thin-summary ETags in the Angular
   communication runtime before requesting full compatibility details
+- [x] `status.summary_metrics`: expose summary mode, response bytes, cache
+  hits, and `304` reuse for soak verification
 - [x] `status.hot_event_budget`: add a shared debounce/window budget helper
   for hot event-to-status paths before skill-specific migrations
 
