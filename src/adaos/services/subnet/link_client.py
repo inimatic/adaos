@@ -1144,6 +1144,29 @@ class MemberLinkClient:
 
     @staticmethod
     def _post_local_admin(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        supervisor_path = MemberLinkClient._supervisor_update_path(path)
+        if supervisor_path:
+            for supervisor_base in MemberLinkClient._local_supervisor_bases():
+                try:
+                    token = str(resolve_control_token(base_url=supervisor_base) or "dev-local-token")
+                    headers = {"X-AdaOS-Token": token, "Accept": "application/json"}
+                    sess = requests.Session()
+                    try:
+                        sess.trust_env = False
+                    except Exception:
+                        pass
+                    response = sess.post(
+                        supervisor_base.rstrip("/") + supervisor_path,
+                        headers=headers,
+                        json=body,
+                        timeout=8.0,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    return data if isinstance(data, dict) else {"ok": True}
+                except Exception:
+                    continue
+
         base = MemberLinkClient._resolve_local_control_base()
         # Re-resolve the control token against the selected local control base because
         # the active runtime may be serving with a newer supervisor/env token than the
@@ -1161,6 +1184,39 @@ class MemberLinkClient:
         return data if isinstance(data, dict) else {"ok": True}
 
     @staticmethod
+    def _supervisor_update_path(path: str) -> str:
+        text = str(path or "").strip()
+        mapping = {
+            "/api/admin/update/start": "/api/supervisor/update/start",
+            "/api/admin/update/cancel": "/api/supervisor/update/cancel",
+            "/api/admin/update/rollback": "/api/supervisor/update/rollback",
+        }
+        return mapping.get(text, "")
+
+    @staticmethod
+    def _local_supervisor_bases() -> list[str]:
+        truthy = {"1", "true", "yes", "on"}
+        enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in truthy
+        autostart_managed = str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip().lower() in truthy
+        explicit_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip().rstrip("/")
+        explicit_host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "").strip()
+        explicit_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip()
+        if not (enabled or autostart_managed or explicit_url or explicit_host or explicit_port):
+            return []
+        candidates: list[str] = []
+        if explicit_url:
+            candidates.append(explicit_url)
+        host = explicit_host or "127.0.0.1"
+        port = explicit_port or "8776"
+        candidates.append(f"http://{host}:{port}")
+        candidates.append("http://127.0.0.1:8776")
+        unique: list[str] = []
+        for item in candidates:
+            if item and item not in unique:
+                unique.append(item)
+        return unique
+
+    @staticmethod
     def _resolve_local_control_base() -> str:
         candidates: list[str] = []
         env_type = str(os.getenv("ENV_TYPE") or "").strip().lower()
@@ -1170,7 +1226,13 @@ class MemberLinkClient:
             "yes",
             "on",
         }
-        allow_supervisor_probe = bool(supervisor_enabled or env_type != "dev")
+        autostart_managed = str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        allow_supervisor_probe = bool(supervisor_enabled or autostart_managed or env_type != "dev")
         supervisor_candidates = []
         if allow_supervisor_probe:
             supervisor_candidates.extend(
