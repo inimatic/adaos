@@ -472,7 +472,12 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
 
     server = gateway_module.WorkspaceWebsocketServer(auto_clean_rooms=False)
     monkeypatch.setattr(server, "start_room", lambda _room: asyncio.sleep(0))
-    room = asyncio.run(server.get_room(webspace_id))
+    gateway_module._YROOM_LIFECYCLE.clear()
+    context_token = gateway_module._CURRENT_YWS_ATTEMPT_ID.set("yws-room-seed")
+    try:
+        room = asyncio.run(server.get_room(webspace_id))
+    finally:
+        gateway_module._CURRENT_YWS_ATTEMPT_ID.reset(context_token)
 
     assert room is server.rooms[webspace_id]
     assert fake_store.apply_updates_calls == 0
@@ -485,6 +490,13 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
             "ydoc": room.ydoc,
         }
     ]
+    room_info = gateway_module.gateway_transport_snapshot()["rooms"][webspace_id]
+    assert room_info["bootstrap_total"] == 1
+    assert room_info["bootstrap_success_total"] == 1
+    assert room_info["last_bootstrap_yws_attempt_id"] == "yws-room-seed"
+    assert room_info["last_bootstrap_state"] == "ready"
+    assert room_info["last_bootstrap_step"] == "finalize_rebuild_status"
+    gateway_module._YROOM_LIFECYCLE.clear()
 
 
 def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypatch) -> None:
@@ -701,6 +713,9 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
             "total_ms": 6.0,
         },
     )
+    bootstrap_attempt_id = gateway_module._mark_room_bootstrap_started(key, yws_attempt_id="yws-test-1")
+    gateway_module._mark_room_bootstrap_step(key, bootstrap_attempt_id, "seed_from_scenario")
+    gateway_module._mark_room_bootstrap_finished(key, bootstrap_attempt_id, state="ready")
     gateway_module._mark_room_reset(
         key,
         close_reason="manual_test",
@@ -719,6 +734,12 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert room_info["client_total"] == 2
     assert room_info["cold_open_total"] == 1
     assert room_info["single_pass_bootstrap_total"] == 1
+    assert room_info["bootstrap_total"] == 1
+    assert room_info["bootstrap_success_total"] == 1
+    assert room_info["last_bootstrap_attempt_id"] == bootstrap_attempt_id
+    assert room_info["last_bootstrap_yws_attempt_id"] == "yws-test-1"
+    assert room_info["last_bootstrap_state"] == "ready"
+    assert room_info["last_bootstrap_step"] == "seed_from_scenario"
     assert room_info["last_open_mode"] == "cold_open"
     assert room_info["last_open_bootstrap_mode"] == "scenario_projection"
     assert room_info["update_send_stream"]["current_buffer_used"] == 5
@@ -729,6 +750,8 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert transport["room_generation_max"] >= 1
     assert transport["room_cold_open_total"] >= 1
     assert transport["room_single_pass_bootstrap_total"] >= 1
+    assert transport["room_bootstrap_total"] >= 1
+    assert transport["room_bootstrap_success_total"] >= 1
     assert transport["update_stream_buffer_used_total"] >= 5
 
     gateway_module.y_server.rooms.pop(key, None)
@@ -1252,6 +1275,7 @@ def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     )
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._YROOM_LIFECYCLE.clear()
     monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 0.01)
     monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_MAX_S", 0.01)
     events: list[tuple[str, dict[str, object] | None]] = []
@@ -1292,6 +1316,10 @@ def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     assert attempts["last_room_timeout_attempt_id"]
     assert attempts["last_close_attempt_id"] == attempts["last_room_timeout_attempt_id"]
     assert attempts["last_close_reason"] == "room_ready_timeout"
+    room_info = gateway_module.gateway_transport_snapshot()["rooms"]["desktop"]
+    assert room_info["room_wait_timeout_total"] == 1
+    assert room_info["last_wait_timeout_dev_id"] == "dev-timeout"
+    assert room_info["last_wait_timeout_yws_attempt_id"] == attempts["last_room_timeout_attempt_id"]
 
 
 def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypatch) -> None:

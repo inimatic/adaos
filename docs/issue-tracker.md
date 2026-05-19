@@ -2589,7 +2589,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 52%.
+Progress: 58%.
 
 Acceptance criteria:
 
@@ -2664,10 +2664,13 @@ Actions:
   sessions, but reconnect pressure does not quarantine a browser or the whole
   webspace for the full guard cooldown. Active/session limits and auth/policy
   denials remain hard guards.
-- [ ] Add a room-bootstrap attempt id to Yjs gateway logs and reliability
+- [x] Add a room-bootstrap attempt id to Yjs gateway logs and reliability
   diagnostics so `room ready timeout`, `stale bootstrap recovery`,
   `apply_updates cancelled`, and later `room ready` can be correlated without
-  manually stitching timestamps.
+  manually stitching timestamps. YWS room acquisition now carries the
+  `yws_attempt_id` into room bootstrap diagnostics; reliability exposes
+  bootstrap attempt/state/step/duration/error plus wait-timeout counters for the
+  selected webspace.
 - [x] Add YWS connection-attempt correlation to browser breadcrumbs and server
   guard logs, including the close code/reason seen by the browser and the
   server-side guard decision. The runtime now assigns `yws_attempt_id` to each
@@ -2679,6 +2682,20 @@ Actions:
   well, but a quiet stable period should also be visible without inferring it
   from absence of new log rows. The client now emits `runtime_debug.cursor` to
   `/api/node/ui/diagnostics` on a bounded heartbeat.
+
+2026-05-19 implementation checkpoint:
+
+- Core YWS observability now has a two-level correlation chain:
+  `yws_attempt_id` for the browser websocket attempt and `yroom-*` bootstrap
+  attempt for room creation. Gateway room snapshots expose the bootstrap state,
+  last step, duration, error, and the YWS attempt that caused the wait.
+- `state-sync.bootstrap` in reliability includes the same selected-webspace
+  fields, and hard bootstrap outcomes add a blocker such as
+  `room_bootstrap_timeout:<yroom>/<yws>`.
+- This improves investigation of YJS Red / red-green flicker without changing
+  the Yjs or stream data route. Remaining acceptance work is a pressure/soak run
+  that records status registry and stream guard diagnostics while known noisy
+  skills remain useful load fixtures.
 
 2026-05-19 checkpoint:
 

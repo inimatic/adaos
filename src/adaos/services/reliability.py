@@ -4784,6 +4784,11 @@ def yjs_sync_runtime_snapshot(
             "room_cold_open_total": int(yws_transport.get("room_cold_open_total") or 0),
             "room_reuse_total": int(yws_transport.get("room_reuse_total") or 0),
             "room_single_pass_bootstrap_total": int(yws_transport.get("room_single_pass_bootstrap_total") or 0),
+            "room_bootstrap_total": int(yws_transport.get("room_bootstrap_total") or 0),
+            "room_bootstrap_success_total": int(yws_transport.get("room_bootstrap_success_total") or 0),
+            "room_bootstrap_failure_total": int(yws_transport.get("room_bootstrap_failure_total") or 0),
+            "room_bootstrap_timeout_total": int(yws_transport.get("room_bootstrap_timeout_total") or 0),
+            "room_wait_timeout_total": int(yws_transport.get("room_wait_timeout_total") or 0),
             "update_stream_buffer_used_total": int(yws_transport.get("update_stream_buffer_used_total") or 0),
             "update_stream_waiting_send_total": int(yws_transport.get("update_stream_waiting_send_total") or 0),
             "update_stream_waiting_receive_total": int(yws_transport.get("update_stream_waiting_receive_total") or 0),
@@ -5634,6 +5639,15 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     error = str(rebuild.get("error") or "").strip()
     if error:
         blockers.append(error)
+    bootstrap_state = str(gateway_room.get("last_bootstrap_state") or "").strip() or None
+    bootstrap_attempt_id = str(gateway_room.get("last_bootstrap_attempt_id") or "").strip() or None
+    bootstrap_yws_attempt_id = str(gateway_room.get("last_bootstrap_yws_attempt_id") or "").strip() or None
+    if bootstrap_state in {"timeout", "failed", "cancelled"}:
+        blockers.append(
+            f"room_bootstrap_{bootstrap_state}:"
+            f"{bootstrap_attempt_id or 'unknown'}"
+            f"/{bootstrap_yws_attempt_id or 'no_yws_attempt'}"
+        )
 
     return {
         "webspace_id": selected_webspace_id,
@@ -5660,6 +5674,17 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
             if not bool(runtime.get("available")) and assessment_state != "not_applicable"
             else "off"
         ),
+        "bootstrap": {
+            "state": bootstrap_state,
+            "attempt_id": bootstrap_attempt_id,
+            "yws_attempt_id": bootstrap_yws_attempt_id,
+            "step": str(gateway_room.get("last_bootstrap_step") or "").strip() or None,
+            "duration_ms": gateway_room.get("last_bootstrap_duration_ms"),
+            "error": str(gateway_room.get("last_bootstrap_error") or "").strip() or None,
+            "wait_timeout_total": int(gateway_room.get("room_wait_timeout_total") or 0),
+            "last_wait_timeout_yws_attempt_id": str(gateway_room.get("last_wait_timeout_yws_attempt_id") or "").strip() or None,
+            "last_wait_timeout_s": gateway_room.get("last_wait_timeout_s"),
+        },
         "blockers": blockers,
     }
 

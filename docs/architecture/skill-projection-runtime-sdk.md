@@ -279,6 +279,14 @@ or rejected YWS attempt receives a `yws_attempt_id`; the id appears in
 server-side guard decisions can then be stitched by id instead of by loose
 timestamps.
 
+Room bootstrap has its own nested correlation id. When a YWS attempt waits for
+room creation, the gateway records a `yroom-*` bootstrap attempt with the
+originating `yws_attempt_id`, current step, duration, terminal state, error, and
+wait-timeout counters. Reliability exposes this under the selected webspace and
+`state-sync.bootstrap`; a red realtime indicator can therefore be traced to a
+specific websocket attempt and room-bootstrap path without treating HTTP
+snapshots as an alternate data route.
+
 ## Reference Skills
 
 ### `browsers_skill`
