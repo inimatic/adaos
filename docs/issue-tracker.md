@@ -1869,9 +1869,9 @@ Success means:
   debug-only full snapshots.
 - Yjs and stream guards expose limits, suppressions, quarantine, and correlation
   context as operator-visible diagnostics instead of hiding overload.
-- `infrastate_skill` and `infrascope_skill` use the same reusable status
-  projection pattern instead of maintaining parallel ad-hoc debounce,
-  fingerprint, stream snapshot, and last-good-cache logic.
+- `infrastate_skill`, `browsers_skill`, and `infrascope_skill` use the same
+  reusable status projection pattern instead of maintaining parallel ad-hoc
+  debounce, fingerprint, stream snapshot, and last-good-cache logic.
 - Existing UI views remain compatible during migration through thin summary
   endpoints and backward-compatible stream receivers.
 
@@ -1879,7 +1879,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 42%. First implementation slices landed the ABI/schema
+Overall completion: 48%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1896,7 +1896,10 @@ primary-doc pressure event. The first status-plane slice now provides
 versioned status summaries that point to stream/tool details. The API bootstrap
 now registers the shared status registry, `/api/node/status/cards` exposes
 cheap filtered reads, and `/api/node/reliability/summary` includes a
-compatibility `statusPlane` block.
+compatibility `statusPlane` block. StatusPlane now also carries compact
+derived guard cards for Yjs pressure, stream guard pressure, and stream-control
+pressure, while `HotEventBudget` provides the shared debounce/window primitive
+for converting hot raw events into stable operator status.
 
 Problem statement:
 
@@ -1944,9 +1947,15 @@ Execution order:
 2. Add shared status-card and stream-variable helpers on top of that contract.
 3. Move core-owned inventory, health, quarantine, lifecycle, and operation
    details behind stable API/MCP contracts as tracked by `RCMS-007`.
-4. Convert `infrastate_skill` from broad local projection helpers to thin
+4. Finish core guard observability and hot-event budgeting before changing
+   skill behavior.
+5. Use current `infrastate_skill`, `browsers_skill`, and `infrascope_skill`
+   behavior as test subjects while the core surfaces mature.
+6. Convert `infrastate_skill` from broad local projection helpers to thin
    presentation over those contracts.
-5. Re-run browser-load/Yjs stability soaks and record whether the YJS indicator
+7. Convert `browsers_skill` and `infrascope_skill` after the shared protection
+   path is proven.
+8. Re-run browser-load/Yjs stability soaks and record whether the YJS indicator
    stays stable under `Mobile` and multi-browser load.
 
 ### Tasks
@@ -1955,7 +1964,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 85%.
+Progress: 90%.
 
 Purpose:
 
@@ -1982,7 +1991,7 @@ Actions:
 - [x] Define stream-variable delivery semantics in the ABI: replace vs append,
   snapshot-on-subscribe, freshness/TTL, duplicate suppression, stale-event
   rejection, maximum payload, maximum publish rate, and maximum fanout.
-- [ ] Extend guard diagnostics to cover both Yjs and stream routes with common
+- [x] Extend guard diagnostics to cover both Yjs and stream routes with common
   fields: owner, webspace, receiver/path, budget, observed pressure,
   suppression count, quarantine TTL, and correlation/generation id.
 - [x] Enforce declared receiver `budget.maxPayloadBytes` in the router stream
@@ -2028,6 +2037,11 @@ Human verification:
   `adaos node reliability`. The `yjs_pressure.last` line should include the
   projection route kind and surface/slot, so the noisy `scope.slot` can be
   mapped back to the skill route plan.
+- Request `GET /api/node/reliability/summary?webspace_id=<id>` under Yjs or
+  stream pressure. `statusPlane.cards` should include `guard:yjs_pressure`,
+  `guard:webio_stream`, and/or `guard:webio_stream_control` with `guardRef`
+  owner, receiver/path, observed pressure, budget, suppression/coalescing
+  counters, and quarantine fields where present.
 
 Next steps:
 
@@ -2040,7 +2054,7 @@ Next steps:
 
 Status: in progress.
 
-Progress: 70%.
+Progress: 90%.
 
 Target shape:
 
@@ -2066,7 +2080,7 @@ Actions:
 - [x] Define how cards map to incidents and active warnings.
 - [x] Define how status cards reference stream variables and detail tools
   without embedding live rows or diagnostic tails.
-- [ ] Define compact degraded/quarantine card shape for Yjs and stream guard
+- [x] Define compact degraded/quarantine card shape for Yjs and stream guard
   states.
 - [x] Document examples for core, `infrastate_skill`, `infrascope_skill`, and a
   future third-party skill.
@@ -2117,7 +2131,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 65%.
+Progress: 80%.
 
 Expected API:
 
@@ -2137,12 +2151,20 @@ Actions:
 - [x] Provide receiver helpers that coalesce unchanged payloads, attach
   `seq` / `updated_at`, enforce declared budgets, and surface stream-guard
   suppressions.
-- [ ] Provide a shared debounce/budget helper for hot event-to-status paths,
+- [x] Provide a shared debounce/budget helper for hot event-to-status paths,
   starting with `browser.session.changed`, route reconnect, YWS open/close, and
   quarantine transitions.
 - [x] Add tests showing a skill can publish status without touching Yjs or
   rebuilding a full snapshot.
 - [x] Add migration notes for skill authors.
+
+Human verification:
+
+- In a local debug context, create `HotEventBudget(debounce_ms=1000,
+  window_ms=10000, max_events=5)` and call `admit("browser.session.changed",
+  key="<webspace>:<device>")` repeatedly. The first call should be admitted,
+  close repeats should return `reason=debounce`, and sustained bursts should
+  return `reason=budget_exceeded`.
 
 #### STATUS-004: Convert `infrastate_skill` to the shared status/data-route plane
 
@@ -2210,11 +2232,49 @@ Actions:
 - [ ] Add tests proving the overview badge can update without full inventory
   reconstruction.
 
+#### STATUS-005B: Convert `browsers_skill` after core guard observability
+
+Status: planned.
+
+Dependency:
+
+- Start after shared guard status cards, hot-event budgeting, and first
+  `infrastate`/`infrascope` observations are available. Until then,
+  `browsers_skill` remains a useful pressure source for proving the core
+  diagnostics rather than hiding the problem inside the skill.
+
+Current useful pattern and target:
+
+- The checkpoint on `.30` showed `browser.session.changed` pressure can
+  participate in Yjs owner-guard quarantine with both `browsers_skill` and
+  `infrastate_skill`.
+- Target Yjs content is limited to device/session bootstrap state, selected
+  device ids, small auth/degraded badges, and current subscription/control
+  state.
+- Browser session churn, access-link updates, device registry details, and
+  per-device diagnostics should become bounded stream variables or lazy detail
+  reads.
+
+Actions:
+
+- [ ] Inventory current `browsers_skill` Yjs branches, stream receivers, action
+  responses, and event subscriptions.
+- [ ] Add a data-route plan for `browser.session.changed`, device rename/adopt,
+  access-link changes, and session/auth state.
+- [ ] Apply shared `HotEventBudget` to browser session churn before publishing
+  operator status or stream variables.
+- [ ] Identify status cards: browser runtime, session/auth, access-link
+  registry, device registry, and guard pressure.
+- [ ] Keep raw session churn in diagnostics streams/logs and publish only
+  coalesced operator state.
+- [ ] Add two-browser regression tests proving repeated session changes do not
+  rebuild broad Yjs state or shake the status indicator.
+
 #### STATUS-006: Make `/api/node/reliability/summary` thin and versioned
 
 Status: in progress.
 
-Progress: 20%.
+Progress: 30%.
 
 Expected behavior:
 
@@ -2228,6 +2288,8 @@ Actions:
 - [ ] Measure current response size and polling frequency.
 - [x] Expose registry-backed `statusPlane` data inside the compatibility
   summary response and through `/api/node/status/cards`.
+- [x] Add derived Yjs/stream guard cards to `statusPlane` so thin status
+  clients can see pressure without requesting full diagnostics.
 - [ ] Add `mode=thin` or make thin mode the default with a compatibility flag
   for full mode.
 - [ ] Add `ETag` / `If-None-Match` support or `since_version`.
@@ -2266,8 +2328,8 @@ Acceptance criteria:
   red/green YJS indicator flapping from `infrastate` stream or projection work.
 - Thin status payload size is bounded and recorded.
 - Full details remain available on demand.
-- `infrastate_skill` and `infrascope_skill` both publish status cards through
-  the shared path.
+- `infrastate_skill`, `browsers_skill`, and `infrascope_skill` publish status
+  cards through the shared path after their migrations.
 - Yjs and stream guard logs show route, owner, receiver/path, suppression
   counts, and quarantine TTL when limits are hit.
 - Existing realtime stability criteria from `Realtime First 3 Minutes` remain

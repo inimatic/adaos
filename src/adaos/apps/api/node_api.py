@@ -81,6 +81,7 @@ from adaos.services.system_model.service import (
     current_topology_projection,
     route_info,
 )
+from adaos.services.status.guard_cards import guard_status_cards_from_runtime
 from adaos.services.yjs.doc import async_read_ydoc
 from adaos.services.yjs.store import get_ystore_for_webspace
 from adaos.services.yjs.webspace import coerce_webspace_id, default_webspace_id
@@ -231,6 +232,40 @@ def _compact_status_card(value: Any) -> dict[str, Any]:
     }
 
 
+def _status_card_key(card: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(card.get("scope") or "").strip(),
+        str(card.get("owner") or "").strip(),
+        str(card.get("webspace_id") or "").strip(),
+        str(card.get("id") or "").strip(),
+    )
+
+
+def _with_derived_status_cards(snapshot: dict[str, Any], cards: list[Any]) -> dict[str, Any]:
+    if not cards:
+        return snapshot
+    merged = dict(snapshot)
+    rows = [dict(item) for item in _coerce_list(snapshot.get("cards")) if isinstance(item, dict)]
+    seen = {_status_card_key(row) for row in rows}
+    derived_rows: list[dict[str, Any]] = []
+    for card in cards:
+        payload = card.to_dict() if hasattr(card, "to_dict") else _coerce_dict(card)
+        if not payload:
+            continue
+        key = _status_card_key(payload)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(payload)
+        derived_rows.append(payload)
+    diagnostics = _coerce_dict(snapshot.get("diagnostics"))
+    diagnostics["derived_card_count"] = int(diagnostics.get("derived_card_count") or 0) + len(derived_rows)
+    merged["cards"] = rows
+    merged["total"] = len(rows)
+    merged["diagnostics"] = diagnostics
+    return merged
+
+
 def _compact_status_registry_payload(
     snapshot: dict[str, Any],
     *,
@@ -257,6 +292,7 @@ def _compact_status_registry_payload(
             "changedTotal": int(diagnostics.get("changed_total") or 0),
             "unchangedTotal": int(diagnostics.get("unchanged_total") or 0),
             "staleCount": int(diagnostics.get("stale_count") or 0),
+            "derivedCardCount": int(diagnostics.get("derived_card_count") or 0),
             "lastPublishLatencyMs": float(diagnostics.get("last_publish_latency_ms") or 0.0),
             "lastChangedAt": diagnostics.get("last_changed_at"),
         },
@@ -359,6 +395,10 @@ def _compact_runtime_reliability_payload(
         webspace_id
         or runtime.get("webspace_id")
         or payload.get("webspace_id")
+    )
+    status_snapshot = _with_derived_status_cards(
+        status_registry or _current_status_registry_snapshot(webspace_id=resolved_webspace_id),
+        guard_status_cards_from_runtime(runtime, webspace_id=resolved_webspace_id),
     )
     return {
         "ok": True,
@@ -514,7 +554,7 @@ def _compact_runtime_reliability_payload(
         "supervisorRuntime": supervisor_runtime,
         "phase0Communication": _compact_phase0_checkpoint(runtime.get("event_model_phase0_communication")),
         "statusPlane": _compact_status_registry_payload(
-            status_registry or _current_status_registry_snapshot(webspace_id=resolved_webspace_id),
+            status_snapshot,
             webspace_id=resolved_webspace_id,
             limit=20,
             source="api.node.reliability.summary.status_plane",
