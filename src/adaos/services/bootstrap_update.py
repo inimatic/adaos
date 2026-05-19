@@ -33,6 +33,7 @@ SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
 UPDATE_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/apps/autostart_runner.py",
     "src/adaos/apps/core_update_apply.py",
+    "src/adaos/apps/cli/commands/node.py",
     "src/adaos/services/autostart.py",
     "src/adaos/services/bootstrap_update.py",
     "src/adaos/services/node_display.py",

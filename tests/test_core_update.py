@@ -361,6 +361,39 @@ def test_finalize_runtime_boot_status_marks_root_restart_completed_after_root_pr
     assert read_plan() is None
 
 
+def test_finalize_runtime_boot_status_reopens_root_promotion_when_root_source_still_stale(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slots" / "B" / "repo"
+    for base in (root_dir, slot_repo):
+        (base / "src" / "adaos" / "apps" / "cli" / "commands").mkdir(parents=True, exist_ok=True)
+    (root_dir / "src" / "adaos" / "apps" / "cli" / "commands" / "node.py").write_text("old\n", encoding="utf-8")
+    (slot_repo / "src" / "adaos" / "apps" / "cli" / "commands" / "node.py").write_text("new\n", encoding="utf-8")
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+    write_slot_manifest(
+        "B",
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "argv": ["python", "-m", "adaos.apps.autostart_runner"],
+            "bootstrap_update": {"required": False, "changed_paths": []},
+        },
+    )
+    activate_slot("B")
+    write_status({"state": "succeeded", "phase": "root_promoted", "target_slot": "B"})
+
+    payload = finalize_runtime_boot_status()
+
+    assert payload is not None
+    assert payload["state"] == "validated"
+    assert payload["phase"] == "root_promotion_pending"
+    assert payload["root_promotion_required"] is True
+    assert "src/adaos/apps/cli/commands/node.py" in payload["bootstrap_update"]["effective_mismatched_paths"]
+
+
 def test_finalize_runtime_boot_status_clears_candidate_prewarm_after_successful_validate(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     write_slot_manifest(
@@ -395,6 +428,31 @@ def test_finalize_runtime_boot_status_clears_candidate_prewarm_after_successful_
     assert payload["candidate_prewarm_message"] is None
     assert payload["candidate_prewarm_ready_at"] is None
     assert read_plan() is None
+
+
+def test_resolved_root_promotion_detects_stale_operator_cli(monkeypatch, tmp_path) -> None:
+    from adaos.services.core_update import resolved_root_promotion_requirement
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slots" / "B" / "repo"
+    for base in (root_dir, slot_repo):
+        (base / "src" / "adaos" / "apps" / "cli" / "commands").mkdir(parents=True, exist_ok=True)
+    (root_dir / "src" / "adaos" / "apps" / "cli" / "commands" / "node.py").write_text("old\n", encoding="utf-8")
+    (slot_repo / "src" / "adaos" / "apps" / "cli" / "commands" / "node.py").write_text("new\n", encoding="utf-8")
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+
+    required, payload = resolved_root_promotion_requirement(
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "bootstrap_update": {"required": False, "changed_paths": []},
+        }
+    )
+
+    assert required is True
+    assert payload["declared_required"] is False
+    assert "src/adaos/apps/cli/commands/node.py" in payload["effective_mismatched_paths"]
 
 
 def test_promote_root_from_slot_copies_changed_bootstrap_files(monkeypatch, tmp_path) -> None:

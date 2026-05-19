@@ -653,6 +653,8 @@ Before publishing:
   recovery path after resubscribe
 - verify no handler rewrites broad Yjs roots
 - verify hot events have debounce/budget tests
+- verify SDK projection diagnostics show the expected `by_event` pressure
+  counters for dirty refresh paths before optimizing a noisy event source
 - verify stream request bursts cannot rebuild every skill section by default
 - verify status cards stay small and point to details instead of embedding
   detail payloads

@@ -380,7 +380,7 @@ diagnostic surface from becoming a primary Yjs pressure source.
 - [x] `sdk.section_cache`: add bounded section cache with TTL and invalidation
 - [x] `sdk.projection_slot_rate_limit`: support per-slot projection write
   throttling and diagnostics
-- [ ] `sdk.event_pressure_counters`: preserve coalesced/superseded/dropped
+- [x] `sdk.event_pressure_counters`: preserve coalesced/superseded/dropped
   evidence
 - [ ] `sdk.restore_active_demand`: restore active projection/stream demand on
   startup where available

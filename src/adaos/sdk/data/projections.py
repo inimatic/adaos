@@ -146,8 +146,14 @@ class ProjectionDiagnostics:
     errored_total: int = 0
     last_result: ProjectionWriteResult | None = None
     by_slot: dict[str, dict[str, Any]] = field(default_factory=dict)
+    refresh_requested_total: int = 0
     refresh_started_total: int = 0
     refresh_coalesced_total: int = 0
+    refresh_no_dirty_total: int = 0
+    refresh_superseded_total: int = 0
+    refresh_dropped_total: int = 0
+    last_refresh_event: dict[str, Any] | None = None
+    by_event: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def record(self, result: ProjectionWriteResult) -> None:
         self.last_result = result
@@ -183,6 +189,62 @@ class ProjectionDiagnostics:
             self.skipped_unchanged_total += 1
             slot_state["skipped_unchanged_total"] = int(slot_state["skipped_unchanged_total"]) + 1
 
+    def record_refresh_event(
+        self,
+        *,
+        topic: str | None,
+        webspace_id: str,
+        sections: Iterable[str],
+        reason: str | None,
+        outcome: str,
+    ) -> None:
+        topic_key = str(topic or reason or "manual_refresh").strip() or "manual_refresh"
+        outcome_key = str(outcome or "").strip().lower() or "requested"
+        section_list = sorted({str(section or "").strip() for section in sections if str(section or "").strip()})
+        self.refresh_requested_total += 1
+        event_state = self.by_event.setdefault(
+            topic_key,
+            {
+                "requested_total": 0,
+                "started_total": 0,
+                "coalesced_total": 0,
+                "no_dirty_total": 0,
+                "superseded_total": 0,
+                "dropped_total": 0,
+                "last_webspace_id": None,
+                "last_reason": None,
+                "last_outcome": None,
+                "last_sections": [],
+            },
+        )
+        event_state["requested_total"] = int(event_state["requested_total"]) + 1
+        if outcome_key == "started":
+            self.refresh_started_total += 1
+            event_state["started_total"] = int(event_state["started_total"]) + 1
+        elif outcome_key == "coalesced":
+            self.refresh_coalesced_total += 1
+            event_state["coalesced_total"] = int(event_state["coalesced_total"]) + 1
+        elif outcome_key == "no_dirty":
+            self.refresh_no_dirty_total += 1
+            event_state["no_dirty_total"] = int(event_state["no_dirty_total"]) + 1
+        elif outcome_key == "superseded":
+            self.refresh_superseded_total += 1
+            event_state["superseded_total"] = int(event_state["superseded_total"]) + 1
+        elif outcome_key == "dropped":
+            self.refresh_dropped_total += 1
+            event_state["dropped_total"] = int(event_state["dropped_total"]) + 1
+        event_state["last_webspace_id"] = webspace_id
+        event_state["last_reason"] = str(reason or "").strip() or None
+        event_state["last_outcome"] = outcome_key
+        event_state["last_sections"] = section_list
+        self.last_refresh_event = {
+            "topic": topic_key,
+            "webspace_id": webspace_id,
+            "reason": event_state["last_reason"],
+            "outcome": outcome_key,
+            "sections": section_list,
+        }
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "applied_total": self.applied_total,
@@ -192,8 +254,14 @@ class ProjectionDiagnostics:
             "errored_total": self.errored_total,
             "last_result": self.last_result.as_dict() if self.last_result else None,
             "by_slot": json.loads(json.dumps(self.by_slot, sort_keys=True)),
+            "refresh_requested_total": self.refresh_requested_total,
             "refresh_started_total": self.refresh_started_total,
             "refresh_coalesced_total": self.refresh_coalesced_total,
+            "refresh_no_dirty_total": self.refresh_no_dirty_total,
+            "refresh_superseded_total": self.refresh_superseded_total,
+            "refresh_dropped_total": self.refresh_dropped_total,
+            "last_refresh_event": dict(self.last_refresh_event) if self.last_refresh_event else None,
+            "by_event": json.loads(json.dumps(self.by_event, sort_keys=True)),
         }
 
 
@@ -546,7 +614,17 @@ class ProjectionRuntime:
     ) -> ProjectionRefreshResult:
         ws_id = _webspace_token(webspace_id)
         section_names = tuple(sorted({_section_name(section) for section in sections if str(section or "").strip()}))
+        refresh_context = context or ProjectionContext(skill_id=self.skill_id, webspace_id=ws_id, reason=reason)
+        event_topic = str(refresh_context.event_topic or reason or "manual_refresh").strip() or "manual_refresh"
         if not section_names:
+            with self._lock:
+                self._diagnostics.record_refresh_event(
+                    topic=event_topic,
+                    webspace_id=ws_id,
+                    sections=(),
+                    reason=reason,
+                    outcome="no_dirty",
+                )
             return ProjectionRefreshResult(
                 skill_id=self.skill_id,
                 webspace_id=ws_id,
@@ -555,16 +633,27 @@ class ProjectionRuntime:
                 reason="no_dirty_sections",
             )
 
-        refresh_context = context or ProjectionContext(skill_id=self.skill_id, webspace_id=ws_id, reason=reason)
         key = (ws_id, section_names)
         reused_task: asyncio.Task[ProjectionRefreshResult] | None = None
         with self._lock:
             current = self._pending_refresh.get(key)
             if current is not None and not current.done():
-                self._diagnostics.refresh_coalesced_total += 1
+                self._diagnostics.record_refresh_event(
+                    topic=event_topic,
+                    webspace_id=ws_id,
+                    sections=section_names,
+                    reason=reason,
+                    outcome="coalesced",
+                )
                 reused_task = current
             else:
-                self._diagnostics.refresh_started_total += 1
+                self._diagnostics.record_refresh_event(
+                    topic=event_topic,
+                    webspace_id=ws_id,
+                    sections=section_names,
+                    reason=reason,
+                    outcome="started",
+                )
                 task = asyncio.create_task(
                     self._refresh_sections_now(
                         section_names,

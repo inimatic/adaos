@@ -455,12 +455,12 @@ def resolved_root_promotion_requirement(manifest: dict[str, Any] | None) -> tupl
     payload = manifest if isinstance(manifest, dict) else {}
     resolved = dict(bootstrap)
     changed_paths = bootstrap.get("changed_paths") if isinstance(bootstrap.get("changed_paths"), list) else []
-    effective_paths = [str(item) for item in changed_paths if str(item).strip()] or list(BOOTSTRAP_CRITICAL_PATHS)
+    declared_paths = [str(item) for item in changed_paths if str(item).strip()]
+    effective_paths = list(dict.fromkeys((*declared_paths, *BOOTSTRAP_CRITICAL_PATHS)))
     resolved["effective_changed_paths"] = list(effective_paths)
     resolved["effective_basis"] = "root_checkout_compare"
-    resolved["effective_required"] = bool(required)
-    if not required:
-        return False, resolved
+    resolved["declared_required"] = bool(required)
+    resolved["effective_required"] = False
 
     repo_dir_raw = str(payload.get("repo_dir") or "").strip()
     source_repo_dir = Path(repo_dir_raw).expanduser().resolve() if repo_dir_raw else None
@@ -470,10 +470,10 @@ def resolved_root_promotion_requirement(manifest: dict[str, Any] | None) -> tupl
 
     if source_repo_dir is None or not source_repo_dir.exists():
         resolved["effective_unavailable_reason"] = "slot repo_dir is unavailable for root promotion comparison"
-        return True, resolved
+        return bool(required), resolved
     if root_dir is None or not root_dir.exists():
         resolved["effective_unavailable_reason"] = "root checkout is unavailable for root promotion comparison"
-        return True, resolved
+        return bool(required), resolved
 
     mismatched_paths: list[str] = []
     for rel_path in effective_paths:
@@ -520,7 +520,7 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
     manifest = read_slot_manifest(slot_name)
     if not isinstance(manifest, dict):
         raise RuntimeError(f"slot {slot_name} manifest is missing")
-    root_promotion_required, bootstrap_update = manifest_requires_root_promotion(manifest)
+    root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
     if not root_promotion_required:
         resolved_root_dir, resolved_root_basis = _resolve_root_promotion_target(manifest)
         return {
@@ -541,7 +541,15 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
     root_dir, root_basis = _resolve_root_promotion_target(manifest)
     if root_dir is None or not root_dir.exists():
         raise RuntimeError("root checkout is unavailable for promotion")
-    changed_paths = bootstrap_update.get("changed_paths") if isinstance(bootstrap_update.get("changed_paths"), list) else []
+    changed_paths = (
+        bootstrap_update.get("effective_mismatched_paths")
+        if isinstance(bootstrap_update.get("effective_mismatched_paths"), list)
+        else []
+    )
+    if not changed_paths:
+        changed_paths = (
+            bootstrap_update.get("changed_paths") if isinstance(bootstrap_update.get("changed_paths"), list) else []
+        )
     if not changed_paths:
         changed_paths = list(BOOTSTRAP_CRITICAL_PATHS)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
@@ -649,15 +657,23 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
         payload["target_slot"] = slot
     if isinstance(manifest, dict) and manifest:
         payload["manifest"] = manifest
-    root_promotion_required, bootstrap_update = manifest_requires_root_promotion(manifest)
-    if not root_restart_pending and root_promotion_required:
+    root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
+    root_promotion_unavailable = str(bootstrap_update.get("effective_unavailable_reason") or "").strip()
+    if root_promotion_required and (not root_restart_pending or not root_promotion_unavailable):
         payload["state"] = "validated"
         payload["phase"] = "root_promotion_pending"
-        payload["message"] = (
-            f"runtime boot validated on slot {slot}; root promotion pending"
-            if slot
-            else "runtime boot validated; root promotion pending"
-        )
+        if root_restart_pending:
+            payload["message"] = (
+                f"root promotion restart completed on slot {slot}, but root source parity is still pending"
+                if slot
+                else "root promotion restart completed, but root source parity is still pending"
+            )
+        else:
+            payload["message"] = (
+                f"runtime boot validated on slot {slot}; root promotion pending"
+                if slot
+                else "runtime boot validated; root promotion pending"
+            )
         payload["root_promotion_required"] = True
         payload["bootstrap_update"] = bootstrap_update
         payload["candidate_prewarm_state"] = None
