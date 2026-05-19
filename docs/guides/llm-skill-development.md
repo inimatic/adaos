@@ -358,6 +358,9 @@ Status card rules:
 - verify cards through `GET /api/node/status/cards`; the compatibility
   `/api/node/reliability/summary` surface also carries a compact `statusPlane`
   block for badge/status UI during migration
+- Yjs pressure, stream guard, and stream-control pressure are also projected as
+  compact guard cards in `statusPlane`; use their `guardRef` to map observed
+  pressure back to owner, route, receiver/path, budget, and quarantine context
 
 ## Hot events and smoothing
 
@@ -389,6 +392,21 @@ Recommended rules:
   quarantined, explicit user disconnect, or admin shutdown
 - never trigger a full skill snapshot rebuild for each raw hot event
 - do not write raw hot-event churn into Yjs
+- use the shared `HotEventBudget` helper when turning hot raw events into
+  status cards or stream variables; keep the raw event trail in diagnostics
+  and publish only coalesced operator state
+
+```python
+from adaos.services.status import HotEventBudget
+
+budget = HotEventBudget(debounce_ms=1000, window_ms=10000, max_events=5)
+decision = budget.admit(
+    "browser.session.changed",
+    key=f"{webspace_id}:{device_id}",
+)
+if not decision.admitted:
+    return
+```
 
 This smoothing is part of the skill design. Runtime guards may limit abusive
 bursts, but they should not be the main mechanism that keeps the UI calm.

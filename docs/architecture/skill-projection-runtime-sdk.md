@@ -303,10 +303,12 @@ diagnostic surface from becoming a primary Yjs pressure source.
   `publish_status_many`, and `publish_status_stream`
 - [x] `status.bootstrap_registry`: wire the registry into normal API/server
   bootstrap so thin summaries can read it without test setup
-- [ ] `status.guard_cards`: publish compact Yjs/stream guard degraded cards
-  through the shared path
+- [x] `status.guard_cards`: project compact Yjs/stream guard degraded cards
+  into `statusPlane` through the shared card shape
 - [x] `status.summary_endpoint`: expose registry-backed thin status snapshots
   through `/api/node/reliability/summary` or its successor
+- [x] `status.hot_event_budget`: add a shared debounce/window budget helper
+  for hot event-to-status paths before skill-specific migrations
 
 ### 4. `browsers_skill` Migration
 

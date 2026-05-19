@@ -5,7 +5,13 @@ from types import SimpleNamespace
 from adaos.domain import Event
 from adaos.sdk import status as sdk_status
 from adaos.services.eventbus import LocalEventBus
-from adaos.services.status import StatusRegistry, make_status_card, register_status_registry
+from adaos.services.status import (
+    HotEventBudget,
+    StatusRegistry,
+    guard_status_cards_from_runtime,
+    make_status_card,
+    register_status_registry,
+)
 
 
 def test_status_card_normalizes_canonical_status_and_staleness() -> None:
@@ -213,3 +219,79 @@ def test_publish_status_stream_publishes_card_and_stream_variable(monkeypatch) -
     assert stream_payload["data"]["id"] == "runtime"
     assert stream_payload["data"]["seq"] == 7
     assert stream_payload["data"]["value"]["route"]["receiver"] == "infrastate.runtime"
+
+
+def test_guard_status_cards_project_runtime_pressure() -> None:
+    cards = guard_status_cards_from_runtime(
+        {
+            "yjs_pressure": {
+                "webspace_id": "desktop",
+                "owner": "skill:infrastate_skill",
+                "policy_state": "block",
+                "observed_state": "critical",
+                "reason": "write_amplification_blocked",
+                "recent_bytes": 1024,
+                "recent_writes": 8,
+                "last_route": {"kind": "yjs_projection", "surface": "subnet.infrastate.snapshot"},
+                "quarantine_remaining_s": 30,
+            },
+            "webio_stream_guard": {
+                "available": True,
+                "webspace_id": "desktop",
+                "items": [
+                    {
+                        "receiver": "infrastate.realtime",
+                        "owner": "skill:infrastate_skill",
+                        "surface": "widget:realtime",
+                        "suppressed_total": 1,
+                        "throttled_total": 2,
+                        "declared_max_payload_bytes": 4096,
+                        "last_reason": "payload_budget",
+                    }
+                ],
+                "totals": {"attempted": 5, "published": 2, "suppressed": 1, "throttled": 2},
+            },
+            "eventbus_backlog": {
+                "top_webio_stream_controls": [
+                    {
+                        "event_type": "webio.stream.snapshot.requested",
+                        "webspace_id": "desktop",
+                        "receiver": "infrascope.inspector.local",
+                        "incoming_total": 3,
+                        "queued_total": 9,
+                        "superseded_total": 6,
+                    }
+                ]
+            },
+        },
+        webspace_id="desktop",
+        updated_at=10.0,
+    )
+    by_id = {card.id: card.to_dict(now_ts=10.0) for card in cards}
+
+    assert by_id["guard:yjs_pressure"]["status"] == "degraded"
+    assert by_id["guard:yjs_pressure"]["severity"] == "critical"
+    assert by_id["guard:yjs_pressure"]["guard_ref"]["quarantine_ttl_s"] == 30.0
+    assert by_id["guard:webio_stream"]["guard_ref"]["receiver"] == "infrastate.realtime"
+    assert by_id["guard:webio_stream_control"]["status"] == "warning"
+    assert by_id["guard:webio_stream_control"]["guard_ref"]["observed_pressure"]["superseded"] == 6
+
+
+def test_hot_event_budget_debounces_and_tracks_window_budget() -> None:
+    budget = HotEventBudget(debounce_ms=1000, window_ms=5000, max_events=2)
+
+    first = budget.admit("browser.session.changed", key="desktop", now_ts=10.0)
+    debounced = budget.admit("browser.session.changed", key="desktop", now_ts=10.5)
+    second = budget.admit("browser.session.changed", key="desktop", now_ts=11.2)
+    limited = budget.admit("browser.session.changed", key="desktop", now_ts=12.4)
+    reset = budget.admit("browser.session.changed", key="desktop", now_ts=16.1)
+    snapshot = budget.snapshot(now_ts=16.1)
+
+    assert first.admitted is True
+    assert debounced.admitted is False
+    assert debounced.reason == "debounce"
+    assert second.admitted is True
+    assert limited.admitted is False
+    assert limited.reason == "budget_exceeded"
+    assert reset.admitted is True
+    assert snapshot["items"][0]["suppressed_total"] == 2

@@ -1819,7 +1819,13 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["phase0Communication"]["tasks"]["nodeBrowserReady"]["status"] == "done"
     assert payload["statusPlane"]["available"] is True
     assert payload["statusPlane"]["diagnostics"]["cardCount"] == 1
-    assert payload["statusPlane"]["cards"][0]["detailsRef"]["receiver"] == "infrastate.runtime"
+    assert payload["statusPlane"]["diagnostics"]["derivedCardCount"] == 3
+    assert payload["statusPlane"]["total"] == 4
+    cards_by_id = {card["id"]: card for card in payload["statusPlane"]["cards"]}
+    assert cards_by_id["runtime"]["detailsRef"]["receiver"] == "infrastate.runtime"
+    assert cards_by_id["guard:yjs_pressure"]["severity"] == "high"
+    assert cards_by_id["guard:webio_stream"]["guardRef"]["receiver"] == "infrastate.realtime"
+    assert cards_by_id["guard:webio_stream_control"]["status"] == "warning"
 
 
 def test_node_status_cards_endpoint_reads_registry(monkeypatch) -> None:
