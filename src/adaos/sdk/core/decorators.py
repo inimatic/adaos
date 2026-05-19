@@ -12,6 +12,7 @@ from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkRuntimeNotInitialized
 from adaos.sdk.io.context import io_meta
 from adaos.services.node_config import load_config
+from adaos.services.status.hot_events import HotEventBudget
 from adaos.services.skill.activation import load_skill_activation_policy, subscription_strategy_for_policy
 
 # публичные реестры (стабильные имена)
@@ -31,6 +32,29 @@ _STREAM_CONTROL_SUBSCRIPTION_TOPICS = {
     "webio.stream.snapshot.requested",
     "webio.stream.subscription.changed",
 }
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(str(os.getenv(name, str(default)) or str(default)).strip()))
+    except Exception:
+        return max(minimum, int(default))
+
+
+_CRITICAL_CONTROL_PLANE_SUBSCRIPTION_TOPICS = {
+    "core.update.status",
+    "hub.core_update.status",
+    "subnet.member.link.up",
+    "subnet.member.link.down",
+    "subnet.member.snapshot.changed",
+    "subnet.member.update.result",
+}
+_CRITICAL_CONTROL_PLANE_BUDGET = HotEventBudget(
+    debounce_ms=_env_int("ADAOS_SKILL_SUBSCRIPTION_CRITICAL_DEBOUNCE_MS", 2000, minimum=0),
+    window_ms=_env_int("ADAOS_SKILL_SUBSCRIPTION_CRITICAL_WINDOW_MS", 10000),
+    max_events=_env_int("ADAOS_SKILL_SUBSCRIPTION_CRITICAL_MAX_EVENTS", 3),
+)
+_SUBSCRIPTION_CRITICAL_BYPASS_LOG_AT: Dict[str, float] = {}
 
 
 def _topic_matches_any(topic: str, patterns: str) -> bool:
@@ -128,6 +152,101 @@ def _webspace_id_from_event(evt: object) -> str:
     ).strip()
 
 
+def _payload_value(payload: dict[str, Any], *names: str) -> str:
+    for name in names:
+        try:
+            value = payload.get(name)
+        except Exception:
+            value = None
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _nested_payload(payload: dict[str, Any], *names: str) -> dict[str, Any]:
+    for name in names:
+        try:
+            value = payload.get(name)
+        except Exception:
+            value = None
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _critical_control_plane_budget_key(skill_name: str | None, topic: str, evt: object) -> str:
+    payload = _event_payload_dict(evt)
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    status = _nested_payload(payload, "status", "update_status")
+    snapshot_update = _nested_payload(payload, "snapshot_update")
+    snapshot_build = _nested_payload(payload, "snapshot_build")
+    parts = [
+        f"skill={skill_name or '-'}",
+        f"webspace={_webspace_id_from_event(evt) or 'default'}",
+        f"target={_target_node_id_from_event(evt) or _payload_value(payload, 'node_id', 'member_id') or '-'}",
+        f"state={_payload_value(payload, 'state') or _payload_value(status, 'state') or _payload_value(snapshot_update, 'state') or '-'}",
+        f"phase={_payload_value(payload, 'phase') or _payload_value(status, 'phase') or _payload_value(snapshot_update, 'phase') or '-'}",
+        f"action={_payload_value(payload, 'action') or _payload_value(status, 'action') or _payload_value(snapshot_update, 'action') or '-'}",
+        f"version={_payload_value(payload, 'target_version', 'target_rev') or _payload_value(status, 'target_version', 'target_rev') or '-'}",
+        f"slot={_payload_value(payload, 'active_slot') or _payload_value(status, 'active_slot') or '-'}",
+        f"commit={_payload_value(payload, 'active_git_short_commit') or _payload_value(status, 'active_git_short_commit') or _payload_value(snapshot_build, 'runtime_git_short_commit') or '-'}",
+        f"event={str(getattr(evt, 'type', '') or topic or '').strip() or topic}",
+    ]
+    try:
+        if isinstance(meta, dict):
+            trace_id = _payload_value(meta, "trace_id", "yws_attempt_id", "event_id")
+            if trace_id:
+                parts.append(f"trace={trace_id}")
+    except Exception:
+        pass
+    return "|".join(parts)
+
+
+def _admit_critical_control_plane_subscription(
+    skill_name: str | None,
+    topic: str,
+    evt: object,
+    admission: dict[str, Any],
+) -> dict[str, Any]:
+    if admission.get("allowed", True):
+        return admission
+    topic_id = str(topic or "").strip()
+    if topic_id not in _CRITICAL_CONTROL_PLANE_SUBSCRIPTION_TOPICS:
+        return admission
+    decision = _CRITICAL_CONTROL_PLANE_BUDGET.admit(
+        topic_id,
+        key=_critical_control_plane_budget_key(skill_name, topic_id, evt),
+    )
+    base = dict(admission or {})
+    owner_guard_reason = str(base.get("reason") or "owner_guard_denied")
+    base.update(
+        {
+            "governed": True,
+            "critical_control_plane": True,
+            "owner_guard_allowed": False,
+            "owner_guard_reason": owner_guard_reason,
+            "owner_guard_admission": dict(admission or {}),
+            "hot_event": decision.to_dict(),
+            "retry_after_s": float(decision.retry_after_ms or 0) / 1000.0,
+        }
+    )
+    if decision.admitted:
+        base.update(
+            {
+                "allowed": True,
+                "reason": "critical_control_plane_budget",
+            }
+        )
+        return base
+    base.update(
+        {
+            "allowed": False,
+            "reason": f"critical_control_plane_{decision.reason}",
+        }
+    )
+    return base
+
+
 def _admit_skill_subscription_yjs_work(skill_name: str | None, topic: str, evt: object) -> dict[str, Any]:
     if not skill_name:
         return {"allowed": True, "governed": False, "reason": "not_a_skill_subscription"}
@@ -140,7 +259,7 @@ def _admit_skill_subscription_yjs_work(skill_name: str | None, topic: str, evt: 
     try:
         from adaos.services.yjs.owner_guard import admit_owner_work, skill_owner
 
-        return admit_owner_work(
+        admission = admit_owner_work(
             webspace_id=_webspace_id_from_event(evt) or None,
             owner=skill_owner(skill_name),
             root_names=["data"],
@@ -150,6 +269,7 @@ def _admit_skill_subscription_yjs_work(skill_name: str | None, topic: str, evt: 
             work_kind="skill_subscription",
             tool=f"{skill_name}:subscribe:{topic}",
         )
+        return _admit_critical_control_plane_subscription(skill_name, topic, evt, admission)
     except Exception:
         _LOG.debug(
             "failed to apply YJS owner guard for skill subscription skill=%s topic=%s",
@@ -158,6 +278,25 @@ def _admit_skill_subscription_yjs_work(skill_name: str | None, topic: str, evt: 
             exc_info=True,
         )
         return {"allowed": True, "governed": False, "reason": "owner_guard_unavailable"}
+
+
+def _log_subscription_critical_bypass(skill_name: str, topic: str, admission: dict[str, Any]) -> None:
+    key = f"{admission.get('webspace_id') or '-'}:{skill_name}:{topic}:critical"
+    now = time.monotonic()
+    last = float(_SUBSCRIPTION_CRITICAL_BYPASS_LOG_AT.get(key) or 0.0)
+    if now - last < _SUBSCRIPTION_DENY_LOG_INTERVAL_S:
+        return
+    _SUBSCRIPTION_CRITICAL_BYPASS_LOG_AT[key] = now
+    hot_event = admission.get("hot_event") if isinstance(admission.get("hot_event"), dict) else {}
+    _LOG.warning(
+        "skill subscription admitted by critical control-plane budget skill=%s topic=%s owner=%s owner_guard_reason=%s budget_reason=%s key=%s",
+        skill_name,
+        topic,
+        admission.get("owner") or f"skill:{skill_name}",
+        admission.get("owner_guard_reason") or "-",
+        hot_event.get("reason") or "-",
+        hot_event.get("key") or "-",
+    )
 
 
 def _log_subscription_denied(skill_name: str, topic: str, admission: dict[str, Any]) -> None:
@@ -257,6 +396,8 @@ async def register_subscriptions(
                     if _skill:
                         _log_subscription_denied(_skill, _topic, admission)
                     return None
+                if _skill and admission.get("critical_control_plane") and not admission.get("owner_guard_allowed", True):
+                    _log_subscription_critical_bypass(_skill, _topic, admission)
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
                     payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
@@ -281,6 +422,8 @@ async def register_subscriptions(
                     if _skill:
                         _log_subscription_denied(_skill, _topic, admission)
                     return None
+                if _skill and admission.get("critical_control_plane") and not admission.get("owner_guard_allowed", True):
+                    _log_subscription_critical_bypass(_skill, _topic, admission)
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
                     def _call_sync_handler():
