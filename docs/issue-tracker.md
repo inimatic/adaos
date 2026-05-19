@@ -2637,6 +2637,9 @@ Acceptance criteria:
 - Stale terminal status from a previous update must not be allowed to complete
   or fail a fresh active update attempt unless the terminal status itself
   carries the attempted target or the active slot already matches it.
+- Member-follow core update control must enter through the supervisor update
+  contract when autostart is managed, not through the runtime-only
+  `/api/admin/update/start` countdown path.
 
 Actions:
 
@@ -2666,6 +2669,9 @@ Actions:
   reconciliation now ignores targetless old `succeeded/validate` payloads for a
   fresh active target instead of borrowing the attempt target and producing a
   premature `active_slot_target_mismatch`.
+- [x] Route member-follow update/cancel/rollback admin calls through
+  `/api/supervisor/update/*` when a managed supervisor is available, falling
+  back to runtime admin only if the supervisor route cannot be reached.
 - [ ] Add status registry diagnostics to the final soak analysis.
 - [ ] Add stream guard diagnostics to the final soak analysis: published,
   unchanged, coalesced, suppressed, snapshot-requested, and fanout counts by
@@ -2952,6 +2958,14 @@ Actions:
   both stands, so the core guard/observability milestone is ready for the
   planned skill optimization work. Longer plateau soaks remain useful during
   those skill migrations, not as a blocker for starting them.
+- The subsequent docs-only rollout to `d798f73f29ec6fd46a2515ee6b82a9e08cfbca9c`
+  exposed a second `.40` lifecycle edge: member-follow posted to the runtime
+  `/api/admin/update/start` route, which writes countdown/pending restart
+  without preparing a slot. The runtime then restarted the current slot and
+  correctly rejected validation because active slot `2c0f6d1` did not match
+  target `d798f73`. The fix keeps runtime admin as fallback, but managed
+  autostart members now try the supervisor update route first so member-follow
+  uses the same prepare/warm-switch contract as local operator updates.
 
 Human verification:
 
@@ -2979,6 +2993,9 @@ Human verification:
   a docs-only update should either converge or remain active until real
   transition evidence appears, not fail immediately from an old targetless
   `succeeded/validate`.
+- [ ] Verify the member-follow supervisor-route fix on `.30` and `.40`; a
+  member-follow docs-only update should prepare the inactive slot before any
+  runtime restart.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.
