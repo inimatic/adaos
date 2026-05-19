@@ -2501,7 +2501,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 42%.
+Progress: 43%.
 
 Expected behavior:
 
@@ -2536,6 +2536,10 @@ Actions:
   and expose passive-candidate cleanup/reaping state, so manual retries do not
   schedule a redundant same-commit slot transition or leave confusing defunct
   runner processes in diagnostics.
+- [ ] Classify member-follow update expiry separately from Yjs/provider
+  failures: if a member reports `pending update expired before autostart runner
+  picked it up`, hub/status UI must surface stale member-update state and keep
+  the last YWS/provider evidence separate from the member core-update failure.
 - [ ] Verify the client no longer requests large summary payloads repeatedly
   during the first 3 minutes.
 
@@ -2557,7 +2561,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 42%.
+Progress: 48%.
 
 Acceptance criteria:
 
@@ -2631,14 +2635,17 @@ Actions:
   diagnostics so `room ready timeout`, `stale bootstrap recovery`,
   `apply_updates cancelled`, and later `room ready` can be correlated without
   manually stitching timestamps.
-- [ ] Add YWS connection-attempt correlation to browser breadcrumbs and server
+- [x] Add YWS connection-attempt correlation to browser breadcrumbs and server
   guard logs, including the close code/reason seen by the browser and the
-  server-side guard decision.
-- [ ] Export a compact browser runtime heartbeat/cursor to node diagnostics:
+  server-side guard decision. The runtime now assigns `yws_attempt_id` to each
+  YWS attempt, includes it in `browser.session.changed`, open/close logs,
+  guard reject logs, and `transport.attempts`.
+- [x] Export a compact browser runtime heartbeat/cursor to node diagnostics:
   last Yjs provider state, control-WS state, last close reason/code, last export
   time, and dropped-log counts. The current bounded log export proves failures
   well, but a quiet stable period should also be visible without inferring it
-  from absence of new log rows.
+  from absence of new log rows. The client now emits `runtime_debug.cursor` to
+  `/api/node/ui/diagnostics` on a bounded heartbeat.
 
 2026-05-19 checkpoint:
 
@@ -2698,6 +2705,24 @@ Actions:
   candidate runner may appear as a defunct process until the supervisor reaps
   it. That did not leave two listening runtimes, but the status plane should
   classify it instead of making operators infer safety from `ps`/`ss`.
+- Follow-up `.40` checkpoint showed a real member-follow gap, not a Yjs
+  replacement issue: Mediapoint was stuck at `slot A | 2bb279c | restarting`
+  and `adaos autostart update-status` reported `expired` because the pending
+  member update was not picked up before TTL. Manual catch-up to
+  `a710ba6f5fd02265c1f6d3083e79bfb5998fff22` succeeded on slot B.
+- After the `.40` catch-up, local member reliability was available on active
+  port `8778`, while hub `.30` reported YWS `active_yws_connections=1`,
+  `storm_detected=false`, `quarantined_total=0`,
+  `transportState=attached`, `firstSyncState=complete`, and
+  `semanticState=ready`. The stale widget therefore came from delayed/stale
+  projection and member-status propagation under pressure, not from replacing
+  Yjs with HTTP fallback.
+- Node-side browser breadcrumbs confirmed the missing observability edge:
+  `service.__ui_runtime__.ui_runtime.log` captured the old sequence
+  `1006 -> connected -> materialization.ready`, then became quiet. The new
+  `runtime_debug.cursor` heartbeat closes that gap by publishing the last known
+  browser-side provider/control/materialization cursor even when no new
+  exceptional event is generated.
 
 Human verification:
 

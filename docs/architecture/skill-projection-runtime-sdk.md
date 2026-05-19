@@ -254,6 +254,31 @@ red Yjs indicator plus a successful HTTP snapshot therefore means "fallback
 path is alive, realtime path still needs YWS diagnostics", not "Yjs was
 replaced by HTTP".
 
+## Browser And YWS Diagnostics
+
+The browser runtime keeps the full `adaos.runtime_debug.logs.v1` ring in
+localStorage, but node-side investigation must not depend on opening DevTools.
+The client therefore exports bounded diagnostic evidence through
+`/api/node/ui/diagnostics`:
+
+- notable runtime-debug events: YJS provider state, close/error, materialization
+  changes, control-WS state, slow/error HTTP calls, and skill call failures
+- `runtime_debug.cursor` heartbeat: latest retained seq, exported seq, estimated
+  dropped events, last YJS provider/sync/close state, last materialization
+  state, and last control-WS state
+
+This diagnostic export is not a data route. It does not replace Yjs, stream
+variables, tool details, or status cards. Its only job is to make browser-side
+transport truth visible from the node when investigating red/green flicker or a
+stale widget.
+
+YWS server diagnostics must carry the same correlation boundary. Every accepted
+or rejected YWS attempt receives a `yws_attempt_id`; the id appears in
+`browser.session.changed`, server open/close/guard logs, and
+`transport.attempts` in the YWS runtime snapshot. Browser close code/reason and
+server-side guard decisions can then be stitched by id instead of by loose
+timestamps.
+
 ## Reference Skills
 
 ### `browsers_skill`
