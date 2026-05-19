@@ -246,6 +246,14 @@ runtime process first, give `tools/call` a timeout budget compatible with Root's
 outer budget, and avoid retrying a mutating/read-timed-out request against a
 different slot port.
 
+The YWS session guard follows the same rule. Pressure can reject invalid,
+unauthorized, or globally over-limit connections, but a single reconnecting
+browser is treated as diagnostic pressure and replacement/backoff input rather
+than a reason to quarantine that browser for the full cooldown. A red Yjs
+indicator plus a successful HTTP snapshot therefore means "fallback path is
+alive, realtime path still needs YWS diagnostics", not "Yjs was replaced by
+HTTP".
+
 ## Reference Skills
 
 ### `browsers_skill`
