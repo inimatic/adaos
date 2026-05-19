@@ -111,6 +111,56 @@ def test_reconcile_update_status_completes_attempt_on_terminal_status(monkeypatc
     assert attempt["last_status"]["state"] == "succeeded"
 
 
+def test_reconcile_update_status_rejects_terminal_success_for_wrong_active_slot(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "target_version": "1111111111111111111111111111111111111111",
+            "git_commit": "1111111111111111111111111111111111111111",
+            "git_short_commit": "1111111",
+        },
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "2222222222222222222222222222222222222222",
+            "requested_at": 450.0,
+            "transitioned_at": 460.0,
+            "updated_at": 460.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": {
+                "state": "succeeded",
+                "phase": "validate",
+                "target_rev": "rev2026",
+                "target_version": "2222222222222222222222222222222222222222",
+                "updated_at": 499.0,
+            },
+            "_served_by": "runtime",
+        }
+    )
+
+    assert payload["status"]["state"] == "failed"
+    assert payload["status"]["active_slot_target_mismatch"] is True
+    assert payload["_served_by"] == "supervisor_target_mismatch_recovery"
+    attempt = payload.get("attempt")
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "failed"
+    assert attempt["completion_reason"] == "active slot target mismatch"
+    assert attempt["last_status"]["target_version"] == "2222222222222222222222222222222222222222"
+
+
 def test_sidecar_role_falls_back_to_load_config_when_ctx_config_is_missing(monkeypatch) -> None:
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token=None)
 
