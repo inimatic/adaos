@@ -641,6 +641,9 @@ Actions:
   manifest.
 - [x] Keep root checkout drift acceptable for production when only supervisor
   and sidecar are launched from root and the updater controls those processes.
+- [x] Keep always-on supervisor/watchdog/update-orchestration root-bound while
+  production CLI/runtime actions remain slot-bound; the root-bound processes
+  use the stable root checkout/root `.venv`, not a runtime slot venv.
 - [ ] Keep `.adaos/dev` development commands explicit and separate from
   production slot-bound commands.
 - [x] Add a `slot_shell_required` diagnostic only when command context is unsafe,
@@ -2501,7 +2504,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 48%.
+Progress: 52%.
 
 Expected behavior:
 
@@ -2542,6 +2545,11 @@ Actions:
   minimum-update-period guard or planned-update refresh path, so probes/retries
   against the already active commit cannot create a delayed redundant slot
   transition.
+- [x] Decouple supervisor/autostart/update-control from slot venvs: autostart
+  now resolves the stable root checkout from the shared `.env`/root context,
+  launches supervisor from the root `.venv`, refreshes the wrapper before a
+  self-restart, and exposes `wrapper_python_is_core_slot` in autostart status.
+  The same source rule applies to future watchdog/control-plane helpers.
 - [ ] Classify member-follow update expiry separately from Yjs/provider
   failures: if a member reports `pending update expired before autostart runner
   picked it up`, hub/status UI must surface stale member-update state and keep
@@ -2562,12 +2570,15 @@ Human verification:
   watch a natural runtime restart; the UI should show `hub restarting` /
   `applying update` when the transition is active, even if the websocket event
   was missed and the state is learned through fallback probing.
+- `adaos autostart status --json` should show
+  `wrapper_python_is_core_slot=false` after the next root-promotion restart;
+  production runtime processes should still report slot `A|B` executables.
 
 #### STATUS-008: Acceptance and observability
 
 Status: in progress.
 
-Progress: 50%.
+Progress: 52%.
 
 Acceptance criteria:
 
@@ -2594,6 +2605,9 @@ Acceptance criteria:
 - Dev Browser runtime breadcrumbs from `adaos.runtime_debug.logs.v1` are
   available to node-side diagnostics as bounded logs, not only in browser
   localStorage.
+- Autostart/supervisor diagnostics reveal whether the always-on control-plane
+  wrapper uses a stable root `.venv` or is accidentally coupled to a runtime
+  slot venv.
 
 Actions:
 
@@ -2747,9 +2761,15 @@ Actions:
   real update cadence.
 - Root promotion on `.30` can leave the systemd wrapper path pointing at the
   root checkout slot (`slot A`) while the production runtime runs from active
-  `slot B`; this is expected only if the bootstrap-managed files in that root
-  checkout match the active slot. The checkpoint verified the promoted
-  `supervisor.py` hashes match across `.30` slot A and slot B.
+  `slot B`. Hash parity proved it was not the immediate YWS regression source,
+  but the wrapper/venv source is still an architecture defect: the
+  always-on supervisor and future watchdog must survive slot mutation from a
+  stable root checkout/root `.venv`, not from `state/core_slots/slots/*/venv`.
+- The control-plane source rule is now encoded in code and architecture docs:
+  `default_spec` prefers the stable root project derived from
+  `ADAOS_SHARED_DOTENV_PATH`, core update commands use that root `.venv`, root
+  promotion refreshes the wrapper before self-restart, and autostart status
+  exposes `wrapper_python_is_core_slot` for stand verification.
 
 Human verification:
 
@@ -2765,6 +2785,11 @@ Human verification:
   `browsers_skill`/`infrastate_skill`/`infrascope_skill`; record whether the
   core survives and whether guard/status/log evidence is sufficient for later
   skill repair.
+- [ ] Verify `.30` and `.40` after the next rollout: supervisor process command
+  should use `/root/adaos/.venv/...python` and
+  `adaos autostart status --json` should report
+  `wrapper_python_is_core_slot=false`; active runtimes should still come from
+  the active slot venv.
 - [ ] Run a focused `infrastate` two-browser soak after conversion and capture
   Yjs owner pressure, stream pressure, route pressure, and quarantine counters.
 - [ ] Record payload size reduction and polling reduction in this tracker.

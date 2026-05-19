@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from adaos.apps import autostart_runner
@@ -44,6 +45,32 @@ def test_core_update_prefers_context_paths(monkeypatch, tmp_path: Path) -> None:
 
     assert core_update._base_dir() == (tmp_path / "custom-base").resolve()
     assert core_update._repo_root() == (tmp_path / "repo").resolve()
+
+
+def test_core_update_prefers_stable_root_over_slot_repo_env(monkeypatch, tmp_path: Path) -> None:
+    base_dir = tmp_path / "custom-base"
+    project_root = tmp_path / "adaos"
+    (project_root / "src" / "adaos").mkdir(parents=True)
+    shared_dotenv = project_root / ".env"
+    shared_dotenv.write_text("ADAOS_TOKEN=test\n", encoding="utf-8")
+    slot_repo = base_dir / "state" / "core_slots" / "slots" / "A" / "repo"
+    (slot_repo / "src" / "adaos").mkdir(parents=True)
+    python_rel = Path("Scripts") / "python.exe" if os.name == "nt" else Path("bin") / "python"
+    root_python = project_root / ".venv" / python_rel
+    root_python.parent.mkdir(parents=True)
+    root_python.write_text("", encoding="utf-8")
+
+    ctx = _FakeCtx(base_dir, slot_repo / "src" / "adaos")
+    monkeypatch.setattr(agent_context, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(core_update, "get_ctx", lambda: ctx)
+    monkeypatch.setenv("ADAOS_ROOT_REPO_ROOT", str(slot_repo))
+    monkeypatch.setenv("ADAOS_SHARED_DOTENV_PATH", str(shared_dotenv))
+
+    assert core_update._repo_root() == project_root.resolve()
+    command = core_update.configured_update_command({"target_slot": "B", "target_version": "abc123"})
+    assert command is not None
+    assert str(root_python.resolve()) in command
+    assert str(project_root.resolve()) in command
 
 
 def test_autostart_runner_slot_launch_spec_uses_context_base_dir(monkeypatch, tmp_path: Path) -> None:
