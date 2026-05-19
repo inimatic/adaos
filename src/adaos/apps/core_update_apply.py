@@ -360,7 +360,12 @@ def _validate_checkout_target_version(repo_dir: Path, *, target_version: str, so
         raise RuntimeError(
             f"{source_label} did not produce a verifiable git checkout for requested target_version {target_version}"
         )
-    if actual.lower() != target_version.lower():
+    actual_norm = actual.lower()
+    target_norm = target_version.lower()
+    matches = actual_norm == target_norm or (
+        len(target_norm) < 40 and actual_norm.startswith(target_norm)
+    )
+    if not matches:
         raise RuntimeError(
             f"{source_label} resolved to git commit {actual} instead of requested target_version {target_version}"
         )
