@@ -14,6 +14,11 @@ on the entity being developed instead of forcing it to mine the platform-wide
 - The browser records user-visible runtime issues in `[Node 0] Notifications`.
 - In `dev` runtime mode only, UI notifications whose `source` starts with
   `ui.` are sent to `POST /api/node/ui/diagnostics`.
+- The browser also keeps a runtime-debug ring in `localStorage` under
+  `adaos.runtime_debug.logs.v1`. Those events are valuable Dev Browser
+  breadcrumbs, but they are currently local to the browser unless exported.
+  The target contract is a bounded diagnostic export into the same node-side
+  log retrieval path, not a Yjs state branch.
 - The node writes accepted diagnostics as JSONL to
   `.adaos/logs/service.<skill>.ui_runtime.log`.
 - In-process `adaos.*` log records emitted while a `CurrentSkill` is active are
@@ -45,11 +50,16 @@ specific skill.
 Diagnostics use a bounded HTTP ingestion endpoint rather than Yjs branches. This
 avoids feedback loops where a UI failure writes to Yjs, triggers render/update
 work, and produces more UI failures. Yjs remains the source for UI runtime state;
-HTTP is only the side channel for observability.
+HTTP is only the side channel for observability. Runtime-debug breadcrumbs from
+browser `localStorage` must follow the same rule: export them as bounded logs or
+diagnostic records, never as primary desktop state.
 
 ## TODO
 
 - Add a typed ABI schema for `ui.runtime.diagnostic.v1`.
+- Add bounded export/ingest for `adaos.runtime_debug.logs.v1`, including
+  session/tab ids and duplicate suppression, so node-side tooling can inspect
+  Dev Browser breadcrumbs.
 - Add per-skill log retention and rotation policy for `*.runtime.log` and
   `*.ui_runtime.log`.
 - Add richer widget-level ownership metadata, not only modal ownership.
