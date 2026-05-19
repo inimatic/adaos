@@ -1922,7 +1922,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 74%. First implementation slices landed the ABI/schema
+Overall completion: 75%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -2599,7 +2599,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 88%.
+Progress: 90%.
 
 Acceptance criteria:
 
@@ -2941,6 +2941,17 @@ Actions:
   fix keeps real target-bearing mismatch rejection, but ignores stale
   targetless terminal payloads until the update produces its own target-bearing
   status or the active slot actually matches.
+- Rollout of `2c0f6d1a6aa33d4a3c922e476bdfb698d68b6476` validated the
+  fix. `.30` converged automatically to slot `B`. `.40` needed one manual
+  catch-up because its old supervisor failed before it could activate the fix:
+  slot `B` was prepared, activated, root `src/adaos/apps/supervisor.py` was
+  promoted from the slot, and `adaos.service` was restarted. Both stands now
+  report `succeeded/validate`, active slot `B | 2c0f6d1`, live runtime
+  `8778`, and `wrapper_python_is_core_slot=false`. Root
+  `adaos node reliability-metrics` reports Yjs owner/quarantine evidence on
+  both stands, so the core guard/observability milestone is ready for the
+  planned skill optimization work. Longer plateau soaks remain useful during
+  those skill migrations, not as a blocker for starting them.
 
 Human verification:
 
@@ -2964,7 +2975,7 @@ Human verification:
 - [x] Verify after the next rollout that root
   `/root/adaos/.venv/bin/adaos node reliability-metrics` is available without
   falling back to the slot-local CLI.
-- [ ] Verify the stale-terminal-status reconciliation fix on `.30` and `.40`;
+- [x] Verify the stale-terminal-status reconciliation fix on `.30` and `.40`;
   a docs-only update should either converge or remain active until real
   transition evidence appears, not fail immediately from an old targetless
   `succeeded/validate`.
