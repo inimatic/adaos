@@ -2553,7 +2553,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 31%.
+Progress: 35%.
 
 Acceptance criteria:
 
@@ -2600,13 +2600,34 @@ Actions:
 - [ ] Add browser-side breadcrumbs for transition visibility: last supervisor
   transition source, suppression reason, fallback probe URL/result, and current
   Yjs red reason.
-- [ ] Add bounded node ingest/export for the browser runtime-debug ring
+- [x] Add bounded node ingest/export for the browser runtime-debug ring
   (`adaos.runtime_debug.logs.v1`) and include it in the standard skill/runtime
-  log retrieval path.
+  log retrieval path. The client now exports a capped `ui.runtime_debug` tail to
+  `/api/node/ui/diagnostics`, filtering its own diagnostics transport events so
+  the export cannot self-amplify.
+- [x] Fix the root-routed local HTTP hop for `/api/tools/call`: prefer the
+  current process `ADAOS_RUNTIME_PORT` over persisted stale runtime state, use a
+  `tools/call` timeout budget that fits Root's 60s outer budget, and avoid
+  retrying a read-timed-out POST against a different slot port.
 - [ ] Add a room-bootstrap attempt id to Yjs gateway logs and reliability
   diagnostics so `room ready timeout`, `stale bootstrap recovery`,
   `apply_updates cancelled`, and later `room ready` can be correlated without
   manually stitching timestamps.
+
+2026-05-19 checkpoint:
+
+- Public `/api/node/infrastate/snapshot?webspace_id=desktop` on `.30` returned
+  successfully while public `/api/tools/call` for
+  `infrastate_skill:get_snapshot(project=true)` returned `502`.
+- Direct local call to the active runtime on port `8777` succeeded. The public
+  failure showed the hub-route fallback error for stale `127.0.0.1:8778`, which
+  masked the first active-port local hop timing out under the old 2.5s read
+  budget.
+- Current conclusion: the working snapshot endpoint is a control-plane fallback
+  and does not prove Yjs health by itself. Server-side reliability/YWS
+  diagnostics must be checked separately; client-side `YJS Red` needs exported
+  runtime-debug breadcrumbs from the browser rather than inference from the
+  snapshot fallback.
 
 Human verification:
 
@@ -2649,7 +2670,7 @@ Actions:
 
 ### UI-RT-001: Forward UI runtime notifications to node skill logs
 
-Status: planned.
+Status: in progress.
 
 Expected behavior:
 
@@ -2662,12 +2683,17 @@ Expected behavior:
 
 Actions:
 
-- [ ] Define a stable notification envelope for UI runtime issues.
-- [ ] Add a backend ingestion endpoint or stream receiver for client runtime
+- [x] Define a stable notification envelope for UI runtime issues.
+- [x] Add a backend ingestion endpoint or stream receiver for client runtime
   notifications.
-- [ ] Mirror accepted notifications into node skill logs with webspace, node,
+- [x] Mirror accepted notifications into node skill logs with webspace, node,
   scenario, widget, action, and modal context.
+- [x] Export bounded Dev Browser runtime-debug breadcrumbs from
+  `adaos.runtime_debug.logs.v1` as `ui.runtime_debug` diagnostics.
 - [ ] Add LLM-oriented grouping for repeated contract issues.
+- [ ] Add a stand smoke check that reads the resulting
+  `service.__ui_runtime__.ui_runtime.log` tail through the standard skill log
+  retrieval path.
 
 ## Named Entity Registry and NLU Canonicalization
 
