@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -84,6 +85,24 @@ def test_realtime_sidecar_enabled_defaults_to_disabled(monkeypatch: pytest.Monke
     assert realtime_sidecar_enabled(role="hub", os_name="posix") is False
     assert realtime_sidecar_enabled(role="member", os_name="nt") is False
     assert realtime_sidecar_enabled(role="root", os_name="nt") is False
+
+
+def test_realtime_sidecar_paths_survive_deleted_runtime_cwd(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "base"
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
+    monkeypatch.delenv("ADAOS_REALTIME_LOG", raising=False)
+    monkeypatch.delenv("ADAOS_REALTIME_DIAG_FILE", raising=False)
+
+    def missing_cwd() -> Path:
+        raise FileNotFoundError("deleted cwd")
+
+    monkeypatch.setattr(realtime_sidecar_mod.Path, "cwd", staticmethod(missing_cwd))
+
+    assert realtime_sidecar_mod.realtime_sidecar_log_path() == base_dir / "diagnostics" / "realtime_sidecar.log"
+    assert realtime_sidecar_mod.realtime_sidecar_diag_path() == base_dir / "diagnostics" / "realtime_sidecar.jsonl"
 
 
 def test_realtime_sidecar_enabled_respects_explicit_env(monkeypatch: pytest.MonkeyPatch) -> None:

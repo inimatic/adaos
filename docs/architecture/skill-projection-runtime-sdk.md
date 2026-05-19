@@ -262,6 +262,19 @@ when the owner guard is blocking normal skill work. Hot browser/session refresh
 events are not in this exception; they stay governed by the normal guard and
 their own debounce/budget design.
 
+This is a compatibility valve, not the final ownership model. The target split
+is logical-plane separation:
+
+- `status/control communication`: system-owned, compact, durable enough for
+  operator truth such as update epoch, active slot, member state, guard state,
+  and retry/TTL context
+- `skill communication`: skill-owned subscriptions, tools, Yjs projections, and
+  stream receivers that may be throttled or quarantined without hiding the
+  status/control truth
+
+After that split, operational skills can render status/control facts, but they
+do not own their delivery.
+
 ## Browser And YWS Diagnostics
 
 The browser runtime keeps the full `adaos.runtime_debug.logs.v1` ring in

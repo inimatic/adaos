@@ -29,7 +29,7 @@ from adaos.services.nats_ws_transport import (
     _ws_proxy_from_env,
 )
 from adaos.services.runtime_dotenv import merged_runtime_dotenv_env
-from adaos.services.runtime_paths import current_repo_root
+from adaos.services.runtime_paths import current_base_dir, current_repo_root
 
 NATS_PING = b"PING\r\n"
 NATS_PONG = b"PONG\r\n"
@@ -163,6 +163,22 @@ def _realtime_sidecar_repo_root() -> Path | None:
     except Exception:
         pass
     return current_repo_root()
+
+
+def _safe_realtime_relative_base() -> Path:
+    try:
+        return Path.cwd()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    root = current_repo_root()
+    try:
+        if root is not None and root.exists():
+            return root
+    except Exception:
+        pass
+    return current_base_dir()
 
 
 def realtime_sidecar_enablement_policy(*, role: str | None = None) -> dict[str, Any]:
@@ -501,7 +517,10 @@ def realtime_sidecar_log_path() -> Path:
     raw = str(os.getenv("ADAOS_REALTIME_LOG", ".adaos/diagnostics/realtime_sidecar.log") or "").strip()
     path = Path(raw)
     if not path.is_absolute():
-        path = Path.cwd() / path
+        if path.parts and path.parts[0] == ".adaos":
+            path = current_base_dir().joinpath(*path.parts[1:])
+        else:
+            path = _safe_realtime_relative_base() / path
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -510,7 +529,10 @@ def realtime_sidecar_diag_path() -> Path:
     raw = str(os.getenv("ADAOS_REALTIME_DIAG_FILE", ".adaos/diagnostics/realtime_sidecar.jsonl") or "").strip()
     path = Path(raw)
     if not path.is_absolute():
-        path = Path.cwd() / path
+        if path.parts and path.parts[0] == ".adaos":
+            path = current_base_dir().joinpath(*path.parts[1:])
+        else:
+            path = _safe_realtime_relative_base() / path
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
