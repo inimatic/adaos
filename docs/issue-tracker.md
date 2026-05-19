@@ -2618,11 +2618,11 @@ Actions:
   unavailable-cache even while the link still appears connected, preventing a
   slow/offline member from holding the browser control-plane for roughly a
   minute.
-- [x] Make per-client YWS reconnect storms non-destructive: a single hot
-  browser now records diagnostic pressure and can replace its stale session, but
-  it is not quarantined for the full guard cooldown. Webspace-wide reconnect
-  quarantine still requires a multi-client storm, while active/session limits
-  and auth/policy denials remain hard guards.
+- [x] Make YWS reconnect storms non-destructive: hot browsers and multi-client
+  reconnect storms now record diagnostic pressure and can replace stale
+  sessions, but reconnect pressure does not quarantine a browser or the whole
+  webspace for the full guard cooldown. Active/session limits and auth/policy
+  denials remain hard guards.
 - [ ] Add a room-bootstrap attempt id to Yjs gateway logs and reliability
   diagnostics so `room ready timeout`, `stale bootstrap recovery`,
   `apply_updates cancelled`, and later `room ready` can be correlated without
@@ -2662,12 +2662,12 @@ Actions:
   runtime-debug breadcrumbs from the browser rather than inference from the
   snapshot fallback.
 - Follow-up investigation found the next YWS-specific amplifier: the session
-  guard could turn a single browser reconnect loop into a long per-client
-  quarantine. That made the channel red even when server-side materialization
+  guard could turn browser reconnect loops into long per-client or webspace
+  quarantines. That made the channel red even when server-side materialization
   was `attached/complete/ready/fresh` and HTTP fallback snapshots still worked.
-  The guard now treats a single-client reconnect storm as observable pressure
-  rather than a destructive quarantine; only multi-client webspace storms,
-  auth/policy denials, and active-limit violations reject the websocket.
+  The guard now treats reconnect storms as observable pressure rather than a
+  destructive quarantine; auth/policy denials and active-limit violations still
+  reject the websocket.
 
 Human verification:
 
