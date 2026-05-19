@@ -719,6 +719,36 @@ def _is_transition_in_progress(status: dict[str, Any] | None, attempt: dict[str,
     return False
 
 
+def _runtime_ready_for_boot_status_finalize(status: dict[str, Any] | None, runtime: dict[str, Any] | None) -> bool:
+    if not isinstance(status, dict) or not isinstance(runtime, dict):
+        return False
+    state = str(status.get("state") or "").strip().lower()
+    phase = str(status.get("phase") or "").strip().lower()
+    if state == "succeeded" and phase == "validate":
+        return False
+    if state == "validated" and phase == "root_promotion_pending":
+        return False
+    finalizable = state in {"restarting", "applying", "validated"} or (
+        state == "succeeded" and phase in {"", "apply", "launch", "shutdown", "root_promoted"}
+    )
+    if not finalizable:
+        return False
+    runtime_state = str(runtime.get("runtime_state") or "").strip().lower()
+    runtime_ready = runtime_state == "ready" or (
+        bool(runtime.get("listener_running")) and bool(runtime.get("runtime_api_ready"))
+    )
+    if not runtime_ready:
+        return False
+    target_slot = str(status.get("target_slot") or "").strip().upper()
+    manifest = status.get("manifest")
+    if not target_slot and isinstance(manifest, dict):
+        target_slot = str(manifest.get("slot") or "").strip().upper()
+    active_runtime_slot = str(runtime.get("active_slot") or "").strip().upper()
+    if target_slot and active_runtime_slot and target_slot != active_runtime_slot:
+        return False
+    return True
+
+
 def _transition_request_payload(
     *,
     action: str,
@@ -864,6 +894,13 @@ def _fail_root_restart_attempt(
 
 def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
     status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    if _runtime_ready_for_boot_status_finalize(status, runtime):
+        finalized_status = finalize_runtime_boot_status()
+        if isinstance(finalized_status, dict):
+            status = finalized_status
+            payload["status"] = finalized_status
+            payload["_served_by"] = "supervisor_runtime_ready_finalize"
     attempt = _read_update_attempt()
     if not isinstance(attempt, dict):
         return payload
