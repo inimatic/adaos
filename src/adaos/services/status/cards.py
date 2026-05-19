@@ -18,6 +18,8 @@ _SEVERITY_BY_STATUS = {
     CanonicalStatus.UNKNOWN: "unknown",
 }
 
+STATUS_CARD_MAX_BYTES = 8192
+
 
 def _text(value: Any) -> str | None:
     token = str(value or "").strip()
@@ -95,6 +97,31 @@ def status_card_fingerprint(payload: Mapping[str, Any]) -> str:
         body.pop(key, None)
     raw = json.dumps(_json_clean(body), ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def status_card_payload_bytes(payload: Mapping[str, Any]) -> int:
+    raw = json.dumps(
+        _json_clean(payload),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return len(raw.encode("utf-8"))
+
+
+def status_card_boundary_diagnostics(
+    payload: Mapping[str, Any],
+    *,
+    max_bytes: int = STATUS_CARD_MAX_BYTES,
+) -> dict[str, Any]:
+    size_bytes = status_card_payload_bytes(payload)
+    budget = max(1, int(max_bytes or STATUS_CARD_MAX_BYTES))
+    return {
+        "bytes": size_bytes,
+        "max_bytes": budget,
+        "oversized": size_bytes > budget,
+    }
 
 
 @dataclass(slots=True)
@@ -227,7 +254,10 @@ def normalize_status_card(value: StatusCard | Mapping[str, Any], **defaults: Any
 
 __all__ = [
     "StatusCard",
+    "STATUS_CARD_MAX_BYTES",
     "make_status_card",
     "normalize_status_card",
+    "status_card_boundary_diagnostics",
     "status_card_fingerprint",
+    "status_card_payload_bytes",
 ]

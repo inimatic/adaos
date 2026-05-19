@@ -105,6 +105,23 @@ def test_skill_schema_rejects_unknown_browser_data_route() -> None:
         Draft7Validator(schema).validate(payload)
 
 
+def test_skill_schema_rejects_status_plane_as_data_route() -> None:
+    schema = _load_schema("skill.schema.json")
+    payload = {
+        "name": "bad_skill",
+        "version": "1.0.0",
+        "data_routes": [
+            {
+                "surface": "widget:status",
+                "route": "status",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        Draft7Validator(schema).validate(payload)
+
+
 def test_runtime_skill_validator_schema_accepts_data_routes() -> None:
     schema = _load_service_skill_schema()
     payload = {
@@ -126,6 +143,23 @@ def test_runtime_skill_validator_schema_accepts_data_routes() -> None:
     }
 
     Draft202012Validator(schema).validate(payload)
+
+
+def test_runtime_skill_validator_schema_rejects_status_plane_data_route() -> None:
+    schema = _load_service_skill_schema()
+    payload = {
+        "name": "bad_skill",
+        "version": "1.0.0",
+        "data_routes": [
+            {
+                "surface": "widget:status",
+                "route": "status",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
 
 
 def test_skill_schema_rejects_unknown_activation_mode() -> None:

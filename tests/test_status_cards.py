@@ -120,6 +120,29 @@ def test_status_registry_dedupes_versions_and_marks_stale() -> None:
     assert snapshot["diagnostics"]["unchanged_total"] == 1
 
 
+def test_status_registry_reports_oversized_card_boundary() -> None:
+    registry = StatusRegistry(max_card_bytes=256)
+
+    result = registry.publish(
+        {
+            "id": "runtime",
+            "owner": "skill:infrastate_skill",
+            "kind": "runtime",
+            "scope": "infrastate",
+            "status": "ready",
+            "summary": "ready",
+            "metadata": {"rows": ["x" * 512]},
+        }
+    )
+    diagnostics = registry.diagnostics()
+
+    assert result["changed"] is True
+    assert diagnostics["oversized_card_total"] == 1
+    assert diagnostics["max_card_bytes"] == 256
+    assert diagnostics["max_card_bytes_observed"] > 256
+    assert diagnostics["last_oversized_card"]["id"] == "runtime"
+
+
 def test_register_status_registry_consumes_sdk_status_events(monkeypatch) -> None:
     bus = LocalEventBus()
     registry = register_status_registry(bus)

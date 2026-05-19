@@ -322,7 +322,7 @@
         "route": {
           "type": "string",
           "enum": ["yjs", "stream", "tool", "details", "tool/details", "skill-local", "disk", "360log", "disk/360log"],
-          "description": "Normal data route chosen by the skill author. Runtime guards enforce safety but do not silently reroute this decision."
+          "description": "Normal data route chosen by the skill author. Runtime guards enforce safety but do not silently reroute this decision. Status cards/statusPlane are compact indexes over these routes, not valid data routes."
         },
         "owner": {
           "type": "string",

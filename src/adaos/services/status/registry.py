@@ -7,7 +7,12 @@ from typing import Any, Iterable
 from adaos.domain import Event
 from adaos.services.eventbus import emit
 
-from .cards import StatusCard, normalize_status_card
+from .cards import (
+    STATUS_CARD_MAX_BYTES,
+    StatusCard,
+    normalize_status_card,
+    status_card_boundary_diagnostics,
+)
 
 
 def _card_key(card: StatusCard) -> str:
@@ -15,14 +20,24 @@ def _card_key(card: StatusCard) -> str:
 
 
 class StatusRegistry:
-    def __init__(self, *, bus: Any | None = None, max_cards: int = 10000) -> None:
+    def __init__(
+        self,
+        *,
+        bus: Any | None = None,
+        max_cards: int = 10000,
+        max_card_bytes: int = STATUS_CARD_MAX_BYTES,
+    ) -> None:
         self._lock = threading.RLock()
         self._cards: dict[str, StatusCard] = {}
         self._bus = bus
         self._max_cards = max(1, int(max_cards or 10000))
+        self._max_card_bytes = max(1, int(max_card_bytes or STATUS_CARD_MAX_BYTES))
         self._publish_total = 0
         self._changed_total = 0
         self._unchanged_total = 0
+        self._oversized_card_total = 0
+        self._max_card_bytes_observed = 0
+        self._last_oversized_card: dict[str, Any] | None = None
         self._last_publish_latency_ms = 0.0
         self._last_changed_at: float | None = None
 
@@ -51,6 +66,7 @@ class StatusRegistry:
                 self._last_changed_at = stored.changed_at
             self._cards[key] = stored
             self._publish_total += 1
+            self._record_boundary_diagnostics_locked(stored)
             self._prune_locked()
             self._last_publish_latency_ms = (time.perf_counter() - started) * 1000.0
         if changed and emit_event and self._bus is not None:
@@ -108,10 +124,33 @@ class StatusRegistry:
                 "publish_total": int(self._publish_total),
                 "changed_total": int(self._changed_total),
                 "unchanged_total": int(self._unchanged_total),
+                "max_card_bytes": int(self._max_card_bytes),
+                "max_card_bytes_observed": int(self._max_card_bytes_observed),
+                "oversized_card_total": int(self._oversized_card_total),
+                "last_oversized_card": dict(self._last_oversized_card) if self._last_oversized_card else None,
                 "stale_count": sum(1 for card in cards if card.is_stale(now_ts=now)),
                 "last_publish_latency_ms": float(self._last_publish_latency_ms),
                 "last_changed_at": self._last_changed_at,
             }
+
+    def _record_boundary_diagnostics_locked(self, card: StatusCard) -> None:
+        diagnostics = status_card_boundary_diagnostics(
+            card.to_dict(now_ts=card.updated_at),
+            max_bytes=self._max_card_bytes,
+        )
+        size_bytes = int(diagnostics.get("bytes") or 0)
+        self._max_card_bytes_observed = max(self._max_card_bytes_observed, size_bytes)
+        if not diagnostics.get("oversized"):
+            return
+        self._oversized_card_total += 1
+        self._last_oversized_card = {
+            "id": card.id,
+            "owner": card.owner,
+            "scope": card.scope,
+            "webspace_id": card.webspace_id,
+            "bytes": size_bytes,
+            "max_bytes": int(diagnostics.get("max_bytes") or self._max_card_bytes),
+        }
 
     def _prune_locked(self) -> None:
         if len(self._cards) <= self._max_cards:

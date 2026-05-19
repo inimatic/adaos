@@ -1869,6 +1869,9 @@ Success means:
   `/api/node/reliability/summary` for badge/status UI.
 - Core services and skills can publish small versioned status cards through one
   common SDK/service contract.
+- Status cards and `statusPlane` are not a third data transport: they carry
+  compact state, freshness, and references to Yjs/stream/details sources, while
+  large rows, inventories, logs, and diagnostics stay on their declared routes.
 - Browser-facing skills make the Yjs vs stream vs details route explicit before
   implementation; the runtime enforces budgets but does not silently reroute
   badly designed data flows.
@@ -1889,7 +1892,7 @@ Success means:
 
 Snapshot date: 2026-05-19.
 
-Overall completion: 59%. First implementation slices landed the ABI/schema
+Overall completion: 61%. First implementation slices landed the ABI/schema
 contract, runtime preservation of receiver route metadata, router stream-guard
 use of declared receiver budgets, per-receiver stream guard counters, and the
 first SDK helper for replace-mode stream variables: `skill.yaml:data_routes`,
@@ -1918,7 +1921,10 @@ cached ETag and only downloads `mode=full` when the status snapshot changed or
 when the thin response cannot be interpreted as a runtime snapshot. Summary
 responses now expose cache/body-size headers and
 `/api/node/reliability/summary/metrics` so soak checks can count thin/full
-responses, bytes, and `304` reuse.
+responses, bytes, and `304` reuse. Status registry diagnostics now expose the
+status-card compact-boundary budget (`maxCardBytes`, observed max bytes, and
+oversized-card counters) so misuse of `statusPlane` as a data payload route is
+visible during reviews and soaks.
 Checkpoint on `.30` confirmed a boundary bug: Yjs owner quarantine had been
 blocking stream-control subscription handlers, leaving `infrastate.skills` and
 `infrastate.scenarios` in their loading initial state. The core subscription
@@ -1935,6 +1941,10 @@ Problem statement:
 - `infrastate_skill` and `infrascope_skill` already demonstrate the desired
   split: compact Yjs state plus heavy webio stream receivers, but each skill
   implements its own projection helpers and local guard-aware behavior.
+- Thin summaries and status cards are a migration bridge for badge/status UI;
+  if they start carrying operator tables, live rows, or diagnostics payloads,
+  they become an accidental replacement for Yjs/stream data and must be treated
+  as a design defect.
 - The 2026-05 Yjs stability work showed that stream variables are the right
   route for high-churn operator data, but streams still need explicit
   first-paint, snapshot-on-subscribe, dedupe, freshness, rate, payload, and
@@ -1951,6 +1961,9 @@ Design direction:
 - Use small status cards for stable operator summaries, stream receivers for
   live variables and warm/cold details, and explicit debug endpoints/tools for
   raw full diagnostics.
+- Treat `statusPlane` as a compact index over the declared routes, never as
+  `route: status`; manifests and reviews must reject status/statusPlane as a
+  browser data route.
 - Treat primary Yjs as bootstrap/control state: interface shape, small current
   status, selected ids, degraded/quarantine badges, and subscription metadata.
 - Keep stream data bounded and recoverable: replace-mode variables for current
@@ -1963,12 +1976,17 @@ Design direction:
   primary document, stream guard protects publish/snapshot/fanout pressure, and
   both write logs and quarantine context that a future LLM repair loop can
   inspect.
+- Make status-card compactness observable: oversized cards should not hide the
+  overload by moving it out of Yjs/stream, and soak reports must include the
+  compact-boundary counters.
 - Make the pattern reusable for current and future skills.
 
 Execution order:
 
 1. Lock the YJS|Stream data-route contract and guard visibility in core/SDK.
-2. Add shared status-card and stream-variable helpers on top of that contract.
+2. Add shared status-card and stream-variable helpers on top of that contract,
+   with an explicit guardrail that status cards point to data routes instead of
+   becoming one.
 3. Move core-owned inventory, health, quarantine, lifecycle, and operation
    details behind stable API/MCP contracts as tracked by `RCMS-007`.
 4. Finish core guard observability and hot-event budgeting before changing
@@ -1988,7 +2006,7 @@ Execution order:
 
 Status: in progress.
 
-Progress: 90%.
+Progress: 92%.
 
 Purpose:
 
@@ -2036,6 +2054,8 @@ Actions:
   browser-facing skill includes a route plan before implementation.
 - [x] Add the first SDK helper for bounded replace-mode stream variables with
   `id`, `value`, `seq`, `updated_at`, `fingerprint`, and optional `ttl_ms`.
+- [x] Keep `status`/`statusPlane` out of the route enum so manifests cannot
+  declare the status registry as a browser data route.
 
 Human verification:
 
@@ -2046,6 +2066,8 @@ Human verification:
 - Intentionally set `route: magic_runtime_autoroute` or
   `budget.maxPayloadBytes: 0`; validation should fail and point to the schema
   violation.
+- Intentionally set `route: status`; validation should fail, because status
+  cards may reference Yjs/stream/details routes but are not a data route.
 - Set a low receiver `budget.maxPayloadBytes`, rebuild the webspace, publish a
   larger stream payload, and confirm logs/guard diagnostics include receiver,
   owner, surface, route, budget, and quarantine retry context.
@@ -2078,7 +2100,7 @@ Next steps:
 
 Status: in progress.
 
-Progress: 90%.
+Progress: 95%.
 
 Target shape:
 
@@ -2094,6 +2116,9 @@ Target shape:
 - A status card can identify the data route backing its details:
   `route.kind`, `route.receiver`, `route.path`, `route.snapshot_policy`, and
   optional `guard_ref`.
+- A status card stays compact. It may contain a short summary, freshness,
+  status, guard context, and references, but not live rows, inventories,
+  operation tables, logs, or diagnostic tails.
 
 Actions:
 
@@ -2108,6 +2133,9 @@ Actions:
   states.
 - [x] Document examples for core, `infrastate_skill`, `infrascope_skill`, and a
   future third-party skill.
+- [x] Add compact-boundary diagnostics so oversized status cards are visible
+  through registry/thin-summary diagnostics instead of silently becoming a new
+  transport.
 
 Human verification:
 
@@ -2116,6 +2144,9 @@ Human verification:
   `online`/`info` card with stable `fingerprint` and `version=1`.
 - Change only `updated_at`; the registry should keep the same version. Change
   `status` or `summary`; the version should increment.
+- Publish a deliberately oversized card in a local test/debug registry; registry
+  diagnostics should increment `oversizedCardTotal` and record the offending
+  card id, owner, scope, and observed bytes.
 
 #### STATUS-002: Add a materialized status registry/service
 
@@ -2139,6 +2170,8 @@ Actions:
 - [x] Add TTL/staleness sweep.
 - [x] Add compact registry diagnostics: card count, changed count, stale count,
   and last publish latency.
+- [x] Add compact-boundary diagnostics: max card budget, observed max bytes,
+  oversized card total, and last oversized card identity.
 - [x] Add unit tests for dedupe, versioning, TTL expiry, and owner scoping.
 - [x] Wire the registry into API/server bootstrap and expose a read endpoint.
 
@@ -2150,6 +2183,8 @@ Human verification:
 - Request `GET /api/node/reliability/summary?webspace_id=<id>` and verify the
   response still omits full `runtime`/`model` payloads while including
   `statusPlane.cards`.
+- Confirm `statusPlane.diagnostics.oversizedCardTotal` stays `0` in normal
+  browser runs; any nonzero value is a route-design smell to investigate.
 
 #### STATUS-003: Add skill-facing SDK helpers
 
@@ -2306,6 +2341,8 @@ Expected behavior:
 - Full diagnostic snapshot requires `?full=1` or a separate debug endpoint.
 - The endpoint supports ETag or explicit version checks.
 - Unchanged polling returns `304 Not Modified` or a minimal unchanged response.
+- Thin mode exposes status-card compact-boundary counters, not embedded
+  replacement payloads.
 
 Actions:
 
@@ -2319,6 +2356,8 @@ Actions:
 - [x] Add `ETag` / `If-None-Match` support or `since_version`.
 - [x] Keep a migration-safe full snapshot path for existing debug tools.
 - [x] Add tests for unchanged response behavior and full-mode compatibility.
+- [x] Include status-card compact-boundary diagnostics in thin mode so soaks can
+  detect accidental `statusPlane` data transport growth.
 
 Human verification:
 
@@ -2326,6 +2365,9 @@ Human verification:
   The response should contain `mode=thin`, `statusPlane`, `ETag`, and
   `X-AdaOS-Summary-Mode: thin`, without `hubRootHardening` or other
   compatibility diagnostic blocks.
+- `statusPlane.diagnostics.oversizedCardTotal` should be `0` and
+  `maxCardBytesObserved` should remain well below `maxCardBytes` during normal
+  badge/status operation.
 - Repeat the same request with `If-None-Match: <etag from the first response>`.
   If status cards are unchanged, the API should return `304 Not Modified`.
 - Request `GET /api/node/reliability/summary?mode=full&webspace_id=desktop`
@@ -2342,6 +2384,8 @@ Expected behavior:
 - Client bootstraps from a small status snapshot.
 - Client receives status changes through a stream or existing realtime channel.
 - Client requests full details only when a panel/inspector is opened.
+- Client must not treat `statusPlane` or thin summary as a replacement source
+  for live variables, tables, inventory rows, or diagnostic tails.
 
 Actions:
 
@@ -2354,6 +2398,9 @@ Actions:
 - [x] Add client-side cache keyed by thin-summary ETag.
 - [ ] Move badge/status UI to status-card versions once the cards cover all
   currently used runtime fields.
+- [ ] Replace remaining badge/status polling with push/delta once the status
+  stream/realtime channel is available; keep thin polling as the migration
+  bridge, not the final transport.
 - [ ] Verify the client no longer requests large summary payloads repeatedly
   during the first 3 minutes.
 
@@ -2381,6 +2428,9 @@ Acceptance criteria:
   red/green YJS indicator flapping from `infrastate` stream or projection work.
 - Thin status payload size is bounded and recorded.
 - Full details remain available on demand.
+- `statusPlane.diagnostics.oversizedCardTotal` remains `0`; if it rises, the
+  offending card is mapped back to its declared Yjs/stream/details route and
+  corrected instead of expanding the status-card schema.
 - `infrastate_skill`, `browsers_skill`, and `infrascope_skill` publish status
   cards through the shared path after their migrations.
 - Yjs and stream guard logs show route, owner, receiver/path, suppression

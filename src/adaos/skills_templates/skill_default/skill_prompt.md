@@ -224,6 +224,9 @@ The skill must consist of **two files only**, formatted exactly as shown below:
 * For browser-facing state, write the `data_routes` plan before choosing Yjs or
   stream helpers. Use Yjs only for compact bootstrap/control state and streams
   for live variables or event tails.
+* Do not use status cards or `statusPlane` as a data route. Status cards may
+  summarize health and point to Yjs, stream, or details routes, but they must
+  not embed tables, live rows, logs, or diagnostics.
 * Default language for `lang_res()` is **English only**.
 
 ---

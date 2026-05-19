@@ -307,6 +307,10 @@ def _compact_status_registry_payload(
             "publishTotal": int(diagnostics.get("publish_total") or 0),
             "changedTotal": int(diagnostics.get("changed_total") or 0),
             "unchangedTotal": int(diagnostics.get("unchanged_total") or 0),
+            "maxCardBytes": _coerce_optional_int(diagnostics.get("max_card_bytes")),
+            "maxCardBytesObserved": int(diagnostics.get("max_card_bytes_observed") or 0),
+            "oversizedCardTotal": int(diagnostics.get("oversized_card_total") or 0),
+            "lastOversizedCard": _coerce_dict(diagnostics.get("last_oversized_card")),
             "staleCount": int(diagnostics.get("stale_count") or 0),
             "derivedCardCount": int(diagnostics.get("derived_card_count") or 0),
             "lastPublishLatencyMs": float(diagnostics.get("last_publish_latency_ms") or 0.0),
@@ -443,6 +447,10 @@ def _thin_runtime_reliability_payload(
         "cardCount": int(diagnostics.get("cardCount") or 0),
         "staleCount": int(diagnostics.get("staleCount") or 0),
         "derivedCardCount": int(diagnostics.get("derivedCardCount") or 0),
+        "maxCardBytes": _coerce_optional_int(diagnostics.get("maxCardBytes")),
+        "maxCardBytesObserved": int(diagnostics.get("maxCardBytesObserved") or 0),
+        "oversizedCardTotal": int(diagnostics.get("oversizedCardTotal") or 0),
+        "lastOversizedCard": _coerce_dict(diagnostics.get("lastOversizedCard")),
         "lastChangedAt": diagnostics.get("lastChangedAt"),
     }
     return {
