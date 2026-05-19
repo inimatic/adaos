@@ -333,6 +333,7 @@ def _strip_summary_etag_volatiles(value: Any) -> Any:
                 "expires_at",
                 "updated_at",
                 "updatedAt",
+                "changedAt",
                 "lastPublishLatencyMs",
             }
         }

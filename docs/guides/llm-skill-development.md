@@ -375,6 +375,9 @@ Status card rules:
   verify thin/full mode counts, response bytes, `304` reuse, and the compact
   `acceptance` block with status-registry, stream guard, stream-control, and
   per-receiver pressure counters
+- for a human-readable check, use
+  `adaos node reliability-metrics --webspace <id> --receiver <stream>` and
+  include the `acceptance.*` lines in soak notes
 - verify `statusPlane.diagnostics.oversizedCardTotal == 0`; a nonzero value
   means a status card is being used as a payload container and needs a route
   redesign
