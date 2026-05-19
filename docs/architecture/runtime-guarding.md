@@ -328,6 +328,7 @@ Every guard action must preserve enough evidence to debug the source later.
 Minimum evidence set:
 
 - owner and source attribution
+- correlation ids, for example `yws_attempt_id` and room-bootstrap attempt id
 - webspace, root path, channel, and operation kind when available
 - threshold that was crossed
 - observed metrics and window duration

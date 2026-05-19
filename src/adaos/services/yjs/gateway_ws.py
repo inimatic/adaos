@@ -5,6 +5,7 @@ Yjs websocket gateway implementation (service layer).
 """
 
 import asyncio
+import contextvars
 from collections import deque
 import gc
 import hashlib
@@ -80,6 +81,7 @@ _YWS_GUARD_DIAG: dict[str, Any] = {
     "last_reject_dev_id": "",
 }
 _YWS_ATTEMPT_SEQ = 0
+_CURRENT_YWS_ATTEMPT_ID = contextvars.ContextVar("adaos_yws_attempt_id", default="")
 _YWS_ATTEMPT_DIAG: dict[str, Any] = {
     "last_attempt_id": "",
     "last_attempt_at": 0.0,
@@ -95,6 +97,7 @@ _YWS_ATTEMPT_DIAG: dict[str, Any] = {
     "last_room_timeout_attempt_id": "",
 }
 _YROOM_LIFECYCLE_LOCK = threading.RLock()
+_YROOM_BOOTSTRAP_ATTEMPT_SEQ = 0
 _YROOM_LIFECYCLE: dict[str, dict[str, Any]] = {}
 _WS_EVENT_SUBSCRIPTIONS_LOCK = threading.RLock()
 _WS_EVENT_SUBSCRIBERS: dict[int, dict[str, Any]] = {}
@@ -1169,6 +1172,96 @@ def _mark_room_reset(
             entry["last_dropped_at"] = now
 
 
+def _next_room_bootstrap_attempt_id(webspace_id: str) -> str:
+    global _YROOM_BOOTSTRAP_ATTEMPT_SEQ
+    now = time.time()
+    with _YROOM_LIFECYCLE_LOCK:
+        _YROOM_BOOTSTRAP_ATTEMPT_SEQ += 1
+        return f"yroom-{int(now * 1000):x}-{_YROOM_BOOTSTRAP_ATTEMPT_SEQ:x}"
+
+
+def _mark_room_bootstrap_started(webspace_id: str, *, yws_attempt_id: str | None = None) -> str:
+    key = str(webspace_id or "").strip() or "default"
+    yws_token = str(yws_attempt_id or "").strip()
+    attempt_id = _next_room_bootstrap_attempt_id(key)
+    now = time.time()
+    with _YROOM_LIFECYCLE_LOCK:
+        entry = _YROOM_LIFECYCLE.setdefault(key, {})
+        entry["bootstrap_total"] = int(entry.get("bootstrap_total") or 0) + 1
+        entry["last_bootstrap_attempt_id"] = attempt_id
+        entry["last_bootstrap_yws_attempt_id"] = yws_token or None
+        entry["last_bootstrap_started_at"] = now
+        entry["last_bootstrap_finished_at"] = None
+        entry["last_bootstrap_duration_ms"] = None
+        entry["last_bootstrap_state"] = "starting"
+        entry["last_bootstrap_step"] = None
+        entry["last_bootstrap_error"] = None
+    return attempt_id
+
+
+def _mark_room_bootstrap_step(webspace_id: str, bootstrap_attempt_id: str, step: str) -> None:
+    key = str(webspace_id or "").strip() or "default"
+    attempt_id = str(bootstrap_attempt_id or "").strip()
+    if not attempt_id:
+        return
+    with _YROOM_LIFECYCLE_LOCK:
+        entry = _YROOM_LIFECYCLE.setdefault(key, {})
+        if str(entry.get("last_bootstrap_attempt_id") or "") != attempt_id:
+            return
+        entry["last_bootstrap_step"] = str(step or "").strip() or None
+
+
+def _mark_room_bootstrap_finished(
+    webspace_id: str,
+    bootstrap_attempt_id: str,
+    *,
+    state: str,
+    step: str | None = None,
+    error: str | None = None,
+) -> None:
+    key = str(webspace_id or "").strip() or "default"
+    attempt_id = str(bootstrap_attempt_id or "").strip()
+    if not attempt_id:
+        return
+    state_token = str(state or "").strip().lower() or "unknown"
+    now = time.time()
+    with _YROOM_LIFECYCLE_LOCK:
+        entry = _YROOM_LIFECYCLE.setdefault(key, {})
+        if str(entry.get("last_bootstrap_attempt_id") or "") != attempt_id:
+            return
+        started_at = float(entry.get("last_bootstrap_started_at") or 0.0)
+        entry["last_bootstrap_finished_at"] = now
+        entry["last_bootstrap_duration_ms"] = round(max(0.0, now - started_at) * 1000.0, 3) if started_at > 0.0 else None
+        entry["last_bootstrap_state"] = state_token
+        if step is not None:
+            entry["last_bootstrap_step"] = str(step or "").strip() or None
+        entry["last_bootstrap_error"] = str(error or "").strip()[:240] or None
+        if state_token == "ready":
+            entry["bootstrap_success_total"] = int(entry.get("bootstrap_success_total") or 0) + 1
+        else:
+            entry["bootstrap_failure_total"] = int(entry.get("bootstrap_failure_total") or 0) + 1
+            if state_token == "timeout":
+                entry["bootstrap_timeout_total"] = int(entry.get("bootstrap_timeout_total") or 0) + 1
+
+
+def _mark_room_wait_timeout(
+    webspace_id: str,
+    *,
+    dev_id: str,
+    yws_attempt_id: str | None,
+    waited_s: float,
+) -> None:
+    key = str(webspace_id or "").strip() or "default"
+    now = time.time()
+    with _YROOM_LIFECYCLE_LOCK:
+        entry = _YROOM_LIFECYCLE.setdefault(key, {})
+        entry["room_wait_timeout_total"] = int(entry.get("room_wait_timeout_total") or 0) + 1
+        entry["last_wait_timeout_at"] = now
+        entry["last_wait_timeout_s"] = round(max(0.0, float(waited_s or 0.0)), 3)
+        entry["last_wait_timeout_dev_id"] = str(dev_id or "").strip() or "unknown"
+        entry["last_wait_timeout_yws_attempt_id"] = str(yws_attempt_id or "").strip() or None
+
+
 def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or "default"
     with _YROOM_LIFECYCLE_LOCK:
@@ -1262,6 +1355,11 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
         "cold_open_total": int(meta.get("cold_open_total") or 0),
         "reuse_total": int(meta.get("reuse_total") or 0),
         "single_pass_bootstrap_total": int(meta.get("single_pass_bootstrap_total") or 0),
+        "bootstrap_total": int(meta.get("bootstrap_total") or 0),
+        "bootstrap_success_total": int(meta.get("bootstrap_success_total") or 0),
+        "bootstrap_failure_total": int(meta.get("bootstrap_failure_total") or 0),
+        "bootstrap_timeout_total": int(meta.get("bootstrap_timeout_total") or 0),
+        "room_wait_timeout_total": int(meta.get("room_wait_timeout_total") or 0),
         "last_open_mode": str(meta.get("last_open_mode") or "").strip() or None,
         "last_open_total_ms": meta.get("last_open_total_ms"),
         "last_open_apply_updates_ms": meta.get("last_open_apply_updates_ms"),
@@ -1269,6 +1367,21 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
         "last_open_bootstrap_mode": str(meta.get("last_open_bootstrap_mode") or "").strip() or None,
         "last_open_bootstrap_persisted_via": str(meta.get("last_open_bootstrap_persisted_via") or "").strip() or None,
         "last_open_bootstrap_single_pass": bool(meta.get("last_open_bootstrap_single_pass")),
+        "last_bootstrap_attempt_id": str(meta.get("last_bootstrap_attempt_id") or "").strip() or None,
+        "last_bootstrap_yws_attempt_id": str(meta.get("last_bootstrap_yws_attempt_id") or "").strip() or None,
+        "last_bootstrap_started_at": meta.get("last_bootstrap_started_at"),
+        "last_bootstrap_started_ago_s": _seconds_ago(meta.get("last_bootstrap_started_at"), now),
+        "last_bootstrap_finished_at": meta.get("last_bootstrap_finished_at"),
+        "last_bootstrap_finished_ago_s": _seconds_ago(meta.get("last_bootstrap_finished_at"), now),
+        "last_bootstrap_duration_ms": meta.get("last_bootstrap_duration_ms"),
+        "last_bootstrap_state": str(meta.get("last_bootstrap_state") or "").strip() or None,
+        "last_bootstrap_step": str(meta.get("last_bootstrap_step") or "").strip() or None,
+        "last_bootstrap_error": str(meta.get("last_bootstrap_error") or "").strip() or None,
+        "last_wait_timeout_at": meta.get("last_wait_timeout_at"),
+        "last_wait_timeout_ago_s": _seconds_ago(meta.get("last_wait_timeout_at"), now),
+        "last_wait_timeout_s": meta.get("last_wait_timeout_s"),
+        "last_wait_timeout_dev_id": str(meta.get("last_wait_timeout_dev_id") or "").strip() or None,
+        "last_wait_timeout_yws_attempt_id": str(meta.get("last_wait_timeout_yws_attempt_id") or "").strip() or None,
         "last_reset_reason": str(meta.get("last_reset_reason") or "").strip() or None,
         "last_reset_closed_connections": int(meta.get("last_reset_closed_connections") or 0),
         "last_reset_closed_webrtc_peers": int(meta.get("last_reset_closed_webrtc_peers") or 0),
@@ -1312,6 +1425,11 @@ def _room_debug_snapshot_all(now: float) -> tuple[dict[str, Any], dict[str, int]
         "room_cold_open_total": 0,
         "room_reuse_total": 0,
         "room_single_pass_bootstrap_total": 0,
+        "room_bootstrap_total": 0,
+        "room_bootstrap_success_total": 0,
+        "room_bootstrap_failure_total": 0,
+        "room_bootstrap_timeout_total": 0,
+        "room_wait_timeout_total": 0,
         "update_stream_buffer_used_total": 0,
         "update_stream_waiting_send_total": 0,
         "update_stream_waiting_receive_total": 0,
@@ -1330,6 +1448,11 @@ def _room_debug_snapshot_all(now: float) -> tuple[dict[str, Any], dict[str, int]
         aggregated["room_cold_open_total"] += int(snapshot.get("cold_open_total") or 0)
         aggregated["room_reuse_total"] += int(snapshot.get("reuse_total") or 0)
         aggregated["room_single_pass_bootstrap_total"] += int(snapshot.get("single_pass_bootstrap_total") or 0)
+        aggregated["room_bootstrap_total"] += int(snapshot.get("bootstrap_total") or 0)
+        aggregated["room_bootstrap_success_total"] += int(snapshot.get("bootstrap_success_total") or 0)
+        aggregated["room_bootstrap_failure_total"] += int(snapshot.get("bootstrap_failure_total") or 0)
+        aggregated["room_bootstrap_timeout_total"] += int(snapshot.get("bootstrap_timeout_total") or 0)
+        aggregated["room_wait_timeout_total"] += int(snapshot.get("room_wait_timeout_total") or 0)
         aggregated["room_generation_max"] = max(
             aggregated["room_generation_max"],
             int(snapshot.get("generation") or 0),
@@ -3030,7 +3153,10 @@ class WorkspaceWebsocketServer(WebsocketServer):
         if name not in self.rooms:
             lock = _room_locks.setdefault(webspace_id, asyncio.Lock())
             async with lock:
+                bootstrap_attempt_id = ""
+
                 async def _await_bootstrap_step(label: str, awaitable: Any) -> Any:
+                    _mark_room_bootstrap_step(webspace_id, bootstrap_attempt_id, label)
                     timeout_s = max(float(_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S), 0.0)
                     if timeout_s <= 0.0:
                         return await awaitable
@@ -3048,7 +3174,14 @@ class WorkspaceWebsocketServer(WebsocketServer):
                 # Second check after acquiring lock - another coroutine may
                 # have already created the room while we were waiting.
                 if name not in self.rooms:
-                    _ylog.info("creating YRoom for webspace=%s", webspace_id)
+                    yws_attempt_id = str(_CURRENT_YWS_ATTEMPT_ID.get() or "").strip()
+                    bootstrap_attempt_id = _mark_room_bootstrap_started(webspace_id, yws_attempt_id=yws_attempt_id)
+                    _ylog.info(
+                        "creating YRoom for webspace=%s bootstrap_attempt=%s yws_attempt=%s",
+                        webspace_id,
+                        bootstrap_attempt_id,
+                        yws_attempt_id or None,
+                    )
                     room: DiagnosticYRoom | None = None
                     ystore = None
                     try:
@@ -3103,7 +3236,20 @@ class WorkspaceWebsocketServer(WebsocketServer):
                         )
                         self.rooms[name] = room
                         _mark_room_created(webspace_id, room)
-                    except BaseException:
+                        _mark_room_bootstrap_finished(webspace_id, bootstrap_attempt_id, state="ready")
+                    except BaseException as exc:
+                        if isinstance(exc, asyncio.TimeoutError):
+                            bootstrap_state = "timeout"
+                        elif isinstance(exc, asyncio.CancelledError):
+                            bootstrap_state = "cancelled"
+                        else:
+                            bootstrap_state = "failed"
+                        _mark_room_bootstrap_finished(
+                            webspace_id,
+                            bootstrap_attempt_id,
+                            state=bootstrap_state,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
                         self.rooms.pop(name, None)
                         _room_locks.pop(webspace_id, None)
                         if ystore is not None:
@@ -3876,7 +4022,7 @@ async def _recover_stale_yws_room_bootstrap(webspace: str, dev_id: str, *, waite
         _ylog.warning("failed to evict YStore during stale yws room bootstrap recovery webspace=%s", webspace, exc_info=True)
 
 
-async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
+async def _acquire_yws_room(webspace_id: str, dev_id: str, *, yws_attempt_id: str | None = None) -> YRoom:
     """
     Resolve YJS room with bounded waiting and cache fallback.
 
@@ -3888,7 +4034,12 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
     max_wait_s = max(float(_YWS_ROOM_READY_MAX_S), 0.0)
     poll_s = max(float(_YWS_ROOM_READY_POLL_S), 0.25)
 
-    wait_task: asyncio.Task[YRoom] = asyncio.create_task(y_server.get_room(webspace))
+    yws_attempt_token = str(yws_attempt_id or "").strip()
+    token = _CURRENT_YWS_ATTEMPT_ID.set(yws_attempt_token)
+    try:
+        wait_task: asyncio.Task[YRoom] = asyncio.create_task(y_server.get_room(webspace))
+    finally:
+        _CURRENT_YWS_ATTEMPT_ID.reset(token)
     started = time.perf_counter()
     attempts = 0
 
@@ -3931,9 +4082,10 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
                 raise asyncio.TimeoutError("room wait timeout exceeded")
 
             _ylog.warning(
-                "yws room ready timeout webspace=%s dev=%s timeout_s=%.3f waited_s=%.3f",
+                "yws room ready timeout webspace=%s dev=%s yws_attempt=%s timeout_s=%.3f waited_s=%.3f",
                 webspace,
                 dev_id,
+                yws_attempt_token or None,
                 timeout_s,
                 elapsed,
             )
@@ -3955,6 +4107,13 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
                 raise
             return room
         wait_task.cancel()
+        waited_s = time.perf_counter() - started
+        _mark_room_wait_timeout(
+            webspace,
+            dev_id=dev_id,
+            yws_attempt_id=yws_attempt_token,
+            waited_s=waited_s,
+        )
         try:
             await wait_task
         except asyncio.CancelledError:
@@ -3979,11 +4138,11 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str) -> YRoom:
         if lock is not None and not lock.locked():
             _room_locks.pop(webspace, None)
         elif lock is not None:
-            waited_s = time.perf_counter() - started
             _ylog.warning(
-                "yws room lock remains locked after bootstrap timeout webspace=%s dev=%s waited_s=%.3f",
+                "yws room lock remains locked after bootstrap timeout webspace=%s dev=%s yws_attempt=%s waited_s=%.3f",
                 webspace,
                 dev_id,
+                yws_attempt_token or None,
                 waited_s,
             )
             await _recover_stale_yws_room_bootstrap(
@@ -4127,7 +4286,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
 
     adapter: YWebsocket = FastAPIWebsocketAdapter(websocket, path=webspace_id)
     try:
-        room_ref = await _acquire_yws_room(webspace_id, dev_id)
+        room_ref = await _acquire_yws_room(webspace_id, dev_id, yws_attempt_id=attempt_id)
     except asyncio.TimeoutError:
         _remember_yws_attempt(attempt_id, "room_timeout")
         _ylog.warning(
