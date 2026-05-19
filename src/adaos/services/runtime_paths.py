@@ -27,6 +27,19 @@ def _resolve_path(raw: str | os.PathLike[str] | None) -> Path | None:
         return None
 
 
+def _absolute_path(raw: str | os.PathLike[str] | None) -> Path | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path.absolute()
+    except Exception:
+        return None
+
+
 def _looks_like_project_root(path: Path | None) -> bool:
     if path is None:
         return False
@@ -37,12 +50,12 @@ def _looks_like_project_root(path: Path | None) -> bool:
 
 
 def is_core_slot_path(path: Path | str | None, *, base_dir: Path | None = None) -> bool:
-    candidate = _resolve_path(path)
+    candidate = _absolute_path(path)
     if candidate is None:
         return False
     try:
-        resolved_base = (base_dir or current_base_dir()).expanduser().resolve()
-        slots_root = (resolved_base / "state" / "core_slots" / "slots").resolve()
+        resolved_base = (base_dir or current_base_dir()).expanduser().absolute()
+        slots_root = (resolved_base / "state" / "core_slots" / "slots").absolute()
     except Exception:
         return False
     return candidate == slots_root or slots_root in candidate.parents
@@ -106,7 +119,7 @@ def current_control_python(repo_root: Path | str | None = None) -> Path:
         for candidate in candidates:
             try:
                 if candidate.exists():
-                    return candidate.resolve()
+                    return candidate.absolute()
             except Exception:
                 continue
     return Path(sys.executable).expanduser().resolve()

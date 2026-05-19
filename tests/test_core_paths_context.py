@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from adaos.apps import autostart_runner
 from adaos.services import agent_context
 from adaos.services import autostart, core_slots, core_update, hub_root_outbox_store, hub_root_protocol_store
+from adaos.services.runtime_paths import is_core_slot_path
 
 
 class _FakePaths:
@@ -71,6 +74,22 @@ def test_core_update_prefers_stable_root_over_slot_repo_env(monkeypatch, tmp_pat
     assert command is not None
     assert str(root_python.resolve()) in command
     assert str(project_root.resolve()) in command
+
+
+def test_core_slot_path_detection_uses_wrapper_path_not_symlink_target(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base"
+    target_python = tmp_path / "uv" / "python3.11"
+    target_python.parent.mkdir(parents=True)
+    target_python.write_text("", encoding="utf-8")
+    slot_python = base_dir / "state" / "core_slots" / "slots" / "A" / "venv" / "bin" / "python"
+    slot_python.parent.mkdir(parents=True)
+    try:
+        slot_python.symlink_to(target_python)
+    except OSError:
+        pytest.skip("symlink creation is unavailable on this platform")
+
+    assert slot_python.resolve() == target_python.resolve()
+    assert is_core_slot_path(slot_python, base_dir=base_dir) is True
 
 
 def test_autostart_runner_slot_launch_spec_uses_context_base_dir(monkeypatch, tmp_path: Path) -> None:
