@@ -307,6 +307,8 @@ diagnostic surface from becoming a primary Yjs pressure source.
   into `statusPlane` through the shared card shape
 - [x] `status.summary_endpoint`: expose registry-backed thin status snapshots
   through `/api/node/reliability/summary` or its successor
+- [x] `status.summary_etag`: support `mode=thin` plus ETag/`If-None-Match`
+  for unchanged polling responses
 - [x] `status.hot_event_budget`: add a shared debounce/window budget helper
   for hot event-to-status paths before skill-specific migrations
 

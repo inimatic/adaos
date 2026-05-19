@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import gc
 import os
@@ -11,7 +13,7 @@ from typing import Any, Mapping, Optional
 import anyio
 import requests
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from adaos.domain import Event
@@ -298,6 +300,92 @@ def _compact_status_registry_payload(
         },
         "cards": cards,
         "error": str(snapshot.get("error") or "").strip() or None,
+    }
+
+
+def _strip_summary_etag_volatiles(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _strip_summary_etag_volatiles(item)
+            for key, item in value.items()
+            if str(key)
+            not in {
+                "age_s",
+                "expires_at",
+                "updated_at",
+                "updatedAt",
+                "lastPublishLatencyMs",
+            }
+        }
+    if isinstance(value, list):
+        return [_strip_summary_etag_volatiles(item) for item in value]
+    return value
+
+
+def _summary_etag(payload: Mapping[str, Any]) -> str:
+    stable = _strip_summary_etag_volatiles(payload)
+    raw = json.dumps(stable, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
+    return f'W/"{hashlib.sha1(raw.encode("utf-8")).hexdigest()}"'
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    tokens = [item.strip() for item in str(header or "").split(",") if item.strip()]
+    return "*" in tokens or etag in tokens
+
+
+def _json_response_with_etag(
+    payload: dict[str, Any],
+    *,
+    if_none_match: str | None = None,
+    mode: str,
+) -> Response:
+    etag = _summary_etag(payload)
+    headers = {
+        "Cache-Control": "no-cache",
+        "ETag": etag,
+        "X-AdaOS-Summary-Mode": mode,
+    }
+    if _etag_matches(if_none_match, etag):
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(content=payload, headers=headers)
+
+
+def _thin_runtime_reliability_payload(
+    status_registry: dict[str, Any],
+    *,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
+    status_plane = _compact_status_registry_payload(
+        status_registry,
+        webspace_id=resolved_webspace_id,
+        limit=50,
+        source="api.node.reliability.summary.status_plane",
+    )
+    diagnostics = _coerce_dict(status_plane.get("diagnostics"))
+    status_plane["diagnostics"] = {
+        "cardCount": int(diagnostics.get("cardCount") or 0),
+        "staleCount": int(diagnostics.get("staleCount") or 0),
+        "derivedCardCount": int(diagnostics.get("derivedCardCount") or 0),
+        "lastChangedAt": diagnostics.get("lastChangedAt"),
+    }
+    return {
+        "ok": True,
+        "available": bool(status_plane.get("available", True)),
+        "schema": "adaos.reliability_summary.thin.v1",
+        "source": "api.node.reliability.summary",
+        "mode": "thin",
+        "webspaceId": resolved_webspace_id,
+        "updatedAt": status_plane.get("updatedAt"),
+        "statusPlane": status_plane,
+        "detailsRef": {
+            "summaryFull": "/api/node/reliability/summary?mode=full",
+            "runtime": "/api/node/reliability",
+        },
+        "cache": {
+            "etag": True,
+            "ifNoneMatch": True,
+        },
     }
 
 
@@ -1440,13 +1528,37 @@ async def node_reliability() -> dict[str, Any]:
 
 
 @router.get("/reliability/summary", dependencies=[Depends(require_token)])
-async def node_reliability_summary(webspace_id: str | None = None) -> dict[str, Any]:
+async def node_reliability_summary(
+    webspace_id: str | None = None,
+    mode: str | None = None,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> Response:
+    requested_mode = str(mode or "compat").strip().lower()
+    if requested_mode in {"thin", "status", "status_plane"}:
+        resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
+        status_registry = _current_status_registry_snapshot(webspace_id=resolved_webspace_id)
+        payload = _thin_runtime_reliability_payload(
+            status_registry,
+            webspace_id=resolved_webspace_id,
+        )
+        return _json_response_with_etag(
+            payload,
+            if_none_match=if_none_match,
+            mode="thin",
+        )
+
     reliability = await _current_reliability_payload_async(webspace_id=webspace_id)
     status_registry = _current_status_registry_snapshot(webspace_id=webspace_id)
-    return _compact_runtime_reliability_payload(
+    payload = _compact_runtime_reliability_payload(
         reliability,
         webspace_id=webspace_id,
         status_registry=status_registry,
+    )
+    payload["mode"] = "full" if requested_mode == "full" else "compat"
+    return _json_response_with_etag(
+        payload,
+        if_none_match=if_none_match,
+        mode=str(payload["mode"]),
     )
 
 
