@@ -1261,6 +1261,31 @@ def _print_reliability_metrics_summary(payload: dict[str, Any]) -> None:
             f"max_observed={status_diag.get('max_card_bytes_observed') or 0}"
         )
 
+    yjs_guard = acceptance.get("yjs_guard") if isinstance(acceptance.get("yjs_guard"), dict) else {}
+    if yjs_guard:
+        typer.echo(
+            "acceptance.yjs_guard: "
+            f"available={'yes' if yjs_guard.get('available') else 'no'} "
+            f"webspace={yjs_guard.get('webspace_id') or '-'} "
+            f"owner={yjs_guard.get('owner') or '-'} "
+            f"attempted={yjs_guard.get('attempted') or 0} "
+            f"allowed={yjs_guard.get('allowed') or 0} "
+            f"blocked={yjs_guard.get('blocked') or 0} "
+            f"throttled={yjs_guard.get('throttled') or 0} "
+            f"quarantined={'yes' if yjs_guard.get('quarantined') else 'no'} "
+            f"quarantine_total={yjs_guard.get('quarantine_total') or 0} "
+            f"denied={yjs_guard.get('quarantine_denied_total') or 0}"
+        )
+        if yjs_guard.get("quarantined") or yjs_guard.get("last_reason"):
+            typer.echo(
+                "acceptance.yjs_guard.last: "
+                f"policy={yjs_guard.get('last_policy_state') or '-'} "
+                f"reason={yjs_guard.get('quarantine_reason') or yjs_guard.get('last_reason') or '-'} "
+                f"path={yjs_guard.get('quarantine_path') or yjs_guard.get('last_path') or '-'} "
+                f"tool={yjs_guard.get('quarantine_tool') or '-'} "
+                f"retry_after_s={yjs_guard.get('quarantine_remaining_s') or 0}"
+            )
+
     stream_guard = acceptance.get("stream_guard") if isinstance(acceptance.get("stream_guard"), dict) else {}
     guard_totals = stream_guard.get("totals") if isinstance(stream_guard.get("totals"), dict) else {}
     if stream_guard:

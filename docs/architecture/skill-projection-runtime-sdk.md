@@ -406,10 +406,14 @@ diagnostic surface from becoming a primary Yjs pressure source.
 - [x] `status.summary_metrics`: expose summary mode, response bytes, cache
   hits, and `304` reuse for soak verification
 - [x] `status.acceptance_metrics`: extend summary metrics with compact
-  status-registry diagnostics, stream guard counters, stream-control
-  snapshot/coalescing counters, and merged per-receiver rows for pressure soaks
+  status-registry diagnostics, Yjs owner-guard counters/quarantine context,
+  stream guard counters, stream-control snapshot/coalescing counters, and
+  merged per-receiver rows for pressure soaks
 - [x] `status.acceptance_metrics_cli`: expose the same counters through
   `adaos node reliability-metrics` for operator and soak-note capture
+- [x] `status.yjs_guard_acceptance`: include attempted/allowed/blocked/
+  throttled counts, active quarantine, TTL/retry, denied count, and last
+  guarded path/tool in the low-cost acceptance surface
 - [x] `update.active_slot_target_validation`: reject terminal update success
   when the active slot manifest does not match the requested target version,
   so acceptance soaks cannot accidentally measure an old runtime
