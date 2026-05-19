@@ -237,6 +237,7 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["result"]["node_id"] == "member-1"
+    assert result["result"]["timeout"] == 8.0
     assert result["trace_id"] == "trace-123"
     assert ("rpc", "member-1") in calls
 
@@ -313,7 +314,7 @@ def test_call_tool_keeps_browsers_skill_local_on_hub(monkeypatch) -> None:
     assert ("rpc", "member-1") not in calls
 
 
-def test_call_tool_does_not_http_fallback_to_loopback_member_base_url_when_rpc_fails(monkeypatch) -> None:
+def test_call_tool_returns_degraded_snapshot_when_loopback_member_rpc_fails(monkeypatch) -> None:
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
             return None
@@ -351,19 +352,77 @@ def test_call_tool_does_not_http_fallback_to_loopback_member_base_url_when_rpc_f
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module, "get_directory", lambda: _FakeDirectory())
     monkeypatch.setattr(tool_bridge_module, "get_hub_link_manager", lambda: _FakeLinkManager())
+    tool_bridge_module._SNAPSHOT_UNAVAILABLE_CACHE.clear()
 
-    with pytest.raises(HTTPException) as excinfo:
-        asyncio.run(
-            tool_bridge_module.call_tool(
-                tool_bridge_module.ToolCall(
-                    tool="subnet_env:get_snapshot",
-                    arguments={"webspace_id": "desktop", "target_node_id": "member-1"},
-                ),
-                SimpleNamespace(headers={}),
-                Response(),
-                ctx=ctx,
-            )
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="subnet_env:get_snapshot",
+                arguments={"webspace_id": "desktop", "target_node_id": "member-1"},
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=ctx,
         )
+    )
 
-    assert excinfo.value.status_code == 502
-    assert "member link rpc failed" in str(excinfo.value.detail)
+    assert result["ok"] is True
+    assert result["degraded"] is True
+    assert result["result"]["error"] == "target_member_unavailable"
+    assert "member link rpc failed" in result["result"]["reason"]
+
+
+def test_call_tool_uses_cached_snapshot_unavailable_before_connected_rpc(monkeypatch) -> None:
+    rpc_calls = 0
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, *_args, **_kwargs):
+            raise AssertionError("local tool execution should be bypassed for explicit target nodes")
+
+    class _FakeDirectory:
+        def get_node_base_url(self, _node_id: str) -> str | None:
+            return "http://127.0.0.1:8779"
+
+    class _FakeLinkManager:
+        def is_connected(self, _node_id: str) -> bool:
+            return True
+
+        async def rpc_tools_call(self, *_args, **_kwargs):
+            nonlocal rpc_calls
+            rpc_calls += 1
+            raise TimeoutError("slow member")
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=None,
+        caps=None,
+        settings=None,
+        bus=None,
+        config=SimpleNamespace(role="hub", node_id="hub-1", token="hub-token"),
+    )
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "get_directory", lambda: _FakeDirectory())
+    monkeypatch.setattr(tool_bridge_module, "get_hub_link_manager", lambda: _FakeLinkManager())
+    tool_bridge_module._SNAPSHOT_UNAVAILABLE_CACHE.clear()
+
+    body = tool_bridge_module.ToolCall(
+        tool="subnet_env:get_snapshot",
+        arguments={"webspace_id": "desktop", "target_node_id": "member-1"},
+    )
+    first = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=ctx))
+    second = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=ctx))
+
+    assert first["ok"] is True
+    assert first["degraded"] is True
+    assert second["ok"] is True
+    assert second["result"]["cached"] is True
+    assert rpc_calls == 1
