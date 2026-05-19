@@ -26,7 +26,7 @@ from adaos.services.core_slots import (
     rollback_to_previous_slot,
     slot_dir,
 )
-from adaos.services.runtime_paths import current_base_dir, current_control_python, current_repo_root
+from adaos.services.runtime_paths import current_base_dir, current_control_python, current_repo_root, is_core_slot_path
 
 
 def _base_dir() -> Path:
@@ -628,7 +628,12 @@ def _resolve_root_promotion_target(manifest: dict[str, Any] | None) -> tuple[Pat
     payload = manifest if isinstance(manifest, dict) else {}
     explicit = str(payload.get("root_repo_root") or "").strip()
     if explicit:
-        return Path(explicit).expanduser().resolve(), "manifest.root_repo_root"
+        explicit_path = Path(explicit).expanduser().resolve()
+        if is_core_slot_path(explicit_path):
+            stable_root = _repo_root()
+            if stable_root is not None and not is_core_slot_path(stable_root):
+                return stable_root, "runtime_context.stable_root_over_manifest_slot"
+        return explicit_path, "manifest.root_repo_root"
     resolved = _repo_root()
     if resolved is not None:
         if str(os.getenv("ADAOS_ROOT_REPO_ROOT") or os.getenv("ADAOS_REPO_ROOT") or "").strip():
