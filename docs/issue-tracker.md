@@ -414,6 +414,11 @@ every two seconds. That did not explain the core runtime RSS growth, but it
 created a 162 MiB service log and unnecessary cache/journald pressure. The
 service skill now suppresses `/health` access logs while keeping non-health
 request/error logs visible.
+The same checkpoint found that `.40` could finish booting the new slot while
+`core_update/status.json` stayed at `restarting/launch`. This was a stale
+supervisor finalization state, not a failed runtime. Supervisor reconciliation
+now finalizes boot status when the managed runtime is API-ready on the target
+slot, even if the previous attempt record has already been completed.
 
 ### Product Rules
 
@@ -614,7 +619,7 @@ Implementation notes:
 
 Status: in progress.
 
-Progress: 50%.
+Progress: 58%.
 
 Actions:
 
@@ -634,6 +639,8 @@ Actions:
 - [x] Add tests for the forgotten `tools/slot-shell.sh` case.
 - [x] Add tests for unsafe state-changing command warning and allowed dev
   override.
+- [x] Self-heal stale `restarting/launch` core-update status when the
+  supervisor can prove the target-slot runtime is already ready.
 
 Implementation notes:
 
@@ -645,6 +652,8 @@ Implementation notes:
 - Root-launched supervisor/sidecar paths now share one bootstrap-critical path
   list, and tests assert that the top-level supervisor/sidecar import surface is
   covered before root promotion.
+- Runtime-ready status reconciliation prevents a completed slot switch from
+  remaining operator-visible as an update still in progress.
 
 #### RCMS-006: Sync catalog snapshots from hub/root to members
 
@@ -2326,7 +2335,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 36%.
+Progress: 38%.
 
 Current useful pattern:
 
@@ -2379,6 +2388,9 @@ Human verification:
 - Repeat `GET /api/node/control-plane/projections/overview?webspace_id=desktop`
   several times in one second; after the first build, immediate repeats should
   reuse the control-plane cache instead of taking the full multi-second path.
+- During/after a managed core update, `.adaos/state/core_update/status.json`
+  should move from `restarting/launch` to `succeeded/validate` once the runtime
+  API is ready on the target slot.
 
 #### STATUS-005B: Convert `browsers_skill` after core guard observability
 
