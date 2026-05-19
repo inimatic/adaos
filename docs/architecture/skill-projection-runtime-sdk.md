@@ -410,6 +410,9 @@ diagnostic surface from becoming a primary Yjs pressure source.
   snapshot/coalescing counters, and merged per-receiver rows for pressure soaks
 - [x] `status.acceptance_metrics_cli`: expose the same counters through
   `adaos node reliability-metrics` for operator and soak-note capture
+- [x] `update.active_slot_target_validation`: reject terminal update success
+  when the active slot manifest does not match the requested target version,
+  so acceptance soaks cannot accidentally measure an old runtime
 - [x] `status.hot_event_budget`: add a shared debounce/window budget helper
   for hot event-to-status paths before skill-specific migrations
 - [x] `status.compact_boundary_diagnostics`: expose max card bytes, observed
