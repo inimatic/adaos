@@ -279,7 +279,17 @@ def test_node_control_plane_overview_projection_returns_canonical_payload(monkey
             kind="overview",
             title="Overview",
             subject=CanonicalObject(id="hub:alpha", kind="hub", title="Hub Alpha", status="warning"),
+            objects=[
+                CanonicalObject(
+                    id="member:beta",
+                    kind="member",
+                    title="Member Beta",
+                    status="offline",
+                    actual_state={"large": "x" * 1000},
+                )
+            ],
             context={"summary_tile": {"value": "warning"}},
+            representations={"operator": {"summary_tile": {"value": "warning"}}, "llm": {"subject_id": "hub:alpha"}},
         ),
     )
 
@@ -289,8 +299,25 @@ def test_node_control_plane_overview_projection_returns_canonical_payload(monkey
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["ok"] is True
+    assert payload["mode"] == "compact"
     assert payload["projection"]["id"] == "projection:hub:alpha/overview"
     assert payload["projection"]["context"]["summary_tile"]["value"] == "warning"
+    assert "objects" not in payload["projection"]
+    assert "incidents" not in payload["projection"]
+    assert payload["projection"]["object_refs"][0]["id"] == "member:beta"
+    assert "actual_state" not in payload["projection"]["object_refs"][0]
+    assert "operator" not in payload["projection"]["representations"]
+    assert payload["projection"]["representations"]["llm"]["subject_id"] == "hub:alpha"
+
+    full_resp = client.get(
+        "/api/node/control-plane/projections/overview",
+        params={"webspace_id": "desk", "mode": "full"},
+    )
+    assert full_resp.status_code == 200
+    full_payload = full_resp.json()
+    assert full_payload["mode"] == "full"
+    assert full_payload["projection"]["objects"][0]["actual_state"]["large"]
+    assert full_payload["projection"]["representations"]["operator"]["summary_tile"]["value"] == "warning"
 
 
 def test_node_control_plane_inventory_projection_returns_canonical_payload(monkeypatch) -> None:

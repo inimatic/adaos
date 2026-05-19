@@ -190,6 +190,11 @@ The current Phase 2 checkpoint turns that MVP into an installable operator works
 - overview rows now stay compact by carrying ids, counts, status, summaries, and
   `details_ref` pointers instead of embedding full member/device/runtime object
   state; inspector streams remain the route for details
+- the control-plane Overview API now defaults to the compact form and leaves the
+  full canonical object dump behind explicit full/debug mode
+- `infrascope_skill` stream snapshot requests for overview, inventory,
+  operations, and inspector receivers use per-receiver builders first, so
+  Overview does not wait for a monolithic snapshot rebuild on subscribe
 - `.adaos/workspace/scenarios/infrascope/*` provides the first desktop `Infrascope` scenario with overview panels, inventory tabs for hubs/members/browsers/devices/skills/scenarios, a unified right-side inspector, and incident-to-object drill-down without leaving context
 - focused tests cover the Phase 2 projections, API facades, SDK helpers, and workspace skill/scenario assets before later topology and impact work expands the UI
 
