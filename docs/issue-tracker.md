@@ -2589,7 +2589,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 58%.
+Progress: 64%.
 
 Acceptance criteria:
 
@@ -2638,9 +2638,13 @@ Actions:
 - [x] Preserve `asyncio.CancelledError` during Yjs bootstrap instead of treating
   a cancelled `apply_updates` as an empty persisted document; this keeps update
   restarts from turning bootstrap timeout into a misleading seed/repair path.
-- [ ] Add browser-side breadcrumbs for transition visibility: last supervisor
+- [x] Add browser-side breadcrumbs for transition visibility: last supervisor
   transition source, suppression reason, fallback probe URL/result, and current
-  Yjs red reason.
+  Yjs red reason. The browser runtime-debug cursor now exports compact
+  `supervisor_transition`, `supervisor_transition_suppressed`,
+  `supervisor_transition_probe`, and computed `yjs_status` fields, while the
+  communication runtime records visible/suppressed supervisor transitions and
+  supervisor fallback probe results.
 - [x] Add bounded node ingest/export for the browser runtime-debug ring
   (`adaos.runtime_debug.logs.v1`) and include it in the standard skill/runtime
   log retrieval path. The client now exports a capped `ui.runtime_debug` tail to
@@ -2692,6 +2696,9 @@ Actions:
 - `state-sync.bootstrap` in reliability includes the same selected-webspace
   fields, and hard bootstrap outcomes add a blocker such as
   `room_bootstrap_timeout:<yroom>/<yws>`.
+- Browser runtime-debug cursor now carries the current computed YJS indicator
+  state/reason plus supervisor transition/probe/suppression breadcrumbs, so the
+  node can explain a red indicator without opening DevTools.
 - This improves investigation of YJS Red / red-green flicker without changing
   the Yjs or stream data route. Remaining acceptance work is a pressure/soak run
   that records status registry and stream guard diagnostics while known noisy
