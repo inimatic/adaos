@@ -2501,7 +2501,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 46%.
+Progress: 48%.
 
 Expected behavior:
 
@@ -2538,6 +2538,10 @@ Actions:
   runner processes in diagnostics. Same-target requests are now accepted as
   deduplicated instead of queued, and same-target queued follow-up transitions
   are dropped after the completed transition is validated.
+- [x] Deduplicate direct active-slot same-target update requests before the
+  minimum-update-period guard or planned-update refresh path, so probes/retries
+  against the already active commit cannot create a delayed redundant slot
+  transition.
 - [ ] Classify member-follow update expiry separately from Yjs/provider
   failures: if a member reports `pending update expired before autostart runner
   picked it up`, hub/status UI must surface stale member-update state and keep
@@ -2563,7 +2567,7 @@ Human verification:
 
 Status: in progress.
 
-Progress: 48%.
+Progress: 50%.
 
 Acceptance criteria:
 
@@ -2725,6 +2729,27 @@ Actions:
   `runtime_debug.cursor` heartbeat closes that gap by publishing the last known
   browser-side provider/control/materialization cursor even when no new
   exceptional event is generated.
+- Rollout of `4c1806aa70b040db61199707e0b739b244d7af04` reached `.40`
+  `succeeded/validate` and `.30` `succeeded/validate`; `.30` recovered YWS on
+  active runtime port `8778` with `transportState=attached`,
+  `firstSyncState=complete`, `semanticState=ready`, `freshnessState=fresh`, and
+  `fallbackMode=off`.
+- The same rollout showed the observed YJS RED window was an update downtime
+  plus heavy disk I/O symptom rather than a YWS guard regression: while
+  bootstrap apply/root promotion was running, the runtime listener was absent
+  or delayed in `jbd2_log_wait_commit`; after the listener came back, YWS opened
+  with correlated `yws_attempt_id`.
+- A manual same-target probe after `4c1806aa` exposed a remaining ordering bug:
+  direct same-target `update-start` was caught by `minimum_update_period` before
+  active-slot dedupe, creating a delayed redundant update plan. The probe plans
+  were cancelled on `.30` and `.40`, and the supervisor now checks the active
+  slot manifest first, returning `deduplicated/same_target` without changing the
+  real update cadence.
+- Root promotion on `.30` can leave the systemd wrapper path pointing at the
+  root checkout slot (`slot A`) while the production runtime runs from active
+  `slot B`; this is expected only if the bootstrap-managed files in that root
+  checkout match the active slot. The checkpoint verified the promoted
+  `supervisor.py` hashes match across `.30` slot A and slot B.
 
 Human verification:
 
