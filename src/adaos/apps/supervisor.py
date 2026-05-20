@@ -331,9 +331,244 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def _read_jsonl_tail(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
+def _compact_json_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    max_depth: int = 3,
+    max_items: int = 20,
+    max_text: int = 512,
+) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= max_text:
+            return value
+        return f"{value[:max_text]}...<truncated:{len(value) - max_text}>"
+    if depth >= max_depth:
+        if isinstance(value, dict):
+            return {"_truncated": True, "type": "dict", "size": len(value)}
+        if isinstance(value, (list, tuple)):
+            return {"_truncated": True, "type": "list", "size": len(value)}
+        return repr(value)
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                result["_truncated_items"] = max(0, len(value) - max_items)
+                break
+            result[str(key)] = _compact_json_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+                max_text=max_text,
+            )
+        return result
+    if isinstance(value, (list, tuple)):
+        items = [
+            _compact_json_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_items=max_items,
+                max_text=max_text,
+            )
+            for item in list(value)[:max_items]
+        ]
+        if len(value) > max_items:
+            items.append({"_truncated_items": len(value) - max_items})
+        return items
+    return repr(value)
+
+
+def _compact_watchdog_channel_state(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    keys = {
+        "root_control_status",
+        "route_status",
+        "hub_root_status",
+        "hub_root_state",
+        "hub_root_browser_status",
+        "hub_root_browser_state",
+        "hub_member_status",
+        "member_state",
+        "assessment_state",
+        "assessment_reason",
+        "transition_state",
+        "transition_reason",
+        "connected",
+        "last_error",
+        "last_close_reason",
+        "last_summary",
+        "hub_url",
+    }
+    return {
+        key: _compact_json_value(item, max_depth=2, max_text=256)
+        for key, item in value.items()
+        if key in keys and item is not None
+    }
+
+
+def _compact_watchdog_required_link(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    keys = {
+        "kind",
+        "role",
+        "owner",
+        "state",
+        "reason",
+        "ready",
+        "visible",
+        "desired_state",
+        "current_owner",
+        "planned_owner",
+        "future_owner",
+        "continuity_mode",
+        "sidecar_enabled",
+        "reconnect_total",
+        "cooldown_sec",
+        "verify_timeout_sec",
+        "served_by",
+        "blockers",
+        "transport_state",
+        "transition_state",
+        "handoff_state",
+        "handoff_ready",
+        "recovery_policy",
+    }
+    return {
+        key: _compact_json_value(item, max_depth=2, max_text=256)
+        for key, item in value.items()
+        if key in keys and item is not None
+    }
+
+
+def _compact_watchdog_decision(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    keys = {
+        "reason",
+        "message",
+        "action",
+        "transport_owner",
+        "root_control_status",
+        "route_status",
+        "hub_root_status",
+        "hub_root_state",
+        "hub_root_browser_status",
+        "hub_root_browser_state",
+        "continuity_mode",
+        "handoff_state",
+        "handoff_ready",
+        "recovery_policy",
+        "hub_member_status",
+        "member_state",
+        "assessment_state",
+        "assessment_reason",
+        "transition_state",
+        "transition_reason",
+        "last_error",
+        "last_close_reason",
+        "last_event",
+        "last_summary",
+    }
+    result = {
+        key: _compact_json_value(item, max_depth=2, max_text=256)
+        for key, item in value.items()
+        if key in keys and item is not None
+    }
+    channel = value.get("channel_before")
+    compact_channel = _compact_watchdog_channel_state(channel)
+    if compact_channel:
+        result["channel"] = compact_channel
+    required_link = _compact_watchdog_required_link(value.get("required_upstream_link"))
+    if required_link:
+        result["required_upstream_link"] = required_link
+    return result
+
+
+def _compact_watchdog_verification(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        key: _compact_json_value(value.get(key), max_depth=2, max_text=256)
+        for key in ("ok", "state", "attempts", "timeout_sec", "error")
+        if value.get(key) is not None
+    }
+    channel = _compact_watchdog_channel_state(value.get("channel"))
+    if channel:
+        result["channel"] = channel
+    return result
+
+
+def _compact_watchdog_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    keys = {"ok", "accepted", "error", "message", "state", "restart", "reconnect", "action"}
+    return {
+        key: _compact_json_value(item, max_depth=2, max_text=256)
+        for key, item in value.items()
+        if key in keys and item is not None
+    }
+
+
+def _compact_watchdog_last_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        key: _compact_json_value(value.get(key), max_depth=1, max_text=256)
+        for key in ("requested_at", "action")
+        if value.get(key) is not None
+    }
+    decision = _compact_watchdog_decision(value.get("decision"))
+    if decision:
+        result["decision"] = decision
+    action_result = _compact_watchdog_result(value.get("result"))
+    if action_result:
+        result["result"] = action_result
+    verification = _compact_watchdog_verification(value.get("verification"))
+    if verification:
+        result["verification"] = verification
+    return result
+
+
+def _compact_watchdog_event(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        key: _compact_json_value(value.get(key), max_depth=2, max_text=256)
+        for key in ("ts", "runtime_url", "event", "action", "transport_owner")
+        if value.get(key) is not None
+    }
+    decision = _compact_watchdog_decision(value.get("decision"))
+    if decision:
+        result["decision"] = decision
+    action_result = _compact_watchdog_result(value.get("result"))
+    if action_result:
+        result["result"] = action_result
+    verification = _compact_watchdog_verification(value.get("verification"))
+    if verification:
+        result["verification"] = verification
+    return result
+
+
+def _read_jsonl_tail(path: Path, *, limit: int = 20, max_bytes: int = 256 * 1024) -> list[dict[str, Any]]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        if max_bytes > 0:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                start = max(0, size - max_bytes)
+                handle.seek(start)
+                text = handle.read().decode("utf-8", errors="ignore")
+            lines = text.splitlines()
+            if start > 0 and lines:
+                lines = lines[1:]
+        else:
+            lines = path.read_text(encoding="utf-8").splitlines()
     except Exception:
         return []
     items: list[dict[str, Any]] = []
@@ -3093,9 +3328,9 @@ class SupervisorManager:
         runtime = self._runtime_reliability_payload(timeout=2.0)
         return dict(runtime.get("sidecar_runtime")) if isinstance(runtime.get("sidecar_runtime"), dict) else {}
 
-    def _hub_root_watchdog_state_payload(self) -> dict[str, Any]:
+    def _hub_root_watchdog_state_payload(self, *, include_events: bool = True) -> dict[str, Any]:
         log_path = _supervisor_hub_root_watchdog_log_path()
-        return {
+        payload = {
             "enabled": _hub_root_watchdog_enabled(),
             "last_state": self._hub_root_watchdog_last_state,
             "last_reason": self._hub_root_watchdog_last_reason,
@@ -3105,13 +3340,19 @@ class SupervisorManager:
             "reset_degraded_route": _hub_root_watchdog_reset_degraded_route_enabled(),
             "verify_timeout_sec": _hub_root_watchdog_verify_timeout_sec(),
             "log_path": str(log_path),
-            "recent_events": _read_jsonl_tail(log_path, limit=10),
-            "last_result": dict(self._hub_root_watchdog_last_result or {}),
+            "last_result": _compact_watchdog_last_result(self._hub_root_watchdog_last_result),
         }
+        if include_events:
+            payload["recent_events"] = [
+                _compact_watchdog_event(event)
+                for event in _read_jsonl_tail(log_path, limit=10)
+                if event
+            ]
+        return payload
 
-    def _member_hub_watchdog_state_payload(self) -> dict[str, Any]:
+    def _member_hub_watchdog_state_payload(self, *, include_events: bool = True) -> dict[str, Any]:
         log_path = _supervisor_member_hub_watchdog_log_path()
-        return {
+        payload = {
             "enabled": _member_hub_watchdog_enabled(),
             "last_state": self._member_hub_watchdog_last_state,
             "last_reason": self._member_hub_watchdog_last_reason,
@@ -3120,9 +3361,15 @@ class SupervisorManager:
             "cooldown_sec": _member_hub_watchdog_cooldown_sec(),
             "verify_timeout_sec": _member_hub_watchdog_verify_timeout_sec(),
             "log_path": str(log_path),
-            "recent_events": _read_jsonl_tail(log_path, limit=10),
-            "last_result": dict(self._member_hub_watchdog_last_result or {}),
+            "last_result": _compact_watchdog_last_result(self._member_hub_watchdog_last_result),
         }
+        if include_events:
+            payload["recent_events"] = [
+                _compact_watchdog_event(event)
+                for event in _read_jsonl_tail(log_path, limit=10)
+                if event
+            ]
+        return payload
 
     @staticmethod
     def _required_upstream_link_kind_for_role(role: str | None) -> str:
@@ -3133,9 +3380,9 @@ class SupervisorManager:
         role_norm = str(role or self._managed_transition_role or self._sidecar_role() or "").strip().lower() or None
         kind = self._required_upstream_link_kind_for_role(role_norm)
         payload = (
-            self._member_hub_watchdog_state_payload()
+            self._member_hub_watchdog_state_payload(include_events=False)
             if kind == "member_hub"
-            else self._hub_root_watchdog_state_payload()
+            else self._hub_root_watchdog_state_payload(include_events=False)
         )
         sidecar_enabled = bool(realtime_sidecar_enabled(role=role_norm))
         state = str(payload.get("last_state") or "").strip().lower() or "unknown"
@@ -3288,7 +3535,7 @@ class SupervisorManager:
             **payload,
         }
         try:
-            _append_jsonl(_supervisor_hub_root_watchdog_log_path(), event)
+            _append_jsonl(_supervisor_hub_root_watchdog_log_path(), _compact_watchdog_event(event))
         except Exception:
             _LOG.debug("failed to append hub-root watchdog event", exc_info=True)
 
@@ -3299,7 +3546,7 @@ class SupervisorManager:
             **payload,
         }
         try:
-            _append_jsonl(_supervisor_member_hub_watchdog_log_path(), event)
+            _append_jsonl(_supervisor_member_hub_watchdog_log_path(), _compact_watchdog_event(event))
         except Exception:
             _LOG.debug("failed to append member-hub watchdog event", exc_info=True)
 
@@ -3461,13 +3708,13 @@ class SupervisorManager:
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             _LOG.warning("hub-root watchdog reconnect request failed: %s: %s", type(exc).__name__, exc)
         verification = await self._verify_hub_root_watchdog_recovery()
-        self._hub_root_watchdog_last_result = {
+        self._hub_root_watchdog_last_result = _compact_watchdog_last_result({
             "requested_at": self._hub_root_watchdog_last_reconnect_at,
             "action": action,
             "decision": decision,
             "result": result,
             "verification": verification,
-        }
+        })
         self._hub_root_watchdog_last_state = "ready" if bool(verification.get("ok")) else "recovery_failed"
         self._hub_root_watchdog_last_reason = (
             "hub-root channel recovered"
@@ -3627,13 +3874,13 @@ class SupervisorManager:
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             _LOG.warning("member-hub watchdog reconnect request failed: %s: %s", type(exc).__name__, exc)
         verification = await self._verify_member_hub_watchdog_recovery()
-        self._member_hub_watchdog_last_result = {
+        self._member_hub_watchdog_last_result = _compact_watchdog_last_result({
             "requested_at": self._member_hub_watchdog_last_reconnect_at,
             "action": "runtime_reconnect",
             "decision": decision,
             "result": result,
             "verification": verification,
-        }
+        })
         self._member_hub_watchdog_last_state = "ready" if bool(verification.get("ok")) else "recovery_failed"
         self._member_hub_watchdog_last_reason = (
             "member-hub channel recovered"
