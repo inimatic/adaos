@@ -218,6 +218,10 @@ class ScenarioManager:
             meta = self.ctx.scenarios_repo.install(name, branch=None)
             if not meta:
                 raise FileNotFoundError(f"scenario '{name}' not found in monorepo")
+            try:
+                self.reg.register(name, pin=pin, active_version=getattr(meta, "version", None))
+            except Exception:
+                pass
             emit(self.bus, "scenario.installed", {"id": meta.id.value, "pin": pin}, "scenario.mgr")
             try:
                 install_scenario_in_capacity(meta.id.value, getattr(meta, "version", "unknown"), active=True)
@@ -248,8 +252,9 @@ class ScenarioManager:
         """
         target_webspace = webspace_id or default_webspace_id()
         meta = self.install(name, pin=pin)
+        artifact_name = name.strip()
         try:
-            dep_result = self.bootstrap_dependencies(meta.id.value, webspace_id=target_webspace)
+            dep_result = self.bootstrap_dependencies(artifact_name, webspace_id=target_webspace)
         except Exception as exc:
             dep_result = {
                 "ok": False,
