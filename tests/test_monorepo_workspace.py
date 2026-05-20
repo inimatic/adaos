@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from adaos.adapters.git import cli_git as cli_git_module
-from adaos.adapters.git.cli_git import CliGitClient
+from adaos.adapters.git.cli_git import CliGitClient, _dirty_paths_covered_by_sparse_request
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
 from adaos.adapters.skills.git_repo import GitSkillRepository
 
@@ -217,6 +217,33 @@ def test_sparse_set_auto_stashes_dirty_worktree(monkeypatch, monorepo, paths):
 
     stashes = _run_git(["stash", "list"], cwd=paths.workspace_dir())
     assert "adaos:auto-stash sparse-checkout" in stashes
+
+
+def test_sparse_set_preserves_dirty_files_inside_requested_scope(monkeypatch, monorepo, paths):
+    monkeypatch.setenv("ADAOS_TESTING", "0")
+    repo = _make_skill_repo(paths, monorepo)
+    repo.install("weather_skill")
+
+    skill_yaml = paths.skills_dir() / "weather_skill" / "skill.yaml"
+    skill_yaml.write_text(
+        skill_yaml.read_text(encoding="utf-8") + "description: local edit\n",
+        encoding="utf-8",
+    )
+    assert not _git_status_clean(paths.workspace_dir())
+    dirty = CliGitClient().changed_files(paths.workspace_dir())
+    requested = ["registry.json", "skills/weather_skill"]
+    assert _dirty_paths_covered_by_sparse_request(dirty, requested)
+
+    CliGitClient().sparse_set(
+        paths.workspace_dir(),
+        requested,
+        no_cone=True,
+    )
+
+    assert "description: local edit" in skill_yaml.read_text(encoding="utf-8")
+    stashes = _run_git(["stash", "list"], cwd=paths.workspace_dir())
+    assert "adaos:auto-stash sparse-checkout" not in stashes
+    assert not _git_status_clean(paths.workspace_dir())
 
 
 def test_sparse_set_removes_stale_blocker_in_non_dev(monkeypatch, tmp_path):

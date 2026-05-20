@@ -275,6 +275,32 @@ def _remove_sparse_checkout_blockers(dir: StrOrPath, paths: Sequence[str]) -> li
     return removed
 
 
+def _normalize_sparse_path(path: str) -> str:
+    token = str(path or "").strip().replace("\\", "/")
+    while token.startswith("./"):
+        token = token[2:]
+    token = token.lstrip("/")
+    return token.rstrip("/")
+
+
+def _dirty_paths_covered_by_sparse_request(dirty: Sequence[str], paths: Sequence[str]) -> bool:
+    requested = [
+        _normalize_sparse_path(path)
+        for path in paths
+        if str(path or "").strip() and not str(path or "").strip().startswith("!")
+    ]
+    requested = [path for path in requested if path]
+    if not requested:
+        return False
+    for item in dirty:
+        dirty_path = _normalize_sparse_path(str(item))
+        if not dirty_path:
+            return False
+        if not any(dirty_path == root or dirty_path.startswith(f"{root}/") for root in requested):
+            return False
+    return True
+
+
 class CliGitClient(GitClient):
     def __init__(self, depth: int = 1) -> None:
         self._depth: Final[int] = depth
@@ -432,15 +458,22 @@ class CliGitClient(GitClient):
             dirty = self.changed_files(dir)
             if dirty:
                 repo_path = str(Path(dir))
-                _log.warning(
-                    "git sparse-checkout set with dirty worktree; auto-stashing repo=%s files=%s",
-                    repo_path,
-                    len(dirty),
-                )
-                _log_git_snapshot(dir)
-                stash_ref = self.stash_push(str(dir), "adaos:auto-stash sparse-checkout set", include_untracked=True)
-                if stash_ref:
-                    _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
+                if _dirty_paths_covered_by_sparse_request(dirty, paths):
+                    _log.info(
+                        "git sparse-checkout set preserves dirty files inside requested scope repo=%s files=%s",
+                        repo_path,
+                        len(dirty),
+                    )
+                else:
+                    _log.warning(
+                        "git sparse-checkout set with dirty worktree; auto-stashing repo=%s files=%s",
+                        repo_path,
+                        len(dirty),
+                    )
+                    _log_git_snapshot(dir)
+                    stash_ref = self.stash_push(str(dir), "adaos:auto-stash sparse-checkout set", include_untracked=True)
+                    if stash_ref:
+                        _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
         def _apply_sparse_set() -> None:
             _run_git([*args, *paths], cwd=dir)
             if _sanitize_sparse_checkout_file(dir):
@@ -525,7 +558,7 @@ class CliGitClient(GitClient):
             line = raw.rstrip("\n").rstrip("\r")
             if not line.strip():
                 continue
-            payload = line[3:] if len(line) > 3 else ""
+            payload = line[3:] if len(line) > 3 and line[2] == " " else line[2:]
             payload = payload.strip()
             if " -> " in payload:
                 payload = payload.split(" -> ", 1)[1].strip()
