@@ -63,6 +63,15 @@ def _read_local_artifact_version(kind: str, artifact_dir: Path) -> str | None:
     return _clean_version_text(entry.get("version"))
 
 
+def _artifact_name_from_meta(meta: object) -> str:
+    path = str(getattr(meta, "path", "") or "").strip()
+    if path:
+        name = Path(path).name.strip()
+        if name:
+            return name
+    return str(getattr(meta, "name", None) or getattr(getattr(meta, "id", None), "value", None) or "").strip()
+
+
 def _run_safe(func):
     """Wrap Typer callbacks to surface tracebacks when ADAOS_CLI_DEBUG=1."""
 
@@ -114,11 +123,11 @@ def list_cmd(
     present = list(mgr.list_present() or [])
     fallback_rows = [
         {
-            "name": str(getattr(getattr(meta, "id", None), "value", None) or getattr(meta, "name", "") or "").strip(),
+            "name": _artifact_name_from_meta(meta),
             "version": str(getattr(meta, "version", None) or "unknown"),
         }
         for meta in present
-        if str(getattr(getattr(meta, "id", None), "value", None) or getattr(meta, "name", "") or "").strip()
+        if _artifact_name_from_meta(meta)
     ]
 
     if json_output:
@@ -152,7 +161,7 @@ def list_cmd(
             typer.echo(_("cli.scenario.list.item", name=r.name, version=version))
 
     if show_fs:
-        present = {m.id.value for m in mgr.list_present()}
+        present = {name for m in mgr.list_present() for name in [_artifact_name_from_meta(m)] if name}
         desired = {r.name for r in rows if bool(getattr(r, "installed", True))}
         missing = desired - present
         extra = present - desired

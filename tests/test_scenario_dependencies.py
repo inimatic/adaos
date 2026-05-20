@@ -178,6 +178,80 @@ def test_install_with_deps_pulls_dependency_forward_before_projection(monkeypatc
     ]
 
 
+def test_install_with_deps_reads_dependencies_from_artifact_name_when_manifest_id_differs(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def install(self, name: str) -> None:
+            calls.append(f"install:{name}")
+
+        def prepare_runtime(self, name: str, run_tests: bool = False):
+            calls.append(f"prepare_runtime:{name}:{int(run_tests)}")
+            return SimpleNamespace(version="0.2.1", slot="B")
+
+        def activate_for_space(
+            self,
+            name: str,
+            *,
+            version: str | None = None,
+            slot: str | None = None,
+            space: str = "default",
+            webspace_id: str = "default",
+        ) -> None:
+            calls.append(f"activate_for_space:{name}:{version}:{slot}:{space}:{webspace_id}")
+
+    def _install_scenario(name: str, pin: str | None = None):
+        calls.append(f"scenario_install:{name}:{pin}")
+        return SimpleNamespace(
+            id=SimpleNamespace(value="new_face_vision_scenario"),
+            name="new_face_vision",
+            version="0.2.1",
+            path="/scenarios/new_face_vision",
+        )
+
+    def _read_manifest(scenario_id: str):
+        if scenario_id == "new_face_vision":
+            return {"id": "new_face_vision_scenario", "depends": ["new_face_vision_skill"]}
+        return {}
+
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.setattr(
+        scenario_manager,
+        "get_ctx",
+        lambda: SimpleNamespace(sql=object(), skills_repo=object(), git=object(), paths=object(), caps=object()),
+    )
+    monkeypatch.setattr(scenario_manager, "read_manifest", _read_manifest)
+    monkeypatch.setattr(scenario_manager, "SqliteSkillRegistry", lambda sql: object())
+    monkeypatch.setattr(scenario_manager, "SkillManager", _FakeSkillManager)
+
+    mgr = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=object(),
+        git=object(),
+        paths=object(),
+        bus=SimpleNamespace(publish=lambda evt: None),
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(mgr, "install", _install_scenario)
+    monkeypatch.setattr(mgr, "sync_to_yjs", lambda scenario_id, webspace_id=None: calls.append(f"sync_to_yjs:{scenario_id}:{webspace_id}"))
+
+    meta = mgr.install_with_deps("new_face_vision", webspace_id="desktop")
+
+    assert getattr(meta.id, "value") == "new_face_vision_scenario"
+    assert mgr.last_dependency_bootstrap_result["required"] == ["new_face_vision_skill"]
+    assert mgr.last_dependency_bootstrap_result["succeeded"] == ["new_face_vision_skill"]
+    assert calls == [
+        "scenario_install:new_face_vision:None",
+        "install:new_face_vision_skill",
+        "prepare_runtime:new_face_vision_skill:0",
+        "activate_for_space:new_face_vision_skill:0.2.1:B:default:desktop",
+        "sync_to_yjs:new_face_vision_scenario:desktop",
+    ]
+
+
 def test_install_with_deps_blocks_projection_when_required_dependency_fails_in_prod(monkeypatch) -> None:
     sync_calls: list[str] = []
     dep_result = {

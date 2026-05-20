@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,15 +74,24 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
     assert "preview_base64" not in snapshot
     assert "preview_base64" not in snapshot["latest"]
     assert snapshot["latest"]["frame_idx"] == 1
+    assert snapshot["latest"]["seq"] == 2
+    assert snapshot["playback"]["run_id"] == snapshot["latest"]["run_id"]
+    assert snapshot["stats"]["processed_frames"] == 2
     assert snapshot["stats"]["next_frame"] == 0
     assert snapshot["files"]["frames"]["source"]["uri"] == "skill://upload/frames.zip"
 
     frame_payload = engine.frame_stream_payload(second)
     metrics_payload = engine.metrics_stream_payload(second)
+    assert frame_payload["id"] == second["id"]
+    assert frame_payload["seq"] == second["seq"]
+    assert frame_payload["run_id"] == second["run_id"]
     assert frame_payload["image"]["encoding"] == "base64"
     assert frame_payload["image"]["data"]
     assert frame_payload["image"]["src"].startswith("data:image/jpeg;base64,")
+    assert metrics_payload["id"] == second["id"]
+    assert metrics_payload["seq"] == second["seq"]
     assert metrics_payload["series"]["pred_ratio"] == second["pred_ratio"]
+    assert metrics_payload["series"]["iou"] == second["metrics"]["iou"]
 
 
 def test_new_face_vision_errors_are_normalized_and_projectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,3 +173,48 @@ def test_new_face_vision_uses_only_client_supported_widget_types() -> None:
             unknown[str(path.relative_to(ROOT))] = missing
 
     assert unknown == {}
+
+
+def test_new_face_vision_declares_yjs_stream_route_balance() -> None:
+    skill = yaml.safe_load((SKILL_ROOT / "skill.yaml").read_text(encoding="utf-8"))
+    routes = skill.get("data_routes") or []
+
+    assert any(
+        route.get("route") == "yjs"
+        and route.get("projection_slot") == "new_face_vision.current"
+        and route.get("budget", {}).get("max_payload_bytes", 0) <= 12288
+        for route in routes
+    )
+
+    stream_routes = {route.get("receiver"): route for route in routes if route.get("route") == "stream"}
+    assert {"newface_vision_frame", "newface_vision_metrics", "newface_vision_progress"} <= set(stream_routes)
+    assert stream_routes["newface_vision_frame"]["budget"]["snapshot_policy"] == "on_subscribe"
+    assert stream_routes["newface_vision_metrics"]["budget"]["max_items"] <= 120
+
+    webui = json.loads((SKILL_ROOT / "webui.json").read_text(encoding="utf-8"))
+    receivers = webui["webio"]["receivers"]
+    assert receivers["newface_vision_frame"]["mode"] == "replace"
+    assert receivers["newface_vision_frame"]["snapshotPolicy"] == "on_subscribe"
+    assert receivers["newface_vision_metrics"]["mode"] == "append"
+    assert receivers["newface_vision_metrics"]["collectionKey"] == "points"
+    assert receivers["newface_vision_metrics"]["dedupeBy"] == "id"
+    assert receivers["newface_vision_metrics"]["maxItems"] <= 120
+
+
+def test_new_face_vision_compacts_uploads_into_modal() -> None:
+    scenario = json.loads(
+        (ROOT / ".adaos" / "workspace" / "scenarios" / "new_face_vision" / "scenario.json").read_text(encoding="utf-8")
+    )
+    application = scenario["ui"]["application"]
+    page_widgets = application["desktop"]["pageSchema"]["widgets"]
+
+    assert not any(widget.get("type") == "input.fileUpload" for widget in page_widgets)
+    assert not any(widget.get("type") == "ui.jsonViewer" for widget in page_widgets)
+
+    controls = next(widget for widget in page_widgets if widget.get("id") == "controls")
+    upload_action = next(action for action in controls["actions"] if action.get("on") == "click:upload")
+    assert upload_action["type"] == "openModal"
+    assert upload_action["params"]["modalId"] == "newface_upload_modal"
+
+    upload_widgets = application["modals"]["newface_upload_modal"]["schema"]["widgets"]
+    assert [widget["type"] for widget in upload_widgets].count("input.fileUpload") == 4

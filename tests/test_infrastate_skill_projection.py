@@ -10,6 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
+from adaos.sdk.data.projections import clear_projection_demand
+
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
@@ -38,6 +42,20 @@ def _load_infrastate_module():
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(autouse=True)
+def _clear_projection_demand_registry():
+    clear_projection_demand()
+    yield
+    clear_projection_demand()
+
+
+def _enable_projection_demand(mod, *slot_names: str, webspace_id: str = "default") -> None:
+    clear_projection_demand()
+    mod._PROJECTION_RUNTIME.reset()
+    for slot_name in slot_names:
+        mod._PROJECTION_RUNTIME.remember_projection(slot_name, webspace_id=webspace_id, subscription_id="test")
 
 
 def test_infrastate_yjs_tabs_do_not_self_reference_sync_runtime():
@@ -198,6 +216,70 @@ def test_infrastate_set_node_names_prefers_selected_member_over_injected_local_n
     assert result["node_id"] == "member-1"
     assert pushed == [("member-1", ["Edge One"])]
     assert ui_updates[-1]["selected_node_id"] == "member-1"
+
+
+def test_infrastate_remote_node_scoped_start_update_routes_to_member(monkeypatch):
+    mod = _load_infrastate_module()
+
+    class _Conf:
+        role = "hub"
+        node_id = "hub-1"
+
+    requests: list[tuple[str, dict[str, object]]] = []
+    ui_updates: list[dict[str, object]] = []
+
+    class _Manager:
+        async def request_member_update(self, node_id: str, **kwargs: object) -> dict[str, object]:
+            requests.append((node_id, dict(kwargs)))
+            return {
+                "ok": True,
+                "accepted": True,
+                "node_id": node_id,
+                "action": kwargs.get("action"),
+            }
+
+    monkeypatch.setattr(mod, "_ui_state", lambda: {})
+    monkeypatch.setattr(mod, "_write_ui_state", lambda **kwargs: ui_updates.append(dict(kwargs)))
+    monkeypatch.setattr(
+        mod,
+        "read_core_update_status",
+        lambda: {"state": "idle", "target_rev": "rev-123", "target_version": "0.1.0+rev123"},
+    )
+    monkeypatch.setattr(
+        mod,
+        "_post_local_admin",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local update must not be called")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.subnet.link_manager",
+        types.SimpleNamespace(get_hub_link_manager=lambda: _Manager()),
+    )
+
+    result = mod._perform_action(
+        "start_update",
+        _Conf(),
+        {"target_node_id": "member-1", "node_id": "member-1"},
+    )
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert requests == [
+        (
+            "member-1",
+            {
+                "action": "update",
+                "target_rev": "rev-123",
+                "target_version": "0.1.0+rev123",
+                "countdown_sec": 60.0,
+                "drain_timeout_sec": 10.0,
+                "signal_delay_sec": 0.25,
+                "reason": "infrastate.member_start_update",
+            },
+        )
+    ]
+    assert ui_updates[-1]["selected_node_id"] == "member-1"
+    assert ui_updates[-1]["last_action"] == "member_start_update"
 
 
 def test_infrastate_set_node_names_uses_sdk_layer_for_local_update(monkeypatch):
@@ -1737,6 +1819,7 @@ def test_infrastate_realtime_items_include_semantic_state_plane_cards():
 def test_infrastate_project_async_skips_snapshot_with_only_timestamp_changes(monkeypatch):
     mod = _load_infrastate_module()
     applied: list[tuple[str | None, str, object]] = []
+    _enable_projection_demand(mod, "infrastate.summary")
     mod._projection_fingerprints.clear()
     mod._projection_diag.update({"apply_total": 0, "skip_total": 0, "cache_hit_total": 0})
 
@@ -1771,6 +1854,7 @@ def test_infrastate_project_async_skips_snapshot_with_only_timestamp_changes(mon
 def test_infrastate_project_async_uses_throttled_interval_when_yjs_policy_requires(monkeypatch):
     mod = _load_infrastate_module()
     applied: list[tuple[str | None, str, object]] = []
+    _enable_projection_demand(mod, "infrastate.summary")
     mod._projection_fingerprints.clear()
     mod._projection_last_applied_at.clear()
     mod._projection_diag.update(
@@ -1816,6 +1900,7 @@ def test_infrastate_project_async_blocks_primary_yjs_projection_but_keeps_stream
     mod = _load_infrastate_module()
     applied: list[tuple[str | None, str]] = []
     published: list[str] = []
+    _enable_projection_demand(mod, "infrastate.summary")
     mod._projection_fingerprints.clear()
     mod._projection_last_applied_at.clear()
     mod._projection_diag.update(
@@ -1975,6 +2060,7 @@ def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch)
     mod = _load_infrastate_module()
     projected: list[tuple[str, object]] = []
     published: list[tuple[str, object, str | None]] = []
+    _enable_projection_demand(mod, "infrastate.summary", "infrastate.operations.active")
     mod._projection_fingerprints.clear()
     mod._projection_diag.update({"apply_total": 0, "skip_total": 0, "cache_hit_total": 0})
 
