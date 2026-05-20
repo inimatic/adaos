@@ -1929,6 +1929,102 @@ def _publish_webio_stream_subscription_change(
             _ylog.debug("failed to publish webio stream subscription change topic=%s", token, exc_info=True)
 
 
+def _parse_webio_yjs_projection_topic(topic: str) -> dict[str, Any] | None:
+    token = str(topic or "").strip()
+    prefix = "webio.yjs."
+    if not token.startswith(prefix):
+        return None
+    suffix = token[len(prefix):]
+    parts = [str(part or "").strip() for part in suffix.split(".") if str(part or "").strip()]
+    if len(parts) < 2:
+        return None
+    node_id = None
+    if parts[0] == "nodes":
+        if len(parts) < 3:
+            return None
+        webspace_id = _coerce_gateway_webspace_id(None)
+        node_id = parts[1]
+        slot_parts = parts[2:]
+    else:
+        webspace_id = _coerce_gateway_webspace_id(parts[0])
+        slot_parts = parts[1:]
+    if len(slot_parts) >= 3 and slot_parts[0] == "nodes":
+        node_id = slot_parts[1]
+        slot_parts = slot_parts[2:]
+    slot = ".".join(slot_parts).strip()
+    if not webspace_id or not slot:
+        return None
+    payload: dict[str, Any] = {
+        "topic": token,
+        "webspace_id": webspace_id,
+        "slot": slot,
+        "projection": slot,
+    }
+    if node_id:
+        payload["node_id"] = node_id
+        payload["target_node_id"] = node_id
+        payload["_meta"] = {"webspace_id": webspace_id, "target_node_id": node_id}
+    return payload
+
+
+def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str) -> None:
+    for topic in topics:
+        parsed = _parse_webio_yjs_projection_topic(topic)
+        if not parsed:
+            continue
+        try:
+            ctx = get_agent_ctx()
+            payload = dict(parsed)
+            payload["transport"] = str(transport or "ws")
+            ctx.bus.publish(
+                DomainEvent(
+                    type="webio.yjs.snapshot.requested",
+                    payload=payload,
+                    source="events_ws",
+                    ts=time.time(),
+                )
+            )
+        except Exception:
+            _ylog.debug("failed to request webio yjs projection snapshot topic=%s", topic, exc_info=True)
+
+
+def _publish_webio_yjs_projection_subscription_change(
+    topics: set[str],
+    *,
+    action: str,
+    transport: str,
+    connection_id: str | None = None,
+) -> None:
+    for topic in topics:
+        parsed = _parse_webio_yjs_projection_topic(topic)
+        if not parsed:
+            continue
+        try:
+            payload = dict(parsed)
+            payload["transport"] = str(transport or "ws")
+            payload["action"] = str(action or "").strip() or "subscribed"
+            if connection_id:
+                payload["connection_id"] = str(connection_id)
+                payload["subscription_id"] = f"{transport}:{connection_id}:{payload['topic']}"
+            try:
+                from adaos.sdk.data.projections import record_projection_subscription_change
+
+                record_projection_subscription_change(payload)
+            except Exception:
+                _ylog.debug("failed to record webio yjs projection demand topic=%s", topic, exc_info=True)
+            ctx = get_agent_ctx()
+            ctx.bus.publish(
+                DomainEvent(
+                    type="webio.yjs.subscription.changed",
+                    payload=payload,
+                    source="events_ws",
+                    ts=time.time(),
+                )
+            )
+        except Exception:
+            _ylog.debug("failed to publish webio yjs projection subscription change topic=%s", topic, exc_info=True)
+
+
 async def _send_initial_ws_event_messages(websocket: WebSocket, topics: set[str]) -> None:
     for message in _iter_initial_ws_event_messages(topics):
         try:
@@ -1976,6 +2072,12 @@ def _register_ws_event_subscriptions(
             transport="ws",
             connection_id=str(id(websocket)),
         )
+        _publish_webio_yjs_projection_subscription_change(
+            added,
+            action="subscribed",
+            transport="ws",
+            connection_id=str(id(websocket)),
+        )
     return added
 
 
@@ -1985,6 +2087,12 @@ def _unregister_ws_event_subscriptions(websocket: WebSocket) -> None:
     topics = set(entry.get("topics") or []) if isinstance(entry, dict) else set()
     if topics:
         _publish_webio_stream_subscription_change(
+            topics,
+            action="unsubscribed",
+            transport="ws",
+            connection_id=str(id(websocket)),
+        )
+        _publish_webio_yjs_projection_subscription_change(
             topics,
             action="unsubscribed",
             transport="ws",
@@ -2007,6 +2115,12 @@ def _unregister_ws_event_subscription_topics(websocket: WebSocket, raw_topics: A
             _WS_EVENT_SUBSCRIBERS.pop(id(websocket), None)
     if removed:
         _publish_webio_stream_subscription_change(
+            removed,
+            action="unsubscribed",
+            transport="ws",
+            connection_id=str(id(websocket)),
+        )
+        _publish_webio_yjs_projection_subscription_change(
             removed,
             action="unsubscribed",
             transport="ws",
@@ -4993,6 +5107,17 @@ async def process_events_command(
         await _ack()
         return None
 
+    if kind == "webio.yjs.subscription.changed":
+        try:
+            from adaos.sdk.data.projections import record_projection_subscription_change
+
+            record_projection_subscription_change(payload)
+        except Exception:
+            _log.debug("failed to record explicit webio.yjs.subscription.changed", exc_info=True)
+        _publish_bus("webio.yjs.subscription.changed", payload)
+        await _ack()
+        return None
+
     # Default behaviour for declarative host actions: publish unknown command
     # kinds to the local bus so skills can subscribe to their own UI events.
     if isinstance(kind, str) and kind.strip():
@@ -5067,6 +5192,7 @@ async def events_ws(websocket: WebSocket):
                 if added:
                     await _send_initial_ws_event_messages(websocket, added)
                     _request_webio_stream_snapshots(added, transport="ws")
+                    _request_webio_yjs_projection_snapshots(added, transport="ws")
                 continue
 
             if msg.get("type") == "unsubscribe":

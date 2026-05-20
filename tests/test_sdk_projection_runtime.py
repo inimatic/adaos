@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+import pytest
+
 from adaos.sdk.data.projections import (
     DirtyRouter,
     ProjectionRuntime,
@@ -10,6 +12,8 @@ from adaos.sdk.data.projections import (
     SectionCache,
     StreamReceiver,
     StreamRuntime,
+    clear_projection_demand,
+    has_projection_demand,
     stable_payload_fingerprint,
 )
 
@@ -28,6 +32,13 @@ class _Payload:
     values: list[int]
 
 
+@pytest.fixture(autouse=True)
+def _clear_projection_demand_registry() -> None:
+    clear_projection_demand()
+    yield
+    clear_projection_demand()
+
+
 def test_stable_payload_fingerprint_is_order_independent_for_mappings() -> None:
     left = {"b": 2, "a": {"z": 1, "y": [3, 2, 1]}}
     right = {"a": {"y": [3, 2, 1], "z": 1}, "b": 2}
@@ -42,6 +53,7 @@ def test_projection_runtime_writes_once_and_skips_identical_even_when_forced() -
     subnet = _FakeSubnet()
     runtime = ProjectionRuntime("browsers_skill", ctx_subnet=subnet)
     slot = ProjectionSlot("browsers.summary", "data/browsers/summary")
+    runtime.remember_projection(slot, webspace_id="desktop", subscription_id="test")
 
     first = asyncio.run(runtime.set_if_changed(slot, {"count": 1}, webspace_id="desktop"))
     second = asyncio.run(runtime.set_if_changed(slot, {"count": 1}, webspace_id="desktop"))
@@ -64,6 +76,8 @@ def test_projection_runtime_writes_once_and_skips_identical_even_when_forced() -
 def test_projection_runtime_tracks_webspace_state_independently() -> None:
     subnet = _FakeSubnet()
     runtime = ProjectionRuntime("browsers_skill", ctx_subnet=subnet)
+    runtime.remember_projection("browsers.summary", webspace_id="desktop", subscription_id="test-desktop")
+    runtime.remember_projection("browsers.summary", webspace_id="ops", subscription_id="test-ops")
 
     asyncio.run(runtime.set_if_changed("browsers.summary", {"count": 1}, webspace_id="desktop"))
     asyncio.run(runtime.set_if_changed("browsers.summary", {"count": 1}, webspace_id="ops"))
@@ -79,6 +93,7 @@ def test_projection_runtime_tracks_webspace_state_independently() -> None:
 def test_projection_runtime_writes_when_payload_changes() -> None:
     subnet = _FakeSubnet()
     runtime = ProjectionRuntime("infrastate_skill", ctx_subnet=subnet)
+    runtime.remember_projection("infrastate.summary", webspace_id="desktop", subscription_id="test")
 
     first = asyncio.run(runtime.set_if_changed("infrastate.summary", {"state": "ok"}, webspace_id="desktop"))
     second = asyncio.run(runtime.set_if_changed("infrastate.summary", {"state": "warn"}, webspace_id="desktop"))
@@ -88,11 +103,52 @@ def test_projection_runtime_writes_when_payload_changes() -> None:
     assert [call[1] for call in subnet.calls] == [{"state": "ok"}, {"state": "warn"}]
 
 
+def test_projection_runtime_skips_yjs_write_without_active_demand() -> None:
+    subnet = _FakeSubnet()
+    runtime = ProjectionRuntime("infrastate_skill", ctx_subnet=subnet)
+
+    result = asyncio.run(runtime.set_if_changed("infrastate.nodes", {"items": []}, webspace_id="desktop"))
+
+    assert result.written is False
+    assert result.skipped is True
+    assert result.pressure_blocked is True
+    assert result.reason == "no_active_projection_demand"
+    assert subnet.calls == []
+
+
+def test_projection_runtime_subscription_change_tracks_default_webspace_alias() -> None:
+    runtime = ProjectionRuntime("browsers_skill")
+
+    accepted = runtime.handle_subscription_changed(
+        {
+            "slot": "browsers.devices",
+            "webspace_id": "desktop",
+            "action": "subscribed",
+            "subscription_id": "ws:1:webio.yjs.desktop.browsers.devices",
+        }
+    )
+
+    assert accepted is True
+    assert has_projection_demand("browsers.devices", webspace_id="default") is True
+
+    runtime.handle_subscription_changed(
+        {
+            "slot": "browsers.devices",
+            "webspace_id": "desktop",
+            "action": "unsubscribed",
+            "subscription_id": "ws:1:webio.yjs.desktop.browsers.devices",
+        }
+    )
+
+    assert has_projection_demand("browsers.devices", webspace_id="default") is False
+
+
 def test_projection_runtime_rate_limits_changed_payloads_per_slot() -> None:
     subnet = _FakeSubnet()
     clock = [100.0]
     runtime = ProjectionRuntime("infrastate_skill", ctx_subnet=subnet, clock=lambda: clock[0])
     slot = ProjectionSlot("infrastate.summary", "data/infrastate/summary", min_interval_s=5.0)
+    runtime.remember_projection(slot, webspace_id="desktop", subscription_id="test")
 
     first = asyncio.run(runtime.set_if_changed(slot, {"state": "ok"}, webspace_id="desktop"))
     clock[0] = 101.0
@@ -143,6 +199,7 @@ def test_projection_runtime_refresh_dirty_uses_slot_events() -> None:
             )
         ],
     )
+    runtime.remember_projection("browsers.summary", webspace_id="desktop", subscription_id="test")
 
     result = asyncio.run(runtime.refresh_dirty("browser.session.changed", webspace_id="desktop"))
 
@@ -169,6 +226,7 @@ def test_projection_runtime_coalesces_concurrent_refreshes() -> None:
             ctx_subnet=subnet,
             projections=[ProjectionSlot("browsers.summary", build=_build)],
         )
+        runtime.remember_projection("browsers.summary", webspace_id="desktop", subscription_id="test")
         return await asyncio.gather(
             runtime.refresh_sections(["browsers.summary"], webspace_id="desktop"),
             runtime.refresh_sections(["browsers.summary"], webspace_id="desktop"),
@@ -205,6 +263,7 @@ def test_projection_runtime_records_event_pressure_counters() -> None:
                 )
             ],
         )
+        runtime.remember_projection("browsers.summary", webspace_id="desktop", subscription_id="test")
         await runtime.refresh_dirty("skills.registry.changed", webspace_id="desktop")
         await asyncio.gather(
             runtime.refresh_dirty("browser.session.changed", webspace_id="desktop"),

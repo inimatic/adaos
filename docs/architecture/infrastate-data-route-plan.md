@@ -49,6 +49,8 @@ changing runtime behavior.
 - [x] Preserve pressure semantics while validating: Yjs `block` stops
   projection, Yjs `throttle` stretches the projection interval, and stream
   snapshots continue through stream guard.
+- [x] Put remaining Yjs projections behind `webio.yjs.*` demand so closed
+  modals do not receive background `infrastate.*` projection writes.
 - [ ] Publish shared status cards for runtime, realtime/route, Yjs, operations,
   core update, marketplace, and skill/scenario registry.
 - [ ] Remove `infrastate.operations.active` from Yjs projection after the stream
