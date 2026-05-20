@@ -1270,6 +1270,87 @@ def _active_slot_target_mismatch_status(status: dict[str, Any], attempt: dict[st
     )
 
 
+def _runtime_payload_ready(runtime: dict[str, Any] | None) -> bool:
+    payload = runtime if isinstance(runtime, dict) else {}
+    runtime_state = str(payload.get("runtime_state") or "").strip().lower()
+    return bool(
+        runtime_state == "ready"
+        or (bool(payload.get("listener_running")) and bool(payload.get("runtime_api_ready")))
+    )
+
+
+def _recover_active_attempt_target_already_active(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+    runtime: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    attempt_map = attempt if isinstance(attempt, dict) else {}
+    if str(attempt_map.get("state") or "").strip().lower() != "active":
+        return None
+    if str(attempt_map.get("action") or "update").strip().lower() != "update":
+        return None
+    target_version = str(attempt_map.get("target_version") or "").strip()
+    if not target_version:
+        return None
+    if not _runtime_payload_ready(runtime):
+        return None
+    try:
+        manifest = active_slot_manifest()
+    except Exception:
+        manifest = None
+    if not _manifest_matches_target_version(manifest, target_version):
+        return None
+
+    status_map = status if isinstance(status, dict) else {}
+    status_state = str(status_map.get("state") or "").strip().lower()
+    status_phase = str(status_map.get("phase") or "").strip().lower()
+    if status_state in {"failed", "cancelled", "expired", "rolled_back"} and not bool(status_map.get("supervisor_timeout_at")):
+        return None
+    if status_state == "validated" and status_phase == "root_promotion_pending":
+        return None
+    if status_state == "succeeded" and status_phase == "root_promoted":
+        return None
+
+    now = time.time()
+    slot = str((manifest or {}).get("slot") or active_slot() or "").strip().upper()
+    payload = dict(status_map)
+    payload.update(
+        {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": str(attempt_map.get("target_rev") or status_map.get("target_rev") or ""),
+            "target_version": target_version,
+            "reason": str(attempt_map.get("reason") or status_map.get("reason") or "supervisor.recovered_active_target"),
+            "target_slot": slot,
+            "message": (
+                f"runtime boot validated on slot {slot}; supervisor recovered stale active attempt"
+                if slot
+                else "runtime boot validated; supervisor recovered stale active attempt"
+            ),
+            "manifest": manifest if isinstance(manifest, dict) else {},
+            "validated_at": now,
+            "finished_at": now,
+            "scheduled_for": None,
+            "candidate_prewarm_state": None,
+            "candidate_prewarm_message": None,
+            "candidate_prewarm_ready_at": None,
+            "stale_active_attempt_recovered": True,
+            "stale_active_attempt_recovered_at": now,
+        }
+    )
+    recovered_status = write_core_update_status(payload)
+    with contextlib.suppress(Exception):
+        clear_core_update_plan()
+    _complete_update_attempt(
+        state="completed",
+        status=recovered_status,
+        reason="active slot target already active",
+    )
+    return recovered_status
+
+
 def _fail_root_restart_attempt(
     *,
     status: dict[str, Any],
@@ -1317,6 +1398,17 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     payload["attempt"] = dict(attempt)
+    recovered_status = _recover_active_attempt_target_already_active(
+        status=status,
+        attempt=attempt,
+        runtime=runtime,
+    )
+    if isinstance(recovered_status, dict):
+        payload["status"] = recovered_status
+        payload["attempt"] = _read_update_attempt() or payload["attempt"]
+        payload["_served_by"] = "supervisor_active_target_recovery"
+        return payload
+
     now = time.time()
     timeout_sec = _update_attempt_timeout_sec()
     status_age = max(0.0, now - _status_updated_at(status)) if _status_updated_at(status) > 0.0 else 0.0
@@ -6774,6 +6866,14 @@ class SupervisorManager:
             }
         current_status = read_core_update_status()
         current_attempt = _read_update_attempt()
+        recovered_status = _recover_active_attempt_target_already_active(
+            status=current_status,
+            attempt=current_attempt,
+            runtime=self.status(),
+        )
+        if isinstance(recovered_status, dict):
+            current_status = recovered_status
+            current_attempt = _read_update_attempt()
         if _is_transition_in_progress(current_status, current_attempt):
             return self._queue_subsequent_transition(
                 request=request,
