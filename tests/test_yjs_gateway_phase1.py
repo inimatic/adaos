@@ -333,6 +333,66 @@ def test_request_webio_stream_snapshots_extracts_global_node_receiver() -> None:
     assert getattr(event, "payload", {}).get("_meta", {}).get("target_node_id") == "member-01"
 
 
+def test_webio_yjs_projection_subscription_tracks_active_demand() -> None:
+    from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
+
+    published: list[object] = []
+
+    class _Bus:
+        def publish(self, event: object) -> None:
+            published.append(event)
+
+    clear_projection_demand()
+    gateway_module.get_agent_ctx = lambda: SimpleNamespace(bus=_Bus())
+
+    gateway_module._publish_webio_yjs_projection_subscription_change(
+        {"webio.yjs.default.browsers.devices"},
+        action="subscribed",
+        transport="ws",
+        connection_id="client-1",
+    )
+
+    assert has_projection_demand("browsers.devices", webspace_id="desktop") is True
+    assert len(published) == 1
+    event = published[0]
+    assert getattr(event, "type", "") == "webio.yjs.subscription.changed"
+    assert getattr(event, "payload", {}).get("webspace_id") == "desktop"
+    assert getattr(event, "payload", {}).get("slot") == "browsers.devices"
+
+    gateway_module._publish_webio_yjs_projection_subscription_change(
+        {"webio.yjs.default.browsers.devices"},
+        action="unsubscribed",
+        transport="ws",
+        connection_id="client-1",
+    )
+
+    assert has_projection_demand("browsers.devices", webspace_id="desktop") is False
+    clear_projection_demand()
+
+
+def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot() -> None:
+    published: list[object] = []
+
+    class _Bus:
+        def publish(self, event: object) -> None:
+            published.append(event)
+
+    gateway_module.get_agent_ctx = lambda: SimpleNamespace(bus=_Bus())
+
+    gateway_module._request_webio_yjs_projection_snapshots(
+        {"webio.yjs.default.nodes.member-01.infrastate.summary"},
+        transport="ws",
+    )
+
+    assert len(published) == 1
+    event = published[0]
+    assert getattr(event, "type", "") == "webio.yjs.snapshot.requested"
+    assert getattr(event, "payload", {}).get("webspace_id") == "desktop"
+    assert getattr(event, "payload", {}).get("slot") == "infrastate.summary"
+    assert getattr(event, "payload", {}).get("node_id") == "member-01"
+    assert getattr(event, "payload", {}).get("_meta", {}).get("target_node_id") == "member-01"
+
+
 def test_diagnostic_room_skips_empty_y_update() -> None:
     reset_backend_room_update_markers()
     ystore = _FakeWriteYStore()
