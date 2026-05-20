@@ -59,7 +59,7 @@ def _run_sync_handler_in_thread(topic: str) -> bool:
             return False
         patterns = os.getenv(
             "ADAOS_SYNC_SUBSCRIPTION_THREAD_TOPICS",
-            "sys.ready,webio.stream.snapshot.requested",
+            "sys.ready,webio.stream.snapshot.requested,webio.yjs.snapshot.requested",
         )
         return _topic_matches_any(topic, patterns)
     except Exception:

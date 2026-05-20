@@ -202,6 +202,22 @@ projection_runtime = ProjectionRuntime(
 )
 ```
 
+Yjs projections are demand-gated by default. Browser `kind: y` data sources
+retain `webio.yjs.<webspace>.<projection>` while a widget/modal/page observer is
+alive, and websocket/WebRTC gateways record that demand in the shared
+`ProjectionRuntime` registry. `set_if_changed(...)` skips the Yjs write with
+`reason="no_active_projection_demand"` when no consumer is present. Compact
+bootstrap slots that must always publish should opt in explicitly:
+
+```python
+ProjectionSlot(
+    "status.summary",
+    "data/status/summary",
+    build_status_summary,
+    demand="pinned",
+)
+```
+
 The exact API names can change during implementation, but the ownership split
 must not.
 
@@ -211,6 +227,8 @@ must not.
   low-level repair operation.
 - A forced refresh may force recomputation, but it must not force an identical
   Yjs write.
+- A forced refresh must not bypass projection demand; use an explicit
+  `demand="pinned"` slot for compact bootstrap/control state.
 - Status cards are not data transport. They may carry compact state,
   freshness, guard context, and references, but live rows, inventories,
   operation tables, logs, and diagnostic tails must stay in declared Yjs,

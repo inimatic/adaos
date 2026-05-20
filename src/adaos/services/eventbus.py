@@ -17,6 +17,8 @@ _log = logging.getLogger("adaos.eventbus")
 _WEBIO_STREAM_CONTROL_EVENTS = {
     "webio.stream.snapshot.requested",
     "webio.stream.subscription.changed",
+    "webio.yjs.snapshot.requested",
+    "webio.yjs.subscription.changed",
 }
 
 
@@ -74,7 +76,7 @@ def _bounded_event_topics() -> tuple[str, ...]:
     raw = str(
         os.getenv(
             "ADAOS_EVENTBUS_BOUNDED_TOPICS",
-            "webio.stream.snapshot.requested,webio.stream.subscription.changed,subnet.member.snapshot.changed",
+            "webio.stream.snapshot.requested,webio.stream.subscription.changed,webio.yjs.snapshot.requested,webio.yjs.subscription.changed,subnet.member.snapshot.changed",
         )
         or ""
     ).strip()
@@ -86,7 +88,7 @@ def _bounded_supersede_by_handler_topics() -> tuple[str, ...]:
     raw = str(
         os.getenv(
             "ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS",
-            "webio.stream.snapshot.requested,webio.stream.subscription.changed",
+            "webio.stream.snapshot.requested,webio.stream.subscription.changed,webio.yjs.snapshot.requested,webio.yjs.subscription.changed",
         )
         or ""
     ).strip()
@@ -239,7 +241,7 @@ class LocalEventBus(EventBus):
             return None
         webspace_id = str(self._event_field(event, "webspace_id") or "default").strip() or "default"
         target_node_id = str(self._event_field(event, "target_node_id", "node_id") or "").strip()
-        stream_id = str(self._event_field(event, "stream_id", "receiver", "id") or "").strip()
+        stream_id = str(self._event_field(event, "stream_id", "receiver", "slot", "projection", "id") or "").strip()
         source = str(self._event_field(event, "source") or getattr(event, "source", "") or "").strip()
         return (event_type, webspace_id, target_node_id, stream_id, source)
 

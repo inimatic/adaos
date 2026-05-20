@@ -319,6 +319,43 @@ Practical guidance:
   should drop active receiver bookkeeping and cached stream fingerprints for
   that receiver
 
+## Yjs Projection Demand
+
+Yjs projections use the same live control-plane pattern as streams, but keep
+the durable payload in the shared YDoc. A browser that observes a `kind: y`
+data source retains a topic:
+
+```text
+webio.yjs.<webspace>.<projection>
+webio.yjs.<webspace>.nodes.<node_id>.<projection>
+```
+
+For example, `data/browsers/devices` maps to
+`webio.yjs.desktop.browsers.devices`, and
+`data/nodes/member-01/infrastate/summary` maps to
+`webio.yjs.desktop.nodes.member-01.infrastate.summary`.
+
+The gateway records subscribe/unsubscribe deltas in the shared
+`ProjectionRuntime` demand registry and emits:
+
+* `webio.yjs.subscription.changed`
+* `webio.yjs.snapshot.requested`
+
+The emitted payload includes:
+
+* `slot` / `projection`
+* `webspace_id`
+* `node_id` and `target_node_id` when node-qualified
+* `topic`
+* `transport`
+* `action` for subscription changes
+
+`ProjectionRuntime.set_if_changed(...)` requires active demand by default.
+When no browser holds a projection subscription, the write is skipped with
+`reason = "no_active_projection_demand"` before touching Yjs. Compact
+bootstrap/control projections that must exist without a visible surface should
+declare `ProjectionSlot(..., demand="pinned")`.
+
 ## Member Skills and Delivery
 
 Member skills do not need to manage delivery transport themselves, but they do

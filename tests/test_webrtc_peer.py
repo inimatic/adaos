@@ -272,6 +272,66 @@ def test_request_webio_stream_snapshots_extracts_global_node_receiver(monkeypatc
     ]
 
 
+def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+    published: list[tuple[str, dict[str, object], str]] = []
+
+    peer_mod.get_ctx = lambda: SimpleNamespace(bus=object())
+    peer_mod.bus_emit = lambda bus, topic, payload, source: published.append((topic, payload, source))
+
+    peer_mod._request_webio_yjs_projection_snapshots(
+        {"webio.yjs.default.nodes.member-01.infrastate.summary"},
+        transport="webrtc_data:events",
+    )
+
+    assert published == [
+        (
+            "webio.yjs.snapshot.requested",
+            {
+                "topic": "webio.yjs.default.nodes.member-01.infrastate.summary",
+                "webspace_id": "desktop",
+                "slot": "infrastate.summary",
+                "projection": "infrastate.summary",
+                "node_id": "member-01",
+                "transport": "webrtc_data:events",
+            },
+            "webrtc.peer",
+        )
+    ]
+
+
+def test_webio_yjs_projection_subscription_tracks_active_demand(monkeypatch) -> None:
+    from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
+
+    peer_mod = _load_peer_module(monkeypatch)
+    published: list[tuple[str, dict[str, object], str]] = []
+
+    clear_projection_demand()
+    peer_mod.get_ctx = lambda: SimpleNamespace(bus=object())
+    peer_mod.bus_emit = lambda bus, topic, payload, source: published.append((topic, payload, source))
+
+    peer_mod._publish_webio_yjs_projection_subscription_change(
+        {"webio.yjs.default.browsers.devices"},
+        action="subscribed",
+        transport="webrtc_data:events",
+        connection_id="peer-1",
+    )
+
+    assert has_projection_demand("browsers.devices", webspace_id="desktop") is True
+    assert published[0][0] == "webio.yjs.subscription.changed"
+    assert published[0][1]["slot"] == "browsers.devices"
+
+    peer_mod._publish_webio_yjs_projection_subscription_change(
+        {"webio.yjs.default.browsers.devices"},
+        action="unsubscribed",
+        transport="webrtc_data:events",
+        connection_id="peer-1",
+    )
+
+    assert has_projection_demand("browsers.devices", webspace_id="desktop") is False
+    clear_projection_demand()
+
+
 def test_handle_rtc_offer_replaces_failed_peer(monkeypatch) -> None:
     peer_mod = _load_peer_module(monkeypatch)
 

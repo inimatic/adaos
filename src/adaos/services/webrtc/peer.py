@@ -136,6 +136,12 @@ def _register_event_channel_subscriptions(
             transport="webrtc_data:events",
             connection_id=str(id(peer)),
         )
+        _publish_webio_yjs_projection_subscription_change(
+            added,
+            action="subscribed",
+            transport="webrtc_data:events",
+            connection_id=str(id(peer)),
+        )
     return added
 
 
@@ -145,6 +151,12 @@ def _unregister_event_channel_subscriptions(peer: "HubPeer") -> None:
     topics = set(entry.get("topics") or []) if isinstance(entry, dict) else set()
     if topics:
         _publish_webio_stream_subscription_change(
+            topics,
+            action="unsubscribed",
+            transport="webrtc_data:events",
+            connection_id=str(id(peer)),
+        )
+        _publish_webio_yjs_projection_subscription_change(
             topics,
             action="unsubscribed",
             transport="webrtc_data:events",
@@ -173,6 +185,12 @@ def _unregister_event_channel_subscription_topics(peer: "HubPeer", raw_topics: A
             _EVENT_CHANNEL_SUBSCRIBERS.pop(id(peer), None)
     if removed:
         _publish_webio_stream_subscription_change(
+            removed,
+            action="unsubscribed",
+            transport="webrtc_data:events",
+            connection_id=str(id(peer)),
+        )
+        _publish_webio_yjs_projection_subscription_change(
             removed,
             action="unsubscribed",
             transport="webrtc_data:events",
@@ -330,6 +348,108 @@ def _publish_webio_stream_subscription_change(
             )
         except Exception:
             _log.debug("failed to publish webio stream subscription change topic=%s", token, exc_info=True)
+
+
+def _coerce_peer_webspace_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    if raw and raw != "default":
+        return raw
+    try:
+        from adaos.services.yjs.webspace import default_webspace_id
+
+        return str(default_webspace_id() or "").strip() or "default"
+    except Exception:
+        return "default"
+
+
+def _parse_webio_yjs_projection_topic(topic: str) -> dict[str, Any] | None:
+    token = str(topic or "").strip()
+    prefix = "webio.yjs."
+    if not token.startswith(prefix):
+        return None
+    suffix = token[len(prefix):]
+    parts = [str(part or "").strip() for part in suffix.split(".") if str(part or "").strip()]
+    if len(parts) < 2:
+        return None
+    node_id = None
+    if parts[0] == "nodes":
+        if len(parts) < 3:
+            return None
+        webspace_id = _coerce_peer_webspace_id(None)
+        node_id = parts[1]
+        slot_parts = parts[2:]
+    else:
+        webspace_id = _coerce_peer_webspace_id(parts[0])
+        slot_parts = parts[1:]
+    if len(slot_parts) >= 3 and slot_parts[0] == "nodes":
+        node_id = slot_parts[1]
+        slot_parts = slot_parts[2:]
+    slot = ".".join(slot_parts).strip()
+    if not webspace_id or not slot:
+        return None
+    payload: dict[str, Any] = {
+        "topic": token,
+        "webspace_id": webspace_id,
+        "slot": slot,
+        "projection": slot,
+    }
+    if node_id:
+        payload["node_id"] = node_id
+    return payload
+
+
+def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str) -> None:
+    for topic in topics:
+        parsed = _parse_webio_yjs_projection_topic(topic)
+        if not parsed:
+            continue
+        try:
+            ctx = get_ctx()
+            payload = dict(parsed)
+            payload["transport"] = str(transport or "webrtc_data:events")
+            bus_emit(
+                ctx.bus,
+                "webio.yjs.snapshot.requested",
+                payload,
+                "webrtc.peer",
+            )
+        except Exception:
+            _log.debug("failed to request webio yjs projection snapshot topic=%s", topic, exc_info=True)
+
+
+def _publish_webio_yjs_projection_subscription_change(
+    topics: set[str],
+    *,
+    action: str,
+    transport: str,
+    connection_id: str | None = None,
+) -> None:
+    for topic in topics:
+        parsed = _parse_webio_yjs_projection_topic(topic)
+        if not parsed:
+            continue
+        try:
+            ctx = get_ctx()
+            payload = dict(parsed)
+            payload["transport"] = str(transport or "webrtc_data:events")
+            payload["action"] = str(action or "").strip() or "subscribed"
+            if connection_id:
+                payload["connection_id"] = str(connection_id)
+                payload["subscription_id"] = f"{transport}:{connection_id}:{payload['topic']}"
+            try:
+                from adaos.sdk.data.projections import record_projection_subscription_change
+
+                record_projection_subscription_change(payload)
+            except Exception:
+                _log.debug("failed to record webio yjs projection demand topic=%s", topic, exc_info=True)
+            bus_emit(
+                ctx.bus,
+                "webio.yjs.subscription.changed",
+                payload,
+                "webrtc.peer",
+            )
+        except Exception:
+            _log.debug("failed to publish webio yjs projection subscription change topic=%s", topic, exc_info=True)
 
 
 def _forward_event_channel_bus_event(ev: Any) -> None:
@@ -676,6 +796,7 @@ class HubPeer:
 
                     asyncio.ensure_future(_send_initial())
                     _request_webio_stream_snapshots(added, transport="webrtc_data:events")
+                    _request_webio_yjs_projection_snapshots(added, transport="webrtc_data:events")
                 return
             if msg.get("type") == "unsubscribe":
                 _unregister_event_channel_subscription_topics(self, msg.get("topics"))

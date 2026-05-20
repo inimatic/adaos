@@ -1669,7 +1669,12 @@ class BootstrapService:
                     event_type = str(ev.type or "").strip()
                     if not event_type or event_type.startswith("desktop."):
                         return
-                    if event_type in {"webio.stream.snapshot.requested", "webio.stream.subscription.changed"}:
+                    if event_type in {
+                        "webio.stream.snapshot.requested",
+                        "webio.stream.subscription.changed",
+                        "webio.yjs.snapshot.requested",
+                        "webio.yjs.subscription.changed",
+                    }:
                         return
                     payload = ev.payload if isinstance(ev.payload, dict) else {}
                     meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
@@ -1703,6 +1708,8 @@ class BootstrapService:
                 core_bus.subscribe("desktop.webspace.reset", _forward_desktop_reload_to_members)
                 core_bus.subscribe("webio.stream.snapshot.requested", _forward_webio_stream_control_to_members)
                 core_bus.subscribe("webio.stream.subscription.changed", _forward_webio_stream_control_to_members)
+                core_bus.subscribe("webio.yjs.snapshot.requested", _forward_webio_stream_control_to_members)
+                core_bus.subscribe("webio.yjs.subscription.changed", _forward_webio_stream_control_to_members)
                 core_bus.subscribe("*", _forward_targeted_event_to_members)
             except Exception:
                 self._log.debug(

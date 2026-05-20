@@ -31,6 +31,7 @@ class ProjectionSlot:
     scope: str = "webspace"
     audience: str = "shared"
     min_interval_s: float = 0.0
+    demand: str = "active"
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,6 +530,122 @@ def _topic_matches(pattern: str, topic: str) -> bool:
     return False
 
 
+_PROJECTION_DEMAND: dict[tuple[str, str], set[str]] = {}
+_PROJECTION_DEMAND_LOCK = threading.RLock()
+
+
+def _projection_subscription_token(
+    slot: ProjectionSlot | str,
+    *,
+    webspace_id: str | None = None,
+    subscription_id: str | None = None,
+) -> str:
+    sub = str(subscription_id or "").strip()
+    if sub:
+        return sub
+    return f"manual:{_webspace_token(webspace_id)}:{_slot_name(slot)}"
+
+
+def _webspace_aliases(webspace_id: str | None) -> set[str]:
+    token = _webspace_token(webspace_id)
+    aliases = {token}
+    try:
+        from adaos.services.yjs.webspace import default_webspace_id
+
+        default_id = str(default_webspace_id() or "").strip() or "desktop"
+    except Exception:
+        default_id = "desktop"
+    if token == "default":
+        aliases.add(default_id)
+    if token == default_id:
+        aliases.add("default")
+    return aliases
+
+
+def remember_projection_demand(
+    slot: ProjectionSlot | str,
+    *,
+    webspace_id: str | None = None,
+    subscription_id: str | None = None,
+) -> None:
+    slot_name = _slot_name(slot)
+    token = _projection_subscription_token(slot_name, webspace_id=webspace_id, subscription_id=subscription_id)
+    with _PROJECTION_DEMAND_LOCK:
+        for ws_id in _webspace_aliases(webspace_id):
+            _PROJECTION_DEMAND.setdefault((ws_id, slot_name), set()).add(token)
+
+
+def forget_projection_demand(
+    slot: ProjectionSlot | str,
+    *,
+    webspace_id: str | None = None,
+    subscription_id: str | None = None,
+) -> None:
+    slot_name = _slot_name(slot)
+    token = _projection_subscription_token(slot_name, webspace_id=webspace_id, subscription_id=subscription_id)
+    with _PROJECTION_DEMAND_LOCK:
+        for ws_id in _webspace_aliases(webspace_id):
+            key = (ws_id, slot_name)
+            subscribers = _PROJECTION_DEMAND.get(key)
+            if subscribers is None:
+                continue
+            subscribers.discard(token)
+            if not subscribers:
+                _PROJECTION_DEMAND.pop(key, None)
+
+
+def has_projection_demand(slot: ProjectionSlot | str, *, webspace_id: str | None = None) -> bool:
+    slot_name = _slot_name(slot)
+    with _PROJECTION_DEMAND_LOCK:
+        return any(bool(_PROJECTION_DEMAND.get((ws_id, slot_name))) for ws_id in _webspace_aliases(webspace_id))
+
+
+def projection_demand_from_payload(payload: Any) -> tuple[str, str, str]:
+    if not isinstance(payload, Mapping):
+        return "", "default", ""
+    slot = str(payload.get("slot") or payload.get("projection") or payload.get("projection_key") or "").strip()
+    webspace_id = _webspace_from_payload(payload)
+    subscription_id = str(payload.get("subscription_id") or payload.get("subscriptionId") or "").strip()
+    topic = str(payload.get("topic") or "").strip()
+    if not subscription_id and topic:
+        connection_id = str(payload.get("connection_id") or payload.get("connectionId") or "").strip()
+        transport = str(payload.get("transport") or "").strip()
+        subscription_id = ":".join(part for part in (transport, connection_id, topic) if part)
+    return slot, webspace_id, subscription_id
+
+
+def record_projection_subscription_change(payload: Any) -> bool:
+    slot, webspace_id, subscription_id = projection_demand_from_payload(payload)
+    if not slot:
+        return False
+    action = ""
+    if isinstance(payload, Mapping):
+        action = str(payload.get("action") or "").strip().lower()
+    if action == "unsubscribed":
+        forget_projection_demand(slot, webspace_id=webspace_id, subscription_id=subscription_id)
+    else:
+        remember_projection_demand(slot, webspace_id=webspace_id, subscription_id=subscription_id)
+    return True
+
+
+def active_projection_demand_snapshot() -> list[dict[str, Any]]:
+    with _PROJECTION_DEMAND_LOCK:
+        return [
+            {
+                "webspace_id": webspace_id,
+                "slot": slot,
+                "subscribers": len(subscribers),
+            }
+            for (webspace_id, slot), subscribers in sorted(_PROJECTION_DEMAND.items())
+            if subscribers
+        ]
+
+
+def clear_projection_demand() -> None:
+    with _PROJECTION_DEMAND_LOCK:
+        _PROJECTION_DEMAND.clear()
+
+
 class ProjectionRuntime:
     """Minimal per-skill set-if-changed projection runtime."""
 
@@ -554,6 +671,36 @@ class ProjectionRuntime:
         self._diagnostics = ProjectionDiagnostics()
         self._lock = threading.RLock()
         self.register_projections(projections or ())
+
+    def remember_projection(
+        self,
+        slot: ProjectionSlot | str,
+        *,
+        webspace_id: str | None = None,
+        subscription_id: str | None = None,
+    ) -> None:
+        remember_projection_demand(slot, webspace_id=webspace_id, subscription_id=subscription_id)
+
+    def forget_projection(
+        self,
+        slot: ProjectionSlot | str,
+        *,
+        webspace_id: str | None = None,
+        subscription_id: str | None = None,
+    ) -> None:
+        forget_projection_demand(slot, webspace_id=webspace_id, subscription_id=subscription_id)
+
+    def active_projections_snapshot(self) -> list[dict[str, Any]]:
+        return active_projection_demand_snapshot()
+
+    def handle_subscription_changed(self, event: Any, *, slot_prefix: str | None = None) -> bool:
+        payload = _event_payload(event)
+        slot_name, _, _ = projection_demand_from_payload(payload)
+        if not slot_name:
+            return False
+        if slot_prefix and not slot_name.startswith(str(slot_prefix)):
+            return False
+        return record_projection_subscription_change(payload)
 
     def register_projection(self, slot: ProjectionSlot) -> ProjectionSlot:
         slot_name = _slot_name(slot)
@@ -770,6 +917,24 @@ class ProjectionRuntime:
         fingerprint = stable_payload_fingerprint(value)
         key = (ws_id, slot_name)
         slot_decl = slot if isinstance(slot, ProjectionSlot) else self._projections.get(slot_name)
+        demand_policy = str(getattr(slot_decl, "demand", "active") or "active").strip().lower()
+        requires_demand = demand_policy not in {"always", "pinned", "bootstrap", "none", "off"}
+
+        if requires_demand and not has_projection_demand(slot_name, webspace_id=ws_id):
+            result = ProjectionWriteResult(
+                skill_id=self.skill_id,
+                slot=slot_name,
+                webspace_id=ws_id,
+                fingerprint=fingerprint,
+                written=False,
+                skipped=True,
+                reason="no_active_projection_demand",
+                force=bool(force),
+                pressure_blocked=True,
+            )
+            with self._lock:
+                self._diagnostics.record(result)
+            return result
 
         with self._lock:
             previous = self._fingerprints.get(key)
@@ -888,6 +1053,7 @@ class ProjectionRuntime:
             payload["pending_refresh_entries"] = sum(1 for task in self._pending_refresh.values() if not task.done())
             payload["registered_projections"] = sorted(self._projections)
             payload["dirty_routes"] = self._router.snapshot()
+            payload["active_projection_demand"] = active_projection_demand_snapshot()
             payload["ts"] = time.time()
             return payload
 
@@ -1354,8 +1520,14 @@ __all__ = [
     "StreamPublishResult",
     "StreamReceiver",
     "StreamRuntime",
+    "active_projection_demand_snapshot",
+    "clear_projection_demand",
     "clear_projection_runtime_state",
     "get_projection_runtime",
+    "has_projection_demand",
+    "record_projection_subscription_change",
+    "remember_projection_demand",
+    "forget_projection_demand",
     "set_projection_if_changed",
     "stable_payload_fingerprint",
 ]
