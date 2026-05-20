@@ -790,6 +790,46 @@ def test_hub_root_watchdog_restarts_sidecar_when_sidecar_owns_transport(monkeypa
     assert events[-1]["verification"]["ok"] is True
 
 
+def test_watchdog_payloads_stay_light_when_previous_state_is_recursive(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._hub_root_watchdog_last_result = {
+        "requested_at": 1.0,
+        "action": "runtime_reconnect",
+        "decision": {
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "watchdog": {
+                    "recent_events": [{"payload": "x" * 4096}],
+                    "last_result": {"decision": {"watchdog": {"recent_events": []}}},
+                },
+            },
+            "channel_before": {"root_control_status": "down", "raw": "y" * 4096},
+        },
+        "result": {"ok": True, "payload": {"raw": "z" * 4096}},
+        "verification": {"ok": False, "channel": {"root_control_status": "down", "raw": "w" * 4096}},
+    }
+
+    required_link = manager._required_upstream_link_state_payload(role="hub")
+    compact = supervisor._compact_watchdog_last_result(manager._hub_root_watchdog_last_result)
+
+    assert "recent_events" not in required_link["watchdog"]
+    assert "watchdog" not in compact["decision"]["required_upstream_link"]
+    assert "channel_before" not in compact["decision"]
+    assert "raw" not in compact["verification"]["channel"]
+    assert "payload" not in compact["result"]
+
+
+def test_read_jsonl_tail_uses_bounded_tail_window(tmp_path) -> None:
+    path = tmp_path / "watchdog.jsonl"
+    lines = [{"i": i, "payload": "x" * 20} for i in range(10)]
+    path.write_text("\n".join(supervisor.json.dumps(item) for item in lines) + "\n", encoding="utf-8")
+
+    tail = supervisor._read_jsonl_tail(path, limit=2, max_bytes=256)
+
+    assert [item["i"] for item in tail] == [8, 9]
+
+
 def test_member_hub_watchdog_requests_reconnect_when_member_link_is_down(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
