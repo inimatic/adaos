@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from adaos.apps.autostart_runner import _slot_launch_spec
-from adaos.services.autostart import default_spec, enable, status
+from adaos.services.autostart import default_spec, disable, enable, status
 
 
 class _FakePaths:
@@ -26,6 +26,30 @@ class _FakeCtx:
         self.settings = _FakeSettings()
 
 
+class _FakeProc:
+    def __init__(
+        self,
+        pid: int,
+        *,
+        cmdline: list[str],
+        env: dict[str, str] | None = None,
+        parent: "_FakeProc | None" = None,
+    ) -> None:
+        self.pid = pid
+        self._cmdline = cmdline
+        self._env = env or {}
+        self._parent = parent
+
+    def cmdline(self) -> list[str]:
+        return self._cmdline
+
+    def environ(self) -> dict[str, str]:
+        return self._env
+
+    def parent(self) -> "_FakeProc | None":
+        return self._parent
+
+
 def test_default_autostart_spec_uses_runner(tmp_path: Path) -> None:
     spec = default_spec(_FakeCtx(tmp_path), host="127.0.0.1", port=8779, token="t1")
     assert spec.argv[:3] == (spec.argv[0], "-m", "adaos.apps.supervisor")
@@ -35,6 +59,80 @@ def test_default_autostart_spec_uses_runner(tmp_path: Path) -> None:
     assert spec.env["ADAOS_PROFILE"] == "default"
     assert spec.env["ADAOS_AUTOSTART_MANAGED"] == "1"
     assert spec.env["ADAOS_TOKEN"] == "t1"
+
+
+def test_windows_disable_stops_live_autostart_wrapper_tree(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "bin" / "adaos-autostart.ps1"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("", encoding="utf-8")
+    wrapper_proc = _FakeProc(100, cmdline=["powershell.exe", "-File", str(wrapper)])
+    supervisor_proc = _FakeProc(
+        200,
+        cmdline=["python.exe", "-m", "adaos.apps.supervisor", "--host", "127.0.0.1", "--port", "8777"],
+        env={"ADAOS_AUTOSTART_MANAGED": "1", "ADAOS_BASE_DIR": str(tmp_path)},
+        parent=wrapper_proc,
+    )
+    runner_proc = _FakeProc(
+        300,
+        cmdline=["python.exe", "-m", "adaos.apps.autostart_runner", "--host", "127.0.0.1", "--port", "8777"],
+        env={"ADAOS_AUTOSTART_MANAGED": "1", "ADAOS_BASE_DIR": str(tmp_path)},
+        parent=supervisor_proc,
+    )
+
+    class _Proc:
+        def __init__(self, returncode: int = 0) -> None:
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = ""
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(autostart, "_is_windows", lambda: True)
+    monkeypatch.setattr(autostart, "_is_linux", lambda: False)
+    monkeypatch.setattr(autostart, "_is_macos", lambda: False)
+    monkeypatch.setattr(autostart, "_current_process_family_pids", lambda: {999})
+    monkeypatch.setattr(autostart.psutil, "process_iter", lambda attrs=None: [wrapper_proc, supervisor_proc, runner_proc])
+    monkeypatch.setattr(autostart, "_run", lambda cmd: calls.append(cmd) or _Proc())
+
+    result = disable(_FakeCtx(tmp_path))
+
+    assert ["schtasks", "/Delete", "/F", "/TN", "AdaOS"] in calls
+    assert ["taskkill", "/PID", "100", "/T", "/F"] in calls
+    assert result["worker"]["status"] == "stopped"
+    assert result["worker"]["pids"] == [100]
+    assert result["worker"]["stopped_pids"] == [100]
+    assert not wrapper.exists()
+
+
+def test_windows_disable_reports_no_live_autostart_worker(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    manual_api_proc = _FakeProc(
+        400,
+        cmdline=["adaos", "api", "serve", "--host", "127.0.0.1", "--port", "8777"],
+    )
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(autostart, "_is_windows", lambda: True)
+    monkeypatch.setattr(autostart, "_is_linux", lambda: False)
+    monkeypatch.setattr(autostart, "_is_macos", lambda: False)
+    monkeypatch.setattr(autostart, "_current_process_family_pids", lambda: {999})
+    monkeypatch.setattr(autostart.psutil, "process_iter", lambda attrs=None: [manual_api_proc])
+    monkeypatch.setattr(autostart, "_run", lambda cmd: calls.append(cmd) or _Proc())
+
+    result = disable(_FakeCtx(tmp_path))
+
+    assert ["schtasks", "/Delete", "/F", "/TN", "AdaOS"] in calls
+    assert not any(call[:1] == ["taskkill"] for call in calls)
+    assert result["worker"] == {"status": "not_found", "pids": []}
 
 
 def test_default_autostart_spec_falls_back_to_loaded_runtime_token(monkeypatch, tmp_path: Path) -> None:
