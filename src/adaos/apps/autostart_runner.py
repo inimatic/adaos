@@ -44,6 +44,7 @@ from adaos.services.core_update import (
 from adaos.services.core_slots import (
     active_slot,
     active_slot_manifest,
+    read_slot_manifest,
     rollback_to_previous_slot,
     slot_dir,
     slot_status,
@@ -976,7 +977,9 @@ def main() -> None:
             if plan_state == "prepared_restart" and plan_action == "update":
                 phase = "prepared_restart"
                 target_slot = str(plan.get("target_slot") or active_slot() or "").strip().upper()
-                manifest = active_slot_manifest()
+                manifest = read_slot_manifest(target_slot) if target_slot else None
+                if not isinstance(manifest, dict):
+                    raise RuntimeError(f"prepared restart target slot {target_slot or '<missing>'} manifest is missing")
                 manifest = dict(manifest) if isinstance(manifest, dict) else {}
                 try:
                     skill_runtime_migration, manifest = _run_prepared_restart_skill_migration(target_slot, manifest)
