@@ -87,6 +87,13 @@ def _update_remote_skill(remote: Path, *, version: str, skill_env: str | None) -
     _run_git(["commit", "-m", f"update infrastate {version}"], cwd=remote)
 
 
+def _clone_remote(source: Path, dest: Path) -> Path:
+    _run_git(["clone", str(source), str(dest)], cwd=dest.parent)
+    _run_git(["config", "user.email", "adaos-tests@example.com"], cwd=dest)
+    _run_git(["config", "user.name", "AdaOS Tests"], cwd=dest)
+    return dest
+
+
 def _make_service(base: Path, remote: Path) -> tuple[SkillUpdateService, _MiniPaths, GitSkillRepository]:
     paths = _MiniPaths(base)
     paths.workspace_dir().mkdir(parents=True, exist_ok=True)
@@ -182,6 +189,42 @@ def test_request_update_rebuilds_workspace_registry_when_local_registry_is_dirty
     assert '"name": "infrastate_skill"' in registry_payload
     assert '"version": "1.0.4"' in registry_payload
     assert '"name": "local_only"' not in registry_payload
+
+
+def test_request_update_repoints_existing_workspace_origin_to_configured_registry(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ADAOS_TESTING", "0")
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    old_remote = _init_monorepo(tmp_path / "case-origin-old", tracked_skill_env=False)
+    new_remote = _clone_remote(old_remote, tmp_path / "case-origin-new")
+    _update_remote_skill(new_remote, version="2.0.0", skill_env='{"mode":"remote-default"}\n')
+
+    service, paths, repo = _make_service(tmp_path / "case-origin-node", old_remote)
+    repo.install("infrastate_skill")
+    skill_dir = paths.skills_dir() / "infrastate_skill"
+    assert "version: '1.0.0'" in (skill_dir / "skill.yaml").read_text(encoding="utf-8")
+
+    updated_repo = GitSkillRepository(
+        paths=paths,
+        git=CliGitClient(depth=0),
+        monorepo_url=str(new_remote),
+        monorepo_branch="main",
+    )
+    updated_service = SkillUpdateService(
+        SimpleNamespace(
+            skills_repo=updated_repo,
+            paths=paths,
+            settings=SimpleNamespace(skills_monorepo_url=str(new_remote), skills_monorepo_branch="main"),
+            git=CliGitClient(depth=0),
+            fs=SimpleNamespace(require_write=lambda _path: None),
+        )
+    )
+
+    result = updated_service.request_update("infrastate_skill")
+
+    assert result.updated is True
+    assert result.version == "2.0.0"
+    assert _run_git(["config", "--get", "remote.origin.url"], cwd=paths.workspace_dir()) == str(new_remote)
+    assert "version: '2.0.0'" in (skill_dir / "skill.yaml").read_text(encoding="utf-8")
 
 
 def test_request_update_auto_forces_on_non_dev_by_stashing_local_changes(monkeypatch, tmp_path: Path) -> None:
