@@ -37,6 +37,7 @@ def test_resolve_bind_prefers_saved_local_hub_port():
         subnet_id="sn_1",
         role="hub",
         hub_url="http://127.0.0.1:8779",
+        local_api_url="http://127.0.0.1:8779",
         token="t1",
     )
     assert _resolve_bind(conf, "127.0.0.1", 8777) == ("127.0.0.1", 8779)
@@ -72,6 +73,7 @@ def test_resolve_stop_bind_uses_local_hub_url():
         subnet_id="sn_1",
         role="hub",
         hub_url="http://127.0.0.1:8779",
+        local_api_url="http://127.0.0.1:8779",
         token="t1",
     )
     assert _resolve_stop_bind(conf) == ("127.0.0.1", 8779)
@@ -138,6 +140,7 @@ def test_api_stop_uses_hub_url_from_node_config(monkeypatch):
         subnet_id="sn_1",
         role="hub",
         hub_url="http://127.0.0.1:8779",
+        local_api_url="http://127.0.0.1:8779",
         token="t1",
     )
     called: list[tuple[str, int]] = []
@@ -163,6 +166,7 @@ def test_api_stop_prefers_graceful_shutdown(monkeypatch):
         subnet_id="sn_1",
         role="hub",
         hub_url="http://127.0.0.1:8779",
+        local_api_url="http://127.0.0.1:8779",
         token="t1",
     )
     forced: list[tuple[str, int]] = []
@@ -203,7 +207,7 @@ def test_api_stop_fails_for_non_local_hub_url(monkeypatch):
     result = runner.invoke(app, ["stop"])
 
     assert result.exit_code == 1
-    assert "does not contain a local hub_url" in result.stdout
+    assert "does not contain a local_api_url" in result.stdout
 
 
 def test_merged_runtime_dotenv_env_prefers_repo_ws_runtime_keys(tmp_path):

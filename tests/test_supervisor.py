@@ -10,6 +10,11 @@ from adaos.apps import supervisor
 from adaos.services.core_update import read_plan, read_status, write_plan, write_status
 
 
+@pytest.fixture(autouse=True)
+def _allow_core_update_reactions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+
+
 def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
