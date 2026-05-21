@@ -6,6 +6,8 @@ import types
 from pathlib import Path
 from uuid import uuid4
 
+import yaml
+
 
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
@@ -81,13 +83,15 @@ def test_voice_chat_get_snapshot_reads_node_scoped_messages(monkeypatch):
 
 def test_voice_chat_skill_yaml_exports_get_snapshot():
     root = Path(__file__).resolve().parents[1]
-    raw = (
+    manifest = (
         root
         / ".adaos"
         / "workspace"
         / "skills"
         / "voice_chat_skill"
         / "skill.yaml"
-    ).read_text(encoding="utf-8")
+    )
+    payload = yaml.safe_load(manifest.read_text(encoding="utf-8"))
 
-    assert "name: \"get_snapshot\"" in raw
+    tools = payload.get("tools") or []
+    assert any((item or {}).get("name") == "get_snapshot" for item in tools)

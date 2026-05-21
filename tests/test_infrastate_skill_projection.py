@@ -1587,6 +1587,7 @@ def test_infrastate_adaos_update_uses_union_sparse_sync_and_installed_skill_name
     mod = _load_infrastate_module()
     runtime_updates: list[str] = []
     scenario_capacity_updates: list[tuple[str, str]] = []
+    rebuild_calls: list[dict[str, object]] = []
 
     ctx = SimpleNamespace(
         sql=object(),
@@ -1615,11 +1616,24 @@ def test_infrastate_adaos_update_uses_union_sparse_sync_and_installed_skill_name
         "SkillManager",
         lambda **kwargs: SimpleNamespace(runtime_update=lambda name, space="workspace": runtime_updates.append(name) or {"ok": True}),
     )
+    monkeypatch.setattr(
+        mod,
+        "refresh_skill_runtime",
+        lambda mgr, name, **kwargs: runtime_updates.append(name) or {
+            "runtime_updated": True,
+            "runtime_migrated": False,
+        },
+    )
     monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda sql: object())
     monkeypatch.setattr(
         mod,
         "install_scenario_in_capacity",
         lambda name, version, *, active=True, dev=False, base_dir=None: scenario_capacity_updates.append((name, version)),
+    )
+    monkeypatch.setattr(
+        mod,
+        "rebuild_webspace_projection_sync",
+        lambda **kwargs: rebuild_calls.append(dict(kwargs)) or {"ok": True, "webspace_id": kwargs.get("webspace_id")},
     )
 
     result = mod._adaos_update_local()
@@ -1633,6 +1647,14 @@ def test_infrastate_adaos_update_uses_union_sparse_sync_and_installed_skill_name
     assert result["scenario_capacity_updated"] == ["scene_one"]
     assert runtime_updates == ["installed_skill"]
     assert scenario_capacity_updates == [("scene_one", "unknown")]
+    assert result["webspace_refresh"]["ok"] is True
+    assert rebuild_calls == [
+        {
+            "webspace_id": mod.default_webspace_id(),
+            "action": "infrastate_adaos_update_sync",
+            "source_of_truth": "scenario_projection",
+        }
+    ]
 
 
 def test_infrastate_marketplace_filters_installed_and_marks_running_operations(monkeypatch):
