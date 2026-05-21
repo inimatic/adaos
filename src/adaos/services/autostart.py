@@ -695,6 +695,176 @@ def _discover_live_control_bind(configured_host: str, configured_port: int) -> t
     return None
 
 
+def _host_matches_listener(bind_host: str, listener_host: str | None) -> bool:
+    host = str(bind_host or "").strip().lower()
+    other = str(listener_host or "").strip().lower()
+    if not host or host in {"0.0.0.0", "::", "[::]"}:
+        return True
+    if host == other:
+        return True
+    loopbacks = {"127.0.0.1", "::1", "localhost"}
+    wildcard = {"0.0.0.0", "::", "[::]"}
+    return host in loopbacks and (other in loopbacks or other in wildcard)
+
+
+def _find_listening_pid(host: str, port: int) -> int | None:
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.status != psutil.CONN_LISTEN:
+                continue
+            laddr = getattr(conn, "laddr", None)
+            if not laddr or int(getattr(laddr, "port", 0) or 0) != int(port):
+                continue
+            listener_host = getattr(laddr, "ip", None) or getattr(laddr, "host", None)
+            if not _host_matches_listener(host, listener_host):
+                continue
+            pid = int(conn.pid or 0)
+            if pid > 0:
+                return pid
+    except Exception:
+        return None
+    return None
+
+
+def _process_kind_from_cmdline(cmdline: Sequence[str]) -> str:
+    joined = " ".join(str(part or "").lower() for part in cmdline)
+    if "adaos.apps.supervisor" in joined:
+        return "supervisor"
+    if "adaos.apps.autostart_runner" in joined:
+        return "autostart_runner"
+    if "adaos" in joined and "api" in joined and "serve" in joined:
+        return "api_server"
+    if "python" in joined:
+        return "python"
+    return "process"
+
+
+def _process_summary(pid: int) -> dict[str, object] | None:
+    try:
+        proc = psutil.Process(pid)
+        cmdline = [str(part) for part in proc.cmdline()]
+    except Exception:
+        return None
+    kind = _process_kind_from_cmdline(cmdline)
+    return {
+        "pid": pid,
+        "process_kind": kind,
+        "cmdline": cmdline,
+        "cmdline_text": " ".join(cmdline),
+    }
+
+
+def _probe_supervisor_status(supervisor_url: str, token: str | None) -> dict[str, object] | None:
+    base = str(supervisor_url or "").strip().rstrip("/")
+    if not base:
+        return None
+    parsed = urlparse(base)
+    if parsed.hostname and parsed.port and not _tcp_probe(parsed.hostname, int(parsed.port), timeout=0.15):
+        return None
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["X-AdaOS-Token"] = str(token)
+    try:
+        response = requests.get(f"{base}/api/supervisor/status", headers=headers, timeout=(0.3, 1.2))
+        if int(response.status_code) != 200:
+            return None
+        payload = response.json()
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _server_owner_from_listener(host: str, port: int) -> dict[str, object] | None:
+    pid = _find_listening_pid(host, port)
+    if not pid:
+        return None
+    summary = _process_summary(pid)
+    if not summary:
+        return None
+    process_kind = str(summary.get("process_kind") or "process")
+    owner_kind = "autostart" if process_kind in {"supervisor", "autostart_runner"} else "api"
+    if process_kind not in {"supervisor", "autostart_runner", "api_server"}:
+        owner_kind = "unknown"
+    return {
+        "kind": owner_kind,
+        "process_kind": process_kind,
+        "pid": pid,
+        "url": f"http://{host}:{int(port)}",
+        "source": "listener",
+    }
+
+
+def _server_owner_payload(payload: Mapping[str, object]) -> dict[str, object] | None:
+    try:
+        host = str(payload.get("host") or "127.0.0.1")
+        port = int(payload.get("port") or 0)
+    except Exception:
+        return None
+    if port <= 0:
+        return None
+
+    wrapper_env = payload.get("wrapper_env") if isinstance(payload.get("wrapper_env"), Mapping) else {}
+    token = str((wrapper_env or {}).get("ADAOS_TOKEN") or "").strip() or _default_control_token()
+    supervisor_url = str(payload.get("supervisor_url") or "").strip().rstrip("/")
+    supervisor_status = _probe_supervisor_status(supervisor_url, token) if supervisor_url else None
+    if isinstance(supervisor_status, dict) and supervisor_status.get("ok") is True:
+        try:
+            runtime_pid = int(supervisor_status.get("managed_pid") or 0) or None
+        except Exception:
+            runtime_pid = None
+        try:
+            supervisor_pid = int(supervisor_status.get("supervisor_pid") or 0) or None
+        except Exception:
+            supervisor_pid = None
+        owner: dict[str, object] = {
+            "kind": "autostart",
+            "process_kind": "autostart_runner",
+            "pid": runtime_pid,
+            "url": supervisor_status.get("runtime_url") or f"http://{host}:{int(port)}",
+            "control_kind": "supervisor",
+            "control_pid": supervisor_pid,
+            "control_url": supervisor_url,
+            "source": "supervisor",
+        }
+        for key in ("active_slot", "runtime_state", "transition_role", "managed_start_reason"):
+            value = supervisor_status.get(key)
+            if value not in (None, ""):
+                owner[key] = value
+        if payload.get("scope"):
+            owner["service_scope"] = payload.get("scope")
+        return owner
+
+    listener_owner = _server_owner_from_listener(host, port)
+    if listener_owner:
+        if payload.get("scope"):
+            listener_owner["service_scope"] = payload.get("scope")
+        return listener_owner
+    if payload.get("active") is True:
+        owner = {
+            "kind": "autostart",
+            "process_kind": "service",
+            "url": f"http://{host}:{int(port)}",
+            "source": "service",
+        }
+        if payload.get("service_main_pid"):
+            owner["control_pid"] = payload.get("service_main_pid")
+        if payload.get("scope"):
+            owner["service_scope"] = payload.get("scope")
+        if supervisor_url:
+            owner["control_kind"] = "supervisor"
+            owner["control_url"] = supervisor_url
+        return owner
+    return None
+
+
+def _attach_server_owner(payload: dict[str, object]) -> None:
+    owner = _server_owner_payload(payload)
+    if not owner:
+        return
+    payload["server_owner"] = owner
+    payload["server_owner_kind"] = owner.get("kind")
+
+
 def _linux_service_main_pid(scope: str) -> int | None:
     if not shutil_which("systemctl"):
         return None
@@ -1534,6 +1704,7 @@ def status(ctx: AgentContext) -> dict:
             payload["wrapper_matches_expected"] = registered_wrapper == expected_wrapper
         if state_raw:
             payload["task_state"] = state_raw
+        _attach_server_owner(payload)
         return payload
 
     if _is_linux():
@@ -1652,6 +1823,7 @@ def status(ctx: AgentContext) -> dict:
             payload["configured_port"] = configured_port
             payload["configured_url"] = f"http://{configured_host}:{int(configured_port)}"
             payload["live_url"] = f"http://{host}:{int(port)}"
+        _attach_server_owner(payload)
         return payload
 
     if _is_macos():
@@ -1702,6 +1874,7 @@ def status(ctx: AgentContext) -> dict:
             payload["configured_port"] = configured_port
             payload["configured_url"] = f"http://{configured_host}:{int(configured_port)}"
             payload["live_url"] = f"http://{host}:{int(port)}"
+        _attach_server_owner(payload)
         return payload
 
     return {"platform": platform.platform(), "enabled": False}

@@ -1073,11 +1073,13 @@ def main() -> None:
         phase = "resolve_bind"
         host, port = _resolve_bind(conf, args.host, args.port)
         advertised_base = _advertise_base(host, port)
+        os.environ["ADAOS_AUTOSTART_MODE"] = "1"
+        os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = "autostart_runner"
         phase = "stop_previous_server"
         _stop_previous_server(host, port)
         phase = "write_pidfile"
         pidfile = _pidfile_path(host, port)
-        _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base)
+        _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner="autostart")
         atexit.register(_cleanup_pidfile, pidfile)
 
         if conf is not None and str(getattr(conf, "role", "") or "").strip().lower() == "hub":
@@ -1092,7 +1094,6 @@ def main() -> None:
         if token:
             os.environ["ADAOS_TOKEN"] = str(token)
         os.environ["ADAOS_SELF_BASE_URL"] = advertised_base
-        os.environ["ADAOS_AUTOSTART_MODE"] = "1"
 
         phase = "launch_active_slot"
         _launch_active_slot_if_needed(args, host=host, port=port, validate=pending_update_succeeded)

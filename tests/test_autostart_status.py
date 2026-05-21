@@ -141,6 +141,62 @@ def test_default_control_token_reads_shared_dotenv(monkeypatch, tmp_path: Path) 
     assert autostart._default_control_token() == "dotenv-token"
 
 
+def test_server_owner_payload_uses_supervisor_runtime(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {
+                "ok": True,
+                "supervisor_pid": 11,
+                "runtime_url": "http://127.0.0.1:8778",
+                "managed_pid": 22,
+                "active_slot": "B",
+                "runtime_state": "ready",
+                "transition_role": "active",
+                "managed_start_reason": "supervisor.start",
+            }
+
+    def _get(url: str, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _Response()
+
+    monkeypatch.setattr(autostart, "_tcp_probe", lambda host, port, timeout=0.15: True)
+    monkeypatch.setattr(autostart.requests, "get", _get)
+
+    owner = autostart._server_owner_payload(
+        {
+            "host": "127.0.0.1",
+            "port": 8778,
+            "active": True,
+            "scope": "system",
+            "supervisor_url": "http://127.0.0.1:8776",
+            "wrapper_env": {"ADAOS_TOKEN": "tok"},
+        }
+    )
+
+    assert owner == {
+        "kind": "autostart",
+        "process_kind": "autostart_runner",
+        "pid": 22,
+        "url": "http://127.0.0.1:8778",
+        "control_kind": "supervisor",
+        "control_pid": 11,
+        "control_url": "http://127.0.0.1:8776",
+        "source": "supervisor",
+        "active_slot": "B",
+        "runtime_state": "ready",
+        "transition_role": "active",
+        "managed_start_reason": "supervisor.start",
+        "service_scope": "system",
+    }
+    assert captured["url"] == "http://127.0.0.1:8776/api/supervisor/status"
+    assert captured["headers"] == {"Accept": "application/json", "X-AdaOS-Token": "tok"}
+
+
 def test_linux_status_root_prefers_system_service_when_user_bus_exists(monkeypatch, tmp_path: Path) -> None:
     user_home = tmp_path / "home"
     user_service = user_home / ".config" / "systemd" / "user" / "adaos.service"
