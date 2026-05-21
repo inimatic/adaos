@@ -620,7 +620,8 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
     current = read_status()
     state = str(current.get("state") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
-    slot = str(current.get("target_slot") or active_slot() or "").strip().upper()
+    explicit_target_slot = str(current.get("target_slot") or "").strip().upper()
+    slot = str(explicit_target_slot or active_slot() or "").strip().upper()
     manifest = read_slot_manifest(slot) if slot else None
     if state == "succeeded" and phase == "validate":
         return current
@@ -631,6 +632,8 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
         return None
     target_version = str(current.get("target_version") or "").strip()
     if target_version and not _manifest_matches_target_version(manifest, target_version):
+        if not explicit_target_slot:
+            return None
         return _runtime_boot_target_mismatch_status(current, slot=slot, manifest=manifest)
 
     now = time.time()
