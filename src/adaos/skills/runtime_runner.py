@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+_SKILL_SOURCE_SNAPSHOTS: dict[str, int] = {}
 
 
 def execute_tool(
@@ -17,8 +20,6 @@ def execute_tool(
     extra_paths: Iterable[Path] | None = None,
 ) -> Any:
     """Execute a tool callable inside the skill package and return the result."""
-
-    import sys
 
     skill_path = Path(skill_dir).resolve()
     # Ensure both the skill package root and its parent (which usually
@@ -33,6 +34,7 @@ def execute_tool(
         if str(extra_path) not in sys.path:
             sys.path.insert(0, str(extra_path))
 
+    _reload_skill_modules_if_sources_changed(skill_path)
     module_name = module or "handlers.main"
     mod = _load_skill_module(skill_path, module_name)
     func = getattr(mod, attr)
@@ -114,17 +116,73 @@ def _is_generic_handlers_module(module_name: str) -> bool:
 
 
 def _purge_generic_handlers_modules() -> None:
-    import sys
-
     for key in list(sys.modules.keys()):
         if key == "handlers" or key.startswith("handlers."):
             sys.modules.pop(key, None)
+
+
+def _purge_generic_skill_modules() -> None:
+    for key in list(sys.modules.keys()):
+        if key in {"handlers", "service"} or key.startswith(("handlers.", "service.")):
+            sys.modules.pop(key, None)
+
+
+def _source_snapshot_mtime_ns(skill_path: Path) -> int:
+    latest = 0
+    for source in skill_path.rglob("*.py"):
+        if "__pycache__" in source.parts:
+            continue
+        try:
+            latest = max(latest, int(source.stat().st_mtime_ns))
+        except OSError:
+            continue
+    return latest
+
+
+def _module_file_is_under(module: Any, root: Path) -> bool:
+    raw = getattr(module, "__file__", None)
+    if not raw:
+        return False
+    try:
+        Path(raw).resolve().relative_to(root)
+    except Exception:
+        return False
+    return True
+
+
+def _purge_skill_source_modules(skill_path: Path) -> None:
+    skill_pkg = skill_path.name
+    for key, module in list(sys.modules.items()):
+        if key == "skills" or key.startswith("adaos.") or key.startswith("adaos_skill_"):
+            continue
+        skill_scoped = (
+            key == f"skills.{skill_pkg}"
+            or key.startswith(f"skills.{skill_pkg}.")
+            or key == skill_pkg
+            or key.startswith(f"{skill_pkg}.")
+        )
+        if skill_scoped or _module_file_is_under(module, skill_path):
+            sys.modules.pop(key, None)
+
+
+def _reload_skill_modules_if_sources_changed(skill_path: Path) -> None:
+    key = str(skill_path)
+    current = _source_snapshot_mtime_ns(skill_path)
+    previous = _SKILL_SOURCE_SNAPSHOTS.get(key)
+    if previous is None:
+        _SKILL_SOURCE_SNAPSHOTS[key] = current
+        return
+    if previous == current:
+        return
+    _purge_skill_source_modules(skill_path)
+    _SKILL_SOURCE_SNAPSHOTS[key] = current
 
 
 def _load_skill_module(skill_path: Path, module_name: str):
     skill_pkg = skill_path.name
     candidates: list[str] = []
     if _is_generic_handlers_module(module_name):
+        _purge_generic_skill_modules()
         candidates.extend(
             [
                 f"skills.{skill_pkg}.{module_name}",
@@ -153,8 +211,6 @@ def _load_skill_module(skill_path: Path, module_name: str):
 
 
 def _load_module_from_skill_source(skill_path: Path, module_name: str):
-    import sys
-
     relative = Path(*[segment for segment in str(module_name or "").split(".") if segment])
     # Build the file path without relying on platform-specific anchors.
     candidate_file = skill_path.joinpath(*relative.parts).with_suffix(".py")
