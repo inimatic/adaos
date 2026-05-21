@@ -6675,7 +6675,7 @@ def reliability_snapshot(
     active_zone_id = None
     if selected_server:
         lower = selected_server.lower()
-        if "://ru.inimatic.com" in lower or lower.endswith("ru.inimatic.com"):
+        if "://ru.api.inimatic.com" in lower or lower.endswith("ru.api.inimatic.com"):
             active_zone_id = "ru"
         elif "://api.inimatic.com" in lower or lower.endswith("api.inimatic.com"):
             active_zone_id = canonical_zone_id(zone_id) if canonical_zone_id(zone_id) in {"us", "eu", "in", "ch"} else "us"
