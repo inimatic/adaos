@@ -1153,6 +1153,7 @@ def _collect_autostart_inspect(*, sample_sec: float = 0.2, token: Optional[str] 
 
     return {
         "autostart": status,
+        "server_owner": status.get("server_owner"),
         "bind": {"host": bind[0], "port": bind[1]} if bind is not None else None,
         "service_process": service_payload,
         "supervisor": supervisor_payload,
@@ -1194,6 +1195,29 @@ def _format_age(value: object) -> str:
     return f"{days}d{hours:02d}h"
 
 
+def _format_server_owner(owner: object) -> str | None:
+    if not isinstance(owner, dict):
+        return None
+    kind = str(owner.get("kind") or "unknown")
+    parts = [kind]
+    if owner.get("active_slot"):
+        parts.append(f"slot={owner.get('active_slot')}")
+    if owner.get("runtime_state"):
+        parts.append(f"state={owner.get('runtime_state')}")
+    if owner.get("pid"):
+        parts.append(f"pid={owner.get('pid')}")
+    if owner.get("control_kind"):
+        control = str(owner.get("control_kind"))
+        if owner.get("control_pid"):
+            control += f":{owner.get('control_pid')}"
+        parts.append(f"control={control}")
+    elif owner.get("control_pid"):
+        parts.append(f"control_pid={owner.get('control_pid')}")
+    if owner.get("url"):
+        parts.append(f"url={owner.get('url')}")
+    return " ".join(parts)
+
+
 def _print_autostart_inspect(payload: dict) -> None:
     status = payload.get("autostart") if isinstance(payload.get("autostart"), dict) else {}
     bind = payload.get("bind") if isinstance(payload.get("bind"), dict) else {}
@@ -1215,6 +1239,9 @@ def _print_autostart_inspect(payload: dict) -> None:
     typer.echo(
         f"autostart: enabled={enabled} active={active} listening={listening}"
     )
+    owner_line = _format_server_owner(status.get("server_owner"))
+    if owner_line:
+        typer.echo(f"server owner: {owner_line}")
     if status.get("url"):
         typer.echo(f"url: {status.get('url')}")
     if bind:
@@ -1339,6 +1366,9 @@ def autostart_status_cmd(json_output: bool = typer.Option(False, "--json", help=
             typer.echo(f"configured url: {s['configured_url']}")
         if "live_url" in s:
             typer.echo(f"live url: {s['live_url']}")
+        owner_line = _format_server_owner(s.get("server_owner"))
+        if owner_line:
+            typer.echo(f"server owner: {owner_line}")
         if "service" in s:
             typer.echo(f"service: {s['service']}")
         if "scope" in s:

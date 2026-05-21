@@ -167,12 +167,14 @@ def _read_pidfile(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _write_pidfile(path: Path, *, host: str, port: int, advertised_base: str) -> None:
+def _write_pidfile(path: Path, *, host: str, port: int, advertised_base: str, owner: str | None = None) -> None:
     payload = {
         "pid": os.getpid(),
         "host": host,
         "port": int(port),
         "advertised_base": advertised_base,
+        "owner": str(owner or _current_launch_owner()),
+        "launch_mode": str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or os.getenv("ADAOS_AUTOSTART_MODE") or ""),
         "started_at": time.time(),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -192,15 +194,80 @@ def _host_matches_listener(bind_host: str, listener_host: str | None) -> bool:
     return False
 
 
-def _process_looks_like_adaos_api(proc: psutil.Process) -> bool:
+def _process_cmdline(proc: psutil.Process) -> list[str]:
     try:
-        cmdline = [str(part).lower() for part in proc.cmdline()]
+        return [str(part) for part in proc.cmdline()]
     except Exception:
-        return False
+        return []
+
+
+def _process_kind(proc: psutil.Process) -> str | None:
+    cmdline = [part.lower() for part in _process_cmdline(proc)]
     joined = " ".join(cmdline)
     if "adaos" not in joined:
+        return None
+    if "adaos.apps.supervisor" in joined:
+        return "supervisor"
+    if "adaos.apps.autostart_runner" in joined:
+        return "autostart_runner"
+    if "serve" in joined and (("api" in joined) or "adaos.apps.cli.commands.api" in joined):
+        return "api_serve"
+    return None
+
+
+def _process_looks_like_adaos_api(proc: psutil.Process) -> bool:
+    return _process_kind(proc) is not None
+
+
+def _process_base_dir(proc: psutil.Process) -> Path | None:
+    raw = ""
+    try:
+        raw = str((proc.environ() or {}).get("ADAOS_BASE_DIR") or "").strip()
+    except Exception:
+        raw = ""
+    if raw:
+        try:
+            return Path(raw).expanduser().resolve()
+        except Exception:
+            return None
+    return None
+
+
+def _current_base_dir() -> Path | None:
+    try:
+        raw = get_ctx().paths.base_dir()
+        return Path(raw() if callable(raw) else raw).expanduser().resolve()
+    except Exception:
+        return None
+
+
+def _same_base_dir(proc: psutil.Process, current_base_dir: Path | None) -> bool:
+    if current_base_dir is None:
         return False
-    return ("api" in joined and "serve" in joined) or "adaos.apps.autostart_runner" in joined
+    proc_base = _process_base_dir(proc)
+    if proc_base is None:
+        return False
+    try:
+        return proc_base == current_base_dir
+    except Exception:
+        return False
+
+
+def _current_launch_owner() -> str:
+    if str(os.getenv("ADAOS_AUTOSTART_MODE") or "").strip() or str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip():
+        return "autostart"
+    return "api"
+
+
+def _candidate_bind(proc: psutil.Process, fallback_host: str, fallback_port: int) -> tuple[str, int]:
+    cmdline = _process_cmdline(proc)
+    raw_port = _cmdline_option_value(cmdline, "--port")
+    try:
+        port = int(str(raw_port or "").strip() or str(int(fallback_port)))
+    except Exception:
+        port = int(fallback_port)
+    host = _cmdline_option_value(cmdline, "--host") or str(fallback_host or "127.0.0.1")
+    return host, port
 
 
 def _cmdline_option_value(cmdline: list[str], option: str) -> str | None:
@@ -223,9 +290,8 @@ def _cmdline_option_value(cmdline: list[str], option: str) -> str | None:
 
 
 def _process_matches_bind(proc: psutil.Process, host: str, port: int) -> bool:
-    try:
-        cmdline = [str(part) for part in proc.cmdline()]
-    except Exception:
+    cmdline = _process_cmdline(proc)
+    if not cmdline:
         return False
     if not _process_looks_like_adaos_api(proc):
         return False
@@ -333,9 +399,141 @@ def _terminate_process_tree(pid: int) -> None:
         pass
 
 
+def _process_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        proc = psutil.Process(pid)
+        return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+    except psutil.Error:
+        return False
+
+
+def _wait_for_pids_exit(pids: list[int], *, timeout: float) -> None:
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while time.monotonic() < deadline:
+        if not any(_process_running(pid) for pid in pids):
+            return
+        time.sleep(0.1)
+
+
+def _resolved_shutdown_token(token: str | None = None) -> str | None:
+    raw = str(token or os.getenv("ADAOS_TOKEN") or "").strip()
+    if raw:
+        return raw
+    try:
+        raw = str(getattr(load_config(), "token", "") or "").strip()
+    except Exception:
+        raw = ""
+    if raw:
+        return raw
+    try:
+        raw = str(resolve_control_token()).strip()
+    except Exception:
+        raw = ""
+    return raw or None
+
+
+def _stop_autostart_service_for_takeover(current_base_dir: Path | None) -> None:
+    try:
+        from adaos.services.autostart import status as autostart_status
+    except Exception:
+        return
+    try:
+        info = autostart_status(get_ctx())
+    except Exception:
+        return
+    if not isinstance(info, dict) or info.get("active") is not True:
+        return
+    try:
+        service_main_pid = int(info.get("service_main_pid") or 0)
+    except Exception:
+        service_main_pid = 0
+    if current_base_dir is not None:
+        raw_base = str(info.get("base_dir") or "").strip()
+        if raw_base:
+            try:
+                if Path(raw_base).expanduser().resolve() != current_base_dir:
+                    return
+            except Exception:
+                return
+
+    platform_name = str(info.get("platform") or "").strip().lower()
+    cmd: list[str] | None = None
+    if platform_name == "linux":
+        scope = str(info.get("scope") or "").strip().lower()
+        service_ref = str(info.get("service") or "adaos.service").strip() or "adaos.service"
+        service_name = Path(service_ref).name or "adaos.service"
+        cmd = ["systemctl"]
+        if scope == "user":
+            cmd.append("--user")
+        cmd.extend(["stop", service_name])
+    elif platform_name == "windows":
+        task_name = str(info.get("task") or "AdaOS").strip() or "AdaOS"
+        cmd = ["schtasks", "/End", "/TN", task_name]
+    elif platform_name == "macos":
+        label = "com.adaos.autostart"
+        try:
+            uid = str(os.getuid()) if hasattr(os, "getuid") else ""
+        except Exception:
+            uid = ""
+        domain = f"gui/{uid}" if uid else "gui"
+        cmd = ["launchctl", "bootout", domain, label]
+    if not cmd:
+        return
+    try:
+        subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=25,
+        )
+    except Exception:
+        return
+    if service_main_pid > 0:
+        _wait_for_pids_exit([service_main_pid], timeout=20.0)
+
+
+def _find_owner_conflict_pids(
+    host: str,
+    port: int,
+    *,
+    new_owner: str,
+    protected_pids: set[int],
+    current_base_dir: Path | None,
+) -> list[int]:
+    conflicts: list[int] = []
+    try:
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            pid = int(proc.info.get("pid") or 0)
+            if pid <= 0 or pid == os.getpid() or pid in protected_pids:
+                continue
+            kind = _process_kind(proc)
+            if kind is None:
+                continue
+            same_bind = _process_matches_bind(proc, host, port)
+            same_base = _same_base_dir(proc, current_base_dir)
+            conflict = same_bind
+            if new_owner == "autostart":
+                conflict = conflict or (kind == "api_serve" and same_base)
+            elif new_owner == "api":
+                conflict = conflict or (kind in {"autostart_runner", "supervisor", "api_serve"} and same_base)
+            if conflict and pid not in conflicts:
+                conflicts.append(pid)
+    except Exception:
+        return conflicts
+    return conflicts
+
+
 def _stop_previous_server(host: str, port: int) -> None:
     pidfile = _pidfile_path(host, port)
     protected_pids = _current_process_family_pids()
+    current_owner = _current_launch_owner()
+    current_base_dir = _current_base_dir()
+    if current_owner == "api":
+        _stop_autostart_service_for_takeover(current_base_dir)
     candidate_pids: list[int] = []
     meta = _read_pidfile(pidfile)
     try:
@@ -350,15 +548,38 @@ def _stop_previous_server(host: str, port: int) -> None:
     for pid in _find_matching_server_pids(host, port, protected_pids=protected_pids):
         if pid not in candidate_pids:
             candidate_pids.append(pid)
+    for pid in _find_owner_conflict_pids(
+        host,
+        port,
+        new_owner=current_owner,
+        protected_pids=protected_pids,
+        current_base_dir=current_base_dir,
+    ):
+        if pid not in candidate_pids:
+            candidate_pids.append(pid)
 
+    token = _resolved_shutdown_token()
     for pid in candidate_pids:
         try:
             proc = psutil.Process(pid)
         except psutil.Error:
             continue
-        if not _process_looks_like_adaos_api(proc):
+        kind = _process_kind(proc)
+        if kind is None:
+            continue
+        stopped = False
+        if kind in {"api_serve", "autostart_runner"}:
+            candidate_host, candidate_port = _candidate_bind(proc, host, port)
+            stopped = _request_graceful_shutdown(
+                candidate_host,
+                candidate_port,
+                token=token,
+                reason=f"{current_owner}.takeover",
+            )
+        if stopped:
             continue
         _terminate_process_tree(pid)
+    _wait_for_pids_exit(candidate_pids, timeout=5.0)
 
     deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline:
@@ -498,7 +719,7 @@ def serve(
     pidfile = _pidfile_path(host, port)
 
     _stop_previous_server(host, port)
-    _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base)
+    _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner="api")
     atexit.register(_cleanup_pidfile, pidfile)
 
     if conf is not None and str(getattr(conf, "role", "") or "").strip().lower() == "hub":
