@@ -115,3 +115,30 @@ def test_prompt_create_dev_project_returns_structured_error(monkeypatch) -> None
 
     assert result["ok"] is False
     assert "Target already exists" in result["error"]
+
+
+def test_prompt_payload_helpers_accept_kwargs(monkeypatch, tmp_path: Path) -> None:
+    module = _load_prompt_engineer_module(monkeypatch)
+    skills_root = tmp_path / "skills"
+    scenarios_root = tmp_path / "scenarios"
+    skills_root.mkdir()
+    scenarios_root.mkdir()
+    for name in ("s1", "s2"):
+        scen = scenarios_root / name
+        scen.mkdir()
+        (scen / "scenario.yaml").write_text(f"id: {name}\nversion: 0.1.0\n", encoding="utf-8")
+
+    class _Paths:
+        def dev_skills_dir(self) -> Path:
+            return skills_root
+
+        def dev_scenarios_dir(self) -> Path:
+            return scenarios_root
+
+    monkeypatch.setattr(module, "_require_ctx", lambda: SimpleNamespace(paths=_Paths()))
+    monkeypatch.setattr(module, "_load_state", lambda object_type, object_id: {"workflow_state": "tz"})
+
+    items = module.prompt_list_dev_objects(limit=1)
+
+    assert len(items) == 1
+    assert items[0]["object_type"] == "scenario"
