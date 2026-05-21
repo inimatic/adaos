@@ -547,10 +547,18 @@ def test_autostart_runner_prepared_restart_preserves_plan_until_validation(monke
         lambda: {"state": "prepared_restart", "action": "update", "target_slot": "B", "prepared_at": 10.0},
     )
     monkeypatch.setattr(autostart_runner, "load_config", lambda: None)
+    target_manifest = {
+        "slot": "B",
+        "target_version": "target-sha",
+        "env": {},
+        "cwd": str(tmp_path),
+        "skill_runtime_migration": {"deferred": True},
+    }
+    monkeypatch.setattr(autostart_runner, "read_slot_manifest", lambda slot: target_manifest if slot == "B" else None)
     monkeypatch.setattr(
         autostart_runner,
         "active_slot_manifest",
-        lambda: {"slot": "B", "env": {}, "cwd": str(tmp_path), "skill_runtime_migration": {"deferred": True}},
+        lambda: (_ for _ in ()).throw(AssertionError("prepared restart must read the target slot manifest")),
     )
     monkeypatch.setattr(
         autostart_runner,
@@ -585,6 +593,7 @@ def test_autostart_runner_prepared_restart_preserves_plan_until_validation(monke
     assert payload["state"] == "restarting"
     assert payload["phase"] == "launch"
     assert payload["target_slot"] == "B"
+    assert payload["manifest"]["target_version"] == "target-sha"
     assert payload["skill_runtime_migration"]["ok"] is True
 
 
