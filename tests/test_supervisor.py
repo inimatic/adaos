@@ -1489,6 +1489,85 @@ def test_supervisor_start_update_deduplicates_active_slot_before_min_period(monk
     assert supervisor._last_update_completion_at(status, attempt) == 450.0
 
 
+def test_supervisor_active_slot_dedupe_clears_stale_failed_prepare_metadata(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor, "core_update_reactions_disabled_reason", lambda: "")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    active_target = "0.1.0"
+    failed_target = "37f53cc4f1e7aa9806f62717491dc6219ab1ab2b"
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "A",
+            "target_rev": "rev2026",
+            "target_version": active_target,
+            "git_commit": "6b63485d53247c9993c351f4499a26fb98b44f9b",
+            "git_short_commit": "6b63485",
+        },
+    )
+    write_status(
+        {
+            "state": "failed",
+            "phase": "prepare",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": failed_target,
+            "message": "core update slot preparation failed",
+            "error_type": "RuntimeError",
+            "error": "fatal: reference is not a tree",
+            "plan": {"target_version": failed_target, "target_slot": "B"},
+            "started_at": 420.0,
+            "finished_at": 430.0,
+            "updated_at": 430.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "failed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": failed_target,
+            "reason": "hub.member_follow.update",
+            "completed_at": 430.0,
+            "completion_reason": "core update slot preparation failed: fatal: reference is not a tree",
+            "last_status": read_status(),
+            "updated_at": 430.0,
+        }
+    )
+
+    result = asyncio.run(
+        manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version=active_target,
+            reason="cli.core_update",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["deduplicated"] is True
+    status = read_status()
+    assert status["state"] == "succeeded"
+    assert status["target_version"] == active_target
+    assert "error" not in status
+    assert "error_type" not in status
+    assert "plan" not in status
+    assert "finished_at" not in status
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "deduplicated"
+    assert attempt.get("completion_reason") is None
+    assert attempt.get("completed_at") is None
+    assert "error" not in attempt["last_status"]
+    assert "plan" not in attempt["last_status"]
+
+
 def test_reconcile_update_status_recovers_active_attempt_when_target_already_active(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     target = "259c1e63e4f2e931292287a93e9eb69a42d8d1cd"
