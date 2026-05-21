@@ -22,7 +22,7 @@ def _zone_public_api_base() -> str | None:
         try:
             parsed = urlparse(raw_root)
             host = str(parsed.hostname or "").strip().lower()
-            if host in {"api.inimatic.com", "ru.inimatic.com"} or host.endswith(".api.inimatic.com"):
+            if host == "api.inimatic.com" or host.endswith(".api.inimatic.com"):
                 scheme = (parsed.scheme or "https").lower()
                 if scheme not in ("http", "https"):
                     scheme = "https"
