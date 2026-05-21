@@ -1125,6 +1125,34 @@ def _same_target_status_completion_time(status: dict[str, Any]) -> float:
     )
 
 
+def _clear_stale_deduplicated_status_fields(
+    status: dict[str, Any],
+    *,
+    keep_completion_timestamps: bool,
+) -> None:
+    for key in (
+        "error",
+        "error_type",
+        "plan",
+        "supervisor_previous_status",
+        "supervisor_timeout_sec",
+        "supervisor_timeout_at",
+        "active_slot_target_mismatch",
+        "active_slot_target_mismatch_reason",
+        "root_promotion_refused",
+        "root_promotion_refused_reason",
+    ):
+        status.pop(key, None)
+    if not keep_completion_timestamps:
+        for key in (
+            "started_at",
+            "finished_at",
+            "validated_at",
+            "root_restart_completed_at",
+        ):
+            status.pop(key, None)
+
+
 def _clear_same_target_subsequent_transition(
     *,
     status: dict[str, Any] | None,
@@ -6142,7 +6170,16 @@ class SupervisorManager:
     ) -> dict[str, Any]:
         now = time.time()
         basis = read_core_update_last_result() or current_status or {}
-        status_payload = dict(basis if isinstance(basis, dict) else {})
+        basis_map = basis if isinstance(basis, dict) else {}
+        keep_completion_timestamps = (
+            str(basis_map.get("state") or "").strip().lower() in {"succeeded", "validated"}
+            and _transition_request_same_target(request, basis_map)
+        )
+        status_payload = dict(basis_map)
+        _clear_stale_deduplicated_status_fields(
+            status_payload,
+            keep_completion_timestamps=keep_completion_timestamps,
+        )
         status_payload.update(
             {
                 "state": "succeeded",
@@ -6188,6 +6225,12 @@ class SupervisorManager:
                 "reason": str(request.get("reason") or ""),
                 "scheduled_for": None,
                 "planned_reason": None,
+                "completed_at": None,
+                "completion_reason": "",
+                "awaiting_restart": False,
+                "restart_required": False,
+                "restart_mode": None,
+                "restart_requested_at": None,
                 "last_status": status,
                 "updated_at": now,
             }
