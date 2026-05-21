@@ -1,3 +1,4 @@
+import json
 import types
 
 from adaos.apps.cli.commands.api import (
@@ -7,6 +8,7 @@ from adaos.apps.cli.commands.api import (
     _process_matches_bind,
     _resolve_stop_bind,
     _resolve_bind,
+    _write_pidfile,
     app,
 )
 from adaos.services.runtime_dotenv import merged_runtime_dotenv_env
@@ -17,6 +19,16 @@ from typer.testing import CliRunner
 def test_advertise_base_uses_loopback_for_wildcard_bind():
     assert _advertise_base("0.0.0.0", 8779) == "http://127.0.0.1:8779"
     assert _advertise_base("::", 8779) == "http://127.0.0.1:8779"
+
+
+def test_write_pidfile_records_server_owner(tmp_path):
+    path = tmp_path / "serve.json"
+
+    _write_pidfile(path, host="127.0.0.1", port=8778, advertised_base="http://127.0.0.1:8778", owner="autostart")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["owner"] == "autostart"
+    assert data["port"] == 8778
 
 
 def test_resolve_bind_prefers_saved_local_hub_port():
