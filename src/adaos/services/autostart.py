@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Literal, Mapping, Sequence
 from urllib.parse import urlparse
 
+import psutil
 import requests
 
 from adaos.build_info import BUILD_INFO
-from adaos.services.agent_context import AgentContext
+from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.core_slots import active_slot, activate_slot, read_slot_manifest, slot_dir
 from adaos.services.runtime_paths import current_control_python, current_control_repo_root, current_state_dir, is_core_slot_path
 from adaos.services.node_config import load_config
@@ -308,6 +309,224 @@ def _text_subprocess_kwargs() -> dict[str, object]:
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, **_text_subprocess_kwargs())
+
+
+def _safe_proc_cmdline(proc: psutil.Process) -> list[str]:
+    try:
+        return [str(part) for part in proc.cmdline()]
+    except Exception:
+        return []
+
+
+def _safe_proc_environ(proc: psutil.Process) -> dict[str, str]:
+    try:
+        raw = proc.environ()
+    except Exception:
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
+
+
+def _current_process_family_pids() -> set[int]:
+    protected: set[int] = {os.getpid()}
+    try:
+        current = psutil.Process(os.getpid())
+    except psutil.Error:
+        return protected
+    try:
+        for proc in current.parents():
+            pid = int(getattr(proc, "pid", 0) or 0)
+            if pid > 0:
+                protected.add(pid)
+    except psutil.Error:
+        pass
+    try:
+        for proc in current.children(recursive=True):
+            pid = int(getattr(proc, "pid", 0) or 0)
+            if pid > 0:
+                protected.add(pid)
+    except psutil.Error:
+        pass
+    return protected
+
+
+def _same_path_text(raw: str, expected: Path) -> bool:
+    value = str(raw or "").strip().strip('"').strip("'")
+    if not value:
+        return False
+    try:
+        return Path(value).expanduser().resolve() == expected.expanduser().resolve()
+    except Exception:
+        try:
+            return os.path.normcase(os.path.abspath(value)) == os.path.normcase(os.path.abspath(str(expected)))
+        except Exception:
+            return False
+
+
+def _cmdline_references_path(cmdline: Sequence[str], path: Path) -> bool:
+    try:
+        expected = path.expanduser().resolve()
+    except Exception:
+        expected = path
+    expected_text = os.path.normcase(str(expected))
+    expected_slash = expected_text.replace("\\", "/")
+    for part in cmdline:
+        raw = str(part or "").strip()
+        if _same_path_text(raw, expected):
+            return True
+        normalized = os.path.normcase(raw.strip('"').strip("'"))
+        if expected_text and expected_text in normalized:
+            return True
+        normalized_slash = normalized.replace("\\", "/")
+        if expected_slash and expected_slash in normalized_slash:
+            return True
+    return False
+
+
+def _env_base_dir_matches(env: Mapping[str, str], base_dir: Path) -> bool:
+    raw = str(env.get("ADAOS_BASE_DIR") or "").strip()
+    if not raw:
+        return False
+    try:
+        return Path(raw).expanduser().resolve() == base_dir.expanduser().resolve()
+    except Exception:
+        return os.path.normcase(os.path.abspath(raw)) == os.path.normcase(os.path.abspath(str(base_dir)))
+
+
+def _autostart_process_match_reason(proc: psutil.Process, *, base_dir: Path, wrapper: Path) -> str | None:
+    cmdline = _safe_proc_cmdline(proc)
+    if _cmdline_references_path(cmdline, wrapper):
+        return "wrapper"
+    joined = " ".join(part.lower() for part in cmdline)
+    if "adaos.apps.supervisor" not in joined and "adaos.apps.autostart_runner" not in joined:
+        return None
+    env = _safe_proc_environ(proc)
+    if str(env.get("ADAOS_AUTOSTART_MANAGED") or "").strip() != "1":
+        return None
+    if not _env_base_dir_matches(env, base_dir):
+        return None
+    if "adaos.apps.supervisor" in joined:
+        return "supervisor"
+    return "autostart_runner"
+
+
+def _has_matched_parent(proc: psutil.Process, matched_pids: set[int]) -> bool:
+    try:
+        parent = proc.parent()
+    except psutil.Error:
+        return False
+    while parent is not None:
+        try:
+            pid = int(getattr(parent, "pid", 0) or 0)
+        except Exception:
+            return False
+        if pid in matched_pids:
+            return True
+        try:
+            parent = parent.parent()
+        except psutil.Error:
+            return False
+    return False
+
+
+def _find_live_autostart_worker_roots(*, base_dir: Path, wrapper: Path) -> list[dict[str, object]]:
+    protected_pids = _current_process_family_pids()
+    matches: list[tuple[psutil.Process, str]] = []
+    try:
+        processes = list(psutil.process_iter(["pid", "cmdline"]))
+    except Exception:
+        processes = []
+    for proc in processes:
+        try:
+            pid = int(getattr(proc, "pid", 0) or 0)
+        except Exception:
+            continue
+        if pid <= 0 or pid in protected_pids:
+            continue
+        reason = _autostart_process_match_reason(proc, base_dir=base_dir, wrapper=wrapper)
+        if reason:
+            matches.append((proc, reason))
+    matched_pids = {int(getattr(proc, "pid", 0) or 0) for proc, _ in matches}
+    roots: list[dict[str, object]] = []
+    for proc, reason in matches:
+        pid = int(getattr(proc, "pid", 0) or 0)
+        if pid <= 0 or _has_matched_parent(proc, matched_pids):
+            continue
+        roots.append({"pid": pid, "kind": reason, "cmdline": _safe_proc_cmdline(proc)})
+    roots.sort(key=lambda item: (0 if item.get("kind") == "wrapper" else 1, int(item.get("pid") or 0)))
+    return roots
+
+
+def _terminate_process_tree(pid: int) -> dict[str, object]:
+    if pid <= 0 or pid == os.getpid():
+        return {"pid": pid, "ok": False, "reason": "protected_pid"}
+    if _is_windows():
+        proc = _run(["taskkill", "/PID", str(int(pid)), "/T", "/F"])
+        ok = proc.returncode == 0
+        payload: dict[str, object] = {"pid": pid, "ok": ok, "returncode": proc.returncode}
+        output = (proc.stderr or proc.stdout or "").strip()
+        if output:
+            payload["message"] = output
+        return payload
+    try:
+        proc = psutil.Process(pid)
+    except psutil.Error:
+        return {"pid": pid, "ok": True, "reason": "already_exited"}
+    try:
+        children = proc.children(recursive=True)
+    except psutil.Error:
+        children = []
+    for child in reversed(children):
+        try:
+            child.terminate()
+        except psutil.Error:
+            pass
+    psutil.wait_procs(children, timeout=3.0)
+    for child in children:
+        try:
+            if child.is_running():
+                child.kill()
+        except psutil.Error:
+            pass
+    try:
+        proc.terminate()
+        proc.wait(timeout=5.0)
+        return {"pid": pid, "ok": True}
+    except psutil.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=3.0)
+            return {"pid": pid, "ok": True, "forced": True}
+        except psutil.Error as exc:
+            return {"pid": pid, "ok": False, "error": str(exc)}
+    except psutil.Error as exc:
+        return {"pid": pid, "ok": False, "error": str(exc)}
+
+
+def _stop_live_autostart_worker(*, base_dir: Path, wrapper: Path) -> dict[str, object]:
+    roots = _find_live_autostart_worker_roots(base_dir=base_dir, wrapper=wrapper)
+    if not roots:
+        return {"status": "not_found", "pids": []}
+    stopped: list[int] = []
+    failed: list[dict[str, object]] = []
+    for root in roots:
+        pid = int(root.get("pid") or 0)
+        result = _terminate_process_tree(pid)
+        if result.get("ok"):
+            stopped.append(pid)
+        else:
+            failed.append(result)
+    status = "stopped"
+    if failed and stopped:
+        status = "partial"
+    elif failed:
+        status = "failed"
+    return {
+        "status": status,
+        "pids": [int(root.get("pid") or 0) for root in roots],
+        "roots": roots,
+        "stopped_pids": stopped,
+        "failed": failed,
+    }
 
 
 def _is_local_url(url: str | None) -> bool:
@@ -1185,12 +1404,13 @@ def disable(ctx: AgentContext) -> dict:
         proc = _run(["schtasks", "/Delete", "/F", "/TN", name])
         ok = proc.returncode == 0
         wrapper = (bin_dir / "adaos-autostart.ps1").resolve()
+        worker = _stop_live_autostart_worker(base_dir=base_dir, wrapper=wrapper)
         if wrapper.exists():
             try:
                 wrapper.unlink()
             except Exception:
                 pass
-        return {"ok": ok, "platform": "windows", "task": name}
+        return {"ok": ok, "platform": "windows", "task": name, "worker": worker}
 
     if _is_linux():
         user_service_path = _linux_service_path_user()
@@ -1214,6 +1434,7 @@ def disable(ctx: AgentContext) -> dict:
             except Exception:
                 pass
         wrapper = (bin_dir / "adaos-autostart.sh").resolve()
+        worker = _stop_live_autostart_worker(base_dir=base_dir, wrapper=wrapper)
         if wrapper.exists():
             try:
                 wrapper.unlink()
@@ -1224,6 +1445,7 @@ def disable(ctx: AgentContext) -> dict:
             "platform": "linux",
             "user_service": str(user_service_path),
             "system_service": str(system_service_path),
+            "worker": worker,
         }
 
     if _is_macos():
@@ -1239,12 +1461,13 @@ def disable(ctx: AgentContext) -> dict:
             except Exception:
                 pass
         wrapper = (bin_dir / "adaos-autostart.sh").resolve()
+        worker = _stop_live_autostart_worker(base_dir=base_dir, wrapper=wrapper)
         if wrapper.exists():
             try:
                 wrapper.unlink()
             except Exception:
                 pass
-        return {"ok": True, "platform": "macos", "plist": str(plist_path)}
+        return {"ok": True, "platform": "macos", "plist": str(plist_path), "worker": worker}
 
     raise RuntimeError(f"autostart is not supported on platform: {platform.platform()}")
 

@@ -1372,6 +1372,27 @@ def autostart_status_cmd(json_output: bool = typer.Option(False, "--json", help=
             typer.echo(summary)
 
 
+def _print_autostart_worker_stop(worker: object) -> None:
+    if not isinstance(worker, dict):
+        return
+    status = str(worker.get("status") or "").strip().lower()
+    pids = worker.get("stopped_pids") if isinstance(worker.get("stopped_pids"), list) else worker.get("pids")
+    pid_values = (
+        [str(pid) for pid in (pids or []) if str(pid).strip() and str(pid) != "0"]
+        if isinstance(pids, list)
+        else []
+    )
+    suffix = f" (pid={', '.join(pid_values)})" if pid_values else ""
+    if status == "stopped":
+        typer.secho(f"[AdaOS] autostart worker stopped{suffix}", fg=typer.colors.GREEN)
+    elif status == "not_found":
+        typer.echo("[AdaOS] autostart worker not found")
+    elif status == "partial":
+        typer.secho(f"[AdaOS] autostart worker partially stopped{suffix}", fg=typer.colors.YELLOW)
+    elif status == "failed":
+        typer.secho("[AdaOS] autostart worker stop failed", fg=typer.colors.RED)
+
+
 @autostart_app.command("inspect")
 @_run_safe
 def autostart_inspect_cmd(
@@ -1437,6 +1458,7 @@ def autostart_disable_cmd(json_output: bool = typer.Option(False, "--json", help
         typer.echo(json.dumps(res, ensure_ascii=False, indent=2))
     else:
         typer.secho("[AdaOS] autostart disabled", fg=typer.colors.GREEN)
+        _print_autostart_worker_stop(res.get("worker"))
 
 
 @autostart_app.command("restart")
