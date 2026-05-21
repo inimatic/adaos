@@ -201,6 +201,30 @@ def _format_divergence_hint(dir: StrOrPath) -> Optional[str]:
     return "\n".join(lines)
 
 
+def _ensure_origin_remote(dir: StrOrPath, url: str) -> None:
+    current = _safe_git(dir, ["remote", "get-url", "origin"])
+    if current is None:
+        _run_git(["remote", "add", "origin", url], cwd=dir)
+        return
+    if current.strip() != str(url).strip():
+        _run_git(["remote", "set-url", "origin", url], cwd=dir)
+
+
+def _pull_reset_target_ref(dir: StrOrPath) -> str:
+    upstream = _safe_git(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    if upstream:
+        return upstream
+    branch = _safe_git(dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if branch and branch != "HEAD":
+        return f"origin/{branch}"
+    return "origin/main"
+
+
+def _remote_from_ref(ref: str) -> str:
+    token = str(ref or "").split("/", 1)[0].strip()
+    return token or "origin"
+
+
 def _append_exclude(dir: str, lines: list[str]) -> None:
     p = Path(dir) / ".git" / "info" / "exclude"
     existing = set()
@@ -363,6 +387,16 @@ class CliGitClient(GitClient):
                 "scenarios/**/.skill_env.json",
             ],
         )
+        if git_dir.exists():
+            _ensure_origin_remote(d, url)
+            if branch:
+                current_branch = _safe_git(d, ["rev-parse", "--abbrev-ref", "HEAD"])
+                if current_branch == branch:
+                    try:
+                        _run_git(["branch", "--set-upstream-to", f"origin/{branch}", branch], cwd=str(d))
+                    except GitError:
+                        # The remote-tracking ref may not exist until the next pull/fetch.
+                        pass
 
     def pull(self, dir: StrOrPath) -> None:
         try:
@@ -388,16 +422,18 @@ class CliGitClient(GitClient):
                         _log_git_snapshot(dir)
                         _run_git(["pull", "--rebase", "--autostash"], cwd=dir)
                         return
-                    # In non-dev (prod/stage), prefer a deterministic state: reset to origin/main.
+                    # In non-dev (prod/stage), prefer a deterministic state: reset to the configured upstream.
+                    target_ref = _pull_reset_target_ref(dir)
                     _log.warning(
-                        "git pull divergence detected; auto-resetting to origin/main (ENV_TYPE=%s) repo=%s",
+                        "git pull divergence detected; auto-resetting to %s (ENV_TYPE=%s) repo=%s",
+                        target_ref,
                         env_type,
                         repo_path,
                     )
-                    _run_git(["fetch", "origin"], cwd=dir)
+                    _run_git(["fetch", _remote_from_ref(target_ref)], cwd=dir)
                     _log_git_snapshot(dir)
-                    _log_git_replacement_diff(dir, target_ref="origin/main")
-                    _run_git(["reset", "--hard", "origin/main"], cwd=dir)
+                    _log_git_replacement_diff(dir, target_ref=target_ref)
+                    _run_git(["reset", "--hard", target_ref], cwd=dir)
                     return
 
                 hint = _format_divergence_hint(dir)
