@@ -137,6 +137,10 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
     assert snapshot["quality"]["threshold"] == snapshot["thresholds"]["warning"]
     assert snapshot["quality"]["color"] in {"success", "danger"}
     assert snapshot["activity"]["label"] == "ready"
+    assert snapshot["timeline"]["total_frames"] == 2
+    assert snapshot["timeline"]["current_frame"] == 1
+    assert snapshot["timeline"]["calculated_count"] == 2
+    assert snapshot["timeline"]["calculated_ranges"] == [{"start": 0, "end": 1}]
     assert snapshot["files"]["frames"]["name"] == "frames.zip"
     assert "source" not in snapshot["files"]["frames"]
     assert "path" not in snapshot["files"]["frames"]
@@ -212,6 +216,13 @@ def test_new_face_vision_can_step_back_to_previous_cached_frame(tmp_path: Path) 
     assert snapshot["stats"]["processed_frames"] == processed_count
     assert snapshot["stats"]["next_frame"] == 1
 
+    seek = engine.seek_frame(1)
+    seek_snapshot = engine.snapshot()
+    assert seek["ok"] is True
+    assert seek["frame_idx"] == 1
+    assert seek_snapshot["latest"]["navigation"] is True
+    assert seek_snapshot["stats"]["processed_frames"] == processed_count
+
 
 def test_new_face_vision_frame_preview_is_compact_jpeg_stream_payload(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
@@ -254,6 +265,7 @@ def test_new_face_vision_persists_prediction_cache_across_restart(tmp_path: Path
 
     monkeypatch.setattr(engine_module.NewFaceVisionEngine, "_create_dummy_prediction", fail_if_recomputed)
     restarted = engine_module.NewFaceVisionEngine(state_dir)
+    assert restarted.snapshot()["timeline"]["calculated_count"] == 1
     cached = restarted.process_frame(0)
 
     assert cached["ok"] is True
@@ -408,6 +420,7 @@ SUPPORTED_CLIENT_WIDGET_TYPES = {
     "item.details",
     "input.commandBar",
     "input.fileUpload",
+    "input.frameSlider",
     "input.text",
     "input.selector",
     "desktop.widgets",
@@ -488,11 +501,14 @@ def test_new_face_vision_declares_yjs_stream_route_balance() -> None:
     assert {
         "new_face_vision_step_back",
         "new_face_vision_step_forward",
+        "new_face_vision_seek_frame",
         "new_face_vision_persist_state",
         "new_face_vision_rehydrate",
     } <= tool_names
     tools = {tool.get("name"): tool for tool in skill.get("tools") or []}
     assert tools["new_face_vision_play"]["timeout_seconds"] >= 90
+    assert tools["new_face_vision_stop"]["timeout_seconds"] >= 180
+    assert tools["new_face_vision_seek_frame"]["timeout_seconds"] >= 180
     assert tools["new_face_vision_process_frame"]["timeout_seconds"] >= 180
     assert tools["new_face_vision_step_forward"]["timeout_seconds"] >= 180
 
@@ -509,7 +525,12 @@ def test_new_face_vision_compacts_uploads_into_modal() -> None:
 
     controls = next(widget for widget in page_widgets if widget.get("id") == "controls")
     frame = next(widget for widget in page_widgets if widget.get("id") == "frame-stream")
+    frame_position = next(widget for widget in page_widgets if widget.get("id") == "frame-position")
     assert frame["inputs"]["retainLastImageOnEmpty"] is True
+    assert frame_position["type"] == "input.frameSlider"
+    assert frame_position["dataSource"]["path"] == "data/new_face_vision/current/timeline"
+    seek_action = next(action for action in frame_position["actions"] if action.get("on") == "change")
+    assert seek_action["target"] == "new_face_vision_skill.new_face_vision_seek_frame"
     button_ids = [button["id"] for button in controls["inputs"]["buttons"]]
     assert "step_back" in button_ids
     assert "step_forward" in button_ids
@@ -539,15 +560,16 @@ def test_new_face_vision_places_charts_side_by_side_under_preview_area() -> None
     assert page_by_id["bad-ratio-stream"]["area"] == "main"
     assert page_by_id["metrics-stream"]["area"] == "main"
     assert page_by_id["frame-stream"]["inputs"]["retainLastImageOnEmpty"] is True
+    assert page_by_id["frame-position"]["type"] == "input.frameSlider"
     assert page_ids.index("frame-stream") < page_ids.index("bad-ratio-stream") < page_ids.index("controls")
+    assert page_ids.index("frame-stream") < page_ids.index("frame-position") < page_ids.index("bad-ratio-stream")
     assert page_ids.index("frame-stream") < page_ids.index("metrics-stream") < page_ids.index("controls")
     assert page_by_id["compute-state"]["dataSource"]["path"] == "data/new_face_vision/current/compute"
     assert page_by_id["bad-ratio"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
     assert page_by_id["bad-ratio"]["inputs"]["colorPath"] == "color"
     assert page_by_id["pipeline-status"]["dataSource"]["path"] == "data/new_face_vision/current/activity"
-    assert page_by_id["threshold-state"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
     assert page_by_id["fps-state"]["dataSource"]["path"] == "data/new_face_vision/current/stats"
-    assert {"total-frames", "model-state", "masks-state"}.isdisjoint(page_by_id)
+    assert {"total-frames", "model-state", "masks-state", "threshold-state"}.isdisjoint(page_by_id)
     for chart_id in ("bad-ratio-stream", "metrics-stream"):
         chart = page_by_id[chart_id]
         assert chart["inputs"]["detailsModalId"] == "newface_metrics_modal"
@@ -562,6 +584,7 @@ def test_new_face_vision_places_charts_side_by_side_under_preview_area() -> None
     assert modal_by_id["newface_modal_ratio_chart"]["area"] == "main"
     assert modal_by_id["newface_modal_metrics_chart"]["area"] == "main"
     assert modal_by_id["newface_modal_frame"]["inputs"]["retainLastImageOnEmpty"] is True
+    assert modal_by_id["newface_modal_frame_position"]["type"] == "input.frameSlider"
     assert modal_by_id["newface_modal_ratio_chart"]["inputs"]["layoutGroup"] == "newface-charts"
     assert modal_by_id["newface_modal_metrics_chart"]["inputs"]["layoutGroup"] == "newface-charts"
     assert modal_ids.index("newface_modal_frame") < modal_ids.index("newface_modal_ratio_chart") < modal_ids.index("newface_modal_controls")
@@ -569,9 +592,8 @@ def test_new_face_vision_places_charts_side_by_side_under_preview_area() -> None
     assert modal_by_id["newface_modal_compute"]["dataSource"]["path"] == "data/new_face_vision/current/compute"
     assert modal_by_id["newface_modal_bad_ratio"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
     assert modal_by_id["newface_modal_status"]["dataSource"]["path"] == "data/new_face_vision/current/activity"
-    assert modal_by_id["newface_modal_threshold"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
     assert modal_by_id["newface_modal_fps"]["dataSource"]["path"] == "data/new_face_vision/current/stats"
-    assert {"newface_modal_frames", "newface_modal_model"}.isdisjoint(modal_by_id)
+    assert {"newface_modal_frames", "newface_modal_model", "newface_modal_threshold"}.isdisjoint(modal_by_id)
     metrics_modal = webui["registry"]["modals"]["newface_metrics_modal"]
     metrics_table = metrics_modal["schema"]["widgets"][0]
     assert metrics_table["type"] == "ui.table"
