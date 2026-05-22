@@ -520,7 +520,9 @@ def test_node_infrastate_action_endpoint_publishes_event_and_returns_snapshot(mo
     assert getattr(published[0], "type", "") == "infrastate.action"
     assert getattr(published[0], "payload", {})["node_id"] == "member-1"
     assert wait_calls == [2.5]
-    assert captured == [("infrastate_skill", "get_snapshot", {"webspace_id": "desktop", "project": False})]
+    assert captured == [
+        ("infrastate_skill", "get_snapshot", {"webspace_id": "desktop", "project": False, "force_refresh": True})
+    ]
     assert result["ok"] is True
     assert result["action"] == "select_node"
     assert result["operation_id"] == "op-node-select"
