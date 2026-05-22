@@ -28,6 +28,7 @@ _LOG = logging.getLogger("adaos.sdk.subscriptions")
 _SUBSCRIPTION_DENY_LOG_AT: Dict[str, float] = {}
 _SUBSCRIPTION_DENY_LOG_INTERVAL_S = 5.0
 _SKILL_SUBSCRIPTION_GENERATIONS: Dict[str, int] = {}
+_REGISTERED_SKILL_SUBSCRIPTIONS: Dict[str, list[tuple[str, Callable]]] = {}
 _STREAM_CONTROL_SUBSCRIPTION_TOPICS = {
     "webio.stream.snapshot.requested",
     "webio.stream.subscription.changed",
@@ -336,6 +337,116 @@ def _subscription_is_current(skill_name: Optional[str], generation: int | None) 
     return generation == int(_SKILL_SUBSCRIPTION_GENERATIONS.get(skill_name) or generation)
 
 
+def _registry_snapshot() -> dict[str, Any]:
+    return {
+        "subscriptions": list(subscriptions),
+        "tools_registry": {module: dict(entries) for module, entries in tools_registry.items()},
+        "tools_meta": dict(tools_meta),
+        "event_payloads": dict(event_payloads),
+        "emits_map": {qualname: set(topics) for qualname, topics in emits_map.items()},
+    }
+
+
+def _restore_registry_snapshot(snapshot: dict[str, Any]) -> None:
+    subscriptions[:] = list(snapshot.get("subscriptions") or [])
+
+    tools_registry.clear()
+    for module, entries in dict(snapshot.get("tools_registry") or {}).items():
+        tools_registry[str(module)] = dict(entries or {})
+
+    tools_meta.clear()
+    tools_meta.update(dict(snapshot.get("tools_meta") or {}))
+
+    event_payloads.clear()
+    event_payloads.update(dict(snapshot.get("event_payloads") or {}))
+
+    emits_map.clear()
+    for qualname, topics in dict(snapshot.get("emits_map") or {}).items():
+        emits_map[str(qualname)] = set(topics or set())
+
+
+def _compact_subscription_registry_for_skills(skill_names: Iterable[str]) -> tuple[int, int]:
+    targets = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
+    if not targets:
+        return len(subscriptions), len(subscriptions)
+
+    before = len(subscriptions)
+    kept: list[tuple[int, str, Callable]] = []
+    latest: dict[tuple[str, str], tuple[int, str, Callable]] = {}
+    for idx, (topic, fn) in enumerate(list(subscriptions)):
+        skill_name = _infer_skill_name(fn)
+        if skill_name and skill_name in targets:
+            latest[(skill_name, str(topic))] = (idx, topic, fn)
+        else:
+            kept.append((idx, topic, fn))
+
+    compacted = [
+        (topic, fn)
+        for _idx, topic, fn in sorted([*kept, *latest.values()], key=lambda item: item[0])
+    ]
+    if len(compacted) != before:
+        subscriptions[:] = compacted
+    return before, len(compacted)
+
+
+def _remove_registered_skill_bus_handlers(skill_names: Iterable[str]) -> int:
+    targets = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
+    if not targets:
+        return 0
+
+    tracked = sum(len(_REGISTERED_SKILL_SUBSCRIPTIONS.get(skill) or []) for skill in targets)
+    removed = 0
+    try:
+        ctx = require_ctx("sdk.core.decorators.register_subscriptions")
+        bus = getattr(ctx, "bus", None)
+    except Exception:
+        bus = None
+
+    if bus is not None:
+        unsubscribe_matching = getattr(bus, "unsubscribe_matching", None)
+        if callable(unsubscribe_matching):
+            try:
+                removed = int(
+                    unsubscribe_matching(
+                        lambda _prefix, handler: str(getattr(handler, "_adaos_skill", "") or "") in targets
+                    )
+                    or 0
+                )
+            except Exception:
+                _LOG.warning(
+                    "failed to remove previous skill subscriptions with matcher skills=%s",
+                    ",".join(sorted(targets)),
+                    exc_info=True,
+                )
+        else:
+            unsubscribe = getattr(bus, "unsubscribe", None)
+            if callable(unsubscribe):
+                for skill in targets:
+                    for topic, handler in _REGISTERED_SKILL_SUBSCRIPTIONS.get(skill) or []:
+                        try:
+                            if unsubscribe(topic, handler):
+                                removed += 1
+                        except Exception:
+                            _LOG.warning(
+                                "failed to unsubscribe previous skill handler skill=%s topic=%s",
+                                skill,
+                                topic,
+                                exc_info=True,
+                            )
+
+    for skill in targets:
+        _REGISTERED_SKILL_SUBSCRIPTIONS.pop(skill, None)
+
+    if tracked or removed:
+        _LOG.info(
+            "skill subscriptions replaced skills=%s tracked_handlers=%d removed_bus_handlers=%d",
+            ",".join(sorted(targets)),
+            tracked,
+            removed,
+        )
+    return removed
+
+
 def _target_subscription_entries(skill_names: Iterable[str] | None) -> list[Tuple[str, Callable]]:
     targets = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
     if not targets:
@@ -364,6 +475,16 @@ async def register_subscriptions(
             _SKILL_SUBSCRIPTION_GENERATIONS[skill_name] = int(
                 _SKILL_SUBSCRIPTION_GENERATIONS.get(skill_name) or 0
             ) + 1
+        removed_handlers = _remove_registered_skill_bus_handlers(target_skills)
+        registry_before, registry_after = _compact_subscription_registry_for_skills(target_skills)
+        if registry_after != registry_before:
+            _LOG.warning(
+                "stale skill subscription registry entries pruned skills=%s before=%d after=%d removed_bus_handlers=%d",
+                ",".join(sorted(target_skills)),
+                registry_before,
+                registry_after,
+                removed_handlers,
+            )
     skill_topic_handlers: Dict[str, Dict[str, str]] = {}
     skill_summaries: Dict[str, list[tuple[str, str]]] = {}
 
@@ -451,7 +572,11 @@ async def register_subscriptions(
         setattr(_wrap, "_adaos_generation", generation)
         skill_key = skill_name or "<unknown>"
         skill_summaries.setdefault(skill_key, []).append((topic, fn.__name__))
-        await on(topic, _wrap)
+        registered_handler = await on(topic, _wrap)
+        if skill_name:
+            _REGISTERED_SKILL_SUBSCRIPTIONS.setdefault(skill_name, []).append(
+                (topic, registered_handler if callable(registered_handler) else _wrap)
+            )
         try:
             await emit(
                 "skill.subscription.registered",
