@@ -29,14 +29,14 @@ from adaos.apps.cli.commands.api import (
     _read_pidfile,
     _resolve_stop_bind,
 )
-from adaos.build_info import BUILD_INFO
+from adaos.build_info import BUILD_INFO, base_version
 from adaos.services.agent_context import get_ctx
 from adaos.services.autostart import default_spec as default_autostart_spec
 from adaos.services.autostart import disable as autostart_disable
 from adaos.services.autostart import enable as autostart_enable
 from adaos.services.autostart import restart_service as autostart_restart_service
 from adaos.services.autostart import status as autostart_status
-from adaos.services.core_slots import active_slot_manifest, slot_dir, slot_status as core_slot_status
+from adaos.services.core_slots import active_slot_manifest, read_slot_manifest, slot_dir, slot_status as core_slot_status
 from adaos.services.core_update import last_result_path as core_update_last_result_path
 from adaos.services.core_update import plan_path as core_update_plan_path
 from adaos.services.core_update import restore_root_from_backup as restore_root_promotion_backup
@@ -433,10 +433,14 @@ def _slot_build_version(slot_id: str) -> str:
         repo_root = slot_dir(slot_name) / "repo"
     except Exception:
         return ""
-    base_version = str(os.getenv("ADAOS_BASE_VERSION") or "0.1.0").strip() or "0.1.0"
+    manifest = read_slot_manifest(slot_name) or {}
+    manifest_version = str(manifest.get("build_version") or "").strip()
+    if manifest_version:
+        return manifest_version
     explicit = str(os.getenv("ADAOS_BUILD_VERSION") or "").strip()
     if explicit:
         return explicit
+    base = base_version(repo_root)
     rev_count = _repo_git_text_at(repo_root, "rev-list", "--count", "HEAD")
     if not rev_count:
         return ""
@@ -444,7 +448,7 @@ def _slot_build_version(slot_id: str) -> str:
     suffix = f"+{rev_count}"
     if short_sha:
         suffix += f".{short_sha}"
-    return f"{base_version}{suffix}"
+    return f"{base}{suffix}"
 
 
 def _autostart_admin_base_url(token: Optional[str] = None) -> str:
@@ -1666,7 +1670,7 @@ def autostart_update_status_cmd(
 @_run_safe
 def autostart_update_start_cmd(
     target_rev: str = typer.Option("", "--target-rev", help="Git branch/tag/ref to install; defaults to current branch"),
-    target_version: str = typer.Option("", "--target-version", help="Human-readable target version; defaults to current BUILD_INFO.version"),
+    target_version: str = typer.Option("", "--target-version", help="Target identity/version; use a commit SHA for pinned rollouts, defaults to current BUILD_INFO.version"),
     countdown_sec: float = typer.Option(60.0, "--countdown-sec", min=0.0),
     drain_timeout_sec: float = typer.Option(10.0, "--drain-timeout-sec", min=0.0, max=30.0),
     signal_delay_sec: float = typer.Option(0.25, "--signal-delay-sec", min=0.0, max=5.0),
@@ -1854,7 +1858,7 @@ def autostart_update_complete_cmd(
 @_run_safe
 def autostart_smoke_update_cmd(
     target_rev: str = typer.Option("", "--target-rev", help="Defaults to current git branch when available"),
-    target_version: str = typer.Option("", "--target-version", help="Defaults to current BUILD_INFO.version"),
+    target_version: str = typer.Option("", "--target-version", help="Target identity/version; use a commit SHA for pinned rollouts, defaults to current BUILD_INFO.version"),
     countdown_sec: float = typer.Option(5.0, "--countdown-sec", min=0.0),
     drain_timeout_sec: float = typer.Option(10.0, "--drain-timeout-sec", min=0.0, max=30.0),
     signal_delay_sec: float = typer.Option(0.25, "--signal-delay-sec", min=0.0, max=5.0),

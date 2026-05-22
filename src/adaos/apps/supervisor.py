@@ -1042,7 +1042,7 @@ def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_ver
     if not expected:
         return True
     data = manifest if isinstance(manifest, dict) else {}
-    for key in ("target_version", "git_commit", "git_short_commit"):
+    for key in ("target_version", "build_version", "git_commit", "git_short_commit"):
         if _target_version_matches(expected, data.get(key)):
             return True
     return False
@@ -1102,7 +1102,7 @@ def _transition_request_matches_active_slot(request: dict[str, Any] | None) -> b
     except Exception:
         manifest = None
     manifest = manifest if isinstance(manifest, dict) else {}
-    for key in ("target_version", "git_commit", "git_short_commit"):
+    for key in ("target_version", "build_version", "git_commit", "git_short_commit"):
         if _target_version_matches(requested_version, manifest.get(key)):
             return True
     return False
