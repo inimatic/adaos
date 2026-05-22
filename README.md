@@ -202,6 +202,23 @@ runtime_pid = 26718 runtime_process.pid
 
 ```
 
+### Linux non-login SSH CLI shim
+
+When `adaos autostart enable` runs as root on Linux, AdaOS also maintains
+`/usr/local/bin/adaos`. This is for non-login SSH commands such as
+`ssh host 'adaos autostart update-status'`, where shell startup files may not
+put the venv into `PATH`.
+
+The shim exports the same root-control environment as the autostart wrapper and
+executes the stable root Python as `python -m adaos.apps.cli.app "$@"`. After a
+core root-promotion, `refresh_wrapper` rewrites the shim together with
+`~/.adaos/bin/adaos-autostart.sh`, so it follows the current `/root/adaos/src`
+checkout. `adaos autostart status --json` reports the `cli_shim` path and state.
+
+Set `ADAOS_LINUX_CLI_SHIM_PATH` before `adaos autostart enable` if a deployment
+needs a different shim path. Existing non-AdaOS files at that path are left
+untouched.
+
 19193
 
 ### Clone

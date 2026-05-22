@@ -443,6 +443,38 @@ def test_linux_enable_root_falls_back_to_system_service(monkeypatch, tmp_path: P
     assert res["scope"] == "system"
     assert (tmp_path / "etc" / "systemd" / "system" / "adaos.service").exists()
     assert ["systemctl", "enable", "--now", "adaos.service"] in calls
+    shim = tmp_path / "bin" / "adaos"
+    assert res["cli_shim"]["ok"] is True
+    assert res["cli_shim"]["path"] == str(shim.resolve())
+    shim_text = shim.read_text(encoding="utf-8")
+    assert "Managed by AdaOS autostart" in shim_text
+    assert "adaos.apps.cli.app" in shim_text
+    assert ' "$@"' in shim_text
+    assert "ADAOS_TOKEN" not in shim_text
+
+
+def test_linux_refresh_wrapper_updates_cli_shim(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "bin" / "adaos-autostart.sh"
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text("exec '/old/python'\n", encoding="utf-8")
+
+    monkeypatch.setattr(autostart, "_is_windows", lambda: False)
+    monkeypatch.setattr(autostart, "_is_macos", lambda: False)
+    monkeypatch.setattr(autostart, "_is_linux", lambda: True)
+    monkeypatch.setattr(autostart, "_linux_is_root", lambda: True)
+    monkeypatch.setattr(autostart, "_home", lambda: tmp_path)
+    monkeypatch.setattr(autostart, "status", lambda ctx: {"wrapper": str(wrapper), "scope": "system"})
+
+    spec = default_spec(_FakeCtx(tmp_path), host="127.0.0.1", port=8777, token="t1")
+    res = autostart.refresh_wrapper(_FakeCtx(tmp_path), spec)
+
+    shim = tmp_path / "bin" / "adaos"
+    assert shim.exists()
+    assert res["cli_shim"]["install"]["ok"] is True
+    assert res["cli_shim"]["changed"] is True
+    assert "adaos.apps.cli.app" in shim.read_text(encoding="utf-8")
 
 
 def test_linux_enable_root_prefers_system_service_even_with_user_bus(monkeypatch, tmp_path: Path) -> None:
