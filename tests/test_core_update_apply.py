@@ -588,4 +588,8 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/services/scenario/webspace_runtime.py" in critical
     assert "src/adaos/services/subnet/link_client.py" in critical
     assert "src/adaos/services/subnet/link_manager.py" in critical
-
+    assert "src/adaos/services/eventbus.py" in critical
+    assert "src/adaos/sdk/core/decorators.py" in critical
+    assert "src/adaos/sdk/data/bus.py" in critical
+    assert "src/adaos/services/skills_loader_importlib.py" in critical
+    assert "src/adaos/services/skill/manager.py" in critical
