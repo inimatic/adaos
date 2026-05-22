@@ -2696,6 +2696,7 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
                     webspace_recent_10s=recent_10s,
                     webspace_distinct_clients_10s=webspace_distinct_clients_10s,
                 )
+                reason = "client_reconnect_storm"
             webspace_reconnect_storm = (
                 recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
                 and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
