@@ -271,7 +271,15 @@ class MemberLinkClient:
             "build": {
                 "version": str(BUILD_INFO.version or ""),
                 "build_date": str(BUILD_INFO.build_date or ""),
-                "runtime_version": str(active_manifest.get("target_version") or ""),
+                "runtime_version": str(
+                    active_manifest.get("build_version")
+                    or active_manifest.get("base_version")
+                    or active_manifest.get("target_version")
+                    or ""
+                ),
+                "runtime_base_version": str(active_manifest.get("base_version") or ""),
+                "runtime_build_version": str(active_manifest.get("build_version") or ""),
+                "runtime_target_version": str(active_manifest.get("target_version") or ""),
                 "runtime_git_commit": str(active_manifest.get("git_commit") or ""),
                 "runtime_git_short_commit": str(active_manifest.get("git_short_commit") or ""),
                 "runtime_git_branch": str(active_manifest.get("git_branch") or active_manifest.get("target_rev") or ""),
@@ -305,6 +313,9 @@ class MemberLinkClient:
                     "slot": str(active_manifest.get("slot") or ""),
                     "target_rev": str(active_manifest.get("target_rev") or ""),
                     "target_version": str(active_manifest.get("target_version") or ""),
+                    "base_version": str(active_manifest.get("base_version") or ""),
+                    "build_version": str(active_manifest.get("build_version") or ""),
+                    "build_date": str(active_manifest.get("build_date") or ""),
                     "git_commit": str(active_manifest.get("git_commit") or ""),
                     "git_short_commit": str(active_manifest.get("git_short_commit") or ""),
                     "git_branch": str(active_manifest.get("git_branch") or ""),

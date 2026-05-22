@@ -59,6 +59,7 @@ def _snapshot_fingerprint(snapshot: dict[str, Any]) -> str:
         "node_names": snapshot.get("node_names") if isinstance(snapshot.get("node_names"), list) else [],
         "build": snapshot.get("build") if isinstance(snapshot.get("build"), dict) else {},
         "update_status": snapshot.get("update_status") if isinstance(snapshot.get("update_status"), dict) else {},
+        "slots": snapshot.get("slots") if isinstance(snapshot.get("slots"), dict) else {},
         "capacity": _compact_snapshot_catalog(capacity, ("io", "skills", "scenarios")),
         "desktop_catalog": _compact_snapshot_catalog(
             desktop_catalog,
@@ -69,6 +70,26 @@ def _snapshot_fingerprint(snapshot: dict[str, Any]) -> str:
         return json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     except Exception:
         return repr(material)
+
+
+def _merge_member_snapshot(existing: Any, heartbeat: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    for key, value in dict(heartbeat or {}).items():
+        key_str = str(key)
+        if key_str in {"capacity", "desktop_catalog"} and value is None:
+            continue
+        merged[key_str] = value
+    return merged
+
+
+def _snapshot_captured_at(snapshot: dict[str, Any], *, fallback: float | None = None) -> float:
+    try:
+        value = snapshot.get("captured_at")
+        if value is not None:
+            return float(value)
+    except Exception:
+        pass
+    return float(fallback or time.time())
 
 
 def _compact_snapshot_catalog(value: Any, keys: tuple[str, ...]) -> dict[str, Any]:
@@ -474,7 +495,7 @@ class HubLinkManager:
             node_id,
             node_names=list(link.node_names),
             snapshot=snap,
-            captured_at=float(snap.get("captured_at") or link.last_snapshot_at or time.time()),
+            captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
         )
         if _snapshot_has_desktop_material(snap):
             self._cancel_snapshot_refresh_task(node_id)
@@ -513,9 +534,15 @@ class HubLinkManager:
         if not link:
             return {"ok": False, "error": "member_not_connected"}
         snap = dict(snapshot or {})
+        merged_snapshot = _merge_member_snapshot(link.node_snapshot, snap)
+        snapshot_fingerprint = _snapshot_fingerprint(merged_snapshot)
+        changed = snapshot_fingerprint != str(link.last_snapshot_fingerprint or "")
         node_names = snap.get("node_names")
         if isinstance(node_names, list):
             link.node_names = [str(item or "").strip() for item in node_names if str(item or "").strip()]
+        link.node_snapshot = merged_snapshot
+        if changed:
+            link.last_snapshot_fingerprint = snapshot_fingerprint
         link.last_snapshot_at = time.time()
         link.last_message_at = link.last_snapshot_at
         update_status = snap.get("update_status")
@@ -526,29 +553,47 @@ class HubLinkManager:
                 link.last_hub_core_update_state = state
             if action:
                 link.last_hub_core_update_action = action
+        payload = _snapshot_event_payload(
+            node_id,
+            node_names=list(link.node_names),
+            snapshot=merged_snapshot,
+            captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
+        )
+        if _snapshot_has_desktop_material(merged_snapshot):
+            self._cancel_snapshot_refresh_task(node_id)
         try:
             from adaos.services.registry.subnet_directory import get_directory
 
-            try:
-                projection_captured_at = (
-                    float(snap.get("captured_at"))
-                    if snap.get("captured_at") is not None
-                    else None
+            directory = get_directory()
+            if changed:
+                directory.on_member_runtime_snapshot(node_id, merged_snapshot)
+            else:
+                try:
+                    projection_captured_at = (
+                        float(snap.get("captured_at"))
+                        if snap.get("captured_at") is not None
+                        else None
+                    )
+                except Exception:
+                    projection_captured_at = None
+                directory.on_member_runtime_snapshot_heartbeat(
+                    node_id,
+                    captured_at=projection_captured_at,
+                    node_state=str(snap.get("node_state") or "").strip() or None,
                 )
-            except Exception:
-                projection_captured_at = None
-            get_directory().on_member_runtime_snapshot_heartbeat(
-                node_id,
-                captured_at=projection_captured_at,
-                node_state=str(snap.get("node_state") or "").strip() or None,
-            )
         except Exception:
             _log.warning(
                 "failed to update subnet directory from member snapshot heartbeat node_id=%s",
                 node_id,
                 exc_info=True,
             )
-        return {"ok": True, "changed": False, "node_id": node_id}
+        try:
+            await self._push_node_display_assignment(node_id)
+        except Exception:
+            _log.debug("failed to push node display assignment after snapshot heartbeat node_id=%s", node_id, exc_info=True)
+        if changed:
+            _publish_link_event("subnet.member.snapshot.changed", payload)
+        return {"ok": True, "changed": changed, **payload}
 
     async def set_member_node_names(self, node_id: str, *, node_names: list[str]) -> dict[str, Any]:
         link = await self._get_link(node_id)
