@@ -153,6 +153,47 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     return out
 
 
+def _yws_client_limit_key(
+    dev_id: str | None,
+    *,
+    browser_session_id: str | None = None,
+    client_attempt_id: str | None = None,
+) -> str:
+    device_key = _clean_browser_metadata_value(dev_id, max_len=128) or "unknown"
+    session_key = _clean_browser_metadata_value(browser_session_id, max_len=128)
+    attempt_key = _clean_browser_metadata_value(client_attempt_id, max_len=128)
+    scoped_key = session_key or attempt_key
+    return f"{device_key}::{scoped_key}" if scoped_key else device_key
+
+
+def _split_yws_client_limit_key(value: str) -> tuple[str, str | None]:
+    token = str(value or "").strip()
+    if "::" not in token:
+        return token or "unknown", None
+    device_key, _, scoped_key = token.partition("::")
+    return device_key or "unknown", scoped_key or None
+
+
+def _websocket_yws_client_limit_key(websocket: WebSocket, *, fallback_device_id: str | None = None) -> str:
+    try:
+        params = getattr(websocket, "query_params", {}) or {}
+    except Exception:
+        params = {}
+    dev_id = _websocket_device_id(websocket) if websocket is not None else fallback_device_id
+    if not dev_id or dev_id == "unknown":
+        dev_id = fallback_device_id or dev_id
+    return _yws_client_limit_key(
+        dev_id,
+        browser_session_id=(
+            params.get("browser_session_id")
+            or params.get("browserSessionId")
+            or params.get("client_session_id")
+            or params.get("clientSessionId")
+        ),
+        client_attempt_id=params.get("client_yws_attempt_id") or params.get("client_attempt_id"),
+    )
+
+
 def _browser_auth_response_payload(
     *,
     dev_id: str,
@@ -2163,14 +2204,14 @@ def _forward_ws_bus_event(ev: DomainEvent) -> None:
 
 def _track_yws_connection(webspace_id: str, websocket: WebSocket, *, device_id: str | None = None) -> None:
     key = str(webspace_id or "").strip() or "default"
-    device_key = str(device_id or "").strip() or "unknown"
+    client_key = _websocket_yws_client_limit_key(websocket, fallback_device_id=device_id)
     _cancel_idle_room_reset(key)
     with _ACTIVE_YWS_LOCK:
         items = _ACTIVE_YWS_CONNECTIONS.setdefault(key, [])
         if websocket not in items:
             items.append(websocket)
         clients = _ACTIVE_YWS_CLIENTS.setdefault(key, {})
-        clients[device_key] = int(clients.get(device_key) or 0) + 1
+        clients[client_key] = int(clients.get(client_key) or 0) + 1
 
 
 def _next_yws_attempt_id(webspace_id: str, dev_id: str) -> str:
@@ -2259,17 +2300,38 @@ def _websocket_device_id(websocket: WebSocket) -> str:
         return "unknown"
 
 
-def _active_yws_connection_total_for_client(webspace_id: str, dev_id: str) -> int:
+def _active_yws_connection_total_for_client(
+    webspace_id: str,
+    dev_id: str,
+    *,
+    browser_session_id: str | None = None,
+    client_attempt_id: str | None = None,
+) -> int:
     key = str(webspace_id or "").strip() or "default"
     device_key = str(dev_id or "").strip() or "unknown"
+    client_key = _yws_client_limit_key(
+        device_key,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id,
+    )
     with _ACTIVE_YWS_LOCK:
         clients = _ACTIVE_YWS_CLIENTS.get(key)
         if isinstance(clients, dict):
-            return max(0, int(clients.get(device_key) or 0))
+            if browser_session_id or client_attempt_id:
+                return max(0, int(clients.get(client_key) or 0))
+            return sum(
+                max(0, int(count or 0))
+                for stored_key, count in clients.items()
+                if _split_yws_client_limit_key(stored_key)[0] == device_key
+            )
         return sum(
             1
             for websocket in list(_ACTIVE_YWS_CONNECTIONS.get(key) or [])
-            if _websocket_device_id(websocket) == device_key
+            if (
+                _websocket_yws_client_limit_key(websocket, fallback_device_id=device_key) == client_key
+                if browser_session_id or client_attempt_id
+                else _websocket_device_id(websocket) == device_key
+            )
         )
 
 
@@ -2279,9 +2341,8 @@ def _active_yws_connection_total_for_device(dev_id: str) -> int:
         return 0
     total = 0
     with _ACTIVE_YWS_LOCK:
-        for clients in _ACTIVE_YWS_CLIENTS.values():
-            if isinstance(clients, dict):
-                total += max(0, int(clients.get(device_key) or 0))
+        for sockets in _ACTIVE_YWS_CONNECTIONS.values():
+            total += sum(1 for websocket in list(sockets or []) if _websocket_device_id(websocket) == device_key)
     return total
 
 
@@ -2305,12 +2366,15 @@ def _active_yws_client_rows() -> list[dict[str, Any]]:
                     attempts.setdefault(f"{webspace_id}::{device_id}", []).append(attempt_id)
     rows: list[dict[str, Any]] = []
     for webspace_id, device_counts in clients.items():
-        for device_id, count in sorted(device_counts.items()):
+        for client_key, count in sorted(device_counts.items()):
+            device_id, scoped_client_id = _split_yws_client_limit_key(client_key)
             row = {
                 "webspace_id": str(webspace_id or "").strip() or "default",
                 "dev_id": str(device_id or "").strip() or "unknown",
                 "session_count": max(0, int(count or 0)),
             }
+            if scoped_client_id:
+                row["client_limit_id"] = scoped_client_id
             attempt_ids = attempts.get(f"{webspace_id}::{device_id}") or []
             if attempt_ids:
                 row["attempt_ids"] = attempt_ids[:3]
@@ -2320,16 +2384,31 @@ def _active_yws_client_rows() -> list[dict[str, Any]]:
     return rows
 
 
-async def _close_existing_yws_client_connections(webspace_id: str, dev_id: str) -> int:
+async def _close_existing_yws_client_connections(
+    webspace_id: str,
+    dev_id: str,
+    *,
+    browser_session_id: str | None = None,
+    client_attempt_id: str | None = None,
+) -> int:
     key = str(webspace_id or "").strip() or "default"
     device_key = str(dev_id or "").strip() or "unknown"
     if not device_key or device_key == "unknown":
         return 0
+    client_key = _yws_client_limit_key(
+        device_key,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id,
+    )
     with _ACTIVE_YWS_LOCK:
         sockets = [
             websocket
             for websocket in list(_ACTIVE_YWS_CONNECTIONS.get(key) or [])
-            if _websocket_device_id(websocket) == device_key
+            if (
+                _websocket_yws_client_limit_key(websocket, fallback_device_id=device_key) == client_key
+                if browser_session_id or client_attempt_id
+                else _websocket_device_id(websocket) == device_key
+            )
         ]
     if len(sockets) < _YWS_MAX_ACTIVE_PER_CLIENT:
         return 0
@@ -2742,14 +2821,14 @@ def _untrack_yws_connection(webspace_id: str, websocket: WebSocket) -> None:
             remaining_connections = len(items)
         if not items:
             _ACTIVE_YWS_CONNECTIONS.pop(key, None)
-        device_key = _websocket_device_id(websocket)
+        client_key = _websocket_yws_client_limit_key(websocket)
         clients = _ACTIVE_YWS_CLIENTS.get(key)
         if clients:
-            remaining = int(clients.get(device_key) or 0) - 1
+            remaining = int(clients.get(client_key) or 0) - 1
             if remaining > 0:
-                clients[device_key] = remaining
+                clients[client_key] = remaining
             else:
-                clients.pop(device_key, None)
+                clients.pop(client_key, None)
             if not clients:
                 _ACTIVE_YWS_CLIENTS.pop(key, None)
     if remaining_connections <= 0:
@@ -2775,20 +2854,22 @@ def active_browser_session_snapshot(*, now_ts: float | None = None) -> dict[str,
         }
     peers: list[dict[str, Any]] = []
     for webspace_id, device_counts in clients.items():
-        for device_id, session_count in sorted(device_counts.items()):
+        for client_key, session_count in sorted(device_counts.items()):
+            device_id, scoped_client_id = _split_yws_client_limit_key(client_key)
             token = str(device_id or "").strip()
             if not token:
                 continue
-            peers.append(
-                {
-                    "device_id": token,
-                    "webspace_id": str(webspace_id or "").strip() or "default",
-                    "connection_state": "connected",
-                    "yjs_channel_state": "open",
-                    "session_count": int(session_count or 0),
-                    "source": "yws_gateway",
-                }
-            )
+            peer = {
+                "device_id": token,
+                "webspace_id": str(webspace_id or "").strip() or "default",
+                "connection_state": "connected",
+                "yjs_channel_state": "open",
+                "session_count": int(session_count or 0),
+                "source": "yws_gateway",
+            }
+            if scoped_client_id:
+                peer["client_limit_id"] = scoped_client_id
+            peers.append(peer)
     return {
         "peer_total": len(peers),
         "peers": peers,
@@ -4286,6 +4367,13 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         params.get("client_yws_attempt_id") or params.get("client_attempt_id"),
         max_len=128,
     ) or ""
+    browser_session_id = _clean_browser_metadata_value(
+        params.get("browser_session_id")
+        or params.get("browserSessionId")
+        or params.get("client_session_id")
+        or params.get("clientSessionId"),
+        max_len=128,
+    )
     browser_metadata = _browser_session_metadata(params)
 
     if _ws_trace_enabled():
@@ -4332,11 +4420,22 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         _ylog.debug("browser access policy check failed webspace=%s dev=%s attempt=%s", webspace_id, dev_id, attempt_id, exc_info=True)
     if not await _accept_websocket(websocket, channel="yws"):
         return
-    replaced_existing = await _close_existing_yws_client_connections(webspace_id, dev_id)
+    replaced_existing = await _close_existing_yws_client_connections(
+        webspace_id,
+        dev_id,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id or None,
+    )
     if replaced_existing:
         deadline = time.monotonic() + 1.0
         while (
-            _active_yws_connection_total_for_client(webspace_id, dev_id) >= _YWS_MAX_ACTIVE_PER_CLIENT
+            _active_yws_connection_total_for_client(
+                webspace_id,
+                dev_id,
+                browser_session_id=browser_session_id,
+                client_attempt_id=client_attempt_id or None,
+            )
+            >= _YWS_MAX_ACTIVE_PER_CLIENT
             and time.monotonic() < deadline
         ):
             await asyncio.sleep(0.05)
