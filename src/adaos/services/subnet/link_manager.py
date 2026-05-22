@@ -207,6 +207,240 @@ def _coerce_json_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _member_infrastate_webspaces() -> list[str]:
+    raw = str(os.getenv("ADAOS_SUBNET_YJS_REPLICATION_WEBSPACES") or "desktop").strip()
+    out: list[str] = []
+    for item in raw.split(","):
+        token = str(item or "").strip()
+        if token and token not in out:
+            out.append(token)
+    return out or ["desktop"]
+
+
+def _member_infrastate_projection_min_interval_s() -> float:
+    raw = str(os.getenv("ADAOS_SUBNET_MEMBER_INFRASTATE_PROJECTION_MIN_INTERVAL_S") or "").strip()
+    try:
+        value = float(raw or 30.0)
+    except Exception:
+        value = 30.0
+    return max(5.0, min(300.0, value))
+
+
+def _core_public_version(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    public, _, _local = text.partition("+")
+    return public.strip() or text
+
+
+def _core_slot_manifest(slots_payload: dict[str, Any], active_slot: str | None = None) -> dict[str, Any]:
+    active = str(active_slot or slots_payload.get("active_slot") or "").strip()
+    lookup_active = active.upper()
+    manifest = slots_payload.get("active_manifest") if isinstance(slots_payload.get("active_manifest"), dict) else {}
+    raw_slots = slots_payload.get("slots") if isinstance(slots_payload.get("slots"), dict) else {}
+    slot_meta = (raw_slots.get(active) or raw_slots.get(lookup_active)) if active else {}
+    slot_manifest = slot_meta.get("manifest") if isinstance(slot_meta, dict) and isinstance(slot_meta.get("manifest"), dict) else {}
+    merged = dict(slot_manifest)
+    merged.update(manifest)
+    if active:
+        merged.setdefault("slot", active)
+    return merged
+
+
+def _core_slot_version(manifest: dict[str, Any], build: dict[str, Any]) -> str:
+    for value in (
+        manifest.get("build_version"),
+        manifest.get("base_version"),
+        build.get("runtime_build_version"),
+        build.get("runtime_base_version"),
+        build.get("runtime_version"),
+        build.get("version"),
+        manifest.get("target_version"),
+    ):
+        label = _core_public_version(value)
+        if label:
+            return label
+    return ""
+
+
+def _core_slot_commit(manifest: dict[str, Any], build: dict[str, Any]) -> str:
+    for value in (
+        manifest.get("git_short_commit"),
+        manifest.get("git_commit"),
+        build.get("runtime_git_short_commit"),
+        build.get("runtime_git_commit"),
+        build.get("git_short_sha"),
+        build.get("git_sha"),
+        manifest.get("target_rev"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text[:7] if len(text) >= 40 and all(ch in "0123456789abcdefABCDEF" for ch in text) else text
+    return ""
+
+
+def _core_slot_summary_subtitle(slots_payload: dict[str, Any], build: dict[str, Any], *, active_slot: str | None = None) -> str:
+    active = str(active_slot or slots_payload.get("active_slot") or "").strip() or "--"
+    manifest = _core_slot_manifest(slots_payload, active)
+    parts = [f"slot {active}"]
+    version = _core_slot_version(manifest, build)
+    commit = _core_slot_commit(manifest, build)
+    if version:
+        parts.append(version)
+    if commit:
+        parts.append(commit)
+    if len(parts) == 1:
+        parts.append("unknown")
+    return " | ".join(parts)
+
+
+def _member_build_meta(snapshot: dict[str, Any]) -> dict[str, Any]:
+    build = snapshot.get("build") if isinstance(snapshot.get("build"), dict) else {}
+    runtime_build_version = str(build.get("runtime_build_version") or "").strip()
+    runtime_base_version = str(build.get("runtime_base_version") or "").strip()
+    runtime_target_version = str(build.get("runtime_target_version") or build.get("runtime_version") or "").strip()
+    return {
+        "version": str(build.get("version") or "unknown"),
+        "build_date": str(build.get("build_date") or ""),
+        "git_sha": "",
+        "git_short_sha": "",
+        "git_branch": "",
+        "git_subject": "",
+        "repo_root": "",
+        "runtime_version": runtime_build_version or runtime_base_version or str(build.get("runtime_version") or build.get("version") or "unknown"),
+        "runtime_base_version": runtime_base_version,
+        "runtime_build_version": runtime_build_version or str(build.get("version") or ""),
+        "runtime_target_version": runtime_target_version,
+        "runtime_git_commit": str(build.get("runtime_git_commit") or ""),
+        "runtime_git_short_commit": str(build.get("runtime_git_short_commit") or ""),
+        "runtime_git_branch": str(build.get("runtime_git_branch") or ""),
+        "runtime_git_subject": str(build.get("runtime_git_subject") or ""),
+    }
+
+
+def _member_slots_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    slots = snapshot.get("slots") if isinstance(snapshot.get("slots"), dict) else {}
+    update = snapshot.get("update_status") if isinstance(snapshot.get("update_status"), dict) else {}
+    active_manifest = slots.get("active_manifest") if isinstance(slots.get("active_manifest"), dict) else {}
+    active_slot = str(slots.get("active_slot") or active_manifest.get("slot") or update.get("target_slot") or "")
+    previous_slot = str(slots.get("previous_slot") or "")
+    raw_slots = slots.get("slots") if isinstance(slots.get("slots"), dict) else {}
+    slot_items = json.loads(json.dumps(raw_slots)) if raw_slots else {}
+    if active_slot and active_slot not in slot_items:
+        slot_items[active_slot] = {
+            "manifest": {
+                "slot": str(active_manifest.get("slot") or active_slot),
+                "target_rev": str(active_manifest.get("target_rev") or ""),
+                "target_version": str(active_manifest.get("target_version") or ""),
+                "base_version": str(active_manifest.get("base_version") or ""),
+                "build_version": str(active_manifest.get("build_version") or ""),
+                "git_commit": str(active_manifest.get("git_commit") or ""),
+                "git_short_commit": str(active_manifest.get("git_short_commit") or ""),
+                "git_branch": str(active_manifest.get("git_branch") or ""),
+                "git_subject": str(active_manifest.get("git_subject") or ""),
+            },
+            "path": "",
+        }
+    if previous_slot and previous_slot not in slot_items:
+        slot_items[previous_slot] = {"manifest": {"slot": previous_slot}, "path": ""}
+    return {
+        "active_slot": active_slot,
+        "previous_slot": previous_slot,
+        "slots": slot_items,
+        "active_manifest": dict(active_manifest),
+    }
+
+
+def _member_status_payload(snapshot: dict[str, Any], *, captured_at: float) -> dict[str, Any]:
+    update = snapshot.get("update_status") if isinstance(snapshot.get("update_status"), dict) else {}
+    state = str(update.get("state") or snapshot.get("node_state") or "connected").strip()
+    message = str(update.get("message") or "").strip()
+    if not message and snapshot:
+        message = "remote member snapshot"
+    return {
+        "state": state,
+        "phase": str(update.get("phase") or ""),
+        "action": str(update.get("action") or ""),
+        "message": message or "remote snapshot pending",
+        "reason": str(update.get("reason") or "subnet.member.snapshot"),
+        "target_rev": str(update.get("target_rev") or ""),
+        "target_version": str(update.get("target_version") or ""),
+        "target_slot": str(update.get("target_slot") or ""),
+        "scheduled_for": update.get("scheduled_for"),
+        "updated_at": update.get("updated_at") or captured_at,
+        "finished_at": update.get("finished_at"),
+    }
+
+
+def _member_last_result_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    last = snapshot.get("last_result") if isinstance(snapshot.get("last_result"), dict) else {}
+    return {
+        "state": str(last.get("state") or ""),
+        "phase": str(last.get("phase") or ""),
+        "message": str(last.get("message") or ""),
+        "target_slot": str(last.get("target_slot") or ""),
+        "finished_at": last.get("finished_at"),
+        "validated_at": last.get("validated_at"),
+    }
+
+
+def _member_lifecycle_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "node_state": str(snapshot.get("node_state") or "connected"),
+        "reason": str(snapshot.get("reason") or "remote member snapshot"),
+        "draining": bool(snapshot.get("draining")),
+    }
+
+
+def _member_infrastate_projection(node_id: str, *, node_names: list[str], snapshot: dict[str, Any], captured_at: float) -> dict[str, Any]:
+    node_key = str(node_id or "").strip()
+    snap = snapshot if isinstance(snapshot, dict) else {}
+    captured = float(captured_at or _snapshot_captured_at(snap))
+    build = _member_build_meta(snap)
+    slots_payload = _member_slots_payload(snap)
+    status = _member_status_payload(snap, captured_at=captured)
+    last_result = _member_last_result_payload(snap)
+    lifecycle = _member_lifecycle_payload(snap)
+    subtitle = _core_slot_summary_subtitle(slots_payload, build, active_slot=str(slots_payload.get("active_slot") or ""))
+    label = next((str(item or "").strip() for item in node_names if str(item or "").strip()), node_key or "member")
+    return {
+        "summary": {
+            "label": "Infra State",
+            "value": str(status.get("state") or lifecycle.get("node_state") or "connected"),
+            "subtitle": subtitle,
+            "description": str(status.get("message") or "remote member snapshot"),
+            "updated_at": captured,
+            "node_id": node_key,
+            "selected_node_id": node_key,
+            "selected_node_label": label,
+            "source": "subnet.member.snapshot",
+        },
+        "status": status,
+        "last_result": last_result,
+        "lifecycle": lifecycle,
+        "slots_meta": slots_payload,
+        "build_meta": build,
+        "last_refresh_ts": captured,
+        "projection_diag": {
+            "source": "subnet.link_manager.member_snapshot",
+            "node_id": node_key,
+            "captured_at": captured,
+        },
+    }
+
+
+def _member_infrastate_projection_fingerprint(projection: dict[str, Any]) -> str:
+    material = json.loads(json.dumps(projection, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+    if isinstance(material.get("summary"), dict):
+        material["summary"].pop("updated_at", None)
+    if isinstance(material.get("status"), dict):
+        material["status"].pop("updated_at", None)
+    material.pop("last_refresh_ts", None)
+    material.pop("projection_diag", None)
+    return json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
 def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -285,6 +519,13 @@ class HubLinkManager:
         self._last_yjs_ingest_node_id = ""
         self._last_yjs_ingest_webspace_id = ""
         self._last_yjs_ingest_bytes = 0
+        self._member_infrastate_projection_fingerprints: dict[tuple[str, str], str] = {}
+        self._member_infrastate_projection_last_at: dict[tuple[str, str], float] = {}
+        self._member_infrastate_projection_total = 0
+        self._member_infrastate_projection_failed_total = 0
+        self._last_member_infrastate_projection_at = 0.0
+        self._last_member_infrastate_projection_node_id = ""
+        self._last_member_infrastate_projection_webspace_id = ""
 
     @staticmethod
     def _member_snapshot_followup_delay_s() -> float:
@@ -469,6 +710,98 @@ class HubLinkManager:
         _publish_link_event("subnet.member.meta.changed", payload)
         return {"ok": True, **payload}
 
+    async def _publish_member_infrastate_projection(
+        self,
+        node_id: str,
+        *,
+        node_names: list[str],
+        snapshot: dict[str, Any],
+        captured_at: float,
+    ) -> None:
+        node_key = str(node_id or "").strip()
+        if not node_key or not isinstance(snapshot, dict):
+            return
+        projection = _member_infrastate_projection(
+            node_key,
+            node_names=list(node_names or []),
+            snapshot=snapshot,
+            captured_at=captured_at,
+        )
+        fingerprint = _member_infrastate_projection_fingerprint(projection)
+        now = time.time()
+        min_interval = _member_infrastate_projection_min_interval_s()
+        for webspace_id in _member_infrastate_webspaces():
+            ws_id = str(webspace_id or "").strip() or "default"
+            cache_key = (node_key, ws_id)
+            if (
+                self._member_infrastate_projection_fingerprints.get(cache_key) == fingerprint
+                and now - float(self._member_infrastate_projection_last_at.get(cache_key) or 0.0) < min_interval
+            ):
+                continue
+            projection_copy = json.loads(json.dumps(projection, ensure_ascii=False, separators=(",", ":")))
+
+            def _merge_projection(ydoc: Any, txn: Any) -> None:
+                data_map = ydoc.get_map("data")
+                nodes = _coerce_json_dict(data_map.get("nodes"))
+                node_state = _coerce_json_dict(nodes.get(node_key))
+                infrastate = _coerce_json_dict(node_state.get("infrastate"))
+                merged = dict(infrastate)
+                merged.update(projection_copy)
+                if infrastate == merged:
+                    return
+                node_state["infrastate"] = merged
+                nodes[node_key] = node_state
+                data_map.set(txn, "nodes", nodes)
+
+            live_scheduled = mutate_live_room(
+                ws_id,
+                _merge_projection,
+                root_names=["data"],
+                source="subnet.link_manager.member_infrastate",
+                owner="core:subnet_link_manager",
+                channel="core.subnet.link.member_infrastate",
+                governed=True,
+            )
+            if not live_scheduled:
+                try:
+                    async with ystore_write_metadata(
+                        root_names=["data"],
+                        source="subnet.link_manager.member_infrastate",
+                        owner="core:subnet_link_manager",
+                        channel="core.subnet.link.member_infrastate",
+                        governed=True,
+                    ):
+                        async with async_get_ydoc(ws_id, load_mark_roots=["data"], governed=True) as ydoc:
+                            data_map = ydoc.get_map("data")
+                            nodes = _coerce_json_dict(data_map.get("nodes"))
+                            node_state = _coerce_json_dict(nodes.get(node_key))
+                            infrastate = _coerce_json_dict(node_state.get("infrastate"))
+                            merged = dict(infrastate)
+                            merged.update(projection_copy)
+                            if infrastate == merged:
+                                self._member_infrastate_projection_fingerprints[cache_key] = fingerprint
+                                self._member_infrastate_projection_last_at[cache_key] = now
+                                continue
+                            node_state["infrastate"] = merged
+                            nodes[node_key] = node_state
+                            with ydoc.begin_transaction() as txn:
+                                data_map.set(txn, "nodes", nodes)
+                except Exception:
+                    self._member_infrastate_projection_failed_total += 1
+                    _log.debug(
+                        "failed to publish member infrastate projection node_id=%s webspace=%s",
+                        node_key,
+                        ws_id,
+                        exc_info=True,
+                    )
+                    continue
+            self._member_infrastate_projection_total += 1
+            self._member_infrastate_projection_fingerprints[cache_key] = fingerprint
+            self._member_infrastate_projection_last_at[cache_key] = now
+            self._last_member_infrastate_projection_at = now
+            self._last_member_infrastate_projection_node_id = node_key
+            self._last_member_infrastate_projection_webspace_id = ws_id
+
     async def update_member_snapshot(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
         link = await self._get_link(node_id)
         if not link:
@@ -525,6 +858,15 @@ class HubLinkManager:
             await self._push_node_display_assignment(node_id)
         except Exception:
             _log.debug("failed to push node display assignment after snapshot node_id=%s", node_id, exc_info=True)
+        try:
+            await self._publish_member_infrastate_projection(
+                node_id,
+                node_names=list(link.node_names),
+                snapshot=snap,
+                captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
+            )
+        except Exception:
+            _log.debug("failed to schedule member infrastate projection after snapshot node_id=%s", node_id, exc_info=True)
         if changed:
             _publish_link_event("subnet.member.snapshot.changed", payload)
         return {"ok": True, "changed": changed, **payload}
@@ -591,6 +933,15 @@ class HubLinkManager:
             await self._push_node_display_assignment(node_id)
         except Exception:
             _log.debug("failed to push node display assignment after snapshot heartbeat node_id=%s", node_id, exc_info=True)
+        try:
+            await self._publish_member_infrastate_projection(
+                node_id,
+                node_names=list(link.node_names),
+                snapshot=merged_snapshot,
+                captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
+            )
+        except Exception:
+            _log.debug("failed to schedule member infrastate projection after snapshot heartbeat node_id=%s", node_id, exc_info=True)
         if changed:
             _publish_link_event("subnet.member.snapshot.changed", payload)
         return {"ok": True, "changed": changed, **payload}
@@ -798,6 +1149,15 @@ class HubLinkManager:
                 "last_ingest_node_id": self._last_yjs_ingest_node_id or None,
                 "last_ingest_webspace_id": self._last_yjs_ingest_webspace_id or None,
                 "last_ingest_bytes": int(self._last_yjs_ingest_bytes),
+                "member_infrastate_projection_total": int(self._member_infrastate_projection_total),
+                "member_infrastate_projection_failed_total": int(self._member_infrastate_projection_failed_total),
+                "last_member_infrastate_projection_ago_s": (
+                    round(max(0.0, now - self._last_member_infrastate_projection_at), 3)
+                    if self._last_member_infrastate_projection_at
+                    else None
+                ),
+                "last_member_infrastate_projection_node_id": self._last_member_infrastate_projection_node_id or None,
+                "last_member_infrastate_projection_webspace_id": self._last_member_infrastate_projection_webspace_id or None,
             },
             "members": items,
             "updated_at": now,
