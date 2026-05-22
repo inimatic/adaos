@@ -46,12 +46,21 @@ UPDATE_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/apps/cli/commands/skill.py",
 )
 
+RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
+    "src/adaos/services/eventbus.py",
+    "src/adaos/sdk/core/decorators.py",
+    "src/adaos/sdk/data/bus.py",
+    "src/adaos/services/skills_loader_importlib.py",
+    "src/adaos/services/skill/manager.py",
+)
+
 BOOTSTRAP_CRITICAL_PATHS: tuple[str, ...] = tuple(
     dict.fromkeys(
         (
             *SUPERVISOR_BOOTSTRAP_PATHS,
             *SIDECAR_CONTROLLED_PATHS,
             *UPDATE_CONTROL_PATHS,
+            *RUNTIME_SKILL_CONTROL_PATHS,
         )
     )
 )
