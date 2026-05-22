@@ -1499,7 +1499,7 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
 
 
-def test_yws_guard_observes_hot_reconnecting_client_without_quarantine(monkeypatch) -> None:
+def test_yws_guard_rejects_hot_reconnecting_client_without_server_quarantine(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     gateway_module._YWS_OPEN_HISTORY.clear()
@@ -1517,16 +1517,17 @@ def test_yws_guard_observes_hot_reconnecting_client_without_quarantine(monkeypat
         gateway_module._record_yws_open("desktop", "dev-hot")
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
-    assert reason == ""
+    assert reason == "client_reconnect_storm"
     assert diag["client_open_15s"] == 3
     assert diag["client_reconnect_storm"] is True
     assert diag["webspace_distinct_clients_10s"] == 1
     assert diag["quarantine_ttl_s"] is None
     assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL == {}
+    assert gateway_module._YWS_GUARD_DIAG["last_reject_reason"] == "client_reconnect_storm"
     assert gateway_module._YWS_GUARD_DIAG["last_client_reconnect_storm_dev_id"] == "dev-hot"
 
     reason_again, _diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
-    assert reason_again == ""
+    assert reason_again == "client_reconnect_storm"
     storm = gateway_module._yws_storm_snapshot(time.time())
     assert storm["client_reconnect_storm_detected"] is True
     assert storm["storm_detected"] is False
