@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import threading
 import time
@@ -56,6 +57,18 @@ def _enable_projection_demand(mod, *slot_names: str, webspace_id: str = "default
     mod._PROJECTION_RUNTIME.reset()
     for slot_name in slot_names:
         mod._PROJECTION_RUNTIME.remember_projection(slot_name, webspace_id=webspace_id, subscription_id="test")
+
+
+def _run_stream_snapshots_inline(mod, monkeypatch) -> None:
+    monkeypatch.setattr(
+        mod,
+        "_schedule_stream_receiver_snapshot",
+        lambda receiver, webspace_id, *, reason: mod._publish_registered_stream_receiver_snapshot(
+            receiver,
+            webspace_id,
+            reason=reason,
+        ),
+    )
 
 
 def test_infrastate_yjs_tabs_do_not_self_reference_sync_runtime():
@@ -2142,10 +2155,113 @@ def test_infrastate_webspace_reload_invalidates_projection_and_stream_state(monk
     assert scheduled == [{"webspace_id": "desktop", "reason": "desktop.webspace.reloaded"}]
 
 
+def test_infrastate_runtime_cache_invalidation_does_not_wait_for_busy_snapshot_lock(monkeypatch):
+    mod = _load_infrastate_module()
+    cache_key = mod._snapshot_cache_key("desktop")
+    old_snapshot = {"summary": {"value": "old"}}
+    mod._snapshot_cache[cache_key] = (time.monotonic(), old_snapshot)
+    mod._snapshot_cache_projection_fingerprints[cache_key] = "fp-old"
+
+    lock = mod._snapshot_cache_lock_for(cache_key)
+    assert lock.acquire(blocking=False)
+    try:
+        mod._invalidate_runtime_caches(webspace_id="desktop")
+    finally:
+        lock.release()
+
+    assert mod._snapshot_cache[cache_key][1] == old_snapshot
+    assert mod._snapshot_cache_invalidated_after(cache_key, 0.0)
+
+    monkeypatch.setattr(mod, "_snapshot_cache_ttl_for_pressure", lambda _webspace_id: 60.0)
+    monkeypatch.setattr(mod, "_snapshot_or_fallback", lambda *, webspace_id=None: {"summary": {"value": "new"}})
+    monkeypatch.setattr(mod, "_snapshot_projection_fingerprint", lambda _snapshot: "fp-new")
+
+    snapshot = mod._snapshot_or_fallback_cached(webspace_id="desktop", allow_cache=True)
+
+    assert snapshot["summary"]["value"] == "new"
+    assert mod._snapshot_cache[cache_key][1]["summary"]["value"] == "new"
+    assert mod._snapshot_cache_projection_fingerprints[cache_key] == "fp-new"
+
+
+def test_infrastate_snapshot_cache_skips_store_when_invalidated_during_build(monkeypatch):
+    mod = _load_infrastate_module()
+    cache_key = mod._snapshot_cache_key("desktop")
+
+    monkeypatch.setattr(mod, "_snapshot_cache_ttl_for_pressure", lambda _webspace_id: 60.0)
+    monkeypatch.setattr(mod, "_snapshot_projection_fingerprint", lambda _snapshot: "fp-new")
+
+    def _snapshot_during_invalidation(*, webspace_id=None):
+        mod._invalidate_runtime_caches(webspace_id=webspace_id)
+        return {"summary": {"value": "during-invalidation"}}
+
+    monkeypatch.setattr(mod, "_snapshot_or_fallback", _snapshot_during_invalidation)
+
+    snapshot = mod._snapshot_or_fallback_cached(webspace_id="desktop", allow_cache=True)
+
+    assert snapshot["summary"]["value"] == "during-invalidation"
+    assert cache_key not in mod._snapshot_cache
+    assert cache_key not in mod._snapshot_cache_projection_fingerprints
+
+
+def test_infrastate_get_snapshot_force_refresh_bypasses_snapshot_cache(monkeypatch):
+    mod = _load_infrastate_module()
+    calls: list[dict[str, object]] = []
+
+    def _cached_snapshot(**kwargs):
+        calls.append(dict(kwargs))
+        return {"summary": {"label": "Infra State", "value": "fresh"}}
+
+    monkeypatch.setattr(mod, "_snapshot_or_fallback_cached", _cached_snapshot)
+    monkeypatch.setattr(mod, "load_config", lambda: SimpleNamespace(node_id="local"))
+
+    snapshot = mod.get_snapshot(webspace_id="desktop", force_refresh=True)
+
+    assert snapshot["summary"]["value"] == "fresh"
+    assert calls == [{"webspace_id": "desktop", "allow_cache": False, "selected_node_id": None}]
+
+
+def test_infrastate_action_invalidates_cache_and_refreshes_inventory_streams(monkeypatch):
+    mod = _load_infrastate_module()
+    cache_key = mod._snapshot_cache_key("desktop")
+    mod._snapshot_cache[cache_key] = (time.monotonic(), {"summary": {"value": "old"}})
+    mod._snapshot_cache_entry_versions[cache_key] = 0
+    mod._snapshot_cache_projection_fingerprints[cache_key] = "fp-old"
+    mod._marketplace_catalog_cache[("desktop", "skills")] = (time.monotonic(), [])
+    mod._registry_catalog_cache[("desktop", "skills")] = (time.monotonic(), [])
+    mod._registry_catalog_meta_cache[("desktop", "skills")] = (time.monotonic(), {"catalog_state": "available"})
+
+    stream_refreshes: list[tuple[str, str | None, str]] = []
+    snapshot_refreshes: list[dict[str, object]] = []
+
+    monkeypatch.setattr(mod, "load_config", lambda: SimpleNamespace(node_id="local", role="hub"))
+    monkeypatch.setattr(mod, "_perform_action", lambda action_id, conf, payload: {"ok": True})
+    monkeypatch.setattr(
+        mod,
+        "_schedule_stream_receiver_snapshot",
+        lambda receiver, webspace_id, *, reason: stream_refreshes.append((receiver, webspace_id, reason)),
+    )
+    monkeypatch.setattr(mod, "_schedule_snapshot_refresh", lambda **kwargs: snapshot_refreshes.append(dict(kwargs)))
+
+    mod.on_action(SimpleNamespace(payload={"id": "skill_activate", "webspace_id": "desktop", "name": "browsers_skill"}))
+
+    assert cache_key not in mod._snapshot_cache
+    assert cache_key not in mod._snapshot_cache_entry_versions
+    assert cache_key not in mod._snapshot_cache_projection_fingerprints
+    assert mod._marketplace_catalog_cache == {}
+    assert mod._registry_catalog_cache == {}
+    assert mod._registry_catalog_meta_cache == {}
+    assert stream_refreshes == [
+        (mod._skills_receiver(), "desktop", "infrastate.action:skill_activate"),
+        (mod._marketplace_skills_receiver(), "desktop", "infrastate.action:skill_activate"),
+    ]
+    assert snapshot_refreshes == [{"webspace_id": "desktop", "reason": "infrastate.action:skill_activate"}]
+
+
 def test_infrastate_stream_snapshot_request_publishes_requested_receiver(monkeypatch):
     mod = _load_infrastate_module()
     published: list[tuple[str, object, str | None]] = []
     cache_flags: list[bool] = []
+    _run_stream_snapshots_inline(mod, monkeypatch)
 
     monkeypatch.setattr(
         mod,
@@ -2181,9 +2297,104 @@ def test_infrastate_stream_snapshot_request_publishes_requested_receiver(monkeyp
     assert cache_flags == [True]
 
 
+def test_infrastate_stream_snapshot_request_schedules_registered_receiver(monkeypatch):
+    mod = _load_infrastate_module()
+    scheduled: list[tuple[str, str | None, str]] = []
+
+    monkeypatch.setattr(
+        mod,
+        "_schedule_stream_receiver_snapshot",
+        lambda receiver, webspace_id, *, reason: scheduled.append((receiver, webspace_id, reason)),
+    )
+
+    mod.on_webio_stream_snapshot_requested(
+        SimpleNamespace(
+            payload={
+                "receiver": mod._scenarios_receiver(),
+                "webspace_id": "desktop",
+            }
+        )
+    )
+
+    assert scheduled == [(mod._scenarios_receiver(), "desktop", "snapshot_requested")]
+
+
+def test_infrastate_stream_subscription_changed_schedules_initial_snapshot(monkeypatch):
+    mod = _load_infrastate_module()
+    remembered: list[tuple[str | None, str]] = []
+    scheduled: list[tuple[str, str | None, str]] = []
+
+    monkeypatch.setattr(
+        mod,
+        "_remember_stream_receiver",
+        lambda webspace_id, receiver: remembered.append((webspace_id, receiver)),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_schedule_stream_receiver_snapshot",
+        lambda receiver, webspace_id, *, reason: scheduled.append((receiver, webspace_id, reason)),
+    )
+
+    mod.on_webio_stream_subscription_changed(
+        SimpleNamespace(
+            payload={
+                "receiver": mod._scenarios_receiver(),
+                "webspace_id": "desktop",
+                "action": "subscribed",
+            }
+        )
+    )
+
+    assert remembered == [("desktop", mod._scenarios_receiver())]
+    assert scheduled == [(mod._scenarios_receiver(), "desktop", "subscription_changed")]
+
+
+def test_infrastate_stream_subscription_changed_forgets_without_snapshot(monkeypatch):
+    mod = _load_infrastate_module()
+    forgotten: list[tuple[str | None, str]] = []
+    scheduled: list[tuple[str, str | None, str]] = []
+
+    monkeypatch.setattr(
+        mod,
+        "_forget_stream_receiver",
+        lambda webspace_id, receiver: forgotten.append((webspace_id, receiver)),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_schedule_stream_receiver_snapshot",
+        lambda receiver, webspace_id, *, reason: scheduled.append((receiver, webspace_id, reason)),
+    )
+
+    mod.on_webio_stream_subscription_changed(
+        SimpleNamespace(
+            payload={
+                "receiver": mod._skills_receiver(),
+                "webspace_id": "desktop",
+                "action": "unsubscribed",
+            }
+        )
+    )
+    mod.on_webio_stream_subscription_changed(
+        SimpleNamespace(
+            payload={
+                "receiver": "infrastate.details.skills.skill-a",
+                "webspace_id": "desktop",
+                "action": "subscribed",
+            }
+        )
+    )
+
+    assert forgotten == [
+        ("desktop", mod._skills_receiver()),
+        ("desktop", "infrastate.details.skills.skill-a"),
+    ]
+    assert scheduled == []
+
+
 def test_infrastate_operations_stream_request_uses_direct_sdk_builder(monkeypatch):
     mod = _load_infrastate_module()
     published: list[tuple[str, object, str | None]] = []
+    _run_stream_snapshots_inline(mod, monkeypatch)
 
     monkeypatch.setattr(
         mod,
@@ -2256,6 +2467,7 @@ def test_infrastate_stream_snapshot_request_bypasses_noncritical_guardrail(monke
     mod = _load_infrastate_module()
     published: list[tuple[str, object, str | None]] = []
     suppressions: list[dict[str, object]] = []
+    _run_stream_snapshots_inline(mod, monkeypatch)
 
     monkeypatch.setattr(
         mod,
@@ -2328,6 +2540,7 @@ def test_infrastate_cached_snapshot_coalesces_concurrent_stream_requests(monkeyp
 def test_infrastate_stream_snapshot_request_supports_yjs_load_mark(monkeypatch):
     mod = _load_infrastate_module()
     published: list[tuple[str, object, str | None]] = []
+    _run_stream_snapshots_inline(mod, monkeypatch)
 
     monkeypatch.setattr(
         mod,
@@ -2363,6 +2576,7 @@ def test_infrastate_stream_snapshot_request_supports_yjs_load_mark(monkeypatch):
 def test_infrastate_stream_snapshot_request_supports_yjs_load_mark_from_reliability_runtime(monkeypatch):
     mod = _load_infrastate_module()
     published: list[tuple[str, object, str | None]] = []
+    _run_stream_snapshots_inline(mod, monkeypatch)
 
     monkeypatch.setattr(
         mod,
@@ -2403,6 +2617,67 @@ def test_infrastate_stream_snapshot_request_supports_yjs_load_mark_from_reliabil
             "default",
         ),
     ]
+
+
+def test_infrastate_direct_yjs_load_mark_stream_uses_history_when_memory_is_empty(monkeypatch):
+    mod = _load_infrastate_module()
+
+    monkeypatch.setattr(
+        mod,
+        "yjs_load_mark_snapshot",
+        lambda webspace_id=None: {"selected_webspace": {"items": [], "owner_items": []}},
+    )
+    monkeypatch.setattr(
+        mod,
+        "list_yjs_load_mark_history_rows",
+        lambda **kwargs: {
+            "items": [
+                {
+                    "kind": "owner",
+                    "bucket_id": "_by_owner/skill_infrastate_skill",
+                    "display": "_by_owner/skill_infrastate_skill",
+                    "peak_bps": 12.0,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_snapshot_or_fallback_cached",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("history fallback should avoid full snapshot")),
+    )
+
+    rows = mod._build_stream_payload_for_receiver(mod._yjs_load_receiver(), "desktop")
+
+    assert rows == [
+        {
+            "kind": "owner",
+            "bucket_id": "_by_owner/skill_infrastate_skill",
+            "display": "_by_owner/skill_infrastate_skill",
+            "peak_bps": 12.0,
+            "id": "_by_owner/skill_infrastate_skill",
+            "owner": "_by_owner/skill_infrastate_skill",
+        }
+    ]
+
+
+def test_infrastate_manifest_wakes_on_webio_stream_controls():
+    root = Path(__file__).resolve().parents[1]
+    manifest = (root / ".adaos" / "workspace" / "skills" / "infrastate_skill" / "skill.yaml").read_text(encoding="utf-8")
+
+    assert "\n  - webio.stream.snapshot.requested\n" in manifest
+    assert "\n  - webio.stream.subscription.changed\n" in manifest
+
+
+def test_infrastate_marketplace_action_opens_modal_without_host_roundtrip():
+    root = Path(__file__).resolve().parents[1]
+    webui = json.loads((root / ".adaos" / "workspace" / "skills" / "infrastate_skill" / "webui.json").read_text(encoding="utf-8"))
+    widgets = webui["registry"]["modals"]["infrastate_modal"]["schema"]["widgets"]
+    update_actions = next(widget for widget in widgets if widget.get("id") == "infrastate-update-actions")
+    actions = update_actions["actions"]
+
+    assert any(action.get("on") == "click:marketplace" and action.get("type") == "openModal" for action in actions)
+    assert not any(action.get("on") == "click" and action.get("target") == "infrastate.action" for action in actions)
 
 
 def test_infrastate_runtime_event_invalidates_snapshot_cache(monkeypatch):
