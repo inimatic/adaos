@@ -242,7 +242,8 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     assert ("rpc", "member-1") in calls
 
 
-def test_call_tool_keeps_browsers_skill_local_on_hub(monkeypatch) -> None:
+@pytest.mark.parametrize("tool_name", ["browsers_skill:rename_link", "infrastate_skill:get_snapshot"])
+def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_name: str) -> None:
     calls: list[tuple[str, str] | tuple[str, str, dict[str, object]]] = []
 
     class _FakeSkillManager:
@@ -265,7 +266,7 @@ def test_call_tool_keeps_browsers_skill_local_on_hub(monkeypatch) -> None:
 
         async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False):
             calls.append(("rpc", node_id))
-            raise AssertionError("browsers_skill should stay local on the hub")
+            raise AssertionError("hub projection tools should stay local on the hub")
 
     async def _fake_run_sync(func, *args, **kwargs):
         calls.append(("run_sync", "local"))
@@ -293,7 +294,7 @@ def test_call_tool_keeps_browsers_skill_local_on_hub(monkeypatch) -> None:
     result = asyncio.run(
         tool_bridge_module.call_tool(
             tool_bridge_module.ToolCall(
-                tool="browsers_skill:rename_link",
+                tool=tool_name,
                 arguments={
                     "name": "Kitchen display",
                     "node_id": "member-1",
