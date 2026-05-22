@@ -147,6 +147,11 @@ def install(
     webspace_id: Optional[str] = typer.Option(None, "--webspace", help="target webspace id (default: 'default')"),
     setup_skills: bool = typer.Option(False, "--setup", help="run skill setup hooks (may prompt / require IO)"),
     autostart: bool = typer.Option(False, "--autostart", help="enable OS autostart after install"),
+    retention_policy: bool = typer.Option(
+        True,
+        "--retention-policy/--no-retention-policy",
+        help="deploy AdaOS maintenance retention policy when supported",
+    ),
     rasa_nlu: bool = typer.Option(True, "--rasa-nlu/--no-rasa-nlu", help="prepare optional Rasa NLU service-skill"),
     train_nlu: bool = typer.Option(True, "--train-nlu/--no-train-nlu", help="train Rasa NLU after installing scenarios/skills"),
     json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
@@ -229,6 +234,16 @@ def install(
         except Exception as exc:
             installed["warnings"].append(f"autostart enable: {exc}")
 
+    if retention_policy:
+        try:
+            from adaos.services.self_hygiene import apply_retention_policy
+
+            installed["maintenance"] = {
+                "retention_policy": apply_retention_policy(base_dir=ctx.paths.base_dir())
+            }
+        except Exception as exc:
+            installed["warnings"].append(f"retention policy: {exc}")
+
     if json_output:
         typer.echo(json.dumps(installed, ensure_ascii=False, indent=2))
         return
@@ -250,6 +265,14 @@ def install(
         typer.secho("warnings:", fg=typer.colors.YELLOW)
         for w in installed["warnings"]:
             typer.echo(f"  - {w}")
+    maintenance = installed.get("maintenance") if isinstance(installed.get("maintenance"), dict) else {}
+    retention = maintenance.get("retention_policy") if isinstance(maintenance.get("retention_policy"), dict) else {}
+    if retention:
+        os_policy = retention.get("os_policy") if isinstance(retention.get("os_policy"), dict) else {}
+        if os_policy.get("skipped"):
+            typer.echo(f"maintenance: retention policy recorded ({os_policy.get('reason') or 'os policy skipped'})")
+        else:
+            typer.echo("maintenance: retention policy applied")
 
 
 @_run_safe

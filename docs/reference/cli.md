@@ -21,6 +21,9 @@ Example calls:
 adaos scenario create demo-scenario
 adaos skill run weather_skill weather.get --event --entities '{"city":"Berlin"}'
 adaos scenario run greet_on_boot
+adaos maintenance status --json
+adaos maintenance apply-retention --dry-run
+adaos maintenance run --pressure-only --json
 ```
 
 The service module `adaos.services.skill.runtime` provides the same operations for programmatic Python usage.

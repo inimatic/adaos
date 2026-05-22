@@ -178,6 +178,23 @@ def test_cleanup_stale_temp_slot_dirs_removes_only_old_temp_dirs(tmp_path: Path)
     assert str(recent) in result["skipped_recent_paths"]
 
 
+def test_core_update_hygiene_skips_in_testing(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    monkeypatch.setenv("ADAOS_TESTING", "1")
+
+    payload = mod._core_update_hygiene(
+        base_dir=tmp_path / "base",
+        trigger="core_update.preflight",
+        pressure_only=True,
+        tmp_min_age_seconds=3600.0,
+    )
+
+    assert payload["ok"] is True
+    assert payload["skipped"] is True
+    assert payload["reason"] == "testing_mode"
+
+
 def test_migrate_installed_skill_runtimes_uses_target_python(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

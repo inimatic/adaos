@@ -246,6 +246,33 @@ def _cleanup_stale_temp_slot_dirs(
     }
 
 
+def _core_update_hygiene(
+    *,
+    base_dir: str | os.PathLike[str] = "",
+    trigger: str,
+    pressure_only: bool,
+    tmp_min_age_seconds: float,
+) -> dict[str, object]:
+    if str(os.getenv("ADAOS_CORE_UPDATE_HYGIENE", "1") or "1").strip().lower() in {"0", "false", "no", "off"}:
+        return {"ok": True, "skipped": True, "reason": "disabled_by_env", "trigger": trigger}
+    if str(os.getenv("ADAOS_TESTING", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}:
+        return {"ok": True, "skipped": True, "reason": "testing_mode", "trigger": trigger}
+    try:
+        from adaos.services.self_hygiene import run_hygiene
+
+        return run_hygiene(
+            base_dir=str(base_dir or ""),
+            trigger=trigger,
+            pressure_only=pressure_only,
+            include_pip_cache=False,
+            include_global_tmp=True,
+            tmp_min_age_seconds=tmp_min_age_seconds,
+            max_paths=48,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "trigger": trigger}
+
+
 def _migrate_installed_skill_runtimes(
     python_executable: Path,
     *,
@@ -615,6 +642,12 @@ def prepare_slot(
         slot_dir.parent,
         min_age_seconds=cleanup_min_age_seconds,
     )
+    preflight_hygiene = _core_update_hygiene(
+        base_dir=str(base_dir or ""),
+        trigger="core_update.preflight",
+        pressure_only=True,
+        tmp_min_age_seconds=6 * 3600.0,
+    )
     repo_root_dir = Path(str(repo_root or "")).expanduser().resolve() if str(repo_root or "").strip() else None
     target_rev = str(target_rev or "").strip()
     target_version = str(target_version or "").strip()
@@ -691,6 +724,9 @@ def prepare_slot(
                 "PYTHONPATH": str(final_repo_dir / "src"),
                 "PYTHONUNBUFFERED": "1",
             },
+            "self_hygiene": {
+                "preflight": preflight_hygiene,
+            },
         }
         _replace_slot_dir(prepared_slot, slot_dir)
         repair = _repair_moved_venv(final_venv_dir, original_venv_dir=original_venv_dir)
@@ -732,6 +768,12 @@ def prepare_slot(
                 "skills": [],
             }
         manifest["skill_runtime_migration"] = skill_runtime_migration
+        manifest["self_hygiene"]["post_prepare"] = _core_update_hygiene(
+            base_dir=str(base_dir or ""),
+            trigger="core_update.post_prepare",
+            pressure_only=False,
+            tmp_min_age_seconds=3600.0,
+        )
         write_slot_manifest(slot_name, manifest)
         return manifest
     finally:
