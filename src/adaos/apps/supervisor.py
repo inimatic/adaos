@@ -7384,6 +7384,26 @@ async def supervisor_public_update_status() -> dict[str, Any]:
     return _manager().public_update_status()
 
 
+def _payload_float(payload: dict[str, Any], key: str, default: float) -> float:
+    if key not in payload:
+        return float(default)
+    value = payload.get(key)
+    if value is None or value == "":
+        return float(default)
+    return float(value)
+
+
+def _payload_first_float(payload: dict[str, Any], keys: tuple[str, ...], default: float) -> float:
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if value is None or value == "":
+            continue
+        return float(value)
+    return float(default)
+
+
 @app.post("/api/supervisor/update/start", dependencies=[Depends(require_token)])
 async def supervisor_update_start(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().start_update(
@@ -7391,9 +7411,9 @@ async def supervisor_update_start(payload: dict[str, Any]) -> dict[str, Any]:
         target_rev=str(payload.get("target_rev") or ""),
         target_version=str(payload.get("target_version") or ""),
         reason=str(payload.get("reason") or "core.update"),
-        countdown_sec=float(payload.get("countdown_sec") or 60.0),
-        drain_timeout_sec=float(payload.get("drain_timeout_sec") or 10.0),
-        signal_delay_sec=float(payload.get("signal_delay_sec") or 0.25),
+        countdown_sec=_payload_float(payload, "countdown_sec", 60.0),
+        drain_timeout_sec=_payload_float(payload, "drain_timeout_sec", 10.0),
+        signal_delay_sec=_payload_float(payload, "signal_delay_sec", 0.25),
     )
 
 
@@ -7405,7 +7425,7 @@ async def supervisor_update_cancel(payload: dict[str, Any]) -> dict[str, Any]:
 @app.post("/api/supervisor/update/defer", dependencies=[Depends(require_token)])
 async def supervisor_update_defer(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().defer_update(
-        delay_sec=float(payload.get("delay_sec") or payload.get("countdown_sec") or 300.0),
+        delay_sec=_payload_first_float(payload, ("delay_sec", "countdown_sec"), 300.0),
         reason=str(payload.get("reason") or "user.deferred"),
     )
 
@@ -7417,9 +7437,9 @@ async def supervisor_update_rollback(payload: dict[str, Any]) -> dict[str, Any]:
         target_rev="",
         target_version="",
         reason=str(payload.get("reason") or "core.rollback"),
-        countdown_sec=float(payload.get("countdown_sec") or 0.0),
-        drain_timeout_sec=float(payload.get("drain_timeout_sec") or 10.0),
-        signal_delay_sec=float(payload.get("signal_delay_sec") or 0.25),
+        countdown_sec=_payload_float(payload, "countdown_sec", 0.0),
+        drain_timeout_sec=_payload_float(payload, "drain_timeout_sec", 10.0),
+        signal_delay_sec=_payload_float(payload, "signal_delay_sec", 0.25),
     )
 
 

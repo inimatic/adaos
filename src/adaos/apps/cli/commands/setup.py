@@ -425,6 +425,119 @@ def _repo_git_text_at(repo_root: Path | str | None, *args: str) -> str:
         return ""
 
 
+def _looks_like_git_sha(value: str) -> bool:
+    text = str(value or "").strip()
+    return 7 <= len(text) <= 40 and all(ch in "0123456789abcdefABCDEF" for ch in text)
+
+
+def _looks_like_full_git_sha(value: str) -> bool:
+    text = str(value or "").strip()
+    return len(text) == 40 and all(ch in "0123456789abcdefABCDEF" for ch in text)
+
+
+def _looks_like_git_remote(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.startswith(("http://", "https://", "ssh://", "git@")):
+        return True
+    if text.endswith(".git"):
+        return True
+    try:
+        return Path(text).expanduser().exists()
+    except Exception:
+        return False
+
+
+def _core_update_repo_url() -> str:
+    candidates: list[str] = [str(os.getenv("ADAOS_CORE_UPDATE_REPO_URL") or "").strip()]
+    try:
+        manifest = active_slot_manifest() or {}
+        candidates.append(str(manifest.get("repo_url") or "").strip())
+    except Exception:
+        pass
+    candidates.append(_repo_git_text("remote", "get-url", "origin"))
+    for candidate in candidates:
+        if _looks_like_git_remote(candidate):
+            return candidate
+    return ""
+
+
+def _git_ls_remote(repo_url: str, *refs: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "ls-remote", str(repo_url), *[str(ref) for ref in refs if str(ref or "").strip()]],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=True,
+        )
+        return (completed.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _remote_ref_sha(repo_url: str, target_ref: str) -> str:
+    ref = str(target_ref or "").strip()
+    if not ref or not repo_url:
+        return ""
+    query_refs = [ref]
+    if not ref.startswith("refs/"):
+        query_refs.extend([f"refs/heads/{ref}", f"refs/tags/{ref}", f"refs/tags/{ref}^{{}}"])
+    output = _git_ls_remote(repo_url, *query_refs)
+    if not output:
+        return ""
+    matches: dict[str, str] = {}
+    first_sha = ""
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        sha, name = parts[0].strip(), parts[1].strip()
+        if not _looks_like_full_git_sha(sha):
+            continue
+        first_sha = first_sha or sha
+        matches[name] = sha
+    preferred = [ref]
+    if not ref.startswith("refs/"):
+        preferred.extend([f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"])
+    for name in preferred:
+        sha = matches.get(name)
+        if sha:
+            return sha
+    return first_sha
+
+
+def _local_ref_sha(target_ref: str) -> str:
+    ref = str(target_ref or "").strip()
+    if not ref:
+        return ""
+    candidates = [ref]
+    if not ref.startswith(("refs/", "origin/")):
+        candidates.insert(0, f"origin/{ref}")
+    for candidate in dict.fromkeys(candidates):
+        sha = _repo_git_text("rev-parse", "--verify", f"{candidate}^{{commit}}")
+        if _looks_like_full_git_sha(sha):
+            return sha
+    return ""
+
+
+def _resolve_core_update_target_version(target_rev: str, target_version: str) -> str:
+    explicit = str(target_version or "").strip()
+    if explicit:
+        return explicit
+    ref = str(target_rev or "").strip()
+    if _looks_like_git_sha(ref):
+        return ref
+    remote_sha = _remote_ref_sha(_core_update_repo_url(), ref)
+    if remote_sha:
+        return remote_sha
+    local_sha = _local_ref_sha(ref)
+    if local_sha:
+        return local_sha
+    return str(BUILD_INFO.version or "").strip()
+
+
 def _slot_build_version(slot_id: str) -> str:
     slot_name = str(slot_id or "").strip().upper()
     if not slot_name:
@@ -1670,7 +1783,7 @@ def autostart_update_status_cmd(
 @_run_safe
 def autostart_update_start_cmd(
     target_rev: str = typer.Option("", "--target-rev", help="Git branch/tag/ref to install; defaults to current branch"),
-    target_version: str = typer.Option("", "--target-version", help="Target identity/version; use a commit SHA for pinned rollouts, defaults to current BUILD_INFO.version"),
+    target_version: str = typer.Option("", "--target-version", help="Target identity/version; use a commit SHA for pinned rollouts, defaults to resolved target ref commit"),
     countdown_sec: float = typer.Option(60.0, "--countdown-sec", min=0.0),
     drain_timeout_sec: float = typer.Option(10.0, "--drain-timeout-sec", min=0.0, max=30.0),
     signal_delay_sec: float = typer.Option(0.25, "--signal-delay-sec", min=0.0, max=5.0),
@@ -1679,7 +1792,7 @@ def autostart_update_start_cmd(
     json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
 ):
     resolved_rev = str(target_rev or _repo_git_text("rev-parse", "--abbrev-ref", "HEAD") or "").strip()
-    resolved_version = str(target_version or BUILD_INFO.version or "").strip()
+    resolved_version = _resolve_core_update_target_version(resolved_rev, target_version)
     try:
         payload = _autostart_update_post(
             "/api/supervisor/update/start",
@@ -1858,7 +1971,7 @@ def autostart_update_complete_cmd(
 @_run_safe
 def autostart_smoke_update_cmd(
     target_rev: str = typer.Option("", "--target-rev", help="Defaults to current git branch when available"),
-    target_version: str = typer.Option("", "--target-version", help="Target identity/version; use a commit SHA for pinned rollouts, defaults to current BUILD_INFO.version"),
+    target_version: str = typer.Option("", "--target-version", help="Target identity/version; use a commit SHA for pinned rollouts, defaults to resolved target ref commit"),
     countdown_sec: float = typer.Option(5.0, "--countdown-sec", min=0.0),
     drain_timeout_sec: float = typer.Option(10.0, "--drain-timeout-sec", min=0.0, max=30.0),
     signal_delay_sec: float = typer.Option(0.25, "--signal-delay-sec", min=0.0, max=5.0),
@@ -1866,7 +1979,7 @@ def autostart_smoke_update_cmd(
     json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
 ):
     resolved_rev = str(target_rev or _repo_git_text("rev-parse", "--abbrev-ref", "HEAD") or "").strip()
-    resolved_version = str(target_version or BUILD_INFO.version or "").strip()
+    resolved_version = _resolve_core_update_target_version(resolved_rev, target_version)
     try:
         payload = _autostart_update_post(
             "/api/supervisor/update/start",

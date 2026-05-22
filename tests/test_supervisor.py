@@ -3982,6 +3982,48 @@ def test_public_memory_status_endpoint_is_unauthenticated(monkeypatch) -> None:
     assert response.json()["memory"]["profile_control_mode"] == "phase2_supervisor_restart"
 
 
+def test_update_start_endpoint_preserves_zero_countdown(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Manager:
+        async def start_update(self, **kwargs) -> dict:
+            captured.update(kwargs)
+            return {"ok": True}
+
+    monkeypatch.setattr(supervisor, "_manager", lambda: _Manager())
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        "/api/supervisor/update/start",
+        headers={"X-AdaOS-Token": "dev-local-token"},
+        json={"target_rev": "rev2026", "target_version": "abc123", "countdown_sec": 0},
+    )
+
+    assert response.status_code == 200
+    assert captured["countdown_sec"] == 0.0
+
+
+def test_update_defer_endpoint_preserves_zero_delay(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Manager:
+        async def defer_update(self, **kwargs) -> dict:
+            captured.update(kwargs)
+            return {"ok": True}
+
+    monkeypatch.setattr(supervisor, "_manager", lambda: _Manager())
+    client = TestClient(supervisor.app)
+
+    response = client.post(
+        "/api/supervisor/update/defer",
+        headers={"X-AdaOS-Token": "dev-local-token"},
+        json={"delay_sec": 0, "reason": "test.defer"},
+    )
+
+    assert response.status_code == 200
+    assert captured["delay_sec"] == 0.0
+
+
 def test_public_update_status_does_not_probe_runtime_admin_status(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
