@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+from adaos.sdk.data import bus as data_bus
 from adaos.sdk.core import decorators
 from adaos.services.status.hot_events import HotEventBudget
 from adaos.services.workspace_registry import write_workspace_registry
@@ -69,7 +70,29 @@ def test_subscription_log_suffix_is_empty_for_unknown_skill() -> None:
 
 def test_register_subscriptions_replaces_skill_generation(monkeypatch) -> None:
     calls: list[str] = []
-    registered: list[object] = []
+
+    class FakeBus:
+        def __init__(self) -> None:
+            self.handlers: list[tuple[str, object]] = []
+
+        def subscribe(self, topic: str, handler):
+            self.handlers.append((topic, handler))
+
+        def unsubscribe_matching(self, predicate, *, type_prefix=None):
+            removed = 0
+            kept: list[tuple[str, object]] = []
+            for topic, handler in self.handlers:
+                if type_prefix is not None and topic != type_prefix:
+                    kept.append((topic, handler))
+                    continue
+                if predicate(topic, handler):
+                    removed += 1
+                else:
+                    kept.append((topic, handler))
+            self.handlers = kept
+            return removed
+
+    bus = FakeBus()
 
     def old_handler(_evt):
         calls.append("old")
@@ -80,30 +103,29 @@ def test_register_subscriptions_replaces_skill_generation(monkeypatch) -> None:
     monkeypatch.setattr(decorators, "subscriptions", [("topic.demo", old_handler)])
     monkeypatch.setattr(decorators, "_registered", False)
     monkeypatch.setattr(decorators, "_SKILL_SUBSCRIPTION_GENERATIONS", {})
+    monkeypatch.setattr(decorators, "_REGISTERED_SKILL_SUBSCRIPTIONS", {})
     monkeypatch.setattr(decorators, "_infer_skill_name", lambda _fn: "demo_skill")
     monkeypatch.setattr(decorators, "_skill_event_targets_this_node", lambda _evt: True)
     monkeypatch.setattr(decorators, "_admit_skill_subscription_yjs_work", lambda *_args: {"allowed": True})
     monkeypatch.setattr(decorators, "_maybe_push_skill", lambda *_args: False)
     monkeypatch.setattr(decorators, "_subscription_log_suffix", lambda _skill: "")
-
-    async def fake_on(_topic, handler):
-        registered.append(handler)
+    monkeypatch.setattr(decorators, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(data_bus, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
 
     async def fake_emit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(decorators, "on", fake_on)
     monkeypatch.setattr(decorators, "emit", fake_emit)
 
     asyncio.run(decorators.register_subscriptions())
-    assert len(registered) == 1
-    asyncio.run(registered[0](SimpleNamespace(payload={})))  # type: ignore[misc]
+    assert len(bus.handlers) == 1
+    asyncio.run(bus.handlers[0][1](SimpleNamespace(payload={})))  # type: ignore[misc]
 
     decorators.subscriptions.append(("topic.demo", new_handler))
     asyncio.run(decorators.register_subscriptions(skill_names={"demo_skill"}, force=True))
-    assert len(registered) == 2
-    asyncio.run(registered[0](SimpleNamespace(payload={})))  # old generation is stale
-    asyncio.run(registered[1](SimpleNamespace(payload={})))
+    assert len(bus.handlers) == 1
+    assert decorators.subscriptions == [("topic.demo", new_handler)]
+    asyncio.run(bus.handlers[0][1](SimpleNamespace(payload={})))  # type: ignore[misc]
 
     assert calls == ["old", "new"]
 

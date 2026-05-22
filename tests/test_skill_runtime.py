@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from adaos.sdk.core import decorators
 from adaos.services.agent_context import get_ctx
+from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime import (
     SkillDirectoryNotFoundError,
     SkillPrepScriptNotFoundError,
@@ -97,6 +99,36 @@ def skill_factory() -> Callable[[str], tuple[SkillRuntimeEnvironment, str]]:
         return env, version
 
     return _create_skill
+
+
+def test_smoke_import_does_not_leak_sdk_decorator_registries(skill_factory):
+    handler_source = textwrap.dedent(
+        """
+        from adaos.sdk.core.decorators import subscribe, tool
+
+        @subscribe("demo.topic")
+        def on_demo(evt):
+            return None
+
+        @tool("demo_tool")
+        def demo_tool():
+            return {"ok": True}
+
+        def handle(topic, payload):
+            return {"topic": topic, "payload": payload}
+        """
+    )
+    env, version = skill_factory("smoke_sub_skill", handler_source=handler_source, prep_source=None)
+    baseline_subscriptions = list(decorators.subscriptions)
+    baseline_tools = {module: dict(entries) for module, entries in decorators.tools_registry.items()}
+    baseline_tools_meta = dict(decorators.tools_meta)
+
+    manager = object.__new__(SkillManager)
+    manager._smoke_import(env=env, name="smoke_sub_skill", version=version, slot="A")
+
+    assert decorators.subscriptions == baseline_subscriptions
+    assert decorators.tools_registry == baseline_tools
+    assert decorators.tools_meta == baseline_tools_meta
 
 
 def test_find_skill_dir_returns_package_path(skill_factory):

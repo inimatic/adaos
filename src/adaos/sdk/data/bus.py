@@ -167,5 +167,5 @@ async def on(topic: str, handler: Callable[[dict], Awaitable[Any]]):
                 res = subscribe(topic, _adapt)
 
     if inspect.iscoroutine(res):
-        return await res
-    return res
+        await res
+    return _adapt

@@ -2612,6 +2612,14 @@ class SkillManager:
         vendor_path = slot_paths.vendor_dir
 
         original_sys_path = list(sys.path)
+        sdk_decorators = None
+        registry_snapshot = None
+        try:
+            from adaos.sdk.core import decorators as sdk_decorators
+
+            registry_snapshot = sdk_decorators._registry_snapshot()
+        except Exception:
+            _log.debug("failed to snapshot SDK decorator registries before smoke import", exc_info=True)
         try:
             runtime_vendor_fragment = f"/.runtime/{name}/"
             sys.path[:] = [
@@ -2635,7 +2643,7 @@ class SkillManager:
                 if candidate not in sys.path:
                     sys.path.insert(0, candidate)
             for mod in list(sys.modules.keys()):
-                if mod == module_name or mod.startswith(f"skills.{name}."):
+                if mod == f"skills.{name}" or mod == module_name or mod.startswith(f"skills.{name}."):
                     sys.modules.pop(mod, None)
             importlib.invalidate_caches()
             importlib.import_module(module_name)
@@ -2644,8 +2652,13 @@ class SkillManager:
         finally:
             sys.path[:] = original_sys_path
             for mod in list(sys.modules.keys()):
-                if mod == module_name or mod.startswith(f"skills.{name}."):
+                if mod == f"skills.{name}" or mod == module_name or mod.startswith(f"skills.{name}."):
                     sys.modules.pop(mod, None)
+            if sdk_decorators is not None and registry_snapshot is not None:
+                try:
+                    sdk_decorators._restore_registry_snapshot(registry_snapshot)
+                except Exception:
+                    _log.warning("failed to restore SDK decorator registries after smoke import", exc_info=True)
 
     def _prepare_python_runtime(
         self,

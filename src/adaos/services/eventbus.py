@@ -339,11 +339,15 @@ class LocalEventBus(EventBus):
         queue = self._bounded_queues.get(topic_key)
         if not queue:
             return []
+        preserve_distinct_webio_controls = event_type in _WEBIO_STREAM_CONTROL_EVENTS and supersede_key is not None
         kept: deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = deque()
         removed: list[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = []
         while queue:
             item = queue.popleft()
             if item[3] == event_type and item[4] == handler_name:
+                if preserve_distinct_webio_controls and item[5] != supersede_key:
+                    kept.append(item)
+                    continue
                 removed.append(item)
                 continue
             kept.append(item)
@@ -580,9 +584,66 @@ class LocalEventBus(EventBus):
 
     def subscribe(self, type_prefix: str, handler: Handler) -> None:
         with self._lock:
-            self._subs[type_prefix].append(handler)
+            handlers = self._subs[type_prefix]
+            if handler in handlers:
+                return
+            handlers.append(handler)
         if _trace_subscribe_enabled():
             _log.debug("bus.subscribe prefix=%r handler=%s", type_prefix, _handler_label(handler))
+
+    def unsubscribe(self, type_prefix: str, handler: Handler) -> bool:
+        with self._lock:
+            handlers = self._subs.get(type_prefix)
+            if not handlers:
+                return False
+            kept = [item for item in handlers if item is not handler]
+            removed = len(handlers) - len(kept)
+            if kept:
+                self._subs[type_prefix] = kept
+            else:
+                self._subs.pop(type_prefix, None)
+        if removed and _trace_subscribe_enabled():
+            _log.debug("bus.unsubscribe prefix=%r handler=%s removed=%d", type_prefix, _handler_label(handler), removed)
+        return removed > 0
+
+    def unsubscribe_matching(
+        self,
+        predicate: Callable[[str, Handler], bool],
+        *,
+        type_prefix: str | None = None,
+    ) -> int:
+        removed = 0
+        with self._lock:
+            prefixes = [type_prefix] if type_prefix is not None else list(self._subs.keys())
+            for prefix in prefixes:
+                if prefix is None:
+                    continue
+                handlers = self._subs.get(prefix)
+                if not handlers:
+                    continue
+                kept: list[Handler] = []
+                for handler in handlers:
+                    try:
+                        matched = bool(predicate(prefix, handler))
+                    except Exception:
+                        _log.warning(
+                            "eventbus unsubscribe predicate crashed prefix=%r handler=%s",
+                            prefix,
+                            _handler_label(handler),
+                            exc_info=True,
+                        )
+                        matched = False
+                    if matched:
+                        removed += 1
+                    else:
+                        kept.append(handler)
+                if kept:
+                    self._subs[prefix] = kept
+                else:
+                    self._subs.pop(prefix, None)
+        if removed and _trace_subscribe_enabled():
+            _log.debug("bus.unsubscribe_matching prefix=%r removed=%d", type_prefix or "*", removed)
+        return removed
 
     def publish(self, event: Event) -> None:
         event_type = str(getattr(event, "type", "<unknown>") or "<unknown>")
