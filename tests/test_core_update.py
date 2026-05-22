@@ -527,6 +527,34 @@ def test_resolved_root_promotion_detects_stale_operator_cli(monkeypatch, tmp_pat
     assert "src/adaos/apps/cli/commands/node.py" in payload["effective_mismatched_paths"]
 
 
+def test_resolved_root_promotion_detects_stale_build_info_dependency(monkeypatch, tmp_path) -> None:
+    from adaos.services.core_update import resolved_root_promotion_requirement
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slots" / "B" / "repo"
+    for base in (root_dir, slot_repo):
+        (base / "src" / "adaos").mkdir(parents=True, exist_ok=True)
+    (root_dir / "src" / "adaos" / "build_info.py").write_text("BUILD_INFO = object()\n", encoding="utf-8")
+    (slot_repo / "src" / "adaos" / "build_info.py").write_text(
+        "BUILD_INFO = object()\ndef base_version():\n    return '0.1.0'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+
+    required, payload = resolved_root_promotion_requirement(
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "bootstrap_update": {"required": False, "changed_paths": []},
+        }
+    )
+
+    assert required is True
+    assert payload["declared_required"] is False
+    assert "src/adaos/build_info.py" in payload["effective_mismatched_paths"]
+
+
 def test_promote_root_from_slot_copies_changed_bootstrap_files(monkeypatch, tmp_path) -> None:
     from adaos.services.core_update import promote_root_from_slot
 

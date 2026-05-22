@@ -579,6 +579,7 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
 
     critical = set(BOOTSTRAP_CRITICAL_PATHS)
 
+    assert "src/adaos/build_info.py" in critical
     assert "src/adaos/services/core_update_policy.py" in critical
     assert "src/adaos/services/runtime_refresh.py" in critical
     assert "src/adaos/apps/cli/commands/node.py" in critical
