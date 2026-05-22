@@ -1635,6 +1635,51 @@ def test_reconcile_update_status_recovers_active_attempt_when_target_already_act
     assert attempt["completion_reason"] == "active slot target already active"
 
 
+def test_reconcile_update_status_keeps_fresh_launch_status_when_attempt_clock_is_old(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "180")
+    monkeypatch.setattr(supervisor.time, "time", lambda: 550.0)
+    monkeypatch.setattr(
+        supervisor,
+        "rollback_to_previous_slot",
+        lambda: (_ for _ in ()).throw(AssertionError("fresh launch status must not roll back")),
+    )
+    write_status(
+        {
+            "state": "restarting",
+            "phase": "launch",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-sha",
+            "message": "prepared slot activated; awaiting runtime launch",
+            "updated_at": 520.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-sha",
+            "requested_at": 100.0,
+            "transitioned_at": 100.0,
+            "updated_at": 100.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "_served_by": "supervisor_monitor",
+        }
+    )
+
+    assert payload["status"]["state"] == "restarting"
+    assert payload["status"]["phase"] == "launch"
+    assert supervisor._read_update_attempt()["state"] == "active"
+
+
 def test_start_update_recovers_stale_active_attempt_before_new_target(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(supervisor, "core_update_reactions_disabled_reason", lambda: "")
