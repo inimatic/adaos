@@ -205,6 +205,92 @@ def test_update_member_snapshot_heartbeat_refreshes_runtime_snapshot(monkeypatch
     assert changed_events[-1].payload["snapshot_build"]["runtime_git_short_commit"] == "6ae4ddb"
 
 
+def test_member_infrastate_projection_carries_core_slot_version() -> None:
+    projection = mod._member_infrastate_projection(
+        "member-1",
+        node_names=["Mediapoint"],
+        captured_at=120.0,
+        snapshot={
+            "node_id": "member-1",
+            "node_names": ["Mediapoint"],
+            "node_state": "ready",
+            "build": {
+                "runtime_build_version": "0.1.0+1.16fcc7a",
+                "runtime_git_short_commit": "16fcc7a",
+            },
+            "update_status": {"state": "succeeded", "phase": "validate", "action": "update"},
+            "slots": {
+                "active_slot": "B",
+                "active_manifest": {
+                    "slot": "B",
+                    "build_version": "0.1.0+1.16fcc7a",
+                    "git_short_commit": "16fcc7a",
+                },
+            },
+        },
+    )
+
+    assert projection["summary"]["subtitle"] == "slot B | 0.1.0 | 16fcc7a"
+    assert projection["summary"]["selected_node_id"] == "member-1"
+    assert projection["slots_meta"]["active_slot"] == "B"
+    assert projection["build_meta"]["runtime_build_version"] == "0.1.0+1.16fcc7a"
+
+
+def test_update_member_snapshot_heartbeat_publishes_member_infrastate_projection(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(
+        node_id="member-1",
+        websocket=_FakeWebSocket(),
+        node_names=["Mediapoint"],
+    )
+    projections: list[dict] = []
+
+    async def _capture_projection(node_id: str, **kwargs) -> None:
+        projections.append({"node_id": node_id, **kwargs})
+
+    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _capture_projection)
+
+    asyncio.run(
+        manager.update_member_snapshot_heartbeat(
+            "member-1",
+            snapshot={
+                "captured_at": 120.0,
+                "node_id": "member-1",
+                "node_names": ["Mediapoint"],
+                "node_state": "ready",
+                "build": {
+                    "runtime_build_version": "0.1.0+1.16fcc7a",
+                    "runtime_git_short_commit": "16fcc7a",
+                },
+                "update_status": {"state": "succeeded", "phase": "validate", "action": "update"},
+                "slots": {
+                    "active_slot": "B",
+                    "active_manifest": {
+                        "build_version": "0.1.0+1.16fcc7a",
+                        "git_short_commit": "16fcc7a",
+                    },
+                },
+            },
+        )
+    )
+
+    assert projections
+    assert projections[-1]["node_id"] == "member-1"
+    assert projections[-1]["captured_at"] == 120.0
+    projection = mod._member_infrastate_projection(
+        projections[-1]["node_id"],
+        node_names=projections[-1]["node_names"],
+        snapshot=projections[-1]["snapshot"],
+        captured_at=projections[-1]["captured_at"],
+    )
+    assert projection["summary"]["subtitle"] == "slot B | 0.1.0 | 16fcc7a"
+
+
 def test_update_member_snapshot_ignores_nested_capacity_timestamps(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
