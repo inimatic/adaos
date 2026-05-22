@@ -131,6 +131,12 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
     assert snapshot["playback"]["run_id"] == snapshot["latest"]["run_id"]
     assert snapshot["stats"]["processed_frames"] == 2
     assert snapshot["stats"]["next_frame"] == 0
+    assert snapshot["stats"]["target_fps"] == 5.0
+    assert "actual_fps" in snapshot["stats"]
+    assert snapshot["quality"]["bad_ratio"] == snapshot["latest"]["pred_ratio"]
+    assert snapshot["quality"]["threshold"] == snapshot["thresholds"]["warning"]
+    assert snapshot["quality"]["color"] in {"success", "danger"}
+    assert snapshot["activity"]["label"] == "ready"
     assert snapshot["files"]["frames"]["name"] == "frames.zip"
     assert "source" not in snapshot["files"]["frames"]
     assert "path" not in snapshot["files"]["frames"]
@@ -153,6 +159,30 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
     assert metrics_payload["seq"] == second["seq"]
     assert metrics_payload["series"]["pred_ratio"] == second["pred_ratio"]
     assert metrics_payload["series"]["iou"] == second["metrics"]["iou"]
+
+
+def test_new_face_vision_exposes_calculation_state_only_for_uncached_frames(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_cls = _load_engine_class()
+    engine = engine_cls(tmp_path / "state")
+    archive = tmp_path / "frames.zip"
+    _frames_zip(archive)
+
+    load_result = engine.load_frames(str(archive))
+    assert load_result["ok"] is True
+    assert engine.is_frame_cached(0) is False
+
+    mark = engine.begin_calculation_status(0)
+    calculating = engine.snapshot()
+    assert mark["frame_idx"] == 0
+    assert calculating["activity"]["label"] == "Calculate"
+    assert calculating["activity"]["color"] == "warning"
+
+    first = engine.process_frame(0)
+    ready = engine.snapshot()
+    assert first["ok"] is True
+    assert engine.is_frame_cached(0) is True
+    assert ready["activity"]["label"] == "ready"
 
 
 def test_new_face_vision_can_step_back_to_previous_cached_frame(tmp_path: Path) -> None:
@@ -478,6 +508,8 @@ def test_new_face_vision_compacts_uploads_into_modal() -> None:
     assert not any(widget.get("type") == "ui.jsonViewer" for widget in page_widgets)
 
     controls = next(widget for widget in page_widgets if widget.get("id") == "controls")
+    frame = next(widget for widget in page_widgets if widget.get("id") == "frame-stream")
+    assert frame["inputs"]["retainLastImageOnEmpty"] is True
     button_ids = [button["id"] for button in controls["inputs"]["buttons"]]
     assert "step_back" in button_ids
     assert "step_forward" in button_ids
@@ -506,9 +538,16 @@ def test_new_face_vision_places_charts_side_by_side_under_preview_area() -> None
     page_ids = [widget["id"] for widget in page_widgets]
     assert page_by_id["bad-ratio-stream"]["area"] == "main"
     assert page_by_id["metrics-stream"]["area"] == "main"
+    assert page_by_id["frame-stream"]["inputs"]["retainLastImageOnEmpty"] is True
     assert page_ids.index("frame-stream") < page_ids.index("bad-ratio-stream") < page_ids.index("controls")
     assert page_ids.index("frame-stream") < page_ids.index("metrics-stream") < page_ids.index("controls")
     assert page_by_id["compute-state"]["dataSource"]["path"] == "data/new_face_vision/current/compute"
+    assert page_by_id["bad-ratio"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
+    assert page_by_id["bad-ratio"]["inputs"]["colorPath"] == "color"
+    assert page_by_id["pipeline-status"]["dataSource"]["path"] == "data/new_face_vision/current/activity"
+    assert page_by_id["threshold-state"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
+    assert page_by_id["fps-state"]["dataSource"]["path"] == "data/new_face_vision/current/stats"
+    assert {"total-frames", "model-state", "masks-state"}.isdisjoint(page_by_id)
     for chart_id in ("bad-ratio-stream", "metrics-stream"):
         chart = page_by_id[chart_id]
         assert chart["inputs"]["detailsModalId"] == "newface_metrics_modal"
@@ -522,11 +561,17 @@ def test_new_face_vision_places_charts_side_by_side_under_preview_area() -> None
     modal_ids = [widget["id"] for widget in modal_widgets]
     assert modal_by_id["newface_modal_ratio_chart"]["area"] == "main"
     assert modal_by_id["newface_modal_metrics_chart"]["area"] == "main"
+    assert modal_by_id["newface_modal_frame"]["inputs"]["retainLastImageOnEmpty"] is True
     assert modal_by_id["newface_modal_ratio_chart"]["inputs"]["layoutGroup"] == "newface-charts"
     assert modal_by_id["newface_modal_metrics_chart"]["inputs"]["layoutGroup"] == "newface-charts"
     assert modal_ids.index("newface_modal_frame") < modal_ids.index("newface_modal_ratio_chart") < modal_ids.index("newface_modal_controls")
     assert modal_ids.index("newface_modal_frame") < modal_ids.index("newface_modal_metrics_chart") < modal_ids.index("newface_modal_controls")
     assert modal_by_id["newface_modal_compute"]["dataSource"]["path"] == "data/new_face_vision/current/compute"
+    assert modal_by_id["newface_modal_bad_ratio"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
+    assert modal_by_id["newface_modal_status"]["dataSource"]["path"] == "data/new_face_vision/current/activity"
+    assert modal_by_id["newface_modal_threshold"]["dataSource"]["path"] == "data/new_face_vision/current/quality"
+    assert modal_by_id["newface_modal_fps"]["dataSource"]["path"] == "data/new_face_vision/current/stats"
+    assert {"newface_modal_frames", "newface_modal_model"}.isdisjoint(modal_by_id)
     metrics_modal = webui["registry"]["modals"]["newface_metrics_modal"]
     metrics_table = metrics_modal["schema"]["widgets"][0]
     assert metrics_table["type"] == "ui.table"
