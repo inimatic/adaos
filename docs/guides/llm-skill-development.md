@@ -81,8 +81,57 @@ For every widget, modal section, status row, and detail view, answer:
   fanout.
 - `guard_visibility`: what warning, degraded state, or incident is shown when
   the route is throttled, blocked, or quarantined?
+- `memory_owner`: which module globals, caches, background workers, model
+  objects, or file handles can retain data for this route, and how are they
+  bounded and cleaned up?
 
 If a route cannot answer these questions, do not add it yet.
+
+## Memory and reload safety
+
+Process memory is a data plane too. Browser-facing skills run inside long-lived
+runtime processes, can be smoke-imported before activation, and can be reloaded
+without a process restart. Treat every module global as retained until proven
+otherwise.
+
+Use these rules for every skill that owns subscriptions, streams, projections,
+background work, or heavy resources:
+
+- Keep import time passive. Importing a handler module must not start threads,
+  load large models, open sockets, register external callbacks, publish events,
+  or mutate persistent state. Smoke imports should be safe to repeat.
+- Make reloads idempotent. Runtime-owned bus subscriptions are deduplicated by
+  the core, but skill-owned threads, timers, executors, external callbacks, and
+  resource handles still need an owner token, stop signal, and cleanup hook.
+- Bound every cache. Prefer `deque(maxlen=...)`, LRU/TTL caches, and explicit
+  byte or item budgets over plain module-level `list` and `dict` accumulators.
+  Per-webspace, per-receiver, and per-device state needs an eviction policy.
+- Store fingerprints before payloads. A last-good snapshot cache is acceptable
+  only when it has a size/TTL budget; otherwise keep compact hashes, freshness,
+  and the minimal state needed to avoid duplicate publishes.
+- Treat background workers as lifecycle resources. `Thread`, `asyncio` tasks,
+  timers, schedulers, `ThreadPoolExecutor`, subprocesses, and playback loops
+  must stop during `drain`, `dispose`, quarantine, or deactivation.
+- Lazy-load heavy resources and release them. ML models, media indexes, large
+  parsers, embeddings, and device sessions should load on demand, expose a
+  `dispose` path, and cap both memory and disk caches.
+- Do not keep large tool or diagnostic responses alive in globals, logs, or
+  exception objects. If the browser needs large detail data, use a details tool,
+  stream snapshot, or disk evidence route with bounded retention.
+- Log memory-protection actions as normal operational telemetry: cache eviction,
+  stale worker cleanup, rejected oversize payloads, disabled stream sections,
+  and skipped refreshes under pressure.
+
+The minimum verification for a memory-sensitive skill is:
+
+- import the handler module repeatedly and verify no threads, model loads,
+  sockets, subscriptions, or persistent writes are created at import time
+- activate/reload the same skill at least three times and verify active
+  subscription counts, worker counts, cache sizes, and receiver state do not
+  grow linearly
+- run a short burst/soak using the skill's hottest events and stream subscribe
+  requests; RSS should plateau after warmup, and guard logs should explain any
+  throttling or dropped oversized payloads
 
 ## Data-plane decision table
 
@@ -111,13 +160,16 @@ Use `skill.yaml` to declare:
 - `events.subscribe` for command or domain events.
 - `data_projections` only for browser-visible Yjs branches the skill owns.
 - `webui.receivers` in `webui.json` for live stream variables.
+- `memory_budget` for owned caches, per-webspace state, background workers,
+  loaded resources, and expected RSS/retention behavior.
 - optional lifecycle hooks such as `healthcheck`, `drain`, `dispose`, and
   `onQuarantine` / `on_quarantine` when the skill can clean up or explain a
   guard action.
 
 Every declared Yjs projection should have a reason to be reconnect-stable.
 Every stream receiver should have bounded delivery semantics and an initial or
-snapshot-on-subscribe story.
+snapshot-on-subscribe story. Every declared worker, cache, and heavy resource
+should have an owner, budget, and cleanup path.
 
 Example:
 
@@ -149,6 +201,16 @@ data_projections:
   targets:
   - backend: yjs
     path: data/weather
+
+memory_budget:
+  expected_rss_mb: 64
+  caches:
+  - name: weather.snapshot_cache
+    max_items: 32
+    ttl_seconds: 300
+  background_workers:
+    max_threads: 1
+    cleanup_hook: dispose
 
 tools:
 - name: get_snapshot
@@ -629,6 +691,10 @@ Before coding:
 - define size and frequency expectations
 - identify hot events and define debounce/budget behavior before writing
   handlers
+- list module globals, caches, background workers, and heavy resources that can
+  survive reload
+- define the memory budget, eviction policy, and lifecycle cleanup path for
+  each retained object
 
 When coding:
 
@@ -642,6 +708,11 @@ When coding:
 - keep raw diagnostic evidence separate from smoothed operator state
 - accept routing metadata and unknown keyword args
 - preserve owner attribution where helper APIs require it
+- avoid import-time side effects
+- give every thread, task, executor, timer, subprocess, model, and external
+  callback an explicit stop/dispose path
+- log cache eviction, stale worker cleanup, oversize rejects, and degraded
+  stream sections
 
 Before publishing:
 
@@ -664,6 +735,11 @@ Before publishing:
 - verify no action returns a large payload when a projection/stream is the
   real data path
 - verify Yjs and stream guard errors are visible to the UI
+- import and smoke-validate handlers repeatedly with no import-time workers,
+  model loads, bus mutations, or persistent writes
+- reload/reactivate the same skill repeatedly and verify subscription counts,
+  worker counts, cache sizes, and receiver state remain bounded
+- run a short RSS soak for the hottest event and stream-subscribe paths
 
 ## Anti-patterns
 
@@ -686,16 +762,32 @@ Treat these as defects in LLM-generated skills:
 - treating stream delivery as durable state without snapshot-on-subscribe
 - letting subscription flaps rewrite Yjs on every subscribe/unsubscribe
 - using runtime quarantine as the normal way to quiet a noisy skill
+- starting anonymous non-daemon threads, timers, executors, subprocesses, or
+  playback loops without a stop/dispose path
+- loading ML models, media indexes, sockets, or external sessions at import time
+- keeping unbounded module-level caches, per-webspace dictionaries, receiver
+  state, or diagnostics lists
+- retaining full snapshots or large tool responses in globals when a compact
+  fingerprint, stream snapshot, details tool, or disk evidence route would do
+- assuming a skill reload frees Python objects without explicit cleanup
 
 ## Current migration priorities
 
 The current workspace audit suggests this priority order:
 
-1. migrate `voice_chat_skill` to declared projection/stream contracts
-2. make `browsers_skill` projection refreshes idempotent, avoid all-webspace
-   fanout for routine events, and keep streams to snapshot-on-subscribe or
-   genuinely high-churn data
-3. split `infrastate_skill` into minimal summary plus details/streams
-4. split `infrascope_skill` into demanded projection families
-5. decide whether `mediaserver` and `prompt_engineer_skill` should remain
-   tool-driven or adopt browser-facing projection contracts
+1. split `infrastate_skill` into minimal summary plus details/streams, reduce
+   broad event subscriptions, and add reload/RSS soak checks for its stream
+   control paths
+2. split `infrascope_skill` into demanded projection families, keep expensive
+   snapshot sections request-driven, and verify subscription counts stay flat
+   across reloads
+3. make `browsers_skill` and `infra_access_skill` projection refreshes
+   idempotent, avoid all-webspace fanout for routine events, and add cleanup
+   for owned executors, threads, and caches
+4. migrate `voice_chat_skill` away from direct Yjs reads/writes to declared
+   projection/stream contracts with bounded chat history
+5. add explicit cache/model/playback lifecycle budgets to
+   `new_face_vision_skill`
+6. decide whether `mediaserver` and `prompt_engineer_skill` should remain
+   tool-driven or adopt browser-facing projection contracts, and cap large
+   library, scan, and diagnostic payloads either way
