@@ -2124,6 +2124,11 @@ def test_infrastate_project_async_excludes_stream_sections_from_yjs(monkeypatch)
         ("infrastate.summary", {"value": "ready"}),
         ("infrastate.operations.active", [{"id": "op-1"}]),
     ]
+    assert published == []
+
+    mod._remember_stream_receiver("default", mod._operations_receiver())
+    asyncio.run(mod._project_async(snapshot, webspace_id="default"))
+
     assert published == [
         ("infrastate.operations.active", [{"id": "op-1"}], "default"),
     ]
@@ -2241,6 +2246,9 @@ def test_infrastate_action_invalidates_cache_and_refreshes_inventory_streams(mon
         lambda receiver, webspace_id, *, reason: stream_refreshes.append((receiver, webspace_id, reason)),
     )
     monkeypatch.setattr(mod, "_schedule_snapshot_refresh", lambda **kwargs: snapshot_refreshes.append(dict(kwargs)))
+
+    mod._remember_stream_receiver("desktop", mod._skills_receiver())
+    mod._remember_stream_receiver("desktop", mod._marketplace_skills_receiver())
 
     mod.on_action(SimpleNamespace(payload={"id": "skill_activate", "webspace_id": "desktop", "name": "browsers_skill"}))
 

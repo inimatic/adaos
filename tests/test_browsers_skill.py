@@ -288,6 +288,35 @@ def test_browsers_skill_refresh_event_handler_does_not_wait_for_projection(monke
     assert "desktop" in mod._PENDING_REFRESH_BY_WS
 
 
+def test_browsers_skill_runtime_dispose_clears_pending_state_and_executor() -> None:
+    mod = _load_browsers_skill_module()
+
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class _Future:
+        def cancel(self) -> bool:
+            return True
+
+    class _Executor:
+        def shutdown(self, *, wait=False, cancel_futures=False):
+            shutdown_calls.append((wait, cancel_futures))
+
+    mod._PENDING_REFRESH_BY_WS["desktop"] = _Future()
+    mod._SELECTED_BROWSER_BY_WS["desktop"] = "browser-1"
+    mod._PROJECTION_EXECUTOR = _Executor()
+
+    result = mod.browsers_runtime_dispose(reason="test")
+
+    assert result["ok"] is True
+    assert result["pending_total"] == 1
+    assert result["cancelled_total"] == 1
+    assert result["selected_total"] == 1
+    assert mod._PENDING_REFRESH_BY_WS == {}
+    assert mod._SELECTED_BROWSER_BY_WS == {}
+    assert mod._PROJECTION_EXECUTOR is None
+    assert shutdown_calls == [(False, True)]
+
+
 def test_browsers_skill_get_link_settings_uses_sdk_device_access(monkeypatch) -> None:
     mod = _load_browsers_skill_module()
     expected = {
