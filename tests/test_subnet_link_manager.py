@@ -236,6 +236,50 @@ def test_member_infrastate_projection_carries_core_slot_version() -> None:
     assert projection["build_meta"]["runtime_build_version"] == "0.1.0+1.16fcc7a"
 
 
+def test_member_node_state_ingest_preserves_hub_infrastate_projection() -> None:
+    existing = {
+        "desktop": {"theme": "dark"},
+        "infrastate": {
+            "summary": {
+                "subtitle": "slot A | 0.1.2 | 72c87e4",
+                "source": "subnet.member.snapshot",
+            },
+            "projection_diag": {"source": "subnet.link_manager.member_snapshot"},
+        },
+    }
+    incoming = {
+        "desktop": {"theme": "light"},
+        "infrastate": {
+            "summary": {
+                "subtitle": "slot A | 78a00fe",
+                "source": "skill.infrastate_skill",
+            },
+            "projection_diag": {"source": "skill_infrastate_skill"},
+        },
+    }
+
+    merged = mod._member_node_state_for_ingest(existing, incoming)
+
+    assert merged["desktop"]["theme"] == "light"
+    assert merged["infrastate"]["summary"]["subtitle"] == "slot A | 0.1.2 | 72c87e4"
+
+
+def test_member_node_state_ingest_drops_untrusted_infrastate_without_hub_projection() -> None:
+    incoming = {
+        "desktop": {"theme": "light"},
+        "infrastate": {
+            "summary": {
+                "subtitle": "slot A | 78a00fe",
+                "source": "skill.infrastate_skill",
+            }
+        },
+    }
+
+    merged = mod._member_node_state_for_ingest({}, incoming)
+
+    assert merged == {"desktop": {"theme": "light"}}
+
+
 def test_update_member_snapshot_heartbeat_publishes_member_infrastate_projection(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()

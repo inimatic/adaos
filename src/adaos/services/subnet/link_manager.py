@@ -441,6 +441,29 @@ def _member_infrastate_projection_fingerprint(projection: dict[str, Any]) -> str
     return json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def _is_member_infrastate_projection(value: Any) -> bool:
+    infrastate = _coerce_json_dict(value)
+    if not infrastate:
+        return False
+    summary = _coerce_json_dict(infrastate.get("summary"))
+    diag = _coerce_json_dict(infrastate.get("projection_diag"))
+    return (
+        str(summary.get("source") or "").strip() == "subnet.member.snapshot"
+        or str(diag.get("source") or "").strip() == "subnet.link_manager.member_snapshot"
+    )
+
+
+def _member_node_state_for_ingest(existing: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+    state = json.loads(json.dumps(incoming or {}, ensure_ascii=False, separators=(",", ":")))
+    existing_state = _coerce_json_dict(existing)
+    existing_infrastate = _coerce_json_dict(existing_state.get("infrastate"))
+    if _is_member_infrastate_projection(existing_infrastate):
+        state["infrastate"] = existing_infrastate
+    else:
+        state.pop("infrastate", None)
+    return state
+
+
 def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -744,12 +767,9 @@ class HubLinkManager:
                 data_map = ydoc.get_map("data")
                 nodes = _coerce_json_dict(data_map.get("nodes"))
                 node_state = _coerce_json_dict(nodes.get(node_key))
-                infrastate = _coerce_json_dict(node_state.get("infrastate"))
-                merged = dict(infrastate)
-                merged.update(projection_copy)
-                if infrastate == merged:
+                if _coerce_json_dict(node_state.get("infrastate")) == projection_copy:
                     return
-                node_state["infrastate"] = merged
+                node_state["infrastate"] = projection_copy
                 nodes[node_key] = node_state
                 data_map.set(txn, "nodes", nodes)
 
@@ -775,14 +795,11 @@ class HubLinkManager:
                             data_map = ydoc.get_map("data")
                             nodes = _coerce_json_dict(data_map.get("nodes"))
                             node_state = _coerce_json_dict(nodes.get(node_key))
-                            infrastate = _coerce_json_dict(node_state.get("infrastate"))
-                            merged = dict(infrastate)
-                            merged.update(projection_copy)
-                            if infrastate == merged:
+                            if _coerce_json_dict(node_state.get("infrastate")) == projection_copy:
                                 self._member_infrastate_projection_fingerprints[cache_key] = fingerprint
                                 self._member_infrastate_projection_last_at[cache_key] = now
                                 continue
-                            node_state["infrastate"] = merged
+                            node_state["infrastate"] = projection_copy
                             nodes[node_key] = node_state
                             with ydoc.begin_transaction() as txn:
                                 data_map.set(txn, "nodes", nodes)
@@ -1297,9 +1314,10 @@ class HubLinkManager:
         def _merge_node_state(ydoc: Any, txn: Any) -> None:
             data_map = ydoc.get_map("data")
             nodes = _coerce_json_dict(data_map.get("nodes"))
-            if nodes.get(node_key) == state_copy:
+            merged_state = _member_node_state_for_ingest(nodes.get(node_key), state_copy)
+            if nodes.get(node_key) == merged_state:
                 return
-            nodes[node_key] = state_copy
+            nodes[node_key] = merged_state
             data_map.set(txn, "nodes", nodes)
 
         live_scheduled = mutate_live_room(
@@ -1332,9 +1350,10 @@ class HubLinkManager:
                 async with async_get_ydoc(ws_id, load_mark_roots=["data"], governed=True) as ydoc:
                     data_map = ydoc.get_map("data")
                     nodes = _coerce_json_dict(data_map.get("nodes"))
-                    if nodes.get(node_key) == state_copy:
+                    merged_state = _member_node_state_for_ingest(nodes.get(node_key), state_copy)
+                    if nodes.get(node_key) == merged_state:
                         return
-                    nodes[node_key] = state_copy
+                    nodes[node_key] = merged_state
                     with ydoc.begin_transaction() as txn:
                         data_map.set(txn, "nodes", nodes)
             self._yjs_live_apply_total += 1
