@@ -306,7 +306,8 @@ Backend versioning:
 AdaOS core update versioning:
 
 - Core base version is `pyproject.toml` `[project].version`.
-- The `AdaOS Version Bump` workflow increments the patch version after a successful `AdaOS CI` push run on `rev2026`.
+- The `AdaOS CI` workflow increments the patch version after the full test matrix succeeds on a `rev2026` push, then pushes a `chore: bump adaos version ...` commit.
+- Root GitHub core-update webhooks publish rollout releases from those version-bump commits by default, so subnets do not update to the pre-bump commit.
 - Core update requests still use the target Git commit SHA as rollout identity, while prepared slots record the human-readable `build_version` in `manifest.json`.
 - `adaos autostart update-status` shows the running slot's `active build version`; backend `/healthz.version` is the root/backend container version, not the core slot version.
 
