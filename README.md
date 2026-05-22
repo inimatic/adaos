@@ -286,6 +286,13 @@ Backend versioning:
 - CI/CD publishes backend builds with auto-incremented patch version in the form `MAJOR.MINOR.PATCH`, where `PATCH` is derived from the backend git history during image build.
 - The deployed backend exposes `version`, `build_date`, and `commit` via `https://ru.api.inimatic.com/healthz` and `/v1/health`.
 
+AdaOS core update versioning:
+
+- Core base version is `pyproject.toml` `[project].version`.
+- The `AdaOS Version Bump` workflow increments the patch version after a successful `AdaOS CI` push run on `rev2026`.
+- Core update requests still use the target Git commit SHA as rollout identity, while prepared slots record the human-readable `build_version` in `manifest.json`.
+- `adaos autostart update-status` shows the running slot's `active build version`; backend `/healthz.version` is the root/backend container version, not the core slot version.
+
 ## Documentation
 
 - Project docs: `docs/`

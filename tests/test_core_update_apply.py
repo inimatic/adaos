@@ -298,6 +298,37 @@ def test_validate_prepared_slot_imports_checks_installed_package_without_pythonp
     assert "PYTHONPATH" not in captured["env"]
 
 
+def test_checkout_build_version_uses_pyproject_and_git_metadata(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.7"\n',
+        encoding="utf-8",
+    )
+
+    def _fake_git_text(_repo_dir, *args):
+        if args == ("rev-list", "--count", "HEAD"):
+            return "44"
+        if args == ("rev-parse", "--short", "HEAD"):
+            return "abc1234"
+        return ""
+
+    monkeypatch.delenv("ADAOS_BASE_VERSION", raising=False)
+    monkeypatch.delenv("ADAOS_BUILD_VERSION", raising=False)
+    monkeypatch.setattr(mod, "_git_text", _fake_git_text)
+
+    assert mod._checkout_build_version(tmp_path) == "0.1.7+44.abc1234"
+
+
+def test_checkout_build_version_env_override_wins(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    monkeypatch.setenv("ADAOS_BUILD_VERSION", "2026.5.22")
+    monkeypatch.setattr(mod, "_git_text", lambda *_args: "44")
+
+    assert mod._checkout_build_version(tmp_path) == "2026.5.22"
+
+
 def test_strip_repo_vcs_metadata_removes_git_dir(tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

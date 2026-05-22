@@ -38,6 +38,15 @@ def test_core_update_command_formats_placeholders(monkeypatch, tmp_path) -> None
     assert str(tmp_path) in cmd
 
 
+def test_manifest_target_match_accepts_build_version() -> None:
+    from adaos.services.core_update import _manifest_matches_target_version
+
+    assert _manifest_matches_target_version(
+        {"build_version": "0.1.7+44.abc1234", "git_commit": "f" * 40},
+        "0.1.7+44.abc1234",
+    )
+
+
 def test_core_update_command_uses_builtin_runner_when_not_configured(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.delenv("ADAOS_CORE_UPDATE_CMD", raising=False)

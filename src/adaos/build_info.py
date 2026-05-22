@@ -1,25 +1,24 @@
 """Utilities for exposing AdaOS build metadata.
 
-The project keeps a static semantic version in :mod:`pyproject.toml`, but for
-internal deployments we want automatically increasing versions on every push
-without having to edit the sources manually.  To achieve that we derive a
-monotonic build identifier from the Git history (commit count + short SHA) and
-expose it together with the commit timestamp.  Both values can be overridden by
-environment variables so CI pipelines or packaged builds may inject canonical
-information.
+The project keeps the core base version in :mod:`pyproject.toml`.  CI may bump
+that patch version, while local and slot runtimes append a Git-history build
+suffix when the checkout still has VCS metadata.  Values can be overridden by
+environment variables for packaged builds.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import importlib.metadata
 import os
 from pathlib import Path
 import subprocess
+import tomllib
 from typing import Final
 
 
-_BASE_VERSION: Final[str] = os.getenv("ADAOS_BASE_VERSION", "0.1.0")
+_DEFAULT_BASE_VERSION: Final[str] = "0.1.0"
 
 
 def _repo_root() -> Path:
@@ -41,10 +40,41 @@ def _git(*args: str) -> str | None:
         return None
 
 
+def _pyproject_version(repo_root: Path) -> str | None:
+    pyproject_path = repo_root / "pyproject.toml"
+    try:
+        payload = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    project = payload.get("project") if isinstance(payload, dict) else None
+    if not isinstance(project, dict):
+        return None
+    version = str(project.get("version") or "").strip()
+    return version or None
+
+
+def _installed_distribution_version() -> str | None:
+    try:
+        return str(importlib.metadata.version("adaos") or "").strip() or None
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def base_version(repo_root: Path | str | None = None) -> str:
+    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
+    if explicit:
+        return explicit
+    root = Path(repo_root).expanduser().resolve() if repo_root is not None else _repo_root()
+    return _pyproject_version(root) or _installed_distribution_version() or _DEFAULT_BASE_VERSION
+
+
 def _compute_version() -> str:
     explicit = os.getenv("ADAOS_BUILD_VERSION")
     if explicit:
         return explicit
+    base = base_version()
 
     rev_count = _git("rev-list", "--count", "HEAD")
     short_sha = _git("rev-parse", "--short", "HEAD")
@@ -52,9 +82,9 @@ def _compute_version() -> str:
         suffix = f"+{rev_count}"
         if short_sha:
             suffix += f".{short_sha}"
-        return f"{_BASE_VERSION}{suffix}"
+        return f"{base}{suffix}"
 
-    return _BASE_VERSION
+    return base
 
 
 def _compute_build_date() -> str:

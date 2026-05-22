@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 
 from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
@@ -500,6 +501,41 @@ def _git_text(repo_dir: Path, *args: str) -> str:
         return ""
 
 
+def _checkout_base_version(repo_dir: Path) -> str:
+    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
+    if explicit:
+        return explicit
+    pyproject_path = repo_dir / "pyproject.toml"
+    try:
+        payload = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "0.1.0"
+    project = payload.get("project") if isinstance(payload, dict) else None
+    if not isinstance(project, dict):
+        return "0.1.0"
+    version = str(project.get("version") or "").strip()
+    return version or "0.1.0"
+
+
+def _checkout_build_version(repo_dir: Path) -> str:
+    explicit = str(os.getenv("ADAOS_BUILD_VERSION") or "").strip()
+    if explicit:
+        return explicit
+    base = _checkout_base_version(repo_dir)
+    rev_count = _git_text(repo_dir, "rev-list", "--count", "HEAD")
+    if not rev_count:
+        return base
+    short_sha = _git_text(repo_dir, "rev-parse", "--short", "HEAD")
+    suffix = f"+{rev_count}"
+    if short_sha:
+        suffix += f".{short_sha}"
+    return f"{base}{suffix}"
+
+
+def _checkout_build_date(repo_dir: Path) -> str:
+    return _git_text(repo_dir, "show", "-s", "--format=%cI", "HEAD")
+
+
 _PREPARED_SLOT_IMPORT_MODULES: tuple[str, ...] = (
     "adaos.apps.supervisor",
     "adaos.services.core_update_policy",
@@ -614,6 +650,9 @@ def prepare_slot(
         git_short_commit = _git_text(checkout_tmp, "rev-parse", "--short", "HEAD")
         git_branch = _git_text(checkout_tmp, "rev-parse", "--abbrev-ref", "HEAD")
         git_subject = _git_text(checkout_tmp, "show", "-s", "--format=%s", "HEAD")
+        build_version = _checkout_build_version(checkout_tmp)
+        base_version = _checkout_base_version(checkout_tmp)
+        build_date = _checkout_build_date(checkout_tmp)
         bootstrap_update = _detect_bootstrap_promotion_requirement(checkout_tmp, repo_root_dir)
         _strip_repo_vcs_metadata(checkout_tmp)
         manifest = {
@@ -627,6 +666,9 @@ def prepare_slot(
             "repo_url": repo_url,
             "repo_dir": str(final_repo_dir),
             "venv_dir": str(final_venv_dir),
+            "base_version": base_version,
+            "build_version": build_version,
+            "build_date": build_date,
             "git_commit": git_commit,
             "git_short_commit": git_short_commit,
             "git_branch": git_branch,
