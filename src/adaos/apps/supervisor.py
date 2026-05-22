@@ -901,6 +901,13 @@ def _attempt_transition_at(payload: dict[str, Any]) -> float:
     return 0.0
 
 
+def _update_transition_timed_out(*, status_age: float, transition_age: float, timeout_sec: float) -> bool:
+    ages = [age for age in (status_age, transition_age) if age > 0.0]
+    if not ages:
+        return False
+    return min(ages) >= float(timeout_sec)
+
+
 def _is_terminal_update_status(payload: dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -1455,7 +1462,11 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
                 status=status,
                 reason="root restart completed",
             )
-        elif max(status_age, transition_age) >= timeout_sec:
+        elif _update_transition_timed_out(
+            status_age=status_age,
+            transition_age=transition_age,
+            timeout_sec=timeout_sec,
+        ):
             # If a new runtime is already serving status, let it finalize a stale
             # root-promoted marker before declaring the update failed.
             finalized_status = finalize_runtime_boot_status()
@@ -1496,7 +1507,11 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         payload["attempt"] = _complete_update_attempt(state="completed", status=status, reason="terminal core update status")
         return payload
 
-    if max(status_age, transition_age) < timeout_sec:
+    if not _update_transition_timed_out(
+        status_age=status_age,
+        transition_age=transition_age,
+        timeout_sec=timeout_sec,
+    ):
         return payload
 
     action = str(status.get("action") or attempt.get("action") or "update")
