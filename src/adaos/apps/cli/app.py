@@ -208,6 +208,8 @@ _STATE_CHANGING_COMMANDS = {
     ("autostart", "update-restore-root"),
     ("autostart", "update-rollback"),
     ("autostart", "update-start"),
+    ("maintenance", "apply-retention"),
+    ("maintenance", "run"),
     ("node", "join"),
     ("node", "member-refresh"),
     ("node", "member-update"),
@@ -403,6 +405,7 @@ from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests
 from adaos.apps.cli.commands import diag360
 from adaos.apps.cli.commands import git as git_cmd
 from adaos.apps.cli.commands import interpreter
+from adaos.apps.cli.commands import maintenance
 from adaos.apps.cli.commands import native
 from adaos.apps.cli.commands import rhasspy as rhasspy_cmd
 from adaos.apps.cli.commands import secret
@@ -563,6 +566,7 @@ app.add_typer(realtime.app, name="realtime", help="Realtime sidecar")
 app.add_typer(diag360.app, name="360log", help="360log flight-recorder snapshots")
 app.add_typer(node.app, name="node", help="Node onboarding and role management")
 app.add_typer(hub.app, name="hub", help="Hub operations (join-codes)")
+app.add_typer(maintenance.app, name="maintenance", help="Maintenance and self-hygiene")
 app.add_typer(monitor.app, name="monitor")
 app.add_typer(repo.app, name="repo", help=_("cli.repo.help"))
 app.add_typer(git_cmd.app, name="git", help="Git availability / archive fallback")
