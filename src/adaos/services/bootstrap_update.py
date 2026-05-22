@@ -4,6 +4,7 @@ from __future__ import annotations
 # behavior and therefore require root promotion only after the prepared slot has
 # already been validated.
 SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
+    "src/adaos/build_info.py",
     "src/adaos/apps/supervisor.py",
     "src/adaos/apps/api/auth.py",
     "src/adaos/apps/bootstrap.py",
