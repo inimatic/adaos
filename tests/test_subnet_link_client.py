@@ -35,6 +35,55 @@ if "ypy_websocket" not in sys.modules:
 mod = importlib.import_module("adaos.services.subnet.link_client")
 
 
+def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    monkeypatch.setattr(mod, "BUILD_INFO", SimpleNamespace(version="0.1.0", build_date="2026-05-22T09:17:56+03:00"))
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="member-1",
+                subnet_id="sn-1",
+                role="member",
+                node_settings=SimpleNamespace(node_names=["Mediapoint"]),
+                primary_node_name="Mediapoint",
+            )
+        ),
+    )
+    monkeypatch.setattr(mod, "runtime_lifecycle_snapshot", lambda: {"node_state": "ready", "reason": "", "draining": False})
+    monkeypatch.setattr(
+        mod,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "A",
+            "target_rev": "HEAD",
+            "target_version": "6ae4ddbc8bc4ad25f391bf18f0ed868052d11a92",
+            "base_version": "0.1.0",
+            "build_version": "0.1.0+1.6ae4ddb",
+            "build_date": "2026-05-22T09:17:56+03:00",
+            "git_commit": "6ae4ddbc8bc4ad25f391bf18f0ed868052d11a92",
+            "git_short_commit": "6ae4ddb",
+            "git_subject": "Fix core update launch timeout clock",
+        },
+    )
+    monkeypatch.setattr(mod, "slot_status", lambda: {"active_slot": "A", "previous_slot": "B"})
+    monkeypatch.setattr(
+        mod,
+        "read_core_update_status",
+        lambda: {"state": "succeeded", "phase": "validate", "target_slot": "A"},
+    )
+    monkeypatch.setattr(mod, "read_core_update_last_result", lambda: {})
+
+    snapshot = client._local_node_snapshot_heartbeat()
+
+    assert snapshot["build"]["runtime_version"] == "0.1.0+1.6ae4ddb"
+    assert snapshot["build"]["runtime_build_version"] == "0.1.0+1.6ae4ddb"
+    assert snapshot["build"]["runtime_base_version"] == "0.1.0"
+    assert snapshot["build"]["runtime_target_version"] == "6ae4ddbc8bc4ad25f391bf18f0ed868052d11a92"
+    assert snapshot["slots"]["active_manifest"]["build_version"] == "0.1.0+1.6ae4ddb"
+
+
 def test_member_link_client_skips_hub_follow_when_node_config_disables_updates(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)

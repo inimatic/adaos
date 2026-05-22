@@ -143,6 +143,68 @@ def test_update_member_snapshot_publishes_only_material_changes(monkeypatch) -> 
     assert payload["snapshot_update"]["state"] == "succeeded"
 
 
+def test_update_member_snapshot_heartbeat_refreshes_runtime_snapshot(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+
+    asyncio.run(
+        manager.update_member_snapshot(
+            "member-1",
+            snapshot={
+                "captured_at": 100.0,
+                "node_id": "member-1",
+                "node_names": ["Mediapoint"],
+                "node_state": "ready",
+                "build": {"runtime_git_short_commit": "78a00fe"},
+                "slots": {
+                    "active_slot": "A",
+                    "active_manifest": {"git_short_commit": "78a00fe"},
+                },
+                "desktop_catalog": {"apps": [{"id": "infrastate"}], "widgets": []},
+            },
+        )
+    )
+    result = asyncio.run(
+        manager.update_member_snapshot_heartbeat(
+            "member-1",
+            snapshot={
+                "captured_at": 120.0,
+                "node_id": "member-1",
+                "node_names": ["Mediapoint"],
+                "node_state": "ready",
+                "build": {
+                    "runtime_build_version": "0.1.0+1.6ae4ddb",
+                    "runtime_git_short_commit": "6ae4ddb",
+                },
+                "update_status": {"state": "succeeded", "phase": "validate", "action": "update"},
+                "slots": {
+                    "active_slot": "A",
+                    "active_manifest": {
+                        "build_version": "0.1.0+1.6ae4ddb",
+                        "git_short_commit": "6ae4ddb",
+                    },
+                },
+            },
+        )
+    )
+
+    link = manager._links["member-1"]
+    assert result["changed"] is True
+    assert link.node_snapshot["build"]["runtime_git_short_commit"] == "6ae4ddb"
+    assert link.node_snapshot["slots"]["active_manifest"]["build_version"] == "0.1.0+1.6ae4ddb"
+    assert link.node_snapshot["desktop_catalog"]["apps"][0]["id"] == "infrastate"
+    assert fake_directory.calls[-1][0] == "member-1"
+    assert fake_directory.calls[-1][1]["build"]["runtime_git_short_commit"] == "6ae4ddb"
+    changed_events = [event for event in fake_bus.events if event.type == "subnet.member.snapshot.changed"]
+    assert len(changed_events) == 2
+    assert changed_events[-1].payload["snapshot_build"]["runtime_git_short_commit"] == "6ae4ddb"
+
+
 def test_update_member_snapshot_ignores_nested_capacity_timestamps(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
