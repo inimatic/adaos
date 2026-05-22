@@ -2552,7 +2552,7 @@ async def node_infrastate_action(payload: InfrastateActionRequest) -> dict[str, 
         result = mgr.run_tool(
             "infrastate_skill",
             "get_snapshot",
-            {"webspace_id": target_webspace_id, "project": False},
+            {"webspace_id": target_webspace_id, "project": False, "force_refresh": True},
         )
         return result if isinstance(result, dict) else {"summary": {}, "raw": result}
 
