@@ -1323,6 +1323,57 @@ def test_yws_guard_replaces_existing_client_sessions(monkeypatch) -> None:
     gateway_module._untrack_yws_connection("ops", old_ws)
 
 
+def test_yws_guard_limits_browser_session_not_whole_device(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_CLIENT", 1)
+
+    class _FakeWebSocket:
+        def __init__(self, browser_session_id: str) -> None:
+            self.query_params = {"dev": "dev-2", "browser_session_id": browser_session_id}
+            self.closed: list[tuple[int, str]] = []
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed.append((code, str(reason or "")))
+
+    tab_a = _FakeWebSocket("tab-a")
+    gateway_module._track_yws_connection("ops", tab_a, device_id="dev-2")
+
+    closed = asyncio.run(
+        gateway_module._close_existing_yws_client_connections(
+            "ops",
+            "dev-2",
+            browser_session_id="tab-b",
+        )
+    )
+
+    assert closed == 0
+    assert tab_a.closed == []
+    assert gateway_module._active_yws_connection_total_for_client(
+        "ops",
+        "dev-2",
+        browser_session_id="tab-b",
+    ) == 0
+    assert gateway_module._active_yws_connection_total_for_client(
+        "ops",
+        "dev-2",
+        browser_session_id="tab-a",
+    ) == 1
+
+    closed = asyncio.run(
+        gateway_module._close_existing_yws_client_connections(
+            "ops",
+            "dev-2",
+            browser_session_id="tab-a",
+        )
+    )
+
+    assert closed == 1
+    assert tab_a.closed == [(1012, "replaced_by_new_yws_session")]
+    gateway_module._untrack_yws_connection("ops", tab_a)
+
+
 def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     gateway_module._TRANSPORT_STATE["yws"].update(
         {
