@@ -375,6 +375,7 @@ def test_autostart_smoke_update_defaults_to_current_branch(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(setup_cmd, "BUILD_INFO", types.SimpleNamespace(version="0.1.0+1.abc"))
     monkeypatch.setattr(setup_cmd, "_repo_git_text", lambda *args: "rev2026")
+    monkeypatch.setattr(setup_cmd, "_core_update_repo_url", lambda: "")
     captured: dict[str, object] = {}
 
     def _post(path, *, body=None, token=None):
@@ -397,6 +398,7 @@ def test_autostart_update_start_defaults_to_current_branch(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(setup_cmd, "BUILD_INFO", types.SimpleNamespace(version="0.1.0+2.def"))
     monkeypatch.setattr(setup_cmd, "_repo_git_text", lambda *args: "rev2026")
+    monkeypatch.setattr(setup_cmd, "_core_update_repo_url", lambda: "")
     captured: dict[str, object] = {}
 
     def _post(path, *, body=None, token=None):
@@ -412,6 +414,34 @@ def test_autostart_update_start_defaults_to_current_branch(monkeypatch) -> None:
     assert captured["path"] == "/api/supervisor/update/start"
     assert captured["body"]["target_rev"] == "rev2026"
     assert captured["body"]["target_version"] == "0.1.0+2.def"
+
+
+def test_autostart_update_start_defaults_target_version_to_remote_ref_sha(monkeypatch) -> None:
+    runner = CliRunner()
+    target_sha = "30da9f698a4408afe83c99293f76a670c8e34169"
+    monkeypatch.setattr(setup_cmd, "BUILD_INFO", types.SimpleNamespace(version="0.1.0"))
+    monkeypatch.setattr(setup_cmd, "_repo_git_text", lambda *args: "rev2026")
+    monkeypatch.setattr(setup_cmd, "_core_update_repo_url", lambda: "https://example.test/inimatic/adaos.git")
+    monkeypatch.setattr(
+        setup_cmd,
+        "_git_ls_remote",
+        lambda repo_url, *refs: f"{target_sha}\trefs/heads/rev2026\n",
+    )
+    captured: dict[str, object] = {}
+
+    def _post(path, *, body=None, token=None):
+        captured["path"] = path
+        captured["body"] = body
+        return {"ok": True, "accepted": True}
+
+    monkeypatch.setattr(setup_cmd, "_autostart_supervisor_post", _post)
+
+    result = runner.invoke(autostart_app, ["update-start", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["path"] == "/api/supervisor/update/start"
+    assert captured["body"]["target_rev"] == "rev2026"
+    assert captured["body"]["target_version"] == target_sha
 
 
 def test_autostart_update_start_does_not_fallback_to_runtime_admin(monkeypatch) -> None:
