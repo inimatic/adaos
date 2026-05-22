@@ -193,6 +193,13 @@ def _update_validation_timeout_sec() -> float:
         return 45.0
 
 
+def _skill_runtime_migration_timeout_sec() -> float:
+    try:
+        return max(1.0, float(os.getenv("ADAOS_SKILL_RUNTIME_MIGRATION_TIMEOUT_SEC") or "45"))
+    except Exception:
+        return 45.0
+
+
 def _update_validation_strict() -> bool:
     raw = str(os.getenv("ADAOS_CORE_UPDATE_VALIDATE_STRICT") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
@@ -486,6 +493,91 @@ def _run_slot_cli_smoke_check(
     return result
 
 
+def _terminate_migration_process(proc: subprocess.Popen[Any]) -> None:
+    if proc.poll() is not None:
+        return
+    if os.name != "nt":
+        with contextlib.suppress(Exception):
+            os.killpg(proc.pid, signal.SIGTERM)
+    else:
+        with contextlib.suppress(Exception):
+            proc.terminate()
+    try:
+        proc.wait(timeout=5.0)
+        return
+    except Exception:
+        pass
+    if os.name != "nt":
+        with contextlib.suppress(Exception):
+            os.killpg(proc.pid, signal.SIGKILL)
+    else:
+        with contextlib.suppress(Exception):
+            proc.kill()
+
+
+def _run_skill_runtime_migration_subprocess(
+    command: list[str],
+    *,
+    env: dict[str, str],
+    cwd: Path | None,
+    timeout_sec: float,
+) -> subprocess.CompletedProcess[str]:
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "env": env,
+        "cwd": str(cwd) if cwd else None,
+    }
+    if os.name != "nt":
+        popen_kwargs["start_new_session"] = True
+    proc: subprocess.Popen[str] = subprocess.Popen(command, **popen_kwargs)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_migration_process(proc)
+        with contextlib.suppress(Exception):
+            stdout, stderr = proc.communicate(timeout=1.0)
+            exc.output = stdout
+            exc.stderr = stderr
+        raise
+    return subprocess.CompletedProcess(command, int(proc.returncode or 0), stdout or "", stderr or "")
+
+
+def _skill_runtime_migration_timeout_payload(timeout_sec: float, exc: subprocess.TimeoutExpired) -> dict[str, Any]:
+    stderr = str(getattr(exc, "stderr", "") or "")
+    stdout = str(getattr(exc, "output", "") or "")
+    message = f"deferred skill runtime migration timed out after {float(timeout_sec):.1f}s"
+    return {
+        "ok": False,
+        "total": 0,
+        "failed_total": 1,
+        "rollback_total": 0,
+        "deactivated_total": 0,
+        "lifecycle_failed_total": 0,
+        "tests_failed_total": 0,
+        "run_tests": True,
+        "safe_for_core_update": True,
+        "deferred": False,
+        "timeout": True,
+        "timeout_sec": float(timeout_sec),
+        "error": message,
+        "stdout": stdout[-4000:],
+        "stderr": stderr[-4000:],
+        "skills": [
+            {
+                "skill": "*",
+                "ok": False,
+                "failure_kind": "timeout",
+                "failed_stage": "prepare",
+                "stage": "failed",
+                "safe_for_core_update": True,
+                "error": message,
+            }
+        ],
+    }
+
+
 def _run_prepared_restart_skill_migration(slot: str, manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     slot_name = str(slot or "").strip().upper()
     if not slot_name:
@@ -503,13 +595,21 @@ def _run_prepared_restart_skill_migration(slot: str, manifest: dict[str, Any]) -
     env["ADAOS_ACTIVE_CORE_SLOT_DIR"] = str(slot_dir(slot_name))
     cwd_raw = str(manifest.get("cwd") or "").strip()
     cwd = Path(cwd_raw).expanduser().resolve() if cwd_raw else None
-    completed = subprocess.run(
-        [sys.executable, "-m", "adaos.apps.skill_runtime_migrate", "--json"],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(cwd) if cwd else None,
-    )
+    command = [sys.executable, "-m", "adaos.apps.skill_runtime_migrate", "--json"]
+    timeout_sec = _skill_runtime_migration_timeout_sec()
+    try:
+        completed = _run_skill_runtime_migration_subprocess(
+            command,
+            env=env,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        payload = _skill_runtime_migration_timeout_payload(timeout_sec, exc)
+        updated_manifest = dict(manifest)
+        updated_manifest["skill_runtime_migration"] = payload
+        write_slot_manifest(slot_name, updated_manifest)
+        return payload, updated_manifest
     if completed.returncode != 0:
         raise RuntimeError(
             f"deferred skill runtime migration failed rc={completed.returncode}: "
