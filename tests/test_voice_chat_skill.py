@@ -39,46 +39,38 @@ def _load_voice_chat_module():
     return module
 
 
-def test_voice_chat_get_snapshot_reads_node_scoped_messages(monkeypatch):
+def test_voice_chat_get_snapshot_uses_projected_state_without_yjs(monkeypatch):
     mod = _load_voice_chat_module()
+    assert not hasattr(mod, "get_ydoc")
 
-    class _Map:
-        def __init__(self, payload):
-            self._payload = payload
+    projected: list[tuple[str, str | None, object]] = []
+    streamed: list[tuple[str, object, dict[str, object]]] = []
+    monkeypatch.setattr(
+        mod.ctx_subnet,
+        "set",
+        lambda slot, value, *, webspace_id=None: projected.append((slot, webspace_id, value)),
+    )
+    monkeypatch.setattr(
+        mod._STREAM_RUNTIME,
+        "publish_snapshot",
+        lambda receiver, data, **kwargs: streamed.append((receiver, data, kwargs)),
+    )
 
-        def to_json(self):
-            return self._payload
-
-    class _Doc:
-        def get_map(self, name: str):
-            assert name == "data"
-            return _Map({
-                "nodes": {
-                    "member-01": {
-                        "voice_chat": {
-                            "messages": [
-                                {"id": "m-1", "from": "user", "text": "weather in Berlin"},
-                            ],
-                            "last_refresh_ts": 123.0,
-                        }
-                    }
-                }
-            })
-
-    class _Ctx:
-        def __enter__(self):
-            return _Doc()
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-    monkeypatch.setattr(mod, "get_ydoc", lambda *_args, **_kwargs: _Ctx())
+    state = mod._state_for("desktop", "member-01")
+    state["messages"] = [
+        {"id": "m-1", "from": "user", "text": "weather in Berlin"},
+    ]
+    state["last_refresh_ts"] = 123.0
 
     snapshot = mod.get_snapshot(webspace_id="desktop", target_node_id="member-01")
 
     assert snapshot["voice_chat"]["messages"][0]["text"] == "weather in Berlin"
     assert snapshot["messages"][0]["text"] == "weather in Berlin"
     assert snapshot["last_refresh_ts"] == 123.0
+    assert projected and projected[0][0] == "voice_chat.state"
+    assert streamed and streamed[0][0] == "voice_chat.messages"
+    assert streamed[0][2]["webspace_id"] == "desktop"
+    assert streamed[0][2]["force"] is True
 
 
 def test_voice_chat_skill_yaml_exports_get_snapshot():

@@ -30,12 +30,21 @@ def _load_module():
     return module
 
 
+def _clear_snapshot_cache(module) -> None:
+    module._CACHE.clear()
+
+
+def _seed_snapshot_cache(module, snapshot: dict, *, target_id: str | None = None, ts: float | None = None) -> None:
+    managed_target_id = module._managed_target_id_for_root_mcp(target_id)
+    cache_key = module._snapshot_cache_key(managed_target_id)
+    module._CACHE[cache_key] = (time.time() if ts is None else ts, dict(snapshot))
+
+
 def test_infra_access_skill_snapshot_and_projection(monkeypatch) -> None:
     module = _load_module()
 
     projected: list[tuple[str | None, dict]] = []
-    module._CACHE["ts"] = 0.0
-    module._CACHE["snapshot"] = None
+    _clear_snapshot_cache(module)
 
     monkeypatch.setattr(
         module.sdk_root_mcp,
@@ -141,8 +150,7 @@ def test_infra_access_skill_snapshot_and_projection(monkeypatch) -> None:
 def test_infra_access_skill_issue_codex_connection(monkeypatch) -> None:
     module = _load_module()
 
-    module._CACHE["ts"] = 0.0
-    module._CACHE["snapshot"] = None
+    _clear_snapshot_cache(module)
     module._LAST_ISSUED.clear()
     issue_calls: list[dict] = []
     refresh_calls: list[dict] = []
@@ -190,15 +198,17 @@ def test_infra_access_skill_issue_codex_connection(monkeypatch) -> None:
 def test_infra_access_skill_cached_snapshot_keeps_fresh_issued_connection(monkeypatch) -> None:
     module = _load_module()
 
-    module._CACHE["ts"] = time.time()
-    module._CACHE["snapshot"] = {
-        "ok": True,
-        "generated_at": "2026-04-21T12:42:00+00:00",
-        "target_id": "hub:test-subnet",
-        "root_url": "https://root.test",
-        "summary_items": [],
-        "events": [],
-    }
+    _seed_snapshot_cache(
+        module,
+        {
+            "ok": True,
+            "generated_at": "2026-04-21T12:42:00+00:00",
+            "target_id": "hub:test-subnet",
+            "root_url": "https://root.test",
+            "summary_items": [],
+            "events": [],
+        },
+    )
     module._LAST_ISSUED.clear()
     module._LAST_ISSUED["payload"] = {
         "session_id": "sess-new",
@@ -223,8 +233,7 @@ def test_infra_access_skill_projects_fallback_snapshot(monkeypatch) -> None:
     module = _load_module()
 
     projected: list[tuple[str | None, dict]] = []
-    module._CACHE["ts"] = 0.0
-    module._CACHE["snapshot"] = None
+    _clear_snapshot_cache(module)
     module._LAST_ISSUED.clear()
 
     monkeypatch.setattr(
@@ -254,3 +263,55 @@ def test_infra_access_skill_projects_fallback_snapshot(monkeypatch) -> None:
     assert snapshot["ok"] is False
     assert "root auth missing" in snapshot["summary"]["description"]
     assert projected and projected[0][1]["events"][0]["id"] == "snapshot-error"
+
+
+def test_infra_access_skill_cache_is_keyed_by_managed_target(monkeypatch) -> None:
+    module = _load_module()
+
+    _clear_snapshot_cache(module)
+    module._LAST_ISSUED.clear()
+    build_calls: list[str | None] = []
+    monkeypatch.setattr(
+        module.sdk_root_mcp,
+        "get_local_target_context",
+        lambda **kwargs: {"target_id": kwargs.get("target_id")},
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_snapshot",
+        lambda *, target_id=None: build_calls.append(target_id) or {"ok": True, "target_id": target_id},
+    )
+
+    first = module._snapshot_or_cached(force=False, target_id="hub:alpha")
+    second = module._snapshot_or_cached(force=False, target_id="hub:beta")
+    again = module._snapshot_or_cached(force=False, target_id="hub:alpha")
+
+    assert first["target_id"] == "hub:alpha"
+    assert second["target_id"] == "hub:beta"
+    assert again["target_id"] == "hub:alpha"
+    assert build_calls == ["hub:alpha", "hub:beta"]
+    assert set(module._CACHE) == {"hub:alpha", "hub:beta"}
+
+
+def test_infra_access_skill_runtime_dispose_clears_cache_and_executor() -> None:
+    module = _load_module()
+
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class _Executor:
+        def shutdown(self, *, wait=False, cancel_futures=False):
+            shutdown_calls.append((wait, cancel_futures))
+
+    _seed_snapshot_cache(module, {"ok": True})
+    module._LAST_ISSUED["payload"] = {"session_id": "sess-1"}
+    module._PROJECTION_EXECUTOR = _Executor()
+
+    result = module.infra_access_runtime_dispose(reason="test")
+
+    assert result["ok"] is True
+    assert result["cache_total"] == 1
+    assert result["issued_total"] == 1
+    assert module._CACHE == {}
+    assert module._LAST_ISSUED == {}
+    assert module._PROJECTION_EXECUTOR is None
+    assert shutdown_calls == [(False, True)]
