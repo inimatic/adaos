@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import signal
+import subprocess
 import types
 from pathlib import Path
 
@@ -595,6 +596,34 @@ def test_autostart_runner_prepared_restart_preserves_plan_until_validation(monke
     assert payload["target_slot"] == "B"
     assert payload["manifest"]["target_version"] == "target-sha"
     assert payload["skill_runtime_migration"]["ok"] is True
+
+
+def test_prepared_restart_skill_migration_timeout_is_safe_for_core_update(monkeypatch, tmp_path: Path) -> None:
+    written: list[tuple[str, dict]] = []
+    manifest = {
+        "slot": "B",
+        "env": {},
+        "cwd": str(tmp_path),
+        "skill_runtime_migration": {"deferred": True},
+    }
+
+    def _timeout(command, *, env, cwd, timeout_sec):
+        raise subprocess.TimeoutExpired(command, timeout_sec, output="partial stdout", stderr="partial stderr")
+
+    monkeypatch.setattr(autostart_runner, "_skill_runtime_migration_timeout_sec", lambda: 12.0)
+    monkeypatch.setattr(autostart_runner, "_run_skill_runtime_migration_subprocess", _timeout)
+    monkeypatch.setattr(autostart_runner, "write_slot_manifest", lambda slot, payload: written.append((slot, dict(payload))))
+
+    payload, updated_manifest = autostart_runner._run_prepared_restart_skill_migration("B", manifest)
+
+    assert payload["ok"] is False
+    assert payload["timeout"] is True
+    assert payload["safe_for_core_update"] is True
+    assert payload["deferred"] is False
+    assert payload["timeout_sec"] == 12.0
+    assert "timed out" in payload["error"]
+    assert updated_manifest["skill_runtime_migration"] == payload
+    assert written[-1] == ("B", updated_manifest)
 
 
 def test_launch_active_slot_marks_child_to_skip_pending_update(monkeypatch) -> None:
