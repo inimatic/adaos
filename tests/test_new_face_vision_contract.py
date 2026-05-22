@@ -57,6 +57,18 @@ def _frames_zip(path: Path) -> None:
         zf.writestr("frame_001.png", _png_bytes((40, 40, 40)))
 
 
+def _metadata_file(path: Path) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"frame_idx": 0, "ratio_bad_true": 0.1}),
+                json.dumps({"frame_idx": 1, "ratio_bad_true": 0.2}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def _large_frames_zip(path: Path) -> None:
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("frame_000.png", _noisy_png_bytes())
@@ -71,6 +83,8 @@ def test_new_face_vision_engine_snapshot_imports_without_image_dependencies(tmp_
     assert snapshot["ok"] is True
     assert snapshot["status"] == "init"
     assert snapshot["history"] == []
+    assert snapshot["compute"]["mode"] in {"CPU", "GPU"}
+    assert "cuda_available" in snapshot["compute"]
 
 
 def test_new_face_vision_retries_late_image_dependency_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,10 +131,15 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
     assert snapshot["playback"]["run_id"] == snapshot["latest"]["run_id"]
     assert snapshot["stats"]["processed_frames"] == 2
     assert snapshot["stats"]["next_frame"] == 0
-    assert snapshot["files"]["frames"]["source"]["uri"] == "skill://upload/frames.zip"
+    assert snapshot["files"]["frames"]["name"] == "frames.zip"
+    assert "source" not in snapshot["files"]["frames"]
+    assert "path" not in snapshot["files"]["frames"]
     assert snapshot["files"]["frames"]["updated_at"] is not None
     assert snapshot["file_items"][0]["id"] == "frames"
     assert snapshot["file_items"][0]["updated_at"] == snapshot["files"]["frames"]["updated_at"]
+    assert snapshot["history"]
+    assert snapshot["history"][0]["frame_label"] == "1/2"
+    assert snapshot["cache"]["disk_entries"] >= 2
 
     frame_payload = engine.frame_stream_payload(second)
     metrics_payload = engine.metrics_stream_payload(second)
@@ -134,6 +153,34 @@ def test_new_face_vision_snapshot_stays_compact_and_stream_payloads_hold_preview
     assert metrics_payload["seq"] == second["seq"]
     assert metrics_payload["series"]["pred_ratio"] == second["pred_ratio"]
     assert metrics_payload["series"]["iou"] == second["metrics"]["iou"]
+
+
+def test_new_face_vision_can_step_back_to_previous_cached_frame(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_cls = _load_engine_class()
+    engine = engine_cls(tmp_path / "state")
+    archive = tmp_path / "frames.zip"
+    _frames_zip(archive)
+
+    load_result = engine.load_frames(str(archive))
+    assert load_result["ok"] is True
+
+    first = engine.process_frame()
+    second = engine.process_frame()
+    processed_count = engine.snapshot()["stats"]["processed_frames"]
+
+    back = engine.process_relative_frame(-1)
+    snapshot = engine.snapshot()
+
+    assert first["frame_idx"] == 0
+    assert second["frame_idx"] == 1
+    assert back["ok"] is True
+    assert back["frame_idx"] == 0
+    assert back["navigation"] is True
+    assert snapshot["latest"]["frame_idx"] == 0
+    assert snapshot["latest"]["navigation"] is True
+    assert snapshot["stats"]["processed_frames"] == processed_count
+    assert snapshot["stats"]["next_frame"] == 1
 
 
 def test_new_face_vision_frame_preview_is_compact_jpeg_stream_payload(tmp_path: Path) -> None:
@@ -157,6 +204,34 @@ def test_new_face_vision_frame_preview_is_compact_jpeg_stream_payload(tmp_path: 
     assert payload_size < 21_000
 
 
+def test_new_face_vision_persists_prediction_cache_across_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_module = _load_engine_module()
+    state_dir = tmp_path / "state"
+    archive = tmp_path / "frames.zip"
+    _frames_zip(archive)
+
+    engine = engine_module.NewFaceVisionEngine(state_dir)
+    load_result = engine.load_frames(str(archive))
+    assert load_result["ok"] is True
+    first = engine.process_frame(0)
+    assert first["ok"] is True
+    assert first["cached"] is False
+    assert list((state_dir / "prediction_cache").glob("*.json"))
+
+    def fail_if_recomputed(self: Any, frame: Any) -> Any:
+        raise AssertionError("prediction should come from persistent cache")
+
+    monkeypatch.setattr(engine_module.NewFaceVisionEngine, "_create_dummy_prediction", fail_if_recomputed)
+    restarted = engine_module.NewFaceVisionEngine(state_dir)
+    cached = restarted.process_frame(0)
+
+    assert cached["ok"] is True
+    assert cached["cached"] is True
+    assert cached["preview_base64"] == first["preview_base64"]
+    assert restarted.snapshot()["cache"]["hits"] == 1
+
+
 def test_new_face_vision_removes_stale_uploads_after_successful_load(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
     engine_cls = _load_engine_class()
@@ -176,6 +251,91 @@ def test_new_face_vision_removes_stale_uploads_after_successful_load(tmp_path: P
     cleanup = engine.snapshot()["files"]["frames"]["cleanup"]
     assert cleanup["deleted_count"] == 1
     assert cleanup["deleted_names"] == ["frames.zip"]
+
+
+def test_new_face_vision_rehydrates_manifest_after_restart(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_cls = _load_engine_class()
+    state_dir = tmp_path / "state"
+    frames_zip = tmp_path / "frames.zip"
+    masks_zip = tmp_path / "masks.zip"
+    metadata = tmp_path / "meta.jsonl"
+    model = tmp_path / "best_full_finetune_v2.pt"
+    _frames_zip(frames_zip)
+    _frames_zip(masks_zip)
+    _metadata_file(metadata)
+    model.write_bytes(b"model-placeholder")
+
+    manifest = {
+        "schema": "new_face_vision.state.v1",
+        "files": {
+            "model": {"path": str(model), "name": model.name},
+            "frames": {"path": str(frames_zip), "name": frames_zip.name},
+            "masks": {"path": str(masks_zip), "name": masks_zip.name},
+            "metadata": {"path": str(metadata), "name": metadata.name},
+        },
+    }
+    state_dir.mkdir()
+    (state_dir / "state_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    engine = engine_cls(state_dir)
+    snapshot = engine.snapshot()
+
+    assert snapshot["status"] == "ready"
+    assert snapshot["stats"]["total_frames"] == 2
+    assert snapshot["stats"]["loaded_masks"] == 2
+    assert snapshot["stats"]["loaded_metadata"] == 2
+    assert snapshot["stats"]["model_loaded"] is True
+    assert snapshot["model"]["loaded"] is True
+    assert snapshot["model"]["materialized"] is False
+    assert {item["id"] for item in snapshot["file_items"]} == {"model", "frames", "masks", "metadata"}
+
+
+def test_new_face_vision_discovers_legacy_uploads_without_manifest(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_cls = _load_engine_class()
+    upload_root = tmp_path / "runtime" / "data" / "files" / "uploads"
+    frames_zip = upload_root / "frames" / "frames.zip"
+    masks_zip = upload_root / "masks" / "masks.zip"
+    metadata = upload_root / "metadata" / "meta.jsonl"
+    model = upload_root / "model" / "best_full_finetune_v2.pt"
+    frames_zip.parent.mkdir(parents=True)
+    masks_zip.parent.mkdir(parents=True)
+    metadata.parent.mkdir(parents=True)
+    model.parent.mkdir(parents=True)
+    _frames_zip(frames_zip)
+    _frames_zip(masks_zip)
+    _metadata_file(metadata)
+    model.write_bytes(b"model-placeholder")
+
+    engine = engine_cls(tmp_path / "state", upload_root=upload_root)
+    snapshot = engine.snapshot()
+
+    assert snapshot["stats"]["total_frames"] == 2
+    assert snapshot["stats"]["loaded_masks"] == 2
+    assert snapshot["stats"]["loaded_metadata"] == 2
+    assert snapshot["stats"]["model_loaded"] is True
+    assert (tmp_path / "state" / "state_manifest.json").exists()
+
+
+def test_new_face_vision_clear_tombstone_prevents_upload_resurrection(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_cls = _load_engine_class()
+    upload_root = tmp_path / "runtime" / "data" / "files" / "uploads"
+    frames_zip = upload_root / "frames" / "frames.zip"
+    frames_zip.parent.mkdir(parents=True)
+    _frames_zip(frames_zip)
+
+    engine = engine_cls(tmp_path / "state", upload_root=upload_root)
+    assert engine.snapshot()["stats"]["total_frames"] == 2
+
+    clear_result = engine.clear()
+    restarted = engine_cls(tmp_path / "state", upload_root=upload_root)
+    manifest = json.loads((tmp_path / "state" / "state_manifest.json").read_text(encoding="utf-8"))
+
+    assert clear_result["ok"] is True
+    assert "cleared_at" in manifest
+    assert restarted.snapshot()["stats"]["total_frames"] == 0
 
 
 def test_new_face_vision_errors_are_normalized_and_projectable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,6 +451,20 @@ def test_new_face_vision_declares_yjs_stream_route_balance() -> None:
     assert receivers["newface_vision_metrics"]["collectionKey"] == "points"
     assert receivers["newface_vision_metrics"]["dedupeBy"] == "id"
     assert receivers["newface_vision_metrics"]["maxItems"] <= 120
+    lifecycle = skill.get("lifecycle") or {}
+    assert lifecycle["persist_before_switch"] == "new_face_vision_persist_state"
+    assert lifecycle["rehydrate"] == "new_face_vision_rehydrate"
+    tool_names = {tool.get("name") for tool in skill.get("tools") or []}
+    assert {
+        "new_face_vision_step_back",
+        "new_face_vision_step_forward",
+        "new_face_vision_persist_state",
+        "new_face_vision_rehydrate",
+    } <= tool_names
+    tools = {tool.get("name"): tool for tool in skill.get("tools") or []}
+    assert tools["new_face_vision_play"]["timeout_seconds"] >= 90
+    assert tools["new_face_vision_process_frame"]["timeout_seconds"] >= 180
+    assert tools["new_face_vision_step_forward"]["timeout_seconds"] >= 180
 
 
 def test_new_face_vision_compacts_uploads_into_modal() -> None:
@@ -304,6 +478,9 @@ def test_new_face_vision_compacts_uploads_into_modal() -> None:
     assert not any(widget.get("type") == "ui.jsonViewer" for widget in page_widgets)
 
     controls = next(widget for widget in page_widgets if widget.get("id") == "controls")
+    button_ids = [button["id"] for button in controls["inputs"]["buttons"]]
+    assert "step_back" in button_ids
+    assert "step_forward" in button_ids
     upload_action = next(action for action in controls["actions"] if action.get("on") == "click:upload")
     assert upload_action["type"] == "openModal"
     assert upload_action["params"]["modalId"] == "newface_upload_modal"
@@ -314,19 +491,43 @@ def test_new_face_vision_compacts_uploads_into_modal() -> None:
     assert file_list["type"] == "ui.list"
     assert file_list["dataSource"]["path"] == "data/new_face_vision/current/file_items"
     assert file_list["inputs"]["refreshOnStateEmit"] is True
+    assert "newface_metrics_modal" in application["modals"]
+    metrics_widgets = application["modals"]["newface_metrics_modal"]["schema"]["widgets"]
+    table = next(widget for widget in metrics_widgets if widget.get("type") == "ui.table")
+    assert table["dataSource"]["path"] == "data/new_face_vision/history"
 
 
-def test_new_face_vision_places_charts_under_preview_area() -> None:
+def test_new_face_vision_places_charts_side_by_side_under_preview_area() -> None:
     scenario = json.loads(
         (ROOT / ".adaos" / "workspace" / "scenarios" / "new_face_vision" / "scenario.json").read_text(encoding="utf-8")
     )
     page_widgets = scenario["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
     page_by_id = {widget["id"]: widget for widget in page_widgets}
+    page_ids = [widget["id"] for widget in page_widgets]
     assert page_by_id["bad-ratio-stream"]["area"] == "main"
     assert page_by_id["metrics-stream"]["area"] == "main"
+    assert page_ids.index("frame-stream") < page_ids.index("bad-ratio-stream") < page_ids.index("controls")
+    assert page_ids.index("frame-stream") < page_ids.index("metrics-stream") < page_ids.index("controls")
+    assert page_by_id["compute-state"]["dataSource"]["path"] == "data/new_face_vision/current/compute"
+    for chart_id in ("bad-ratio-stream", "metrics-stream"):
+        chart = page_by_id[chart_id]
+        assert chart["inputs"]["detailsModalId"] == "newface_metrics_modal"
+        assert chart["inputs"]["showValues"] is False
+        assert chart["inputs"]["layoutGroup"] == "newface-charts"
+        assert any(action.get("params", {}).get("modalId") == "newface_metrics_modal" for action in chart["actions"])
 
     webui = json.loads((SKILL_ROOT / "webui.json").read_text(encoding="utf-8"))
     modal_widgets = webui["registry"]["modals"]["newface_vision_modal"]["schema"]["widgets"]
     modal_by_id = {widget["id"]: widget for widget in modal_widgets}
+    modal_ids = [widget["id"] for widget in modal_widgets]
     assert modal_by_id["newface_modal_ratio_chart"]["area"] == "main"
     assert modal_by_id["newface_modal_metrics_chart"]["area"] == "main"
+    assert modal_by_id["newface_modal_ratio_chart"]["inputs"]["layoutGroup"] == "newface-charts"
+    assert modal_by_id["newface_modal_metrics_chart"]["inputs"]["layoutGroup"] == "newface-charts"
+    assert modal_ids.index("newface_modal_frame") < modal_ids.index("newface_modal_ratio_chart") < modal_ids.index("newface_modal_controls")
+    assert modal_ids.index("newface_modal_frame") < modal_ids.index("newface_modal_metrics_chart") < modal_ids.index("newface_modal_controls")
+    assert modal_by_id["newface_modal_compute"]["dataSource"]["path"] == "data/new_face_vision/current/compute"
+    metrics_modal = webui["registry"]["modals"]["newface_metrics_modal"]
+    metrics_table = metrics_modal["schema"]["widgets"][0]
+    assert metrics_table["type"] == "ui.table"
+    assert metrics_table["dataSource"]["path"] == "data/new_face_vision/history"
