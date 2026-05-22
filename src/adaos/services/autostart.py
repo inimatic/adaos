@@ -31,6 +31,19 @@ class AutostartSpec:
     env: dict[str, str]
 
 
+_LINUX_CLI_SHIM_MARKER = "Managed by AdaOS autostart"
+_LINUX_CLI_SHIM_ENV_KEYS = {
+    "ADAOS_BASE_DIR",
+    "ADAOS_PROFILE",
+    "ADAOS_AUTOSTART_MANAGED",
+    "ADAOS_SHARED_DOTENV_PATH",
+    "ADAOS_ROOT_REPO_ROOT",
+    "ADAOS_SUPERVISOR_HOST",
+    "ADAOS_SUPERVISOR_PORT",
+    "PYTHONPATH",
+}
+
+
 def _home() -> Path:
     return Path.home().expanduser().resolve()
 
@@ -267,6 +280,10 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _sh_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
 def _write_wrapper_windows(path: Path, *, argv: Sequence[str], env: Mapping[str, str]) -> None:
     # Keep script simple: set env vars and exec python in foreground.
     def _ps_quote(value: str) -> str:
@@ -286,9 +303,6 @@ def _write_wrapper_windows(path: Path, *, argv: Sequence[str], env: Mapping[str,
 
 
 def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]) -> None:
-    def _sh_quote(value: str) -> str:
-        return "'" + value.replace("'", "'\"'\"'") + "'"
-
     lines = ["#!/usr/bin/env bash", "set -euo pipefail"]
     for k, v in env.items():
         lines.append(f"export {k}={_sh_quote(str(v))}")
@@ -299,6 +313,91 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
         path.chmod(path.stat().st_mode | 0o111)
     except Exception:
         pass
+
+
+def _linux_cli_shim_path() -> Path:
+    raw = str(os.getenv("ADAOS_LINUX_CLI_SHIM_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    if os.getenv("ADAOS_TESTING") == "1":
+        return (_home() / "bin" / "adaos").resolve()
+    return Path("/usr/local/bin/adaos").resolve()
+
+
+def _linux_cli_shim_is_owned(path: Path) -> bool:
+    if not path.exists() and not path.is_symlink():
+        return True
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    owned_markers = (
+        _LINUX_CLI_SHIM_MARKER,
+        "adaos.apps.cli.app",
+        ".venv/bin/adaos",
+        ".venv\\Scripts\\adaos",
+    )
+    return any(marker in text for marker in owned_markers)
+
+
+def _write_linux_cli_shim(path: Path, spec: AutostartSpec) -> None:
+    python = str(spec.argv[0])
+    lines = [
+        "#!/usr/bin/env sh",
+        f"# {_LINUX_CLI_SHIM_MARKER}. Safe to overwrite.",
+        "set -eu",
+    ]
+    for key, value in spec.env.items():
+        if key not in _LINUX_CLI_SHIM_ENV_KEYS:
+            continue
+        lines.append(f"export {key}={_sh_quote(str(value))}")
+    lines.append(f"exec {_sh_quote(python)} -m adaos.apps.cli.app \"$@\"")
+    _write_text(path, "\n".join(lines) + "\n")
+    try:
+        path.chmod(path.stat().st_mode | 0o111)
+    except Exception:
+        pass
+
+
+def _linux_cli_shim_status(*, base_dir: Path | str | None = None) -> dict[str, object]:
+    path = _linux_cli_shim_path()
+    payload: dict[str, object] = {
+        "path": str(path),
+        "exists": bool(path.exists() or path.is_symlink()),
+    }
+    if not payload["exists"]:
+        payload["managed"] = False
+        return payload
+    payload["managed"] = _linux_cli_shim_is_owned(path)
+    env = _parse_wrapper_env(path)
+    for key in ("ADAOS_BASE_DIR", "ADAOS_PROFILE", "ADAOS_ROOT_REPO_ROOT", "PYTHONPATH"):
+        value = str(env.get(key) or "").strip()
+        if value:
+            payload[key.lower()] = value
+    payload.update(_wrapper_control_plane_payload(path, base_dir=env.get("ADAOS_BASE_DIR") or base_dir))
+    return payload
+
+
+def _install_linux_cli_shim(spec: AutostartSpec) -> dict[str, object]:
+    path = _linux_cli_shim_path()
+    if not _is_linux():
+        return {"ok": False, "path": str(path), "skipped": True, "reason": "not_linux"}
+    if not _linux_is_root():
+        return {"ok": False, "path": str(path), "skipped": True, "reason": "requires_root"}
+    if not _linux_cli_shim_is_owned(path):
+        return {
+            "ok": False,
+            "path": str(path),
+            "skipped": True,
+            "reason": "existing_non_adaos_file",
+        }
+    try:
+        _write_linux_cli_shim(path, spec)
+    except Exception as exc:
+        return {"ok": False, "path": str(path), "error": str(exc)}
+    payload = {"ok": True}
+    payload.update(_linux_cli_shim_status(base_dir=spec.env.get("ADAOS_BASE_DIR")))
+    return payload
 
 
 def _text_subprocess_kwargs() -> dict[str, object]:
@@ -1409,6 +1508,7 @@ def enable(
 
         wrapper = (bin_dir / "adaos-autostart.sh").resolve()
         _write_wrapper_sh(wrapper, argv=spec.argv, env=spec.env)
+        cli_shim = _install_linux_cli_shim(spec) if _linux_is_root() else None
         user_service_path = _linux_service_path_user()
 
         if not prefer_system_scope:
@@ -1420,13 +1520,16 @@ def enable(
             enabled = _run(["systemctl", "--user", "enable", "--now", _linux_service_name()])
             if enabled.returncode != 0:
                 raise RuntimeError((enabled.stderr or enabled.stdout or "failed to enable systemd user service").strip())
-            return {
+            result = {
                 "ok": True,
                 "platform": "linux",
                 "scope": "user",
                 "wrapper": str(wrapper),
                 "service": str(user_service_path),
             }
+            if cli_shim is not None:
+                result["cli_shim"] = cli_shim
+            return result
 
         # Prefer system scope for root / server environments where user services do not survive a reboot reliably.
         if prefer_system_scope and shutil_which("systemctl") and _linux_is_root() and _linux_has_systemd_pid1():
@@ -1447,7 +1550,7 @@ def enable(
             enabled = _run(["systemctl", "enable", "--now", _linux_service_name()])
             if enabled.returncode != 0:
                 raise RuntimeError((enabled.stderr or enabled.stdout or "failed to enable systemd system service").strip())
-            return {
+            result = {
                 "ok": True,
                 "platform": "linux",
                 "scope": "system",
@@ -1456,6 +1559,9 @@ def enable(
                 "service": str(system_service_path),
                 "user_service": str(user_service_path),
             }
+            if cli_shim is not None:
+                result["cli_shim"] = cli_shim
+            return result
 
         if scope == "user" and shutil_which("systemctl") and not _linux_systemctl_user_available():
             raise RuntimeError(_linux_systemctl_user_unavailable_hint(user_service_path=user_service_path, wrapper=wrapper))
@@ -1476,7 +1582,10 @@ def enable(
                 ).strip()
             )
 
-        return {"ok": True, "platform": "linux", "wrapper": str(wrapper), "service": str(user_service_path)}
+        result = {"ok": True, "platform": "linux", "wrapper": str(wrapper), "service": str(user_service_path)}
+        if cli_shim is not None:
+            result["cli_shim"] = cli_shim
+        return result
 
     if _is_macos():
         wrapper = (bin_dir / "adaos-autostart.sh").resolve()
@@ -1547,14 +1656,17 @@ def refresh_wrapper(ctx: AgentContext, spec: AutostartSpec) -> dict[str, object]
     else:
         wrapper = (base_dir / "bin" / "adaos-autostart.sh").resolve()
     before = _wrapper_control_plane_payload(wrapper, base_dir=base_dir)
+    cli_shim_before = _linux_cli_shim_status(base_dir=base_dir) if _is_linux() and _linux_is_root() else None
     if _is_windows():
         _write_wrapper_windows(wrapper, argv=spec.argv, env=spec.env)
     elif _is_linux() or _is_macos():
         _write_wrapper_sh(wrapper, argv=spec.argv, env=spec.env)
     else:
         raise RuntimeError(f"autostart wrapper refresh is not supported on platform: {platform.platform()}")
+    cli_shim_install = _install_linux_cli_shim(spec) if _is_linux() and _linux_is_root() else None
+    cli_shim_after = _linux_cli_shim_status(base_dir=base_dir) if cli_shim_install is not None else None
     after = _wrapper_control_plane_payload(wrapper, base_dir=base_dir)
-    return {
+    result: dict[str, object] = {
         "ok": True,
         "platform": platform_name,
         "wrapper": str(wrapper),
@@ -1563,6 +1675,14 @@ def refresh_wrapper(ctx: AgentContext, spec: AutostartSpec) -> dict[str, object]
         "after": after,
         "changed": before != after,
     }
+    if cli_shim_install is not None:
+        result["cli_shim"] = {
+            "install": cli_shim_install,
+            "before": cli_shim_before,
+            "after": cli_shim_after,
+            "changed": cli_shim_before != cli_shim_after,
+        }
+    return result
 
 
 def disable(ctx: AgentContext) -> dict:
@@ -1815,6 +1935,8 @@ def status(ctx: AgentContext) -> dict:
         payload["user_service_exists"] = user_service_path.exists()
         payload["system_service_exists"] = system_service_path.exists()
         payload["system_scope_preferred"] = _linux_should_prefer_system_scope("auto")
+        if _linux_is_root():
+            payload["cli_shim"] = _linux_cli_shim_status(base_dir=payload.get("base_dir") or ctx.paths.base_dir())
         core_update_status = _core_update_status_from_base_dir(payload.get("base_dir") or ctx.paths.base_dir())
         if core_update_status:
             payload["core_update_status"] = core_update_status

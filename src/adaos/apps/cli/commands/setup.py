@@ -1594,6 +1594,10 @@ def autostart_enable_cmd(
         for k in ("scope", "run_as", "task", "service", "plist", "wrapper"):
             if k in res:
                 typer.echo(f"{k}: {res[k]}")
+        cli_shim = res.get("cli_shim")
+        if isinstance(cli_shim, dict) and cli_shim.get("path"):
+            state = "ok" if cli_shim.get("ok") else str(cli_shim.get("reason") or cli_shim.get("error") or "skipped")
+            typer.echo(f"cli shim: {cli_shim.get('path')} ({state})")
 
 
 @autostart_app.command("disable")
