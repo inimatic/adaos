@@ -29,6 +29,7 @@ router = APIRouter()
 _log = logging.getLogger("adaos.api.tool_bridge")
 _HUB_LOCAL_TOOL_PREFIXES: tuple[str, ...] = (
     "browsers_skill:",
+    "infrastate_skill:",
 )
 _SNAPSHOT_UNAVAILABLE_TTL_S = max(0.0, float(os.getenv("ADAOS_TOOL_BRIDGE_SNAPSHOT_UNAVAILABLE_TTL_S") or "20"))
 _SNAPSHOT_UNAVAILABLE_CACHE_LOCK = threading.RLock()
@@ -252,9 +253,8 @@ def _should_proxy_tool_call_to_target(
     if not target_node_id or target_node_id == local_node_id:
         return False
     tool_token = str(tool_name or "").strip()
-    # browsers_skill manages the hub-side access-link registry and live member
-    # link state, so even when the UI is focused on a specific member node the
-    # tool must execute on the hub rather than be proxied to that member.
+    # Some tools expose hub-side projections of member state. Even when the UI
+    # is focused on a member node, their authority lives on the hub.
     if any(tool_token.startswith(prefix) for prefix in _HUB_LOCAL_TOOL_PREFIXES):
         return False
     return True
