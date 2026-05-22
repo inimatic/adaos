@@ -68,6 +68,7 @@
         "item.details",
         "input.commandBar",
         "input.fileUpload",
+        "input.frameSlider",
         "input.text",
         "input.selector",
         "desktop.widgets",
