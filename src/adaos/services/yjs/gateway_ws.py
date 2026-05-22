@@ -69,6 +69,8 @@ _ACTIVE_YWS_CONNECTIONS: dict[str, list[WebSocket]] = {}
 _ACTIVE_YWS_CLIENTS: dict[str, dict[str, int]] = {}
 _YWS_OPEN_HISTORY: deque[float] = deque(maxlen=512)
 _YWS_CLIENT_OPEN_HISTORY: dict[str, deque[float]] = {}
+_YWS_ATTEMPT_HISTORY: deque[float] = deque(maxlen=1024)
+_YWS_CLIENT_ATTEMPT_HISTORY: dict[str, deque[float]] = {}
 _YWS_GUARD_QUARANTINE_UNTIL: dict[str, float] = {}
 _YWS_GUARD_LAST_LOG_AT: dict[str, float] = {}
 _YWS_GUARD_LAST_NOTIFY_AT: dict[str, float] = {}
@@ -102,6 +104,18 @@ _YROOM_LIFECYCLE: dict[str, dict[str, Any]] = {}
 _WS_EVENT_SUBSCRIPTIONS_LOCK = threading.RLock()
 _WS_EVENT_SUBSCRIBERS: dict[int, dict[str, Any]] = {}
 _WS_EVENT_FORWARDER_INSTALLED = False
+_WS_EVENT_SEND_LOCK = threading.RLock()
+_WS_EVENT_SEND_STATES: dict[int, dict[str, Any]] = {}
+_WS_EVENT_SEND_DIAG: dict[str, Any] = {
+    "queued_total": 0,
+    "sent_total": 0,
+    "dropped_total": 0,
+    "coalesced_total": 0,
+    "last_drop_at": 0.0,
+    "last_drop_kind": "",
+    "last_coalesced_at": 0.0,
+    "last_coalesced_kind": "",
+}
 _COMMAND_TRACE_LOCK = threading.RLock()
 _COMMAND_TRACE_HISTORY: deque[dict[str, Any]] = deque(maxlen=128)
 _COMMAND_TRACE_STATS: dict[str, int] = {
@@ -249,6 +263,8 @@ _YWS_GUARD_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_COOLDOWN_S", 300.0, minimum=
 _YWS_GUARD_MAX_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_MAX_COOLDOWN_S", 1800.0, minimum=0.0)
 _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S", 3600.0, minimum=1.0)
 _YWS_GUARD_NOTIFY_INTERVAL_S = _env_float("ADAOS_YWS_GUARD_NOTIFY_INTERVAL_S", 30.0, minimum=1.0)
+_WS_EVENT_SEND_QUEUE_LIMIT = _env_int("ADAOS_WS_EVENT_SEND_QUEUE_LIMIT", 64, minimum=1)
+_WS_EVENT_SEND_LOG_INTERVAL_S = _env_float("ADAOS_WS_EVENT_SEND_LOG_INTERVAL_S", 10.0, minimum=0.0)
 _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC", 5.0, minimum=0.0)
 _YROOM_DIAG_BUFFER_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_BUFFER_WARN", 32, minimum=1)
 _YROOM_DIAG_PENDING_WARN = _env_int("ADAOS_YJS_ROOM_DIAG_PENDING_WARN", 32, minimum=1)
@@ -1803,6 +1819,176 @@ def _build_ws_event_message(
     }
 
 
+def _ws_event_message_kind(message: dict[str, Any]) -> str:
+    return str(message.get("kind") or "").strip()
+
+
+def _ws_event_message_coalesce_key(message: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    kind = _ws_event_message_kind(message)
+    if not kind:
+        return None
+    if not (
+        kind in {"node.status", "core.update.status", "supervisor.update.status.raw", "browser.session.changed", "webrtc.peer.state.changed"}
+        or kind.startswith("webio.")
+    ):
+        return None
+    payload = message.get("payload")
+    payload_map = payload if isinstance(payload, dict) else {}
+    route_key = (
+        str(payload_map.get("topic") or "").strip()
+        or str(payload_map.get("receiver") or payload_map.get("projection") or payload_map.get("slot") or "").strip()
+    )
+    webspace_id = str(payload_map.get("webspace_id") or payload_map.get("workspace_id") or "").strip()
+    subject_id = str(payload_map.get("device_id") or payload_map.get("node_id") or payload_map.get("target_node_id") or "").strip()
+    return (kind, webspace_id, route_key, subject_id)
+
+
+def _ws_event_send_snapshot() -> dict[str, Any]:
+    with _WS_EVENT_SEND_LOCK:
+        states = list(_WS_EVENT_SEND_STATES.items())
+        queue_total = 0
+        active_tasks = 0
+        top_queues: list[dict[str, Any]] = []
+        for key, state in states:
+            queue = state.get("queue")
+            queue_len = len(queue) if isinstance(queue, deque) else 0
+            queue_total += queue_len
+            task = state.get("task")
+            if isinstance(task, asyncio.Task) and not task.done():
+                active_tasks += 1
+            if queue_len > 0:
+                top_queues.append(
+                    {
+                        "connection_id": str(key),
+                        "queue_len": queue_len,
+                        "dropped_total": int(state.get("dropped_total") or 0),
+                        "coalesced_total": int(state.get("coalesced_total") or 0),
+                    }
+                )
+        top_queues.sort(key=lambda item: (-int(item.get("queue_len") or 0), str(item.get("connection_id") or "")))
+        return {
+            "queue_limit": int(_WS_EVENT_SEND_QUEUE_LIMIT),
+            "connection_total": len(states),
+            "active_tasks": active_tasks,
+            "queue_total": queue_total,
+            "top_queues": top_queues[:5],
+            **dict(_WS_EVENT_SEND_DIAG),
+        }
+
+
+def _drop_ws_event_send_state(websocket: WebSocket, *, cancel_task: bool = True) -> None:
+    key = id(websocket)
+    with _WS_EVENT_SEND_LOCK:
+        state = _WS_EVENT_SEND_STATES.pop(key, None)
+    if not isinstance(state, dict):
+        return
+    queue = state.get("queue")
+    if isinstance(queue, deque):
+        queue.clear()
+    task = state.get("task")
+    if cancel_task and isinstance(task, asyncio.Task) and not task.done():
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is not current:
+            task.cancel()
+
+
+def _maybe_log_ws_event_send_pressure_locked(kind: str, *, action: str, count: int) -> None:
+    now = time.time()
+    key = f"last_{action}_log_at"
+    last = float(_WS_EVENT_SEND_DIAG.get(key) or 0.0)
+    if now - last < _WS_EVENT_SEND_LOG_INTERVAL_S:
+        return
+    _WS_EVENT_SEND_DIAG[key] = now
+    _log.warning(
+        "events websocket send queue %s kind=%s count=%s queued_connections=%s queue_limit=%s",
+        action,
+        kind or "-",
+        count,
+        len(_WS_EVENT_SEND_STATES),
+        _WS_EVENT_SEND_QUEUE_LIMIT,
+    )
+
+
+async def _drain_ws_event_send_queue(key: int, websocket: WebSocket) -> None:
+    while True:
+        with _WS_EVENT_SEND_LOCK:
+            state = _WS_EVENT_SEND_STATES.get(key)
+            if not isinstance(state, dict):
+                return
+            queue = state.get("queue")
+            if not isinstance(queue, deque) or not queue:
+                state["task"] = None
+                with _WS_EVENT_SUBSCRIPTIONS_LOCK:
+                    subscribed = key in _WS_EVENT_SUBSCRIBERS
+                if not subscribed:
+                    _WS_EVENT_SEND_STATES.pop(key, None)
+                return
+            message = queue.popleft()
+        try:
+            await _send_ws_event_message(websocket, message)
+        finally:
+            with _WS_EVENT_SEND_LOCK:
+                _WS_EVENT_SEND_DIAG["sent_total"] = int(_WS_EVENT_SEND_DIAG.get("sent_total") or 0) + 1
+        await asyncio.sleep(0)
+
+
+def _enqueue_ws_event_message(websocket: WebSocket, message: dict[str, Any]) -> None:
+    key = id(websocket)
+    kind = _ws_event_message_kind(message)
+    with _WS_EVENT_SEND_LOCK:
+        state = _WS_EVENT_SEND_STATES.setdefault(
+            key,
+            {
+                "queue": deque(),
+                "task": None,
+                "dropped_total": 0,
+                "coalesced_total": 0,
+            },
+        )
+        queue = state.get("queue")
+        if not isinstance(queue, deque):
+            queue = deque()
+            state["queue"] = queue
+        if len(queue) >= _WS_EVENT_SEND_QUEUE_LIMIT:
+            coalesce_key = _ws_event_message_coalesce_key(message)
+            if coalesce_key is not None:
+                for index in range(len(queue) - 1, -1, -1):
+                    queued = queue[index]
+                    if isinstance(queued, dict) and _ws_event_message_coalesce_key(queued) == coalesce_key:
+                        queue[index] = message
+                        state["coalesced_total"] = int(state.get("coalesced_total") or 0) + 1
+                        _WS_EVENT_SEND_DIAG["coalesced_total"] = int(_WS_EVENT_SEND_DIAG.get("coalesced_total") or 0) + 1
+                        _WS_EVENT_SEND_DIAG["last_coalesced_at"] = time.time()
+                        _WS_EVENT_SEND_DIAG["last_coalesced_kind"] = kind
+                        _maybe_log_ws_event_send_pressure_locked(kind, action="coalesced", count=int(state["coalesced_total"]))
+                        break
+                else:
+                    queue.popleft()
+                    queue.append(message)
+                    state["dropped_total"] = int(state.get("dropped_total") or 0) + 1
+                    _WS_EVENT_SEND_DIAG["dropped_total"] = int(_WS_EVENT_SEND_DIAG.get("dropped_total") or 0) + 1
+                    _WS_EVENT_SEND_DIAG["last_drop_at"] = time.time()
+                    _WS_EVENT_SEND_DIAG["last_drop_kind"] = kind
+                    _maybe_log_ws_event_send_pressure_locked(kind, action="dropped", count=int(state["dropped_total"]))
+            else:
+                queue.popleft()
+                queue.append(message)
+                state["dropped_total"] = int(state.get("dropped_total") or 0) + 1
+                _WS_EVENT_SEND_DIAG["dropped_total"] = int(_WS_EVENT_SEND_DIAG.get("dropped_total") or 0) + 1
+                _WS_EVENT_SEND_DIAG["last_drop_at"] = time.time()
+                _WS_EVENT_SEND_DIAG["last_drop_kind"] = kind
+                _maybe_log_ws_event_send_pressure_locked(kind, action="dropped", count=int(state["dropped_total"]))
+        else:
+            queue.append(message)
+            _WS_EVENT_SEND_DIAG["queued_total"] = int(_WS_EVENT_SEND_DIAG.get("queued_total") or 0) + 1
+        task = state.get("task")
+        if not isinstance(task, asyncio.Task) or task.done():
+            state["task"] = asyncio.create_task(_drain_ws_event_send_queue(key, websocket), name="events-ws-send-drain")
+
+
 async def _send_ws_event_message(websocket: WebSocket, message: dict[str, Any]) -> None:
     try:
         await websocket.send_text(json.dumps(message))
@@ -2125,6 +2311,7 @@ def _register_ws_event_subscriptions(
 def _unregister_ws_event_subscriptions(websocket: WebSocket) -> None:
     with _WS_EVENT_SUBSCRIPTIONS_LOCK:
         entry = _WS_EVENT_SUBSCRIBERS.pop(id(websocket), None)
+    _drop_ws_event_send_state(websocket)
     topics = set(entry.get("topics") or []) if isinstance(entry, dict) else set()
     if topics:
         _publish_webio_stream_subscription_change(
@@ -2154,6 +2341,7 @@ def _unregister_ws_event_subscription_topics(websocket: WebSocket, raw_topics: A
         tracked.difference_update(removed)
         if not tracked:
             _WS_EVENT_SUBSCRIBERS.pop(id(websocket), None)
+            _drop_ws_event_send_state(websocket)
     if removed:
         _publish_webio_stream_subscription_change(
             removed,
@@ -2194,10 +2382,7 @@ def _forward_ws_bus_event(ev: DomainEvent) -> None:
         if websocket is None or not isinstance(loop, asyncio.AbstractEventLoop):
             continue
         try:
-            asyncio.run_coroutine_threadsafe(
-                _send_ws_event_message(websocket, message),
-                loop,
-            )
+            loop.call_soon_threadsafe(_enqueue_ws_event_message, websocket, message)
         except Exception:
             _unregister_ws_event_subscriptions(websocket)
 
@@ -2461,6 +2646,24 @@ def _record_yws_open(webspace_id: str, dev_id: str) -> None:
         )
 
 
+def _record_yws_guard_attempt(webspace_id: str, dev_id: str) -> None:
+    now = time.time()
+    key = f"{str(webspace_id or '').strip() or 'default'}::{str(dev_id or '').strip() or 'unknown'}"
+    with _YWS_STORM_LOCK:
+        _YWS_ATTEMPT_HISTORY.append(now)
+        items = _YWS_CLIENT_ATTEMPT_HISTORY.setdefault(key, deque(maxlen=128))
+        items.append(now)
+        cutoff = now - 60.0
+        stale_keys: list[str] = []
+        for client_key, queue in _YWS_CLIENT_ATTEMPT_HISTORY.items():
+            while queue and queue[0] < cutoff:
+                queue.popleft()
+            if not queue:
+                stale_keys.append(client_key)
+        for client_key in stale_keys:
+            _YWS_CLIENT_ATTEMPT_HISTORY.pop(client_key, None)
+
+
 def _yws_guard_quarantine_key(webspace_id: str, dev_id: str | None = None) -> str:
     webspace_key = str(webspace_id or "").strip() or "default"
     dev_key = str(dev_id or "").strip() or "*"
@@ -2535,7 +2738,7 @@ def _yws_guard_should_notify(*, webspace_id: str, dev_id: str, reason: str) -> b
 def _yws_client_recent_open_counts_locked(webspace_key: str, now: float) -> tuple[int, int]:
     recent_10s = 0
     distinct_clients_10s = 0
-    for client_key, queue in _YWS_CLIENT_OPEN_HISTORY.items():
+    for client_key, queue in _YWS_CLIENT_ATTEMPT_HISTORY.items():
         client_webspace, _, _client_dev = str(client_key or "").partition("::")
         if (client_webspace or "default") != webspace_key:
             continue
@@ -2638,6 +2841,8 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
         cutoff_60 = now - 60.0
         while _YWS_OPEN_HISTORY and _YWS_OPEN_HISTORY[0] < cutoff_60:
             _YWS_OPEN_HISTORY.popleft()
+        while _YWS_ATTEMPT_HISTORY and _YWS_ATTEMPT_HISTORY[0] < cutoff_60:
+            _YWS_ATTEMPT_HISTORY.popleft()
         stale_keys: list[str] = []
         for client_key, queue in _YWS_CLIENT_OPEN_HISTORY.items():
             while queue and queue[0] < cutoff_60:
@@ -2646,44 +2851,34 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
                 stale_keys.append(client_key)
         for client_key in stale_keys:
             _YWS_CLIENT_OPEN_HISTORY.pop(client_key, None)
+        stale_attempt_keys: list[str] = []
+        for client_key, queue in _YWS_CLIENT_ATTEMPT_HISTORY.items():
+            while queue and queue[0] < cutoff_60:
+                queue.popleft()
+            if not queue:
+                stale_attempt_keys.append(client_key)
+        for client_key in stale_attempt_keys:
+            _YWS_CLIENT_ATTEMPT_HISTORY.pop(client_key, None)
         for key0 in list(_YWS_GUARD_QUARANTINE_UNTIL.keys()):
             if float(_YWS_GUARD_QUARANTINE_UNTIL.get(key0) or 0.0) <= now:
                 _YWS_GUARD_QUARANTINE_UNTIL.pop(key0, None)
         recent_10s, webspace_distinct_clients_10s = _yws_client_recent_open_counts_locked(webspace_key, now)
         client_key = _yws_guard_quarantine_key(webspace_key, dev_key)
-        client_queue = _YWS_CLIENT_OPEN_HISTORY.get(client_key) or deque()
+        client_queue = _YWS_CLIENT_ATTEMPT_HISTORY.get(client_key) or deque()
         client_15s = sum(1 for ts in client_queue if ts >= now - 15.0)
         client_quarantine_until = float(_YWS_GUARD_QUARANTINE_UNTIL.get(client_key) or 0.0)
         webspace_quarantine_until = float(
             _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
         if client_quarantine_until > now:
-            # Older builds used a destructive per-client reconnect quarantine.
-            # Reconnect storms are still diagnostic pressure, but a single
-            # client should be replaced/backed off by the browser, not locked
-            # out of the shared Yjs channel for the full cooldown window.
-            _YWS_GUARD_QUARANTINE_UNTIL.pop(client_key, None)
-            cleared_client_quarantine = True
-            _YWS_GUARD_DIAG["last_cleared_client_quarantine_at"] = now
-            _YWS_GUARD_DIAG["last_cleared_client_quarantine_webspace_id"] = webspace_key
-            _YWS_GUARD_DIAG["last_cleared_client_quarantine_dev_id"] = dev_key
-            _YWS_GUARD_DIAG["last_cleared_client_quarantine_remaining_s"] = max(
-                0.0,
-                client_quarantine_until - now,
-            )
-        if webspace_quarantine_until > now:
-            # Reconnect storms used to quarantine the whole YWS room. Keep the
-            # evidence, but clear the destructive cooldown so the realtime
-            # channel can recover without waiting for a timer.
-            _YWS_GUARD_QUARANTINE_UNTIL.pop(_yws_guard_quarantine_key(webspace_key), None)
-            cleared_webspace_quarantine = True
-            _YWS_GUARD_DIAG["last_cleared_webspace_quarantine_at"] = now
-            _YWS_GUARD_DIAG["last_cleared_webspace_quarantine_webspace_id"] = webspace_key
-            _YWS_GUARD_DIAG["last_cleared_webspace_quarantine_remaining_s"] = max(
-                0.0,
-                webspace_quarantine_until - now,
-            )
-        if active_total >= _YWS_MAX_ACTIVE_PER_WEBSPACE:
+            reason = "client_reconnect_backoff"
+            quarantine_until = client_quarantine_until
+            quarantine_ttl_s = max(0.0, client_quarantine_until - now)
+        elif webspace_quarantine_until > now:
+            reason = "webspace_reconnect_backoff"
+            quarantine_until = webspace_quarantine_until
+            quarantine_ttl_s = max(0.0, webspace_quarantine_until - now)
+        elif active_total >= _YWS_MAX_ACTIVE_PER_WEBSPACE:
             reason = "active_limit"
         else:
             client_reconnect_storm = client_15s >= _YWS_GUARD_CLIENT_OPEN_15S
@@ -2695,6 +2890,10 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
                     client_15s=client_15s,
                     webspace_recent_10s=recent_10s,
                     webspace_distinct_clients_10s=webspace_distinct_clients_10s,
+                )
+                quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
+                    client_key,
+                    now,
                 )
                 reason = "client_reconnect_storm"
             webspace_reconnect_storm = (
@@ -2710,6 +2909,11 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
                     client_15s=client_15s,
                     webspace_distinct_clients_10s=webspace_distinct_clients_10s,
                 )
+                quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
+                    _yws_guard_quarantine_key(webspace_key),
+                    now,
+                )
+                reason = "webspace_reconnect_storm"
         if reason:
             _YWS_GUARD_DIAG["reject_total"] = int(_YWS_GUARD_DIAG.get("reject_total") or 0) + 1
             _YWS_GUARD_DIAG["last_reject_at"] = now
@@ -2760,7 +2964,7 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
         hot_clients: list[dict[str, Any]] = []
         distinct_hot_clients_10s = 0
         client_reconnect_storm_detected = False
-        for key, queue in _YWS_CLIENT_OPEN_HISTORY.items():
+        for key, queue in _YWS_CLIENT_ATTEMPT_HISTORY.items():
             client_recent_10s = sum(1 for ts in queue if ts >= now - 10.0)
             if client_recent_10s > 0:
                 distinct_hot_clients_10s += 1
@@ -2775,6 +2979,7 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
                     "webspace_id": webspace_id or "default",
                     "dev_id": dev_id or "unknown",
                     "open_15s": recent_15s,
+                    "attempt_15s": recent_15s,
                 }
             )
     with _YWS_ATTEMPT_LOCK:
@@ -3282,6 +3487,9 @@ def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]
     yws_state = state.get("yws") if isinstance(state.get("yws"), dict) else None
     if yws_state is not None:
         yws_state.update(_yws_storm_snapshot(now))
+    ws_state = state.get("ws") if isinstance(state.get("ws"), dict) else None
+    if ws_state is not None:
+        ws_state["send_queue"] = _ws_event_send_snapshot()
     room_details, room_aggregates = _room_debug_snapshot_all(now)
     if yws_state is not None:
         yws_state.update(room_aggregates)
@@ -4419,6 +4627,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             return
     except Exception:
         _ylog.debug("browser access policy check failed webspace=%s dev=%s attempt=%s", webspace_id, dev_id, attempt_id, exc_info=True)
+    _record_yws_guard_attempt(webspace_id, dev_id)
     if not await _accept_websocket(websocket, channel="yws"):
         return
     replaced_existing = await _close_existing_yws_client_connections(
