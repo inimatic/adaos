@@ -53,6 +53,25 @@ def test_local_event_bus_subscribe_debug_can_be_enabled(monkeypatch):
     assert any("bus.subscribe" in message for message in messages)
 
 
+def test_local_event_bus_unsubscribe_matching_removes_skill_handlers():
+    bus = LocalEventBus()
+    seen: list[str] = []
+
+    def handler(event: Event):
+        seen.append(event.type)
+
+    setattr(handler, "_adaos_skill", "demo_skill")
+    bus.subscribe("topic.", handler)
+
+    removed = bus.unsubscribe_matching(
+        lambda _prefix, candidate: getattr(candidate, "_adaos_skill", None) == "demo_skill"
+    )
+    bus.publish(Event(type="topic.demo", payload={}, source="test", ts=0.0))
+
+    assert removed == 1
+    assert seen == []
+
+
 @pytest.mark.asyncio
 async def test_local_event_bus_reports_webio_stream_control_pressure():
     bus = LocalEventBus()
@@ -92,3 +111,43 @@ async def test_local_event_bus_reports_webio_stream_control_pressure():
     ok = await bus.wait_for_idle(timeout=1.0)
     assert ok is True
     assert seen == ["infrastate.realtime"]
+
+
+def test_local_event_bus_keeps_distinct_webio_stream_receivers_for_same_handler():
+    async def _run() -> None:
+        bus = LocalEventBus()
+        seen: list[str] = []
+        receivers = ["infrastate.skills", "infrastate.scenarios", "infrastate.yjs.load_mark"]
+
+        async def handler(event: Event):
+            await asyncio.sleep(0.01)
+            seen.append(str(event.payload.get("receiver") or ""))
+
+        bus.subscribe("webio.stream.snapshot.requested", handler)
+        for receiver in receivers:
+            bus.publish(
+                Event(
+                    type="webio.stream.snapshot.requested",
+                    payload={
+                        "webspace_id": "desktop",
+                        "receiver": receiver,
+                        "source": "events_ws",
+                    },
+                    source="test",
+                    ts=0.0,
+                )
+            )
+
+        ok = await bus.wait_for_idle(timeout=1.0)
+
+        assert ok is True
+        assert seen == receivers
+
+        controls = bus.backlog_snapshot()["top_webio_stream_controls"]
+        by_receiver = {item["receiver"]: item for item in controls}
+        for receiver in receivers:
+            assert by_receiver[receiver]["incoming_total"] == 1
+            assert by_receiver[receiver]["queued_total"] == 1
+            assert int(by_receiver[receiver].get("superseded_total") or 0) == 0
+
+    asyncio.run(_run())
