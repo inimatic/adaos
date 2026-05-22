@@ -135,6 +135,15 @@ class _FakeEventWebSocket:
         self.messages.append(json.loads(payload))
 
 
+def _clear_yws_guard_state() -> None:
+    gateway_module._YWS_OPEN_HISTORY.clear()
+    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
+    gateway_module._YWS_ATTEMPT_HISTORY.clear()
+    gateway_module._YWS_CLIENT_ATTEMPT_HISTORY.clear()
+    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
+    gateway_module._YWS_GUARD_INCIDENTS.clear()
+
+
 def _fake_log() -> SimpleNamespace:
     return SimpleNamespace(
         debug=lambda *args, **kwargs: None,
@@ -1502,10 +1511,7 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
 def test_yws_guard_rejects_hot_reconnecting_client_without_server_quarantine(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
-    gateway_module._YWS_OPEN_HISTORY.clear()
-    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
-    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
-    gateway_module._YWS_GUARD_INCIDENTS.clear()
+    _clear_yws_guard_state()
     gateway_module._YWS_GUARD_DIAG.clear()
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 3)
@@ -1514,56 +1520,47 @@ def test_yws_guard_rejects_hot_reconnecting_client_without_server_quarantine(mon
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 40.0)
 
     for _idx in range(3):
-        gateway_module._record_yws_open("desktop", "dev-hot")
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
     assert reason == "client_reconnect_storm"
     assert diag["client_open_15s"] == 3
     assert diag["client_reconnect_storm"] is True
     assert diag["webspace_distinct_clients_10s"] == 1
-    assert diag["quarantine_ttl_s"] is None
-    assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL == {}
+    assert diag["quarantine_ttl_s"] == 10.0
+    assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     assert gateway_module._YWS_GUARD_DIAG["last_reject_reason"] == "client_reconnect_storm"
     assert gateway_module._YWS_GUARD_DIAG["last_client_reconnect_storm_dev_id"] == "dev-hot"
 
     reason_again, _diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
-    assert reason_again == "client_reconnect_storm"
+    assert reason_again == "client_reconnect_backoff"
     storm = gateway_module._yws_storm_snapshot(time.time())
     assert storm["client_reconnect_storm_detected"] is True
     assert storm["storm_detected"] is False
-    assert storm["guard"]["quarantined_total"] == 0
-    gateway_module._YWS_OPEN_HISTORY.clear()
-    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
-    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
-    gateway_module._YWS_GUARD_INCIDENTS.clear()
+    assert storm["guard"]["quarantined_total"] == 1
+    _clear_yws_guard_state()
 
 
 def test_yws_guard_clears_legacy_client_reconnect_quarantine() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
-    gateway_module._YWS_OPEN_HISTORY.clear()
-    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
-    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
-    gateway_module._YWS_GUARD_INCIDENTS.clear()
+    _clear_yws_guard_state()
     gateway_module._YWS_GUARD_DIAG.clear()
     client_key = gateway_module._yws_guard_quarantine_key("desktop", "dev-hot")
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL[client_key] = time.time() + 300.0
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
 
-    assert reason == ""
-    assert diag["client_quarantine_cleared"] is True
-    assert client_key not in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
-    assert gateway_module._YWS_GUARD_DIAG["last_cleared_client_quarantine_dev_id"] == "dev-hot"
+    assert reason == "client_reconnect_backoff"
+    assert diag["client_quarantine_cleared"] is False
+    assert client_key in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    _clear_yws_guard_state()
 
 
 def test_yws_guard_observes_webspace_reconnect_storm_without_quarantine(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
-    gateway_module._YWS_OPEN_HISTORY.clear()
-    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
-    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
-    gateway_module._YWS_GUARD_INCIDENTS.clear()
+    _clear_yws_guard_state()
     gateway_module._YWS_GUARD_DIAG.clear()
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 2)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 2)
@@ -1572,48 +1569,42 @@ def test_yws_guard_observes_webspace_reconnect_storm_without_quarantine(monkeypa
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 40.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_ESCALATION_WINDOW_S", 3600.0)
 
-    gateway_module._record_yws_open("desktop", "dev-hot-a")
-    gateway_module._record_yws_open("desktop", "dev-hot-b")
+    gateway_module._record_yws_guard_attempt("desktop", "dev-hot-a")
+    gateway_module._record_yws_guard_attempt("desktop", "dev-hot-b")
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot-c")
-    assert reason == ""
+    assert reason == "webspace_reconnect_storm"
     assert diag["webspace_reconnect_storm"] is True
-    assert diag["quarantine_ttl_s"] is None
+    assert diag["quarantine_ttl_s"] == 10.0
     assert diag["webspace_distinct_clients_10s"] == 2
-    assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL == {}
+    assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     assert gateway_module._YWS_GUARD_DIAG["last_webspace_reconnect_storm_webspace_id"] == "desktop"
 
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
-    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
-    gateway_module._record_yws_open("desktop", "dev-hot-a")
-    gateway_module._record_yws_open("desktop", "dev-hot-b")
+    gateway_module._YWS_CLIENT_ATTEMPT_HISTORY.clear()
+    gateway_module._record_yws_guard_attempt("desktop", "dev-hot-a")
+    gateway_module._record_yws_guard_attempt("desktop", "dev-hot-b")
     reason2, diag2 = gateway_module._yws_guard_reject_reason("desktop", "dev-hot-c")
-    assert reason2 == ""
+    assert reason2 == "webspace_reconnect_storm"
     assert diag2["webspace_reconnect_storm"] is True
-    assert diag2["quarantine_ttl_s"] is None
-    assert gateway_module._YWS_GUARD_INCIDENTS == {}
-    gateway_module._YWS_OPEN_HISTORY.clear()
-    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
-    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
-    gateway_module._YWS_GUARD_INCIDENTS.clear()
+    assert diag2["quarantine_ttl_s"] == 20.0
+    assert gateway_module._YWS_GUARD_INCIDENTS
+    _clear_yws_guard_state()
 
 
 def test_yws_guard_clears_legacy_webspace_reconnect_quarantine() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
-    gateway_module._YWS_OPEN_HISTORY.clear()
-    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
-    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
-    gateway_module._YWS_GUARD_INCIDENTS.clear()
+    _clear_yws_guard_state()
     gateway_module._YWS_GUARD_DIAG.clear()
     webspace_key = gateway_module._yws_guard_quarantine_key("desktop")
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL[webspace_key] = time.time() + 300.0
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
 
-    assert reason == ""
-    assert diag["webspace_quarantine_cleared"] is True
-    assert webspace_key not in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
-    assert gateway_module._YWS_GUARD_DIAG["last_cleared_webspace_quarantine_webspace_id"] == "desktop"
+    assert reason == "webspace_reconnect_backoff"
+    assert diag["webspace_quarantine_cleared"] is False
+    assert webspace_key in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    _clear_yws_guard_state()
 
 
 def test_acquire_yws_room_uses_cache_when_bootstrap_lags(monkeypatch) -> None:
@@ -1659,6 +1650,7 @@ def test_yws_impl_cleans_up_after_first_message_timeout(monkeypatch) -> None:
     )
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
     monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 1.0)
     monkeypatch.setattr(gateway_module, "_YWS_FIRST_MESSAGE_TIMEOUT_S", 0.01)
     events: list[tuple[str, dict[str, object] | None]] = []
@@ -1833,17 +1825,6 @@ def test_forward_ws_bus_event_delivers_core_update_status(monkeypatch) -> None:
             "topics": {"core.update.status"},
         }
 
-        def _run_coro_threadsafe(coro, target_loop):  # noqa: ANN001
-            assert target_loop is loop
-            asyncio.run(coro)
-            return SimpleNamespace()
-
-        monkeypatch.setattr(
-            gateway_module.asyncio,
-            "run_coroutine_threadsafe",
-            _run_coro_threadsafe,
-        )
-
         gateway_module._forward_ws_bus_event(
             SimpleNamespace(
                 type="core.update.status",
@@ -1852,9 +1833,12 @@ def test_forward_ws_bus_event_delivers_core_update_status(monkeypatch) -> None:
                 ts=321.0,
             )
         )
+        loop.run_until_complete(asyncio.sleep(0))
+        loop.run_until_complete(asyncio.sleep(0))
     finally:
         loop.close()
         gateway_module._WS_EVENT_SUBSCRIBERS.clear()
+        gateway_module._WS_EVENT_SEND_STATES.clear()
 
     assert websocket.messages == [
         {
@@ -1866,3 +1850,58 @@ def test_forward_ws_bus_event_delivers_core_update_status(monkeypatch) -> None:
             "ts": 321.0,
         }
     ]
+
+
+def test_ws_event_send_queue_coalesces_hot_events(monkeypatch) -> None:
+    websocket = _FakeEventWebSocket()
+    monkeypatch.setattr(gateway_module, "_WS_EVENT_SEND_QUEUE_LIMIT", 2)
+    gateway_module._WS_EVENT_SEND_STATES.clear()
+    gateway_module._WS_EVENT_SEND_DIAG["coalesced_total"] = 0
+
+    async def _run() -> None:
+        gateway_module._enqueue_ws_event_message(
+            websocket,
+            {"ch": "events", "t": "evt", "kind": "node.status", "payload": {"seq": 1}, "source": "test", "ts": 1.0},
+        )
+        gateway_module._enqueue_ws_event_message(
+            websocket,
+            {"ch": "events", "t": "evt", "kind": "core.update.status", "payload": {"seq": 2}, "source": "test", "ts": 2.0},
+        )
+        gateway_module._enqueue_ws_event_message(
+            websocket,
+            {"ch": "events", "t": "evt", "kind": "node.status", "payload": {"seq": 3}, "source": "test", "ts": 3.0},
+        )
+        state = gateway_module._WS_EVENT_SEND_STATES[id(websocket)]
+        queued = list(state["queue"])
+        assert [item["payload"]["seq"] for item in queued] == [3, 2]
+        assert int(gateway_module._WS_EVENT_SEND_DIAG["coalesced_total"]) >= 1
+        gateway_module._drop_ws_event_send_state(websocket)
+
+    asyncio.run(_run())
+    gateway_module._WS_EVENT_SEND_STATES.clear()
+
+
+def test_yws_guard_attempts_create_reconnect_backoff(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
+    gateway_module._YWS_OPEN_HISTORY.clear()
+    gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
+    gateway_module._YWS_ATTEMPT_HISTORY.clear()
+    gateway_module._YWS_CLIENT_ATTEMPT_HISTORY.clear()
+    gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
+    gateway_module._YWS_GUARD_INCIDENTS.clear()
+
+    for _ in range(3):
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    assert reason == "client_reconnect_storm"
+    assert diag["client_open_15s"] == 3
+    assert diag["quarantine_ttl_s"] == 30.0
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    assert reason == "client_reconnect_backoff"
+    assert diag["quarantine_ttl_s"] > 0
+
+    _clear_yws_guard_state()
