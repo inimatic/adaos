@@ -1383,6 +1383,42 @@ def test_yws_guard_limits_browser_session_not_whole_device(monkeypatch) -> None:
     gateway_module._untrack_yws_connection("ops", tab_a)
 
 
+def test_yws_guard_closes_only_overflow_client_sessions(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_CLIENT", 2)
+
+    class _FakeWebSocket:
+        query_params = {"dev": "dev-2", "browser_session_id": "tab-a"}
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.closed: list[tuple[int, str]] = []
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed.append((code, str(reason or "")))
+
+    first = _FakeWebSocket("first")
+    second = _FakeWebSocket("second")
+    gateway_module._track_yws_connection("ops", first, device_id="dev-2")
+    gateway_module._track_yws_connection("ops", second, device_id="dev-2")
+
+    closed = asyncio.run(
+        gateway_module._close_existing_yws_client_connections(
+            "ops",
+            "dev-2",
+            browser_session_id="tab-a",
+        )
+    )
+
+    assert closed == 1
+    assert first.closed == [(1012, "replaced_by_new_yws_session")]
+    assert second.closed == []
+    gateway_module._untrack_yws_connection("ops", first)
+    gateway_module._untrack_yws_connection("ops", second)
+
+
 def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     gateway_module._TRANSPORT_STATE["yws"].update(
         {
@@ -1538,6 +1574,31 @@ def test_yws_guard_rejects_hot_reconnecting_client_without_server_quarantine(mon
     assert storm["client_reconnect_storm_detected"] is True
     assert storm["storm_detected"] is False
     assert storm["guard"]["quarantined_total"] == 1
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_scopes_reconnect_history_by_browser_session(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 10)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 10.0)
+
+    gateway_module._record_yws_guard_attempt("desktop", "dev-hot", browser_session_id="tab-a")
+    gateway_module._record_yws_guard_attempt("desktop", "dev-hot", browser_session_id="tab-a")
+    gateway_module._record_yws_guard_attempt("desktop", "dev-hot", browser_session_id="tab-b")
+
+    reason, diag = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+
+    assert reason == ""
+    assert diag["client_open_15s"] == 2
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
 
 

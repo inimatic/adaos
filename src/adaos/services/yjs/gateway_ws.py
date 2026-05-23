@@ -255,7 +255,7 @@ _YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_BOOTSTRAP_STEP_T
 _YWS_ROOM_STALE_RECOVERY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S", 3.0, minimum=0.25)
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
 _YWS_MAX_ACTIVE_PER_WEBSPACE = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_WEBSPACE", 6, minimum=1)
-_YWS_MAX_ACTIVE_PER_CLIENT = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_CLIENT", 1, minimum=1)
+_YWS_MAX_ACTIVE_PER_CLIENT = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_CLIENT", 2, minimum=1)
 _YWS_GUARD_RECENT_OPEN_10S = _env_int("ADAOS_YWS_GUARD_RECENT_OPEN_10S", 8, minimum=1)
 _YWS_GUARD_CLIENT_OPEN_15S = _env_int("ADAOS_YWS_GUARD_CLIENT_OPEN_15S", 4, minimum=1)
 _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S = _env_int("ADAOS_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2, minimum=1)
@@ -2595,10 +2595,11 @@ async def _close_existing_yws_client_connections(
                 else _websocket_device_id(websocket) == device_key
             )
         ]
-    if len(sockets) < _YWS_MAX_ACTIVE_PER_CLIENT:
+    overflow = len(sockets) - _YWS_MAX_ACTIVE_PER_CLIENT + 1
+    if overflow <= 0:
         return 0
     closed = 0
-    for websocket in sockets:
+    for websocket in sockets[:overflow]:
         try:
             await websocket.close(code=1012, reason="replaced_by_new_yws_session")
             closed += 1
@@ -2622,7 +2623,7 @@ async def _close_existing_yws_client_connections(
 
 def _record_yws_open(webspace_id: str, dev_id: str) -> None:
     now = time.time()
-    key = f"{str(webspace_id or '').strip() or 'default'}::{str(dev_id or '').strip() or 'unknown'}"
+    key = _yws_guard_client_history_key(webspace_id, dev_id)
     with _YWS_STORM_LOCK:
         _YWS_OPEN_HISTORY.append(now)
         items = _YWS_CLIENT_OPEN_HISTORY.setdefault(key, deque(maxlen=64))
@@ -2646,9 +2647,20 @@ def _record_yws_open(webspace_id: str, dev_id: str) -> None:
         )
 
 
-def _record_yws_guard_attempt(webspace_id: str, dev_id: str) -> None:
+def _record_yws_guard_attempt(
+    webspace_id: str,
+    dev_id: str,
+    *,
+    browser_session_id: str | None = None,
+    client_attempt_id: str | None = None,
+) -> None:
     now = time.time()
-    key = f"{str(webspace_id or '').strip() or 'default'}::{str(dev_id or '').strip() or 'unknown'}"
+    key = _yws_guard_client_history_key(
+        webspace_id,
+        dev_id,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id,
+    )
     with _YWS_STORM_LOCK:
         _YWS_ATTEMPT_HISTORY.append(now)
         items = _YWS_CLIENT_ATTEMPT_HISTORY.setdefault(key, deque(maxlen=128))
@@ -2668,6 +2680,23 @@ def _yws_guard_quarantine_key(webspace_id: str, dev_id: str | None = None) -> st
     webspace_key = str(webspace_id or "").strip() or "default"
     dev_key = str(dev_id or "").strip() or "*"
     return f"{webspace_key}::{dev_key}"
+
+
+def _yws_guard_client_history_key(
+    webspace_id: str,
+    dev_id: str,
+    *,
+    browser_session_id: str | None = None,
+    client_attempt_id: str | None = None,
+) -> str:
+    webspace_key = str(webspace_id or "").strip() or "default"
+    device_key = str(dev_id or "").strip() or "unknown"
+    client_key = _yws_client_limit_key(
+        device_key,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id,
+    )
+    return f"{webspace_key}::{client_key}"
 
 
 def _set_yws_guard_quarantine_locked(key: str, now: float) -> tuple[float, float, int]:
@@ -2821,7 +2850,13 @@ def _yws_guard_note_webspace_storm(
     )
 
 
-def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[str, Any]]:
+def _yws_guard_reject_reason(
+    webspace_id: str,
+    dev_id: str,
+    *,
+    browser_session_id: str | None = None,
+    client_attempt_id: str | None = None,
+) -> tuple[str, dict[str, Any]]:
     webspace_key = str(webspace_id or "").strip() or "default"
     dev_key = str(dev_id or "").strip() or "unknown"
     now = time.time()
@@ -2863,7 +2898,12 @@ def _yws_guard_reject_reason(webspace_id: str, dev_id: str) -> tuple[str, dict[s
             if float(_YWS_GUARD_QUARANTINE_UNTIL.get(key0) or 0.0) <= now:
                 _YWS_GUARD_QUARANTINE_UNTIL.pop(key0, None)
         recent_10s, webspace_distinct_clients_10s = _yws_client_recent_open_counts_locked(webspace_key, now)
-        client_key = _yws_guard_quarantine_key(webspace_key, dev_key)
+        client_key = _yws_guard_client_history_key(
+            webspace_key,
+            dev_key,
+            browser_session_id=browser_session_id,
+            client_attempt_id=client_attempt_id,
+        )
         client_queue = _YWS_CLIENT_ATTEMPT_HISTORY.get(client_key) or deque()
         client_15s = sum(1 for ts in client_queue if ts >= now - 15.0)
         client_quarantine_until = float(_YWS_GUARD_QUARANTINE_UNTIL.get(client_key) or 0.0)
@@ -4627,7 +4667,12 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             return
     except Exception:
         _ylog.debug("browser access policy check failed webspace=%s dev=%s attempt=%s", webspace_id, dev_id, attempt_id, exc_info=True)
-    _record_yws_guard_attempt(webspace_id, dev_id)
+    _record_yws_guard_attempt(
+        webspace_id,
+        dev_id,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id or None,
+    )
     if not await _accept_websocket(websocket, channel="yws"):
         return
     replaced_existing = await _close_existing_yws_client_connections(
@@ -4649,7 +4694,12 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             and time.monotonic() < deadline
         ):
             await asyncio.sleep(0.05)
-    guard_reason, guard_diag = _yws_guard_reject_reason(webspace_id, dev_id)
+    guard_reason, guard_diag = _yws_guard_reject_reason(
+        webspace_id,
+        dev_id,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id or None,
+    )
     if guard_reason:
         state_token = f"yws_guard_{guard_reason}"
         _remember_yws_attempt(attempt_id, "guard_reject")
