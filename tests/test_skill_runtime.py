@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import shutil
 import textwrap
 from collections.abc import Callable
@@ -142,6 +143,27 @@ def test_find_skill_slot_points_to_current_symlink(skill_factory):
     env, version = skill_factory("symlinked_skill", slots=("A", "B"), active_slot="B")
     slot_path = find_skill_slot("symlinked_skill")
     assert slot_path.name == "current"
+    assert slot_path.resolve() == env.build_slot_paths(version, "B").root.resolve()
+
+
+def test_find_skill_slot_falls_back_to_active_slot_when_symlink_unsupported(skill_factory, monkeypatch):
+    env, version = skill_factory("drive_skill", slots=("A", "B"), active_slot="B")
+    current_link = env.slots_root(version) / "current"
+    if current_link.exists() or current_link.is_symlink():
+        if current_link.is_dir() and not current_link.is_symlink():
+            current_link.rmdir()
+        else:
+            current_link.unlink()
+
+    def fail_symlink(*_args, **_kwargs):
+        raise OSError(errno.ENOTSUP, "Operation not supported")
+
+    monkeypatch.setattr("adaos.services.skill.runtime_env.os.symlink", fail_symlink)
+    monkeypatch.setattr("adaos.services.skill.runtime_env.subprocess.run", fail_symlink)
+
+    slot_path = find_skill_slot("drive_skill")
+
+    assert slot_path.name == "B"
     assert slot_path.resolve() == env.build_slot_paths(version, "B").root.resolve()
 
 

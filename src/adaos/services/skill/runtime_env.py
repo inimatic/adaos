@@ -44,6 +44,7 @@ pre-computed paths that are convenient for callers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import json
 import os
 import re
@@ -56,6 +57,13 @@ from typing import Iterable, Optional
 _SLOT_NAMES: tuple[str, ...] = ("A", "B")
 _SEMVER_COMPAT_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:[.\-+_].*)?$")
 _RUNTIME_BUCKET_RE = re.compile(r"^v\d+\.\d+$")
+_SYMLINK_UNSUPPORTED_ERRNOS = {
+    errno.EACCES,
+    errno.EINVAL,
+    errno.EPERM,
+    getattr(errno, "ENOTSUP", 95),
+    getattr(errno, "EOPNOTSUPP", 95),
+}
 
 
 def _version_sort_key(value: str) -> tuple[int, int, int, str]:
@@ -84,6 +92,10 @@ def _runtime_bucket_name(version: str) -> str:
 
 def _is_runtime_bucket_name(value: str) -> bool:
     return bool(_RUNTIME_BUCKET_RE.match(str(value or "").strip()))
+
+
+def _is_symlink_unsupported(exc: OSError) -> bool:
+    return getattr(exc, "errno", None) in _SYMLINK_UNSUPPORTED_ERRNOS
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,7 +418,7 @@ class SkillRuntimeEnvironment:
         if not keep.exists():
             keep.write_text("managed by adaos", encoding="utf-8")
 
-    def _update_current_link(self, version: str, slot: str) -> None:
+    def _update_current_link(self, version: str, slot: str) -> Path:
         slots_root = self.slots_root(version)
         target = slots_root / slot
         current_link = slots_root / "current"
@@ -428,19 +440,28 @@ class SkillRuntimeEnvironment:
             try:
                 os.symlink(target, current_link, target_is_directory=True)  # type: ignore[arg-type]
             except OSError:
-                subprocess.run(
-                    ["cmd", "/c", "mklink", "/J", str(current_link), str(target)],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                try:
+                    subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(current_link), str(target)],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except (OSError, subprocess.CalledProcessError):
+                    return target
+            return current_link
         else:
-            os.symlink(target, current_link, target_is_directory=True)
+            try:
+                os.symlink(target, current_link, target_is_directory=True)
+            except OSError as exc:
+                if _is_symlink_unsupported(exc):
+                    return target
+                raise
+            return current_link
 
     def ensure_current_link(self, version: str) -> Path:
         slot = self.read_active_slot(version)
-        self._update_current_link(version, slot)
-        return self.slots_root(version) / "current"
+        return self._update_current_link(version, slot)
 
     # ------------------------------------------------------------------
     # Slot helpers

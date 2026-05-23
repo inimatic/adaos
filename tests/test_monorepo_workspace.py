@@ -325,6 +325,66 @@ def test_sparse_set_restores_staged_deletion_only_workspace_in_prod(monkeypatch,
     assert not any(call[:2] == ["stash", "push"] for call in calls)
 
 
+def test_sparse_set_restores_mass_staged_deletions_before_stashing_mixed_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    root = tmp_path / ".adaos" / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    deletion_storm = "\n".join(f"D  skills/old_skill_{idx}/skill.yaml" for idx in range(25))
+    status_responses = iter(
+        [
+            f"{deletion_storm}\n?? scratch.txt\n",
+            f"{deletion_storm}\n?? scratch.txt\n",
+            "?? scratch.txt\n",
+        ]
+    )
+    calls: list[list[str]] = []
+
+    def fake_run_git(args, cwd=None):
+        calls.append(list(args))
+        if args[:2] == ["status", "--porcelain"]:
+            return next(status_responses)
+        if args[:3] == ["restore", "--staged", "--worktree"]:
+            return ""
+        if args[:2] == ["stash", "push"]:
+            return "Saved working directory and index state"
+        if args[:2] == ["stash", "list"]:
+            return "stash@{0}: On main: adaos:auto-stash sparse-checkout set [abc123]"
+        if args[:2] == ["sparse-checkout", "set"]:
+            return ""
+        if args and args[0] in {"status", "log"}:
+            return ""
+        raise AssertionError(f"unexpected git call: {args!r}")
+
+    monkeypatch.setattr(cli_git_module, "_run_git", fake_run_git)
+
+    CliGitClient(depth=0).sparse_set(str(root), ["registry.json", "scenarios/new_face"], no_cone=True)
+
+    restore_calls = [call for call in calls if call[:3] == ["restore", "--staged", "--worktree"]]
+    assert restore_calls
+    assert len(restore_calls[0]) == 3 + 1 + 25
+    assert any(call[:2] == ["stash", "push"] for call in calls)
+
+
+def test_sparse_set_separates_options_from_patterns(monkeypatch, tmp_path):
+    root = tmp_path / ".adaos" / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    calls: list[list[str]] = []
+
+    def fake_run_git(args, cwd=None):
+        calls.append(list(args))
+        if args[:2] == ["status", "--porcelain"]:
+            return ""
+        if args[:2] == ["sparse-checkout", "set"]:
+            return ""
+        raise AssertionError(f"unexpected git call: {args!r}")
+
+    monkeypatch.setattr(cli_git_module, "_run_git", fake_run_git)
+
+    CliGitClient(depth=0).sparse_set(str(root), ["registry.json", "skills/news_skill"], no_cone=True)
+
+    assert ["sparse-checkout", "set", "--no-cone", "--", "registry.json", "skills/news_skill"] in calls
+
+
 def test_sparse_set_removes_stale_blocker_in_non_dev(monkeypatch, tmp_path):
     monkeypatch.setenv("ENV_TYPE", "prod")
     root = tmp_path / ".adaos" / "workspace"

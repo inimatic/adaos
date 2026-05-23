@@ -339,6 +339,33 @@ def _status_is_staged_deletions_only(lines: Sequence[str]) -> bool:
     return bool(lines) and all(line[:2] == "D " for line in lines)
 
 
+def _status_payload(line: str) -> str:
+    payload = line[3:] if len(line) > 3 and line[2] == " " else line[2:]
+    payload = payload.strip()
+    if " -> " in payload:
+        payload = payload.split(" -> ", 1)[1].strip()
+    return payload
+
+
+def _status_staged_deletion_paths_if_safe(lines: Sequence[str]) -> list[str]:
+    paths: list[str] = []
+    for line in lines:
+        if not line:
+            continue
+        if line.startswith("??"):
+            continue
+        index_status = line[0]
+        if index_status == " ":
+            continue
+        if index_status != "D":
+            return []
+        path = _status_payload(line)
+        if not path:
+            return []
+        paths.append(path)
+    return paths
+
+
 def _staged_deletion_restore_min_files() -> int:
     try:
         return max(1, int(str(os.getenv("ADAOS_STAGED_DELETION_RESTORE_MIN") or "20").strip()))
@@ -348,20 +375,32 @@ def _staged_deletion_restore_min_files() -> int:
 
 def _restore_staged_deletions_if_safe(dir: StrOrPath, *, context: str) -> bool:
     lines = _status_lines(dir)
-    if not _status_is_staged_deletions_only(lines):
-        return False
     min_files = _staged_deletion_restore_min_files()
-    if len(lines) < min_files:
+    if _status_is_staged_deletions_only(lines):
+        if len(lines) < min_files:
+            return False
+        repo_path = str(Path(dir))
+        _log.warning(
+            "git %s found staged deletion-only workspace; restoring tracked files repo=%s files=%s threshold=%s",
+            context,
+            repo_path,
+            len(lines),
+            min_files,
+        )
+        _run_git(["reset", "--hard", "HEAD"], cwd=dir)
+        return True
+    deletion_paths = _status_staged_deletion_paths_if_safe(lines)
+    if len(deletion_paths) < min_files:
         return False
     repo_path = str(Path(dir))
     _log.warning(
-        "git %s found staged deletion-only workspace; restoring tracked files repo=%s files=%s threshold=%s",
+        "git %s found mass staged deletions; restoring tracked files repo=%s files=%s threshold=%s",
         context,
         repo_path,
-        len(lines),
+        len(deletion_paths),
         min_files,
     )
-    _run_git(["reset", "--hard", "HEAD"], cwd=dir)
+    _run_git(["restore", "--staged", "--worktree", "--", *deletion_paths], cwd=dir)
     return True
 
 
@@ -564,7 +603,7 @@ class CliGitClient(GitClient):
                             if stash_ref:
                                 _log.warning("git auto-stashed local changes repo=%s stash=%s", repo_path, stash_ref)
         def _apply_sparse_set() -> None:
-            _run_git([*args, *paths], cwd=dir)
+            _run_git([*args, "--", *paths], cwd=dir)
             if _sanitize_sparse_checkout_file(dir):
                 self.sparse_reapply(dir)
 
