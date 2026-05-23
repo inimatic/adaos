@@ -263,6 +263,8 @@ _YWS_GUARD_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_COOLDOWN_S", 300.0, minimum=
 _YWS_GUARD_MAX_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_MAX_COOLDOWN_S", 1800.0, minimum=0.0)
 _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S", 3600.0, minimum=1.0)
 _YWS_GUARD_NOTIFY_INTERVAL_S = _env_float("ADAOS_YWS_GUARD_NOTIFY_INTERVAL_S", 30.0, minimum=1.0)
+_YWS_GUARD_REJECT_HOLD_MAX_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_MAX_SEC", 30.0, minimum=0.0)
+_YWS_GUARD_REJECT_HOLD_STEP_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_STEP_SEC", 1.0, minimum=0.05)
 _WS_EVENT_SEND_QUEUE_LIMIT = _env_int("ADAOS_WS_EVENT_SEND_QUEUE_LIMIT", 64, minimum=1)
 _WS_EVENT_SEND_LOG_INTERVAL_S = _env_float("ADAOS_WS_EVENT_SEND_LOG_INTERVAL_S", 10.0, minimum=0.0)
 _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC", 5.0, minimum=0.0)
@@ -2764,6 +2766,81 @@ def _yws_guard_should_notify(*, webspace_id: str, dev_id: str, reason: str) -> b
     return True
 
 
+def _yws_guard_reject_hold_seconds(reason: str, diag: dict[str, Any] | None) -> float:
+    reason_token = str(reason or "").strip().lower()
+    if reason_token not in {
+        "client_reconnect_storm",
+        "client_reconnect_backoff",
+        "webspace_reconnect_storm",
+        "webspace_reconnect_backoff",
+    }:
+        return 0.0
+    max_hold_s = max(0.0, float(_YWS_GUARD_REJECT_HOLD_MAX_SEC))
+    if max_hold_s <= 0.0:
+        return 0.0
+    try:
+        quarantine_ttl_s = float((diag or {}).get("quarantine_ttl_s") or 0.0)
+    except Exception:
+        quarantine_ttl_s = 0.0
+    if quarantine_ttl_s <= 0.0:
+        return 0.0
+    return max(0.0, min(max_hold_s, quarantine_ttl_s))
+
+
+async def _hold_yws_guard_reject(
+    websocket: WebSocket,
+    *,
+    webspace_id: str,
+    dev_id: str,
+    attempt_id: str,
+    client_attempt_id: str | None,
+    guard_reason: str,
+    guard_diag: dict[str, Any] | None,
+) -> bool:
+    hold_s = _yws_guard_reject_hold_seconds(guard_reason, guard_diag)
+    if hold_s <= 0.0:
+        return True
+    now = time.time()
+    with _YWS_STORM_LOCK:
+        _YWS_GUARD_DIAG["reject_hold_total"] = int(_YWS_GUARD_DIAG.get("reject_hold_total") or 0) + 1
+        _YWS_GUARD_DIAG["last_reject_hold_at"] = now
+        _YWS_GUARD_DIAG["last_reject_hold_reason"] = guard_reason
+        _YWS_GUARD_DIAG["last_reject_hold_seconds"] = hold_s
+        _YWS_GUARD_DIAG["last_reject_hold_attempt_id"] = attempt_id
+    _ylog.warning(
+        "yws guard holding rejected connection webspace=%s dev=%s attempt=%s client_attempt=%s reason=%s hold_s=%.1f",
+        webspace_id,
+        dev_id,
+        attempt_id,
+        client_attempt_id or None,
+        guard_reason,
+        hold_s,
+    )
+    deadline = time.monotonic() + hold_s
+    while True:
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0.0:
+            return True
+        step_s = min(max(0.05, float(_YWS_GUARD_REJECT_HOLD_STEP_SEC)), remaining_s)
+        try:
+            message = await asyncio.wait_for(websocket.receive(), timeout=step_s)
+        except asyncio.TimeoutError:
+            continue
+        except (WebSocketDisconnect, RuntimeError):
+            return False
+        except Exception:
+            _ylog.debug(
+                "yws guard hold ended by receive error webspace=%s dev=%s attempt=%s",
+                webspace_id,
+                dev_id,
+                attempt_id,
+                exc_info=True,
+            )
+            return False
+        if isinstance(message, dict) and message.get("type") == "websocket.disconnect":
+            return False
+
+
 def _yws_client_recent_open_counts_locked(webspace_key: str, now: float) -> tuple[int, int]:
     recent_10s = 0
     distinct_clients_10s = 0
@@ -4744,8 +4821,20 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
                 },
             )
         try:
-            await websocket.close(code=1013, reason=state_token[:120])
-            _remember_yws_attempt(attempt_id, "closed", close_code=1013, close_reason=state_token[:120])
+            should_close = await _hold_yws_guard_reject(
+                websocket,
+                webspace_id=webspace_id,
+                dev_id=dev_id,
+                attempt_id=attempt_id,
+                client_attempt_id=client_attempt_id or None,
+                guard_reason=guard_reason,
+                guard_diag=guard_diag,
+            )
+            if should_close:
+                await websocket.close(code=1013, reason=state_token[:120])
+                _remember_yws_attempt(attempt_id, "closed", close_code=1013, close_reason=state_token[:120])
+            else:
+                _remember_yws_attempt(attempt_id, "closed", close_reason="guard_reject_peer_disconnected")
         except Exception:
             pass
         return
