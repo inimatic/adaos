@@ -333,6 +333,89 @@ def test_new_face_vision_rehydrates_manifest_after_restart(tmp_path: Path) -> No
     assert {item["id"] for item in snapshot["file_items"]} == {"model", "frames", "masks", "metadata"}
 
 
+def test_new_face_vision_model_load_retries_pytorch26_weights_only_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine_module = _load_engine_module()
+    calls: list[dict[str, Any]] = []
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class FakeTorch:
+        cuda = FakeCuda()
+
+        @staticmethod
+        def load(path: str, **kwargs: Any) -> dict[str, Any]:
+            calls.append({"path": path, **kwargs})
+            if kwargs.get("weights_only") is True:
+                raise RuntimeError("Weights only load failed. Unsupported operand 123")
+            return {"model_state": {"classifier.weight": object()}, "epoch": 7}
+
+    class FakeLayer:
+        pass
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.classifier = [FakeLayer()]
+            self.loaded_state: dict[str, Any] | None = None
+
+        def load_state_dict(self, state: dict[str, Any], strict: bool = False) -> None:
+            self.loaded_state = state
+
+        def to(self, device: str) -> None:
+            self.device = device
+
+        def eval(self) -> None:
+            self.eval_called = True
+
+    class FakeSegmentation:
+        @staticmethod
+        def deeplabv3_resnet50(**_: Any) -> FakeModel:
+            return FakeModel()
+
+    class FakeModels:
+        segmentation = FakeSegmentation()
+
+    class FakeTorchvision:
+        models = FakeModels()
+
+    class FakeNN:
+        @staticmethod
+        def Conv2d(*_: Any, **__: Any) -> FakeLayer:
+            return FakeLayer()
+
+    monkeypatch.setattr(engine_module, "torch", FakeTorch, raising=False)
+    monkeypatch.setattr(engine_module, "torchvision", FakeTorchvision, raising=False)
+    monkeypatch.setattr(engine_module, "nn", FakeNN, raising=False)
+    monkeypatch.setattr(engine_module, "TF", object(), raising=False)
+
+    model_path = tmp_path / "best_full_finetune_v2.pt"
+    model_path.write_bytes(b"checkpoint" * 200)
+    engine = engine_module.NewFaceVisionEngine(tmp_path / "state")
+
+    result = engine.load_model(str(model_path))
+
+    assert result["ok"] is True
+    assert [call.get("weights_only") for call in calls] == [True, False]
+
+
+def test_new_face_vision_model_load_rejects_json_placeholder(tmp_path: Path) -> None:
+    engine_cls = _load_engine_class()
+    model_path = tmp_path / "best_full_finetune_v2.pt"
+    model_path.write_text("{}", encoding="utf-8")
+    engine = engine_cls(tmp_path / "state")
+
+    result = engine.load_model(str(model_path))
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_model_file"
+    assert "too small" in result["error"]["message"]
+
+
 def test_new_face_vision_discovers_legacy_uploads_without_manifest(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
     engine_cls = _load_engine_class()

@@ -10,6 +10,7 @@ import math
 import os
 import socket
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -4718,6 +4719,7 @@ class BootstrapService:
                         tunnels: dict[str, dict[str, Any]] = {}
                         tunnel_tasks: dict[str, asyncio.Task] = {}
                         media_relay_sessions: dict[str, dict[str, Any]] = {}
+                        http_body_relay_sessions: dict[str, dict[str, Any]] = {}
                         pending_chunks: dict[str, dict[str, Any]] = {}
                         pending_tunnel_events: dict[str, list[dict[str, Any]]] = {}
                         pending_tunnel_meta: dict[str, dict[str, Any]] = {}
@@ -5318,6 +5320,7 @@ class BootstrapService:
                                             *[str(k) for k in pending_tunnel_events.keys()],
                                             *[str(k) for k in reply_subjects.keys()],
                                             *[str(k) for k in media_relay_sessions.keys()],
+                                            *[str(k) for k in http_body_relay_sessions.keys()],
                                             *[
                                                 str(st.get("key"))
                                                 for st in pending_chunks.values()
@@ -5356,6 +5359,10 @@ class BootstrapService:
                                     pass
                                 try:
                                     _cleanup_media_relay_session(key, remove_temp=True)
+                                except Exception:
+                                    pass
+                                try:
+                                    _cleanup_http_body_relay_session(key, remove_temp=True)
                                 except Exception:
                                     pass
                                 try:
@@ -5810,6 +5817,24 @@ class BootstrapService:
                                 except Exception:
                                     pass
 
+                        def _cleanup_http_body_relay_session(key: str, *, remove_temp: bool) -> None:
+                            session = http_body_relay_sessions.pop(key, None)
+                            if not isinstance(session, dict):
+                                return
+                            handle = session.get("handle")
+                            try:
+                                if handle:
+                                    handle.close()
+                            except Exception:
+                                pass
+                            if remove_temp:
+                                tmp_path = session.get("tmp_path")
+                                try:
+                                    if tmp_path is not None:
+                                        Path(tmp_path).unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+
                         async def _route_media_reply_json(
                             key: str,
                             *,
@@ -5848,6 +5873,133 @@ class BootstrapService:
                                     "truncated": False,
                                 },
                             )
+
+                        def _route_local_http_request(
+                            *,
+                            method: str,
+                            path: str,
+                            search: str,
+                            headers: Any,
+                            body: Any = None,
+                            content_length: int | None = None,
+                        ) -> dict[str, Any]:
+                            import requests  # type: ignore
+
+                            try:
+                                from adaos.services.node_config import load_config
+
+                                cfg = getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)
+                                bases = _build_hub_route_http_bases(
+                                    path_norm=(path.rstrip("/") or "/") if isinstance(path, str) else "/",
+                                    method=method,
+                                    cfg=cfg,
+                                    ctx=self.ctx,
+                                )
+                                token_local = getattr(cfg, "token", None) or os.getenv("ADAOS_TOKEN", "") or None
+                            except Exception:
+                                bases = _build_hub_route_http_bases(
+                                    path_norm=(path.rstrip("/") or "/") if isinstance(path, str) else "/",
+                                    method=method,
+                                    cfg=None,
+                                    ctx=self.ctx,
+                                )
+                                token_local = os.getenv("ADAOS_TOKEN", "") or None
+
+                            try:
+                                from urllib.parse import urlparse
+
+                                u0 = urlparse(bases[0])
+                                h0 = u0.hostname or "127.0.0.1"
+                                p0 = u0.port
+                                scheme0 = u0.scheme or "http"
+                                alt_port_raw = os.getenv("ADAOS_TARGET_PORT") or os.getenv("ADAOS_CORE_PORT") or ""
+                                alt_port = int(alt_port_raw) if alt_port_raw.strip() else 8788
+                                if (p0 in (None, 8777)) and alt_port and alt_port != p0:
+                                    bases.append(f"{scheme0}://{h0}:{alt_port}")
+                            except Exception:
+                                pass
+
+                            h2: dict[str, str] = {}
+                            if token_local:
+                                h2["X-AdaOS-Token"] = str(token_local)
+                            if isinstance(headers, dict):
+                                ct = headers.get("content-type") or headers.get("Content-Type")
+                                if isinstance(ct, str) and ct:
+                                    h2["Content-Type"] = ct
+                            if isinstance(content_length, int) and content_length >= 0:
+                                h2["Content-Length"] = str(content_length)
+
+                            sess = requests.Session()
+                            body_handle = None
+                            try:
+                                try:
+                                    sess.trust_env = False
+                                except Exception:
+                                    pass
+                                body_data = body
+                                if isinstance(body, (str, Path)):
+                                    body_handle = open(body, "rb")
+                                    body_data = body_handle
+                                last_exc: Exception | None = None
+                                resp = None
+                                for base in bases:
+                                    url_try = f"{base}{path}{search}"
+                                    try:
+                                        timeout = _hub_route_local_http_timeout(path)
+                                        resp = sess.request(method, url_try, data=body_data, headers=h2, timeout=timeout)
+                                        last_exc = None
+                                        break
+                                    except Exception as e:
+                                        last_exc = e
+                                        if body_handle:
+                                            try:
+                                                body_handle.seek(0)
+                                            except Exception:
+                                                pass
+                                        if _route_verbose:
+                                            try:
+                                                print(
+                                                    f"[hub-route] http upstream failed url={url_try}: {type(e).__name__}: {e}"
+                                                )
+                                            except Exception:
+                                                pass
+                                        if not _hub_route_should_retry_http_upstream_error(
+                                            method=method,
+                                            path=path,
+                                            error_kind=type(e).__name__,
+                                        ):
+                                            break
+                                if resp is None:
+                                    raise last_exc or RuntimeError("http upstream failed")
+                                raw = resp.content or b""
+                                limit = 2 * 1024 * 1024
+                                truncated = len(raw) > limit
+                                if truncated:
+                                    raw = raw[:limit]
+                                out_headers: dict[str, str] = {}
+                                try:
+                                    cth = resp.headers.get("content-type")
+                                    if cth:
+                                        out_headers["content-type"] = cth
+                                except Exception:
+                                    pass
+                                return {
+                                    "t": "http_resp",
+                                    "status": int(resp.status_code),
+                                    "headers": out_headers,
+                                    "body_b64": base64.b64encode(raw).decode("ascii"),
+                                    "truncated": truncated,
+                                }
+                            finally:
+                                try:
+                                    if body_handle:
+                                        body_handle.close()
+                                except Exception:
+                                    pass
+                                try:
+                                    sess.close()
+                                except Exception:
+                                    pass
 
                         def _parse_media_range(range_header: str | None, size_bytes: int) -> tuple[int, int] | None:
                             raw = str(range_header or "").strip()
@@ -7001,6 +7153,187 @@ class BootstrapService:
                                 if t == "media_http_abort":
                                     _cleanup_media_relay_session(key, remove_temp=True)
                                     route_outcome = "media_http_abort"
+                                    return
+
+                                if t == "http_req_open":
+                                    try:
+                                        method = str((data or {}).get("method") or "GET").upper()
+                                        path = str((data or {}).get("path") or "/api/ping")
+                                        search = str((data or {}).get("search") or "")
+                                        headers = (data or {}).get("headers") or {}
+                                        content_length = int((data or {}).get("content_length") or 0)
+                                        if content_length > int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES):
+                                            await _route_reply(
+                                                key,
+                                                {
+                                                    "t": "http_resp",
+                                                    "status": 413,
+                                                    "headers": {"content-type": "application/json"},
+                                                    "body_b64": base64.b64encode(
+                                                        _json.dumps(
+                                                            {
+                                                                "ok": False,
+                                                                "detail": "http_upload_too_large",
+                                                                "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                                            },
+                                                            ensure_ascii=False,
+                                                        ).encode("utf-8")
+                                                    ).decode("ascii"),
+                                                    "truncated": False,
+                                                },
+                                            )
+                                            route_outcome = "http_req_open_too_large"
+                                            return
+                                        relay_dir = Path(tempfile.gettempdir()) / "adaos-route-http"
+                                        relay_dir.mkdir(parents=True, exist_ok=True)
+                                        tmp_path = relay_dir / f"{key}.{os.getpid()}.{int(time.time() * 1000)}.body"
+                                        handle = tmp_path.open("wb")
+                                        http_body_relay_sessions[key] = {
+                                            "method": method,
+                                            "path": path,
+                                            "search": search,
+                                            "headers": headers,
+                                            "content_length": content_length,
+                                            "tmp_path": tmp_path,
+                                            "handle": handle,
+                                            "size_bytes": 0,
+                                            "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                        }
+                                        route_outcome = "http_req_open"
+                                    except Exception as e:
+                                        _cleanup_http_body_relay_session(key, remove_temp=True)
+                                        await _route_reply(
+                                            key,
+                                            {
+                                                "t": "http_resp",
+                                                "status": 502,
+                                                "headers": {},
+                                                "body_b64": "",
+                                                "truncated": False,
+                                                "err": f"http_req_open_failed: {e}",
+                                            },
+                                        )
+                                        route_outcome = f"http_req_open_fail:{type(e).__name__}"
+                                    return
+
+                                if t == "http_req_chunk":
+                                    session = http_body_relay_sessions.get(key)
+                                    if not isinstance(session, dict):
+                                        route_outcome = "http_req_chunk_without_session"
+                                        return
+                                    try:
+                                        b64 = (data or {}).get("data_b64")
+                                        if not isinstance(b64, str) or not b64:
+                                            route_outcome = "http_req_chunk_empty"
+                                            return
+                                        blob = base64.b64decode(b64.encode("ascii"))
+                                        size_bytes = int(session.get("size_bytes") or 0) + len(blob)
+                                        if size_bytes > int(session.get("max_upload_bytes") or 0):
+                                            _cleanup_http_body_relay_session(key, remove_temp=True)
+                                            await _route_reply(
+                                                key,
+                                                {
+                                                    "t": "http_resp",
+                                                    "status": 413,
+                                                    "headers": {"content-type": "application/json"},
+                                                    "body_b64": base64.b64encode(
+                                                        _json.dumps(
+                                                            {
+                                                                "ok": False,
+                                                                "detail": "http_upload_too_large",
+                                                                "max_upload_bytes": int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES),
+                                                            },
+                                                            ensure_ascii=False,
+                                                        ).encode("utf-8")
+                                                    ).decode("ascii"),
+                                                    "truncated": False,
+                                                },
+                                            )
+                                            route_outcome = "http_req_chunk_too_large"
+                                            return
+                                        handle = session.get("handle")
+                                        if not handle:
+                                            route_outcome = "http_req_chunk_no_handle"
+                                            return
+                                        handle.write(blob)
+                                        session["size_bytes"] = size_bytes
+                                        route_outcome = "http_req_chunk_written"
+                                    except Exception as e:
+                                        _cleanup_http_body_relay_session(key, remove_temp=True)
+                                        await _route_reply(
+                                            key,
+                                            {
+                                                "t": "http_resp",
+                                                "status": 502,
+                                                "headers": {},
+                                                "body_b64": "",
+                                                "truncated": False,
+                                                "err": f"http_req_chunk_failed: {e}",
+                                            },
+                                        )
+                                        route_outcome = f"http_req_chunk_fail:{type(e).__name__}"
+                                    return
+
+                                if t == "http_req_end":
+                                    session = http_body_relay_sessions.get(key)
+                                    if not isinstance(session, dict):
+                                        route_outcome = "http_req_end_without_session"
+                                        return
+                                    try:
+                                        handle = session.get("handle")
+                                        if handle:
+                                            handle.close()
+                                            session["handle"] = None
+                                        tmp_path = Path(session.get("tmp_path"))
+                                        method = str(session.get("method") or "GET").upper()
+                                        path = str(session.get("path") or "/api/ping")
+                                        search = str(session.get("search") or "")
+                                        headers = session.get("headers") or {}
+                                        size_bytes = int(session.get("size_bytes") or 0)
+
+                                        def _do_streamed_http() -> dict[str, Any]:
+                                            try:
+                                                return _route_local_http_request(
+                                                    method=method,
+                                                    path=path,
+                                                    search=search,
+                                                    headers=headers,
+                                                    body=tmp_path,
+                                                    content_length=size_bytes,
+                                                )
+                                            except Exception as e:
+                                                return {
+                                                    "t": "http_resp",
+                                                    "status": 502,
+                                                    "headers": {},
+                                                    "body_b64": "",
+                                                    "truncated": False,
+                                                    "err": str(e),
+                                                }
+
+                                        resp = await asyncio.to_thread(_do_streamed_http)
+                                        _cleanup_http_body_relay_session(key, remove_temp=True)
+                                        await _route_reply(key, resp)
+                                        route_outcome = f"http_req_replied:{resp.get('status')}"
+                                    except Exception as e:
+                                        _cleanup_http_body_relay_session(key, remove_temp=True)
+                                        await _route_reply(
+                                            key,
+                                            {
+                                                "t": "http_resp",
+                                                "status": 502,
+                                                "headers": {},
+                                                "body_b64": "",
+                                                "truncated": False,
+                                                "err": f"http_req_end_failed: {e}",
+                                            },
+                                        )
+                                        route_outcome = f"http_req_end_fail:{type(e).__name__}"
+                                    return
+
+                                if t == "http_req_abort":
+                                    _cleanup_http_body_relay_session(key, remove_temp=True)
+                                    route_outcome = "http_req_abort"
                                     return
 
                                 if t == "http":
