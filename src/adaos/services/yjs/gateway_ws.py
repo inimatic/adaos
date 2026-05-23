@@ -2910,11 +2910,11 @@ def _yws_guard_reject_reason(
         webspace_quarantine_until = float(
             _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
-        if client_quarantine_until > now:
+        if client_quarantine_until > now and active_total > 0:
             reason = "client_reconnect_backoff"
             quarantine_until = client_quarantine_until
             quarantine_ttl_s = max(0.0, client_quarantine_until - now)
-        elif webspace_quarantine_until > now:
+        elif webspace_quarantine_until > now and active_total > 0:
             reason = "webspace_reconnect_backoff"
             quarantine_until = webspace_quarantine_until
             quarantine_ttl_s = max(0.0, webspace_quarantine_until - now)
@@ -2922,7 +2922,7 @@ def _yws_guard_reject_reason(
             reason = "active_limit"
         else:
             client_reconnect_storm = client_15s >= _YWS_GUARD_CLIENT_OPEN_15S
-            if client_reconnect_storm:
+            if client_reconnect_storm and active_total > 0:
                 _yws_guard_note_client_storm(
                     webspace_id=webspace_key,
                     dev_id=dev_key,
@@ -2940,7 +2940,7 @@ def _yws_guard_reject_reason(
                 recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
                 and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
             )
-            if webspace_reconnect_storm:
+            if webspace_reconnect_storm and active_total > 0:
                 _yws_guard_note_webspace_storm(
                     webspace_id=webspace_key,
                     dev_id=dev_key,
