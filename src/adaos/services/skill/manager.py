@@ -65,6 +65,19 @@ def _payload_webspace_id(payload: Mapping[str, Any] | None) -> str:
     return _default_webspace_id()
 
 
+def _payload_scenario_id(payload: Mapping[str, Any] | None) -> str:
+    if not isinstance(payload, Mapping):
+        return ""
+    meta = payload.get("_meta")
+    meta_map = meta if isinstance(meta, Mapping) else {}
+    for source in (payload, meta_map):
+        for key in ("scenario_id", "current_scenario", "home_scenario"):
+            token = str(source.get(key) or "").strip()
+            if token:
+                return token
+    return ""
+
+
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -166,6 +179,7 @@ def _skill_tool_yjs_denied_result(
     retry_after_s = max(0.0, float(admission.get("retry_after_s") or 0.0))
     reason = str(admission.get("reason") or "owner_quarantined").strip() or "owner_quarantined"
     webspace_id = str(admission.get("webspace_id") or _payload_webspace_id(payload)).strip() or "default"
+    scenario_id = str(admission.get("scenario_id") or _payload_scenario_id(payload)).strip()
     owner = str(admission.get("owner") or f"skill:{name}").strip()
     target_node_id = ""
     if isinstance(payload, Mapping):
@@ -180,6 +194,7 @@ def _skill_tool_yjs_denied_result(
         "retryable": True,
         "retry_after_s": retry_after_s,
         "webspace_id": webspace_id,
+        "scenario_id": scenario_id or None,
         "owner": owner,
         "tool": f"{name}:{tool}",
         "target_node_id": target_node_id or None,
@@ -203,6 +218,7 @@ def _skill_quarantine_event(
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     webspace_id = str(admission.get("webspace_id") or _payload_webspace_id(payload)).strip() or "default"
+    scenario_id = str(admission.get("scenario_id") or _payload_scenario_id(payload)).strip()
     owner = str(admission.get("owner") or f"skill:{name}").strip()
     reason = str(admission.get("reason") or "owner_quarantined").strip() or "owner_quarantined"
     retry_after_s = max(0.0, float(admission.get("retry_after_s") or 0.0))
@@ -219,6 +235,7 @@ def _skill_quarantine_event(
         "owner": owner,
         "blocked_tool": tool,
         "webspace_id": webspace_id,
+        "scenario_id": scenario_id or None,
         "target_node_id": target_node_id or None,
         "reason": reason,
         "retry_after_s": retry_after_s,
