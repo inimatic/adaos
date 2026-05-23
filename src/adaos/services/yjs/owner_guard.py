@@ -37,9 +37,13 @@ _QUARANTINE_TTL_S = _float_env("ADAOS_YJS_OWNER_QUARANTINE_TTL_S", 300.0, 1.0)
 _QUARANTINE_MAX_TTL_S = _float_env("ADAOS_YJS_OWNER_QUARANTINE_MAX_TTL_S", 1800.0, 1.0)
 _QUARANTINE_ESCALATION_WINDOW_S = _float_env("ADAOS_YJS_OWNER_QUARANTINE_ESCALATION_WINDOW_S", 3600.0, 1.0)
 _THROTTLE_STREAK_LIMIT = _int_env("ADAOS_YJS_OWNER_QUARANTINE_THROTTLE_STREAK", 8, 1)
-_POLICY_BLOCK_QUARANTINE_WORK_KINDS = {
+_PRESSURE_QUARANTINE_WORK_KINDS = {
     token.strip()
-    for token in str(os.getenv("ADAOS_YJS_OWNER_POLICY_BLOCK_QUARANTINE_WORK_KINDS") or "browser_stream")
+    for token in str(
+        os.getenv("ADAOS_YJS_OWNER_PRESSURE_QUARANTINE_WORK_KINDS")
+        or os.getenv("ADAOS_YJS_OWNER_POLICY_BLOCK_QUARANTINE_WORK_KINDS")
+        or "browser_stream"
+    )
     .lower()
     .split(",")
     if token.strip()
@@ -110,13 +114,13 @@ def _governs_owner(owner: Any) -> bool:
     )
 
 
-def _policy_block_quarantines(work_kind: str) -> bool:
+def _pressure_quarantines(work_kind: str) -> bool:
     token = str(work_kind or "").strip().lower()
     if not token:
         return False
-    if "*" in _POLICY_BLOCK_QUARANTINE_WORK_KINDS:
+    if "*" in _PRESSURE_QUARANTINE_WORK_KINDS:
         return True
-    return token in _POLICY_BLOCK_QUARANTINE_WORK_KINDS
+    return token in _PRESSURE_QUARANTINE_WORK_KINDS
 
 
 def skill_owner(skill_name: Any) -> str:
@@ -527,7 +531,7 @@ def admit_owner_work(
                 decision="block",
                 now=now,
             )
-            if _QUARANTINE_ENABLE and _policy_block_quarantines(work_kind):
+            if _QUARANTINE_ENABLE and _pressure_quarantines(work_kind):
                 row = _activate_quarantine_locked(
                     key=key,
                     webspace_id=token_ws,
@@ -595,7 +599,12 @@ def admit_owner_work(
                 now=now,
             )
             observed_state = str(payload.get("observed_state") or "").strip().lower()
-            if _QUARANTINE_ENABLE and int(stats.get("throttle_streak") or 0) >= _THROTTLE_STREAK_LIMIT and observed_state in {"high", "critical"}:
+            if (
+                _QUARANTINE_ENABLE
+                and _pressure_quarantines(work_kind)
+                and int(stats.get("throttle_streak") or 0) >= _THROTTLE_STREAK_LIMIT
+                and observed_state in {"high", "critical"}
+            ):
                 row = _activate_quarantine_locked(
                     key=key,
                     webspace_id=token_ws,
