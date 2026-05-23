@@ -1981,6 +1981,20 @@ def _apply_incident_degradation(
     stability_state = str(stability.get("state") or "")
     if stability_state not in {"unstable", "flapping"}:
         return node
+    try:
+        stable_for_s = float(diag.get("stable_for_s") or 0.0)
+    except Exception:
+        stable_for_s = 0.0
+    try:
+        recent_non_ready_5m = int(diag.get("recent_non_ready_transitions_5m") or 0)
+    except Exception:
+        recent_non_ready_5m = 0
+    try:
+        recent_transitions_5m = int(diag.get("recent_transitions_5m") or 0)
+    except Exception:
+        recent_transitions_5m = 0
+    if stable_for_s >= 300.0 and recent_non_ready_5m <= 0 and recent_transitions_5m <= 0:
+        return node
     degraded = dict(node)
     degraded["status"] = ReadinessStatus.DEGRADED.value
     degraded["summary"] = f"{channel_name} is degraded due to recent transport incidents"

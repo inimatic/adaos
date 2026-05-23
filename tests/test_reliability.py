@@ -225,6 +225,42 @@ def test_hub_reliability_marks_root_channel_unstable_after_reconnect_incident_wi
     assert any(item["status"] == "reconnect" for item in diag["recent_history"])
 
 
+def test_hub_reliability_recovers_ready_route_after_stable_probe_window(monkeypatch) -> None:
+    _reset_state()
+    reliability = importlib.import_module("adaos.services.reliability")
+    clock = {"now": 1_774_017_000.0}
+    monkeypatch.setattr(reliability.time, "time", lambda: clock["now"])
+
+    mark_root_control_up(details={"server": "wss://api.inimatic.com/nats"})
+    mark_route_ready(details={"subject": "route.to_hub.*"})
+    for idx in range(5):
+        clock["now"] += 20.0
+        reliability.note_route_incident(
+            status="no_upstream",
+            summary="hub route frame arrived while upstream is not connected",
+            details={"key_tag": f"route-{idx}", "t": "frame"},
+        )
+    clock["now"] += 360.0
+
+    snapshot = reliability_snapshot(
+        node_id="node-1",
+        subnet_id="sn_1",
+        role="hub",
+        local_ready=True,
+        node_state="ready",
+        draining=False,
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    route_diag = snapshot["runtime"]["channel_diagnostics"]["route"]
+    assert route_diag["stability"]["state"] == "unstable"
+    assert route_diag["recent_non_ready_transitions_5m"] == 0
+    assert route_diag["recent_non_ready_transitions_15m"] == 5
+    assert snapshot["runtime"]["readiness_tree"]["route"]["status"] == "ready"
+    assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
+
+
 def test_hub_reliability_snapshot_exposes_route_reset_runtime_details() -> None:
     _reset_state()
     observe_hub_root_route_runtime(
