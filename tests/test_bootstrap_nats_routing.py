@@ -148,7 +148,7 @@ def test_hub_route_max_chunk_raw_respects_smaller_explicit_value(monkeypatch) ->
 
 def test_hub_route_semantic_flow_classifies_control_and_sync_paths() -> None:
     assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws?token=secret") == "control"
-    assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws/subnet") == "control"
+    assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws/subnet") == "subnet"
     assert bootstrap_mod._hub_route_semantic_flow_for_path("/yws/desktop") == "sync"
     assert bootstrap_mod._hub_route_semantic_flow_for_path("/api/node/status") == "route"
 
@@ -181,6 +181,49 @@ def test_hub_route_sheds_sync_frames_when_pending_bytes_cross_control_threshold(
             guardrail_active=False,
             frame_flush_pending_bytes=128 * 1024,
             payload_bytes=64 * 1024,
+        )
+        is False
+    )
+
+
+def test_hub_route_subnet_sync_policy_drops_only_raw_yjs_under_pressure() -> None:
+    assert (
+        bootstrap_mod._hub_route_subnet_sync_payload_type(
+            "/ws/subnet",
+            '{"t":"yjs.update","update_b64":"abc"}',
+        )
+        == "yjs.update"
+    )
+    assert (
+        bootstrap_mod._hub_route_should_drop_subnet_sync_frame(
+            "/ws/subnet",
+            "yjs.update",
+            pending_data_size=0,
+            guardrail_active=False,
+            frame_flush_pending_bytes=64 * 1024,
+            payload_bytes=128 * 1024,
+        )
+        is True
+    )
+    assert (
+        bootstrap_mod._hub_route_should_drop_subnet_sync_frame(
+            "/ws/subnet",
+            "yjs.node_state",
+            pending_data_size=128 * 1024,
+            guardrail_active=True,
+            frame_flush_pending_bytes=64 * 1024,
+            payload_bytes=128 * 1024,
+        )
+        is False
+    )
+    assert (
+        bootstrap_mod._hub_route_should_drop_subnet_sync_frame(
+            "/ws",
+            "yjs.update",
+            pending_data_size=128 * 1024,
+            guardrail_active=True,
+            frame_flush_pending_bytes=64 * 1024,
+            payload_bytes=128 * 1024,
         )
         is False
     )

@@ -21,6 +21,60 @@ from adaos.services.yjs.store import get_ystore_for_webspace, suppress_ystore_wr
 _log = logging.getLogger("adaos.subnet.link")
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default)) or str(default)).strip())
+    except Exception:
+        value = int(default)
+    value = max(int(minimum), value)
+    if maximum is not None:
+        value = min(int(maximum), value)
+    return value
+
+
+def _hub_yjs_broadcast_skip_source_prefixes() -> tuple[str, ...]:
+    raw = str(
+        os.getenv(
+            "ADAOS_SUBNET_HUB_YJS_BROADCAST_SKIP_SOURCES",
+            "subnet.link_manager,subnet.link_client",
+        )
+        or ""
+    ).strip()
+    return tuple(str(item or "").strip() for item in raw.split(",") if str(item or "").strip())
+
+
+def _hub_yjs_broadcast_max_bytes() -> int:
+    return _env_int(
+        "ADAOS_SUBNET_HUB_YJS_BROADCAST_MAX_BYTES",
+        64 * 1024,
+        minimum=0,
+        maximum=8 * 1024 * 1024,
+    )
+
+
+def _hub_yjs_broadcast_policy(update: bytes, metadata: dict[str, Any] | None = None) -> tuple[bool, str]:
+    if not _env_flag("ADAOS_SUBNET_HUB_YJS_BROADCAST", True):
+        return False, "disabled"
+    payload_len = len(update or b"")
+    max_bytes = _hub_yjs_broadcast_max_bytes()
+    if max_bytes > 0 and payload_len > max_bytes:
+        return False, "payload_too_large"
+    meta = dict(metadata or {})
+    source = str(meta.get("source") or "").strip()
+    channel = str(meta.get("channel") or "").strip()
+    for prefix in _hub_yjs_broadcast_skip_source_prefixes():
+        if (source and source.startswith(prefix)) or (channel and channel.startswith(prefix)):
+            return False, "source_suppressed"
+    return True, ""
+
+
 def _normalize_snapshot_material(value: Any, *, path: tuple[str, ...] = ()) -> Any:
     if isinstance(value, dict):
         normalized: dict[str, Any] = {}
@@ -538,6 +592,14 @@ class HubLinkManager:
         self._yjs_live_apply_failed_total = 0
         self._yjs_broadcast_total = 0
         self._yjs_broadcast_failed_total = 0
+        self._yjs_broadcast_suppressed_total = 0
+        self._yjs_broadcast_suppressed_bytes = 0
+        self._last_yjs_broadcast_suppressed_at = 0.0
+        self._last_yjs_broadcast_suppressed_reason = ""
+        self._last_yjs_broadcast_suppressed_source = ""
+        self._last_yjs_broadcast_suppressed_channel = ""
+        self._last_yjs_broadcast_suppressed_webspace_id = ""
+        self._last_yjs_broadcast_suppressed_bytes = 0
         self._last_yjs_ingest_at = 0.0
         self._last_yjs_ingest_node_id = ""
         self._last_yjs_ingest_webspace_id = ""
@@ -1162,6 +1224,18 @@ class HubLinkManager:
                 "live_apply_failed_total": int(self._yjs_live_apply_failed_total),
                 "broadcast_total": int(self._yjs_broadcast_total),
                 "broadcast_failed_total": int(self._yjs_broadcast_failed_total),
+                "broadcast_suppressed_total": int(self._yjs_broadcast_suppressed_total),
+                "broadcast_suppressed_bytes": int(self._yjs_broadcast_suppressed_bytes),
+                "last_broadcast_suppressed_ago_s": (
+                    round(max(0.0, now - self._last_yjs_broadcast_suppressed_at), 3)
+                    if self._last_yjs_broadcast_suppressed_at
+                    else None
+                ),
+                "last_broadcast_suppressed_reason": self._last_yjs_broadcast_suppressed_reason or None,
+                "last_broadcast_suppressed_source": self._last_yjs_broadcast_suppressed_source or None,
+                "last_broadcast_suppressed_channel": self._last_yjs_broadcast_suppressed_channel or None,
+                "last_broadcast_suppressed_webspace_id": self._last_yjs_broadcast_suppressed_webspace_id or None,
+                "last_broadcast_suppressed_bytes": int(self._last_yjs_broadcast_suppressed_bytes),
                 "last_ingest_ago_s": round(max(0.0, now - self._last_yjs_ingest_at), 3) if self._last_yjs_ingest_at else None,
                 "last_ingest_node_id": self._last_yjs_ingest_node_id or None,
                 "last_ingest_webspace_id": self._last_yjs_ingest_webspace_id or None,
@@ -1228,11 +1302,46 @@ class HubLinkManager:
         finally:
             link.pending_rpc.pop(rid, None)
 
-    async def broadcast_yjs_update(self, *, webspace_id: str, update: bytes, origin_node_id: str | None) -> None:
+    def _note_yjs_broadcast_suppressed(
+        self,
+        *,
+        webspace_id: str,
+        update: bytes,
+        reason: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload_len = len(update or b"")
+        meta = dict(metadata or {})
+        self._yjs_broadcast_suppressed_total += 1
+        self._yjs_broadcast_suppressed_bytes += payload_len
+        self._last_yjs_broadcast_suppressed_at = time.time()
+        self._last_yjs_broadcast_suppressed_reason = str(reason or "").strip()
+        self._last_yjs_broadcast_suppressed_source = str(meta.get("source") or "").strip()
+        self._last_yjs_broadcast_suppressed_channel = str(meta.get("channel") or "").strip()
+        self._last_yjs_broadcast_suppressed_webspace_id = str(webspace_id or "").strip() or "default"
+        self._last_yjs_broadcast_suppressed_bytes = payload_len
+
+    async def broadcast_yjs_update(
+        self,
+        *,
+        webspace_id: str,
+        update: bytes,
+        origin_node_id: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """
         Broadcast an update to all connected members except the origin.
         """
         if not update:
+            return
+        allowed, reason = _hub_yjs_broadcast_policy(update, metadata)
+        if not allowed:
+            self._note_yjs_broadcast_suppressed(
+                webspace_id=webspace_id,
+                update=update,
+                reason=reason,
+                metadata=metadata,
+            )
             return
         b64 = base64.b64encode(update).decode("ascii")
         async with self._lock:

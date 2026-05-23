@@ -151,8 +151,15 @@ def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int
     return int(raw)
 
 
-def _hub_route_semantic_flow_for_path(path: Any) -> str:
+def _hub_route_path_token(path: Any) -> str:
     token = str(path or "").strip().split("?", 1)[0].rstrip("/")
+    return token or "/"
+
+
+def _hub_route_semantic_flow_for_path(path: Any) -> str:
+    token = _hub_route_path_token(path)
+    if token == "/ws/subnet" or token.startswith("/ws/subnet/"):
+        return "subnet"
     if token == "/yws" or token.startswith("/yws/"):
         return "sync"
     if token == "/ws" or token.startswith("/ws/"):
@@ -187,6 +194,61 @@ def _hub_route_should_shed_sync_frame(
     except Exception:
         payload = 0
     return pending >= threshold or (pending > 0 and pending + payload >= threshold)
+
+
+def _hub_route_subnet_sync_payload_type(path: Any, message: Any) -> str:
+    if _hub_route_semantic_flow_for_path(path) != "subnet":
+        return ""
+    if not isinstance(message, str):
+        return ""
+    # Keep the hot path cheap: only parse likely member-link sync frames.
+    if "yjs.update" not in message and "yjs.node_state" not in message:
+        return ""
+    try:
+        payload = _json.loads(message)
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    msg_type = str(payload.get("t") or "").strip()
+    if msg_type in {"yjs.update", "yjs.node_state"}:
+        return msg_type
+    return ""
+
+
+def _hub_route_should_drop_subnet_sync_frame(
+    path: Any,
+    payload_type: Any,
+    *,
+    pending_data_size: Any,
+    guardrail_active: Any,
+    frame_flush_pending_bytes: Any,
+    payload_bytes: Any = 0,
+) -> bool:
+    if _hub_route_semantic_flow_for_path(path) != "subnet":
+        return False
+    # yjs.node_state is the semantic, bounded state path for member-owned data.
+    # Raw yjs.update is best-effort sync and must not block member-link control
+    # messages such as ping/pong, rpc, or core update commands.
+    if str(payload_type or "").strip() != "yjs.update":
+        return False
+    if bool(guardrail_active):
+        return True
+    try:
+        threshold = int(frame_flush_pending_bytes or 0)
+    except Exception:
+        threshold = 0
+    if threshold <= 0:
+        return False
+    try:
+        pending = max(0, int(pending_data_size or 0))
+    except Exception:
+        pending = 0
+    try:
+        payload = max(0, int(payload_bytes or 0))
+    except Exception:
+        payload = 0
+    return pending >= threshold or payload >= threshold or (pending > 0 and pending + payload >= threshold)
 
 
 def _should_forward_node_status_to_members(payload: object) -> bool:
@@ -4986,6 +5048,11 @@ class BootstrapService:
                             "sync_backpressure_late_drop_total": 0,
                             "last_sync_backpressure_late_drop_key_tag": "",
                             "last_sync_backpressure_late_drop_path": "",
+                            "subnet_sync_backpressure_drop_total": 0,
+                            "last_subnet_sync_backpressure_key_tag": "",
+                            "last_subnet_sync_backpressure_path": "",
+                            "last_subnet_sync_backpressure_type": "",
+                            "last_subnet_sync_backpressure_payload_bytes": 0,
                         }
 
                         def _route_refresh_starvation_state() -> None:
@@ -6444,6 +6511,50 @@ class BootstrapService:
                                     else:
                                         text = str(msg)
                                         text_payload_bytes = len(text.encode("utf-8"))
+                                        path0 = _route_tunnel_path(key)
+                                        subnet_payload_type = _hub_route_subnet_sync_payload_type(path0, text)
+                                        if subnet_payload_type:
+                                            try:
+                                                _route_refresh_starvation_state()
+                                            except Exception:
+                                                pass
+                                            if _hub_route_should_drop_subnet_sync_frame(
+                                                path0,
+                                                subnet_payload_type,
+                                                pending_data_size=route_diag_state.get("last_nc_pending_data_size"),
+                                                guardrail_active=route_diag_state.get("guardrail_active"),
+                                                frame_flush_pending_bytes=_route_frame_flush_pending_bytes,
+                                                payload_bytes=text_payload_bytes,
+                                            ):
+                                                route_diag_state["subnet_sync_backpressure_drop_total"] = int(
+                                                    route_diag_state.get("subnet_sync_backpressure_drop_total") or 0
+                                                ) + 1
+                                                route_diag_state["last_subnet_sync_backpressure_key_tag"] = _key_tag(key)
+                                                route_diag_state["last_subnet_sync_backpressure_path"] = path0
+                                                route_diag_state["last_subnet_sync_backpressure_type"] = subnet_payload_type
+                                                route_diag_state["last_subnet_sync_backpressure_payload_bytes"] = text_payload_bytes
+                                                _route_note_starvation(
+                                                    "subnet_sync_backpressure_drop",
+                                                    key=key,
+                                                    extra=(
+                                                        f"path={path0 or '-'} "
+                                                        f"type={subnet_payload_type} "
+                                                        f"payload_bytes={text_payload_bytes} "
+                                                        f"threshold_bytes={_route_frame_flush_pending_bytes}"
+                                                    ),
+                                                )
+                                                _route_observe_flow(
+                                                    "frame",
+                                                    "subnet_sync_backpressure_drop",
+                                                    direction="to_browser",
+                                                    payload_bytes=text_payload_bytes,
+                                                    error="route_subnet_sync_backpressure",
+                                                )
+                                                try:
+                                                    _update_route_protocol_runtime()
+                                                except Exception:
+                                                    pass
+                                                continue
                                         if await _shed_sync_tunnel_if_backpressured(key, ws, text_payload_bytes):
                                             break
                                         if len(text) > MAX_CHUNK_RAW:

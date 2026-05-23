@@ -25,12 +25,17 @@ async def start_subnet_p2p(app: Any) -> None:
     if conf.role == "hub" and yjs_enabled:
         mgr = get_hub_link_manager()
 
-        def _on_write(webspace_id: str, update: bytes) -> None:
+        def _on_write(webspace_id: str, update: bytes, meta: dict[str, Any] | None = None) -> None:
             if not update:
                 return
             try:
                 asyncio.get_running_loop().create_task(
-                    mgr.broadcast_yjs_update(webspace_id=webspace_id or "default", update=update, origin_node_id=None)
+                    mgr.broadcast_yjs_update(
+                        webspace_id=webspace_id or "default",
+                        update=update,
+                        origin_node_id=None,
+                        metadata=meta if isinstance(meta, dict) else None,
+                    )
                 )
             except Exception:
                 return
