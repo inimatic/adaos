@@ -71,6 +71,7 @@ _YWS_OPEN_HISTORY: deque[float] = deque(maxlen=512)
 _YWS_CLIENT_OPEN_HISTORY: dict[str, deque[float]] = {}
 _YWS_ATTEMPT_HISTORY: deque[float] = deque(maxlen=1024)
 _YWS_CLIENT_ATTEMPT_HISTORY: dict[str, deque[float]] = {}
+_YWS_CLIENT_SHORT_SESSION_HISTORY: dict[str, deque[float]] = {}
 _YWS_GUARD_QUARANTINE_UNTIL: dict[str, float] = {}
 _YWS_GUARD_LAST_LOG_AT: dict[str, float] = {}
 _YWS_GUARD_LAST_NOTIFY_AT: dict[str, float] = {}
@@ -265,6 +266,9 @@ _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S
 _YWS_GUARD_NOTIFY_INTERVAL_S = _env_float("ADAOS_YWS_GUARD_NOTIFY_INTERVAL_S", 30.0, minimum=1.0)
 _YWS_GUARD_REJECT_HOLD_MAX_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_MAX_SEC", 30.0, minimum=0.0)
 _YWS_GUARD_REJECT_HOLD_STEP_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_STEP_SEC", 1.0, minimum=0.05)
+_YWS_GUARD_MIN_STABLE_SESSION_S = _env_float("ADAOS_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0, minimum=0.0)
+_YWS_GUARD_SHORT_SESSION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0, minimum=1.0)
+_YWS_GUARD_SHORT_SESSION_LIMIT = _env_int("ADAOS_YWS_GUARD_SHORT_SESSION_LIMIT", 3, minimum=1)
 _WS_EVENT_SEND_QUEUE_LIMIT = _env_int("ADAOS_WS_EVENT_SEND_QUEUE_LIMIT", 64, minimum=1)
 _WS_EVENT_SEND_LOG_INTERVAL_S = _env_float("ADAOS_WS_EVENT_SEND_LOG_INTERVAL_S", 10.0, minimum=0.0)
 _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC", 5.0, minimum=0.0)
@@ -2678,6 +2682,45 @@ def _record_yws_guard_attempt(
             _YWS_CLIENT_ATTEMPT_HISTORY.pop(client_key, None)
 
 
+def _record_yws_short_session(
+    webspace_id: str,
+    dev_id: str,
+    *,
+    lifetime_s: float,
+    browser_session_id: str | None = None,
+    client_attempt_id: str | None = None,
+) -> None:
+    if _YWS_GUARD_MIN_STABLE_SESSION_S <= 0.0:
+        return
+    if lifetime_s >= _YWS_GUARD_MIN_STABLE_SESSION_S:
+        return
+    now = time.time()
+    key = _yws_guard_client_history_key(
+        webspace_id,
+        dev_id,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id,
+    )
+    with _YWS_STORM_LOCK:
+        items = _YWS_CLIENT_SHORT_SESSION_HISTORY.setdefault(key, deque(maxlen=64))
+        items.append(now)
+        cutoff = now - max(1.0, float(_YWS_GUARD_SHORT_SESSION_WINDOW_S))
+        stale_keys: list[str] = []
+        for client_key, queue in _YWS_CLIENT_SHORT_SESSION_HISTORY.items():
+            while queue and queue[0] < cutoff:
+                queue.popleft()
+            if not queue:
+                stale_keys.append(client_key)
+        for client_key in stale_keys:
+            _YWS_CLIENT_SHORT_SESSION_HISTORY.pop(client_key, None)
+        recent = sum(1 for ts in items if ts >= cutoff)
+        _YWS_GUARD_DIAG["last_short_session_at"] = now
+        _YWS_GUARD_DIAG["last_short_session_webspace_id"] = str(webspace_id or "").strip() or "default"
+        _YWS_GUARD_DIAG["last_short_session_dev_id"] = str(dev_id or "").strip() or "unknown"
+        _YWS_GUARD_DIAG["last_short_session_lifetime_s"] = round(max(0.0, lifetime_s), 3)
+        _YWS_GUARD_DIAG["last_short_session_recent"] = recent
+
+
 def _yws_guard_quarantine_key(webspace_id: str, dev_id: str | None = None) -> str:
     webspace_key = str(webspace_id or "").strip() or "default"
     dev_key = str(dev_id or "").strip() or "*"
@@ -2771,6 +2814,7 @@ def _yws_guard_reject_hold_seconds(reason: str, diag: dict[str, Any] | None) -> 
     if reason_token not in {
         "client_reconnect_storm",
         "client_reconnect_backoff",
+        "client_short_session_storm",
         "webspace_reconnect_storm",
         "webspace_reconnect_backoff",
     }:
@@ -2942,7 +2986,9 @@ def _yws_guard_reject_reason(
     recent_10s = 0
     webspace_distinct_clients_10s = 0
     client_15s = 0
+    client_short_sessions = 0
     client_reconnect_storm = False
+    client_short_session_storm = False
     webspace_reconnect_storm = False
     cleared_client_quarantine = False
     cleared_webspace_quarantine = False
@@ -2971,6 +3017,15 @@ def _yws_guard_reject_reason(
                 stale_attempt_keys.append(client_key)
         for client_key in stale_attempt_keys:
             _YWS_CLIENT_ATTEMPT_HISTORY.pop(client_key, None)
+        short_cutoff = now - max(1.0, float(_YWS_GUARD_SHORT_SESSION_WINDOW_S))
+        stale_short_keys: list[str] = []
+        for client_key, queue in _YWS_CLIENT_SHORT_SESSION_HISTORY.items():
+            while queue and queue[0] < short_cutoff:
+                queue.popleft()
+            if not queue:
+                stale_short_keys.append(client_key)
+        for client_key in stale_short_keys:
+            _YWS_CLIENT_SHORT_SESSION_HISTORY.pop(client_key, None)
         for key0 in list(_YWS_GUARD_QUARANTINE_UNTIL.keys()):
             if float(_YWS_GUARD_QUARANTINE_UNTIL.get(key0) or 0.0) <= now:
                 _YWS_GUARD_QUARANTINE_UNTIL.pop(key0, None)
@@ -2983,11 +3038,18 @@ def _yws_guard_reject_reason(
         )
         client_queue = _YWS_CLIENT_ATTEMPT_HISTORY.get(client_key) or deque()
         client_15s = sum(1 for ts in client_queue if ts >= now - 15.0)
+        short_queue = _YWS_CLIENT_SHORT_SESSION_HISTORY.get(client_key) or deque()
+        client_short_sessions = sum(1 for ts in short_queue if ts >= short_cutoff)
         client_quarantine_until = float(_YWS_GUARD_QUARANTINE_UNTIL.get(client_key) or 0.0)
         webspace_quarantine_until = float(
             _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
-        if client_quarantine_until > now and active_total > 0:
+        client_backoff_active = (
+            active_total > 0
+            or client_15s >= _YWS_GUARD_CLIENT_OPEN_15S
+            or client_short_sessions >= _YWS_GUARD_SHORT_SESSION_LIMIT
+        )
+        if client_quarantine_until > now and client_backoff_active:
             reason = "client_reconnect_backoff"
             quarantine_until = client_quarantine_until
             quarantine_ttl_s = max(0.0, client_quarantine_until - now)
@@ -3013,6 +3075,20 @@ def _yws_guard_reject_reason(
                     now,
                 )
                 reason = "client_reconnect_storm"
+            client_short_session_storm = client_short_sessions >= _YWS_GUARD_SHORT_SESSION_LIMIT
+            if client_short_session_storm and not reason:
+                quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
+                    client_key,
+                    now,
+                )
+                reason = "client_short_session_storm"
+                _YWS_GUARD_DIAG["client_short_session_storm_observed_total"] = int(
+                    _YWS_GUARD_DIAG.get("client_short_session_storm_observed_total") or 0
+                ) + 1
+                _YWS_GUARD_DIAG["last_client_short_session_storm_at"] = now
+                _YWS_GUARD_DIAG["last_client_short_session_storm_webspace_id"] = webspace_key
+                _YWS_GUARD_DIAG["last_client_short_session_storm_dev_id"] = dev_key
+                _YWS_GUARD_DIAG["last_client_short_session_storm_recent"] = client_short_sessions
             webspace_reconnect_storm = (
                 recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
                 and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
@@ -3046,7 +3122,9 @@ def _yws_guard_reject_reason(
         "recent_open_10s": recent_10s,
         "webspace_distinct_clients_10s": webspace_distinct_clients_10s,
         "client_open_15s": client_15s,
+        "client_short_sessions": client_short_sessions,
         "client_reconnect_storm": client_reconnect_storm,
+        "client_short_session_storm": client_short_session_storm,
         "webspace_reconnect_storm": webspace_reconnect_storm,
         "client_quarantine_cleared": cleared_client_quarantine,
         "webspace_quarantine_cleared": cleared_webspace_quarantine,
@@ -3091,12 +3169,17 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
             if recent_15s >= _YWS_GUARD_CLIENT_OPEN_15S:
                 client_reconnect_storm_detected = True
             webspace_id, _, dev_id = key.partition("::")
+            short_queue = _YWS_CLIENT_SHORT_SESSION_HISTORY.get(key) or deque()
+            short_sessions = sum(
+                1 for ts in short_queue if ts >= now - max(1.0, float(_YWS_GUARD_SHORT_SESSION_WINDOW_S))
+            )
             hot_clients.append(
                 {
                     "webspace_id": webspace_id or "default",
                     "dev_id": dev_id or "unknown",
                     "open_15s": recent_15s,
                     "attempt_15s": recent_15s,
+                    "short_sessions": short_sessions,
                 }
             )
     with _YWS_ATTEMPT_LOCK:
@@ -3117,6 +3200,9 @@ def _yws_storm_snapshot(now: float) -> dict[str, Any]:
             "max_active_per_client": _YWS_MAX_ACTIVE_PER_CLIENT,
             "recent_open_10s_limit": _YWS_GUARD_RECENT_OPEN_10S,
             "client_open_15s_limit": _YWS_GUARD_CLIENT_OPEN_15S,
+            "short_session_limit": _YWS_GUARD_SHORT_SESSION_LIMIT,
+            "short_session_window_s": _YWS_GUARD_SHORT_SESSION_WINDOW_S,
+            "min_stable_session_s": _YWS_GUARD_MIN_STABLE_SESSION_S,
             "webspace_min_clients_10s": _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S,
             "cooldown_s": _YWS_GUARD_COOLDOWN_S,
             "max_cooldown_s": _YWS_GUARD_MAX_COOLDOWN_S,
@@ -4877,6 +4963,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     _track_yws_connection(webspace_id, websocket, device_id=dev_id)
     _transport_mark_open("yws")
     _remember_yws_attempt(attempt_id, "open")
+    yws_opened_at = time.time()
     try:
         from adaos.services.access_links import touch_browser_session
 
@@ -4915,6 +5002,14 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         )
         return
     finally:
+        yws_lifetime_s = max(0.0, time.time() - yws_opened_at)
+        _record_yws_short_session(
+            webspace_id,
+            dev_id,
+            lifetime_s=yws_lifetime_s,
+            browser_session_id=browser_session_id,
+            client_attempt_id=client_attempt_id or None,
+        )
         _untrack_yws_connection(webspace_id, websocket)
         _transport_mark_close("yws")
         mark_offline = _should_mark_yws_browser_session_offline(dev_id)
