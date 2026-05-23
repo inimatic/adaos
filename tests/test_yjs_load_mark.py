@@ -63,6 +63,62 @@ def test_load_mark_tracks_owner_write_volume_and_rate() -> None:
     assert selected["active_owner_total"] == 1
 
 
+def test_load_mark_policy_throttles_single_snapshot_spike() -> None:
+    _reset_load_mark_state()
+
+    load_mark_module.record_write_update(
+        "default",
+        total_bytes=180 * 1024,
+        root_names=["data"],
+        now_ts=10.0,
+        source="async_get_ydoc",
+        owner="skill:browsers_skill",
+    )
+
+    policy = load_mark_module.yjs_primary_doc_policy_snapshot(
+        webspace_id="default",
+        owner="skill:browsers_skill",
+        root_names=["data"],
+        now_ts=11.0,
+    )
+
+    assert policy["policy_state"] == "throttle"
+    assert policy["reason"] == "write_amplification"
+    assert policy["throttled_roots"] == ["data"]
+
+
+def test_load_mark_policy_blocks_repeated_large_snapshot_writes() -> None:
+    _reset_load_mark_state()
+
+    load_mark_module.record_write_update(
+        "default",
+        total_bytes=180 * 1024,
+        root_names=["data"],
+        now_ts=10.0,
+        source="async_get_ydoc",
+        owner="skill:browsers_skill",
+    )
+    load_mark_module.record_write_update(
+        "default",
+        total_bytes=180 * 1024,
+        root_names=["data"],
+        now_ts=10.5,
+        source="async_get_ydoc",
+        owner="skill:browsers_skill",
+    )
+
+    policy = load_mark_module.yjs_primary_doc_policy_snapshot(
+        webspace_id="default",
+        owner="skill:browsers_skill",
+        root_names=["data"],
+        now_ts=11.0,
+    )
+
+    assert policy["policy_state"] == "block"
+    assert policy["reason"] == "write_amplification_blocked"
+    assert policy["blocked_roots"] == ["data"]
+
+
 def test_load_mark_surfaces_unknown_owner_for_unattributed_flow() -> None:
     _reset_load_mark_state()
 

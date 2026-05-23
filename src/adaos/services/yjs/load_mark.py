@@ -34,6 +34,10 @@ _HIGH_WPS = max(1.0, float(os.getenv("ADAOS_YJS_LOAD_MARK_HIGH_WPS") or "8"))
 _CRITICAL_WPS = max(_HIGH_WPS + 0.1, float(os.getenv("ADAOS_YJS_LOAD_MARK_CRITICAL_WPS") or "32"))
 _BLOCK_BPS = max(_CRITICAL_BPS + 1, int(os.getenv("ADAOS_YJS_LOAD_MARK_BLOCK_BPS") or str(256 * 1024)))
 _BLOCK_WPS = max(_CRITICAL_WPS + 0.1, float(os.getenv("ADAOS_YJS_LOAD_MARK_BLOCK_WPS") or "64"))
+_SINGLE_SNAPSHOT_SPIKE_BYTES = max(
+    _CRITICAL_BPS,
+    int(os.getenv("ADAOS_YJS_LOAD_MARK_SINGLE_SNAPSHOT_SPIKE_BYTES") or str(192 * 1024)),
+)
 _GATEWAY_HIGH_WPS = max(_HIGH_WPS, float(os.getenv("ADAOS_YJS_LOAD_MARK_GATEWAY_HIGH_WPS") or "64"))
 _GATEWAY_CRITICAL_WPS = max(
     _GATEWAY_HIGH_WPS + 0.1,
@@ -1259,6 +1263,13 @@ def yjs_primary_doc_policy_snapshot(
             avg_wps=avg_wps,
             peak_wps=peak_wps,
         )
+        if (
+            policy_state == "block"
+            and int(owner_row.get("recent_writes") or 0) <= 1
+            and int(owner_row.get("recent_bytes") or 0) <= _SINGLE_SNAPSHOT_SPIKE_BYTES
+            and peak_wps <= 1.0
+        ):
+            policy_state = "throttle"
     affected_roots: list[str] = []
     for raw_name in list(root_names or ()):
         name = str(raw_name or "").strip()
