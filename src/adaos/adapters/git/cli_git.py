@@ -4,10 +4,13 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 import logging
-from typing import Optional, Final, Sequence, Union
+from typing import Iterator, Optional, Final, Sequence, Union
 from adaos.ports.git import GitClient
 
 
@@ -17,6 +20,8 @@ class GitError(RuntimeError): ...
 StrOrPath = Union[str, Path]
 
 _log = logging.getLogger(__name__)
+_REPO_LOCKS: dict[str, threading.RLock] = {}
+_REPO_LOCKS_GUARD = threading.Lock()
 
 
 def _git_command_timeout_s() -> float:
@@ -26,14 +31,174 @@ def _git_command_timeout_s() -> float:
         return 90.0
 
 
+def _git_repo_lock_timeout_s() -> float:
+    try:
+        return max(1.0, float(str(os.getenv("ADAOS_GIT_REPO_LOCK_TIMEOUT_S") or "120").strip()))
+    except Exception:
+        return 120.0
+
+
+def _git_index_lock_stale_after_s() -> float:
+    try:
+        return max(1.0, float(str(os.getenv("ADAOS_GIT_INDEX_LOCK_STALE_AFTER_S") or "30").strip()))
+    except Exception:
+        return 30.0
+
+
+def _thread_lock_for(path: Path) -> threading.RLock:
+    key = str(path)
+    with _REPO_LOCKS_GUARD:
+        lock = _REPO_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _REPO_LOCKS[key] = lock
+        return lock
+
+
+def _git_dir_for_lock(cwd: StrOrPath) -> Path:
+    root = Path(cwd)
+    dotgit = root / ".git"
+    if dotgit.is_dir():
+        return dotgit
+    if dotgit.is_file():
+        try:
+            raw = dotgit.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            raw = ""
+        prefix = "gitdir:"
+        if raw.lower().startswith(prefix):
+            target = raw[len(prefix) :].strip()
+            git_dir = Path(target)
+            if not git_dir.is_absolute():
+                git_dir = root / git_dir
+            return git_dir
+    return dotgit
+
+
+def _git_lock_path(cwd: StrOrPath) -> Path:
+    root = Path(cwd)
+    dotgit = root / ".git"
+    if dotgit.exists():
+        return _git_dir_for_lock(cwd) / "adaos.lock"
+    return root.parent / f".{root.name}.adaos.git.lock"
+
+
+@contextmanager
+def _cross_process_lock(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timeout_s = _git_repo_lock_timeout_s()
+    started = time.monotonic()
+    with path.open("a+b") as fh:
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() - started >= timeout_s:
+                        raise GitError(f"timed out waiting for AdaOS git repo lock {path}")
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            return
+
+        try:
+            import fcntl
+        except Exception:
+            yield
+            return
+
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() - started >= timeout_s:
+                    raise GitError(f"timed out waiting for AdaOS git repo lock {path}")
+                time.sleep(0.1)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _git_repo_lock(cwd: Optional[StrOrPath]) -> Iterator[None]:
+    if cwd is None:
+        yield
+        return
+    try:
+        lock_path = _git_lock_path(cwd).resolve()
+    except Exception:
+        lock_path = _git_lock_path(cwd).absolute()
+    thread_lock = _thread_lock_for(lock_path)
+    with thread_lock:
+        with _cross_process_lock(lock_path):
+            yield
+
+
+def _git_index_lock_path(cwd: StrOrPath) -> Path:
+    return _git_dir_for_lock(cwd) / "index.lock"
+
+
+def _is_index_lock_error(details: str) -> bool:
+    lowered = (details or "").lower()
+    return "index.lock" in lowered and ("unable to create" in lowered or "file exists" in lowered)
+
+
+def _clear_stale_workspace_index_lock(cwd: Optional[StrOrPath], details: str) -> bool:
+    if cwd is None or not _is_index_lock_error(details) or not _is_adaos_workspace_repo(cwd):
+        return False
+    lock_path = _git_index_lock_path(cwd)
+    stale_after_s = _git_index_lock_stale_after_s()
+    deadline = time.monotonic() + stale_after_s
+    while lock_path.exists():
+        try:
+            age_s = time.time() - lock_path.stat().st_mtime
+        except OSError:
+            return False
+        if age_s >= stale_after_s:
+            try:
+                lock_path.unlink()
+                _log.warning("removed stale git index.lock repo=%s lock=%s age_s=%.1f", str(Path(cwd)), lock_path, age_s)
+                return True
+            except OSError as exc:
+                _log.warning("failed to remove stale git index.lock repo=%s lock=%s err=%s", str(Path(cwd)), lock_path, exc)
+                return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+    return True
+
+
 def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
     if cwd is not None:
         cwd = str(Path(cwd))  # единая точка приведения к str
     timeout_s = _git_command_timeout_s()
-    try:
-        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
+    with _git_repo_lock(cwd):
+        try:
+            p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+        except subprocess.TimeoutExpired as exc:
+            raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
+        if p.returncode != 0:
+            stderr = p.stderr.strip()
+            stdout = p.stdout.strip()
+            details = stderr
+            if stdout:
+                details = f"{details}\n{stdout}".strip()
+            if _clear_stale_workspace_index_lock(cwd, details):
+                try:
+                    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+                except subprocess.TimeoutExpired as exc:
+                    raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
     # TODO Проверить, git нет, но папка не пустая. Вместо операции c git даем дружественную ошибку
     # destination path 'C:\git\MUIV\adaos_test\adaos\.adaos_1\workspace' already exists and is not an empty directory
     if p.returncode != 0:

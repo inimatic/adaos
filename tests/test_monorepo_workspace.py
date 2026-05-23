@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import shutil
+import os
 from pathlib import Path
 
 import pytest
@@ -481,6 +482,23 @@ def test_sparse_init_detects_workspace_before_dirty_autostash(monkeypatch, tmp_p
     CliGitClient(depth=0).sparse_init(str(root), cone=False)
 
     assert calls == [["status", "--porcelain"], ["sparse-checkout", "init"]]
+
+
+def test_git_run_removes_stale_workspace_index_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("ADAOS_GIT_INDEX_LOCK_STALE_AFTER_S", "1")
+    root = tmp_path / ".adaos" / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    _run_git(["init"], cwd=root)
+    (root / "file.txt").write_text("hello\n", encoding="utf-8")
+    index_lock = root / ".git" / "index.lock"
+    index_lock.write_text("stale\n", encoding="utf-8")
+    old = 0
+    os.utime(index_lock, (old, old))
+
+    cli_git_module._run_git(["add", "file.txt"], cwd=root)
+
+    assert not index_lock.exists()
+    assert "A  file.txt" in _run_git(["status", "--porcelain"], cwd=root)
 
 
 def test_sparse_checkout_ignores_cli_flags(monkeypatch, monorepo, paths):
