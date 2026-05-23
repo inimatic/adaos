@@ -1879,6 +1879,17 @@ class InfraAccessActionRequest(BaseModel):
     ttl_seconds: int | None = None
 
 
+class SkillEventPublishRequest(BaseModel):
+    event_type: str | None = None
+    type: str | None = None
+    payload: Any | None = None
+    webspace_id: str | None = None
+    workspace_id: str | None = None
+    node_id: str | None = None
+    target_node_id: str | None = None
+    meta: dict[str, Any] | None = Field(default=None, alias="_meta")
+
+
 class UiRuntimeDiagnosticsRequest(BaseModel):
     webspace_id: str | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
@@ -2458,6 +2469,64 @@ async def node_ui_runtime_diagnostics(payload: UiRuntimeDiagnosticsRequest) -> d
         {"webspace_id": payload.webspace_id, "events": payload.events},
         webspace_id=payload.webspace_id,
     )
+
+
+@router.post("/events/publish", dependencies=[Depends(require_token)])
+async def node_skill_event_publish(payload: SkillEventPublishRequest) -> dict[str, Any]:
+    conf = load_config()
+    target_webspace_id = _coerce_node_webspace_id(payload.webspace_id or payload.workspace_id)
+    if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "hub_role_required",
+        }
+    event_type = str(payload.event_type or payload.type or "").strip()
+    if not event_type:
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "event_type required",
+        }
+    raw_event_payload = payload.payload
+    if isinstance(raw_event_payload, dict):
+        event_payload: dict[str, Any] = dict(raw_event_payload)
+    elif raw_event_payload is None:
+        event_payload = {}
+    else:
+        event_payload = {"value": raw_event_payload}
+    event_payload.setdefault("webspace_id", target_webspace_id)
+    for key in ("workspace_id", "node_id", "target_node_id"):
+        value = getattr(payload, key, None)
+        if value is not None and not event_payload.get(key):
+            event_payload[key] = value
+    meta = dict(event_payload.get("_meta") or {})
+    if isinstance(payload.meta, dict):
+        for key, value in payload.meta.items():
+            meta.setdefault(key, value)
+    meta.setdefault("webspace_id", target_webspace_id)
+    target_node_id = str(
+        event_payload.get("target_node_id")
+        or event_payload.get("node_target_id")
+        or meta.get("target_node_id")
+        or meta.get("node_target_id")
+        or event_payload.get("node_id")
+        or ""
+    ).strip()
+    if target_node_id:
+        event_payload.setdefault("target_node_id", target_node_id)
+        meta.setdefault("target_node_id", target_node_id)
+    event_payload["_meta"] = meta
+    ctx = get_ctx()
+    ctx.bus.publish(Event(type=event_type, payload=event_payload, source="api.node", ts=time.time()))
+    return {
+        "ok": True,
+        "accepted": True,
+        "webspace_id": target_webspace_id,
+        "event_type": event_type,
+    }
 
 
 @router.post("/infrastate/action", dependencies=[Depends(require_token)])

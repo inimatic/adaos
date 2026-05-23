@@ -530,6 +530,49 @@ def test_node_infrastate_action_endpoint_publishes_event_and_returns_snapshot(mo
     assert result["snapshot"]["summary"]["value"] == "ready"
 
 
+def test_node_skill_event_publish_endpoint_publishes_generic_event(monkeypatch) -> None:
+    published: list[object] = []
+
+    class _FakeBus:
+        def publish(self, event) -> None:
+            published.append(event)
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "get_ctx",
+        lambda: SimpleNamespace(bus=_FakeBus()),
+    )
+
+    result = asyncio.run(
+        node_api_module.node_skill_event_publish(
+            node_api_module.SkillEventPublishRequest(
+                event_type="custom.location.requested",
+                payload={"city": "Berlin"},
+                webspace_id="default",
+                node_id="member-1",
+                _meta={"trace_id": "trace-1"},
+            )
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["event_type"] == "custom.location.requested"
+    assert len(published) == 1
+    event = published[0]
+    assert getattr(event, "type", "") == "custom.location.requested"
+    assert getattr(event, "source", "") == "api.node"
+    payload = getattr(event, "payload", {})
+    assert payload["city"] == "Berlin"
+    assert payload["webspace_id"] == "desktop"
+    assert payload["node_id"] == "member-1"
+    assert payload["target_node_id"] == "member-1"
+    assert payload["_meta"]["webspace_id"] == "desktop"
+    assert payload["_meta"]["target_node_id"] == "member-1"
+    assert payload["_meta"]["trace_id"] == "trace-1"
+
+
 def test_node_infrastate_action_marketplace_install_returns_fast_operation_ack(monkeypatch) -> None:
     published: list[object] = []
     wait_calls: list[float] = []
