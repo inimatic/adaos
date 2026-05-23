@@ -5,6 +5,7 @@ set -euo pipefail
 CLIENT_SUBMODULE_PATH="src/adaos/integrations/adaos-client"
 BACKEND_SUBMODULE_PATH="src/adaos/integrations/adaos-backend"
 INFRA_SUBMODULE_PATH="src/adaos/integrations/infra-inimatic"
+RASA_SUBMODULE_PATH="src/adaos/integrations/rasa-port"
 
 VENV_DIR=".venv"
 VENV_ACTIVATE=".venv/bin/activate"
@@ -201,6 +202,28 @@ fallback_to_uv() {
   # Some installers/extractors may drop the executable bit (or mount with `noexec`),
   # so invoke explicitly via bash instead of executing the file directly.
   exec bash "./tools/bootstrap_uv.sh" "${ORIG_ARGS[@]}"
+}
+
+ensure_required_submodules() {
+  if ! have git; then
+    warn "git not found; required submodule ${RASA_SUBMODULE_PATH} cannot be initialized automatically."
+    return 0
+  fi
+  if [[ ! -d ".git" && ! -f ".git" ]]; then
+    if [[ ! -f "${RASA_SUBMODULE_PATH}/pyproject.toml" ]]; then
+      warn "Repository is not a git checkout; required submodule ${RASA_SUBMODULE_PATH} is unavailable in archive mode."
+    fi
+    return 0
+  fi
+  [[ -f "${RASA_SUBMODULE_PATH}/pyproject.toml" ]] && return 0
+  log "Initializing required submodule: ${RASA_SUBMODULE_PATH}"
+  git submodule sync -- "${RASA_SUBMODULE_PATH}" || { warn "git submodule sync failed for ${RASA_SUBMODULE_PATH}"; return 0; }
+  git submodule update --init --recursive "${RASA_SUBMODULE_PATH}" || { warn "git submodule update failed for ${RASA_SUBMODULE_PATH}"; return 0; }
+  if [[ -f "${RASA_SUBMODULE_PATH}/.git" && ! -f "${RASA_SUBMODULE_PATH}/pyproject.toml" ]]; then
+    warn "${RASA_SUBMODULE_PATH} worktree is incomplete; restoring from HEAD..."
+    git -C "${RASA_SUBMODULE_PATH}" restore --source=HEAD --worktree .
+    git -C "${RASA_SUBMODULE_PATH}" restore --source=HEAD --staged .
+  fi
 }
 
 show_optional_modules_note() {
@@ -573,6 +596,8 @@ if [[ -z "${ROLE:-}" ]]; then
     ROLE="hub"
   fi
 fi
+
+ensure_required_submodules
 
 log "Choosing Python >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE}..."
 if ! choose_python_311; then
