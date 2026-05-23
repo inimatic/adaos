@@ -148,3 +148,69 @@ def test_policy_block_browser_stream_still_quarantines(monkeypatch) -> None:
     assert result["allowed"] is False
     assert result["quarantined"] is True
     assert result["quarantine"]["trigger"] == "policy_block"
+
+
+def test_throttle_subscription_streak_does_not_quarantine_owner(monkeypatch) -> None:
+    _reset_owner_guard_state()
+    monkeypatch.setattr(owner_guard, "_THROTTLE_STREAK_LIMIT", 2)
+    monkeypatch.setattr(owner_guard, "_publish_quarantine_service_node", lambda _webspace_id: None)
+
+    for _ in range(2):
+        result = owner_guard.admit_owner_work(
+            webspace_id="desktop",
+            owner="skill:browsers_skill",
+            root_names=["data"],
+            path="event/browser.session.changed",
+            source="sdk.subscription",
+            channel="skill.subscription",
+            work_kind="skill_subscription",
+            tool="browsers_skill:subscribe:browser.session.changed",
+            policy={
+                "policy_state": "throttle",
+                "observed_state": "critical",
+                "reason": "write_amplification",
+            },
+        )
+
+    snapshot = owner_guard.owner_guard_snapshot(webspace_id="desktop", owner="skill:browsers_skill")
+
+    assert result["allowed"] is True
+    assert result["throttled"] is True
+    assert snapshot["active"] is False
+    assert snapshot["rows"][0]["throttle_streak"] == 2
+    with owner_guard._LOCK:
+        assert owner_guard._DENIED_TOTAL == 0
+
+
+def test_throttle_browser_stream_streak_still_quarantines(monkeypatch) -> None:
+    _reset_owner_guard_state()
+    monkeypatch.setattr(owner_guard, "_THROTTLE_STREAK_LIMIT", 2)
+    monkeypatch.setattr(owner_guard, "_publish_quarantine_service_node", lambda _webspace_id: None)
+
+    first = owner_guard.admit_owner_work(
+        webspace_id="desktop",
+        owner="skill:telemetry_skill",
+        root_names=["stream"],
+        path="stream/telemetry.realtime",
+        source="router.webio_stream",
+        channel="webio.stream",
+        work_kind="browser_stream",
+        tool="skill:telemetry_skill:stream:telemetry.realtime",
+        policy={"policy_state": "throttle", "observed_state": "critical", "reason": "payload_budget"},
+    )
+    second = owner_guard.admit_owner_work(
+        webspace_id="desktop",
+        owner="skill:telemetry_skill",
+        root_names=["stream"],
+        path="stream/telemetry.realtime",
+        source="router.webio_stream",
+        channel="webio.stream",
+        work_kind="browser_stream",
+        tool="skill:telemetry_skill:stream:telemetry.realtime",
+        policy={"policy_state": "throttle", "observed_state": "critical", "reason": "payload_budget"},
+    )
+
+    assert first["allowed"] is True
+    assert second["allowed"] is False
+    assert second["quarantined"] is True
+    assert second["quarantine"]["trigger"] == "throttle_streak"
