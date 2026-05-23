@@ -233,6 +233,13 @@ def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert bootstrap_mod._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
 
 
+def test_hub_route_local_http_timeout_allows_skill_file_upload_to_finish() -> None:
+    assert bootstrap_mod._hub_route_local_http_timeout("/api/skills/new_face_vision_skill/files/meta.jsonl") == (
+        3.0,
+        300.0,
+    )
+
+
 def test_hub_route_tools_call_does_not_retry_after_read_timeout() -> None:
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",

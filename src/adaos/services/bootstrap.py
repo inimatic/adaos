@@ -8,6 +8,7 @@ import json as _json
 import logging
 import math
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -442,6 +443,10 @@ def _hub_route_local_http_timeout(path: str) -> tuple[float, float]:
     path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
     if path_norm in ("/api/node/status", "/api/ping", "/healthz"):
         return (0.5, 1.2)
+    if re.match(r"^/api/skills/[^/]+/files/", path_norm):
+        return (3.0, 300.0)
+    if path_norm.startswith("/api/media/files/"):
+        return (3.0, 300.0)
     if path_norm == "/api/tools/call":
         # Root allows tools/call to take up to 60s. Keep the local hop below
         # that ceiling, but do not make member-link tools fail under normal

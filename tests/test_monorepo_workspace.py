@@ -501,6 +501,24 @@ def test_git_run_removes_stale_workspace_index_lock(monkeypatch, tmp_path):
     assert "A  file.txt" in _run_git(["status", "--porcelain"], cwd=root)
 
 
+def test_git_run_rebuilds_corrupt_workspace_index(tmp_path):
+    root = tmp_path / ".adaos" / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    _run_git(["init"], cwd=root)
+    _run_git(["config", "user.email", "adaos-tests@example.com"], cwd=root)
+    _run_git(["config", "user.name", "AdaOS Tests"], cwd=root)
+    (root / "file.txt").write_text("hello\n", encoding="utf-8")
+    _run_git(["add", "file.txt"], cwd=root)
+    _run_git(["commit", "-m", "seed"], cwd=root)
+    index_path = root / ".git" / "index"
+    index_path.write_bytes(b"x")
+
+    out = cli_git_module._run_git(["status", "--porcelain"], cwd=root)
+
+    assert out == ""
+    assert index_path.stat().st_size > 1
+
+
 def test_sparse_checkout_ignores_cli_flags(monkeypatch, monorepo, paths):
     monkeypatch.setenv("ADAOS_TESTING", "0")
     repo = _make_skill_repo(paths, monorepo)
