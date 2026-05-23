@@ -50,6 +50,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          token: ${{ github.token }}
           fetch-depth: 0
 
       - name: Setup Python ${{ matrix.python }}
@@ -95,6 +96,7 @@ jobs:
       - name: Checkout rev2026
         uses: actions/checkout@v4
         with:
+          token: ${{ github.token }}
           ref: rev2026
           fetch-depth: 0
 
