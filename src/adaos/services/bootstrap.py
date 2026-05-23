@@ -131,7 +131,7 @@ def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> fl
 
 
 def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int:
-    default = 128 * 1024
+    default = 64 * 1024
     minimum = 16 * 1024
     maximum = 512 * 1024
     try:
@@ -144,8 +144,9 @@ def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int
     except Exception:
         warn = 0
     if warn > 0:
-        # Keep one route frame below the pending-data guard even after JSON/base64 overhead.
-        raw = min(raw, max(minimum, warn // 2))
+        # Keep a route frame comfortably below the pending-data guard even after
+        # JSON/base64 overhead, leaving room for one in-flight control frame.
+        raw = min(raw, max(minimum, warn // 4))
     return int(raw)
 
 

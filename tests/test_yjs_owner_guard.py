@@ -98,7 +98,53 @@ def test_owner_guard_snapshot_preserves_projection_route_metadata(monkeypatch) -
     snapshot = owner_guard.owner_guard_snapshot(webspace_id="desktop", owner="skill:infrastate_skill")
 
     assert result["allowed"] is False
-    assert result["quarantine"]["route"]["kind"] == "yjs_projection"
+    assert result["quarantined"] is False
     assert snapshot["last_route"]["surface"] == "subnet.infrastate.snapshot"
-    assert snapshot["quarantine_route"]["surface"] == "subnet.infrastate.snapshot"
+    assert snapshot["quarantine_route"] == {}
     assert snapshot["last_projection"]["slot"] == "infrastate.snapshot"
+
+
+def test_policy_block_subscription_is_admitted_without_quarantine(monkeypatch) -> None:
+    _reset_owner_guard_state()
+    monkeypatch.setattr(owner_guard, "_publish_quarantine_service_node", lambda _webspace_id: None)
+
+    result = owner_guard.admit_owner_work(
+        webspace_id="desktop",
+        owner="skill:browsers_skill",
+        root_names=["data"],
+        path="event/browser.session.changed",
+        source="sdk.subscription",
+        channel="skill.subscription",
+        work_kind="skill_subscription",
+        tool="browsers_skill:subscribe:browser.session.changed",
+        policy={"policy_state": "block", "reason": "write_amplification_blocked"},
+    )
+    snapshot = owner_guard.owner_guard_snapshot(webspace_id="desktop", owner="skill:browsers_skill")
+
+    assert result["allowed"] is True
+    assert result["throttled"] is True
+    assert result["quarantined"] is False
+    assert snapshot["active"] is False
+    with owner_guard._LOCK:
+        assert owner_guard._DENIED_TOTAL == 0
+
+
+def test_policy_block_browser_stream_still_quarantines(monkeypatch) -> None:
+    _reset_owner_guard_state()
+    monkeypatch.setattr(owner_guard, "_publish_quarantine_service_node", lambda _webspace_id: None)
+
+    result = owner_guard.admit_owner_work(
+        webspace_id="desktop",
+        owner="skill:telemetry_skill",
+        root_names=["stream"],
+        path="stream/telemetry.realtime",
+        source="router.webio_stream",
+        channel="webio.stream",
+        work_kind="browser_stream",
+        tool="skill:telemetry_skill:stream:telemetry.realtime",
+        policy={"policy_state": "block", "reason": "payload_budget_blocked"},
+    )
+
+    assert result["allowed"] is False
+    assert result["quarantined"] is True
+    assert result["quarantine"]["trigger"] == "policy_block"
