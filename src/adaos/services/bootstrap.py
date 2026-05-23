@@ -130,6 +130,25 @@ def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> fl
     return float(interval_s)
 
 
+def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int:
+    default = 128 * 1024
+    minimum = 16 * 1024
+    maximum = 512 * 1024
+    try:
+        raw = int(str(os.getenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES") or str(default)).strip())
+    except Exception:
+        raw = default
+    raw = max(minimum, min(maximum, raw))
+    try:
+        warn = int(pending_warn_bytes or 0)
+    except Exception:
+        warn = 0
+    if warn > 0:
+        # Keep one route frame below the pending-data guard even after JSON/base64 overhead.
+        raw = min(raw, max(minimum, warn // 2))
+    return int(raw)
+
+
 def _should_forward_node_status_to_members(payload: object) -> bool:
     if not isinstance(payload, dict):
         return True
@@ -4728,7 +4747,6 @@ class BootstrapService:
                         # v1:  route.to_browser.<key>
                         # v2:  route.v2.to_browser.<hubId>.<key>
                         reply_subjects: dict[str, str] = {}
-                        MAX_CHUNK_RAW = 300_000
                         try:
                             MAX_PENDING_TUNNEL_EVENTS = max(
                                 8,
@@ -4803,6 +4821,24 @@ class BootstrapService:
                             _route_pending_data_warn_bytes = 2 * 1024 * 1024
                         if _route_pending_data_warn_bytes < 0:
                             _route_pending_data_warn_bytes = 0
+                        MAX_CHUNK_RAW = _hub_route_max_chunk_raw_bytes(_route_pending_data_warn_bytes)
+                        try:
+                            _route_frame_flush_pending_bytes = int(
+                                os.getenv(
+                                    "HUB_ROUTE_FRAME_FLUSH_PENDING_BYTES",
+                                    str(max(64 * 1024, MAX_CHUNK_RAW)),
+                                )
+                                or str(max(64 * 1024, MAX_CHUNK_RAW))
+                            )
+                        except Exception:
+                            _route_frame_flush_pending_bytes = max(64 * 1024, MAX_CHUNK_RAW)
+                        if _route_pending_data_warn_bytes > 0:
+                            _route_frame_flush_pending_bytes = min(
+                                _route_frame_flush_pending_bytes,
+                                max(64 * 1024, _route_pending_data_warn_bytes // 2),
+                            )
+                        if _route_frame_flush_pending_bytes < 0:
+                            _route_frame_flush_pending_bytes = 0
                         try:
                             _route_guard_pending_data_bytes = int(
                                 os.getenv(
@@ -5659,7 +5695,20 @@ class BootstrapService:
                                             )
                                     except Exception:
                                         pass
-                                if _route_force_flush and t in ("http_resp", "close"):
+                                should_force_flush = bool(_route_force_flush and t in ("open_ack", "http_resp", "close"))
+                                if (
+                                    _route_force_flush
+                                    and not should_force_flush
+                                    and t in ("frame", "chunk")
+                                    and _route_frame_flush_pending_bytes > 0
+                                ):
+                                    try:
+                                        _route_refresh_starvation_state()
+                                        pending_data_size0 = int(route_diag_state.get("last_nc_pending_data_size") or 0)
+                                    except Exception:
+                                        pending_data_size0 = 0
+                                    should_force_flush = pending_data_size0 >= _route_frame_flush_pending_bytes
+                                if should_force_flush:
                                     # Fast-drain pending bytes without relying on NATS PING/PONG.
                                     # This avoids `flush()` (which can time out when PONGs are flaky behind WS proxies).
                                     try:
@@ -5706,7 +5755,10 @@ class BootstrapService:
                                         _route_note_starvation(
                                             "flush_slow",
                                             key=key,
-                                            extra=f"flush_ms={flush_took_s * 1000.0:.1f} timeout_ms={tout * 1000.0:.1f}",
+                                            extra=(
+                                                f"t={t} flush_ms={flush_took_s * 1000.0:.1f} "
+                                                f"timeout_ms={tout * 1000.0:.1f}"
+                                            ),
                                         )
                                     if (
                                         _route_pending_data_warn_bytes > 0
