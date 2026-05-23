@@ -82,6 +82,51 @@ async def _noop_push(*_args, **_kwargs) -> None:
     return None
 
 
+def test_broadcast_yjs_update_suppresses_large_hub_updates(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUBNET_HUB_YJS_BROADCAST_MAX_BYTES", "8")
+    fake_ws = _FakeWebSocket()
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=fake_ws)
+
+    asyncio.run(
+        manager.broadcast_yjs_update(
+            webspace_id="desktop",
+            update=b"x" * 32,
+            origin_node_id=None,
+            metadata={"source": "projection_service", "channel": "projection.yjs"},
+        )
+    )
+
+    assert fake_ws.messages == []
+    yjs = manager.snapshot()["yjs_replication"]
+    assert yjs["broadcast_total"] == 0
+    assert yjs["broadcast_suppressed_total"] == 1
+    assert yjs["last_broadcast_suppressed_reason"] == "payload_too_large"
+    assert yjs["last_broadcast_suppressed_webspace_id"] == "desktop"
+
+
+def test_broadcast_yjs_update_suppresses_subnet_echo_sources(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUBNET_HUB_YJS_BROADCAST_MAX_BYTES", "1024")
+    fake_ws = _FakeWebSocket()
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=fake_ws)
+
+    asyncio.run(
+        manager.broadcast_yjs_update(
+            webspace_id="desktop",
+            update=b"small",
+            origin_node_id=None,
+            metadata={"source": "subnet.link_manager.node_state", "channel": "core.subnet.link.node_state"},
+        )
+    )
+
+    assert fake_ws.messages == []
+    yjs = manager.snapshot()["yjs_replication"]
+    assert yjs["broadcast_suppressed_total"] == 1
+    assert yjs["last_broadcast_suppressed_reason"] == "source_suppressed"
+    assert yjs["last_broadcast_suppressed_source"] == "subnet.link_manager.node_state"
+
+
 def test_update_member_snapshot_publishes_only_material_changes(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
