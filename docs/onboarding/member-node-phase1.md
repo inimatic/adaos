@@ -121,11 +121,13 @@ Expected (example):
 - `ready` is `true`
 - `route_mode` is `ws` when connected to hub via `/ws/subnet`
 
-Current phase-1 note:
+Current implementation note:
 
 - `adaos node join` persists the membership contract immediately
-- live `member -> hub` activation may still depend on the running runtime picking up the new configuration
-- the target design is to make join self-activating in dev and supervisor-managed in production; see the roadmap in [Member-Hub Connectivity](../architecture/member-hub-connectivity.md)
+- `adaos node join` also sends a best-effort local activation request to the running runtime
+- in development mode, the runtime attempts immediate `member -> hub` activation
+- in production mode, the supervisor member-hub watchdog owns persistent recovery
+- the longer-term target is described in [Member-Hub Connectivity](../architecture/member-hub-connectivity.md)
 
 ## Where config is stored
 

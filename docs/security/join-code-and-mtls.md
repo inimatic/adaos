@@ -18,7 +18,7 @@ Storage:
 Threat model notes:
 
 - Treat join-codes like passwords during their TTL.
-- Don’t send them to shared logs or chats unless necessary.
+- Do not send them to shared logs or chats unless necessary.
 
 ## What is delivered to the member
 
@@ -34,5 +34,5 @@ This avoids passing the subnet token in the command line while still enabling ex
 
 Phase 1 join-code flow focuses on safe token *delivery* without exposing tokens in CLI arguments.
 
-mTLS provisioning/rotation is expected to be layered on top in a later phase (e.g., issuing per-node client certificates and using them for member↔hub or node↔root authentication).
+mTLS provisioning/rotation is expected to be layered on top in a later phase (for example, issuing per-node client certificates and using them for member-to-hub or node-to-root authentication).
 

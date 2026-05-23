@@ -2,371 +2,223 @@
 
 ![AdaOS CI](https://github.com/inimatic/adaos/actions/workflows/ci.yml/badge.svg)
 
-AdaOS is an environment for personal digital assistants. It turns devices, agents, skills, applications, and interfaces into one assistant environment while keeping the lower-level subnet, scenario, widget, and hub/member machinery available for diagnostics and developer workflows.
+AdaOS is a developer platform for personal assistant runtimes. It connects hubs,
+member nodes, browsers, skills, scenarios, and operational tooling into one
+assistant environment while keeping the lower-level runtime machinery available
+for diagnostics and integration work.
 
-[Documentation](https://inimatic.github.io/adaos/)
+[Documentation](https://inimatic.github.io/adaos/) |
+[Quickstart](docs/quickstart.md) |
+[Deployment](docs/deployment.md) |
+[Versioning](docs/operations/versioning.md)
 
-## Overview
+## What is in this repository
 
-AdaOS is designed around a small core and extensible edges:
-
-- an **Assistant** is the persistent user-facing environment, internally backed by a subnet
-- **Webspaces** define web access and projection contexts such as Main, Owner, Guests, or Developer
-- **Applications** are user-facing scenarios inside a webspace; `web_desktop` is shown as **Capabilities**
-- **Devices** are physical or virtual hosts, while **Agents** are software participants running on them
-- `skills` implement focused capabilities such as integrations, automations, interface logic, or assistant behaviors
-- `SDK`, `CLI` and `API` provide local control, automation, diagnostics, and operational workflows
-
-This repository contains the open developer platform: core runtime components, SDK modules, bootstrap scripts, documentation, and tests for local development, experimentation, and integration work.
-
-## Why AdaOS
-
-Most real-world assistant and automation tasks do not live inside a single chat window or a single device. They span browsers, local services, devices, users, and external systems. AdaOS is built to support this kind of distributed environment with a model based on composable skills, scenarios, and node roles.
-
-AdaOS is intended for:
-
-- local and private assistant deployments
-- distributed automation and service orchestration
-- experimental multi-node assistant environments
-- university labs, applied research, and student-built products
-- integrators and teams building domain-specific assistant solutions
-
-## Features
-
-- Python 3.11.9+ CLI exposed as `adaos`
-- Local HTTP API for node and runtime control
+- Python 3.11.9+ AdaOS core package and CLI (`adaos`)
+- Local HTTP API, SDK modules, and runtime services
 - Skill and scenario development workflows
-- Bootstrap scripts for Linux, macOS, and Windows
-- Runtime support for hub/member node roles
-- Developer-oriented project structure for extensions, testing, and automation
-- Optional submodules for related client, backend, and infrastructure work
-- MkDocs-based documentation site
+- Hub/member node support and join-code onboarding
+- Browser/device access architecture and client integration contracts
+- Bootstrap scripts for Linux, macOS, Windows, Codespaces, and Colab-style labs
+- MkDocs documentation and test suite
+- Optional integration trees for the hosted client, backend, and infrastructure
 
-## What You Can Build
+## Core ideas
 
-With AdaOS you can:
+- An **Assistant** is the persistent user-facing environment, backed internally by
+  a subnet.
+- A **Hub** owns a subnet and connects to Root.
+- A **Member** is another runtime node that joins a hub-managed subnet.
+- A **Browser** is a web endpoint connected through the Inimatic/AdaOS client.
+- **Skills** implement focused capabilities such as integrations, automations,
+  assistant behavior, or UI logic.
+- **Scenarios** coordinate multi-step flows across services, skills, and nodes.
+- **Webspaces** define web access and projection contexts such as Main, Owner,
+  Guests, or Developer.
 
-- develop and run skills for integrations, automation, and assistant behavior
-- compose scenarios that coordinate multi-step flows across services and nodes
-- expose runtime functionality through a local API and CLI
-- experiment with distributed assistant topologies using hub and member roles
-- prototype local or private digital assistant environments
-- use the platform as a base for campus, lab, and applied product development
+## Quick start
 
-## Quick Start
-
-## Install from a single line (init scripts)
-
-The init scripts prefer a real git checkout when `git` is available. Archive
-mode is still available as an explicit fallback via `--archive` / `-Archive`,
-but it does not include git metadata or submodules.
-
-### Linux
-
-```bash
-# use optional key to join member to subnet: --zone ru --join-code CODE 
-curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru|us|eu
-# if your PATH points at a uv shim, force a real interpreter path:
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --python /usr/bin/python3.11 --zone ru
-# set a friendly node name that will be shown in the desktop:
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --node-name "Codespace Member" --zone ru
-# disable hub/member core updates from CI/CD signals for this node:
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --no-core-update --zone ru
-# bootstrap from a fork instead of the upstream core repo:
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
-# force archive mode (no git metadata/submodules):
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --archive --zone ru
-# use a fork of the workspace registry repo:
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
-# in GitHub Codespaces, reuse the current checkout directly and keep core updates manual:
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
-# or install directly into the current directory:
-# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --dest . --zone ru
-```
-
-### Windows (PowerShell)
-
-```powershell
-# requires Windows PowerShell 5.1+ or PowerShell 7+
-# use optional key to join member to subnet: -JoinCode CODE
-& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content))
-# pick zone explicitly when needed:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
-# bootstrap from a fork instead of the upstream core repo:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
-# force archive mode (no git metadata/submodules):
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -Archive -ZoneId ru
-# use a fork of the workspace registry repo:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
-# enable dev bootstrap when needed:
-# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru -Dev
-```
-
-### Windows (CMD)
-
-```bat
-REM requires Windows PowerShell 5.1+ or PowerShell 7+
-REM use optional key to join member to subnet: -JoinCode CODE
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -JoinCode CODE"
-REM pick zone explicitly when needed:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -ZoneId ru"
-REM bootstrap from a fork instead of the upstream core repo:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch"
-REM use a fork of the workspace registry repo:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru"
-REM enable dev bootstrap when needed:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -ZoneId ru -Dev"
-```
-
-### Git checkout maintenance
-
-```bash
-adaos git remote status --recursive --check-ssh
-adaos git remote use-ssh --recursive
-adaos git remote use-https --recursive
-adaos git repair-core --rev rev2026
-```
-
-`repair-core` can adopt an existing AdaOS source tree into a git checkout,
-set `origin/rev2026` as upstream, and initialize the required `rasa-port`
-submodule.
-
-## Переключить текущий shell на runtime активного core slot, не трогая корневой `.venv`, используйте source-able script из `tools/`
-
-```bash
-source tools/slot-shell.sh
-source tools/slot-shell.sh --cd
-```
-
-Для PowerShell:
-
-```powershell
-. .\tools\slot-shell.ps1
-. .\tools\slot-shell.ps1 -Cd
-```
-
-State-changing production CLI commands try to re-exec into the active slot
-automatically. If the current process is still outside the active slot context,
-the CLI emits `slot_shell_required`; run `source tools/slot-shell.sh --cd`
-or `. .\tools\slot-shell.ps1 -Cd` before retrying.
-
-Benchmark
-
-```
-adaos node yjs benchmark-scenario --webspace default --scenario-id infrascope --baseline-scenario web_desktop --iterations 5 --detail
-```
-
-## AdaOS Service management
-
-```bash
-# Restart
-systemctl --user daemon-reload
-systemctl --user restart adaos.service
-# Проверить
-systemctl --user status adaos.service --no-pager
-journalctl --user -u adaos.service -n 120 --no-pager
-ADAOS_TOKEN=********
-curl -sS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8777/api/node/status
-adaos autostart enable
-adaos autostart status
-adaos autostart update-complete
-adaos autostart inspect
-adaos autostart inspect --json
-adaos autostart disable
-
-
-adaos autostart update-status
-export ADAOS_TOKEN='********'
-adaos autostart update-start
-# Checkup
-cat ~/adaos/.adaos/state/core_update/status.json
-cat ~/.adaos/state/core_update/status.json
-adaos autostart update-cancel
-adaos autostart update-rollback
-adaos autostart smoke-update
-
-adaos autostart update-status --json
-adaos autostart smoke-update --countdown-sec 5 --json
-adaos autostart update-cancel --json
-adaos autostart update-rollback --json
-
-# Recommended smoke-order:
-adaos autostart update-status --json
-adaos autostart smoke-update --countdown-sec 30 --json
-adaos autostart update-cancel --json
-adaos autostart smoke-update --countdown-sec 5 --json
-
-
-adaos node reliability
-adaos node status
-adaos node status --probe
-
-adaos autostart inspect
-adaos autostart inspect --json
-adaos autostart inspect --sample-sec 0.5
-
-# CPU inspection
-adaos autostart inspect --json
-runtime_pid = 26718 runtime_process.pid
-/root/.adaos/state/core_slots/slots/A/venv/bin/python -m pip install py-spy
-/root/adaos/.adaos/state/core_slots/slots/B/venv/bin/python -m pip install 'websockets>=13,<16'
-/root/.adaos/state/core_slots/slots/B/venv/bin/py-spy dump --pid 26718
-
-# Web client URL parameters:
-# Full list: src/adaos/integrations/adaos-client/README.md#client-url-parameters
-# https://inimatic.web.app/?zone=ru&mode=login&auto_login=1
-# https://inimatic.web.app/?boot_debug=1
-# https://inimatic.web.app/?runtime_debug=0
-# https://inimatic.web.app/?yjs_persist=0
-# Alternative Firebase custom domain:
-# https://inimatic.com/?zone=ru&mode=login&auto_login=1
-
-```
-
-### Linux non-login SSH CLI shim
-
-When `adaos autostart enable` runs as root on Linux, AdaOS also maintains
-`/usr/local/bin/adaos`. This is for non-login SSH commands such as
-`ssh host 'adaos autostart update-status'`, where shell startup files may not
-put the venv into `PATH`.
-
-The shim exports the same root-control environment as the autostart wrapper and
-executes the stable root Python as `python -m adaos.apps.cli.app "$@"`. After a
-core root-promotion, `refresh_wrapper` rewrites the shim together with
-`~/.adaos/bin/adaos-autostart.sh`, so it follows the current `/root/adaos/src`
-checkout. `adaos autostart status --json` reports the `cli_shim` path and state.
-
-Set `ADAOS_LINUX_CLI_SHIM_PATH` before `adaos autostart enable` if a deployment
-needs a different shim path. Existing non-AdaOS files at that path are left
-untouched.
-
-19193
-
-### Clone
+Clone and bootstrap:
 
 ```bash
 git clone -b rev2026 https://github.com/inimatic/adaos.git
 cd adaos
-```
-
-### Linux / macOS
-
-```bash
-bash tools/bootstrap.sh
+bash tools/bootstrap.sh --zone ru --dev
 source .venv/bin/activate
 adaos --help
-# bash tools/bootstrap.sh --zone ru --dev
-# bash tools/bootstrap.sh --python /usr/bin/python3.11 --zone ru --dev
-# bash tools/bootstrap.sh --node-name "Local Dev Node" --zone ru --dev
 ```
 
-### Windows PowerShell
-
-Using `uv`:
+Windows PowerShell:
 
 ```powershell
-Set-ExecutionPolicy RemoteSigned -Scope Process
-powershell -ExecutionPolicy Bypass -File tools/bootstrap_uv.ps1
-.\.venv\Scripts\Activate.ps1
-adaos --help
-# powershell -ExecutionPolicy Bypass -File tools/bootstrap_uv.ps1 -ZoneId ru -Dev
-```
-
-Using `pip`:
-
-```powershell
+git clone -b rev2026 https://github.com/inimatic/adaos.git
+cd adaos
 powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1 -ZoneId ru -Dev
 .\.venv\Scripts\Activate.ps1
 adaos --help
-# powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1 -ZoneId ru -Dev
 ```
 
-Repo bootstrap scripts support zone-aware Root routing via `--zone` or `-ZoneId`. Use only a two-letter country or region code such as `ru`. When the default public Root URL is in use, national zones follow the `[zone].api.inimatic.com` rule; right now `ru` resolves to `https://ru.api.inimatic.com`, while the other zones still stay on `https://api.inimatic.com`. The optional `--dev` / `-Dev` flag writes `ENV_TYPE=dev` into `.env`.
-
-### Install from an existing environment
-
-If you already have Python 3.11.9+ and want a manual editable install:
+Run a development API:
 
 ```bash
-pip install -e ".[dev]"
-adaos --help
-```
-
-## Common Commands
-
-```bash
-adaos --help
 adaos api serve --host 127.0.0.1 --port 8777
-adaos skill list
-adaos skill run weather_skill --topic nlp.intent.weather.get --payload '{"city":"Berlin"}'
-```
-
-Local API runtime notes:
-
-- `adaos api serve` starts the local hub/runtime HTTP API directly, without the slot supervisor.
-- In development, an explicit `--port` is persisted into `.adaos/node.yaml` as `local_api_url`, and the next `adaos api serve` reuses it.
-- `8777` and `8778` are the normal browser-discoverable local hub ports.
-- Use a different port such as `8779` when you do not want `https://inimatic.web.app/` or `https://inimatic.com/` to auto-attach to the local runtime and prefer it to stay on Root.
-- Supervisor-managed runtime mode is separate: it owns port `8776`, manages slots, and sets `ADAOS_SUPERVISOR_ENABLED=1`.
-- Development runtimes with `ENV_TYPE=dev` do not follow hub/root core-update signals by default; set `ADAOS_DEV_ALLOW_CORE_UPDATE=1` only when deliberately testing the update machinery.
-- Use the same hub-to-root NATS-over-WS defaults on Windows and Linux. Leave `HUB_NATS_WS_PROXY` unset or set to `auto`; use `HUB_NATS_WS_PROXY=none` only when deliberately diagnosing direct-route failures.
-
-Health endpoints are available once the API is running:
-
-```bash
 curl -i http://127.0.0.1:8777/health/live
 curl -i http://127.0.0.1:8777/health/ready
 ```
 
-Backend versioning:
+Use port `8777` or `8778` when you want the browser client to auto-discover a
+local runtime. Use a different port, such as `8779`, when the hosted client
+should stay routed through Root.
 
-- Current backend base version: `0.1.0`
-- CI/CD publishes backend builds with auto-incremented patch version in the form `MAJOR.MINOR.PATCH`, where `PATCH` is derived from the backend git history during image build.
-- The deployed backend exposes `version`, `build_date`, and `commit` via `https://ru.api.inimatic.com/healthz` and `/v1/health`.
+More setup paths are documented in [Quickstart](docs/quickstart.md).
 
-AdaOS core update versioning:
+## One-line bootstrap
 
-- Core base version is `pyproject.toml` `[project].version`.
-- The `AdaOS CI` workflow increments the patch version after the full test matrix succeeds on a `rev2026` push, then pushes a `chore: bump adaos version ...` commit.
-- Root GitHub core-update webhooks publish rollout releases from those version-bump commits by default, so subnets do not update to the pre-bump commit.
-- Core update requests still use the target Git commit SHA as rollout identity, while prepared slots record the human-readable `build_version` in `manifest.json`.
-- `adaos autostart update-status` shows the running slot's `active build version`; backend `/healthz.version` is the root/backend container version, not the core slot version.
+Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --zone ru
+```
+
+Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
+```
+
+Useful options:
+
+```bash
+--join-code CODE
+--node-name "Kitchen Member"
+--role hub
+--install-service auto
+--no-core-update
+--use-git-from https://github.com/<you>/adaos.git --rev my-branch
+```
+
+Windows uses the corresponding PowerShell names, for example `-JoinCode`,
+`-NodeName`, `-Role`, `-InstallService`, and `-NoCoreUpdate`.
+
+Details: [bootstrap variants and checkout maintenance](docs/operations/common-commands.md#one-line-bootstrap-variants).
+
+## Deployment modes
+
+- **Development**: `tools/bootstrap.* --dev` plus direct `adaos api serve`.
+- **Production**: init/bootstrap scripts plus `adaos autostart enable` or
+  `--install-service auto`, with supervisor-managed runtime slots.
+- **Colab/lab**: repository bootstrap in a notebook, usually as a temporary
+  member node with `--no-core-update`.
+
+See [Deployment](docs/deployment.md) for production, development, and Colab
+commands.
+
+## Browser and member connection
+
+Open the public client:
+
+```text
+https://inimatic.com/?zone=ru&mode=login
+```
+
+Create a member join-code on the hub:
+
+```bash
+adaos hub join-code create
+```
+
+Join from the member:
+
+```bash
+bash tools/bootstrap.sh --join-code CODE --zone ru --node-name "Kitchen Member"
+```
+
+See [Browser and Member Connection](docs/onboarding/browser-and-member.md) and
+[Member node onboarding](docs/onboarding/member-node-phase1.md).
+
+## Versions and health
+
+Core version is stored in `pyproject.toml`. The `AdaOS CI` workflow bumps the
+patch version after the full test matrix passes on `rev2026`.
+
+Check deployed backend and client versions:
+
+```bash
+curl -sS https://api.inimatic.com/healthz
+curl -sS https://ru.api.inimatic.com/healthz
+curl -sS https://inimatic.com/version.json
+curl -sS https://inimatic.web.app/version.json
+```
+
+Local runtime slot version:
+
+```bash
+adaos autostart update-status
+adaos node status --json
+```
+
+Details are in [Versioning and Public Build Checks](docs/operations/versioning.md).
+
+## Common commands
+
+```bash
+adaos --help
+adaos where
+adaos install
+adaos update
+adaos skill list
+adaos scenario list
+adaos node status
+adaos node reliability
+adaos autostart status
+```
+
+Details:
+[full command cookbook](docs/operations/common-commands.md),
+[runtime operations](docs/cli/runtime.md), and
+[CLI reference](docs/reference/cli.md).
+
+When a production CLI command reports `slot_shell_required`, switch into the
+active runtime slot first:
+
+```bash
+source tools/slot-shell.sh --cd
+```
+
+PowerShell:
+
+```powershell
+. .\tools\slot-shell.ps1 -Cd
+```
 
 ## Documentation
 
-- Project docs: `docs/`
-- Quick start: `docs/quickstart.md`
-- Architecture overview: `docs/architecture/overview.md`
-- Skill activation and scenario binding: `docs/architecture/skill-activation-and-scenario-binding.md`
-- Device access architecture: `docs/architecture/device-access-and-browsers.md`
-- Device access transition roadmap: `docs/architecture/device-access-roadmap.md`
-- ABI schemas: `src/adaos/abi/`
-- CLI reference: `docs/reference/cli.md`
-- SDK docs: `docs/sdk/`
-- English docs: `docs/en/`
-
-## Scope and Status
-
-AdaOS is an evolving platform. This repository focuses on the developer-facing and runtime foundations needed to build, test, and operate skills, scenarios, and node services.
-
-Some ecosystem layers may evolve separately from this repository, including hosted or managed infrastructure, trust and publication workflows, operator tooling, and broader distribution services. The current repository should be understood as the core development and runtime foundation rather than the entirety of the AdaOS ecosystem.
+- [Quickstart](docs/quickstart.md)
+- [Deployment](docs/deployment.md)
+- [Versioning](docs/operations/versioning.md)
+- [CLI reference](docs/reference/cli.md)
+- [Runtime and operations](docs/cli/runtime.md)
+- [Architecture overview](docs/architecture/overview.md)
+- [Device Access and Browsers](docs/architecture/device-access-and-browsers.md)
+- [Member-Hub Connectivity](docs/architecture/member-hub-connectivity.md)
+- [Client integration README](src/adaos/integrations/adaos-client/README.md)
 
 ## Development
 
-### Run tests
+Run tests:
 
 ```bash
 pytest
 ```
 
-### Build documentation locally
+Build documentation locally:
 
 ```bash
 pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
-### Project layout
+Project layout:
 
 ```text
 src/adaos/        Core package, apps, services, SDK, templates
@@ -375,18 +227,12 @@ docs/             Documentation source
 tools/            Bootstrap and diagnostic scripts
 ```
 
-## Contributing
+## Status
 
-Contributions are welcome in areas such as:
-
-- core runtime improvements
-- skills and scenario tooling
-- documentation
-- developer workflows
-- tests and diagnostics
-- extension contracts and platform-facing specifications
-
-For larger architectural changes, please open an issue or discussion first so proposals can be aligned with the platform direction.
+AdaOS is an evolving platform. This repository is the open developer-facing
+runtime foundation for building, testing, and operating skills, scenarios, and
+node services. Hosted infrastructure, publication workflows, and broader
+operator tooling may evolve in adjacent integration repositories.
 
 ## License
 

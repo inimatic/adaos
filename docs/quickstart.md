@@ -158,3 +158,9 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicPar
 # powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
 ```
 These scripts can optionally receive a join code for member-node onboarding and a zone identifier for zonal Root routing.
+
+Next steps:
+
+- [Deployment](deployment.md) for development, production, and Colab-style runtime modes
+- [Browser and Member Connection](onboarding/browser-and-member.md) for browser access and member join workflows
+- [Versioning and Public Build Checks](operations/versioning.md) for core/backend/client version checks
