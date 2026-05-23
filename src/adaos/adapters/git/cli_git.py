@@ -154,6 +154,16 @@ def _is_index_lock_error(details: str) -> bool:
     return "index.lock" in lowered and ("unable to create" in lowered or "file exists" in lowered)
 
 
+def _is_corrupt_index_error(details: str) -> bool:
+    lowered = (details or "").lower()
+    return ".git/index" in lowered and (
+        "index file smaller than expected" in lowered
+        or "index file corrupt" in lowered
+        or "bad index file sha1 signature" in lowered
+        or "bad signature" in lowered
+    )
+
+
 def _clear_stale_workspace_index_lock(cwd: Optional[StrOrPath], details: str) -> bool:
     if cwd is None or not _is_index_lock_error(details) or not _is_adaos_workspace_repo(cwd):
         return False
@@ -179,6 +189,39 @@ def _clear_stale_workspace_index_lock(cwd: Optional[StrOrPath], details: str) ->
     return True
 
 
+def _rebuild_workspace_index(cwd: Optional[StrOrPath], details: str) -> bool:
+    if cwd is None or not _is_corrupt_index_error(details) or not _is_adaos_workspace_repo(cwd):
+        return False
+    git_dir = _git_dir_for_lock(cwd)
+    index_path = git_dir / "index"
+    lock_path = git_dir / "index.lock"
+    for path in (lock_path, index_path):
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError as exc:
+            _log.warning("failed to remove corrupt git index artifact repo=%s path=%s err=%s", str(Path(cwd)), path, exc)
+            return False
+    timeout_s = _git_command_timeout_s()
+    try:
+        proc = subprocess.run(
+            ["git", "reset", "--mixed", "HEAD"],
+            cwd=str(Path(cwd)),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _log.warning("git index rebuild timed out repo=%s timeout_s=%.1f", str(Path(cwd)), timeout_s)
+        raise GitError(f"git reset --mixed HEAD timed out after {timeout_s:.1f}s cwd={cwd}") from exc
+    if proc.returncode != 0:
+        details = proc.stderr.strip() or proc.stdout.strip()
+        _log.warning("git index rebuild failed repo=%s err=%s", str(Path(cwd)), details)
+        return False
+    _log.warning("rebuilt corrupt git index repo=%s", str(Path(cwd)))
+    return True
+
+
 def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
     if cwd is not None:
         cwd = str(Path(cwd))  # единая точка приведения к str
@@ -199,6 +242,17 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
                     p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
                 except subprocess.TimeoutExpired as exc:
                     raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
+            if p.returncode != 0:
+                stderr = p.stderr.strip()
+                stdout = p.stdout.strip()
+                details = stderr
+                if stdout:
+                    details = f"{details}\n{stdout}".strip()
+                if _rebuild_workspace_index(cwd, details):
+                    try:
+                        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout_s)
+                    except subprocess.TimeoutExpired as exc:
+                        raise GitError(f"git {' '.join(args)} timed out after {timeout_s:.1f}s cwd={cwd or '-'}") from exc
     # TODO Проверить, git нет, но папка не пустая. Вместо операции c git даем дружественную ошибку
     # destination path 'C:\git\MUIV\adaos_test\adaos\.adaos_1\workspace' already exists and is not an empty directory
     if p.returncode != 0:
