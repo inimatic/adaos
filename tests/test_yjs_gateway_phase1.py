@@ -1554,6 +1554,7 @@ def test_yws_guard_rejects_hot_reconnecting_client_without_server_quarantine(mon
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 10.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 40.0)
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
 
     for _idx in range(3):
         gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
@@ -1574,6 +1575,7 @@ def test_yws_guard_rejects_hot_reconnecting_client_without_server_quarantine(mon
     assert storm["client_reconnect_storm_detected"] is True
     assert storm["storm_detected"] is False
     assert storm["guard"]["quarantined_total"] == 1
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     _clear_yws_guard_state()
 
 
@@ -1602,7 +1604,7 @@ def test_yws_guard_scopes_reconnect_history_by_browser_session(monkeypatch) -> N
     _clear_yws_guard_state()
 
 
-def test_yws_guard_clears_legacy_client_reconnect_quarantine() -> None:
+def test_yws_guard_allows_rescue_connection_when_client_backoff_has_no_active_yws() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
@@ -1612,7 +1614,7 @@ def test_yws_guard_clears_legacy_client_reconnect_quarantine() -> None:
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
 
-    assert reason == "client_reconnect_backoff"
+    assert reason == ""
     assert diag["client_quarantine_cleared"] is False
     assert client_key in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
@@ -1629,6 +1631,7 @@ def test_yws_guard_observes_webspace_reconnect_storm_without_quarantine(monkeypa
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 10.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 40.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_ESCALATION_WINDOW_S", 3600.0)
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
 
     gateway_module._record_yws_guard_attempt("desktop", "dev-hot-a")
     gateway_module._record_yws_guard_attempt("desktop", "dev-hot-b")
@@ -1649,10 +1652,11 @@ def test_yws_guard_observes_webspace_reconnect_storm_without_quarantine(monkeypa
     assert diag2["webspace_reconnect_storm"] is True
     assert diag2["quarantine_ttl_s"] == 20.0
     assert gateway_module._YWS_GUARD_INCIDENTS
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     _clear_yws_guard_state()
 
 
-def test_yws_guard_clears_legacy_webspace_reconnect_quarantine() -> None:
+def test_yws_guard_allows_rescue_connection_when_webspace_backoff_has_no_active_yws() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
@@ -1662,7 +1666,7 @@ def test_yws_guard_clears_legacy_webspace_reconnect_quarantine() -> None:
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
 
-    assert reason == "webspace_reconnect_backoff"
+    assert reason == ""
     assert diag["webspace_quarantine_cleared"] is False
     assert webspace_key in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
@@ -1952,6 +1956,8 @@ def test_yws_guard_attempts_create_reconnect_backoff(monkeypatch) -> None:
     gateway_module._YWS_CLIENT_ATTEMPT_HISTORY.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
     gateway_module._YWS_GUARD_INCIDENTS.clear()
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
 
     for _ in range(3):
         gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
@@ -1965,4 +1971,5 @@ def test_yws_guard_attempts_create_reconnect_backoff(monkeypatch) -> None:
     assert reason == "client_reconnect_backoff"
     assert diag["quarantine_ttl_s"] > 0
 
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     _clear_yws_guard_state()
