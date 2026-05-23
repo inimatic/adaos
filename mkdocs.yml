@@ -142,6 +142,14 @@ nav:
   - Home: index.md
   - Issue Tracker: issue-tracker.md
   - Quickstart: quickstart.md
+  - Deployment: deployment.md
+  - Operations:
+      - Versioning: operations/versioning.md
+      - Common Commands: operations/common-commands.md
+      - Runtime And Operations: cli/runtime.md
+      - Inimatic Hosting: integrations/inimatic.md
+      - Browser and Member Connection: onboarding/browser-and-member.md
+      - Member Node Onboarding: onboarding/member-node-phase1.md
   - Architecture:
       - Overview: architecture/index.md
       - Runtime Overview: architecture/overview.md
@@ -167,7 +175,6 @@ nav:
       - Overview: cli/index.md
       - API Service: cli/api.md
       - Codex Test-Hub MCP: cli/codex-test-hub-mcp.md
-      - Runtime And Operations: cli/runtime.md
   - SDK:
       - Overview: sdk/index.md
       - Bus: sdk/bus.md
