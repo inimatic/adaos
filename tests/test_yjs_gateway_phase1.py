@@ -1579,6 +1579,36 @@ def test_yws_guard_rejects_hot_reconnecting_client_without_server_quarantine(mon
     _clear_yws_guard_state()
 
 
+def test_yws_guard_reject_hold_follows_guard_quarantine_ttl(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_REJECT_HOLD_MAX_SEC", 30.0)
+
+    assert (
+        gateway_module._yws_guard_reject_hold_seconds(
+            "client_reconnect_backoff",
+            {"quarantine_ttl_s": 12.0},
+        )
+        == 12.0
+    )
+    assert (
+        gateway_module._yws_guard_reject_hold_seconds(
+            "webspace_reconnect_storm",
+            {"quarantine_ttl_s": 300.0},
+        )
+        == 30.0
+    )
+    assert gateway_module._yws_guard_reject_hold_seconds("active_limit", {"quarantine_ttl_s": 300.0}) == 0.0
+    assert gateway_module._yws_guard_reject_hold_seconds("client_reconnect_backoff", {}) == 0.0
+
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_REJECT_HOLD_MAX_SEC", 0.0)
+    assert (
+        gateway_module._yws_guard_reject_hold_seconds(
+            "client_reconnect_backoff",
+            {"quarantine_ttl_s": 12.0},
+        )
+        == 0.0
+    )
+
+
 def test_yws_guard_scopes_reconnect_history_by_browser_session(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
