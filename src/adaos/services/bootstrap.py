@@ -4787,6 +4787,7 @@ class BootstrapService:
                         pending_tunnel_events: dict[str, list[dict[str, Any]]] = {}
                         pending_tunnel_meta: dict[str, dict[str, Any]] = {}
                         pending_tunnel_close_tasks: dict[str, asyncio.Task] = {}
+                        sync_shed_tunnel_meta: dict[str, dict[str, Any]] = {}
                         # Map route key -> reply subject so we can support both legacy v1 and v2 subjects.
                         # v1:  route.to_browser.<key>
                         # v2:  route.v2.to_browser.<hubId>.<key>
@@ -4982,6 +4983,9 @@ class BootstrapService:
                             "last_sync_backpressure_key_tag": "",
                             "last_sync_backpressure_path": "",
                             "last_sync_backpressure_payload_bytes": 0,
+                            "sync_backpressure_late_drop_total": 0,
+                            "last_sync_backpressure_late_drop_key_tag": "",
+                            "last_sync_backpressure_late_drop_path": "",
                         }
 
                         def _route_refresh_starvation_state() -> None:
@@ -5081,12 +5085,23 @@ class BootstrapService:
                             extra: str | None = None,
                         ) -> None:
                             try:
+                                flow_path = ""
+                                try:
+                                    key0 = str(key or "")
+                                    if key0:
+                                        flow0 = _route_tunnel_flow(key0)
+                                        path0 = _route_tunnel_path(key0)
+                                        if flow0 or path0:
+                                            flow_path = f" flow={flow0 or '-'} path={path0 or '-'}"
+                                except Exception:
+                                    flow_path = ""
                                 msg = (
                                     f"[hub-route] starvation reason={reason} "
                                     f"key={_key_tag(key or '')} "
                                     f"pending_oldest_age_s={route_diag_state.get('pending_oldest_age_s')} "
                                     f"pending_oldest_key={route_diag_state.get('pending_oldest_key_tag')} "
                                     f"pending_data_size={route_diag_state.get('last_nc_pending_data_size')}"
+                                    f"{flow_path}"
                                 )
                                 if extra:
                                     msg += f" {extra}"
@@ -5459,6 +5474,10 @@ class BootstrapService:
                                     except Exception:
                                         pass
                                     closed_tunnels += 1
+                            try:
+                                sync_shed_tunnel_meta.clear()
+                            except Exception:
+                                pass
                             route_reset_total += 1
                             try:
                                 _route_observe_flow("control", "runtime_reset", error=reason0)
@@ -6239,6 +6258,12 @@ class BootstrapService:
                                     return str(rec0.get("path") or "")
                             except Exception:
                                 pass
+                            try:
+                                meta0 = _recent_sync_shed_tunnel(key)
+                                if isinstance(meta0, dict):
+                                    return str(meta0.get("path") or "")
+                            except Exception:
+                                pass
                             return ""
 
                         def _route_tunnel_flow(key: str) -> str:
@@ -6250,7 +6275,73 @@ class BootstrapService:
                                         return flow0
                             except Exception:
                                 pass
+                            try:
+                                if _recent_sync_shed_tunnel(key):
+                                    return "sync"
+                            except Exception:
+                                pass
                             return _hub_route_semantic_flow_for_path(_route_tunnel_path(key))
+
+                        def _remember_sync_shed_tunnel(key: str, *, path: str, payload_bytes: int) -> None:
+                            try:
+                                ttl_s = max(5.0, float(_route_no_upstream_close_after_s or 0.0) * 4.0)
+                            except Exception:
+                                ttl_s = 6.0
+                            try:
+                                sync_shed_tunnel_meta[str(key)] = {
+                                    "path": str(path or ""),
+                                    "payload_bytes": max(0, int(payload_bytes or 0)),
+                                    "expires_at": time.monotonic() + ttl_s,
+                                }
+                            except Exception:
+                                pass
+
+                        def _recent_sync_shed_tunnel(key: str) -> dict[str, Any] | None:
+                            key0 = str(key or "")
+                            if not key0:
+                                return None
+                            now0 = time.monotonic()
+                            try:
+                                for k0, meta0 in list(sync_shed_tunnel_meta.items()):
+                                    if not isinstance(meta0, dict):
+                                        sync_shed_tunnel_meta.pop(k0, None)
+                                        continue
+                                    expires_at0 = float(meta0.get("expires_at") or 0.0)
+                                    if expires_at0 <= now0:
+                                        sync_shed_tunnel_meta.pop(k0, None)
+                            except Exception:
+                                pass
+                            meta = sync_shed_tunnel_meta.get(key0)
+                            return dict(meta) if isinstance(meta, dict) else None
+
+                        def _drop_late_sync_shed_frame(key: str, payload: dict[str, Any]) -> bool:
+                            meta0 = _recent_sync_shed_tunnel(key)
+                            if not meta0:
+                                return False
+                            path0 = str(meta0.get("path") or "")
+                            route_diag_state["sync_backpressure_late_drop_total"] = int(
+                                route_diag_state.get("sync_backpressure_late_drop_total") or 0
+                            ) + 1
+                            route_diag_state["last_sync_backpressure_late_drop_key_tag"] = _key_tag(key)
+                            route_diag_state["last_sync_backpressure_late_drop_path"] = path0
+                            _route_observe_flow(
+                                "frame",
+                                "sync_backpressure_late_drop",
+                                payload=payload,
+                                error="route_sync_backpressure",
+                            )
+                            if _route_trace:
+                                try:
+                                    _route_log(
+                                        f"[hub-route] drop late sync frame key={_key_tag(key)} path={path0 or '-'} reason=route_sync_backpressure"
+                                    )
+                                except Exception:
+                                    pass
+                            try:
+                                _update_route_protocol_runtime()
+                            except Exception:
+                                pass
+                            return True
 
                         async def _shed_sync_tunnel_if_backpressured(key: str, ws, payload_bytes: int) -> bool:
                             path0 = _route_tunnel_path(key)
@@ -6281,6 +6372,7 @@ class BootstrapService:
                             route_diag_state["last_sync_backpressure_key_tag"] = _key_tag(key)
                             route_diag_state["last_sync_backpressure_path"] = path0
                             route_diag_state["last_sync_backpressure_payload_bytes"] = max(0, int(payload_bytes or 0))
+                            _remember_sync_shed_tunnel(key, path=path0, payload_bytes=payload_bytes)
                             _route_note_starvation(
                                 "sync_backpressure_shed",
                                 key=key,
@@ -6781,6 +6873,10 @@ class BootstrapService:
 
                                 if t == "open":
                                     route_outcome = "open"
+                                    try:
+                                        sync_shed_tunnel_meta.pop(key, None)
+                                    except Exception:
+                                        pass
                                     _route_observe_flow("control", "open_request", payload=data)
                                     # Open a local WS to the hub server and start pumping frames.
                                     if websockets_mod is None:
@@ -6966,6 +7062,9 @@ class BootstrapService:
                                     rec = tunnels.get(key)
                                     ws = rec.get("ws") if isinstance(rec, dict) else None
                                     if not ws:
+                                        if _drop_late_sync_shed_frame(key, data):
+                                            route_outcome = "frame_drop_after_sync_backpressure"
+                                            return
                                         route_outcome = "frame_no_upstream"
                                         _route_observe_flow(
                                             "frame",
@@ -7031,6 +7130,9 @@ class BootstrapService:
                                     rec = tunnels.get(key)
                                     ws = rec.get("ws") if isinstance(rec, dict) else None
                                     if not ws:
+                                        if _drop_late_sync_shed_frame(key, data):
+                                            route_outcome = "chunk_drop_after_sync_backpressure"
+                                            return
                                         route_outcome = "chunk_no_upstream"
                                         _route_observe_flow(
                                             "frame",
