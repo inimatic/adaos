@@ -19,6 +19,7 @@ $ErrorActionPreference = "Stop"
 $clientSubPath = "src\adaos\integrations\adaos-client"
 $backendSubPath = "src\adaos\integrations\adaos-backend"
 $infraSubPath = "src\adaos\integrations\infra-inimatic"
+$rasaSubPath = "src\adaos\integrations\rasa-port"
 $minPython = "3.11.9"
 $maxPythonExclusive = "3.12"
 
@@ -76,6 +77,31 @@ function Show-BootstrapConfig {
   Write-Host ("  dev_mode:       {0}" -f $(if ($Dev) { "1" } else { "0" }))
   Write-Host ("  workspace_registry_repo: {0}" -f $WorkspaceRegistryRepo)
   Write-Host ""
+}
+
+function Ensure-RequiredSubmodules {
+  if (-not (Have "git")) {
+    Write-Warning "git not found; required submodule $rasaSubPath cannot be initialized automatically."
+    return
+  }
+  if (-not (Test-Path ".git")) {
+    if (-not (Test-Path (Join-Path $rasaSubPath "pyproject.toml"))) {
+      Write-Warning "Repository is not a git checkout; required submodule $rasaSubPath is unavailable in archive mode."
+    }
+    return
+  }
+  if (Test-Path (Join-Path $rasaSubPath "pyproject.toml")) { return }
+
+  Write-Host "Initializing required submodule: $rasaSubPath"
+  & git submodule sync -- $rasaSubPath
+  if ($LASTEXITCODE -ne 0) { Write-Warning "git submodule sync failed for $rasaSubPath"; return }
+  & git submodule update --init --recursive $rasaSubPath
+  if ($LASTEXITCODE -ne 0) { Write-Warning "git submodule update failed for $rasaSubPath"; return }
+  if ((Test-Path (Join-Path $rasaSubPath ".git")) -and -not (Test-Path (Join-Path $rasaSubPath "pyproject.toml"))) {
+    Write-Warning "$rasaSubPath worktree is incomplete; restoring from HEAD..."
+    & git -C $rasaSubPath restore --source=HEAD --worktree .
+    & git -C $rasaSubPath restore --source=HEAD --staged .
+  }
 }
 
 function Wait-ForAutostartActivation {
@@ -157,6 +183,8 @@ function Resolve-EffectiveRootUrl {
 }
 
 # 1) Install uv if missing
+Ensure-RequiredSubmodules
+
 if (-not (Have "uv")) {
   Write-Host "Installing uv..."
   Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1 | Invoke-Expression

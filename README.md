@@ -57,6 +57,10 @@ With AdaOS you can:
 
 ## Install from a single line (init scripts)
 
+The init scripts prefer a real git checkout when `git` is available. Archive
+mode is still available as an explicit fallback via `--archive` / `-Archive`,
+but it does not include git metadata or submodules.
+
 ### Linux
 
 ```bash
@@ -70,6 +74,8 @@ curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/l
 # curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --no-core-update --zone ru
 # bootstrap from a fork instead of the upstream core repo:
 # curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+# force archive mode (no git metadata/submodules):
+# curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --archive --zone ru
 # use a fork of the workspace registry repo:
 # curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
 # in GitHub Codespaces, reuse the current checkout directly and keep core updates manual:
@@ -88,6 +94,8 @@ curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/l
 # & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -ZoneId ru
 # bootstrap from a fork instead of the upstream core repo:
 # & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
+# force archive mode (no git metadata/submodules):
+# & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -Archive -ZoneId ru
 # use a fork of the workspace registry repo:
 # & ([scriptblock]::Create((iwr -UseBasicParsing https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1).Content)) -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
 # enable dev bootstrap when needed:
@@ -98,17 +106,30 @@ curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/l
 
 ```bat
 REM requires Windows PowerShell 5.1+ or PowerShell 7+
-# use optional key to join member to subnet: -JoinCode CODE
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -JoinCode CODE
+REM use optional key to join member to subnet: -JoinCode CODE
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -JoinCode CODE"
 REM pick zone explicitly when needed:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -ZoneId ru"
 REM bootstrap from a fork instead of the upstream core repo:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -UseGitFrom https://github.com/<you>/adaos.git -Rev my-branch"
 REM use a fork of the workspace registry repo:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -WorkspaceRegistryRepo https://github.com/<you>/adaos-registry.git -ZoneId ru"
 REM enable dev bootstrap when needed:
-REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile '.\\init.ps1'" && powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -ZoneId ru -Dev
+REM powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'adaos-init.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/windows/init.ps1' -OutFile $p; & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p -ZoneId ru -Dev"
 ```
+
+### Git checkout maintenance
+
+```bash
+adaos git remote status --recursive --check-ssh
+adaos git remote use-ssh --recursive
+adaos git remote use-https --recursive
+adaos git repair-core --rev rev2026
+```
+
+`repair-core` can adopt an existing AdaOS source tree into a git checkout,
+set `origin/rev2026` as upstream, and initialize the required `rasa-port`
+submodule.
 
 ## Переключить текущий shell на runtime активного core slot, не трогая корневой `.venv`, используйте source-able script из `tools/`
 

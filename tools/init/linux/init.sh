@@ -77,7 +77,7 @@ fetch_to_file() {
 
 usage() {
   cat <<EOF
-Usage: init.sh [--dest DIR] [--rev REV] [--use-git] [--use-git-from URL] [--workspace-registry-repo URL] [--codespaces] [--] [bootstrap args...]
+Usage: init.sh [--dest DIR] [--rev REV] [--use-git] [--archive|--no-git] [--force] [--use-git-from URL] [--workspace-registry-repo URL] [--codespaces] [--] [bootstrap args...]
 
 Defaults:
   --rev  ${REV_DEFAULT}
@@ -89,6 +89,7 @@ Examples:
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --codespaces --node-name "Codespace Member" --no-core-update --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --role hub --install-service auto --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --use-git-from https://github.com/<you>/adaos.git --rev my-branch --zone ru
+  curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --archive --zone ru
   curl -fsSL https://raw.githubusercontent.com/inimatic/adaos/rev2026/tools/init/linux/init.sh | bash -s -- --workspace-registry-repo https://github.com/<you>/adaos-registry.git --zone ru
 EOF
 }
@@ -128,7 +129,9 @@ try_install_git() {
 
 DEST="$DEST_DEFAULT"
 REV="$REV_DEFAULT"
-USE_GIT="${ADAOS_INIT_USE_GIT:-0}"
+USE_GIT="${ADAOS_INIT_USE_GIT:-auto}"
+ARCHIVE_MODE="${ADAOS_INIT_ARCHIVE:-0}"
+FORCE_REPLACE="${ADAOS_INIT_FORCE:-0}"
 REPO_URL="$REPO_URL_DEFAULT"
 CODESPACES_MODE="${ADAOS_INIT_CODESPACES:-0}"
 WORKSPACE_REGISTRY_URL="${ADAOS_WORKSPACE_REGISTRY_REPO:-}"
@@ -144,6 +147,8 @@ while [[ $# -gt 0 ]]; do
     --dest) DEST="${2:-}"; shift 2 ;;
     --rev) REV="${2:-}"; shift 2 ;;
     --use-git) USE_GIT="1"; shift ;;
+    --archive|--no-git) ARCHIVE_MODE="1"; USE_GIT="0"; shift ;;
+    --force) FORCE_REPLACE="1"; shift ;;
     --use-git-from) REPO_URL="${2:-}"; USE_GIT="1"; shift 2 ;;
     --workspace-registry-repo|--use-workspace-registry-from) WORKSPACE_REGISTRY_URL="${2:-}"; shift 2 ;;
     --codespaces) CODESPACES_MODE="1"; shift ;;
@@ -161,6 +166,9 @@ fi
 if [[ -n "${REPO_URL:-}" ]]; then
   REPO_URL="$(printf '%s' "$REPO_URL" | xargs)"
   [[ -n "${REPO_URL:-}" ]] || die "--use-git-from requires a non-empty URL"
+fi
+if [[ "$ARCHIVE_MODE" == "1" && -n "${REPO_URL:-}" ]]; then
+  die "--archive/--no-git cannot be combined with --use-git-from"
 fi
 if [[ -n "${WORKSPACE_REGISTRY_URL:-}" ]]; then
   WORKSPACE_REGISTRY_URL="$(printf '%s' "$WORKSPACE_REGISTRY_URL" | xargs)"
@@ -183,6 +191,45 @@ if ! have git; then
   fi
 fi
 
+if [[ "$USE_GIT" == "auto" ]]; then
+  if have git; then
+    USE_GIT="1"
+  else
+    USE_GIT="0"
+  fi
+fi
+if [[ "$USE_GIT" == "1" ]] && ! have git; then
+  die "git is not installed (required for git mode). Either install git, or run with --archive."
+fi
+
+ensure_origin() {
+  local repo_dir="$1"
+  local url="$2"
+  local current_origin
+  current_origin="$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)"
+  if [[ -z "${current_origin:-}" ]]; then
+    git -C "$repo_dir" remote add origin "$url"
+  elif [[ "$current_origin" != "$url" ]]; then
+    log "Updating origin URL: ${url}"
+    git -C "$repo_dir" remote set-url origin "$url"
+  fi
+}
+
+ensure_required_submodules() {
+  local repo_dir="$1"
+  local rasa_path="src/adaos/integrations/rasa-port"
+  have git || return 0
+  [[ -d "$repo_dir/.git" || -f "$repo_dir/.git" ]] || return 0
+  log "Ensuring required submodules..."
+  git -C "$repo_dir" submodule sync -- "$rasa_path"
+  git -C "$repo_dir" submodule update --init --recursive "$rasa_path"
+  if [[ -f "$repo_dir/$rasa_path/.git" && ! -f "$repo_dir/$rasa_path/pyproject.toml" ]]; then
+    warn "rasa-port submodule worktree is incomplete; restoring from HEAD..."
+    git -C "$repo_dir/$rasa_path" restore --source=HEAD --worktree .
+    git -C "$repo_dir/$rasa_path" restore --source=HEAD --staged .
+  fi
+}
+
 if in_codespaces && looks_like_adaos_checkout "$REPO_DIR"; then
   REUSE_EXISTING_REPO=1
   ok "Using existing AdaOS checkout in-place: ${REPO_DIR}"
@@ -192,28 +239,39 @@ if in_codespaces && looks_like_adaos_checkout "$REPO_DIR"; then
 fi
 
 if [[ "$REUSE_EXISTING_REPO" == "1" ]]; then
-  :
+  ensure_required_submodules "$REPO_DIR"
 elif [[ "$USE_GIT" == "1" ]]; then
-  if ! have git; then
-    die "git is not installed (required for --use-git / --use-git-from). Either install git, or run without git mode (archive download)."
-  fi
   clone_url="${REPO_URL:-https://github.com/${REPO_OWNER}/${REPO_NAME}.git}"
   if [[ -d "$REPO_DIR/.git" ]]; then
     log "Existing git repo detected; updating..."
-    if [[ -n "${REPO_URL:-}" ]]; then
-      current_origin="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
-      if [[ "$current_origin" != "$REPO_URL" ]]; then
-        log "Updating origin URL: ${REPO_URL}"
-        git -C "$REPO_DIR" remote set-url origin "$REPO_URL"
-      fi
-    fi
+    ensure_origin "$REPO_DIR" "$clone_url"
     git -C "$REPO_DIR" fetch --all --prune
     git -C "$REPO_DIR" checkout "$REV"
     git -C "$REPO_DIR" pull --ff-only
+    git -C "$REPO_DIR" branch --set-upstream-to="origin/${REV}" "$REV" >/dev/null 2>&1 || true
+  elif looks_like_adaos_checkout "$REPO_DIR"; then
+    log "Adopting existing AdaOS source tree into git checkout..."
+    git -C "$REPO_DIR" init
+    ensure_origin "$REPO_DIR" "$clone_url"
+    git -C "$REPO_DIR" fetch origin "$REV"
+    git -C "$REPO_DIR" symbolic-ref HEAD "refs/heads/${REV}"
+    git -C "$REPO_DIR" reset --hard "origin/${REV}"
+    git -C "$REPO_DIR" branch --set-upstream-to="origin/${REV}" "$REV" >/dev/null 2>&1 || true
+  elif find "$REPO_DIR" -mindepth 1 -maxdepth 1 | read -r _; then
+    if [[ "$FORCE_REPLACE" != "1" ]]; then
+      die "Destination is non-empty and is not an AdaOS git checkout: ${REPO_DIR}. Use --force to replace it, or choose another --dest."
+    fi
+    warn "Removing non-empty destination because --force was supplied: ${REPO_DIR}"
+    rm -rf "$REPO_DIR"
+    log "Cloning ${clone_url} (${REV})..."
+    git clone -b "$REV" "$clone_url" "$REPO_DIR"
+    git -C "$REPO_DIR" branch --set-upstream-to="origin/${REV}" "$REV" >/dev/null 2>&1 || true
   else
     log "Cloning ${clone_url} (${REV})..."
     git clone -b "$REV" "$clone_url" "$REPO_DIR"
+    git -C "$REPO_DIR" branch --set-upstream-to="origin/${REV}" "$REV" >/dev/null 2>&1 || true
   fi
+  ensure_required_submodules "$REPO_DIR"
 else
   # No-git path: download GitHub archive.
   tmp="$(mktemp -d)"
@@ -229,12 +287,16 @@ else
       cd "$REPO_DIR" >/dev/null 2>&1 || exit 1
       pwd -P
     )"
-    if [[ "$resolved_repo_dir" == "$(current_dir_resolved)" ]]; then
-      if find "$REPO_DIR" -mindepth 1 -maxdepth 1 | read -r _; then
-        die "Refusing to overwrite the current working directory. Use --codespaces in an existing checkout, --use-git, or an empty destination."
+    if find "$REPO_DIR" -mindepth 1 -maxdepth 1 | read -r _; then
+      if [[ "$FORCE_REPLACE" != "1" ]]; then
+        die "Refusing to overwrite non-empty destination in archive mode: ${REPO_DIR}. Use --force to replace it, or install with git."
       fi
-    else
+      if [[ "$resolved_repo_dir" == "$(current_dir_resolved)" ]]; then
+        die "Refusing to remove the current working directory. Choose another --dest."
+      fi
       rm -rf "$REPO_DIR"
+      mkdir -p "$REPO_DIR"
+    elif [[ ! -d "$REPO_DIR" ]]; then
       mkdir -p "$REPO_DIR"
     fi
   else
