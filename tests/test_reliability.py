@@ -34,6 +34,7 @@ from adaos.services.reliability import (
     hub_member_semantic_channels_snapshot,
     media_plane_runtime_snapshot,
     observe_hub_root_route_runtime,
+    observe_route_e2e,
     mark_root_control_down,
     mark_root_control_up,
     mark_route_ready,
@@ -258,6 +259,51 @@ def test_hub_reliability_recovers_ready_route_after_stable_probe_window(monkeypa
     assert route_diag["recent_non_ready_transitions_5m"] == 0
     assert route_diag["recent_non_ready_transitions_15m"] == 5
     assert snapshot["runtime"]["readiness_tree"]["route"]["status"] == "ready"
+    assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
+
+
+def test_hub_reliability_recovers_route_after_fresh_lightweight_probe(monkeypatch) -> None:
+    _reset_state()
+    reliability = importlib.import_module("adaos.services.reliability")
+    clock = {"now": 1_774_017_000.0}
+    monkeypatch.setattr(reliability.time, "time", lambda: clock["now"])
+
+    mark_root_control_up(details={"server": "wss://api.inimatic.com/nats"})
+    mark_route_ready(details={"subject": "route.to_hub.*"})
+    clock["now"] += 1.0
+    reliability.note_route_incident(
+        status="no_upstream",
+        summary="hub route frame arrived while upstream is not connected",
+        details={"key_tag": "route-hot", "t": "frame"},
+    )
+    clock["now"] += 1.0
+    observe_route_e2e(
+        details={
+            "last_http_probe_rx_at": clock["now"] - 0.2,
+            "last_http_probe_reply_at": clock["now"],
+            "last_http_rx_path": "/api/node/status",
+            "last_http_reply_path": "/api/node/status",
+            "last_http_reply_outcome": "http_inline_probe_replied",
+        }
+    )
+
+    snapshot = reliability_snapshot(
+        node_id="node-1",
+        subnet_id="sn_1",
+        role="hub",
+        local_ready=True,
+        node_state="ready",
+        draining=False,
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    route_diag = snapshot["runtime"]["channel_diagnostics"]["route"]
+    route_tree = snapshot["runtime"]["readiness_tree"]["route"]
+    assert route_diag["recent_non_ready_transitions_5m"] == 1
+    assert route_diag["stability"]["state"] in {"unstable", "flapping"}
+    assert route_tree["status"] == "ready"
+    assert route_tree["details"]["incident_recovery"] == "fresh_lightweight_route_probe"
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
 
 

@@ -403,6 +403,7 @@ _INTEGRATION_NAMES = ("telegram", "github", "llm")
 _CHANNEL_NAMES = ("root_control", "route")
 _CHANNEL_HISTORY_LIMIT = 128
 _TRANSPORT_HISTORY_LIMIT = 64
+_ROUTE_SEMANTIC_PROBE_FRESH_S = 30.0
 _UNSET = object()
 _ROOT_CONTROL = RuntimeSignal()
 _ROUTE = RuntimeSignal()
@@ -1967,11 +1968,67 @@ def _node(
     }
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if number <= 0.0:
+        return None
+    return number
+
+
+def _route_semantic_probe_recovery(
+    node: dict[str, Any],
+    *,
+    diagnostics: dict[str, Any],
+    now_ts: float,
+) -> dict[str, Any] | None:
+    details = node.get("details") if isinstance(node.get("details"), dict) else {}
+    probe_reply_at = _float_or_none(details.get("last_http_probe_reply_at"))
+    if probe_reply_at is None:
+        return None
+    if now_ts - probe_reply_at > _ROUTE_SEMANTIC_PROBE_FRESH_S:
+        return None
+
+    probe_rx_at = _float_or_none(details.get("last_http_probe_rx_at"))
+    if probe_rx_at is not None and probe_reply_at + 0.001 < probe_rx_at:
+        return None
+
+    incident_times = [
+        _float_or_none(diagnostics.get("last_non_ready_at")),
+        _float_or_none(diagnostics.get("last_incident_at")),
+    ]
+    samples = diagnostics.get("recent_incident_samples")
+    if isinstance(samples, list):
+        for item in samples:
+            if isinstance(item, dict):
+                incident_times.append(_float_or_none(item.get("ts")))
+    last_incident_at = max((ts for ts in incident_times if ts is not None), default=None)
+    if last_incident_at is not None and probe_reply_at <= last_incident_at:
+        return None
+
+    recovered = dict(node)
+    recovered_details = dict(details)
+    recovered_details.update(
+        {
+            "incident_recovery": "fresh_lightweight_route_probe",
+            "incident_recovery_probe_reply_at": probe_reply_at,
+            "incident_recovery_last_incident_at": last_incident_at,
+            "incident_recovery_probe_age_s": round(max(0.0, now_ts - probe_reply_at), 3),
+            "incident_recovery_probe_fresh_s": _ROUTE_SEMANTIC_PROBE_FRESH_S,
+        }
+    )
+    recovered["details"] = recovered_details
+    return recovered
+
+
 def _apply_incident_degradation(
     node: dict[str, Any],
     *,
     channel_name: str,
     diagnostics: dict[str, Any] | None,
+    allow_semantic_probe_recovery: bool = False,
 ) -> dict[str, Any]:
     current_status = str(node.get("status") or "")
     if current_status != ReadinessStatus.READY.value:
@@ -1995,6 +2052,10 @@ def _apply_incident_degradation(
         recent_transitions_5m = 0
     if stable_for_s >= 300.0 and recent_non_ready_5m <= 0 and recent_transitions_5m <= 0:
         return node
+    if allow_semantic_probe_recovery:
+        recovered = _route_semantic_probe_recovery(node, diagnostics=diag, now_ts=time.time())
+        if recovered is not None:
+            return recovered
     degraded = dict(node)
     degraded["status"] = ReadinessStatus.DEGRADED.value
     degraded["summary"] = f"{channel_name} is degraded due to recent transport incidents"
@@ -2111,6 +2172,7 @@ def build_readiness_tree(
                 route_signal,
                 channel_name="root relay route",
                 diagnostics=diagnostics.get("route"),
+                allow_semantic_probe_recovery=True,
             )
             if (
                 str(route.get("status") or "") == ReadinessStatus.READY.value
