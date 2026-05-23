@@ -140,6 +140,7 @@ def _clear_yws_guard_state() -> None:
     gateway_module._YWS_CLIENT_OPEN_HISTORY.clear()
     gateway_module._YWS_ATTEMPT_HISTORY.clear()
     gateway_module._YWS_CLIENT_ATTEMPT_HISTORY.clear()
+    gateway_module._YWS_CLIENT_SHORT_SESSION_HISTORY.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
     gateway_module._YWS_GUARD_INCIDENTS.clear()
 
@@ -1607,6 +1608,34 @@ def test_yws_guard_reject_hold_follows_guard_quarantine_ttl(monkeypatch) -> None
         )
         == 0.0
     )
+
+
+def test_yws_guard_rejects_repeated_short_sessions_without_active_yws(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_LIMIT", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
+
+    for _idx in range(3):
+        gateway_module._record_yws_short_session("desktop", "dev-hot", lifetime_s=6.0)
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+
+    assert reason == "client_short_session_storm"
+    assert diag["client_short_sessions"] == 3
+    assert diag["client_short_session_storm"] is True
+    assert diag["quarantine_ttl_s"] == 30.0
+
+    reason_again, _diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    assert reason_again == "client_reconnect_backoff"
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    _clear_yws_guard_state()
 
 
 def test_yws_guard_scopes_reconnect_history_by_browser_session(monkeypatch) -> None:
