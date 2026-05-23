@@ -151,6 +151,44 @@ def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int
     return int(raw)
 
 
+def _hub_route_semantic_flow_for_path(path: Any) -> str:
+    token = str(path or "").strip().split("?", 1)[0].rstrip("/")
+    if token == "/yws" or token.startswith("/yws/"):
+        return "sync"
+    if token == "/ws" or token.startswith("/ws/"):
+        return "control"
+    return "route"
+
+
+def _hub_route_should_shed_sync_frame(
+    path: Any,
+    *,
+    pending_data_size: Any,
+    guardrail_active: Any,
+    frame_flush_pending_bytes: Any,
+    payload_bytes: Any = 0,
+) -> bool:
+    if _hub_route_semantic_flow_for_path(path) != "sync":
+        return False
+    if bool(guardrail_active):
+        return True
+    try:
+        threshold = int(frame_flush_pending_bytes or 0)
+    except Exception:
+        threshold = 0
+    if threshold <= 0:
+        return False
+    try:
+        pending = max(0, int(pending_data_size or 0))
+    except Exception:
+        pending = 0
+    try:
+        payload = max(0, int(payload_bytes or 0))
+    except Exception:
+        payload = 0
+    return pending >= threshold or (pending > 0 and pending + payload >= threshold)
+
+
 def _should_forward_node_status_to_members(payload: object) -> bool:
     if not isinstance(payload, dict):
         return True
@@ -4940,6 +4978,10 @@ class BootstrapService:
                             "last_dispatch_ms": 0.0,
                             "last_dispatch_slow_ms": 0.0,
                             "last_dispatch_key_tag": "",
+                            "sync_backpressure_shed_total": 0,
+                            "last_sync_backpressure_key_tag": "",
+                            "last_sync_backpressure_path": "",
+                            "last_sync_backpressure_payload_bytes": 0,
                         }
 
                         def _route_refresh_starvation_state() -> None:
@@ -6190,6 +6232,81 @@ class BootstrapService:
                             except Exception:
                                 return False
 
+                        def _route_tunnel_path(key: str) -> str:
+                            try:
+                                rec0 = tunnels.get(key) or {}
+                                if isinstance(rec0, dict):
+                                    return str(rec0.get("path") or "")
+                            except Exception:
+                                pass
+                            return ""
+
+                        def _route_tunnel_flow(key: str) -> str:
+                            try:
+                                rec0 = tunnels.get(key) or {}
+                                if isinstance(rec0, dict):
+                                    flow0 = str(rec0.get("flow") or "").strip()
+                                    if flow0:
+                                        return flow0
+                            except Exception:
+                                pass
+                            return _hub_route_semantic_flow_for_path(_route_tunnel_path(key))
+
+                        async def _shed_sync_tunnel_if_backpressured(key: str, ws, payload_bytes: int) -> bool:
+                            path0 = _route_tunnel_path(key)
+                            if _route_tunnel_flow(key) != "sync":
+                                return False
+                            try:
+                                _route_refresh_starvation_state()
+                            except Exception:
+                                pass
+                            should_shed = _hub_route_should_shed_sync_frame(
+                                path0 or "/yws",
+                                pending_data_size=route_diag_state.get("last_nc_pending_data_size"),
+                                guardrail_active=route_diag_state.get("guardrail_active"),
+                                frame_flush_pending_bytes=_route_frame_flush_pending_bytes,
+                                payload_bytes=payload_bytes,
+                            )
+                            if not should_shed:
+                                return False
+                            try:
+                                rec0 = tunnels.get(key)
+                                if isinstance(rec0, dict):
+                                    rec0["close_err"] = "route_sync_backpressure"
+                            except Exception:
+                                pass
+                            route_diag_state["sync_backpressure_shed_total"] = int(
+                                route_diag_state.get("sync_backpressure_shed_total") or 0
+                            ) + 1
+                            route_diag_state["last_sync_backpressure_key_tag"] = _key_tag(key)
+                            route_diag_state["last_sync_backpressure_path"] = path0
+                            route_diag_state["last_sync_backpressure_payload_bytes"] = max(0, int(payload_bytes or 0))
+                            _route_note_starvation(
+                                "sync_backpressure_shed",
+                                key=key,
+                                extra=(
+                                    f"path={path0 or '-'} "
+                                    f"payload_bytes={max(0, int(payload_bytes or 0))} "
+                                    f"threshold_bytes={_route_frame_flush_pending_bytes}"
+                                ),
+                            )
+                            _route_observe_flow(
+                                "frame",
+                                "sync_backpressure_shed",
+                                direction="to_browser",
+                                payload_bytes=max(0, int(payload_bytes or 0)),
+                                error="route_sync_backpressure",
+                            )
+                            try:
+                                await ws.close(code=1013, reason="route_sync_backpressure")
+                            except Exception:
+                                pass
+                            try:
+                                _update_route_protocol_runtime()
+                            except Exception:
+                                pass
+                            return True
+
                         async def _tunnel_reader(key: str, ws) -> None:
                             try:
                                 async for msg in ws:
@@ -6205,6 +6322,8 @@ class BootstrapService:
                                             pass
                                     if isinstance(msg, (bytes, bytearray)):
                                         raw = bytes(msg)
+                                        if await _shed_sync_tunnel_if_backpressured(key, ws, len(raw)):
+                                            break
                                         if len(raw) > MAX_CHUNK_RAW:
                                             cid = f"c_{uuid.uuid4().hex}"
                                             total = (len(raw) + MAX_CHUNK_RAW - 1) // MAX_CHUNK_RAW
@@ -6232,6 +6351,9 @@ class BootstrapService:
                                             )
                                     else:
                                         text = str(msg)
+                                        text_payload_bytes = len(text.encode("utf-8"))
+                                        if await _shed_sync_tunnel_if_backpressured(key, ws, text_payload_bytes):
+                                            break
                                         if len(text) > MAX_CHUNK_RAW:
                                             cid = f"c_{uuid.uuid4().hex}"
                                             parts = [text[i : i + MAX_CHUNK_RAW] for i in range(0, len(text), MAX_CHUNK_RAW)]
@@ -6269,7 +6391,14 @@ class BootstrapService:
                                         pass
                                 _route_observe_flow("control", "upstream_closed")
                                 try:
-                                    await _route_reply(key, {"t": "close"})
+                                    close_payload: dict[str, Any] = {"t": "close"}
+                                    try:
+                                        rec0 = tunnels.get(key) or {}
+                                        if isinstance(rec0, dict) and rec0.get("close_err"):
+                                            close_payload["err"] = str(rec0.get("close_err") or "")
+                                    except Exception:
+                                        pass
+                                    await _route_reply(key, close_payload)
                                 except Exception:
                                     pass
                                 tunnels.pop(key, None)
@@ -6776,7 +6905,12 @@ class BootstrapService:
                                         await _route_reply(key, {"t": "close", "err": str(e)})
                                         return
                                     route_outcome = "open_connected"
-                                    tunnels[key] = {"ws": ws, "url": url}
+                                    tunnels[key] = {
+                                        "ws": ws,
+                                        "url": url,
+                                        "path": path,
+                                        "flow": _hub_route_semantic_flow_for_path(path),
+                                    }
                                     _clear_pending_tunnel_state(key, drop_events=False)
                                     tunnel_tasks[key] = asyncio.create_task(_tunnel_reader(key, ws), name=f"hub-route-{key}")
                                     try:

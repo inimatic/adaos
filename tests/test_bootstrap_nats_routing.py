@@ -146,6 +146,46 @@ def test_hub_route_max_chunk_raw_respects_smaller_explicit_value(monkeypatch) ->
     assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 64 * 1024
 
 
+def test_hub_route_semantic_flow_classifies_control_and_sync_paths() -> None:
+    assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws?token=secret") == "control"
+    assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws/subnet") == "control"
+    assert bootstrap_mod._hub_route_semantic_flow_for_path("/yws/desktop") == "sync"
+    assert bootstrap_mod._hub_route_semantic_flow_for_path("/api/node/status") == "route"
+
+
+def test_hub_route_sheds_sync_frames_when_pending_bytes_cross_control_threshold() -> None:
+    assert (
+        bootstrap_mod._hub_route_should_shed_sync_frame(
+            "/yws/desktop",
+            pending_data_size=96 * 1024,
+            guardrail_active=False,
+            frame_flush_pending_bytes=128 * 1024,
+            payload_bytes=64 * 1024,
+        )
+        is True
+    )
+    assert (
+        bootstrap_mod._hub_route_should_shed_sync_frame(
+            "/ws",
+            pending_data_size=96 * 1024,
+            guardrail_active=True,
+            frame_flush_pending_bytes=128 * 1024,
+            payload_bytes=64 * 1024,
+        )
+        is False
+    )
+    assert (
+        bootstrap_mod._hub_route_should_shed_sync_frame(
+            "/yws/desktop",
+            pending_data_size=0,
+            guardrail_active=False,
+            frame_flush_pending_bytes=128 * 1024,
+            payload_bytes=64 * 1024,
+        )
+        is False
+    )
+
+
 def test_hub_id_from_nats_user_extracts_canonical_hub_id() -> None:
     assert bootstrap_mod._hub_id_from_nats_user("hub_sn_92ffc943") == "sn_92ffc943"
     assert bootstrap_mod._hub_id_from_nats_user("hub_9d91f466-0349-475d-9887-2d2bb3c783ee") == "9d91f466-0349-475d-9887-2d2bb3c783ee"
