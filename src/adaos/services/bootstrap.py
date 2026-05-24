@@ -4946,6 +4946,17 @@ class BootstrapService:
                             _route_flush_timeout_s = float(os.getenv("HUB_ROUTE_FLUSH_TIMEOUT_S", "1.0") or "1.0")
                         except Exception:
                             _route_flush_timeout_s = 1.0
+                        _route_sync_frame_force_flush = os.getenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", "1") == "1"
+                        try:
+                            _route_sync_frame_flush_timeout_s = float(
+                                os.getenv(
+                                    "HUB_ROUTE_SYNC_FRAME_FLUSH_TIMEOUT_S",
+                                    str(max(float(_route_flush_timeout_s), 2.0)),
+                                )
+                                or str(max(float(_route_flush_timeout_s), 2.0))
+                            )
+                        except Exception:
+                            _route_sync_frame_flush_timeout_s = max(float(_route_flush_timeout_s), 2.0)
                         try:
                             _route_publish_slow_warn_s = float(
                                 os.getenv("HUB_ROUTE_PUBLISH_SLOW_WARN_S", "0.250") or "0.250"
@@ -5878,7 +5889,26 @@ class BootstrapService:
                                             )
                                     except Exception:
                                         pass
-                                should_force_flush = bool(_route_force_flush and t in ("open_ack", "http_resp", "close"))
+                                sync_frame_force_flush_this = False
+                                if (
+                                    _route_force_flush
+                                    and _route_sync_frame_force_flush
+                                    and t in ("frame", "chunk")
+                                ):
+                                    try:
+                                        sync_frame_force_flush_this = _route_tunnel_flow(key) == "sync"
+                                    except Exception:
+                                        sync_frame_force_flush_this = False
+                                    if sync_frame_force_flush_this and t == "chunk":
+                                        try:
+                                            total0 = int((payload or {}).get("total") or 0)
+                                            idx0 = int((payload or {}).get("idx") or -1)
+                                            sync_frame_force_flush_this = total0 > 0 and idx0 >= total0 - 1
+                                        except Exception:
+                                            sync_frame_force_flush_this = True
+                                should_force_flush = bool(
+                                    _route_force_flush and t in ("open_ack", "http_resp", "close")
+                                ) or bool(sync_frame_force_flush_this)
                                 if (
                                     _route_force_flush
                                     and not should_force_flush
@@ -5895,7 +5925,10 @@ class BootstrapService:
                                     # Fast-drain pending bytes without relying on NATS PING/PONG.
                                     # This avoids `flush()` (which can time out when PONGs are flaky behind WS proxies).
                                     try:
-                                        tout = max(0.1, float(_route_flush_timeout_s))
+                                        if sync_frame_force_flush_this:
+                                            tout = max(0.1, float(_route_sync_frame_flush_timeout_s))
+                                        else:
+                                            tout = max(0.1, float(_route_flush_timeout_s))
                                     except Exception:
                                         tout = 1.0
                                     flush_err = None
