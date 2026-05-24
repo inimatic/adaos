@@ -173,6 +173,7 @@ def _hub_route_should_shed_sync_frame(
     pending_data_size: Any,
     guardrail_active: Any,
     frame_flush_pending_bytes: Any,
+    sync_shed_pending_bytes: Any = None,
     payload_bytes: Any = 0,
 ) -> bool:
     if _hub_route_semantic_flow_for_path(path) != "sync":
@@ -180,7 +181,7 @@ def _hub_route_should_shed_sync_frame(
     if bool(guardrail_active):
         return True
     try:
-        threshold = int(frame_flush_pending_bytes or 0)
+        threshold = int(sync_shed_pending_bytes or 0)
     except Exception:
         threshold = 0
     if threshold <= 0:
@@ -190,8 +191,8 @@ def _hub_route_should_shed_sync_frame(
     except Exception:
         pending = 0
     # YWS sync can legitimately emit a large first-state frame.  The route
-    # reader chunks large payloads after this check, so do not close the whole
-    # sync tunnel merely because one payload would cross the pending threshold.
+    # reader chunks large payloads after this check, so sync shedding uses its
+    # own high-water mark instead of the much smaller force-flush threshold.
     return pending >= threshold
 
 
@@ -5023,6 +5024,22 @@ class BootstrapService:
                             _route_guard_oldest_age_s = max(_route_starvation_warn_s, 1.5)
                         if _route_guard_oldest_age_s < 0.05:
                             _route_guard_oldest_age_s = 0.05
+                        try:
+                            _route_sync_backpressure_shed_pending_bytes = int(
+                                os.getenv(
+                                    "HUB_ROUTE_SYNC_BACKPRESSURE_SHED_PENDING_BYTES",
+                                    str(max(_route_guard_pending_data_bytes, _route_pending_data_warn_bytes, 4 * 1024 * 1024)),
+                                )
+                                or str(max(_route_guard_pending_data_bytes, _route_pending_data_warn_bytes, 4 * 1024 * 1024))
+                            )
+                        except Exception:
+                            _route_sync_backpressure_shed_pending_bytes = max(
+                                _route_guard_pending_data_bytes,
+                                _route_pending_data_warn_bytes,
+                                4 * 1024 * 1024,
+                            )
+                        if _route_sync_backpressure_shed_pending_bytes < 0:
+                            _route_sync_backpressure_shed_pending_bytes = 0
 
                         # Resend critical small HTTP replies after short delays. Root accepts the first http_resp
                         # and unsubscribes, so later duplicates are harmless but recover single PUB loss/stall.
@@ -6574,6 +6591,7 @@ class BootstrapService:
                                 pending_data_size=route_diag_state.get("last_nc_pending_data_size"),
                                 guardrail_active=route_diag_state.get("guardrail_active"),
                                 frame_flush_pending_bytes=_route_frame_flush_pending_bytes,
+                                sync_shed_pending_bytes=_route_sync_backpressure_shed_pending_bytes,
                                 payload_bytes=payload_bytes,
                             )
                             if not should_shed:
@@ -6597,7 +6615,7 @@ class BootstrapService:
                                 extra=(
                                     f"path={path0 or '-'} "
                                     f"payload_bytes={max(0, int(payload_bytes or 0))} "
-                                    f"threshold_bytes={_route_frame_flush_pending_bytes}"
+                                    f"threshold_bytes={_route_sync_backpressure_shed_pending_bytes}"
                                 ),
                             )
                             _route_observe_flow(
