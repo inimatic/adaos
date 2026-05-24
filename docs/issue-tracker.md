@@ -6,6 +6,151 @@ and delivery work.
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 
+## Stipot Final Harvest and Cutover
+
+### Goal
+
+Move all useful remaining work from `stipot-com/adaos` into the
+`inimatic/rev2026` line, then treat `stipot-com` as a historical donor rather
+than a future base branch.
+
+### Current Status
+
+Snapshot date: 2026-05-24.
+
+Local comparison found that `inimatic/rev2026` and `stipot-com/rev2026` have
+diverged rather than forming a simple behind/ahead chain. `inimatic/rev2026`
+keeps 126 commits that are not in `stipot-com/rev2026`; `stipot-com/rev2026`
+keeps 42 commits that are not in `inimatic/rev2026`. A direct merge would risk
+reverting newer Inimatic work such as projection demand handling, status-card
+services, eventbus unsubscribe helpers, self-hygiene, update/install behavior,
+and repository branding.
+
+`stipot-com/adaos#86` is the main useful donor slice. It is an open PR from
+`Fla1lx:rev2026` to `stipot-com:rev2026`, with 22 commits and 53 changed files.
+Its content is valuable, but it should be integrated as a topic harvest over
+`inimatic/rev2026`, not by adopting the `stipot-com` branch.
+
+### Tasks
+
+#### SFH-001: Freeze donor references
+
+Status: planned.
+
+Actions:
+
+- [ ] Create an integration branch from current `inimatic/rev2026`, for
+  example `integration/stipot-final-harvest`.
+- [ ] Record donor refs before integration:
+  `stipot-com/rev2026` at `37f53cc4` and `stipot-com/pr-86` at `093cc861`.
+- [ ] Treat `stipot-com` as read-only donor input for this effort.
+- [ ] Avoid direct merge of `stipot-com/rev2026` into `inimatic/rev2026`.
+
+#### SFH-002: Integrate PR #86 Neural NLU package
+
+Status: planned.
+
+Actions:
+
+- [ ] Harvest the PR #86 topic using merge-base `53e39b58`, not the current
+  `stipot-com/rev2026` tip.
+- [ ] Resolve the expected conflict in
+  `src/adaos/apps/cli/commands/setup.py` by preserving current Inimatic
+  install/autostart/update/retention behavior while adding
+  `--neural-nlu/--no-neural-nlu`.
+- [ ] Move `neural_nlu_service_skill` to normal skill delivery if packaging and
+  install/update flows can carry `skills/neural_nlu_service_skill`.
+- [ ] Keep Neural NLU dependencies isolated in the service-skill venv; do not
+  add `torch`, `numpy`, or `faiss-cpu` to the hub root venv.
+- [ ] Add Neural readiness, probe, diagnostics, reindex, and rebuild CLI
+  commands.
+- [ ] Add Neural usage statistics and `neural -> rasa` fallback outcome
+  linkage.
+- [ ] Add NLU Teacher save-example backend and curated Neural training export.
+- [ ] Add the system action catalog and default NLU examples for current
+  runtime-backed host actions.
+- [ ] Decide whether voice-chat Neural intent demo is enabled by default,
+  behind `ADAOS_VOICE_CHAT_INTENT_DEMO`, or kept as operator-only tooling.
+
+#### SFH-003: Harvest small high-confidence patches from the 42 commits
+
+Status: planned.
+
+Actions:
+
+- [ ] Apply or reimplement `73c02720`: initialize lazy `ctx.status_registry`
+  before SDK status events are emitted.
+- [ ] Apply or reimplement `c2e5a0f0`: tag stream publishes with
+  `_meta.owner`, `_meta.skill_id`, and `_meta.skill_name`.
+- [ ] Keep these as small, reviewable patches rather than pulling the full
+  `stipot-com/rev2026` diff.
+
+#### SFH-004: Audit larger behavior from the 42 commits
+
+Status: planned.
+
+Actions:
+
+- [ ] Check whether current Inimatic code already covers YWS client attempt
+  overlap guards, browser-session churn coalescing, and reconnect-storm
+  behavior.
+- [ ] Check whether current supervisor code already covers compact watchdog
+  state, control-plane memory tripwire behavior, target mismatch recovery,
+  orphan slot cleanup, and slow-prewarm active-runtime preservation.
+- [ ] Check whether current core update code already covers slot venv reuse or
+  equivalent seeded slot install behavior.
+- [ ] For any real gap, port behavior as a focused Inimatic-style patch instead
+  of cherry-picking branch history.
+
+#### SFH-005: Exclude known unsafe donor changes
+
+Status: planned.
+
+Actions:
+
+- [ ] Do not restore `stipot-com` repository URLs or branding into runtime
+  defaults.
+- [ ] Do not delete current status-card service modules.
+- [ ] Do not remove projection demand APIs without an explicit replacement.
+- [ ] Do not remove eventbus unsubscribe helpers used by current runtime code.
+- [ ] Do not remove self-hygiene or current maintenance/update behavior as part
+  of the harvest.
+- [ ] Do not accept broad documentation cleanup that rewrites current Inimatic
+  roadmap state without matching code.
+
+#### SFH-006: Verify the harvest
+
+Status: planned.
+
+Actions:
+
+- [ ] Run NLU-focused tests:
+  `test_neural_service_bridge.py`, `test_neural_skill_installer.py`,
+  `test_interpreter_neural_cli.py`, `test_neural_usage_stats.py`,
+  `test_nlu_teacher_save_example.py`, `test_system_actions_catalog.py`,
+  `test_rasa_service_bridge.py`, and `test_router_voice_chat.py`.
+- [ ] Run setup/install tests that cover `adaos install`, Rasa NLU bootstrap,
+  Neural NLU bootstrap, and `--no-neural-nlu`.
+- [ ] Run regression tests for status cards, projection runtime, eventbus,
+  supervisor, YWS, and core update behavior.
+- [ ] On a clean workspace, verify that Neural NLU install can prepare an
+  isolated service-skill runtime without mutating the hot parse path.
+
+#### SFH-007: Cut over away from `stipot-com`
+
+Status: planned.
+
+Actions:
+
+- [ ] Update docs introduced by the harvest so they describe Inimatic current
+  behavior and do not overstate roadmap completion.
+- [ ] Remove remaining runtime/doc/script references that point users to
+  `stipot-com` as an active upstream.
+- [ ] Record the final harvest summary: transferred features, intentionally
+  skipped changes, tests run, and remaining risks.
+- [ ] After the harvest lands, keep `stipot-com` only as an archived local
+  remote or remove it from the active developer workflow.
+
 ## Device Identity and Access Usability
 
 ### Goal
