@@ -5535,6 +5535,27 @@ def _connectivity_transition_state_for_browser_route(
         return derived_state, planned
     effective_state = str(item.get("effective_state") or "").strip().lower()
     transport_state = _map_connectivity_transport_state(item.get("effective_status"))
+    readiness = item.get("readiness") if isinstance(item.get("readiness"), dict) else {}
+    readiness_details = (
+        readiness.get("details")
+        if isinstance(readiness.get("details"), dict)
+        else {}
+    )
+    if (
+        transport_state == "ready"
+        and str(readiness_details.get("incident_recovery") or "").strip()
+        == "fresh_lightweight_route_probe"
+    ):
+        try:
+            probe_age_s = float(readiness_details.get("incident_recovery_probe_age_s") or 0.0)
+        except (TypeError, ValueError):
+            probe_age_s = 0.0
+        try:
+            probe_fresh_s = float(readiness_details.get("incident_recovery_probe_fresh_s") or 30.0)
+        except (TypeError, ValueError):
+            probe_fresh_s = 30.0
+        if probe_age_s <= max(1.0, probe_fresh_s):
+            return "ready", {"active": False, "reason": None}
     if effective_state in {"flapping", "unstable"}:
         return "reconnecting", {"active": False, "reason": effective_state}
     if transport_state == "ready":
