@@ -144,6 +144,11 @@ class MemberLinkClient:
         self._last_connect_yjs_state_at = 0.0
         self._link_session_end_total = 0
         self._last_link_session_end_log_at = 0.0
+        self._ws_control_ping_interval_s_last: float | None = None
+        self._ws_control_ping_timeout_s_last: float | None = None
+        self._last_ws_close_code: int | None = None
+        self._last_ws_close_reason = ""
+        self._last_ws_close_error = ""
 
     @staticmethod
     def _pong_stale_after_s() -> float:
@@ -153,6 +158,34 @@ class MemberLinkClient:
         except Exception:
             value = 35.0
         return max(15.0, value)
+
+    @staticmethod
+    def _ws_control_ping_interval_s() -> float | None:
+        raw = str(os.getenv("ADAOS_SUBNET_WS_PING_INTERVAL_S") or "").strip()
+        if not raw or raw.lower() in {"0", "false", "no", "off", "none", "disabled"}:
+            return None
+        try:
+            value = float(raw)
+        except Exception:
+            return None
+        if value <= 0.0:
+            return None
+        return max(5.0, value)
+
+    @staticmethod
+    def _ws_control_ping_timeout_s(ping_interval_s: float | None = None) -> float | None:
+        if ping_interval_s is None:
+            return None
+        raw = str(os.getenv("ADAOS_SUBNET_WS_PING_TIMEOUT_S") or "").strip()
+        if raw.lower() in {"0", "false", "no", "off", "none", "disabled"}:
+            return None
+        try:
+            value = float(raw) if raw else max(20.0, ping_interval_s * 4.0)
+        except Exception:
+            value = max(20.0, ping_interval_s * 4.0)
+        if value <= 0.0:
+            return None
+        return max(5.0, value)
 
     @staticmethod
     def _parse_bus_prefixes(raw: str | None) -> list[str] | None:
@@ -198,6 +231,11 @@ class MemberLinkClient:
             "last_pong_ago_s": round(max(0.0, now - self._last_pong_at), 3) if self._last_pong_at else None,
             "last_hub_event_type": self._last_hub_event_type,
             "last_hub_event_ago_s": round(max(0.0, now - self._last_hub_event_at), 3) if self._last_hub_event_at else None,
+            "ws_control_ping_interval_s": self._ws_control_ping_interval_s_last,
+            "ws_control_ping_timeout_s": self._ws_control_ping_timeout_s_last,
+            "last_ws_close_code": self._last_ws_close_code,
+            "last_ws_close_reason": self._last_ws_close_reason or None,
+            "last_ws_close_error": self._last_ws_close_error or None,
             "last_hub_core_update": last_hub_core_update,
             "last_follow_key": self._last_follow_key or None,
             "last_follow_result": dict(self._last_follow_result) if isinstance(self._last_follow_result, dict) else {},
@@ -722,12 +760,19 @@ class MemberLinkClient:
             ping_t: asyncio.Task | None = None
             snapshot_t: asyncio.Task | None = None
             try:
+                ws_ping_interval_s = self._ws_control_ping_interval_s()
+                ws_ping_timeout_s = self._ws_control_ping_timeout_s(ws_ping_interval_s)
+                self._ws_control_ping_interval_s_last = ws_ping_interval_s
+                self._ws_control_ping_timeout_s_last = ws_ping_timeout_s
+                self._last_ws_close_code = None
+                self._last_ws_close_reason = ""
+                self._last_ws_close_error = ""
                 async with websockets.connect(
                     ws_url,
                     additional_headers=headers,
                     max_size=None,
-                    ping_interval=5.0,
-                    ping_timeout=20.0,
+                    ping_interval=ws_ping_interval_s,
+                    ping_timeout=ws_ping_timeout_s,
                 ) as ws:
                     self._connected.set()
                     self._connected_at = time.time()
@@ -817,9 +862,11 @@ class MemberLinkClient:
                                 raw = await ws.recv()
                             except asyncio.CancelledError:
                                 raise
-                            except websockets.exceptions.ConnectionClosedOK:
+                            except websockets.exceptions.ConnectionClosedOK as exc:
+                                self._remember_ws_close(exc)
                                 return
-                            except websockets.exceptions.ConnectionClosedError:
+                            except websockets.exceptions.ConnectionClosedError as exc:
+                                self._remember_ws_close(exc)
                                 return
                             try:
                                 msg = json.loads(raw)
@@ -884,19 +931,28 @@ class MemberLinkClient:
                         else:
                             done_diag.append(f"{name}:ok")
                     now = time.time()
+                    close_code = self._last_ws_close_code
+                    if close_code is None:
+                        close_code = getattr(ws, "close_code", None)
+                    close_reason = self._last_ws_close_reason or str(getattr(ws, "close_reason", "") or "")
                     self._link_session_end_total += 1
                     log_fn = _log.debug
                     if now - float(self._last_link_session_end_log_at or 0.0) >= 60.0:
                         self._last_link_session_end_log_at = now
                         log_fn = _log.warning
                     log_fn(
-                        "subnet link session ended ws=%s done=%s connected_for_s=%.3f last_message_ago_s=%.3f last_pong_ago_s=%.3f queue=%d",
+                        "subnet link session ended ws=%s done=%s connected_for_s=%.3f last_message_ago_s=%.3f last_pong_ago_s=%.3f queue=%d close_code=%s close_reason=%s close_error=%s ws_ping_interval=%s ws_ping_timeout=%s",
                         ws_url,
                         ",".join(done_diag) or "-",
                         max(0.0, now - float(self._connected_at or 0.0)),
                         max(0.0, now - float(self._last_message_at or 0.0)) if self._last_message_at else -1.0,
                         max(0.0, now - float(self._last_pong_at or 0.0)) if self._last_pong_at else -1.0,
                         int(self._out_q.qsize()),
+                        close_code,
+                        close_reason or "-",
+                        self._last_ws_close_error or "-",
+                        ws_ping_interval_s,
+                        ws_ping_timeout_s,
                     )
             except asyncio.CancelledError:
                 raise
@@ -915,6 +971,15 @@ class MemberLinkClient:
 
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2.0, 15.0)
+
+    def _remember_ws_close(self, exc: BaseException) -> None:
+        self._last_ws_close_error = type(exc).__name__
+        code = getattr(exc, "code", None)
+        try:
+            self._last_ws_close_code = int(code) if code is not None else None
+        except Exception:
+            self._last_ws_close_code = None
+        self._last_ws_close_reason = str(getattr(exc, "reason", "") or "")
 
     async def _ping_loop(self, ws) -> None:
         pong_stale_after_s = self._pong_stale_after_s()

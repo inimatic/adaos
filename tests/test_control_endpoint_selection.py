@@ -486,6 +486,24 @@ def test_member_link_is_connected_treats_stale_activity_as_disconnected(monkeypa
     assert not client.is_connected()
 
 
+def test_member_link_ws_control_ping_defaults_to_semantic_watchdog(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SUBNET_WS_PING_INTERVAL_S", raising=False)
+    monkeypatch.delenv("ADAOS_SUBNET_WS_PING_TIMEOUT_S", raising=False)
+
+    assert MemberLinkClient._ws_control_ping_interval_s() is None
+    assert MemberLinkClient._ws_control_ping_timeout_s(None) is None
+
+
+def test_member_link_ws_control_ping_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUBNET_WS_PING_INTERVAL_S", "2")
+    monkeypatch.setenv("ADAOS_SUBNET_WS_PING_TIMEOUT_S", "7")
+
+    interval = MemberLinkClient._ws_control_ping_interval_s()
+
+    assert interval == 5.0
+    assert MemberLinkClient._ws_control_ping_timeout_s(interval) == 7.0
+
+
 @pytest.mark.asyncio
 async def test_member_link_ping_loop_exits_when_pong_goes_stale(monkeypatch) -> None:
     class _FakeWs:
