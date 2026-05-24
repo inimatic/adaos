@@ -567,6 +567,49 @@ def _hub_route_should_retry_http_upstream_error(
     return True
 
 
+def _hub_route_parse_resend_delays(raw: Any, *, max_delay_s: float = 10.0, max_count: int = 8) -> list[float]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    delays: list[float] = []
+    seen: set[float] = set()
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            delay = float(item)
+        except Exception:
+            continue
+        if delay <= 0:
+            continue
+        try:
+            delay = min(float(delay), max(0.001, float(max_delay_s)))
+        except Exception:
+            delay = min(float(delay), 10.0)
+        if delay in seen:
+            continue
+        seen.add(delay)
+        delays.append(delay)
+        if len(delays) >= max(1, int(max_count)):
+            break
+    return delays
+
+
+def _hub_route_should_resend_http_resp(path: Any) -> bool:
+    path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
+    if path_norm in (
+        "/api/node/status",
+        "/api/ping",
+        "/healthz",
+        "/api/supervisor/public/update-status",
+        "/api/node/ui/diagnostics",
+        "/api/node/yjs/runtime",
+    ):
+        return True
+    return bool(re.match(r"^/api/node/yjs/webspaces/[^/]+/materialization$", path_norm))
+
+
 def _probe_runtime_http_base(sess: Any, *, base: str, timeout_s: float) -> bool:
     try:
         response = sess.get(
@@ -4970,37 +5013,33 @@ class BootstrapService:
                         if _route_guard_oldest_age_s < 0.05:
                             _route_guard_oldest_age_s = 0.05
 
-                        # Optional probe mitigation: resend inline probe replies after short delays.
-                        # Useful when NATS-over-WS intermittently drops a single PUB frame and Root times out.
-                        _route_probe_resend_delays_s: list[float] = []
+                        # Resend critical small HTTP replies after short delays. Root accepts the first http_resp
+                        # and unsubscribes, so later duplicates are harmless but recover single PUB loss/stall.
                         try:
-                            raw_delays = str(os.getenv("HUB_ROUTE_PROBE_RESEND_S", "") or "").strip()
-                            if raw_delays:
-                                seen_delays: set[float] = set()
-                                for it in raw_delays.split(","):
-                                    it = it.strip()
-                                    if not it:
-                                        continue
-                                    try:
-                                        d = float(it)
-                                    except Exception:
-                                        continue
-                                    if d <= 0:
-                                        continue
-                                    # Avoid runaway schedules.
-                                    if d > 10.0:
-                                        d = 10.0
-                                    if d in seen_delays:
-                                        continue
-                                    seen_delays.add(d)
-                                    _route_probe_resend_delays_s.append(d)
+                            raw_delays = os.getenv("HUB_ROUTE_HTTP_RESP_RESEND_S")
+                            if raw_delays is None:
+                                raw_delays = os.getenv("HUB_ROUTE_PROBE_RESEND_S")
+                            if raw_delays is None:
+                                raw_delays = "0.35,1.0,2.5"
+                            _route_http_resp_resend_delays_s = _hub_route_parse_resend_delays(raw_delays)
                         except Exception:
-                            _route_probe_resend_delays_s = []
-                        if _route_probe_resend_delays_s and (_route_verbose or _route_tx_verbose):
+                            _route_http_resp_resend_delays_s = []
+                        try:
+                            _route_http_resp_resend_max_bytes = int(
+                                os.getenv("HUB_ROUTE_HTTP_RESP_RESEND_MAX_BYTES", str(256 * 1024)) or str(256 * 1024)
+                            )
+                        except Exception:
+                            _route_http_resp_resend_max_bytes = 256 * 1024
+                        if _route_http_resp_resend_max_bytes < 0:
+                            _route_http_resp_resend_max_bytes = 0
+                        if _route_http_resp_resend_delays_s and (_route_verbose or _route_tx_verbose):
                             try:
                                 _rl_log(
-                                    "hub-route.probe_resend_cfg",
-                                    f"[hub-route] probe resend delays_s={_route_probe_resend_delays_s}",
+                                    "hub-route.http_resp_resend_cfg",
+                                    (
+                                        f"[hub-route] http_resp resend delays_s={_route_http_resp_resend_delays_s} "
+                                        f"max_bytes={_route_http_resp_resend_max_bytes}"
+                                    ),
                                     every_s=60.0,
                                 )
                             except Exception:
@@ -5022,6 +5061,12 @@ class BootstrapService:
                             "reply_publish_slow_total": 0,
                             "reply_flush_slow_total": 0,
                             "reply_publish_fail_total": 0,
+                            "http_resp_resend_scheduled_total": 0,
+                            "http_resp_resend_sent_total": 0,
+                            "http_resp_resend_skipped_total": 0,
+                            "last_http_resp_resend_key_tag": "",
+                            "last_http_resp_resend_delay_s": 0.0,
+                            "last_http_resp_resend_payload_bytes": 0,
                             "last_publish_slow_key_tag": "",
                             "last_publish_slow_ms": 0.0,
                             "last_flush_slow_key_tag": "",
@@ -5725,7 +5770,12 @@ class BootstrapService:
                             except Exception:
                                 return ""
 
-                        async def _route_reply(key: str, payload: dict[str, Any]) -> None:
+                        async def _route_reply(
+                            key: str,
+                            payload: dict[str, Any],
+                            *,
+                            resend_http_resp: bool = False,
+                        ) -> None:
                             reply_subject = ""
                             try:
                                 reply_subject = str(reply_subjects.get(key) or "")
@@ -5983,6 +6033,76 @@ class BootstrapService:
                                     payload=payload,
                                     extra=f"err={type(e).__name__}: {e} {_route_nc_diag()}",
                                 )
+
+                            if not (
+                                resend_http_resp
+                                and t0 == "http_resp"
+                                and _route_http_resp_resend_delays_s
+                            ):
+                                return
+                            try:
+                                payload_bytes = len(_json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                            except Exception:
+                                payload_bytes = 0
+                            if payload_bytes > int(_route_http_resp_resend_max_bytes):
+                                try:
+                                    route_diag_state["http_resp_resend_skipped_total"] = int(
+                                        route_diag_state.get("http_resp_resend_skipped_total") or 0
+                                    ) + 1
+                                    route_diag_state["last_http_resp_resend_key_tag"] = _key_tag(key)
+                                    route_diag_state["last_http_resp_resend_payload_bytes"] = payload_bytes
+                                except Exception:
+                                    pass
+                                return
+
+                            for delay_s in _route_http_resp_resend_delays_s:
+
+                                async def _resend_http_resp(delay_s: float = float(delay_s)) -> None:
+                                    try:
+                                        await asyncio.sleep(max(0.0, delay_s))
+                                        await _route_reply(key, payload, resend_http_resp=False)
+                                        try:
+                                            route_diag_state["http_resp_resend_sent_total"] = int(
+                                                route_diag_state.get("http_resp_resend_sent_total") or 0
+                                            ) + 1
+                                            route_diag_state["last_http_resp_resend_key_tag"] = _key_tag(key)
+                                            route_diag_state["last_http_resp_resend_delay_s"] = float(delay_s)
+                                            route_diag_state["last_http_resp_resend_payload_bytes"] = payload_bytes
+                                            _update_route_protocol_runtime()
+                                        except Exception:
+                                            pass
+                                        if _route_tx_verbose or _route_verbose:
+                                            try:
+                                                _rl_log(
+                                                    "hub-route.http_resp_resend",
+                                                    (
+                                                        f"[hub-route] http_resp resend delay_s={delay_s} "
+                                                        f"key={key} payload_bytes={payload_bytes}"
+                                                    ),
+                                                    every_s=1.0,
+                                                )
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        return
+
+                                try:
+                                    route_diag_state["http_resp_resend_scheduled_total"] = int(
+                                        route_diag_state.get("http_resp_resend_scheduled_total") or 0
+                                    ) + 1
+                                    route_diag_state["last_http_resp_resend_key_tag"] = _key_tag(key)
+                                    route_diag_state["last_http_resp_resend_delay_s"] = float(delay_s)
+                                    route_diag_state["last_http_resp_resend_payload_bytes"] = payload_bytes
+                                    asyncio.create_task(
+                                        _resend_http_resp(),
+                                        name=f"hub-route-http-resp-resend-{str(key)[-8:]}-{int(float(delay_s) * 1000)}",
+                                    )
+                                except Exception:
+                                    pass
+                            try:
+                                _update_route_protocol_runtime()
+                            except Exception:
+                                pass
 
                         def _cleanup_media_relay_session(key: str, *, remove_temp: bool) -> None:
                             session = media_relay_sessions.pop(key, None)
@@ -7717,7 +7837,11 @@ class BootstrapService:
 
                                         resp = await asyncio.to_thread(_do_streamed_http)
                                         _cleanup_http_body_relay_session(key, remove_temp=True)
-                                        await _route_reply(key, resp)
+                                        await _route_reply(
+                                            key,
+                                            resp,
+                                            resend_http_resp=_hub_route_should_resend_http_resp(path),
+                                        )
                                         route_outcome = f"http_req_replied:{resp.get('status')}"
                                     except Exception as e:
                                         _cleanup_http_body_relay_session(key, remove_temp=True)
@@ -7781,35 +7905,10 @@ class BootstrapService:
                                                 "truncated": False,
                                             }
                                             try:
-                                                await _route_reply(key, resp)
+                                                await _route_reply(key, resp, resend_http_resp=True)
                                                 route_outcome = "http_inline_probe_replied"
                                             except Exception:
                                                 pass
-                                            if _route_probe_resend_delays_s:
-                                                for delay_s in _route_probe_resend_delays_s:
-                                                    async def _resend(delay_s: float = float(delay_s)) -> None:
-                                                        try:
-                                                            await asyncio.sleep(max(0.0, delay_s))
-                                                            await _route_reply(key, resp)
-                                                            if _route_tx_verbose or _route_verbose:
-                                                                try:
-                                                                    _rl_log(
-                                                                        "hub-route.probe_resend",
-                                                                        f"[hub-route] http probe resend delay_s={delay_s} key={key}",
-                                                                        every_s=1.0,
-                                                                    )
-                                                                except Exception:
-                                                                    pass
-                                                        except Exception:
-                                                            return
-
-                                                    try:
-                                                        asyncio.create_task(
-                                                            _resend(),
-                                                            name=f"hub-route-probe-resend-{key[-8:]}-{int(delay_s * 1000)}",
-                                                        )
-                                                    except Exception:
-                                                        pass
                                             try:
                                                 if _route_diag:
                                                     _rl_log(
@@ -7977,7 +8076,11 @@ class BootstrapService:
                                         except Exception:
                                             pass
                                     try:
-                                        await _route_reply(key, resp)
+                                        await _route_reply(
+                                            key,
+                                            resp,
+                                            resend_http_resp=_hub_route_should_resend_http_resp(path),
+                                        )
                                         route_outcome = f"http_replied:{resp.get('status')}"
                                     except Exception:
                                         pass
