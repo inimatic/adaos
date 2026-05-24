@@ -11,6 +11,7 @@ import tempfile
 import time
 import tomllib
 from pathlib import Path
+from typing import Sequence
 
 from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
 from adaos.services.core_slots import write_slot_manifest
@@ -142,27 +143,78 @@ def _rewrite_text_file(path: Path, *, old: str, new: str) -> bool:
     return True
 
 
-def _repair_moved_venv(venv_dir: Path, *, original_venv_dir: Path) -> dict[str, object]:
-    repaired: list[str] = []
+def _rewrite_text_file_many(path: Path, replacements: Sequence[tuple[str, str]]) -> bool:
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        return False
+    if b"\x00" in raw:
+        return False
+    try:
+        text = raw.decode("utf-8")
+    except Exception:
+        return False
+    updated = text
+    for old, new in replacements:
+        if old and old != new:
+            updated = updated.replace(old, new)
+    if updated == text:
+        return False
+    path.write_text(updated, encoding="utf-8", newline="")
+    return True
+
+
+def _venv_text_repair_paths(venv_dir: Path) -> list[Path]:
+    paths: list[Path] = []
     if os.name == "nt":
         scripts_dir = venv_dir / "Scripts"
     else:
         scripts_dir = venv_dir / "bin"
-    old_text = str(original_venv_dir)
-    new_text = str(venv_dir)
     if scripts_dir.exists():
-        for child in scripts_dir.iterdir():
+        paths.extend(child for child in scripts_dir.iterdir() if child.is_file())
+    pyvenv_cfg = venv_dir / "pyvenv.cfg"
+    if pyvenv_cfg.exists():
+        paths.append(pyvenv_cfg)
+    site_package_roots = list(venv_dir.glob("lib/python*/site-packages"))
+    site_package_roots.extend(venv_dir.glob("Lib/site-packages"))
+    for site_packages in site_package_roots:
+        if not site_packages.is_dir():
+            continue
+        for child in site_packages.rglob("*"):
             if not child.is_file():
                 continue
-            if _rewrite_text_file(child, old=old_text, new=new_text):
-                repaired.append(str(child))
-    pyvenv_cfg = venv_dir / "pyvenv.cfg"
-    if pyvenv_cfg.exists() and _rewrite_text_file(pyvenv_cfg, old=old_text, new=new_text):
-        repaired.append(str(pyvenv_cfg))
+            suffix = child.suffix.lower()
+            if suffix in {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".a", ".lib"}:
+                continue
+            try:
+                if child.stat().st_size > 2 * 1024 * 1024:
+                    continue
+            except Exception:
+                continue
+            paths.append(child)
+    return list(dict.fromkeys(paths))
+
+
+def _repair_moved_venv(
+    venv_dir: Path,
+    *,
+    original_venv_dir: Path,
+    original_repo_dir: Path | None = None,
+    final_repo_dir: Path | None = None,
+) -> dict[str, object]:
+    repaired: list[str] = []
+    replacements: list[tuple[str, str]] = [(str(original_venv_dir), str(venv_dir))]
+    if original_repo_dir is not None and final_repo_dir is not None:
+        replacements.append((str(original_repo_dir), str(final_repo_dir)))
+    for child in _venv_text_repair_paths(venv_dir):
+        if _rewrite_text_file_many(child, replacements):
+            repaired.append(str(child))
     return {
         "ok": True,
         "venv_dir": str(venv_dir),
         "original_venv_dir": str(original_venv_dir),
+        "original_repo_dir": str(original_repo_dir) if original_repo_dir is not None else "",
+        "final_repo_dir": str(final_repo_dir) if final_repo_dir is not None else "",
         "repaired_files": repaired,
     }
 
@@ -931,7 +983,12 @@ def prepare_slot(
             },
         }
         _replace_slot_dir(prepared_slot, slot_dir)
-        repair = _repair_moved_venv(final_venv_dir, original_venv_dir=original_venv_dir)
+        repair = _repair_moved_venv(
+            final_venv_dir,
+            original_venv_dir=original_venv_dir,
+            original_repo_dir=checkout_tmp.resolve(),
+            final_repo_dir=final_repo_dir.resolve(),
+        )
         manifest["venv_repair"] = repair
         manifest["import_validation"] = _validate_prepared_slot_imports(final_py)
         if migrate_skill_runtimes:
