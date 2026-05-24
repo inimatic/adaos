@@ -224,6 +224,45 @@ def test_hub_route_does_not_use_flush_threshold_as_sync_shed_threshold() -> None
     )
 
 
+def test_hub_route_force_flushes_only_final_sync_chunk() -> None:
+    common = {
+        "route_force_flush": True,
+        "route_sync_frame_force_flush": True,
+        "tunnel_flow": "sync",
+        "pending_data_size": 512 * 1024,
+        "frame_flush_pending_bytes": 64 * 1024,
+    }
+
+    assert (
+        bootstrap_mod._hub_route_should_force_flush_reply(
+            {"t": "chunk", "flow": "sync", "idx": 0, "total": 4},
+            **common,
+        )
+        is False
+    )
+    assert (
+        bootstrap_mod._hub_route_should_force_flush_reply(
+            {"t": "chunk", "flow": "sync", "idx": 3, "total": 4},
+            **common,
+        )
+        is True
+    )
+    assert (
+        bootstrap_mod._hub_route_should_force_flush_reply(
+            {"t": "frame", "flow": "sync", "kind": "bin"},
+            **common,
+        )
+        is True
+    )
+    assert (
+        bootstrap_mod._hub_route_should_force_flush_reply(
+            {"t": "chunk", "flow": "route", "idx": 0, "total": 4},
+            **{**common, "tunnel_flow": "route"},
+        )
+        is True
+    )
+
+
 def test_hub_route_subnet_sync_policy_drops_only_raw_yjs_under_pressure() -> None:
     assert (
         bootstrap_mod._hub_route_subnet_sync_payload_type(
