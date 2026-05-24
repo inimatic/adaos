@@ -263,7 +263,7 @@ def test_hub_route_force_flushes_only_final_sync_chunk() -> None:
     )
 
 
-def test_hub_route_can_skip_forced_sync_frame_flush_below_pressure_threshold() -> None:
+def test_hub_route_skips_forced_sync_frame_flush_under_pending_pressure() -> None:
     common = {
         "route_force_flush": True,
         "route_sync_frame_force_flush": False,
@@ -290,6 +290,13 @@ def test_hub_route_can_skip_forced_sync_frame_flush_below_pressure_threshold() -
         bootstrap_mod._hub_route_should_force_flush_reply(
             {"t": "frame", "flow": "sync", "kind": "bin"},
             **{**common, "pending_data_size": 128 * 1024},
+        )
+        is False
+    )
+    assert (
+        bootstrap_mod._hub_route_should_force_flush_reply(
+            {"t": "frame", "flow": "route", "kind": "bin"},
+            **{**common, "tunnel_flow": "route", "pending_data_size": 128 * 1024},
         )
         is True
     )

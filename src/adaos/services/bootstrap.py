@@ -234,6 +234,8 @@ def _hub_route_should_force_flush_reply(
             return total > 0
     if is_sync_frame and bool(route_sync_frame_force_flush):
         return True
+    if is_sync_frame:
+        return False
 
     try:
         threshold = int(frame_flush_pending_bytes or 0)
