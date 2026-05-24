@@ -1620,6 +1620,11 @@ def test_yws_guard_rejects_repeated_short_sessions_without_active_yws(monkeypatc
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_route_dependency_snapshot",
+        lambda *, now_ts=None: {"ready": False, "reason": "route_signal_not_ready"},
+    )
 
     for _idx in range(3):
         gateway_module._record_yws_short_session("desktop", "dev-hot", lifetime_s=6.0)
@@ -1635,6 +1640,40 @@ def test_yws_guard_rejects_repeated_short_sessions_without_active_yws(monkeypatc
     reason_again, _diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
     assert reason_again == "client_reconnect_backoff"
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_allows_short_session_recovery_when_route_dependency_ready(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_LIMIT", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_route_dependency_snapshot",
+        lambda *, now_ts=None: {
+            "ready": True,
+            "reason": "fresh_lightweight_route_probe",
+            "route_status": "ready",
+        },
+    )
+
+    for _idx in range(3):
+        gateway_module._record_yws_short_session("desktop", "dev-hot", lifetime_s=6.0)
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+
+    assert reason == ""
+    assert diag["client_short_sessions"] == 3
+    assert diag["client_short_session_storm"] is True
+    assert diag["dependency_recovery_allowed"] is True
+    assert diag["dependency_recovery_reason"] == "client_short_session_storm"
+    assert diag["route_dependency"]["reason"] == "fresh_lightweight_route_probe"
+    assert gateway_module._YWS_GUARD_DIAG["dependency_recovery_allowed_total"] == 1
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
 
 
