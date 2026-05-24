@@ -1,6 +1,7 @@
 # src\adaos\adapters\db\sqlite_store.py
 # соединение SQLite (SQLite) + простое KV (SQLiteKV)
 from __future__ import annotations
+import os
 import sqlite3, json
 from pathlib import Path
 from typing import Any, Optional, Final
@@ -10,17 +11,42 @@ from adaos.ports.paths import PathProvider
 _DB_FILE = "adaos.db"
 
 
+def _sqlite_timeout_s() -> float:
+    try:
+        timeout_s = float(os.getenv("ADAOS_SQLITE_TIMEOUT_S", "5.0") or "5.0")
+    except Exception:
+        timeout_s = 5.0
+    if timeout_s < 0.1:
+        timeout_s = 0.1
+    return timeout_s
+
+
+def _configure_connection(con: sqlite3.Connection, *, foreign_keys: bool) -> None:
+    timeout_ms = int(_sqlite_timeout_s() * 1000)
+    try:
+        con.execute(f"PRAGMA busy_timeout={timeout_ms}")
+    except Exception:
+        pass
+    if foreign_keys:
+        con.execute("PRAGMA foreign_keys=ON")
+
+
 class SQLite(SQL):
     def __init__(self, paths: PathProvider):
         self._db_path: Final[Path] = Path(paths.state_dir()) / _DB_FILE
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # ленивое создание файла
-        with sqlite3.connect(self._db_path) as con:
-            con.execute("PRAGMA journal_mode=WAL")
+        with sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s()) as con:
+            _configure_connection(con, foreign_keys=False)
+            try:
+                con.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower():
+                    raise
 
     def connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self._db_path)
-        con.execute("PRAGMA foreign_keys=ON")
+        con = sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s())
+        _configure_connection(con, foreign_keys=True)
         return con
 
 
