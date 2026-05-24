@@ -196,6 +196,57 @@ def _hub_route_should_shed_sync_frame(
     return pending >= threshold
 
 
+def _hub_route_should_force_flush_reply(
+    payload: Any,
+    *,
+    route_force_flush: Any,
+    route_sync_frame_force_flush: Any,
+    tunnel_flow: Any,
+    pending_data_size: Any,
+    frame_flush_pending_bytes: Any,
+) -> bool:
+    if not bool(route_force_flush):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    t = payload.get("t")
+    if t in ("open_ack", "http_resp", "close"):
+        return True
+    if t not in ("frame", "chunk"):
+        return False
+
+    payload_flow = str(payload.get("flow") or "").strip().lower()
+    flow = payload_flow or str(tunnel_flow or "").strip().lower()
+    is_sync_frame = flow == "sync"
+    if is_sync_frame and t == "chunk":
+        try:
+            idx = int(payload.get("idx") or 0)
+        except Exception:
+            idx = 0
+        try:
+            total = int(payload.get("total") or 0)
+        except Exception:
+            total = 0
+        if total > 1 and 0 <= idx < total - 1:
+            return False
+        if bool(route_sync_frame_force_flush):
+            return total > 0
+    if is_sync_frame and bool(route_sync_frame_force_flush):
+        return True
+
+    try:
+        threshold = int(frame_flush_pending_bytes or 0)
+    except Exception:
+        threshold = 0
+    if threshold <= 0:
+        return False
+    try:
+        pending = max(0, int(pending_data_size or 0))
+    except Exception:
+        pending = 0
+    return pending >= threshold
+
+
 def _hub_route_subnet_sync_payload_type(path: Any, message: Any) -> str:
     if _hub_route_semantic_flow_for_path(path) != "subnet":
         return ""
@@ -5906,37 +5957,34 @@ class BootstrapService:
                                             )
                                     except Exception:
                                         pass
+                                route_flow0 = ""
+                                try:
+                                    if t in ("frame", "chunk"):
+                                        route_flow0 = _route_tunnel_flow(key)
+                                except Exception:
+                                    route_flow0 = ""
+                                try:
+                                    _route_refresh_starvation_state()
+                                except Exception:
+                                    pass
+                                should_force_flush = _hub_route_should_force_flush_reply(
+                                    payload,
+                                    route_force_flush=_route_force_flush,
+                                    route_sync_frame_force_flush=_route_sync_frame_force_flush,
+                                    tunnel_flow=route_flow0,
+                                    pending_data_size=route_diag_state.get("last_nc_pending_data_size"),
+                                    frame_flush_pending_bytes=_route_frame_flush_pending_bytes,
+                                )
                                 sync_frame_force_flush_this = False
-                                if (
-                                    _route_force_flush
-                                    and _route_sync_frame_force_flush
-                                    and t in ("frame", "chunk")
-                                ):
+                                if should_force_flush and t in ("frame", "chunk"):
                                     try:
                                         payload_flow0 = str((payload or {}).get("flow") or "").strip().lower()
                                     except Exception:
                                         payload_flow0 = ""
-                                    try:
-                                        sync_frame_force_flush_this = (
-                                            payload_flow0 == "sync" or _route_tunnel_flow(key) == "sync"
-                                        )
-                                    except Exception:
-                                        sync_frame_force_flush_this = False
-                                should_force_flush = bool(
-                                    _route_force_flush and t in ("open_ack", "http_resp", "close")
-                                ) or bool(sync_frame_force_flush_this)
-                                if (
-                                    _route_force_flush
-                                    and not should_force_flush
-                                    and t in ("frame", "chunk")
-                                    and _route_frame_flush_pending_bytes > 0
-                                ):
-                                    try:
-                                        _route_refresh_starvation_state()
-                                        pending_data_size0 = int(route_diag_state.get("last_nc_pending_data_size") or 0)
-                                    except Exception:
-                                        pending_data_size0 = 0
-                                    should_force_flush = pending_data_size0 >= _route_frame_flush_pending_bytes
+                                    sync_frame_force_flush_this = (
+                                        bool(_route_sync_frame_force_flush)
+                                        and (payload_flow0 == "sync" or route_flow0 == "sync")
+                                    )
                                 if should_force_flush:
                                     # Fast-drain pending bytes without relying on NATS PING/PONG.
                                     # This avoids `flush()` (which can time out when PONGs are flaky behind WS proxies).
