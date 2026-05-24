@@ -115,6 +115,38 @@ def _coerce_list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _clone_json_like(value: Any) -> Any:
+    to_json = getattr(value, "to_json", None)
+    if callable(to_json):
+        try:
+            raw = to_json()
+            if isinstance(raw, str):
+                return json.loads(raw)
+            return json.loads(json.dumps(raw))
+        except Exception:
+            pass
+    try:
+        return json.loads(json.dumps(value))
+    except Exception:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return {str(k): _clone_json_like(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_clone_json_like(v) for v in value]
+        if isinstance(value, tuple):
+            return [_clone_json_like(v) for v in value]
+        if isinstance(value, Mapping):
+            return {str(k): _clone_json_like(v) for k, v in value.items()}
+        items = getattr(value, "items", None)
+        if callable(items):
+            try:
+                return {str(k): _clone_json_like(v) for k, v in items() if str(k)}
+            except Exception:
+                return value
+        return value
+
+
 def _coerce_node_webspace_id(value: Any = None) -> str:
     return coerce_webspace_id(value, fallback=default_webspace_id())
 
@@ -1677,6 +1709,19 @@ async def _describe_yjs_materialization(
         }
 
 
+async def _read_yjs_materialization_snapshot(webspace_id: str) -> dict[str, Any]:
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    async with async_read_ydoc(target_webspace_id, prefer_live_room=False) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        registry_map = ydoc.get_map("registry")
+        return {
+            "ui": _coerce_dict(_clone_json_like(ui_map)),
+            "data": _coerce_dict(_clone_json_like(data_map)),
+            "registry": _coerce_dict(_clone_json_like(registry_map)),
+        }
+
+
 async def _read_live_catalog_items(webspace_id: str, kind: str) -> list[dict[str, Any]]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     bucket = "widgets" if str(kind or "").strip().lower() == "widgets" else "apps"
@@ -2894,6 +2939,32 @@ async def node_yjs_webspace_materialization_state(
         "ok": True,
         "accepted": True,
         "webspace_id": target_webspace_id,
+        "materialization": materialization,
+        "rebuild": rebuild,
+    }
+    if include_runtime:
+        result["runtime"] = yjs_sync_runtime_snapshot(
+            role=conf.role,
+            webspace_id=target_webspace_id,
+        )
+    return result
+
+
+@router.get("/yjs/webspaces/{webspace_id}/materialization/snapshot", dependencies=[Depends(require_token)])
+async def node_yjs_webspace_materialization_snapshot(
+    webspace_id: str,
+    include_runtime: bool = False,
+) -> dict[str, Any]:
+    conf = load_config()
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    rebuild = describe_webspace_rebuild_state(target_webspace_id)
+    materialization = await _describe_yjs_materialization(target_webspace_id, rebuild_state=rebuild)
+    snapshot = await _read_yjs_materialization_snapshot(target_webspace_id)
+    result = {
+        "ok": True,
+        "accepted": True,
+        "webspace_id": target_webspace_id,
+        "snapshot": snapshot,
         "materialization": materialization,
         "rebuild": rebuild,
     }

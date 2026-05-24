@@ -1139,6 +1139,65 @@ def test_node_yjs_webspace_materialization_state_endpoint_returns_lightweight_sn
     }
 
 
+def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkeypatch) -> None:
+    fake_state = {
+        "ui": _FakeMap(
+            {
+                "current_scenario": "web_desktop",
+                "application": {
+                    "desktop": {"pageSchema": {"id": "desktop", "widgets": [{"id": "w1"}]}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                },
+            }
+        ),
+        "data": _FakeMap(
+            {
+                "catalog": {"apps": [{"id": "app-1"}], "widgets": [{"id": "w1"}]},
+                "desktop": {"installed": {"apps": ["app-1"], "widgets": ["w1"]}},
+                "installed": {"apps": ["app-1"], "widgets": ["w1"]},
+            }
+        ),
+        "registry": _FakeMap({"scenarios": {"hub-1": {"web_desktop": {"title": "Desktop"}}}}),
+    }
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_rebuild_state",
+        lambda webspace_id: {"webspace_id": webspace_id, "status": "ready"},
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "_describe_yjs_materialization",
+        lambda webspace_id, rebuild_state=None: _awaitable(
+            {
+                "ready": True,
+                "webspace_id": webspace_id,
+                "readiness_state": "ready",
+                "missing_branches": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
+    monkeypatch.setattr(
+        node_api_module,
+        "yjs_sync_runtime_snapshot",
+        lambda **kwargs: {"webspace_id": kwargs.get("webspace_id")},
+    )
+
+    result = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default", include_runtime=True))
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["webspace_id"] == "desktop"
+    assert result["materialization"]["ready"] is True
+    assert result["snapshot"]["ui"]["application"]["desktop"]["pageSchema"]["id"] == "desktop"
+    assert result["snapshot"]["data"]["catalog"]["widgets"][0]["id"] == "w1"
+    assert result["snapshot"]["data"]["installed"]["widgets"] == ["w1"]
+    assert result["snapshot"]["registry"]["scenarios"]["hub-1"]["web_desktop"]["title"] == "Desktop"
+    assert result["runtime"]["webspace_id"] == "desktop"
+
+
 def test_node_yjs_webspace_rebuild_state_endpoint_includes_cached_materialization(monkeypatch) -> None:
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
     monkeypatch.setattr(
@@ -1254,7 +1313,7 @@ def test_describe_yjs_materialization_reports_ready_readiness_and_no_missing_bra
         ),
     }
 
-    monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda _webspace_id: _FakeAsyncDoc(fake_state))
+    monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
     monkeypatch.setattr(node_api_module, "_local_node_id", lambda: "hub-1")
 
     result = asyncio.run(node_api_module._describe_yjs_materialization("default"))
@@ -1288,7 +1347,7 @@ def test_describe_yjs_materialization_reports_hydrating_readiness_and_missing_br
         ),
     }
 
-    monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda _webspace_id: _FakeAsyncDoc(fake_state))
+    monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
 
     result = asyncio.run(node_api_module._describe_yjs_materialization("default"))
 
@@ -1358,7 +1417,7 @@ def test_describe_webspace_operational_state_prefers_live_room_fast_path(monkeyp
     monkeypatch.setattr(
         webspace_runtime_module,
         "async_read_ydoc",
-        lambda _webspace_id: (_ for _ in ()).throw(AssertionError("async_read_ydoc should not run when live room is readable")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("async_read_ydoc should not run when live room is readable")),
     )
 
     result = asyncio.run(webspace_runtime_module.describe_webspace_operational_state("default"))
