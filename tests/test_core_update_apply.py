@@ -110,7 +110,7 @@ def test_repair_moved_venv_preserves_windows_crlf_in_pyvenv_cfg(tmp_path: Path) 
     assert raw.count(b"\r\n") == 3
 
 
-def test_replace_slot_dir_refuses_nested_move_when_cleanup_leaves_destination(
+def test_replace_slot_dir_quarantines_destination_when_cleanup_leaves_destination(
     monkeypatch, tmp_path: Path
 ) -> None:
     import adaos.apps.core_update_apply as mod
@@ -118,15 +118,47 @@ def test_replace_slot_dir_refuses_nested_move_when_cleanup_leaves_destination(
     prepared_slot = tmp_path / "tmp-build" / "A"
     slot_dir = tmp_path / "slots" / "A"
     prepared_slot.mkdir(parents=True, exist_ok=True)
+    (prepared_slot / "fresh.txt").write_text("fresh", encoding="utf-8")
     slot_dir.mkdir(parents=True, exist_ok=True)
+    (slot_dir / "stale.txt").write_text("stale", encoding="utf-8")
 
     monkeypatch.setattr(mod.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    try:
-        mod._replace_slot_dir(prepared_slot, slot_dir)
-        assert False, "expected RuntimeError when destination survives cleanup"
-    except RuntimeError as exc:
-        assert "refusing nested move" in str(exc)
+    mod._replace_slot_dir(prepared_slot, slot_dir)
+
+    quarantined = list((tmp_path / "slots").glob("adaos-core-stale-a-*"))
+    assert len(quarantined) == 1
+    assert (quarantined[0] / "stale.txt").read_text(encoding="utf-8") == "stale"
+    assert (slot_dir / "fresh.txt").read_text(encoding="utf-8") == "fresh"
+    assert (slot_dir / "stale.txt").exists() is False
+
+
+def test_replace_slot_dir_retries_when_cleanup_hits_missing_child(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    prepared_slot = tmp_path / "tmp-build" / "B"
+    slot_dir = tmp_path / "slots" / "B"
+    (prepared_slot / "repo").mkdir(parents=True, exist_ok=True)
+    (prepared_slot / "repo" / "manifest.txt").write_text("fresh", encoding="utf-8")
+    (slot_dir / "repo").mkdir(parents=True, exist_ok=True)
+    (slot_dir / "repo" / "projections.py").write_text("stale", encoding="utf-8")
+    calls = {"total": 0}
+
+    def flaky_remove(path: Path) -> None:
+        calls["total"] += 1
+        if calls["total"] == 1:
+            raise FileNotFoundError("projections.py")
+        shutil.rmtree(path)
+
+    monkeypatch.setattr(mod, "_force_remove_tree", flaky_remove)
+
+    mod._replace_slot_dir(prepared_slot, slot_dir)
+
+    assert calls["total"] == 2
+    assert (slot_dir / "repo" / "manifest.txt").read_text(encoding="utf-8") == "fresh"
+    assert (slot_dir / "repo" / "projections.py").exists() is False
 
 
 def test_replace_slot_dir_removes_existing_partial_slot_dir(tmp_path: Path) -> None:
@@ -495,7 +527,7 @@ def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: P
     monkeypatch.setattr(mod, "_run", _fake_run)
     monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
     monkeypatch.setattr(mod, "_replace_slot_dir", lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)))
-    monkeypatch.setattr(mod, "_repair_moved_venv", lambda _venv_dir, original_venv_dir=None: {"ok": True, "repaired_files": []})
+    monkeypatch.setattr(mod, "_repair_moved_venv", lambda _venv_dir, **_kwargs: {"ok": True, "repaired_files": []})
     monkeypatch.setattr(mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True, "modules": []})
     monkeypatch.setattr(mod, "_migrate_installed_skill_runtimes", lambda *args, **kwargs: {"ok": True, "skills": []})
     monkeypatch.setattr(mod, "_git_text", lambda *_args: "value")

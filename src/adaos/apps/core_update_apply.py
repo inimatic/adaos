@@ -422,15 +422,37 @@ def _force_remove_tree(path: Path) -> None:
 
 
 def _replace_slot_dir(prepared_slot: Path, slot_dir: Path) -> None:
+    cleanup_errors: list[str] = []
     if slot_dir.exists():
-        try:
-            _force_remove_tree(slot_dir)
-        except Exception:
-            pass
+        for attempt in range(2):
+            try:
+                _force_remove_tree(slot_dir)
+            except FileNotFoundError as exc:
+                cleanup_errors.append(f"attempt={attempt + 1}: {type(exc).__name__}: {exc}")
+                if not slot_dir.exists():
+                    break
+                time.sleep(0.05)
+                continue
+            except Exception as exc:
+                cleanup_errors.append(f"attempt={attempt + 1}: {type(exc).__name__}: {exc}")
+                if not slot_dir.exists():
+                    break
+                time.sleep(0.05)
+                continue
+            if not slot_dir.exists():
+                break
     if slot_dir.exists():
-        raise RuntimeError(
-            f"slot directory cleanup failed; refusing nested move into existing path: {slot_dir}"
+        quarantine = slot_dir.with_name(
+            f"adaos-core-stale-{slot_dir.name.lower()}-{int(time.time() * 1000)}-{os.getpid()}"
         )
+        try:
+            slot_dir.rename(quarantine)
+        except Exception as exc:
+            details = "; ".join(cleanup_errors) if cleanup_errors else "cleanup left destination present"
+            raise RuntimeError(
+                "slot directory cleanup failed; refusing nested move into existing path: "
+                f"{slot_dir}; cleanup_errors={details}; quarantine_error={type(exc).__name__}: {exc}"
+            ) from exc
     shutil.move(str(prepared_slot), str(slot_dir))
 
 
