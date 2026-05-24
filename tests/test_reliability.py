@@ -305,6 +305,7 @@ def test_hub_reliability_recovers_route_after_fresh_lightweight_probe(monkeypatc
     assert route_tree["status"] == "ready"
     assert route_tree["details"]["incident_recovery"] == "fresh_lightweight_route_probe"
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
+    assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transition_state"] == "ready"
 
 
 def test_hub_reliability_snapshot_exposes_route_reset_runtime_details() -> None:
