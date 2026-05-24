@@ -269,6 +269,8 @@ _YWS_GUARD_REJECT_HOLD_STEP_SEC = _env_float("ADAOS_YWS_GUARD_REJECT_HOLD_STEP_S
 _YWS_GUARD_MIN_STABLE_SESSION_S = _env_float("ADAOS_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0, minimum=0.0)
 _YWS_GUARD_SHORT_SESSION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0, minimum=1.0)
 _YWS_GUARD_SHORT_SESSION_LIMIT = _env_int("ADAOS_YWS_GUARD_SHORT_SESSION_LIMIT", 3, minimum=1)
+_YWS_GUARD_ROUTE_DEPENDENCY_RECOVERY = _env_flag("ADAOS_YWS_GUARD_ROUTE_DEPENDENCY_RECOVERY", True)
+_YWS_GUARD_ROUTE_PROBE_FRESH_S = _env_float("ADAOS_YWS_GUARD_ROUTE_PROBE_FRESH_S", 30.0, minimum=1.0)
 _WS_EVENT_SEND_QUEUE_LIMIT = _env_int("ADAOS_WS_EVENT_SEND_QUEUE_LIMIT", 64, minimum=1)
 _WS_EVENT_SEND_LOG_INTERVAL_S = _env_float("ADAOS_WS_EVENT_SEND_LOG_INTERVAL_S", 10.0, minimum=0.0)
 _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC", 5.0, minimum=0.0)
@@ -2971,6 +2973,114 @@ def _yws_guard_note_webspace_storm(
     )
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if number <= 0.0:
+        return None
+    return number
+
+
+def _yws_guard_route_dependency_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
+    """Return whether route semantics are healthy enough to permit a YWS rescue."""
+    now = time.time() if now_ts is None else float(now_ts)
+    if not _YWS_GUARD_ROUTE_DEPENDENCY_RECOVERY:
+        return {"ready": False, "reason": "route_dependency_recovery_disabled"}
+    try:
+        from adaos.services.reliability import hub_root_protocol_snapshot, runtime_signal_snapshot
+
+        signals = runtime_signal_snapshot()
+        protocol = hub_root_protocol_snapshot(now_ts=now)
+    except Exception as exc:
+        return {
+            "ready": False,
+            "reason": "route_dependency_unavailable",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    route_signal = signals.get("route") if isinstance(signals.get("route"), dict) else {}
+    route_status = str(route_signal.get("status") or "").strip().lower()
+    route_details = route_signal.get("details") if isinstance(route_signal.get("details"), dict) else {}
+    route_runtime = protocol.get("route_runtime") if isinstance(protocol.get("route_runtime"), dict) else {}
+    assessment = protocol.get("assessment") if isinstance(protocol.get("assessment"), dict) else {}
+    flows = route_runtime.get("flows") if isinstance(route_runtime.get("flows"), dict) else {}
+    control_flow = flows.get("control") if isinstance(flows.get("control"), dict) else {}
+    frame_flow = flows.get("frame") if isinstance(flows.get("frame"), dict) else {}
+
+    def _int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
+
+    probe_reply_at = _float_or_none(route_details.get("last_http_probe_reply_at"))
+    probe_rx_at = _float_or_none(route_details.get("last_http_probe_rx_at"))
+    probe_age_s: float | None = None
+    fresh_probe = False
+    if probe_reply_at is not None:
+        probe_age_s = max(0.0, now - probe_reply_at)
+        fresh_probe = (
+            probe_age_s <= float(_YWS_GUARD_ROUTE_PROBE_FRESH_S)
+            and (probe_rx_at is None or probe_reply_at + 0.001 >= probe_rx_at)
+        )
+
+    pending_tunnels = _int(route_runtime.get("pending_tunnels"))
+    pending_events = _int(route_runtime.get("pending_events"))
+    pending_chunks = _int(route_runtime.get("pending_chunks"))
+    active_tunnels = _int(route_runtime.get("active_tunnels"))
+    guardrail_active = bool(route_runtime.get("guardrail_active"))
+    assessment_state = str(assessment.get("state") or "").strip().lower()
+    control_state = str(control_flow.get("state") or "").strip().lower()
+    frame_state = str(frame_flow.get("state") or "").strip().lower()
+
+    pressure: list[str] = []
+    if guardrail_active:
+        pressure.append("route_guardrail_active")
+    if pending_tunnels > 0:
+        pressure.append("pending_tunnels")
+    if pending_events > 0:
+        pressure.append("pending_events")
+    if pending_chunks > 0:
+        pressure.append("pending_chunks")
+    if control_state in {"pressure", "degraded"}:
+        pressure.append(f"control_{control_state}")
+    if frame_state in {"pressure", "degraded"}:
+        pressure.append(f"frame_{frame_state}")
+
+    ready = False
+    reason = "route_signal_not_ready"
+    if fresh_probe:
+        ready = not pressure
+        reason = "fresh_lightweight_route_probe" if ready else "fresh_probe_with_route_pressure"
+    elif route_status == "ready":
+        ready = not pressure
+        reason = "route_signal_ready" if ready else "route_signal_ready_with_pressure"
+    elif active_tunnels > 0:
+        ready = not pressure
+        reason = "active_route_tunnel" if ready else "active_route_tunnel_with_pressure"
+    elif pressure:
+        reason = "route_runtime_pressure"
+
+    return {
+        "ready": bool(ready),
+        "reason": reason,
+        "route_status": route_status,
+        "fresh_probe": bool(fresh_probe),
+        "probe_age_s": round(probe_age_s, 3) if probe_age_s is not None else None,
+        "active_tunnels": active_tunnels,
+        "pending_tunnels": pending_tunnels,
+        "pending_events": pending_events,
+        "pending_chunks": pending_chunks,
+        "guardrail_active": guardrail_active,
+        "assessment_state": assessment_state,
+        "control_state": control_state,
+        "frame_state": frame_state,
+        "pressure": pressure,
+    }
+
+
 def _yws_guard_reject_reason(
     webspace_id: str,
     dev_id: str,
@@ -2995,6 +3105,34 @@ def _yws_guard_reject_reason(
     quarantine_until = 0.0
     quarantine_ttl_s: float | None = None
     quarantine_incident_count: int | None = None
+    route_dependency: dict[str, Any] = {}
+    dependency_recovery_allowed = False
+    dependency_recovery_reason = ""
+
+    def _dependency_allows_recovery(trigger: str) -> bool:
+        nonlocal route_dependency, dependency_recovery_allowed, dependency_recovery_reason
+        if active_total > 0:
+            return False
+        if not route_dependency:
+            route_dependency = _yws_guard_route_dependency_snapshot(now_ts=now)
+        if not bool(route_dependency.get("ready")):
+            return False
+        dependency_recovery_allowed = True
+        dependency_recovery_reason = str(trigger or "").strip() or "route_dependency_ready"
+        return True
+
+    def _record_dependency_recovery() -> None:
+        if not dependency_recovery_allowed:
+            return
+        _YWS_GUARD_DIAG["dependency_recovery_allowed_total"] = int(
+            _YWS_GUARD_DIAG.get("dependency_recovery_allowed_total") or 0
+        ) + 1
+        _YWS_GUARD_DIAG["last_dependency_recovery_at"] = now
+        _YWS_GUARD_DIAG["last_dependency_recovery_reason"] = dependency_recovery_reason
+        _YWS_GUARD_DIAG["last_dependency_recovery_webspace_id"] = webspace_key
+        _YWS_GUARD_DIAG["last_dependency_recovery_dev_id"] = dev_key
+        _YWS_GUARD_DIAG["last_dependency_recovery_route_reason"] = str(route_dependency.get("reason") or "")
+
     with _YWS_STORM_LOCK:
         cutoff_60 = now - 60.0
         while _YWS_OPEN_HISTORY and _YWS_OPEN_HISTORY[0] < cutoff_60:
@@ -3050,9 +3188,12 @@ def _yws_guard_reject_reason(
             or client_short_sessions >= _YWS_GUARD_SHORT_SESSION_LIMIT
         )
         if client_quarantine_until > now and client_backoff_active:
-            reason = "client_reconnect_backoff"
             quarantine_until = client_quarantine_until
             quarantine_ttl_s = max(0.0, client_quarantine_until - now)
+            if _dependency_allows_recovery("client_reconnect_backoff"):
+                _record_dependency_recovery()
+            else:
+                reason = "client_reconnect_backoff"
         elif webspace_quarantine_until > now and active_total > 0:
             reason = "webspace_reconnect_backoff"
             quarantine_until = webspace_quarantine_until
@@ -3077,18 +3218,21 @@ def _yws_guard_reject_reason(
                 reason = "client_reconnect_storm"
             client_short_session_storm = client_short_sessions >= _YWS_GUARD_SHORT_SESSION_LIMIT
             if client_short_session_storm and not reason:
-                quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
-                    client_key,
-                    now,
-                )
-                reason = "client_short_session_storm"
-                _YWS_GUARD_DIAG["client_short_session_storm_observed_total"] = int(
-                    _YWS_GUARD_DIAG.get("client_short_session_storm_observed_total") or 0
-                ) + 1
-                _YWS_GUARD_DIAG["last_client_short_session_storm_at"] = now
-                _YWS_GUARD_DIAG["last_client_short_session_storm_webspace_id"] = webspace_key
-                _YWS_GUARD_DIAG["last_client_short_session_storm_dev_id"] = dev_key
-                _YWS_GUARD_DIAG["last_client_short_session_storm_recent"] = client_short_sessions
+                if _dependency_allows_recovery("client_short_session_storm"):
+                    _record_dependency_recovery()
+                else:
+                    quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
+                        client_key,
+                        now,
+                    )
+                    reason = "client_short_session_storm"
+                    _YWS_GUARD_DIAG["client_short_session_storm_observed_total"] = int(
+                        _YWS_GUARD_DIAG.get("client_short_session_storm_observed_total") or 0
+                    ) + 1
+                    _YWS_GUARD_DIAG["last_client_short_session_storm_at"] = now
+                    _YWS_GUARD_DIAG["last_client_short_session_storm_webspace_id"] = webspace_key
+                    _YWS_GUARD_DIAG["last_client_short_session_storm_dev_id"] = dev_key
+                    _YWS_GUARD_DIAG["last_client_short_session_storm_recent"] = client_short_sessions
             webspace_reconnect_storm = (
                 recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
                 and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
@@ -3131,6 +3275,9 @@ def _yws_guard_reject_reason(
         "quarantine_until": quarantine_until,
         "quarantine_ttl_s": quarantine_ttl_s,
         "quarantine_incident_count": quarantine_incident_count,
+        "route_dependency": route_dependency,
+        "dependency_recovery_allowed": dependency_recovery_allowed,
+        "dependency_recovery_reason": dependency_recovery_reason,
     }
     if reason:
         _yws_guard_log(
