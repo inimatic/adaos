@@ -1185,17 +1185,25 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
         lambda **kwargs: {"webspace_id": kwargs.get("webspace_id")},
     )
 
-    result = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default", include_runtime=True))
+    result = asyncio.run(
+        node_api_module.node_yjs_webspace_materialization_snapshot("default", include_runtime=True, scope="full")
+    )
 
     assert result["ok"] is True
     assert result["accepted"] is True
     assert result["webspace_id"] == "desktop"
+    assert result["snapshot_scope"] == "full"
     assert result["materialization"]["ready"] is True
     assert result["snapshot"]["ui"]["application"]["desktop"]["pageSchema"]["id"] == "desktop"
     assert result["snapshot"]["data"]["catalog"]["widgets"][0]["id"] == "w1"
     assert result["snapshot"]["data"]["installed"]["widgets"] == ["w1"]
     assert result["snapshot"]["registry"]["scenarios"]["hub-1"]["web_desktop"]["title"] == "Desktop"
     assert result["runtime"]["webspace_id"] == "desktop"
+
+    essential = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default"))
+    assert essential["snapshot_scope"] == "essential"
+    assert sorted(essential["snapshot"]["data"].keys()) == ["catalog", "desktop", "installed", "webspaces"]
+    assert essential["snapshot"]["registry"] == {}
 
 
 def test_node_yjs_webspace_rebuild_state_endpoint_includes_cached_materialization(monkeypatch) -> None:

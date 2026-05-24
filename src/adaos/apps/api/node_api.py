@@ -1709,12 +1709,27 @@ async def _describe_yjs_materialization(
         }
 
 
-async def _read_yjs_materialization_snapshot(webspace_id: str) -> dict[str, Any]:
+async def _read_yjs_materialization_snapshot(webspace_id: str, *, scope: str = "essential") -> dict[str, Any]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    normalized_scope = str(scope or "").strip().lower() or "essential"
     async with async_read_ydoc(target_webspace_id, prefer_live_room=False) as ydoc:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         registry_map = ydoc.get_map("registry")
+        if normalized_scope != "full":
+            return {
+                "ui": {
+                    "current_scenario": _clone_json_like(ui_map.get("current_scenario")),
+                    "application": _coerce_dict(_clone_json_like(ui_map.get("application") or {})),
+                },
+                "data": {
+                    "catalog": _coerce_dict(_clone_json_like(data_map.get("catalog") or {})),
+                    "desktop": _coerce_dict(_clone_json_like(data_map.get("desktop") or {})),
+                    "installed": _coerce_dict(_clone_json_like(data_map.get("installed") or {})),
+                    "webspaces": _coerce_dict(_clone_json_like(data_map.get("webspaces") or {})),
+                },
+                "registry": {},
+            }
         return {
             "ui": _coerce_dict(_clone_json_like(ui_map)),
             "data": _coerce_dict(_clone_json_like(data_map)),
@@ -2954,16 +2969,19 @@ async def node_yjs_webspace_materialization_state(
 async def node_yjs_webspace_materialization_snapshot(
     webspace_id: str,
     include_runtime: bool = False,
+    scope: str = "essential",
 ) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    snapshot_scope = "full" if str(scope or "").strip().lower() == "full" else "essential"
     rebuild = describe_webspace_rebuild_state(target_webspace_id)
     materialization = await _describe_yjs_materialization(target_webspace_id, rebuild_state=rebuild)
-    snapshot = await _read_yjs_materialization_snapshot(target_webspace_id)
+    snapshot = await _read_yjs_materialization_snapshot(target_webspace_id, scope=snapshot_scope)
     result = {
         "ok": True,
         "accepted": True,
         "webspace_id": target_webspace_id,
+        "snapshot_scope": snapshot_scope,
         "snapshot": snapshot,
         "materialization": materialization,
         "rebuild": rebuild,
