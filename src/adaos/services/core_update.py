@@ -987,6 +987,7 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             migrate_skill_runtimes=False,
         )
     except Exception as exc:
+        finished_at = time.time()
         return {
             "state": "failed",
             "phase": "prepare",
@@ -995,9 +996,13 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             "error": str(exc),
             "target_slot": target_slot,
             "started_at": started_at,
-            "finished_at": time.time(),
+            "finished_at": finished_at,
+            "prepare_elapsed_s": round(finished_at - started_at, 3),
             "plan": slot_plan,
         }
+    finished_at = time.time()
+    install = manifest.get("install") if isinstance(manifest, dict) and isinstance(manifest.get("install"), dict) else {}
+    seed = manifest.get("venv_seed") if isinstance(manifest, dict) and isinstance(manifest.get("venv_seed"), dict) else {}
     return {
         "state": "prepared",
         "phase": "prepare",
@@ -1005,7 +1010,12 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
         "target_slot": target_slot,
         "manifest": manifest,
         "started_at": started_at,
-        "finished_at": time.time(),
+        "finished_at": finished_at,
+        "prepare_elapsed_s": round(finished_at - started_at, 3),
+        "install_elapsed_s": install.get("elapsed_s"),
+        "install_installer": str(install.get("installer") or "").strip() or None,
+        "venv_seed_source": str(seed.get("source") or "").strip() or None,
+        "venv_seeded": bool(seed.get("seeded")),
         "plan": slot_plan,
     }
 

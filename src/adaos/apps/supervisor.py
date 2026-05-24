@@ -6592,6 +6592,11 @@ class SupervisorManager:
         candidate_launch_state = "skipped"
         candidate_launch_message = ""
         used_candidate_cutover = False
+        prepare_elapsed_s = None
+        install_elapsed_s = None
+        install_installer = None
+        venv_seed_source = None
+        venv_seeded = False
         prepare_result = prepare_pending_update(
             {
                 "action": action,
@@ -6626,6 +6631,11 @@ class SupervisorManager:
                 or ""
             ).strip().upper()
             manifest = prepare_result.get("manifest") if isinstance(prepare_result.get("manifest"), dict) else None
+            prepare_elapsed_s = prepare_result.get("prepare_elapsed_s")
+            install_elapsed_s = prepare_result.get("install_elapsed_s")
+            install_installer = str(prepare_result.get("install_installer") or "").strip() or None
+            venv_seed_source = str(prepare_result.get("venv_seed_source") or "").strip() or None
+            venv_seeded = bool(prepare_result.get("venv_seeded"))
             try:
                 candidate_prewarm = await self._candidate_prewarm(target_slot=target_slot)
             except Exception as exc:
@@ -6652,6 +6662,11 @@ class SupervisorManager:
                     "started_at": countdown_started_at,
                     "scheduled_for": countdown_started_at + countdown_sec,
                     "prepared_at": float(prepare_result.get("finished_at") or countdown_started_at),
+                    "prepare_elapsed_s": prepare_elapsed_s,
+                    "install_elapsed_s": install_elapsed_s,
+                    "install_installer": install_installer,
+                    "venv_seed_source": venv_seed_source,
+                    "venv_seeded": venv_seeded,
                     "target_slot": target_slot,
                     "candidate_prewarm_state": candidate_prewarm_state,
                     "candidate_prewarm_message": candidate_prewarm_message or None,
@@ -6701,6 +6716,11 @@ class SupervisorManager:
                 "reason": reason,
                 "target_slot": target_slot,
                 "prepared_at": float(prepare_result.get("finished_at") or time.time()),
+                "prepare_elapsed_s": prepare_elapsed_s,
+                "install_elapsed_s": install_elapsed_s,
+                "install_installer": install_installer,
+                "venv_seed_source": venv_seed_source,
+                "venv_seeded": venv_seeded,
                 "created_at": time.time(),
                 "expires_at": time.time() + 1800.0,
             }
@@ -6717,6 +6737,11 @@ class SupervisorManager:
                     "drain_timeout_sec": drain_timeout_sec,
                     "signal_delay_sec": signal_delay_sec,
                     "prepared_at": float(prepare_result.get("finished_at") or time.time()),
+                    "prepare_elapsed_s": prepare_elapsed_s,
+                    "install_elapsed_s": install_elapsed_s,
+                    "install_installer": install_installer,
+                    "venv_seed_source": venv_seed_source,
+                    "venv_seeded": venv_seeded,
                     "candidate_prewarm_state": candidate_prewarm_state,
                     "candidate_prewarm_message": candidate_prewarm_message or None,
                     "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
@@ -6754,6 +6779,11 @@ class SupervisorManager:
                         "target_slot": target_slot,
                         "drain_timeout_sec": drain_timeout_sec,
                         "signal_delay_sec": signal_delay_sec,
+                        "prepare_elapsed_s": prepare_elapsed_s,
+                        "install_elapsed_s": install_elapsed_s,
+                        "install_installer": install_installer,
+                        "venv_seed_source": venv_seed_source,
+                        "venv_seeded": venv_seeded,
                         "candidate_prewarm_state": candidate_prewarm_state,
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
@@ -6815,6 +6845,11 @@ class SupervisorManager:
                     "reason": reason,
                     "target_slot": target_slot,
                     "prepared_at": float(prepare_result.get("finished_at") or time.time()),
+                    "prepare_elapsed_s": prepare_elapsed_s,
+                    "install_elapsed_s": install_elapsed_s,
+                    "install_installer": install_installer,
+                    "venv_seed_source": venv_seed_source,
+                    "venv_seeded": venv_seeded,
                     "candidate_prewarm_state": candidate_launch_state,
                     "candidate_prewarm_message": candidate_launch_message or None,
                     "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
