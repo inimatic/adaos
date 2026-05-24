@@ -3034,6 +3034,14 @@ def _yws_guard_route_dependency_snapshot(*, now_ts: float | None = None) -> dict
     assessment_state = str(assessment.get("state") or "").strip().lower()
     control_state = str(control_flow.get("state") or "").strip().lower()
     frame_state = str(frame_flow.get("state") or "").strip().lower()
+    frame_event = str(frame_flow.get("last_event") or "").strip().lower()
+    frame_reason = str(frame_flow.get("reason") or "").strip().lower()
+    frame_error = str(frame_flow.get("last_error") or "").strip().lower()
+    frame_degraded_by_sync_shedding = (
+        "sync_backpressure" in frame_event
+        or "sync_backpressure" in frame_reason
+        or frame_error in {"route_sync_backpressure", "route_subnet_sync_backpressure"}
+    )
 
     pressure: list[str] = []
     if guardrail_active:
@@ -3046,7 +3054,7 @@ def _yws_guard_route_dependency_snapshot(*, now_ts: float | None = None) -> dict
         pressure.append("pending_chunks")
     if control_state in {"pressure", "degraded"}:
         pressure.append(f"control_{control_state}")
-    if frame_state in {"pressure", "degraded"}:
+    if frame_state in {"pressure", "degraded"} and not frame_degraded_by_sync_shedding:
         pressure.append(f"frame_{frame_state}")
 
     ready = False
@@ -3077,6 +3085,7 @@ def _yws_guard_route_dependency_snapshot(*, now_ts: float | None = None) -> dict
         "assessment_state": assessment_state,
         "control_state": control_state,
         "frame_state": frame_state,
+        "frame_degraded_by_sync_shedding": frame_degraded_by_sync_shedding,
         "pressure": pressure,
     }
 

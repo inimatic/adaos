@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import sys
 import time
@@ -1675,6 +1676,51 @@ def test_yws_guard_allows_short_session_recovery_when_route_dependency_ready(mon
     assert gateway_module._YWS_GUARD_DIAG["dependency_recovery_allowed_total"] == 1
     assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
+
+
+def test_yws_guard_route_dependency_ignores_sync_backpressure_frame_degradation(monkeypatch) -> None:
+    reliability = importlib.import_module("adaos.services.reliability")
+    monkeypatch.setattr(
+        reliability,
+        "runtime_signal_snapshot",
+        lambda: {
+            "route": {
+                "status": "ready",
+                "summary": "hub route relay subscription installed",
+                "details": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "hub_root_protocol_snapshot",
+        lambda *, now_ts=None: {
+            "assessment": {"state": "nominal"},
+            "route_runtime": {
+                "active_tunnels": 2,
+                "pending_tunnels": 0,
+                "pending_events": 0,
+                "pending_chunks": 0,
+                "guardrail_active": False,
+                "flows": {
+                    "control": {"state": "active", "reason": "route_control_session_active"},
+                    "frame": {
+                        "state": "degraded",
+                        "reason": "recent_error:sync_backpressure_late_drop",
+                        "last_event": "sync_backpressure_late_drop",
+                        "last_error": "route_sync_backpressure",
+                    },
+                },
+            },
+        },
+    )
+
+    dependency = gateway_module._yws_guard_route_dependency_snapshot(now_ts=time.time())
+
+    assert dependency["ready"] is True
+    assert dependency["reason"] == "route_signal_ready"
+    assert dependency["frame_degraded_by_sync_shedding"] is True
+    assert dependency["pressure"] == []
 
 
 def test_yws_guard_scopes_reconnect_history_by_browser_session(monkeypatch) -> None:
