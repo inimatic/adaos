@@ -128,16 +128,16 @@ def test_hub_route_force_close_no_upstream_can_disable(monkeypatch) -> None:
     assert bootstrap_mod._hub_route_force_close_no_upstream_s() == 0.0
 
 
-def test_hub_route_max_chunk_raw_defaults_below_small_pending_guard(monkeypatch) -> None:
+def test_hub_route_max_chunk_raw_defaults_to_bounded_yws_frame_size(monkeypatch) -> None:
     monkeypatch.delenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", raising=False)
 
-    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 64 * 1024
+    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 256 * 1024
 
 
 def test_hub_route_max_chunk_raw_clamps_explicit_value_to_guard(monkeypatch) -> None:
     monkeypatch.setenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", str(300_000))
 
-    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 64 * 1024
+    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 256 * 1024
 
 
 def test_hub_route_max_chunk_raw_respects_smaller_explicit_value(monkeypatch) -> None:

@@ -132,7 +132,7 @@ def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> fl
 
 
 def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int:
-    default = 64 * 1024
+    default = 256 * 1024
     minimum = 16 * 1024
     maximum = 512 * 1024
     try:
@@ -145,9 +145,10 @@ def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int
     except Exception:
         warn = 0
     if warn > 0:
-        # Keep a route frame comfortably below the pending-data guard even after
-        # JSON/base64 overhead, leaving room for one in-flight control frame.
-        raw = min(raw, max(minimum, warn // 4))
+        # Root reassembles all chunks before sending the browser WebSocket frame.
+        # Avoid excessive fragmentation of large YWS first-state frames; the
+        # pending-data guard still sheds sync tunnels when the route cannot drain.
+        raw = min(raw, max(minimum, warn))
     return int(raw)
 
 
