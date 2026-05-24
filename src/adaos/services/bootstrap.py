@@ -5896,16 +5896,15 @@ class BootstrapService:
                                     and t in ("frame", "chunk")
                                 ):
                                     try:
-                                        sync_frame_force_flush_this = _route_tunnel_flow(key) == "sync"
+                                        payload_flow0 = str((payload or {}).get("flow") or "").strip().lower()
+                                    except Exception:
+                                        payload_flow0 = ""
+                                    try:
+                                        sync_frame_force_flush_this = (
+                                            payload_flow0 == "sync" or _route_tunnel_flow(key) == "sync"
+                                        )
                                     except Exception:
                                         sync_frame_force_flush_this = False
-                                    if sync_frame_force_flush_this and t == "chunk":
-                                        try:
-                                            total0 = int((payload or {}).get("total") or 0)
-                                            idx0 = int((payload or {}).get("idx") or -1)
-                                            sync_frame_force_flush_this = total0 > 0 and idx0 >= total0 - 1
-                                        except Exception:
-                                            sync_frame_force_flush_this = True
                                 should_force_flush = bool(
                                     _route_force_flush and t in ("open_ack", "http_resp", "close")
                                 ) or bool(sync_frame_force_flush_this)
@@ -6638,12 +6637,14 @@ class BootstrapService:
                                         if len(raw) > MAX_CHUNK_RAW:
                                             cid = f"c_{uuid.uuid4().hex}"
                                             total = (len(raw) + MAX_CHUNK_RAW - 1) // MAX_CHUNK_RAW
+                                            flow0 = _route_tunnel_flow(key)
                                             for idx in range(total):
                                                 chunk = raw[idx * MAX_CHUNK_RAW : (idx + 1) * MAX_CHUNK_RAW]
                                                 await _route_reply(
                                                     key,
                                                     {
                                                         "t": "chunk",
+                                                        "flow": flow0,
                                                         "id": cid,
                                                         "kind": "bin",
                                                         "idx": idx,
@@ -6656,6 +6657,7 @@ class BootstrapService:
                                                 key,
                                                 {
                                                     "t": "frame",
+                                                    "flow": _route_tunnel_flow(key),
                                                     "kind": "bin",
                                                     "data_b64": base64.b64encode(raw).decode("ascii"),
                                                 },
@@ -6712,13 +6714,30 @@ class BootstrapService:
                                         if len(text) > MAX_CHUNK_RAW:
                                             cid = f"c_{uuid.uuid4().hex}"
                                             parts = [text[i : i + MAX_CHUNK_RAW] for i in range(0, len(text), MAX_CHUNK_RAW)]
+                                            flow0 = _route_tunnel_flow(key)
                                             for idx, part in enumerate(parts):
                                                 await _route_reply(
                                                     key,
-                                                    {"t": "chunk", "id": cid, "kind": "text", "idx": idx, "total": len(parts), "data": part},
+                                                    {
+                                                        "t": "chunk",
+                                                        "flow": flow0,
+                                                        "id": cid,
+                                                        "kind": "text",
+                                                        "idx": idx,
+                                                        "total": len(parts),
+                                                        "data": part,
+                                                    },
                                                 )
                                         else:
-                                            await _route_reply(key, {"t": "frame", "kind": "text", "data": text})
+                                            await _route_reply(
+                                                key,
+                                                {
+                                                    "t": "frame",
+                                                    "flow": _route_tunnel_flow(key),
+                                                    "kind": "text",
+                                                    "data": text,
+                                                },
+                                            )
                             except Exception as e:
                                 if _route_trace:
                                     try:
