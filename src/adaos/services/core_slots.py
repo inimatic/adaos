@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -171,6 +172,71 @@ def rollback_to_previous_slot() -> str | None:
         return None
     activate_slot(prev)
     return prev
+
+
+def remove_inactive_slot(slot: str, *, reason: str = "") -> dict[str, Any]:
+    slot_name = str(slot or "").strip().upper()
+    if slot_name not in SLOTS:
+        return {
+            "ok": False,
+            "slot": slot_name,
+            "removed": False,
+            "reason": "invalid_slot",
+        }
+    current = active_slot()
+    if current == slot_name:
+        return {
+            "ok": False,
+            "slot": slot_name,
+            "removed": False,
+            "reason": "refusing_to_remove_active_slot",
+            "active_slot": current,
+        }
+    root = slot_dir(slot_name).resolve()
+    slots_parent = (_slots_root() / "slots").resolve()
+    try:
+        root.relative_to(slots_parent)
+    except Exception:
+        return {
+            "ok": False,
+            "slot": slot_name,
+            "removed": False,
+            "reason": "slot_path_outside_slots_root",
+            "path": str(root),
+        }
+    try:
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=False)
+            removed = True
+        else:
+            removed = False
+        root.mkdir(parents=True, exist_ok=True)
+        previous_cleared = False
+        if previous_slot() == slot_name:
+            try:
+                _marker_path("previous").unlink(missing_ok=True)
+                previous_cleared = True
+            except Exception:
+                previous_cleared = False
+        return {
+            "ok": True,
+            "slot": slot_name,
+            "removed": removed,
+            "previous_cleared": previous_cleared,
+            "reason": str(reason or ""),
+            "path": str(root),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "slot": slot_name,
+            "removed": False,
+            "reason": "remove_failed",
+            "requested_reason": str(reason or ""),
+            "path": str(root),
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
 
 
 def slot_status() -> dict[str, Any]:

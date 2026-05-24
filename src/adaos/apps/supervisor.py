@@ -42,6 +42,7 @@ from adaos.services.core_slots import (
     active_slot_manifest,
     choose_inactive_slot,
     read_slot_manifest,
+    remove_inactive_slot,
     rollback_to_previous_slot,
     slot_status as core_slot_status,
     validate_slot_structure,
@@ -1528,12 +1529,18 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         "supervisor_previous_status": status,
     }
     if action == "update":
+        target_slot = str(status.get("target_slot") or attempt.get("target_slot") or "").strip().upper()
         restored = rollback_to_previous_slot()
         skill_runtime_rollback = rollback_installed_skill_runtimes() if restored else {}
         if restored:
             failed_payload["restored_slot"] = restored
             failed_payload["rollback"] = {"ok": True, "slot": restored}
             failed_payload["message"] += f"; rolled back to slot {restored}"
+        if target_slot:
+            failed_payload["slot_cleanup"] = remove_inactive_slot(
+                target_slot,
+                reason="supervisor.timeout_recovery",
+            )
         if skill_runtime_rollback:
             failed_payload["skill_runtime_rollback"] = skill_runtime_rollback
             if restored and not bool(skill_runtime_rollback.get("ok")):
@@ -6862,6 +6869,11 @@ class SupervisorManager:
             async with self._lock:
                 self._desired_running = True
                 self._persist_runtime_state()
+            slot_cleanup = (
+                remove_inactive_slot(target_slot, reason="supervisor.prepared_transition_failed")
+                if target_slot
+                else None
+            )
             status = write_core_update_status(
                 {
                     "state": "failed",
@@ -6879,6 +6891,7 @@ class SupervisorManager:
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                     "updated_at": time.time(),
+                    "slot_cleanup": slot_cleanup,
                 }
             )
             _complete_update_attempt(

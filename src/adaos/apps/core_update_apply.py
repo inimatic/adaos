@@ -120,6 +120,11 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
+def _venv_is_usable(venv_dir: Path) -> bool:
+    python_bin = _venv_python(venv_dir)
+    return venv_dir.exists() and python_bin.exists()
+
+
 def _rewrite_text_file(path: Path, *, old: str, new: str) -> bool:
     try:
         raw = path.read_bytes()
@@ -159,6 +164,195 @@ def _repair_moved_venv(venv_dir: Path, *, original_venv_dir: Path) -> dict[str, 
         "venv_dir": str(venv_dir),
         "original_venv_dir": str(original_venv_dir),
         "repaired_files": repaired,
+    }
+
+
+def _repair_copied_venv(venv_dir: Path, *, source_venv_dir: Path) -> dict[str, object]:
+    return _repair_moved_venv(venv_dir, original_venv_dir=source_venv_dir)
+
+
+def _copy_seed_venv(source_venv_dir: Path, target_venv_dir: Path) -> dict[str, object]:
+    source = Path(source_venv_dir).expanduser().resolve()
+    target = Path(target_venv_dir).expanduser().resolve()
+    if not _venv_is_usable(source):
+        return {
+            "ok": False,
+            "seeded": False,
+            "source_venv_dir": str(source),
+            "target_venv_dir": str(target),
+            "reason": "source_venv_unusable",
+        }
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    try:
+        shutil.copytree(source, target, symlinks=True)
+    except Exception:
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(source, target)
+    repair = _repair_copied_venv(target, source_venv_dir=source)
+    return {
+        "ok": True,
+        "seeded": True,
+        "source_venv_dir": str(source),
+        "target_venv_dir": str(target),
+        "repair": repair,
+    }
+
+
+def _active_slot_seed_venv(slot_dir: Path) -> Path | None:
+    slots_parent = slot_dir.parent
+    active_marker = slots_parent.parent / "active"
+    try:
+        active = active_marker.read_text(encoding="utf-8").strip().upper()
+    except Exception:
+        active = ""
+    if active not in {"A", "B"}:
+        return None
+    candidate = slots_parent / active / "venv"
+    return candidate.resolve() if _venv_is_usable(candidate) else None
+
+
+def _root_seed_venv(repo_root_dir: Path | None) -> Path | None:
+    if repo_root_dir is None:
+        return None
+    candidates = [
+        repo_root_dir / ".venv",
+    ]
+    for candidate in candidates:
+        if _venv_is_usable(candidate):
+            return candidate.resolve()
+    return None
+
+
+def _prepare_seed_venv(
+    *,
+    venv_dir: Path,
+    slot_dir: Path,
+    repo_root_dir: Path | None,
+) -> dict[str, object]:
+    if str(os.getenv("ADAOS_CORE_UPDATE_SEED_VENV", "1") or "1").strip().lower() in {"0", "false", "no", "off"}:
+        return {
+            "ok": True,
+            "seeded": False,
+            "source": "disabled",
+            "reason": "disabled_by_env",
+            "target_venv_dir": str(venv_dir),
+        }
+    for source_name, source_path in (
+        ("active_slot", _active_slot_seed_venv(slot_dir)),
+        ("root_venv", _root_seed_venv(repo_root_dir)),
+    ):
+        if source_path is None:
+            continue
+        try:
+            result = _copy_seed_venv(source_path, venv_dir)
+            result["source"] = source_name
+            if bool(result.get("ok")):
+                return result
+        except Exception as exc:
+            last_error = {
+                "source": source_name,
+                "source_venv_dir": str(source_path),
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            }
+            continue
+    payload: dict[str, object] = {
+        "ok": True,
+        "seeded": False,
+        "source": "",
+        "reason": "no_usable_seed_venv",
+        "target_venv_dir": str(venv_dir),
+    }
+    if "last_error" in locals():
+        payload["last_error"] = last_error
+    return payload
+
+
+def _uv_install_enabled() -> bool:
+    return str(os.getenv("ADAOS_CORE_UPDATE_UV", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _uv_locked_enabled() -> bool:
+    return str(os.getenv("ADAOS_CORE_UPDATE_UV_LOCKED", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _install_slot_project(
+    *,
+    checkout_dir: Path,
+    venv_dir: Path,
+    seed: dict[str, object],
+) -> dict[str, object]:
+    started_at = time.time()
+    uv = shutil.which("uv") if _uv_install_enabled() else None
+    attempts: list[dict[str, object]] = []
+    if uv and (checkout_dir / "uv.lock").exists():
+        env = dict(os.environ)
+        env["UV_PROJECT_ENVIRONMENT"] = str(venv_dir)
+        cmd = [uv, "sync", "--no-dev", "--python", sys.executable]
+        if _uv_locked_enabled():
+            cmd.insert(2, "--locked")
+        completed = subprocess.run(
+            cmd,
+            cwd=str(checkout_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        attempts.append(
+            {
+                "installer": "uv",
+                "command": cmd,
+                "returncode": int(completed.returncode),
+                "stdout_tail": (completed.stdout or "")[-4000:],
+                "stderr_tail": (completed.stderr or "")[-4000:],
+            }
+        )
+        if completed.returncode == 0:
+            return {
+                "ok": True,
+                "installer": "uv",
+                "started_at": started_at,
+                "finished_at": time.time(),
+                "elapsed_s": round(time.time() - started_at, 3),
+                "seed": seed,
+                "attempts": attempts,
+            }
+
+    if not _venv_is_usable(venv_dir):
+        _run([sys.executable, "-m", "venv", str(venv_dir)])
+    py = _venv_python(venv_dir)
+    try:
+        _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+        _run([str(py), "-m", "pip", "install", str(checkout_dir)])
+    except Exception as first_exc:
+        attempts.append(
+            {
+                "installer": "pip",
+                "returncode": 1,
+                "error": str(first_exc),
+                "error_type": type(first_exc).__name__,
+                "after_seed": bool(seed.get("seeded")),
+            }
+        )
+        if bool(seed.get("seeded")):
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            _run([sys.executable, "-m", "venv", str(venv_dir)])
+            py = _venv_python(venv_dir)
+            _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+            _run([str(py), "-m", "pip", "install", str(checkout_dir)])
+        else:
+            raise
+    attempts.append({"installer": "pip", "returncode": 0})
+    return {
+        "ok": True,
+        "installer": "pip",
+        "started_at": started_at,
+        "finished_at": time.time(),
+        "elapsed_s": round(time.time() - started_at, 3),
+        "seed": seed,
+        "attempts": attempts,
     }
 
 
@@ -670,10 +864,16 @@ def prepare_slot(
             target_version=target_version,
         )
         venv_tmp = prepared_slot / "venv"
-        _run([sys.executable, "-m", "venv", str(venv_tmp)])
-        py = _venv_python(venv_tmp)
-        _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-        _run([str(py), "-m", "pip", "install", str(checkout_tmp)])
+        venv_seed = _prepare_seed_venv(
+            venv_dir=venv_tmp,
+            slot_dir=slot_dir,
+            repo_root_dir=repo_root_dir,
+        )
+        install_result = _install_slot_project(
+            checkout_dir=checkout_tmp,
+            venv_dir=venv_tmp,
+            seed=venv_seed,
+        )
 
         final_repo_dir = slot_dir / "repo"
         final_venv_dir = slot_dir / "venv"
@@ -707,6 +907,8 @@ def prepare_slot(
             "git_branch": git_branch,
             "git_subject": git_subject,
             "bootstrap_update": bootstrap_update,
+            "venv_seed": venv_seed,
+            "install": install_result,
             "cwd": str(final_repo_dir),
             "argv": [
                 str(final_py),
