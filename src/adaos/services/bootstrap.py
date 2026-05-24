@@ -145,10 +145,15 @@ def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int
     except Exception:
         warn = 0
     if warn > 0:
-        # Root reassembles all chunks before sending the browser WebSocket frame.
-        # Avoid excessive fragmentation of large YWS first-state frames; the
-        # pending-data guard still sheds sync tunnels when the route cannot drain.
-        raw = min(raw, max(minimum, warn))
+        # Route chunks are JSON+base64 encoded before they hit the NATS writer.
+        # Keep each encoded publish below the pending-data warning budget when
+        # operators tune that budget down, otherwise a single YWS repair chunk
+        # can immediately trip route pressure.
+        overhead_reserve = min(32 * 1024, max(4 * 1024, warn // 16))
+        safe_budget = max(0, warn - overhead_reserve)
+        safe_raw = max(minimum, (safe_budget * 3) // 4)
+        safe_raw = max(minimum, (safe_raw // (4 * 1024)) * (4 * 1024))
+        raw = min(raw, safe_raw)
     return int(raw)
 
 
@@ -228,8 +233,6 @@ def _hub_route_should_force_flush_reply(
             total = int(payload.get("total") or 0)
         except Exception:
             total = 0
-        if total > 1 and 0 <= idx < total - 1:
-            return False
         if bool(route_sync_frame_force_flush):
             return total > 0
         try:
@@ -242,7 +245,11 @@ def _hub_route_should_force_flush_reply(
             pending = max(0, int(pending_data_size or 0))
         except Exception:
             pending = 0
-        return pending >= threshold
+        if pending >= threshold:
+            return True
+        if total > 1 and 0 <= idx < total - 1:
+            return False
+        return False
     if is_sync_frame and bool(route_sync_frame_force_flush):
         return True
     if is_sync_frame:
@@ -6059,8 +6066,7 @@ class BootstrapService:
                                     except Exception:
                                         payload_flow0 = ""
                                     sync_frame_force_flush_this = (
-                                        bool(_route_sync_frame_force_flush)
-                                        and (payload_flow0 == "sync" or route_flow0 == "sync")
+                                        payload_flow0 == "sync" or route_flow0 == "sync"
                                     )
                                 if should_force_flush:
                                     # Fast-drain pending bytes without relying on NATS PING/PONG.

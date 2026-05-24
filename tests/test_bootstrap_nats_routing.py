@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import sys
 import types
 from types import SimpleNamespace
@@ -128,16 +129,20 @@ def test_hub_route_force_close_no_upstream_can_disable(monkeypatch) -> None:
     assert bootstrap_mod._hub_route_force_close_no_upstream_s() == 0.0
 
 
-def test_hub_route_max_chunk_raw_defaults_to_bounded_yws_frame_size(monkeypatch) -> None:
+def test_hub_route_max_chunk_raw_accounts_for_base64_overhead(monkeypatch) -> None:
     monkeypatch.delenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", raising=False)
 
-    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 256 * 1024
+    raw = bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024)
+
+    assert raw < 256 * 1024
+    assert raw % (4 * 1024) == 0
+    assert len(base64.b64encode(b"x" * raw)) + (16 * 1024) <= 256 * 1024
 
 
 def test_hub_route_max_chunk_raw_clamps_explicit_value_to_guard(monkeypatch) -> None:
     monkeypatch.setenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", str(300_000))
 
-    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 256 * 1024
+    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) < 256 * 1024
 
 
 def test_hub_route_max_chunk_raw_respects_smaller_explicit_value(monkeypatch) -> None:
@@ -224,7 +229,7 @@ def test_hub_route_does_not_use_flush_threshold_as_sync_shed_threshold() -> None
     )
 
 
-def test_hub_route_force_flushes_only_final_sync_chunk() -> None:
+def test_hub_route_force_flushes_all_sync_chunks_when_configured() -> None:
     common = {
         "route_force_flush": True,
         "route_sync_frame_force_flush": True,
@@ -238,7 +243,7 @@ def test_hub_route_force_flushes_only_final_sync_chunk() -> None:
             {"t": "chunk", "flow": "sync", "idx": 0, "total": 4},
             **common,
         )
-        is False
+        is True
     )
     assert (
         bootstrap_mod._hub_route_should_force_flush_reply(
@@ -263,7 +268,7 @@ def test_hub_route_force_flushes_only_final_sync_chunk() -> None:
     )
 
 
-def test_hub_route_flushes_sync_tail_when_pending_pressure_is_high() -> None:
+def test_hub_route_flushes_sync_chunks_when_pending_pressure_is_high() -> None:
     common = {
         "route_force_flush": True,
         "route_sync_frame_force_flush": False,
@@ -284,7 +289,7 @@ def test_hub_route_flushes_sync_tail_when_pending_pressure_is_high() -> None:
             {"t": "chunk", "flow": "sync", "idx": 0, "total": 4},
             **{**common, "pending_data_size": 128 * 1024},
         )
-        is False
+        is True
     )
     assert (
         bootstrap_mod._hub_route_should_force_flush_reply(
