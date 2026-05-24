@@ -346,6 +346,26 @@ def test_hub_route_tools_call_does_not_retry_after_read_timeout() -> None:
     ) is True
 
 
+def test_hub_route_parse_resend_delays_filters_and_clamps_values() -> None:
+    assert bootstrap_mod._hub_route_parse_resend_delays("0.35, bad, -1, 1, 1.0, 30") == [
+        0.35,
+        1.0,
+        10.0,
+    ]
+
+
+def test_hub_route_should_resend_http_resp_only_for_critical_control_paths() -> None:
+    assert bootstrap_mod._hub_route_should_resend_http_resp("/api/node/status") is True
+    assert bootstrap_mod._hub_route_should_resend_http_resp("/api/node/ui/diagnostics") is True
+    assert (
+        bootstrap_mod._hub_route_should_resend_http_resp(
+            "/api/node/yjs/webspaces/desktop/materialization?include_runtime=1"
+        )
+        is True
+    )
+    assert bootstrap_mod._hub_route_should_resend_http_resp("/api/media/files/example.bin") is False
+
+
 def test_build_hub_route_http_bases_prefers_supervisor_active_runtime(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
