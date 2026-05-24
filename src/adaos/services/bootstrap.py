@@ -189,11 +189,10 @@ def _hub_route_should_shed_sync_frame(
         pending = max(0, int(pending_data_size or 0))
     except Exception:
         pending = 0
-    try:
-        payload = max(0, int(payload_bytes or 0))
-    except Exception:
-        payload = 0
-    return pending >= threshold or (pending > 0 and pending + payload >= threshold)
+    # YWS sync can legitimately emit a large first-state frame.  The route
+    # reader chunks large payloads after this check, so do not close the whole
+    # sync tunnel merely because one payload would cross the pending threshold.
+    return pending >= threshold
 
 
 def _hub_route_subnet_sync_payload_type(path: Any, message: Any) -> str:

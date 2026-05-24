@@ -153,11 +153,21 @@ def test_hub_route_semantic_flow_classifies_control_and_sync_paths() -> None:
     assert bootstrap_mod._hub_route_semantic_flow_for_path("/api/node/status") == "route"
 
 
-def test_hub_route_sheds_sync_frames_when_pending_bytes_cross_control_threshold() -> None:
+def test_hub_route_sheds_sync_frames_only_when_pending_bytes_already_cross_control_threshold() -> None:
     assert (
         bootstrap_mod._hub_route_should_shed_sync_frame(
             "/yws/desktop",
             pending_data_size=96 * 1024,
+            guardrail_active=False,
+            frame_flush_pending_bytes=128 * 1024,
+            payload_bytes=64 * 1024,
+        )
+        is False
+    )
+    assert (
+        bootstrap_mod._hub_route_should_shed_sync_frame(
+            "/yws/desktop",
+            pending_data_size=128 * 1024,
             guardrail_active=False,
             frame_flush_pending_bytes=128 * 1024,
             payload_bytes=64 * 1024,
