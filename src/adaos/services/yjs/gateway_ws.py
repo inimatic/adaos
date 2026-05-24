@@ -257,6 +257,7 @@ _YWS_ROOM_STALE_RECOVERY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_STALE_RECOVERY_T
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
 _YWS_MAX_ACTIVE_PER_WEBSPACE = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_WEBSPACE", 6, minimum=1)
 _YWS_MAX_ACTIVE_PER_CLIENT = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_CLIENT", 2, minimum=1)
+_YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS = _env_flag("ADAOS_YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS", True)
 _YWS_GUARD_RECENT_OPEN_10S = _env_int("ADAOS_YWS_GUARD_RECENT_OPEN_10S", 8, minimum=1)
 _YWS_GUARD_CLIENT_OPEN_15S = _env_int("ADAOS_YWS_GUARD_CLIENT_OPEN_15S", 4, minimum=1)
 _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S = _env_int("ADAOS_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2, minimum=1)
@@ -2603,27 +2604,42 @@ async def _close_existing_yws_client_connections(
                 else _websocket_device_id(websocket) == device_key
             )
         ]
-    overflow = len(sockets) - _YWS_MAX_ACTIVE_PER_CLIENT + 1
+    scoped_client = bool(browser_session_id or client_attempt_id)
+    replace_existing = scoped_client and bool(_YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS)
+    overflow = len(sockets) if replace_existing else len(sockets) - _YWS_MAX_ACTIVE_PER_CLIENT + 1
     if overflow <= 0:
         return 0
     closed = 0
     for websocket in sockets[:overflow]:
+        close_ok = False
         try:
-            await websocket.close(code=1012, reason="replaced_by_new_yws_session")
+            await asyncio.wait_for(
+                websocket.close(code=1012, reason="replaced_by_new_yws_session"),
+                timeout=0.5,
+            )
+            close_ok = True
             closed += 1
         except Exception:
             pass
+        if close_ok:
+            try:
+                _untrack_yws_connection(key, websocket)
+            except Exception:
+                pass
     if closed:
         _YWS_GUARD_DIAG["last_replaced_at"] = time.time()
         _YWS_GUARD_DIAG["last_replaced_webspace_id"] = key
         _YWS_GUARD_DIAG["last_replaced_dev_id"] = device_key
         _YWS_GUARD_DIAG["replaced_total"] = int(_YWS_GUARD_DIAG.get("replaced_total") or 0) + closed
+        if replace_existing:
+            _YWS_GUARD_DIAG["scoped_replaced_total"] = int(_YWS_GUARD_DIAG.get("scoped_replaced_total") or 0) + closed
         _ylog.warning(
-            "yws guard replaced stale client sessions webspace=%s dev=%s closed=%s max_active_per_client=%s",
+            "yws guard replaced stale client sessions webspace=%s dev=%s closed=%s max_active_per_client=%s scoped=%s",
             key,
             device_key,
             closed,
             _YWS_MAX_ACTIVE_PER_CLIENT,
+            replace_existing,
         )
         await asyncio.sleep(0)
     return closed
