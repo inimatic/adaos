@@ -4998,7 +4998,10 @@ class BootstrapService:
                             _route_flush_timeout_s = float(os.getenv("HUB_ROUTE_FLUSH_TIMEOUT_S", "1.0") or "1.0")
                         except Exception:
                             _route_flush_timeout_s = 1.0
-                        _route_sync_frame_force_flush = os.getenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", "1") == "1"
+                        # YWS first sync can emit multi-megabyte frame bursts. Let the NATS flusher drain
+                        # sync frames asynchronously by default so route HTTP replies are not serialized
+                        # behind a forced PING/PONG/flush round trip on every final sync chunk.
+                        _route_sync_frame_force_flush = os.getenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", "0") == "1"
                         try:
                             _route_sync_frame_flush_timeout_s = float(
                                 os.getenv(
@@ -5598,9 +5601,29 @@ class BootstrapService:
                             reason0 = str(reason or "").strip() or "route_reset"
                             notify0 = bool(notify_browser)
                             closed_tunnels = 0
+                            closed_tunnels_completed = 0
                             dropped_pending = 0
                             notified_browser = 0
                             keys: list[str] = []
+                            notify_tasks: list[asyncio.Task[Any]] = []
+                            close_tasks: list[asyncio.Task[Any]] = []
+
+                            def _consume_reset_task(task: asyncio.Task[Any]) -> None:
+                                try:
+                                    task.result()
+                                except BaseException:
+                                    pass
+
+                            async def _notify_route_close(key0: str) -> None:
+                                await _route_reply(key0, {"t": "close", "err": reason0})
+
+                            async def _close_route_ws(ws0: Any) -> None:
+                                close0 = getattr(ws0, "close", None)
+                                if callable(close0):
+                                    result0 = close0()
+                                    if asyncio.iscoroutine(result0):
+                                        await result0
+
                             try:
                                 keys = list(
                                     dict.fromkeys(
@@ -5635,11 +5658,12 @@ class BootstrapService:
                                     pass
                                 if notify0 and str(reply_subjects.get(key) or "").strip():
                                     try:
-                                        await asyncio.wait_for(
-                                            _route_reply(key, {"t": "close", "err": reason0}),
-                                            timeout=0.5,
+                                        task0 = asyncio.create_task(
+                                            _notify_route_close(key),
+                                            name=f"hub-route-reset-notify-{_key_tag(key)}",
                                         )
-                                        notified_browser += 1
+                                        task0.add_done_callback(_consume_reset_task)
+                                        notify_tasks.append(task0)
                                     except Exception:
                                         pass
                                 try:
@@ -5660,10 +5684,37 @@ class BootstrapService:
                                     pass
                                 if ws:
                                     try:
-                                        await asyncio.wait_for(ws.close(), timeout=0.5)
+                                        task1 = asyncio.create_task(
+                                            _close_route_ws(ws),
+                                            name=f"hub-route-reset-close-{_key_tag(key)}",
+                                        )
+                                        task1.add_done_callback(_consume_reset_task)
+                                        close_tasks.append(task1)
+                                        closed_tunnels += 1
                                     except Exception:
                                         pass
-                                    closed_tunnels += 1
+                            if notify_tasks:
+                                try:
+                                    done0, _pending0 = await asyncio.wait(set(notify_tasks), timeout=0.25)
+                                    for task0 in done0:
+                                        try:
+                                            if not task0.cancelled() and task0.exception() is None:
+                                                notified_browser += 1
+                                        except BaseException:
+                                            pass
+                                except Exception:
+                                    pass
+                            if close_tasks:
+                                try:
+                                    done1, _pending1 = await asyncio.wait(set(close_tasks), timeout=0.25)
+                                    for task1 in done1:
+                                        try:
+                                            if not task1.cancelled() and task1.exception() is None:
+                                                closed_tunnels_completed += 1
+                                        except BaseException:
+                                            pass
+                                except Exception:
+                                    pass
                             try:
                                 sync_shed_tunnel_meta.clear()
                             except Exception:
@@ -5691,6 +5742,7 @@ class BootstrapService:
                                     details={
                                         "reason": reason0,
                                         "closed_tunnels": closed_tunnels,
+                                        "closed_tunnels_completed": closed_tunnels_completed,
                                         "dropped_pending": dropped_pending,
                                         "notified_browser": notified_browser,
                                     },
@@ -5710,6 +5762,7 @@ class BootstrapService:
                                 "reason": reason0,
                                 "notify_browser": notify0,
                                 "closed_tunnels": closed_tunnels,
+                                "closed_tunnels_completed": closed_tunnels_completed,
                                 "dropped_pending": dropped_pending,
                                 "notified_browser": notified_browser,
                                 "reset_total": route_reset_total,
