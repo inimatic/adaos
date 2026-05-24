@@ -36,6 +36,9 @@ runtime.
 
 Текущие target-state расширения control plane описаны в:
 
+- [Model Runtime and Registry](model-runtime-and-registry.md): target-state слой `models` для model execution, artifact registry, local/remote backend, session и job architecture
+- [Model Runtime Roadmap](model-runtime-roadmap.md): чеклист реализации core model infrastructure перед миграцией Neural NLU и face vision
+
 - [Infrascope](infrascope.md): human-facing архитектура control plane поверх
   canonical system model
 - [Root MCP Foundation](root-mcp-foundation.md): root-hosted agent-facing
