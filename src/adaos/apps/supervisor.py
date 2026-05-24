@@ -1387,6 +1387,30 @@ def _recover_active_attempt_target_already_active(
     return recovered_status
 
 
+def _reconcile_failed_attempt_after_terminal_success(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    status_map = status if isinstance(status, dict) else {}
+    attempt_map = attempt if isinstance(attempt, dict) else {}
+    if str(status_map.get("state") or "").strip().lower() != "succeeded":
+        return None
+    if str(status_map.get("phase") or "").strip().lower() != "validate":
+        return None
+    if str(attempt_map.get("state") or "").strip().lower() != "failed":
+        return None
+    if str(attempt_map.get("action") or "update").strip().lower() != "update":
+        return None
+    if not _terminal_status_belongs_to_attempt(status_map, attempt_map):
+        return None
+    return _complete_update_attempt(
+        state="completed",
+        status=status_map,
+        reason="terminal core update success reconciled",
+    )
+
+
 def _fail_root_restart_attempt(
     *,
     status: dict[str, Any],
@@ -1492,6 +1516,13 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     if str(attempt.get("state") or "").strip().lower() != "active":
+        reconciled_attempt = _reconcile_failed_attempt_after_terminal_success(
+            status=status,
+            attempt=attempt,
+        )
+        if isinstance(reconciled_attempt, dict):
+            payload["attempt"] = reconciled_attempt
+            payload["_served_by"] = "supervisor_failed_attempt_success_reconciled"
         return payload
 
     if _is_terminal_update_status(status):

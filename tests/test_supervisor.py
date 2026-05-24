@@ -212,6 +212,65 @@ def test_reconcile_update_status_rejects_terminal_success_for_wrong_active_slot(
     assert attempt["last_status"]["target_version"] == "2222222222222222222222222222222222222222"
 
 
+def test_reconcile_update_status_clears_failed_attempt_after_terminal_success(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 700.0)
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "A",
+            "build_version": "0.1.39+1.23592eb",
+            "git_commit": "23592eb4b5889c7d880ec1f2ab189ff30e72c03d",
+            "git_short_commit": "23592eb",
+        },
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "failed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "23592eb4b5889c7d880ec1f2ab189ff30e72c03d",
+            "requested_at": 600.0,
+            "transitioned_at": 660.0,
+            "updated_at": 690.0,
+            "completed_at": 690.0,
+            "completion_reason": "active slot target mismatch",
+            "last_status": {
+                "state": "failed",
+                "phase": "validate",
+                "target_slot": "B",
+                "target_version": "23592eb4b5889c7d880ec1f2ab189ff30e72c03d",
+                "reason": "active_slot_target_mismatch",
+            },
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": {
+                "state": "succeeded",
+                "phase": "validate",
+                "target_rev": "rev2026",
+                "target_version": "23592eb4b5889c7d880ec1f2ab189ff30e72c03d",
+                "target_slot": "A",
+                "message": "runtime boot validated on slot A",
+                "updated_at": 699.0,
+            },
+            "_served_by": "runtime",
+        }
+    )
+
+    assert payload["_served_by"] == "supervisor_failed_attempt_success_reconciled"
+    attempt = payload.get("attempt")
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "completed"
+    assert attempt["completion_reason"] == "terminal core update success reconciled"
+    assert attempt["last_status"]["state"] == "succeeded"
+    assert attempt["last_status"]["target_slot"] == "A"
+
+
 def test_sidecar_role_falls_back_to_load_config_when_ctx_config_is_missing(monkeypatch) -> None:
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token=None)
 
