@@ -5561,6 +5561,50 @@ class SupervisorManager:
             "runtime": snapshot,
         }
 
+    async def _refresh_starting_candidate_prewarm(self, *, target_slot: str | None) -> dict[str, Any]:
+        resolved_target = str(target_slot or "").strip().upper()
+        if not resolved_target:
+            return {
+                "state": "skipped",
+                "message": "candidate prewarm refresh skipped: target slot is unavailable",
+            }
+
+        timeout_sec = _warm_switch_candidate_ready_timeout_sec()
+        deadline = time.time() + timeout_sec
+        snapshot = self.status()
+        while True:
+            snapshot = self.status()
+            candidate_slot = str(snapshot.get("candidate_slot") or "").strip().upper()
+            candidate_url = str(snapshot.get("candidate_runtime_url") or "").strip()
+            candidate_alive = bool(snapshot.get("candidate_managed_alive"))
+            candidate_ready = bool(snapshot.get("candidate_runtime_api_ready"))
+            if candidate_slot != resolved_target:
+                return {
+                    "state": "failed",
+                    "message": "candidate prewarm refresh failed: candidate slot changed before shutdown",
+                    "runtime": snapshot,
+                }
+            if candidate_ready:
+                return {
+                    "state": "ready",
+                    "message": f"passive candidate runtime is ready on {candidate_url or resolved_target}",
+                    "ready_at": time.time(),
+                    "runtime": snapshot,
+                }
+            if not candidate_alive:
+                return {
+                    "state": "failed",
+                    "message": "candidate prewarm refresh failed: passive candidate runtime stopped before shutdown",
+                    "runtime": snapshot,
+                }
+            if timeout_sec <= 0.0 or time.time() >= deadline:
+                return {
+                    "state": "starting",
+                    "message": f"passive candidate runtime is still warming on {candidate_url or resolved_target}",
+                    "runtime": snapshot,
+                }
+            await asyncio.sleep(0.25)
+
     async def _cleanup_candidate_runtime(self, *, reason: str, slot: str | None = None) -> dict[str, Any]:
         resolved_slot = str(slot or "").strip().upper() or None
         async with self._lock:
@@ -6738,6 +6782,16 @@ class SupervisorManager:
             )
             cancel_phase = "countdown"
             await asyncio.sleep(max(0.0, float(countdown_sec)))
+            if candidate_prewarm_state == "starting":
+                candidate_refresh = await self._refresh_starting_candidate_prewarm(target_slot=target_slot)
+                refreshed_state = str(candidate_refresh.get("state") or "").strip().lower()
+                if refreshed_state:
+                    candidate_prewarm_state = refreshed_state
+                refreshed_message = str(candidate_refresh.get("message") or "").strip()
+                if refreshed_message:
+                    candidate_prewarm_message = refreshed_message
+                if candidate_refresh.get("ready_at") is not None:
+                    candidate_prewarm_ready_at = candidate_refresh.get("ready_at")
 
             plan = {
                 "state": "prepared_restart",

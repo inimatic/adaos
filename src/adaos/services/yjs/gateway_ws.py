@@ -5,6 +5,7 @@ Yjs websocket gateway implementation (service layer).
 """
 
 import asyncio
+import contextlib
 import contextvars
 from collections import deque
 import gc
@@ -298,6 +299,26 @@ _YROOM_EFFECTIVE_GUARD_REPAIR_COOLDOWN_SEC = _env_float(
     0.25,
     minimum=0.0,
 )
+_YROOM_EFFECTIVE_REPAIR_REPLAY_TTL_SEC = _env_float(
+    "ADAOS_YJS_EFFECTIVE_REPAIR_REPLAY_TTL_SEC",
+    30.0,
+    minimum=0.0,
+)
+_YROOM_EFFECTIVE_REPAIR_REPLAY_MAX_UPDATES = _env_int(
+    "ADAOS_YJS_EFFECTIVE_REPAIR_REPLAY_MAX_UPDATES",
+    8,
+    minimum=1,
+)
+_YROOM_EFFECTIVE_REPAIR_REPLAY_FLUSH_SEC = _env_float(
+    "ADAOS_YJS_EFFECTIVE_REPAIR_REPLAY_FLUSH_SEC",
+    6.0,
+    minimum=0.0,
+)
+_YROOM_EFFECTIVE_REPAIR_REPLAY_INTERVAL_SEC = _env_float(
+    "ADAOS_YJS_EFFECTIVE_REPAIR_REPLAY_INTERVAL_SEC",
+    0.1,
+    minimum=0.05,
+)
 _YROOM_AUTHORITATIVE_SELECTOR_LEASE_SEC = _env_float(
     "ADAOS_YJS_AUTHORITATIVE_SELECTOR_LEASE_SEC",
     30.0,
@@ -493,6 +514,7 @@ class DiagnosticYRoom(YRoom):
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
         self._diag_effective_last_full_check_mono = time.monotonic()
         self._diag_effective_last_repair_mono = 0.0
+        self._diag_effective_repair_replay_updates: deque[dict[str, Any]] = deque()
         self._diag_last_log_mono = 0.0
         self._diag_pressure_active = False
         self._diag_pressure_reason = ""
@@ -556,6 +578,7 @@ class DiagnosticYRoom(YRoom):
             "inbound_guard_last_reset_reserved": bool(self._diag_inbound_guard_last_reset_reserved),
             "effective_repair_total": int(self._diag_effective_repair_total),
             "effective_repair_bytes": int(self._diag_effective_repair_bytes),
+            "effective_repair_replay_pending": len(self._effective_repair_replay_entries()),
             "peak_buffer_used": int(self._diag_peak_buffer_used),
             "peak_pending_send_tasks": int(self._diag_peak_pending_send_tasks),
             "peak_pending_store_tasks": int(self._diag_peak_pending_store_tasks),
@@ -723,6 +746,44 @@ class DiagnosticYRoom(YRoom):
             int(ystore.get("update_log_bytes") or 0),
             int(ystore.get("replay_window_bytes") or 0),
         )
+
+    def _prune_effective_repair_replay_updates(self, now: float | None = None) -> None:
+        now_ts = time.time() if now is None else float(now)
+        while self._diag_effective_repair_replay_updates:
+            entry = self._diag_effective_repair_replay_updates[0]
+            if float(entry.get("expires_at") or 0.0) > now_ts:
+                break
+            self._diag_effective_repair_replay_updates.popleft()
+        while len(self._diag_effective_repair_replay_updates) > _YROOM_EFFECTIVE_REPAIR_REPLAY_MAX_UPDATES:
+            self._diag_effective_repair_replay_updates.popleft()
+
+    def _queue_effective_repair_replay(self, update: bytes, *, reason: str) -> None:
+        if not update or _YROOM_EFFECTIVE_REPAIR_REPLAY_TTL_SEC <= 0.0:
+            return
+        now_ts = time.time()
+        self._prune_effective_repair_replay_updates(now_ts)
+        self._diag_effective_repair_replay_updates.append(
+            {
+                "update": bytes(update),
+                "reason": str(reason or "effective_repair"),
+                "queued_at": now_ts,
+                "expires_at": now_ts + float(_YROOM_EFFECTIVE_REPAIR_REPLAY_TTL_SEC),
+                "sent_total": 0,
+            }
+        )
+        self._prune_effective_repair_replay_updates(now_ts)
+        self.log.warning(
+            "queued Y effective repair replay webspace=%s reason=%s repair_bytes=%s pending=%s clients=%s",
+            self._diag_room_id(),
+            str(reason or "effective_repair"),
+            len(update),
+            len(self._diag_effective_repair_replay_updates),
+            len(getattr(self, "clients", []) or []),
+        )
+
+    def _effective_repair_replay_entries(self) -> list[dict[str, Any]]:
+        self._prune_effective_repair_replay_updates()
+        return list(self._diag_effective_repair_replay_updates)
 
     async def _tracked_client_send(self, client: Any, message: bytes, update_bytes: int) -> None:
         self._diag_pending_send_tasks += 1
@@ -973,7 +1034,13 @@ class DiagnosticYRoom(YRoom):
                     )
                     if repair_update:
                         repair_message = create_update_message(repair_update)
-                        for client in self.clients:
+                        clients = list(getattr(self, "clients", []) or [])
+                        if not clients:
+                            self._queue_effective_repair_replay(
+                                repair_update,
+                                reason="initial_client_update_reconcile",
+                            )
+                        for client in clients:
                             self.log.debug("Sending Y repair update to client with endpoint: %s", client.path)
                             self._task_group.start_soon(
                                 self._tracked_client_send,
@@ -989,7 +1056,13 @@ class DiagnosticYRoom(YRoom):
                     )
                     if repair_update:
                         repair_message = create_update_message(repair_update)
-                        for client in self.clients:
+                        clients = list(getattr(self, "clients", []) or [])
+                        if not clients:
+                            self._queue_effective_repair_replay(
+                                repair_update,
+                                reason="destructive_client_update",
+                            )
+                        for client in clients:
                             self.log.debug("Sending Y repair update to client with endpoint: %s", client.path)
                             self._task_group.start_soon(
                                 self._tracked_client_send,
@@ -4933,6 +5006,46 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str, *, yws_attempt_id: st
         raise
 
 
+async def _flush_pending_effective_repair_replays(
+    room_ref: Any,
+    adapter: YWebsocket,
+    *,
+    webspace_id: str,
+    attempt_id: str,
+    client_attempt_id: str | None = None,
+) -> None:
+    """
+    Replay effective-branch repairs that were produced before ypy registered
+    the just-connected client in room.clients.
+    """
+    entries_func = getattr(room_ref, "_effective_repair_replay_entries", None)
+    if not callable(entries_func) or _YROOM_EFFECTIVE_REPAIR_REPLAY_FLUSH_SEC <= 0.0:
+        return
+    deadline = time.monotonic() + float(_YROOM_EFFECTIVE_REPAIR_REPLAY_FLUSH_SEC)
+    sent_entry_ids: set[int] = set()
+    while time.monotonic() <= deadline:
+        entries = entries_func()
+        pending = [entry for entry in entries if id(entry) not in sent_entry_ids]
+        for entry in pending:
+            update = bytes(entry.get("update") or b"")
+            if not update:
+                sent_entry_ids.add(id(entry))
+                continue
+            await adapter.send(create_update_message(update))
+            sent_entry_ids.add(id(entry))
+            entry["sent_total"] = int(entry.get("sent_total") or 0) + 1
+            _ylog.warning(
+                "replayed pending Y effective repair to yws client webspace=%s attempt=%s client_attempt=%s reason=%s repair_bytes=%s sent_total=%s",
+                webspace_id,
+                attempt_id,
+                client_attempt_id or None,
+                str(entry.get("reason") or "effective_repair"),
+                len(update),
+                int(entry.get("sent_total") or 0),
+            )
+        await asyncio.sleep(float(_YROOM_EFFECTIVE_REPAIR_REPLAY_INTERVAL_SEC))
+
+
 async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     """
     Internal Yjs sync handler used by both /yws and /yws/<room> routes.
@@ -5160,6 +5273,15 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             "source": "yws.gateway",
         },
     )
+    repair_replay_task: asyncio.Task[None] | None = asyncio.create_task(
+        _flush_pending_effective_repair_replays(
+            room_ref,
+            adapter,
+            webspace_id=webspace_id,
+            attempt_id=attempt_id,
+            client_attempt_id=client_attempt_id or None,
+        )
+    )
     try:
         await room_ref.serve(adapter)
     except RuntimeError:
@@ -5174,6 +5296,10 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         )
         return
     finally:
+        if repair_replay_task is not None:
+            repair_replay_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await repair_replay_task
         yws_lifetime_s = max(0.0, time.time() - yws_opened_at)
         _record_yws_short_session(
             webspace_id,

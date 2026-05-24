@@ -153,6 +153,35 @@ def _fake_log() -> SimpleNamespace:
     )
 
 
+def test_pending_effective_repair_replay_flushes_to_yws_adapter(monkeypatch) -> None:
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room._webspace_id = "desktop"
+    sent: list[bytes] = []
+
+    class _Adapter:
+        async def send(self, message: bytes) -> None:
+            sent.append(message)
+
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_REPAIR_REPLAY_FLUSH_SEC", 0.01)
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_REPAIR_REPLAY_INTERVAL_SEC", 0.005)
+
+    room._queue_effective_repair_replay(b"repair-update", reason="initial_client_update_reconcile")
+
+    asyncio.run(
+        gateway_module._flush_pending_effective_repair_replays(
+            room,
+            _Adapter(),
+            webspace_id="desktop",
+            attempt_id="yws-test",
+            client_attempt_id="cyws-test",
+        )
+    )
+
+    entries = room._effective_repair_replay_entries()
+    assert sent == [b"update:repair-update"]
+    assert entries[0]["sent_total"] == 1
+
+
 def test_gateway_coerces_legacy_default_webspace_to_runtime_default() -> None:
     assert gateway_module._coerce_gateway_webspace_id("") == "desktop"
     assert gateway_module._coerce_gateway_webspace_id("default") == "desktop"
