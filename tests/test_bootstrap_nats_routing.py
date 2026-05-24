@@ -263,7 +263,7 @@ def test_hub_route_force_flushes_only_final_sync_chunk() -> None:
     )
 
 
-def test_hub_route_skips_forced_sync_frame_flush_under_pending_pressure() -> None:
+def test_hub_route_flushes_sync_tail_when_pending_pressure_is_high() -> None:
     common = {
         "route_force_flush": True,
         "route_sync_frame_force_flush": False,
@@ -281,6 +281,20 @@ def test_hub_route_skips_forced_sync_frame_flush_under_pending_pressure() -> Non
     )
     assert (
         bootstrap_mod._hub_route_should_force_flush_reply(
+            {"t": "chunk", "flow": "sync", "idx": 0, "total": 4},
+            **{**common, "pending_data_size": 128 * 1024},
+        )
+        is False
+    )
+    assert (
+        bootstrap_mod._hub_route_should_force_flush_reply(
+            {"t": "chunk", "flow": "sync", "idx": 3, "total": 4},
+            **{**common, "pending_data_size": 128 * 1024},
+        )
+        is True
+    )
+    assert (
+        bootstrap_mod._hub_route_should_force_flush_reply(
             {"t": "frame", "flow": "sync", "kind": "bin"},
             **common,
         )
@@ -291,7 +305,7 @@ def test_hub_route_skips_forced_sync_frame_flush_under_pending_pressure() -> Non
             {"t": "frame", "flow": "sync", "kind": "bin"},
             **{**common, "pending_data_size": 128 * 1024},
         )
-        is False
+        is True
     )
     assert (
         bootstrap_mod._hub_route_should_force_flush_reply(

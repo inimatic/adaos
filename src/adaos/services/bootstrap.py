@@ -232,10 +232,31 @@ def _hub_route_should_force_flush_reply(
             return False
         if bool(route_sync_frame_force_flush):
             return total > 0
+        try:
+            threshold = int(frame_flush_pending_bytes or 0)
+        except Exception:
+            threshold = 0
+        if threshold <= 0:
+            return False
+        try:
+            pending = max(0, int(pending_data_size or 0))
+        except Exception:
+            pending = 0
+        return pending >= threshold
     if is_sync_frame and bool(route_sync_frame_force_flush):
         return True
     if is_sync_frame:
-        return False
+        try:
+            threshold = int(frame_flush_pending_bytes or 0)
+        except Exception:
+            threshold = 0
+        if threshold <= 0:
+            return False
+        try:
+            pending = max(0, int(pending_data_size or 0))
+        except Exception:
+            pending = 0
+        return pending >= threshold
 
     try:
         threshold = int(frame_flush_pending_bytes or 0)
