@@ -123,6 +123,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Setup uv
+        if: steps.head.outputs.skip != 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Bump pyproject patch version
         if: steps.head.outputs.skip != 'true'
         id: bump
@@ -131,6 +137,7 @@ jobs:
           set -euo pipefail
           old_version="$(python tools/bump_adaos_patch_version.py --current)"
           new_version="$(python tools/bump_adaos_patch_version.py)"
+          uv lock
           echo "old_version=${old_version}" >> "$GITHUB_OUTPUT"
           echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
           echo "Bumped AdaOS ${old_version} -> ${new_version}"
@@ -140,12 +147,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- pyproject.toml; then
+          if git diff --quiet -- pyproject.toml uv.lock; then
             echo "No version change to commit."
             exit 0
           fi
           git config user.name "AdaOS CI Bot"
           git config user.email "ci-bot@example.com"
-          git add pyproject.toml
+          git add pyproject.toml uv.lock
           git commit -m "chore: bump adaos version to ${{ steps.bump.outputs.new_version }}"
           git push origin HEAD:rev2026
