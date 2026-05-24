@@ -23,6 +23,7 @@ from adaos.services.core_slots import (
     choose_inactive_slot,
     previous_slot,
     read_slot_manifest,
+    remove_inactive_slot,
     rollback_to_previous_slot,
     slot_dir,
 )
@@ -1094,4 +1095,9 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
         "manifest": manifest,
         "plan": slot_plan,
     }
+    if not ok and action == "update" and target_slot:
+        payload["slot_cleanup"] = remove_inactive_slot(
+            target_slot,
+            reason="core_update.apply_failed",
+        )
     return write_status(payload)
