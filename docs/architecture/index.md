@@ -39,6 +39,8 @@ Current target-state control-plane extensions are documented in:
 - [Operational Event Model](operational-event-model.md): target event, demand, lifecycle, and Yjs materialization contract for browser-facing projections
 - [Operational Event Model Reference Plan](operational-event-model-reference-plan.md): top-level coverage gates, required contract shapes, review checklist, and completion definition for implementing the event model correctly
 - [Operational Event Model Roadmap](operational-event-model-roadmap.md): master implementation order across communication, runtime contracts, Yjs shape, client adapters, platform emitters, and skill pilots
+- [Model Runtime and Registry](model-runtime-and-registry.md): target model execution, artifact registry, local/remote backend, session, and job architecture for neural and external model-backed skills
+- [Model Runtime Roadmap](model-runtime-roadmap.md): implementation checklist for landing core model infrastructure first, then migrating Neural NLU and face vision pilots
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md): priority checklist for moving skills and scenarios to demand-driven per-webspace projections
 - [Skill Projection and Stream Boundary](skill-projection-and-stream-boundary.md): current stabilization status and target roadmap for skill-owned Yjs projections, stream data, node-aware addressing, and temporary per-skill bridges
 - [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md): target SDK/core rails for projection slots, stream receivers, dirty routing, fingerprinted Yjs writes, and skill migration checklists
