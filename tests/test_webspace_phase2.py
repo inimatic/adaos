@@ -1389,7 +1389,12 @@ def test_collect_remote_skill_decls_uses_member_desktop_catalog_snapshot(monkeyp
                                                 },
                                             },
                                         ],
-                                    }
+                                    },
+                                    {
+                                        "id": "mediaserver_widget",
+                                        "title": "Media Server",
+                                        "dataSource": {"kind": "y", "path": "data/media/library"},
+                                    },
                                 ],
                                 "registry": {
                                     "modals": {
@@ -1416,6 +1421,7 @@ def test_collect_remote_skill_decls_uses_member_desktop_catalog_snapshot(monkeyp
                                 },
                                 "ydoc_defaults": {
                                     "data/weather/current": {"city": "Moscow"},
+                                    "data/media/library": {"items": []},
                                 },
                             }
                         },
@@ -1442,10 +1448,13 @@ def test_collect_remote_skill_decls_uses_member_desktop_catalog_snapshot(monkeyp
     assert decls[0]["widgets"][0]["dataSource"]["nodeId"] == "member-1"
     assert decls[0]["widgets"][0]["actions"][0]["params"]["modalId"] == "node:member-1:weather_modal"
     assert decls[0]["widgets"][0]["actions"][1]["params"]["_observe"]["path"] == "data/nodes/member-1/weather/current"
+    assert decls[0]["widgets"][1]["id"] == "node:member-1:mediaserver_widget"
+    assert decls[0]["widgets"][1]["dataSource"]["path"] == "data/nodes/member-1/media/library"
     assert decls[0]["registry"]["modals"]["node:member-1:weather_modal"]["schema"]["widgets"][0]["source"] == "data/nodes/member-1/weather/cities"
     assert decls[0]["webio"]["receivers"]["infrastate.realtime"]["mode"] == "replace"
     assert "nodeId" not in decls[0]["webio"]["receivers"]["infrastate.realtime"]
     assert decls[0]["ydoc_defaults"]["data/nodes/member-1/weather/current"] == {"city": "Moscow"}
+    assert decls[0]["ydoc_defaults"]["data/nodes/member-1/media/library"] == {"items": []}
 
 
 def test_resolve_webspace_preserves_live_remote_entries_during_projection_gap(monkeypatch) -> None:
