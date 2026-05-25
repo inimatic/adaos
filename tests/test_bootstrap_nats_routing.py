@@ -151,6 +151,19 @@ def test_hub_route_max_chunk_raw_respects_smaller_explicit_value(monkeypatch) ->
     assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 64 * 1024
 
 
+def test_hub_route_normalize_resend_chunk_indexes_deduplicates_and_bounds() -> None:
+    assert bootstrap_mod._hub_route_normalize_resend_chunk_indexes(
+        [3, "1", 3, -1, "bad", 6, 2],
+        5,
+        max_items=3,
+    ) == [3, 1, 2]
+
+
+def test_hub_route_normalize_resend_chunk_indexes_rejects_invalid_inputs() -> None:
+    assert bootstrap_mod._hub_route_normalize_resend_chunk_indexes("1,2", 4) == []
+    assert bootstrap_mod._hub_route_normalize_resend_chunk_indexes([0, 1], 0) == []
+
+
 def test_hub_route_semantic_flow_classifies_control_and_sync_paths() -> None:
     assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws?token=secret") == "control"
     assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws/subnet") == "subnet"
