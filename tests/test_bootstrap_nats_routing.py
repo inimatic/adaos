@@ -229,6 +229,19 @@ def test_hub_route_does_not_use_flush_threshold_as_sync_shed_threshold() -> None
     )
 
 
+def test_hub_route_sync_frame_force_flush_defaults_to_enabled(monkeypatch) -> None:
+    monkeypatch.delenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", raising=False)
+
+    assert bootstrap_mod._hub_route_sync_frame_force_flush_enabled() is True
+
+
+def test_hub_route_sync_frame_force_flush_allows_explicit_opt_out(monkeypatch) -> None:
+    for value in ("0", "false", "no", "off"):
+        monkeypatch.setenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", value)
+
+        assert bootstrap_mod._hub_route_sync_frame_force_flush_enabled() is False
+
+
 def test_hub_route_force_flushes_all_sync_chunks_when_configured() -> None:
     common = {
         "route_force_flush": True,

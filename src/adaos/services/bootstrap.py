@@ -202,6 +202,15 @@ def _hub_route_should_shed_sync_frame(
     return pending >= threshold
 
 
+def _hub_route_sync_frame_force_flush_enabled(raw: Any = None) -> bool:
+    if raw is None:
+        raw = os.getenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH")
+    token = str(raw if raw is not None else "1").strip().lower()
+    if not token:
+        return True
+    return token not in {"0", "false", "no", "off"}
+
+
 def _hub_route_should_force_flush_reply(
     payload: Any,
     *,
@@ -5062,10 +5071,10 @@ class BootstrapService:
                             _route_flush_timeout_s = float(os.getenv("HUB_ROUTE_FLUSH_TIMEOUT_S", "1.0") or "1.0")
                         except Exception:
                             _route_flush_timeout_s = 1.0
-                        # YWS first sync can emit multi-megabyte frame bursts. Let the NATS flusher drain
-                        # sync frames asynchronously by default so route HTTP replies are not serialized
-                        # behind a forced PING/PONG/flush round trip on every final sync chunk.
-                        _route_sync_frame_force_flush = os.getenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", "0") == "1"
+                        # YWS first sync is the authoritative browser bootstrap. Drain routed sync
+                        # frames deterministically by default; operators can opt out only when a
+                        # dedicated route path has enough independent backpressure control.
+                        _route_sync_frame_force_flush = _hub_route_sync_frame_force_flush_enabled()
                         try:
                             _route_sync_frame_flush_timeout_s = float(
                                 os.getenv(
