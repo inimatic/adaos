@@ -1445,6 +1445,9 @@ def _collect_materialization_missing_branches(
     has_widgets_catalog_modal: bool,
     has_catalog_apps: bool,
     has_catalog_widgets: bool,
+    has_data_desktop: bool,
+    has_installed_apps: bool,
+    has_installed_widgets: bool,
 ) -> list[str]:
     missing: list[str] = []
     if not has_ui_application:
@@ -1461,6 +1464,12 @@ def _collect_materialization_missing_branches(
         missing.append("data.catalog.apps")
     if not has_catalog_widgets:
         missing.append("data.catalog.widgets")
+    if not has_data_desktop:
+        missing.append("data.desktop")
+    if not has_installed_apps:
+        missing.append("data.installed.apps")
+    if not has_installed_widgets:
+        missing.append("data.installed.widgets")
     return missing
 
 
@@ -1475,13 +1484,21 @@ def _derive_materialization_readiness_state(
     has_widgets_catalog_modal: bool,
     has_catalog_apps: bool,
     has_catalog_widgets: bool,
+    has_data_desktop: bool,
+    has_installed_apps: bool,
+    has_installed_widgets: bool,
 ) -> str:
     if ready:
         return "ready"
-    if has_desktop_page_schema and has_catalog_apps and has_catalog_widgets:
+    has_effective_data = has_data_desktop and has_installed_apps and has_installed_widgets
+    if has_desktop_page_schema and has_catalog_apps and has_catalog_widgets and has_effective_data:
         return "interactive"
     if has_desktop_page_schema and (
-        has_catalog_apps or has_catalog_widgets or has_apps_catalog_modal or has_widgets_catalog_modal
+        has_catalog_apps
+        or has_catalog_widgets
+        or has_apps_catalog_modal
+        or has_widgets_catalog_modal
+        or has_effective_data
     ):
         return "hydrating"
     if has_desktop_page_schema:
@@ -1593,6 +1610,11 @@ async def _describe_yjs_materialization(
             catalog = _coerce_dict(data_map.get("catalog") or {})
             apps = _coerce_list(catalog.get("apps"))
             widgets = _coerce_list(catalog.get("widgets"))
+            data_desktop_raw = data_map.get("desktop")
+            installed_raw = data_map.get("installed")
+            installed = _coerce_dict(installed_raw or {})
+            installed_apps = _coerce_list(installed.get("apps"))
+            installed_widgets = _coerce_list(installed.get("widgets"))
             page_schema = _coerce_dict(desktop.get("pageSchema") or {})
             page_widgets = _coerce_list(page_schema.get("widgets"))
             topbar = _coerce_list(desktop.get("topbar"))
@@ -1613,6 +1635,9 @@ async def _describe_yjs_materialization(
             has_widgets_catalog_modal = "widgets_catalog" in modals
             has_catalog_apps = isinstance(catalog.get("apps"), list)
             has_catalog_widgets = isinstance(catalog.get("widgets"), list)
+            has_data_desktop = isinstance(data_desktop_raw, dict)
+            has_installed_apps = isinstance(installed.get("apps"), list)
+            has_installed_widgets = isinstance(installed.get("widgets"), list)
             missing_branches = _collect_materialization_missing_branches(
                 has_ui_application=has_ui_application,
                 has_desktop_config=has_desktop_config,
@@ -1621,6 +1646,9 @@ async def _describe_yjs_materialization(
                 has_widgets_catalog_modal=has_widgets_catalog_modal,
                 has_catalog_apps=has_catalog_apps,
                 has_catalog_widgets=has_catalog_widgets,
+                has_data_desktop=has_data_desktop,
+                has_installed_apps=has_installed_apps,
+                has_installed_widgets=has_installed_widgets,
             )
             ready = not missing_branches
             readiness_state = _derive_materialization_readiness_state(
@@ -1633,6 +1661,9 @@ async def _describe_yjs_materialization(
                 has_widgets_catalog_modal=has_widgets_catalog_modal,
                 has_catalog_apps=has_catalog_apps,
                 has_catalog_widgets=has_catalog_widgets,
+                has_data_desktop=has_data_desktop,
+                has_installed_apps=has_installed_apps,
+                has_installed_widgets=has_installed_widgets,
             )
             compatibility_caches = _describe_compatibility_caches(
                 current_scenario=current_scenario,
@@ -1657,9 +1688,16 @@ async def _describe_yjs_materialization(
                 "has_widgets_catalog_modal": has_widgets_catalog_modal,
                 "has_catalog_apps": has_catalog_apps,
                 "has_catalog_widgets": has_catalog_widgets,
+                "has_data_desktop": has_data_desktop,
+                "has_installed_apps": has_installed_apps,
+                "has_installed_widgets": has_installed_widgets,
                 "catalog_counts": {
                     "apps": len(apps),
                     "widgets": len(widgets),
+                },
+                "installed_counts": {
+                    "apps": len(installed_apps),
+                    "widgets": len(installed_widgets),
                 },
                 "topbar_count": len(topbar),
                 "page_widget_count": len(page_widgets),
@@ -1676,6 +1714,9 @@ async def _describe_yjs_materialization(
             has_widgets_catalog_modal=False,
             has_catalog_apps=False,
             has_catalog_widgets=False,
+            has_data_desktop=False,
+            has_installed_apps=False,
+            has_installed_widgets=False,
         )
         compatibility_caches = _describe_compatibility_caches(
             current_scenario=None,
@@ -1699,7 +1740,11 @@ async def _describe_yjs_materialization(
             "has_widgets_catalog_modal": False,
             "has_catalog_apps": False,
             "has_catalog_widgets": False,
+            "has_data_desktop": False,
+            "has_installed_apps": False,
+            "has_installed_widgets": False,
             "catalog_counts": {"apps": 0, "widgets": 0},
+            "installed_counts": {"apps": 0, "widgets": 0},
             "topbar_count": 0,
             "page_widget_count": 0,
             "snapshot_source": "live_ydoc_error",
