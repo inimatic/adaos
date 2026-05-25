@@ -138,6 +138,7 @@ class MemberLinkClient:
         self._last_yjs_snapshot_webspace_id = ""
         self._last_yjs_snapshot_reason = ""
         self._last_yjs_queue_size = 0
+        self._last_yjs_node_state_timeout_at = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._snapshot_task: asyncio.Task | None = None
         self._last_connect_full_snapshot_at = 0.0
@@ -199,6 +200,19 @@ class MemberLinkClient:
         if value <= 0.0:
             return None
         return max(1.0, min(value, 60.0))
+
+    @staticmethod
+    def _yjs_node_state_timeout_s() -> float | None:
+        raw = str(os.getenv("ADAOS_SUBNET_YJS_NODE_STATE_TIMEOUT_S") or "").strip()
+        if raw.lower() in {"0", "false", "no", "off", "none", "disabled"}:
+            return None
+        try:
+            value = float(raw or 5.0)
+        except Exception:
+            value = 5.0
+        if value <= 0.0:
+            return None
+        return max(0.25, min(value, 60.0))
 
     @staticmethod
     def _parse_bus_prefixes(raw: str | None) -> list[str] | None:
@@ -282,6 +296,11 @@ class MemberLinkClient:
                 "last_snapshot_webspace_id": self._last_yjs_snapshot_webspace_id or None,
                 "last_snapshot_reason": self._last_yjs_snapshot_reason or None,
                 "last_queue_size": int(self._last_yjs_queue_size),
+                "last_node_state_timeout_ago_s": (
+                    round(max(0.0, now - self._last_yjs_node_state_timeout_at), 3)
+                    if self._last_yjs_node_state_timeout_at
+                    else None
+                ),
             },
             "transition_state": str(transition.get("transition_state") or "ready"),
             "transition_reason": str(transition.get("reason") or "none"),
@@ -627,11 +646,9 @@ class MemberLinkClient:
                 return
             try:
                 loop.call_soon_threadsafe(
-                    lambda: asyncio.create_task(
-                        self._queue_yjs_node_state(
-                            webspace_id=webspace_id or "default",
-                            reason="ystore_write",
-                        )
+                    lambda: self._schedule_yjs_node_state(
+                        webspace_id=webspace_id or "default",
+                        reason="ystore_write",
                     )
                 )
             except Exception:
@@ -663,7 +680,8 @@ class MemberLinkClient:
             return
         ydoc = Y.YDoc()
         store = get_ystore_for_webspace(ws_id)
-        try:
+
+        async def _read_node_state() -> dict[str, Any] | None:
             await store.start()
             await store.apply_updates(ydoc)
             data_map = ydoc.get_map("data")
@@ -672,7 +690,15 @@ class MemberLinkClient:
                 data = json.loads(data)
             nodes = data.get("nodes") if isinstance(data, dict) else {}
             node_state = nodes.get(local_node_id) if isinstance(nodes, dict) else None
-            if not isinstance(node_state, dict):
+            return node_state if isinstance(node_state, dict) else None
+
+        try:
+            timeout_s = self._yjs_node_state_timeout_s()
+            if timeout_s is None:
+                node_state = await _read_node_state()
+            else:
+                node_state = await asyncio.wait_for(_read_node_state(), timeout=timeout_s)
+            if not node_state:
                 return
             msg = {
                 "t": "yjs.node_state",
@@ -690,6 +716,15 @@ class MemberLinkClient:
             self._last_yjs_snapshot_webspace_id = ws_id
             self._last_yjs_snapshot_reason = str(reason or "member_link_snapshot")
             self._last_yjs_queue_size = int(self._out_q.qsize())
+        except asyncio.TimeoutError:
+            self._yjs_snapshot_failed_total += 1
+            self._last_yjs_node_state_timeout_at = time.time()
+            _log.warning(
+                "member-link Yjs node-state snapshot timed out webspace=%s reason=%s timeout_s=%.3f",
+                ws_id,
+                reason,
+                self._yjs_node_state_timeout_s() or 0.0,
+            )
         except Exception:
             self._yjs_snapshot_failed_total += 1
             _log.debug("failed to queue member-link Yjs state snapshot webspace=%s", ws_id, exc_info=True)
@@ -698,6 +733,24 @@ class MemberLinkClient:
                 store.stop()
             except Exception:
                 pass
+
+    def _schedule_yjs_node_state(self, *, webspace_id: str, reason: str) -> bool:
+        if not self._yjs_enabled:
+            return False
+        try:
+            loop = self._loop or asyncio.get_running_loop()
+        except Exception:
+            self._yjs_write_drop_queue_total += 1
+            return False
+        try:
+            loop.create_task(
+                self._queue_yjs_node_state(webspace_id=webspace_id or "default", reason=reason),
+                name=f"member-link-yjs-node-state:{webspace_id or 'default'}",
+            )
+            return True
+        except Exception:
+            self._yjs_write_drop_queue_total += 1
+            return False
 
     def _ensure_bus_subscription(self) -> None:
         if self._bus_subscribed:
@@ -850,7 +903,7 @@ class MemberLinkClient:
                     ):
                         self._last_connect_yjs_state_at = now
                         for ws_id in self._yjs_snapshot_webspaces():
-                            await self._queue_yjs_node_state(
+                            self._schedule_yjs_node_state(
                                 webspace_id=ws_id,
                                 reason="member_link_connected",
                             )
