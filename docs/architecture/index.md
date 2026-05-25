@@ -51,6 +51,7 @@ Current target-state control-plane extensions are documented in:
 - [Member-Hub Connectivity](member-hub-connectivity.md): target control-plane architecture for member join, member-hub lifecycle ownership, restart-aware health semantics, and QR onboarding
 - [Device Access and Browsers](device-access-and-browsers.md): target architecture for durable device identity, browser and member access policy, device-centric desktop UX, and reusable access management surfaces
 - [Device Access Roadmap](device-access-roadmap.md): recommended migration order from bootstrap-only links and ad hoc UI actions to a shared access-link control plane
+- [Post-Deploy E2E Testing](post-deploy-e2e-testing.md): target post-deploy browser E2E architecture, evidence bundle model, runtime-contract checks, and roadmap toward rollout gates
 - [Semantic State Plane](semantic-state-plane.md): target kernel architecture for separating connectivity, shared-state sync freshness, and Yjs pressure governance without adding redundant status entities
 - [Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md): target architecture and migration checklist for moving scenario switching from materialize-and-copy to pointer-first semantic rebuild
 - [Skill Assets and Icons Roadmap](skill-assets-and-icons-roadmap.md): roadmap for loading skill-owned icons and resources without recompiling the browser client

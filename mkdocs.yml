@@ -172,6 +172,7 @@ nav:
       - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
       - Device Access and Browsers: architecture/device-access-and-browsers.md
       - Device Access Roadmap: architecture/device-access-roadmap.md
+      - Post-Deploy E2E Testing: architecture/post-deploy-e2e-testing.md
       - Skill Assets and Icons Roadmap: architecture/skill-assets-and-icons-roadmap.md
   - CLI:
       - Overview: cli/index.md
