@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+import tracemalloc
 import traceback
 from http import HTTPStatus
 from pathlib import Path
@@ -145,6 +146,15 @@ def _wait_for_prepared_restart_manifest(
 def _runtime_profile_mode() -> str:
     mode = str(os.getenv("ADAOS_SUPERVISOR_PROFILE_MODE") or "normal").strip().lower()
     return mode if mode in {"normal", "sampled_profile", "trace_profile"} else "normal"
+
+
+class _RuntimeMemoryProfileSession(RuntimeMemoryProfileSession):
+    def __init__(self) -> None:
+        super().__init__(
+            profile_mode=_runtime_profile_mode(),
+            session_id=str(os.getenv("ADAOS_SUPERVISOR_PROFILE_SESSION_ID") or "").strip() or None,
+            profile_trigger=str(os.getenv("ADAOS_SUPERVISOR_PROFILE_TRIGGER") or "").strip() or None,
+        )
 
 
 def _runtime_profile_session_id() -> str | None:
