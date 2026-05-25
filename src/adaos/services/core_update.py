@@ -414,6 +414,34 @@ def _hydrate_rollout_status_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _set_status_default(payload: dict[str, Any], key: str, value: Any) -> None:
+    if value is None:
+        return
+    if key not in payload or payload.get(key) is None or payload.get(key) == "":
+        payload[key] = value
+
+
+def _hydrate_install_status_fields_from_manifest(payload: dict[str, Any], manifest: dict[str, Any] | None) -> None:
+    source = manifest if isinstance(manifest, dict) else {}
+    install = source.get("install") if isinstance(source.get("install"), dict) else {}
+    seed = source.get("venv_seed") if isinstance(source.get("venv_seed"), dict) else {}
+    repair = seed.get("repair") if isinstance(seed.get("repair"), dict) else {}
+
+    _set_status_default(payload, "install_elapsed_s", install.get("elapsed_s"))
+    installer = str(install.get("installer") or "").strip()
+    _set_status_default(payload, "install_installer", installer or None)
+
+    seed_source = str(seed.get("source") or "").strip()
+    _set_status_default(payload, "venv_seed_source", seed_source or None)
+    if "venv_seeded" not in payload:
+        payload["venv_seeded"] = bool(seed.get("seeded"))
+    _set_status_default(payload, "venv_seed_copy_method", str(seed.get("copy_method") or "").strip() or None)
+    _set_status_default(payload, "venv_seed_copy_elapsed_s", seed.get("copy_elapsed_s"))
+    _set_status_default(payload, "venv_seed_elapsed_s", seed.get("elapsed_s"))
+    _set_status_default(payload, "venv_seed_repair_elapsed_s", repair.get("elapsed_s"))
+    _set_status_default(payload, "venv_repair_files_total", repair.get("repaired_files_total"))
+
+
 def _is_terminal_status(payload: dict[str, Any]) -> bool:
     state = str(payload.get("state") or "").strip().lower()
     phase = str(payload.get("phase") or "").strip().lower()
@@ -590,6 +618,9 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
 
 def write_status(payload: dict[str, Any]) -> dict[str, Any]:
     merged = _hydrate_rollout_status_fields(payload)
+    manifest = merged.get("manifest") if isinstance(merged.get("manifest"), dict) else None
+    if manifest is not None:
+        _hydrate_install_status_fields_from_manifest(merged, manifest)
     merged.setdefault("updated_at", time.time())
     _write_json(status_path(), merged)
     if _is_terminal_status(merged):
@@ -661,6 +692,7 @@ def finalize_runtime_boot_status() -> dict[str, Any] | None:
         payload["target_slot"] = slot
     if isinstance(manifest, dict) and manifest:
         payload["manifest"] = manifest
+        _hydrate_install_status_fields_from_manifest(payload, manifest)
     root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
     root_promotion_unavailable = str(bootstrap_update.get("effective_unavailable_reason") or "").strip()
     if root_promotion_required and (not root_restart_pending or not root_promotion_unavailable):
@@ -1016,6 +1048,15 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
         "install_installer": str(install.get("installer") or "").strip() or None,
         "venv_seed_source": str(seed.get("source") or "").strip() or None,
         "venv_seeded": bool(seed.get("seeded")),
+        "venv_seed_copy_method": str(seed.get("copy_method") or "").strip() or None,
+        "venv_seed_copy_elapsed_s": seed.get("copy_elapsed_s"),
+        "venv_seed_elapsed_s": seed.get("elapsed_s"),
+        "venv_seed_repair_elapsed_s": (
+            seed.get("repair", {}).get("elapsed_s") if isinstance(seed.get("repair"), dict) else None
+        ),
+        "venv_repair_files_total": (
+            seed.get("repair", {}).get("repaired_files_total") if isinstance(seed.get("repair"), dict) else None
+        ),
         "plan": slot_plan,
     }
 

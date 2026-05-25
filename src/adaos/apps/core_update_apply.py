@@ -202,6 +202,7 @@ def _repair_moved_venv(
     original_repo_dir: Path | None = None,
     final_repo_dir: Path | None = None,
 ) -> dict[str, object]:
+    started_at = time.time()
     repaired: list[str] = []
     replacements: list[tuple[str, str]] = [(str(original_venv_dir), str(venv_dir))]
     if original_repo_dir is not None and final_repo_dir is not None:
@@ -216,6 +217,8 @@ def _repair_moved_venv(
         "original_repo_dir": str(original_repo_dir) if original_repo_dir is not None else "",
         "final_repo_dir": str(final_repo_dir) if final_repo_dir is not None else "",
         "repaired_files": repaired,
+        "repaired_files_total": len(repaired),
+        "elapsed_s": round(time.time() - started_at, 3),
     }
 
 
@@ -223,7 +226,95 @@ def _repair_copied_venv(venv_dir: Path, *, source_venv_dir: Path) -> dict[str, o
     return _repair_moved_venv(venv_dir, original_venv_dir=source_venv_dir)
 
 
+def _run_seed_copy_command(
+    cmd: Sequence[str],
+    *,
+    source: Path,
+    target: Path,
+    method: str,
+) -> dict[str, object]:
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        list(cmd),
+        cwd=str(source.parent),
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode == 0:
+        return {
+            "ok": True,
+            "method": method,
+            "command": list(cmd),
+        }
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    return {
+        "ok": False,
+        "method": method,
+        "command": list(cmd),
+        "returncode": int(completed.returncode),
+        "stdout_tail": (completed.stdout or "")[-2000:],
+        "stderr_tail": (completed.stderr or "")[-2000:],
+    }
+
+
+def _copy_seed_venv_tree(source: Path, target: Path) -> dict[str, object]:
+    mode = str(os.getenv("ADAOS_CORE_UPDATE_LINUX_SEED_COPY_MODE", "auto") or "auto").strip().lower()
+    attempts: list[dict[str, object]] = []
+    if sys.platform.startswith("linux") and mode not in {"copy", "python", "shutil"}:
+        cp = shutil.which("cp")
+        if cp:
+            source_contents = str(source / ".")
+            if mode in {"auto", "reflink", "cow", "copy-on-write"}:
+                attempt = _run_seed_copy_command(
+                    [cp, "-a", "--reflink=auto", source_contents, str(target)],
+                    source=source,
+                    target=target,
+                    method="cp_reflink_auto",
+                )
+                attempts.append(attempt)
+                if bool(attempt.get("ok")):
+                    attempt["attempts"] = attempts
+                    return attempt
+            hardlink_enabled = mode == "hardlink" or str(
+                os.getenv("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK", "")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if hardlink_enabled:
+                attempt = _run_seed_copy_command(
+                    [cp, "-al", source_contents, str(target)],
+                    source=source,
+                    target=target,
+                    method="cp_hardlink",
+                )
+                attempts.append(attempt)
+                if bool(attempt.get("ok")):
+                    attempt["attempts"] = attempts
+                    return attempt
+
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    try:
+        shutil.copytree(source, target, symlinks=True)
+        return {"ok": True, "method": "shutil_copytree_symlinks", "attempts": attempts}
+    except Exception as first_exc:
+        attempts.append(
+            {
+                "ok": False,
+                "method": "shutil_copytree_symlinks",
+                "error": str(first_exc),
+                "error_type": type(first_exc).__name__,
+            }
+        )
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(source, target)
+        return {"ok": True, "method": "shutil_copytree", "attempts": attempts}
+
+
 def _copy_seed_venv(source_venv_dir: Path, target_venv_dir: Path) -> dict[str, object]:
+    started_at = time.time()
     source = Path(source_venv_dir).expanduser().resolve()
     target = Path(target_venv_dir).expanduser().resolve()
     if not _venv_is_usable(source):
@@ -234,20 +325,19 @@ def _copy_seed_venv(source_venv_dir: Path, target_venv_dir: Path) -> dict[str, o
             "target_venv_dir": str(target),
             "reason": "source_venv_unusable",
         }
-    if target.exists():
-        shutil.rmtree(target, ignore_errors=True)
-    try:
-        shutil.copytree(source, target, symlinks=True)
-    except Exception:
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
-        shutil.copytree(source, target)
+    copy_started_at = time.time()
+    copy_result = _copy_seed_venv_tree(source, target)
+    copy_finished_at = time.time()
     repair = _repair_copied_venv(target, source_venv_dir=source)
     return {
         "ok": True,
         "seeded": True,
         "source_venv_dir": str(source),
         "target_venv_dir": str(target),
+        "copy_method": str(copy_result.get("method") or ""),
+        "copy_elapsed_s": round(copy_finished_at - copy_started_at, 3),
+        "elapsed_s": round(time.time() - started_at, 3),
+        "copy_attempts": copy_result.get("attempts") if isinstance(copy_result.get("attempts"), list) else [],
         "repair": repair,
     }
 

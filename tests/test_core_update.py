@@ -133,6 +133,57 @@ def test_finalize_runtime_boot_status_rejects_active_slot_target_mismatch(monkey
     assert read_last_result()["active_slot_target_mismatch"] is True
 
 
+def test_finalize_runtime_boot_status_hydrates_install_metrics_from_manifest(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    write_slot_manifest(
+        "B",
+        {
+            "slot": "B",
+            "target_version": "0.1.0+1.abc1234",
+            "install": {
+                "installer": "uv",
+                "elapsed_s": 1.234,
+            },
+            "venv_seed": {
+                "seeded": True,
+                "source": "active_slot",
+                "copy_method": "cp_reflink_auto",
+                "copy_elapsed_s": 0.456,
+                "elapsed_s": 0.567,
+                "repair": {
+                    "elapsed_s": 0.111,
+                    "repaired_files_total": 7,
+                },
+            },
+        },
+    )
+    activate_slot("B")
+    write_status(
+        {
+            "state": "restarting",
+            "phase": "launch",
+            "action": "update",
+            "target_version": "0.1.0+1.abc1234",
+            "target_slot": "B",
+        }
+    )
+
+    status = finalize_runtime_boot_status()
+
+    assert status["state"] == "succeeded"
+    assert status["phase"] == "validate"
+    assert status["install_installer"] == "uv"
+    assert status["install_elapsed_s"] == 1.234
+    assert status["venv_seeded"] is True
+    assert status["venv_seed_source"] == "active_slot"
+    assert status["venv_seed_copy_method"] == "cp_reflink_auto"
+    assert status["venv_seed_copy_elapsed_s"] == 0.456
+    assert status["venv_seed_elapsed_s"] == 0.567
+    assert status["venv_seed_repair_elapsed_s"] == 0.111
+    assert status["venv_repair_files_total"] == 7
+    assert read_last_result()["venv_seed_copy_method"] == "cp_reflink_auto"
+
+
 def test_finalize_runtime_boot_status_does_not_reject_pending_target_mismatch(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     write_slot_manifest(
