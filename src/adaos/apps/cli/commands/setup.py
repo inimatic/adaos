@@ -561,6 +561,21 @@ def _resolve_core_update_target_version(target_rev: str, target_version: str) ->
     return str(BUILD_INFO.version or "").strip()
 
 
+def _default_core_update_target_rev() -> str:
+    branch = str(_repo_git_text("rev-parse", "--abbrev-ref", "HEAD") or "").strip()
+    if branch and branch != "HEAD":
+        return branch
+    try:
+        manifest = active_slot_manifest() or {}
+    except Exception:
+        manifest = {}
+    for key in ("target_rev", "git_branch"):
+        value = str(manifest.get(key) or "").strip()
+        if value and value != "HEAD":
+            return value
+    return branch
+
+
 def _slot_build_version(slot_id: str) -> str:
     slot_name = str(slot_id or "").strip().upper()
     if not slot_name:
@@ -1818,7 +1833,7 @@ def autostart_update_start_cmd(
     token: Optional[str] = typer.Option(None, "--token", help="Override X-AdaOS-Token for local admin API"),
     json_output: bool = typer.Option(False, "--json", help=_("cli.option.json")),
 ):
-    resolved_rev = str(target_rev or _repo_git_text("rev-parse", "--abbrev-ref", "HEAD") or "").strip()
+    resolved_rev = str(target_rev or _default_core_update_target_rev() or "").strip()
     resolved_version = _resolve_core_update_target_version(resolved_rev, target_version)
     try:
         payload = _autostart_update_post(

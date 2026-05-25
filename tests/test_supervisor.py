@@ -2240,6 +2240,55 @@ def test_supervisor_start_update_deduplicates_same_target_subsequent_transition(
     assert status["same_target_subsequent_deduped_reason"] == "active_transition_same_target"
 
 
+def test_supervisor_start_update_rejects_unresolved_subsequent_update_target(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: 650.0)
+    write_status(
+        {
+            "state": "countdown",
+            "phase": "countdown",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "60ae4fc5401c0a5c3197b9b6e4b416ad51c076be",
+            "reason": "github.push:rev2026",
+            "scheduled_for": 670.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "60ae4fc5401c0a5c3197b9b6e4b416ad51c076be",
+            "reason": "github.push:rev2026",
+            "scheduled_for": 670.0,
+            "updated_at": 650.0,
+        }
+    )
+
+    result = asyncio.run(
+        manager.start_update(
+            action="update",
+            target_rev="",
+            target_version="0.1.0",
+            reason="cli.core_update",
+            countdown_sec=60.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    assert result["accepted"] is False
+    assert result["reason"] == "unresolved_subsequent_transition_target"
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt.get("subsequent_transition") is not True
+    status = read_status()
+    assert status["ambiguous_subsequent_transition_reason"] == "unresolved_update_target"
+
+
 def test_supervisor_monitor_runs_subsequent_transition_once_after_completion(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")

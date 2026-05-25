@@ -1045,6 +1045,20 @@ def _target_version_matches(left: Any, right: Any) -> bool:
     return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
 
 
+def _looks_like_git_sha(value: Any) -> bool:
+    text = str(value or "").strip()
+    return 7 <= len(text) <= 40 and all(ch in "0123456789abcdefABCDEF" for ch in text)
+
+
+def _transition_request_has_resolved_target(request: dict[str, Any] | None) -> bool:
+    req = request if isinstance(request, dict) else {}
+    if str(req.get("action") or "update").strip().lower() != "update":
+        return True
+    if str(req.get("target_rev") or "").strip():
+        return True
+    return _looks_like_git_sha(req.get("target_version"))
+
+
 def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_version: Any) -> bool:
     expected = str(target_version or "").strip()
     if not expected:
@@ -7066,6 +7080,20 @@ class SupervisorManager:
             current_status = recovered_status
             current_attempt = _read_update_attempt()
         if _is_transition_in_progress(current_status, current_attempt):
+            if not _transition_request_has_resolved_target(request):
+                status = dict(current_status or read_core_update_status() or {})
+                status["ambiguous_subsequent_transition_rejected_at"] = time.time()
+                status["ambiguous_subsequent_transition_target_version"] = str(request.get("target_version") or "")
+                status["ambiguous_subsequent_transition_reason"] = "unresolved_update_target"
+                status = write_core_update_status(status)
+                return {
+                    "ok": True,
+                    "accepted": False,
+                    "deferred": False,
+                    "reason": "unresolved_subsequent_transition_target",
+                    "status": status,
+                    "_served_by": "supervisor",
+                }
             return self._queue_subsequent_transition(
                 request=request,
                 current_status=current_status,
