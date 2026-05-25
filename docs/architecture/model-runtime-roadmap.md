@@ -161,7 +161,32 @@ exist in specialized systems:
 - [ ] Add model readiness and device diagnostics from shared model metadata.
 - [ ] Preserve existing tool names and UI behavior during migration.
 
-## Phase 10: External Provider Convergence Target State
+## Phase 10: Low-Priority Rasa NLU Provider Integration
+
+Rasa is already isolated as `rasa_nlu_service_skill` and should remain a
+service-skill provider. This phase is intentionally lower priority than the
+artifact/dependency MVP and the Neural NLU / face vision pilots.
+
+- [ ] Describe Rasa as an `intent-detection` service-skill provider in the
+  model registry.
+- [ ] Add a `rasa-nlu-py311` dependency profile for `rasa-port` / Rasa NLU
+  service dependencies, keeping upstream Rasa out of the hub root venv.
+- [ ] Track the trained Rasa model as a local model artifact with
+  `current`/`previous` state, without publishing node-trained models through
+  `skill push` by default.
+- [ ] Record the Rasa training fingerprint: skill examples, scenario examples,
+  system-action examples, lookup tables, and relevant config inputs.
+- [ ] Expose Rasa readiness/freshness diagnostics: service installed, service
+  healthy, model trained, model stale, train failed, parse timeout.
+- [ ] Surface Rasa provider status in model/NLU CLI output together with Neural
+  NLU status.
+- [ ] Keep Rasa `/parse` and `/train` implementation inside the service skill;
+  core only manages provider metadata, dependency profile, artifacts, and
+  diagnostics.
+- [ ] Consider shared ModelOps jobs for Rasa training only after Neural NLU jobs
+  have proven the shared job primitives.
+
+## Phase 11: External Provider Convergence Target State
 
 - [ ] Add provider registry for external APIs.
 - [ ] Add shared contracts for chat/text generation and embeddings.
@@ -172,7 +197,7 @@ exist in specialized systems:
 - [ ] Add privacy and data-routing flags so skills can require local-only
   execution.
 
-## Phase 11: OCI Registry Target
+## Phase 12: OCI Registry Target
 
 - [ ] Define OCI artifact layout for model manifests, weights, indexes, and
   metadata.

@@ -153,7 +153,32 @@
   после стабилизации registry/dependency layers.
 - [ ] Сохранить существующие tool names и UI behavior на время миграции.
 
-## Phase 10: External Provider Convergence Target State
+## Phase 10: Low-Priority Rasa NLU Provider Integration
+
+Rasa уже изолирован как `rasa_nlu_service_skill` и должен остаться
+service-skill provider. Эта фаза ниже по приоритету, чем artifact/dependency
+MVP и пилоты Neural NLU / face vision.
+
+- [ ] Описать Rasa как `intent-detection` service-skill provider в model
+  registry.
+- [ ] Добавить dependency profile `rasa-nlu-py311` для `rasa-port` / Rasa NLU
+  service dependencies, не устанавливая upstream Rasa в hub root venv.
+- [ ] Учитывать trained Rasa model как local model artifact с состоянием
+  `current`/`previous`, без публикации node-trained моделей через `skill push`
+  по умолчанию.
+- [ ] Записывать Rasa training fingerprint: skill examples, scenario examples,
+  system-action examples, lookup tables и релевантные config inputs.
+- [ ] Показывать Rasa readiness/freshness diagnostics: service installed,
+  service healthy, model trained, model stale, train failed, parse timeout.
+- [ ] Выводить Rasa provider status в model/NLU CLI рядом со статусом Neural
+  NLU.
+- [ ] Оставить Rasa `/parse` и `/train` implementation внутри service skill;
+  core управляет только provider metadata, dependency profile, artifacts и
+  diagnostics.
+- [ ] Рассматривать shared ModelOps jobs для Rasa training только после того,
+  как Neural NLU jobs подтвердят полезность общих job primitives.
+
+## Phase 11: External Provider Convergence Target State
 
 - [ ] Добавить provider registry для external APIs.
 - [ ] Добавить shared contracts для chat/text generation и embeddings.
@@ -161,7 +186,7 @@
 - [ ] Добавить provider-specific option escape hatches.
 - [ ] Добавить fallback policy между local и external providers.
 
-## Phase 11: OCI Registry Target
+## Phase 12: OCI Registry Target
 
 - [ ] Описать OCI artifact layout для manifests, weights, indexes, metadata.
 - [ ] Добавить `oci://` resolver.
