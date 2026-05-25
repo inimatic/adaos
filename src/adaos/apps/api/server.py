@@ -465,25 +465,26 @@ def _runtime_admin_supervisor_bases() -> list[str]:
     return unique
 
 
-def _try_forward_update_start_to_supervisor(body: "CoreUpdateStartRequest") -> dict[str, Any] | None:
+def _try_forward_update_to_supervisor(
+    path: str,
+    payload: dict[str, Any],
+    *,
+    action: str,
+) -> dict[str, Any] | None:
     if str(os.getenv("ADAOS_RUNTIME_ADMIN_SUPERVISOR_SHIM", "1")).strip().lower() in {"0", "false", "no", "off"}:
         return None
-    payload = {
-        "target_rev": str(body.target_rev or ""),
-        "target_version": str(body.target_version or ""),
-        "reason": body.reason,
-        "countdown_sec": float(body.countdown_sec),
-        "drain_timeout_sec": float(body.drain_timeout_sec),
-        "signal_delay_sec": float(body.signal_delay_sec),
-    }
+    bases = _runtime_admin_supervisor_bases()
+    if not bases:
+        return None
     token = str(getattr(get_ctx().config, "token", "") or os.getenv("ADAOS_TOKEN") or "dev-local-token")
     headers = {"X-AdaOS-Token": token, "Accept": "application/json"}
-    for base in _runtime_admin_supervisor_bases():
+    attempts: list[dict[str, str]] = []
+    for base in bases:
         try:
             import requests as _requests
 
             response = _requests.post(
-                base.rstrip("/") + "/api/supervisor/update/start",
+                base.rstrip("/") + path,
                 headers=headers,
                 json=payload,
                 timeout=8.0,
@@ -494,9 +495,61 @@ def _try_forward_update_start_to_supervisor(body: "CoreUpdateStartRequest") -> d
                 data.setdefault("_served_by", "supervisor")
                 return data
             return {"ok": True, "response": data, "_served_by": "supervisor"}
-        except Exception:
+        except Exception as exc:
+            attempts.append(
+                {
+                    "base": base,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:300],
+                }
+            )
             continue
-    return None
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "ok": False,
+            "error": "supervisor_update_route_unavailable",
+            "action": action,
+            "message": "supervisor-managed runtime refused local update fallback; retry via supervisor",
+            "attempts": attempts[-4:],
+        },
+    )
+
+
+def _try_forward_update_start_to_supervisor(body: "CoreUpdateStartRequest") -> dict[str, Any] | None:
+    return _try_forward_update_to_supervisor(
+        "/api/supervisor/update/start",
+        {
+            "target_rev": str(body.target_rev or ""),
+            "target_version": str(body.target_version or ""),
+            "reason": body.reason,
+            "countdown_sec": float(body.countdown_sec),
+            "drain_timeout_sec": float(body.drain_timeout_sec),
+            "signal_delay_sec": float(body.signal_delay_sec),
+        },
+        action="update.start",
+    )
+
+
+def _try_forward_update_cancel_to_supervisor(body: "CoreUpdateCancelRequest") -> dict[str, Any] | None:
+    return _try_forward_update_to_supervisor(
+        "/api/supervisor/update/cancel",
+        {"reason": body.reason},
+        action="update.cancel",
+    )
+
+
+def _try_forward_update_rollback_to_supervisor(body: "CoreUpdateRollbackRequest") -> dict[str, Any] | None:
+    return _try_forward_update_to_supervisor(
+        "/api/supervisor/update/rollback",
+        {
+            "reason": body.reason,
+            "countdown_sec": float(body.countdown_sec),
+            "drain_timeout_sec": float(body.drain_timeout_sec),
+            "signal_delay_sec": float(body.signal_delay_sec),
+        },
+        action="update.rollback",
+    )
 
 
 def _api_state_dir() -> Path:
@@ -1379,6 +1432,9 @@ async def admin_update_start(body: CoreUpdateStartRequest):
 @app.post("/api/admin/update/cancel", dependencies=[Depends(require_token)])
 async def admin_update_cancel(body: CoreUpdateCancelRequest):
     _ensure_runtime_admin_mutation_allowed("update.cancel")
+    supervisor_payload = _try_forward_update_cancel_to_supervisor(body)
+    if supervisor_payload is not None:
+        return supervisor_payload
     task = getattr(app.state, "core_update_task", None)
     clear_core_update_plan()
     if task is None or task.done():
@@ -1420,6 +1476,9 @@ async def admin_update_rollback(body: CoreUpdateRollbackRequest):
             "reason": disabled_reason,
             "status": read_core_update_status(),
         }
+    supervisor_payload = _try_forward_update_rollback_to_supervisor(body)
+    if supervisor_payload is not None:
+        return supervisor_payload
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
         return {"ok": True, "accepted": False, "status": read_core_update_status()}

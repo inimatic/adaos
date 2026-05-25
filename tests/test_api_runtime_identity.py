@@ -203,6 +203,72 @@ def test_admin_update_start_forwards_to_supervisor_when_autostart_managed(monkey
     assert calls == [("http://127.0.0.1:8776/api/supervisor/update/start", "dev-token", "abc123")]
 
 
+def test_admin_update_start_refuses_runtime_fallback_when_supervisor_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
+    monkeypatch.setenv("ADAOS_TOKEN", "dev-token")
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+    calls: list[str] = []
+
+    def _post(url: str, headers=None, json=None, timeout=None):
+        calls.append(url)
+        raise TimeoutError("supervisor unavailable")
+
+    def _write_status(_payload):
+        raise AssertionError("runtime fallback must not write local update status")
+
+    monkeypatch.setattr("requests.post", _post)
+    monkeypatch.setattr(api_server, "write_core_update_status", _write_status)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_server.admin_update_start(
+                api_server.CoreUpdateStartRequest(
+                    target_rev="rev2026",
+                    target_version="abc123",
+                    reason="test.supervisor.unavailable",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "supervisor_update_route_unavailable"
+    assert exc_info.value.detail["action"] == "update.start"
+    assert calls == ["http://127.0.0.1:8776/api/supervisor/update/start"]
+
+
+def test_admin_update_rollback_forwards_to_supervisor_when_autostart_managed(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
+    monkeypatch.setenv("ADAOS_TOKEN", "dev-token")
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+    calls: list[tuple[str, str]] = []
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True, "accepted": True, "_served_by": "supervisor"}
+
+    def _post(url: str, headers=None, json=None, timeout=None):
+        calls.append((url, json["reason"]))
+        return _Resp()
+
+    monkeypatch.setattr("requests.post", _post)
+
+    payload = asyncio.run(
+        api_server.admin_update_rollback(
+            api_server.CoreUpdateRollbackRequest(reason="test.rollback.supervisor")
+        )
+    )
+
+    assert payload["_served_by"] == "supervisor"
+    assert calls == [("http://127.0.0.1:8776/api/supervisor/update/rollback", "test.rollback.supervisor")]
+
+
 def test_admin_update_status_includes_runtime_identity(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
