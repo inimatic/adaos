@@ -2696,7 +2696,7 @@ def _media_update_guard_snapshot(*, role: str, runtime: dict[str, Any] | None) -
     observed_live_topology: str | None = None
     if bool(member_browser.get("ready")) and connected_browser_session_total > 0:
         observed_live_topology = "member_browser_direct"
-    elif live_connected_peers > 0 or live_tracks_total > 0:
+    elif live_tracks_total > 0:
         observed_live_topology = "hub_webrtc_loopback"
 
     live_session_present = observed_live_topology is not None

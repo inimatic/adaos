@@ -1580,6 +1580,75 @@ def test_media_plane_runtime_snapshot_exposes_live_update_guard(monkeypatch) -> 
     assert guard["current_support"] == "planned"
 
 
+def test_media_plane_runtime_snapshot_does_not_block_update_for_trackless_hub_peer(monkeypatch) -> None:
+    def _snapshot_with_counts(counts: dict[str, int]) -> dict[str, object]:
+        return {
+            "available": True,
+            "paths": {
+                "direct_local_http": {"ready": True},
+                "root_routed_http": {"ready": True},
+                "webrtc_tracks": {"ready": True},
+            },
+            "member_browser_direct": {
+                "ready": False,
+                "admitted": False,
+                "browser_session_total": 0,
+                "connected_browser_session_total": 0,
+            },
+            "counts": counts,
+            "route_intent": {"active_route": "hub_webrtc_loopback", "preferred_route": "hub_webrtc_loopback"},
+            "attempt": {"active_route": "hub_webrtc_loopback", "preferred_route": "hub_webrtc_loopback"},
+        }
+
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.media_library",
+        SimpleNamespace(
+            media_runtime_snapshot=lambda: _snapshot_with_counts(
+                {
+                    "live_connected_peers": 1,
+                    "incoming_audio_tracks": 0,
+                    "incoming_video_tracks": 0,
+                    "loopback_audio_tracks": 0,
+                    "loopback_video_tracks": 0,
+                }
+            ),
+        ),
+    )
+
+    snapshot = media_plane_runtime_snapshot(role="hub", route_mode="hub", connected_to_hub=None)
+    guard = snapshot["update_guard"]
+
+    assert guard["live_session_present"] is False
+    assert guard["observed_live_topology"] is None
+    assert guard["hub_runtime_update"] == "allow"
+    assert guard["criticality"] == "idle"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.media_library",
+        SimpleNamespace(
+            media_runtime_snapshot=lambda: _snapshot_with_counts(
+                {
+                    "live_connected_peers": 1,
+                    "incoming_audio_tracks": 0,
+                    "incoming_video_tracks": 1,
+                    "loopback_audio_tracks": 0,
+                    "loopback_video_tracks": 0,
+                }
+            ),
+        ),
+    )
+
+    snapshot = media_plane_runtime_snapshot(role="hub", route_mode="hub", connected_to_hub=None)
+    guard = snapshot["update_guard"]
+
+    assert guard["live_session_present"] is True
+    assert guard["observed_live_topology"] == "hub_webrtc_loopback"
+    assert guard["hub_runtime_update"] == "preserve_sidecar"
+    assert guard["criticality"] == "hub_live_media"
+
+
 def test_member_reliability_snapshot_uses_connected_to_hub_for_route_and_sync() -> None:
     _reset_state()
 
