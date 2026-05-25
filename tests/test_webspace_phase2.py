@@ -1327,6 +1327,22 @@ def test_collect_remote_skill_decls_uses_member_desktop_catalog_snapshot(monkeyp
                                         "id": "infrastate",
                                         "title": "Infra State",
                                         "dataSource": {"kind": "stream", "receiver": "infrastate.realtime"},
+                                        "actions": [
+                                            {
+                                                "type": "openModal",
+                                                "params": {"modalId": "weather_modal"},
+                                            },
+                                            {
+                                                "type": "callHost",
+                                                "target": "skill.event.publish",
+                                                "params": {
+                                                    "_observe": {
+                                                        "kind": "y",
+                                                        "path": "data/weather/current",
+                                                    }
+                                                },
+                                            },
+                                        ],
                                     }
                                 ],
                                 "registry": {
@@ -1378,6 +1394,8 @@ def test_collect_remote_skill_decls_uses_member_desktop_catalog_snapshot(monkeyp
     assert isinstance(decls[0]["widgets"][0]["node_color"], str) and decls[0]["widgets"][0]["node_color"]
     assert decls[0]["widgets"][0]["id"] == "node:member-1:infrastate"
     assert decls[0]["widgets"][0]["dataSource"]["nodeId"] == "member-1"
+    assert decls[0]["widgets"][0]["actions"][0]["params"]["modalId"] == "node:member-1:weather_modal"
+    assert decls[0]["widgets"][0]["actions"][1]["params"]["_observe"]["path"] == "data/nodes/member-1/weather/current"
     assert decls[0]["registry"]["modals"]["node:member-1:weather_modal"]["schema"]["widgets"][0]["source"] == "data/nodes/member-1/weather/cities"
     assert decls[0]["webio"]["receivers"]["infrastate.realtime"]["mode"] == "replace"
     assert "nodeId" not in decls[0]["webio"]["receivers"]["infrastate.realtime"]

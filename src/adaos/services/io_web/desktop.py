@@ -169,6 +169,67 @@ def _clone_text_list(value: Any) -> List[str]:
     return out
 
 
+def _catalog_widgets_by_id_from_data_map(data_map: Any) -> Dict[str, Dict[str, Any]]:
+    catalog_raw = data_map.get("catalog") if hasattr(data_map, "get") else None
+    catalog = _coerce_dict(catalog_raw)
+    widgets = catalog.get("widgets")
+    if not isinstance(widgets, list):
+        return {}
+    result: Dict[str, Dict[str, Any]] = {}
+    for item in widgets:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        if item_id and item_id not in result:
+            result[item_id] = _clone_json_dict(item)
+    return result
+
+
+def _refresh_pinned_widgets_from_catalog(
+    pinned_widgets: List[Dict[str, Any]],
+    catalog_by_id: Mapping[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not pinned_widgets or not catalog_by_id:
+        return _clone_pinned_widgets(pinned_widgets)
+    refreshed: List[Dict[str, Any]] = []
+    for item in _clone_pinned_widgets(pinned_widgets):
+        item_id = str(item.get("id") or "").strip()
+        base = catalog_by_id.get(item_id)
+        if not isinstance(base, dict):
+            refreshed.append(item)
+            continue
+        merged = dict(item)
+        # Pinned widgets are user layout state. Runtime fields come from the
+        # live catalog so old pins cannot keep stale node routing or Y paths.
+        for key in (
+            "type",
+            "title",
+            "source",
+            "visibleIf",
+            "icon",
+            "origin",
+            "node_id",
+            "node_label",
+            "node_compact_label",
+            "node_index",
+            "node_color",
+            "node_local_id",
+            "remote_id",
+            "groupLabel",
+            "dataSource",
+            "inputs",
+            "actions",
+            "dev",
+        ):
+            if key in base:
+                try:
+                    merged[key] = json.loads(json.dumps(base[key], ensure_ascii=True))
+                except Exception:
+                    merged[key] = base[key]
+        refreshed.append(merged)
+    return refreshed
+
+
 class WebDesktopService:
     """
     High-level helper for manipulating desktop state in a webspace.
@@ -321,7 +382,11 @@ class WebDesktopService:
 
     @staticmethod
     def _apply_pinned_widgets_state(ydoc: Any, txn: Any, pinned_widgets: List[Dict[str, Any]]) -> None:
-        next_pinned = _clone_pinned_widgets(pinned_widgets)
+        data_map = ydoc.get_map("data")
+        next_pinned = _refresh_pinned_widgets_from_catalog(
+            _clone_pinned_widgets(pinned_widgets),
+            _catalog_widgets_by_id_from_data_map(data_map),
+        )
         ui_map = ydoc.get_map("ui")
         application_raw = ui_map.get("application") or {}
         application_next = _coerce_dict(application_raw)
@@ -331,7 +396,6 @@ class WebDesktopService:
         application_next["desktop"] = app_desktop
         ui_map.set(txn, "application", application_next)
 
-        data_map = ydoc.get_map("data")
         desktop_raw = data_map.get("desktop") or {}
         desktop_next = _coerce_dict(desktop_raw)
         desktop_next["pinnedWidgets"] = next_pinned
@@ -437,6 +501,10 @@ class WebDesktopService:
         pinned_next = _clone_pinned_widgets(desktop_raw.get("pinnedWidgets"))
         if not pinned_next:
             pinned_next = _clone_pinned_widgets(pinned_widgets)
+        pinned_next = _refresh_pinned_widgets_from_catalog(
+            pinned_next,
+            _catalog_widgets_by_id_from_data_map(data_map),
+        )
 
         application_raw = _coerce_dict(ui_map.get("application") or {})
         app_desktop = _coerce_dict(application_raw.get("desktop") or {})
