@@ -1726,6 +1726,7 @@ async def _read_yjs_materialization_snapshot(webspace_id: str, *, scope: str = "
                     "catalog": _coerce_dict(_clone_json_like(data_map.get("catalog") or {})),
                     "desktop": _coerce_dict(_clone_json_like(data_map.get("desktop") or {})),
                     "installed": _coerce_dict(_clone_json_like(data_map.get("installed") or {})),
+                    "nodes": _coerce_dict(_clone_json_like(data_map.get("nodes") or {})),
                     "webspaces": _coerce_dict(_clone_json_like(data_map.get("webspaces") or {})),
                 },
                 "registry": {},

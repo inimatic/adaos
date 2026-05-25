@@ -1155,6 +1155,7 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
                 "catalog": {"apps": [{"id": "app-1"}], "widgets": [{"id": "w1"}]},
                 "desktop": {"installed": {"apps": ["app-1"], "widgets": ["w1"]}},
                 "installed": {"apps": ["app-1"], "widgets": ["w1"]},
+                "nodes": {"hub-1": {"weather": {"current": {"city": "Moscow"}}}},
             }
         ),
         "registry": _FakeMap({"scenarios": {"hub-1": {"web_desktop": {"title": "Desktop"}}}}),
@@ -1202,7 +1203,8 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
 
     essential = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default"))
     assert essential["snapshot_scope"] == "essential"
-    assert sorted(essential["snapshot"]["data"].keys()) == ["catalog", "desktop", "installed", "webspaces"]
+    assert sorted(essential["snapshot"]["data"].keys()) == ["catalog", "desktop", "installed", "nodes", "webspaces"]
+    assert essential["snapshot"]["data"]["nodes"]["hub-1"]["weather"]["current"]["city"] == "Moscow"
     assert essential["snapshot"]["registry"] == {}
 
 
