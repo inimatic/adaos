@@ -134,10 +134,46 @@ def test_copy_seed_venv_uses_linux_reflink_copy_when_available(monkeypatch, tmp_
 
     assert result["ok"] is True
     assert result["seeded"] is True
-    assert result["copy_method"] == "cp_reflink_auto"
+    assert result["copy_method"] == "cp_reflink"
     assert result["copy_elapsed_s"] >= 0
     json.dumps(result)
-    assert calls == [["/bin/cp", "-a", "--reflink=auto", str(source / "."), str(target)]]
+    assert calls == [["/bin/cp", "-a", "--reflink=always", str(source / "."), str(target)]]
+
+
+def test_copy_seed_venv_auto_uses_hardlink_after_reflink_fails_for_uv(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    source = tmp_path / "source-venv"
+    target = tmp_path / "target-venv"
+    checkout = tmp_path / "checkout"
+    (checkout / "uv.lock").parent.mkdir(parents=True, exist_ok=True)
+    (checkout / "uv.lock").write_text("", encoding="utf-8")
+    python_bin = mod._venv_python(source)
+    python_bin.parent.mkdir(parents=True, exist_ok=True)
+    python_bin.write_text("python", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **_kwargs):
+        calls.append(list(cmd))
+        if "--reflink=always" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, "", "Operation not supported")
+        target.mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mod.sys, "platform", "linux")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/bin/cp" if name == "cp" else None)
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    result = mod._copy_seed_venv(source, target, checkout_dir=checkout)
+
+    assert result["ok"] is True
+    assert result["copy_method"] == "cp_hardlink"
+    json.dumps(result)
+    assert calls == [
+        ["/bin/cp", "-a", "--reflink=always", str(source / "."), str(target)],
+        ["/bin/cp", "-al", str(source / "."), str(target)],
+    ]
 
 
 def test_replace_slot_dir_quarantines_destination_when_cleanup_leaves_destination(

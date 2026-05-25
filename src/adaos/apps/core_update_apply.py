@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -139,8 +140,32 @@ def _rewrite_text_file(path: Path, *, old: str, new: str) -> bool:
         return False
     if old not in text:
         return False
-    path.write_text(text.replace(old, new), encoding="utf-8", newline="")
+    if not _write_text_file_private(path, text.replace(old, new)):
+        return False
     return True
+
+
+def _write_text_file_private(path: Path, text: str) -> bool:
+    try:
+        file_stat = path.stat()
+    except Exception:
+        return False
+    hardlinked = bool(getattr(file_stat, "st_nlink", 1) > 1)
+    if not hardlinked:
+        path.write_text(text, encoding="utf-8", newline="")
+        return True
+
+    tmp = path.with_name(f".{path.name}.adaos-private-{os.getpid()}-{time.time_ns()}")
+    try:
+        tmp.write_text(text, encoding="utf-8", newline="")
+        with contextlib.suppress(Exception):
+            os.chmod(tmp, stat.S_IMODE(file_stat.st_mode))
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        with contextlib.suppress(Exception):
+            tmp.unlink(missing_ok=True)
+        return False
 
 
 def _rewrite_text_file_many(path: Path, replacements: Sequence[tuple[str, str]]) -> bool:
@@ -160,7 +185,8 @@ def _rewrite_text_file_many(path: Path, replacements: Sequence[tuple[str, str]])
             updated = updated.replace(old, new)
     if updated == text:
         return False
-    path.write_text(updated, encoding="utf-8", newline="")
+    if not _write_text_file_private(path, updated):
+        return False
     return True
 
 
@@ -264,7 +290,29 @@ def _seed_copy_attempts_snapshot(attempts: Sequence[dict[str, object]]) -> list[
     return [dict(attempt) for attempt in attempts]
 
 
-def _copy_seed_venv_tree(source: Path, target: Path) -> dict[str, object]:
+def _env_flag(name: str, default: str = "0") -> bool:
+    return str(os.getenv(name, default) or default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _linux_hardlink_seed_allowed(*, source: Path, target: Path, checkout_dir: Path | None, mode: str) -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    if mode == "hardlink":
+        return True
+    if mode not in {"auto", "auto-hardlink", "hardlink-auto"}:
+        return False
+    if not _env_flag("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK_AUTO", "1"):
+        return False
+    if checkout_dir is None or not (checkout_dir / "uv.lock").exists() or not _uv_install_enabled():
+        return False
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return source.stat().st_dev == target.parent.stat().st_dev
+    except Exception:
+        return False
+
+
+def _copy_seed_venv_tree(source: Path, target: Path, *, checkout_dir: Path | None = None) -> dict[str, object]:
     mode = str(os.getenv("ADAOS_CORE_UPDATE_LINUX_SEED_COPY_MODE", "auto") or "auto").strip().lower()
     attempts: list[dict[str, object]] = []
     if sys.platform.startswith("linux") and mode not in {"copy", "python", "shutil"}:
@@ -273,23 +321,36 @@ def _copy_seed_venv_tree(source: Path, target: Path) -> dict[str, object]:
             source_contents = str(source / ".")
             if mode in {"auto", "reflink", "cow", "copy-on-write"}:
                 attempt = _run_seed_copy_command(
-                    [cp, "-a", "--reflink=auto", source_contents, str(target)],
+                    [cp, "-a", "--reflink=always", source_contents, str(target)],
                     source=source,
                     target=target,
-                    method="cp_reflink_auto",
+                    method="cp_reflink",
                 )
                 attempts.append(attempt)
                 if bool(attempt.get("ok")):
                     return {**attempt, "attempts": _seed_copy_attempts_snapshot(attempts)}
-            hardlink_enabled = mode == "hardlink" or str(
-                os.getenv("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK", "")
-            ).strip().lower() in {"1", "true", "yes", "on"}
-            if hardlink_enabled:
+            hardlink_enabled = _linux_hardlink_seed_allowed(
+                source=source,
+                target=target,
+                checkout_dir=checkout_dir,
+                mode=mode,
+            ) or _env_flag("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK", "0")
+            if hardlink_enabled and mode not in {"reflink", "cow", "copy-on-write"}:
                 attempt = _run_seed_copy_command(
                     [cp, "-al", source_contents, str(target)],
                     source=source,
                     target=target,
                     method="cp_hardlink",
+                )
+                attempts.append(attempt)
+                if bool(attempt.get("ok")):
+                    return {**attempt, "attempts": _seed_copy_attempts_snapshot(attempts)}
+            if mode in {"auto", "archive", "cp", "auto-hardlink", "hardlink-auto"}:
+                attempt = _run_seed_copy_command(
+                    [cp, "-a", source_contents, str(target)],
+                    source=source,
+                    target=target,
+                    method="cp_archive",
                 )
                 attempts.append(attempt)
                 if bool(attempt.get("ok")):
@@ -315,7 +376,12 @@ def _copy_seed_venv_tree(source: Path, target: Path) -> dict[str, object]:
         return {"ok": True, "method": "shutil_copytree", "attempts": attempts}
 
 
-def _copy_seed_venv(source_venv_dir: Path, target_venv_dir: Path) -> dict[str, object]:
+def _copy_seed_venv(
+    source_venv_dir: Path,
+    target_venv_dir: Path,
+    *,
+    checkout_dir: Path | None = None,
+) -> dict[str, object]:
     started_at = time.time()
     source = Path(source_venv_dir).expanduser().resolve()
     target = Path(target_venv_dir).expanduser().resolve()
@@ -328,7 +394,7 @@ def _copy_seed_venv(source_venv_dir: Path, target_venv_dir: Path) -> dict[str, o
             "reason": "source_venv_unusable",
         }
     copy_started_at = time.time()
-    copy_result = _copy_seed_venv_tree(source, target)
+    copy_result = _copy_seed_venv_tree(source, target, checkout_dir=checkout_dir)
     copy_finished_at = time.time()
     repair = _repair_copied_venv(target, source_venv_dir=source)
     return {
@@ -374,6 +440,7 @@ def _prepare_seed_venv(
     venv_dir: Path,
     slot_dir: Path,
     repo_root_dir: Path | None,
+    checkout_dir: Path | None = None,
 ) -> dict[str, object]:
     if str(os.getenv("ADAOS_CORE_UPDATE_SEED_VENV", "1") or "1").strip().lower() in {"0", "false", "no", "off"}:
         return {
@@ -390,7 +457,7 @@ def _prepare_seed_venv(
         if source_path is None:
             continue
         try:
-            result = _copy_seed_venv(source_path, venv_dir)
+            result = _copy_seed_venv(source_path, venv_dir, checkout_dir=checkout_dir)
             result["source"] = source_name
             if bool(result.get("ok")):
                 return result
@@ -463,6 +530,17 @@ def _install_slot_project(
                 "seed": seed,
                 "attempts": attempts,
             }
+
+    if str(seed.get("copy_method") or "").strip() == "cp_hardlink":
+        attempts.append(
+            {
+                "installer": "pip",
+                "returncode": None,
+                "seed_discarded": True,
+                "seed_discard_reason": "hardlink_seed_not_reused_for_pip_fallback",
+            }
+        )
+        shutil.rmtree(venv_dir, ignore_errors=True)
 
     if not _venv_is_usable(venv_dir):
         _run([sys.executable, "-m", "venv", str(venv_dir)])
@@ -1034,6 +1112,7 @@ def prepare_slot(
             venv_dir=venv_tmp,
             slot_dir=slot_dir,
             repo_root_dir=repo_root_dir,
+            checkout_dir=checkout_tmp,
         )
         install_result = _install_slot_project(
             checkout_dir=checkout_tmp,
