@@ -5262,6 +5262,47 @@ def _catalog_ids_from_snapshot(catalog: Any, kind: str) -> set[str]:
     return {str(item.get("id") or "").strip() for item in items if isinstance(item, Mapping) and str(item.get("id") or "").strip()}
 
 
+def _member_catalog_projection_missing_from_catalog(catalog: Any, expected: Mapping[str, set[str]]) -> bool:
+    if catalog is _YDOC_PATH_MISSING:
+        return True
+    current_apps = _catalog_ids_from_snapshot(catalog, "apps")
+    current_widgets = _catalog_ids_from_snapshot(catalog, "widgets")
+    return bool((set(expected.get("apps") or set()) - current_apps) or (set(expected.get("widgets") or set()) - current_widgets))
+
+
+async def _read_persisted_catalog_for_member_projection_check(webspace_id: str) -> Any:
+    try:
+        async with async_read_ydoc(webspace_id, prefer_live_room=False) as ydoc:
+            return _read_current_ydoc_path_value(ydoc, "data/catalog")
+    except TypeError:
+        try:
+            async with async_read_ydoc(webspace_id) as ydoc:
+                return _read_current_ydoc_path_value(ydoc, "data/catalog")
+        except Exception:
+            return _YDOC_PATH_MISSING
+    except Exception:
+        return _YDOC_PATH_MISSING
+
+
+async def _refresh_live_room_for_member_catalog_projection(webspace_id: str, *, node_id: str) -> bool:
+    try:
+        from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
+
+        result = await refresh_live_webspace_effective_branches(
+            webspace_id,
+            reason=f"member_snapshot_refreshed_catalog_present:{node_id}",
+        )
+        return bool(result.get("ok") is not False)
+    except Exception:
+        _log.debug(
+            "failed to refresh live Yjs room for member catalog projection webspace=%s node_id=%s",
+            webspace_id,
+            node_id,
+            exc_info=True,
+        )
+        return False
+
+
 async def _member_catalog_projection_missing(*, webspace_id: str, node_id: str) -> bool:
     try:
         from adaos.services.registry.subnet_directory import get_directory
@@ -5279,18 +5320,17 @@ async def _member_catalog_projection_missing(*, webspace_id: str, node_id: str) 
     live_ydoc = _resolve_live_room_ydoc(webspace_id)
     if live_ydoc is not None:
         catalog = _read_current_ydoc_path_value(live_ydoc, "data/catalog")
-    if catalog is _YDOC_PATH_MISSING:
-        try:
-            async with async_read_ydoc(webspace_id) as ydoc:
-                catalog = _read_current_ydoc_path_value(ydoc, "data/catalog")
-        except Exception:
-            catalog = _YDOC_PATH_MISSING
-    if catalog is _YDOC_PATH_MISSING:
+        if not _member_catalog_projection_missing_from_catalog(catalog, expected):
+            return False
+        persisted_catalog = await _read_persisted_catalog_for_member_projection_check(webspace_id)
+        if not _member_catalog_projection_missing_from_catalog(persisted_catalog, expected):
+            if await _refresh_live_room_for_member_catalog_projection(webspace_id, node_id=node_id):
+                return False
+            return True
         return True
 
-    current_apps = _catalog_ids_from_snapshot(catalog, "apps")
-    current_widgets = _catalog_ids_from_snapshot(catalog, "widgets")
-    return bool((expected["apps"] - current_apps) or (expected["widgets"] - current_widgets))
+    catalog = await _read_persisted_catalog_for_member_projection_check(webspace_id)
+    return _member_catalog_projection_missing_from_catalog(catalog, expected)
 
 
 async def _schedule_member_snapshot_rebuild_from_event(
