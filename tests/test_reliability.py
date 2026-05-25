@@ -25,6 +25,8 @@ from typer.testing import CliRunner
 from adaos.services.reliability import (
     ReadinessStatus,
     _event_model_phase0_communication_checkpoint,
+    _hub_root_control_authority_snapshot,
+    _hub_root_protocol_assessment,
     _hub_member_transport_evidence_snapshot,
     _enrich_required_upstream_link_with_sidecar,
     _request_yjs_replay_pressure_compaction,
@@ -337,6 +339,51 @@ def test_hub_reliability_snapshot_exposes_route_reset_runtime_details() -> None:
     assert route_runtime["last_reset_notified_browser"] == 2
     assert route_runtime["reset_total"] == 4
     assert route_runtime["last_reset_ago_s"] is not None
+
+
+def test_hub_root_control_authority_uses_latest_lifecycle_stream() -> None:
+    protocol = {
+        "traffic_classes": {
+            "control": {
+                "active_subscriptions": 1,
+                "policy": {
+                    "stale_authority_after_s": 60,
+                },
+            },
+        },
+        "streams": {
+            "hub-control:lifecycle:sn_1:old": {
+                "stream_id": "hub-control:lifecycle:sn_1:old",
+                "flow_id": "hub_root.control.lifecycle",
+                "ack_total": 10,
+                "last_issued_cursor": 10,
+                "last_acked_cursor": 10,
+                "last_issue_at": 1_000.0,
+                "last_ack_at": 1_000.0,
+                "updated_at": 1_000.0,
+                "last_ack_ago_s": 3600.0,
+            },
+            "hub-control:lifecycle:sn_1:fresh": {
+                "stream_id": "hub-control:lifecycle:sn_1:fresh",
+                "flow_id": "hub_root.control.lifecycle",
+                "ack_total": 2,
+                "last_issued_cursor": 2,
+                "last_acked_cursor": 2,
+                "last_issue_at": 2_000.0,
+                "last_ack_at": 2_001.0,
+                "updated_at": 2_001.0,
+                "last_ack_ago_s": 2.0,
+            },
+        },
+    }
+
+    authority = _hub_root_control_authority_snapshot(protocol)
+    assessment = _hub_root_protocol_assessment(protocol)
+
+    assert authority["state"] == "fresh"
+    assert authority["stream_id"] == "hub-control:lifecycle:sn_1:fresh"
+    assert authority["ack_age_s"] == 2.0
+    assert assessment["state"] == "nominal"
 
 
 def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkless_members(monkeypatch) -> None:

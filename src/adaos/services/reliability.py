@@ -4122,6 +4122,7 @@ def _hub_root_protocol_assessment(protocol: dict[str, Any]) -> dict[str, Any]:
             state = "pressure"
         reasons.append("integration_outbox_full")
 
+    latest_lifecycle_stream_id = _latest_hub_root_stream_id(streams, "hub_root.control.lifecycle")
     for stream_id, entry in streams.items():
         if not isinstance(entry, dict):
             continue
@@ -4132,6 +4133,8 @@ def _hub_root_protocol_assessment(protocol: dict[str, Any]) -> dict[str, Any]:
         policy = cls.get("policy") if isinstance(cls.get("policy"), dict) else {}
         stale_after_s = int(policy.get("stale_authority_after_s") or 0)
         flow_id = str(entry.get("flow_id") or stream_id).strip()
+        if flow_id == "hub_root.control.lifecycle" and latest_lifecycle_stream_id and stream_id != latest_lifecycle_stream_id:
+            continue
         ack_total = int(entry.get("ack_total") or 0)
         last_issue_ago_s = entry.get("last_issue_ago_s")
         last_ack_ago_s = entry.get("last_ack_ago_s")
@@ -4159,20 +4162,46 @@ def _hub_root_protocol_assessment(protocol: dict[str, Any]) -> dict[str, Any]:
     return {"state": state, "reason": "; ".join(reasons)}
 
 
+def _protocol_stream_recency(entry: dict[str, Any]) -> float:
+    pending = entry.get("pending") if isinstance(entry.get("pending"), dict) else {}
+    candidates = [
+        entry.get("last_issue_at"),
+        entry.get("last_ack_at"),
+        entry.get("updated_at"),
+        pending.get("last_send_at") if isinstance(pending, dict) else None,
+        pending.get("issued_at") if isinstance(pending, dict) else None,
+    ]
+    values: list[float] = []
+    for item in candidates:
+        if isinstance(item, (int, float)):
+            values.append(float(item))
+    return max(values) if values else 0.0
+
+
+def _latest_hub_root_stream_id(streams: dict[str, Any], flow_id: str) -> str:
+    target = str(flow_id or "").strip()
+    best_id = ""
+    best_recency = -1.0
+    for stream_id, entry in streams.items():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("flow_id") or stream_id).strip() != target:
+            continue
+        recency = _protocol_stream_recency(entry)
+        if recency >= best_recency:
+            best_id = str(stream_id)
+            best_recency = recency
+    return best_id
+
+
 def _hub_root_control_authority_snapshot(protocol: dict[str, Any]) -> dict[str, Any]:
     traffic_classes = protocol.get("traffic_classes") if isinstance(protocol.get("traffic_classes"), dict) else {}
     streams = protocol.get("streams") if isinstance(protocol.get("streams"), dict) else {}
     control = traffic_classes.get("control") if isinstance(traffic_classes.get("control"), dict) else {}
     policy = control.get("policy") if isinstance(control.get("policy"), dict) else {}
     stale_after_s = int(policy.get("stale_authority_after_s") or 0)
-    stream = next(
-        (
-            entry
-            for entry in streams.values()
-            if isinstance(entry, dict) and str(entry.get("flow_id") or "") == "hub_root.control.lifecycle"
-        ),
-        {},
-    )
+    stream_id = _latest_hub_root_stream_id(streams, "hub_root.control.lifecycle")
+    stream = streams.get(stream_id) if stream_id else {}
     if not isinstance(stream, dict) or not stream:
         return {
             "state": "missing",
