@@ -1554,32 +1554,57 @@ class BootstrapService:
         except Exception:
             pass
 
-    async def _member_register_and_heartbeat(self, conf: NodeConfig) -> Optional[asyncio.Task]:
+    async def _member_register_and_heartbeat(
+        self,
+        conf: NodeConfig,
+        *,
+        on_registered: Callable[[], Awaitable[None]] | None = None,
+    ) -> Optional[asyncio.Task]:
         hub_url = str(conf.hub_url or "").strip()
         if not hub_url:
             await bus.emit("net.subnet.register.error", {"status": "hub_url_missing"}, source="lifecycle", actor="system")
             return None
         member_hub_token = str(load_member_hub_token() or conf.token or "").strip()
-        try:
-            ok = await self.heartbeat.register(
-                hub_url,
-                member_hub_token,
-                node_id=conf.node_id,
-                subnet_id=conf.subnet_id,
-                hostname=socket.gethostname(),
-                roles=["member"],
-            )
-        except Exception as exc:
-            await bus.emit("net.subnet.register.error", {"error": str(exc)}, source="lifecycle", actor="system")
-            return None
-        if not ok:
-            await bus.emit("net.subnet.register.error", {"status": "non-200"}, source="lifecycle", actor="system")
-            return None
-        await bus.emit("net.subnet.registered", {"hub": conf.hub_url}, source="lifecycle", actor="system")
+        register_retry_s = _bounded_interval_seconds(
+            os.getenv("ADAOS_MEMBER_REGISTER_RETRY_INITIAL_S", "1"),
+            default=1.0,
+            minimum=0.05,
+        )
+
+        async def _try_register() -> bool:
+            try:
+                ok = await self.heartbeat.register(
+                    hub_url,
+                    member_hub_token,
+                    node_id=conf.node_id,
+                    subnet_id=conf.subnet_id,
+                    hostname=socket.gethostname(),
+                    roles=["member"],
+                )
+            except Exception as exc:
+                await bus.emit("net.subnet.register.error", {"error": str(exc)}, source="lifecycle", actor="system")
+                return False
+            if not ok:
+                await bus.emit("net.subnet.register.error", {"status": "non-200"}, source="lifecycle", actor="system")
+                return False
+            await bus.emit("net.subnet.registered", {"hub": conf.hub_url}, source="lifecycle", actor="system")
+            return True
 
         async def loop() -> None:
-            backoff = 1
+            registered = False
+            registered_notified = False
+            backoff = register_retry_s
             while True:
+                if not registered:
+                    registered = await _try_register()
+                    if not registered:
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 30)
+                        continue
+                    backoff = 1
+                    if on_registered is not None and not registered_notified:
+                        registered_notified = True
+                        await on_registered()
                 try:
                     ok_hb = await self.heartbeat.heartbeat(
                         hub_url,
@@ -2244,11 +2269,14 @@ class BootstrapService:
             self._start_boot_task_once("adaos-control-lifecycle-heartbeat", _control_lifecycle_heartbeat)
             self._start_boot_task_once("adaos-node-status-push-heartbeat", _node_status_push_heartbeat)
         else:
-            task = await self._member_register_and_heartbeat(conf)
-            if task:
-                self._boot_tasks.append(task)
+            member_ready_announced = False
+
+            async def _announce_member_ready() -> None:
+                nonlocal member_ready_announced
+                if member_ready_announced:
+                    return
+                member_ready_announced = True
                 self._ready.set()
-                self._booted = True
                 _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
                 await bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
                 _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
@@ -2260,6 +2288,11 @@ class BootstrapService:
                         _finalize_runtime_boot_status()
                 except Exception:
                     self._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
+
+            task = await self._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
+            if task:
+                self._boot_tasks.append(task)
+                self._booted = True
 
         # After IO bus is ready, wire outbound subscriber for Telegram if NATS/local
         _post_ready_started = _startup_stage_mark("bootstrap_post_ready_tail")
