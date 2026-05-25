@@ -260,6 +260,10 @@ def _run_seed_copy_command(
     }
 
 
+def _seed_copy_attempts_snapshot(attempts: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    return [dict(attempt) for attempt in attempts]
+
+
 def _copy_seed_venv_tree(source: Path, target: Path) -> dict[str, object]:
     mode = str(os.getenv("ADAOS_CORE_UPDATE_LINUX_SEED_COPY_MODE", "auto") or "auto").strip().lower()
     attempts: list[dict[str, object]] = []
@@ -276,8 +280,7 @@ def _copy_seed_venv_tree(source: Path, target: Path) -> dict[str, object]:
                 )
                 attempts.append(attempt)
                 if bool(attempt.get("ok")):
-                    attempt["attempts"] = attempts
-                    return attempt
+                    return {**attempt, "attempts": _seed_copy_attempts_snapshot(attempts)}
             hardlink_enabled = mode == "hardlink" or str(
                 os.getenv("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK", "")
             ).strip().lower() in {"1", "true", "yes", "on"}
@@ -290,8 +293,7 @@ def _copy_seed_venv_tree(source: Path, target: Path) -> dict[str, object]:
                 )
                 attempts.append(attempt)
                 if bool(attempt.get("ok")):
-                    attempt["attempts"] = attempts
-                    return attempt
+                    return {**attempt, "attempts": _seed_copy_attempts_snapshot(attempts)}
 
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)

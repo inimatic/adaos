@@ -136,6 +136,7 @@ def test_copy_seed_venv_uses_linux_reflink_copy_when_available(monkeypatch, tmp_
     assert result["seeded"] is True
     assert result["copy_method"] == "cp_reflink_auto"
     assert result["copy_elapsed_s"] >= 0
+    json.dumps(result)
     assert calls == [["/bin/cp", "-a", "--reflink=auto", str(source / "."), str(target)]]
 
 
