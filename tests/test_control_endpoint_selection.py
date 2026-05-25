@@ -295,7 +295,9 @@ def test_member_link_post_local_admin_prefers_supervisor_for_update_routes(monke
     assert calls == [("http://127.0.0.1:8776/api/supervisor/update/start", "supervisor-token")]
 
 
-def test_member_link_post_local_admin_falls_back_when_supervisor_update_route_unavailable(monkeypatch) -> None:
+def test_member_link_post_local_admin_refuses_runtime_fallback_when_supervisor_update_route_unavailable(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
@@ -317,13 +319,10 @@ def test_member_link_post_local_admin_falls_back_when_supervisor_update_route_un
 
     monkeypatch.setattr("adaos.services.subnet.link_client.requests.Session", _FakeSession)
 
-    payload = MemberLinkClient._post_local_admin("/api/admin/update/start", {"reason": "test"})
+    with pytest.raises(RuntimeError, match="supervisor_update_route_unavailable"):
+        MemberLinkClient._post_local_admin("/api/admin/update/start", {"reason": "test"})
 
-    assert payload["_served_by"] == "runtime"
-    assert calls == [
-        ("http://127.0.0.1:8776/api/supervisor/update/start", "supervisor-token"),
-        ("http://127.0.0.1:8779/api/admin/update/start", "runtime-token"),
-    ]
+    assert calls == [("http://127.0.0.1:8776/api/supervisor/update/start", "supervisor-token")]
 
 
 def test_member_link_client_does_not_reemit_hub_mirrored_events(monkeypatch) -> None:

@@ -1247,7 +1247,9 @@ class MemberLinkClient:
     def _post_local_admin(path: str, body: dict[str, Any]) -> dict[str, Any]:
         supervisor_path = MemberLinkClient._supervisor_update_path(path)
         if supervisor_path:
-            for supervisor_base in MemberLinkClient._local_supervisor_bases():
+            supervisor_bases = MemberLinkClient._local_supervisor_bases()
+            supervisor_attempts: list[str] = []
+            for supervisor_base in supervisor_bases:
                 try:
                     token = str(resolve_control_token(base_url=supervisor_base) or "dev-local-token")
                     headers = {"X-AdaOS-Token": token, "Accept": "application/json"}
@@ -1265,8 +1267,14 @@ class MemberLinkClient:
                     response.raise_for_status()
                     data = response.json()
                     return data if isinstance(data, dict) else {"ok": True}
-                except Exception:
+                except Exception as exc:
+                    supervisor_attempts.append(f"{supervisor_base}: {type(exc).__name__}: {str(exc)[:160]}")
                     continue
+            if supervisor_bases:
+                raise RuntimeError(
+                    "supervisor_update_route_unavailable: "
+                    + "; ".join(supervisor_attempts[-4:] or supervisor_bases[-4:])
+                )
 
         base = MemberLinkClient._resolve_local_control_base()
         # Re-resolve the control token against the selected local control base because
