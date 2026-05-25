@@ -54,6 +54,10 @@ checked against `https://ru.api.inimatic.com`.
 The client package version lives in
 `src/adaos/integrations/adaos-client/package.json`.
 
+On pushes to `main` or `rev2026`, the client `Firebase Hosting` workflow bumps
+the package patch version and deploys the hosting bundle from the updated branch
+head. The bump commit is named `chore: bump client version to <version>`.
+
 The hosting build generates Angular build constants and writes a public
 `version.json` file:
 
@@ -95,4 +99,3 @@ For zoned deployments, also check the zone-specific Root:
 ```bash
 curl -sS https://ru.api.inimatic.com/healthz
 ```
-
