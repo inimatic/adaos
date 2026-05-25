@@ -242,7 +242,14 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     assert ("rpc", "member-1") in calls
 
 
-@pytest.mark.parametrize("tool_name", ["browsers_skill:rename_link", "infrastate_skill:get_snapshot"])
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "browsers_skill:rename_link",
+        "infra_access_skill:get_snapshot",
+        "infrastate_skill:get_snapshot",
+    ],
+)
 def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_name: str) -> None:
     calls: list[tuple[str, str] | tuple[str, str, dict[str, object]]] = []
 

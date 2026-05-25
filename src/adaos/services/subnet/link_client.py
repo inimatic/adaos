@@ -188,6 +188,19 @@ class MemberLinkClient:
         return max(5.0, value)
 
     @staticmethod
+    def _ws_semantic_ping_send_timeout_s() -> float | None:
+        raw = str(os.getenv("ADAOS_SUBNET_WS_SEMANTIC_PING_SEND_TIMEOUT_S") or "").strip()
+        if raw.lower() in {"0", "false", "no", "off", "none", "disabled"}:
+            return None
+        try:
+            value = float(raw or 10.0)
+        except Exception:
+            value = 10.0
+        if value <= 0.0:
+            return None
+        return max(1.0, min(value, 60.0))
+
+    @staticmethod
     def _parse_bus_prefixes(raw: str | None) -> list[str] | None:
         txt = str(raw or "").strip()
         if not txt:
@@ -1000,7 +1013,19 @@ class MemberLinkClient:
                 )
                 return
             try:
-                await ws.send(json.dumps({"t": "ping", "ts": time.time()}))
+                ping_payload = json.dumps({"t": "ping", "ts": time.time()})
+                send_timeout_s = self._ws_semantic_ping_send_timeout_s()
+                if send_timeout_s is None:
+                    await ws.send(ping_payload)
+                else:
+                    await asyncio.wait_for(ws.send(ping_payload), timeout=send_timeout_s)
+            except asyncio.TimeoutError:
+                _log.warning(
+                    "subnet link semantic ping send timed out ws=%s timeout_s=%.3f",
+                    self._ws_url,
+                    self._ws_semantic_ping_send_timeout_s() or 0.0,
+                )
+                return
             except Exception:
                 return
 
