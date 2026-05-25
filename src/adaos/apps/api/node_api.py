@@ -3291,6 +3291,7 @@ async def node_yjs_update_desktop(
         page_schema=current.page_schema,
         icon_order=current.icon_order,
         widget_order=current.widget_order,
+        hidden_sections=current.hidden_sections,
     )
     if payload.installed is not None:
         installed = payload.installed if isinstance(payload.installed, dict) else {}
