@@ -783,6 +783,70 @@ def test_run_boot_sequence_deduplicates_concurrent_starts(monkeypatch) -> None:
     asyncio.run(_exercise())
 
 
+def test_member_register_and_heartbeat_recovers_after_transient_register_failure(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_MEMBER_REGISTER_RETRY_INITIAL_S", "0.01")
+    monkeypatch.setattr(bootstrap_mod, "load_member_hub_token", lambda: None)
+
+    events: list[tuple[str, object | None]] = []
+
+    async def _emit(event_type, payload=None, **_kwargs):
+        events.append((str(event_type), payload))
+
+    monkeypatch.setattr(bootstrap_mod.bus, "emit", _emit)
+
+    class _Heartbeat:
+        def __init__(self) -> None:
+            self.register_calls = 0
+            self.heartbeat_calls = 0
+            self.heartbeat_started: asyncio.Event | None = None
+
+        async def register(self, *_args, **_kwargs) -> bool:
+            self.register_calls += 1
+            return self.register_calls >= 2
+
+        async def heartbeat(self, *_args, **_kwargs) -> bool:
+            self.heartbeat_calls += 1
+            if self.heartbeat_started is not None:
+                self.heartbeat_started.set()
+            await asyncio.sleep(3600)
+            return True
+
+    heartbeat = _Heartbeat()
+    svc = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="member")),
+        heartbeat=heartbeat,
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    conf = SimpleNamespace(
+        hub_url="https://ru.api.inimatic.com/hubs/sn_test",
+        token="member-token",
+        node_id="member-1",
+        subnet_id="sn_test",
+    )
+
+    async def _exercise() -> None:
+        registered = asyncio.Event()
+        heartbeat.heartbeat_started = asyncio.Event()
+
+        async def _on_registered() -> None:
+            registered.set()
+
+        task = await svc._member_register_and_heartbeat(conf, on_registered=_on_registered)
+        assert task is not None
+        await asyncio.wait_for(registered.wait(), timeout=1.0)
+        await asyncio.wait_for(heartbeat.heartbeat_started.wait(), timeout=1.0)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(_exercise())
+
+    assert heartbeat.register_calls == 2
+    assert heartbeat.heartbeat_calls == 1
+    assert ("net.subnet.register.error", {"status": "non-200"}) in events
+    assert ("net.subnet.registered", {"hub": conf.hub_url}) in events
+
+
 def test_switch_role_to_hub_runs_root_bootstrap_before_boot(monkeypatch) -> None:
     current = SimpleNamespace(role="member", hub_url="https://ru.api.inimatic.com/hubs/sn_member", subnet_id="sn_member")
     provisional = SimpleNamespace(role="hub", hub_url=None, subnet_id="sn_provisional")
