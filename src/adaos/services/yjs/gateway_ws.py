@@ -3290,6 +3290,10 @@ def _yws_guard_reject_reason(
             quarantine_ttl_s = max(0.0, client_quarantine_until - now)
             if _dependency_allows_recovery("client_reconnect_backoff"):
                 _record_dependency_recovery()
+            elif active_total <= 0:
+                dependency_recovery_allowed = True
+                dependency_recovery_reason = "client_reconnect_backoff_no_active_yws"
+                _record_dependency_recovery()
             else:
                 reason = "client_reconnect_backoff"
         elif webspace_quarantine_until > now and active_total > 0:
@@ -3317,6 +3321,10 @@ def _yws_guard_reject_reason(
             client_short_session_storm = client_short_sessions >= _YWS_GUARD_SHORT_SESSION_LIMIT
             if client_short_session_storm and not reason:
                 if _dependency_allows_recovery("client_short_session_storm"):
+                    _record_dependency_recovery()
+                elif active_total <= 0:
+                    dependency_recovery_allowed = True
+                    dependency_recovery_reason = "client_short_session_storm_no_active_yws"
                     _record_dependency_recovery()
                 else:
                     quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
