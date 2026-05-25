@@ -250,6 +250,53 @@ def test_update_member_snapshot_heartbeat_refreshes_runtime_snapshot(monkeypatch
     assert changed_events[-1].payload["snapshot_build"]["runtime_git_short_commit"] == "6ae4ddb"
 
 
+def test_update_member_snapshot_heartbeat_publishes_refresh_event_for_unchanged_desktop_material(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(mod, "_member_snapshot_refresh_event_min_interval_s", lambda: 0.0)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    snapshot = {
+        "captured_at": 100.0,
+        "node_id": "member-1",
+        "node_names": ["Mediapoint"],
+        "node_state": "ready",
+        "build": {"runtime_git_short_commit": "78a00fe"},
+        "slots": {
+            "active_slot": "A",
+            "active_manifest": {"git_short_commit": "78a00fe"},
+        },
+        "desktop_catalog": {"apps": [{"id": "infrastate_app"}], "widgets": [{"id": "infrastate_widget"}]},
+    }
+
+    asyncio.run(manager.update_member_snapshot("member-1", snapshot=snapshot))
+    result = asyncio.run(
+        manager.update_member_snapshot_heartbeat(
+            "member-1",
+            snapshot={
+                "captured_at": 120.0,
+                "node_id": "member-1",
+                "node_names": ["Mediapoint"],
+                "node_state": "ready",
+                "build": {"runtime_git_short_commit": "78a00fe"},
+                "slots": {
+                    "active_slot": "A",
+                    "active_manifest": {"git_short_commit": "78a00fe"},
+                },
+            },
+        )
+    )
+
+    assert result["changed"] is False
+    refreshed_events = [event for event in fake_bus.events if event.type == "subnet.member.snapshot.refreshed"]
+    assert len(refreshed_events) == 1
+    assert refreshed_events[0].payload["node_id"] == "member-1"
+    assert refreshed_events[0].payload["refresh_reason"] == "unchanged_snapshot_with_desktop_material"
+
+
 def test_member_infrastate_projection_carries_core_slot_version() -> None:
     projection = mod._member_infrastate_projection(
         "member-1",
