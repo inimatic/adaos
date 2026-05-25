@@ -269,9 +269,40 @@ def test_load_mark_gateway_owner_peak_only_burst_does_not_warn(monkeypatch) -> N
 
     snapshot = load_mark_module.yjs_load_mark_snapshot(webspace_id="default", now_ts=51.0)
     owner_item = snapshot["selected_webspace"]["owners"]["_by_owner/gateway_ws"]
+    root_item = snapshot["selected_webspace"]["roots"]["_by_initiator/yjs.gateway_ws"]
 
     assert owner_item["peak_bps"] >= float(load_mark_module._HIGH_BPS)
+    assert owner_item["status"] == "nominal"
+    assert root_item["status"] == "nominal"
+    assert snapshot["selected_webspace"]["assessment"]["state"] == "nominal"
     assert not calls
+
+
+def test_load_mark_gateway_sustained_write_rate_still_warns(monkeypatch) -> None:
+    _reset_load_mark_state()
+    calls = []
+    monkeypatch.setattr(load_mark_module, "_enqueue_owner_pressure_log", lambda *args: calls.append(args))
+    monkeypatch.setattr(load_mark_module, "_GATEWAY_HIGH_WPS", 0.05)
+    monkeypatch.setattr(load_mark_module, "_GATEWAY_CRITICAL_WPS", 0.1)
+
+    for index in range(10):
+        load_mark_module.record_write_update(
+            "default",
+            total_bytes=1,
+            now_ts=52.0 + (float(index) / 100.0),
+            source="yjs.gateway_ws",
+            owner="gateway_ws",
+        )
+
+    snapshot = load_mark_module.yjs_load_mark_snapshot(webspace_id="default", now_ts=53.0)
+    owner_item = snapshot["selected_webspace"]["owners"]["_by_owner/gateway_ws"]
+    root_item = snapshot["selected_webspace"]["roots"]["_by_initiator/yjs.gateway_ws"]
+
+    assert owner_item["avg_wps"] >= float(load_mark_module._GATEWAY_CRITICAL_WPS)
+    assert owner_item["status"] == "critical"
+    assert root_item["status"] == "critical"
+    assert snapshot["selected_webspace"]["assessment"]["state"] == "critical"
+    assert calls
 
 
 def test_load_mark_gateway_tiny_sustained_writes_do_not_warn(monkeypatch) -> None:

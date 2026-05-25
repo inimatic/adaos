@@ -958,6 +958,30 @@ def _scope_node_data_source(data_source: Any, *, node_id: str) -> Any:
     return scoped
 
 
+def _scope_node_modal_id(modal_id: Any, *, node_id: str, modal_id_map: Mapping[str, str] | None = None) -> Any:
+    if not isinstance(modal_id, str):
+        return modal_id
+    token = str(modal_id or "").strip()
+    if not token or token.startswith("$"):
+        return modal_id
+    if modal_id_map and token in modal_id_map:
+        return modal_id_map[token]
+    return _node_scoped_catalog_id(node_id, token)
+
+
+def _scope_node_observe_spec(observe_spec: Any, *, node_id: str) -> Any:
+    if not isinstance(observe_spec, Mapping):
+        return observe_spec
+    scoped = _clone_json_like(observe_spec)
+    if not isinstance(scoped, dict):
+        return observe_spec
+    kind = str(scoped.get("kind") or "").strip().lower()
+    if (not kind or kind == "y") and scoped.get("path") is not None:
+        scoped["path"] = node_scope_data_path(str(scoped.get("path") or ""), node_id)
+        scoped.setdefault("kind", "y")
+    return scoped
+
+
 def _apply_node_context_to_ui(
     value: Any,
     display: Mapping[str, Any] | None,
@@ -986,11 +1010,23 @@ def _apply_node_context_to_ui(
     if isinstance(data.get("source"), str):
         data["source"] = node_scope_data_path(str(data.get("source") or ""), node_id)
     if isinstance(data.get("launchModal"), str):
-        modal_id = str(data.get("launchModal") or "").strip()
-        if modal_id_map and modal_id in modal_id_map:
-            data["launchModal"] = modal_id_map[modal_id]
-        elif modal_id:
-            data["launchModal"] = _node_scoped_catalog_id(node_id, modal_id)
+        data["launchModal"] = _scope_node_modal_id(
+            data.get("launchModal"),
+            node_id=node_id,
+            modal_id_map=modal_id_map,
+        )
+    if isinstance(data.get("_observe"), Mapping):
+        data["_observe"] = _scope_node_observe_spec(data.get("_observe"), node_id=node_id)
+    params = data.get("params")
+    if isinstance(params, dict):
+        if isinstance(params.get("modalId"), str):
+            params["modalId"] = _scope_node_modal_id(
+                params.get("modalId"),
+                node_id=node_id,
+                modal_id_map=modal_id_map,
+            )
+        if isinstance(params.get("_observe"), Mapping):
+            params["_observe"] = _scope_node_observe_spec(params.get("_observe"), node_id=node_id)
     return data
 
 
@@ -2043,6 +2079,55 @@ def _normalize_overlay_widget_entries(values: Any) -> List[Dict[str, Any]]:
             item["type"] = str(item.get("type"))
         out.append(item)
     return out
+
+
+def _refresh_pinned_widgets_from_catalog_entries(
+    pinned_widgets: Any,
+    catalog_widgets: Any,
+) -> List[Dict[str, Any]]:
+    pinned = _normalize_overlay_widget_entries(pinned_widgets)
+    if not pinned or not isinstance(catalog_widgets, list):
+        return pinned
+    catalog_by_id: Dict[str, Dict[str, Any]] = {}
+    for raw in catalog_widgets:
+        if not isinstance(raw, Mapping):
+            continue
+        item_id = str(raw.get("id") or "").strip()
+        if item_id and item_id not in catalog_by_id:
+            catalog_by_id[item_id] = dict(raw)
+    if not catalog_by_id:
+        return pinned
+    refreshed: List[Dict[str, Any]] = []
+    for item in pinned:
+        base = catalog_by_id.get(str(item.get("id") or "").strip())
+        if not isinstance(base, dict):
+            refreshed.append(item)
+            continue
+        merged = dict(item)
+        for key in (
+            "type",
+            "title",
+            "source",
+            "visibleIf",
+            "icon",
+            "origin",
+            "node_id",
+            "node_label",
+            "node_compact_label",
+            "node_index",
+            "node_color",
+            "node_local_id",
+            "remote_id",
+            "groupLabel",
+            "dataSource",
+            "inputs",
+            "actions",
+            "dev",
+        ):
+            if key in base:
+                merged[key] = _clone_json_like(base[key])
+        refreshed.append(merged)
+    return refreshed
 
 
 def _built_in_scenario_content(scenario_id: str) -> Dict[str, Any]:
@@ -3783,8 +3868,10 @@ class WebspaceScenarioRuntime:
         desktop_config = _coerce_dict(app_with_modals.get("desktop") or {})
         desktop_config["topbar"] = scenario_topbar
         desktop_config["pageSchema"] = scenario_page_schema
-        desktop_config["pinnedWidgets"] = (
-            overlay_pinned_widgets if overlay_has_pinned_widgets else scenario_pinned_widgets
+        pinned_widgets_source = overlay_pinned_widgets if overlay_has_pinned_widgets else scenario_pinned_widgets
+        desktop_config["pinnedWidgets"] = _refresh_pinned_widgets_from_catalog_entries(
+            pinned_widgets_source,
+            merged_widgets,
         )
         desktop_config["iconOrder"] = list(overlay_icon_order)
         desktop_config["widgetOrder"] = list(overlay_widget_order)

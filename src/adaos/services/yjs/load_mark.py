@@ -1011,6 +1011,18 @@ def _status_for_rate(avg_bps: float, peak_bps: float) -> str:
     return "idle"
 
 
+def _gateway_status_for_rate(avg_bps: float, peak_bps: float) -> str:
+    if _GATEWAY_PEAK_ALERTS:
+        return _status_for_rate(avg_bps, peak_bps)
+    if avg_bps >= float(_CRITICAL_BPS):
+        return "critical"
+    if avg_bps >= float(_HIGH_BPS):
+        return "high"
+    if peak_bps > 0.0 or avg_bps > 0.0:
+        return "nominal"
+    return "idle"
+
+
 def _status_for_write_rate(avg_wps: float, peak_wps: float) -> str:
     if peak_wps >= float(_CRITICAL_WPS) or avg_wps >= float(_CRITICAL_WPS):
         return "critical"
@@ -1019,6 +1031,35 @@ def _status_for_write_rate(avg_wps: float, peak_wps: float) -> str:
     if peak_wps > 0.0 or avg_wps > 0.0:
         return "nominal"
     return "idle"
+
+
+def _gateway_status_for_write_rate(avg_wps: float, peak_wps: float) -> str:
+    if _GATEWAY_PEAK_ALERTS:
+        return _status_for_write_rate(avg_wps, peak_wps)
+    if avg_wps >= float(_GATEWAY_CRITICAL_WPS):
+        return "critical"
+    if avg_wps >= float(_GATEWAY_HIGH_WPS):
+        return "high"
+    if peak_wps > 0.0 or avg_wps > 0.0:
+        return "nominal"
+    return "idle"
+
+
+def _is_gateway_flow_bucket(bucket_name: str, *, key_name: str, bucket_state: Mapping[str, Any] | None = None) -> bool:
+    token = str(bucket_name or "").strip().lower()
+    key = str(key_name or "").strip().lower()
+    if key == "owner":
+        return token == _GATEWAY_OWNER_BUCKET
+    if key != "root":
+        return False
+    if token.startswith(_UNATTRIBUTED_PREFIX):
+        source = token.removeprefix(_UNATTRIBUTED_PREFIX)
+        if source == "gateway_ws" or source.startswith("yjs.gateway"):
+            return True
+    source = ""
+    if isinstance(bucket_state, Mapping):
+        source = str(bucket_state.get("last_source") or "").strip().lower()
+    return source == "gateway_ws" or source.startswith("yjs.gateway")
 
 
 def _snapshot_bucket_collection_locked(collection: dict[str, Any], *, key_name: str, now_ts: float) -> tuple[list[dict[str, Any]], str]:
@@ -1040,8 +1081,12 @@ def _snapshot_bucket_collection_locked(collection: dict[str, Any], *, key_name: 
         peak_bps = round(float(peak_bucket_bytes) / float(_BUCKET_SEC), 3)
         avg_wps = round(float(bucket_state.get("recent_write_total") or 0) / float(_WINDOW_SEC), 3)
         peak_wps = round(float(peak_bucket_writes) / float(_BUCKET_SEC), 3)
-        byte_status = _status_for_rate(avg_bps, peak_bps)
-        write_status = _status_for_write_rate(avg_wps, peak_wps)
+        if _is_gateway_flow_bucket(str(bucket_name), key_name=key_name, bucket_state=bucket_state):
+            byte_status = _gateway_status_for_rate(avg_bps, peak_bps)
+            write_status = _gateway_status_for_write_rate(avg_wps, peak_wps)
+        else:
+            byte_status = _status_for_rate(avg_bps, peak_bps)
+            write_status = _status_for_write_rate(avg_wps, peak_wps)
         status = "critical" if "critical" in {byte_status, write_status} else "high" if "high" in {byte_status, write_status} else "nominal" if "nominal" in {byte_status, write_status} else "idle"
         if status == "critical":
             overall_state = "critical"

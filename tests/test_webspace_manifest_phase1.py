@@ -712,6 +712,39 @@ def test_web_desktop_service_get_snapshot_returns_overlay_state(monkeypatch) -> 
     }
 
 
+def test_web_desktop_service_refreshes_stale_pinned_widget_runtime_fields(monkeypatch) -> None:
+    webspace_id = "phase5-pinned-widget-runtime-fields"
+    ensure_workspace(webspace_id)
+    stale_pin = {
+        "id": "node:member-01:weather",
+        "type": "visual.metricTile",
+        "dataSource": {"kind": "y", "path": "data/weather/current"},
+        "actions": [{"type": "openModal", "params": {"modalId": "weather_modal"}}],
+    }
+    fresh_catalog = {
+        "id": "node:member-01:weather",
+        "type": "visual.metricTile",
+        "dataSource": {"kind": "y", "path": "data/nodes/member-01/weather/current"},
+        "actions": [{"type": "openModal", "params": {"modalId": "node:member-01:weather_modal"}}],
+    }
+    fake_state = {
+        "ui": _FakeMap({"application": {"desktop": {}}}),
+        "data": _FakeMap(
+            {
+                "desktop": {"pinnedWidgets": [stale_pin]},
+                "installed": {},
+                "catalog": {"widgets": [fresh_catalog]},
+            }
+        ),
+    }
+    monkeypatch.setattr(desktop_module, "get_ydoc", lambda _webspace_id: _FakeSyncDoc(fake_state))
+
+    snapshot = desktop_module.WebDesktopService().get_snapshot(webspace_id)
+
+    assert snapshot.pinned_widgets[0]["dataSource"]["path"] == "data/nodes/member-01/weather/current"
+    assert snapshot.pinned_widgets[0]["actions"][0]["params"]["modalId"] == "node:member-01:weather_modal"
+
+
 def test_web_desktop_service_get_snapshot_async_prefers_read_only_live_doc(monkeypatch) -> None:
     webspace_id = "phase5-desktop-snapshot-async"
     ensure_workspace(webspace_id)
