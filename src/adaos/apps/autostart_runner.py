@@ -659,7 +659,7 @@ def _run_prepared_restart_skill_migration(slot: str, manifest: dict[str, Any]) -
     env["ADAOS_ACTIVE_CORE_SLOT_DIR"] = str(slot_dir(slot_name))
     cwd_raw = str(manifest.get("cwd") or "").strip()
     cwd = Path(cwd_raw).expanduser().resolve() if cwd_raw else None
-    command = [sys.executable, "-m", "adaos.apps.skill_runtime_migrate", "--json"]
+    command = [str(_slot_python_executable(slot_name)), "-m", "adaos.apps.skill_runtime_migrate", "--json"]
     timeout_sec = _skill_runtime_migration_timeout_sec()
     try:
         completed = _run_skill_runtime_migration_subprocess(

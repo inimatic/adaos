@@ -712,6 +712,7 @@ def test_autostart_runner_prepared_restart_manifest_timeout_clears_plan(monkeypa
 
 def test_prepared_restart_skill_migration_timeout_is_safe_for_core_update(monkeypatch, tmp_path: Path) -> None:
     written: list[tuple[str, dict]] = []
+    target_python = tmp_path / "target-slot-python"
     manifest = {
         "slot": "B",
         "env": {},
@@ -720,9 +721,11 @@ def test_prepared_restart_skill_migration_timeout_is_safe_for_core_update(monkey
     }
 
     def _timeout(command, *, env, cwd, timeout_sec):
+        assert command[:3] == [str(target_python), "-m", "adaos.apps.skill_runtime_migrate"]
         raise subprocess.TimeoutExpired(command, timeout_sec, output="partial stdout", stderr="partial stderr")
 
     monkeypatch.setattr(autostart_runner, "_skill_runtime_migration_timeout_sec", lambda: 12.0)
+    monkeypatch.setattr(autostart_runner, "_slot_python_executable", lambda slot: target_python)
     monkeypatch.setattr(autostart_runner, "_run_skill_runtime_migration_subprocess", _timeout)
     monkeypatch.setattr(autostart_runner, "write_slot_manifest", lambda slot, payload: written.append((slot, dict(payload))))
 
