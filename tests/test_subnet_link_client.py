@@ -135,3 +135,59 @@ def test_member_link_client_skips_hub_follow_in_dev_environment(monkeypatch) -> 
 
     assert client._last_follow_key == ""
     assert client._last_follow_result == {}
+
+
+def test_member_link_schedules_yjs_node_state_in_background(monkeypatch) -> None:
+    async def _exercise() -> None:
+        client = mod.MemberLinkClient()
+        client._loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _slow_queue(*, webspace_id: str, reason: str) -> None:
+            assert webspace_id == "desktop"
+            assert reason == "member_link_connected"
+            started.set()
+            await release.wait()
+
+        monkeypatch.setattr(client, "_queue_yjs_node_state", _slow_queue)
+
+        assert client._schedule_yjs_node_state(webspace_id="desktop", reason="member_link_connected") is True
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        release.set()
+        await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+
+def test_member_link_yjs_node_state_snapshot_times_out(monkeypatch) -> None:
+    class _FakeYDoc:
+        def get_map(self, _name: str):
+            return SimpleNamespace(to_json=lambda: {"nodes": {"member-1": {"ready": True}}})
+
+    class _SlowStore:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        async def start(self) -> None:
+            return None
+
+        async def apply_updates(self, _ydoc) -> None:
+            await asyncio.Future()
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    client = mod.MemberLinkClient()
+    store = _SlowStore()
+    monkeypatch.setattr(mod.Y, "YDoc", _FakeYDoc)
+    monkeypatch.setattr(mod, "get_ystore_for_webspace", lambda _webspace_id: store)
+    monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="member-1")))
+    monkeypatch.setattr(client, "_yjs_node_state_timeout_s", lambda: 0.01)
+
+    asyncio.run(client._queue_yjs_node_state(webspace_id="desktop", reason="member_link_connected"))
+
+    assert client._yjs_snapshot_failed_total == 1
+    assert client._last_yjs_node_state_timeout_at > 0
+    assert client._out_q.empty()
+    assert store.stopped is True
