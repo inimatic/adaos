@@ -2319,6 +2319,12 @@ class BootstrapService:
                 if member_ready_announced:
                     return
                 member_ready_announced = True
+                try:
+                    from adaos.services.subnet.link_client import get_member_link_client
+
+                    await get_member_link_client().start()
+                except Exception:
+                    self._log.warning("failed to start member hub websocket link after registration", exc_info=True)
                 self._ready.set()
                 _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
                 await bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
