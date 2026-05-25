@@ -21,6 +21,7 @@ _LAST_CITY_IN_DOC: Dict[str, Optional[str]] = {}
 _LAST_DOC_CHECK_AT: Dict[str, float] = {}
 _LAST_NO_CITY_LOG_AT: Dict[str, float] = {}
 _OBSERVER_STATS: Dict[str, Dict[str, Any]] = {}
+_LAST_CITY_TARGET_NODE: Dict[str, Optional[str]] = {}
 _ACTIVE_CITY_CHECK_INTERVAL_S = 0.5
 _IDLE_CITY_CHECK_INTERVAL_S = 5.0
 _NO_CITY_LOG_INTERVAL_S = 30.0
@@ -51,6 +52,7 @@ def _stats_entry(webspace_id: str) -> dict[str, Any]:
         "last_check_at": None,
         "last_emit_at": None,
         "last_city": None,
+        "last_target_node_id": None,
     }
     _OBSERVER_STATS[key] = stats
     return stats
@@ -90,14 +92,24 @@ def weather_observer_snapshot(*, webspace_id: str | None = None) -> dict[str, An
     }
 
 
+def _is_ymap(value: Any) -> bool:
+    ymap_type = getattr(Y, "YMap", None)
+    return bool(ymap_type) and isinstance(value, ymap_type)
+
+
+def _is_yarray(value: Any) -> bool:
+    yarray_type = getattr(Y, "YArray", None)
+    return bool(yarray_type) and isinstance(value, yarray_type)
+
+
 def _coerce_weather_mapping(value) -> dict:
     def _normalize(node):
         if isinstance(node, dict):
             return {str(k): _normalize(v) for k, v in node.items()}
-        if isinstance(node, Y.YMap):
+        if _is_ymap(node):
             keys = list(node.keys())
             return {str(k): _normalize(node.get(k)) for k in keys}
-        if isinstance(node, Y.YArray):
+        if _is_yarray(node):
             return [_normalize(it) for it in node]
         if node is None:
             return None
@@ -121,16 +133,39 @@ def _coerce_weather_mapping(value) -> dict:
     return {}
 
 
-def _current_city_from_doc(ydoc) -> Optional[str]:
-    data = ydoc.get_map("data")
-    weather = data.get("weather")
-    if isinstance(weather, Y.YMap):
+def _mapping_get(value: Any, key: str) -> Any:
+    if _is_ymap(value):
+        return value.get(key)
+    if isinstance(value, dict):
+        return value.get(key)
+    mapping = _coerce_weather_mapping(value)
+    if isinstance(mapping, dict):
+        return mapping.get(key)
+    return None
+
+
+def _mapping_keys(value: Any) -> list[str]:
+    try:
+        if _is_ymap(value):
+            return [str(key) for key in value.keys() if str(key)]
+        if isinstance(value, dict):
+            return [str(key) for key in value.keys() if str(key)]
+    except Exception:
+        return []
+    mapping = _coerce_weather_mapping(value)
+    if isinstance(mapping, dict):
+        return [str(key) for key in mapping.keys() if str(key)]
+    return []
+
+
+def _city_from_weather_node(weather: Any) -> Optional[str]:
+    if _is_ymap(weather):
         current = weather.get("current")
     elif isinstance(weather, dict):
         current = weather.get("current")
     else:
         current = _coerce_weather_mapping(weather).get("current")
-    if isinstance(current, Y.YMap):
+    if _is_ymap(current):
         city = current.get("city")
     elif isinstance(current, dict):
         city = current.get("city")
@@ -139,6 +174,35 @@ def _current_city_from_doc(ydoc) -> Optional[str]:
     if city:
         return str(city)
     return None
+
+
+def _local_node_id() -> str:
+    try:
+        return str(getattr(get_ctx().config, "node_id", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _current_city_from_doc(ydoc) -> Tuple[Optional[str], Optional[str]]:
+    data = ydoc.get_map("data")
+    direct_city = _city_from_weather_node(_mapping_get(data, "weather"))
+    if direct_city:
+        return direct_city, None
+
+    nodes = _mapping_get(data, "nodes")
+    local_node_id = _local_node_id()
+    if local_node_id:
+        city = _city_from_weather_node(_mapping_get(_mapping_get(nodes, local_node_id), "weather"))
+        if city:
+            return city, local_node_id
+
+    for node_id in _mapping_keys(nodes):
+        if node_id == local_node_id:
+            continue
+        city = _city_from_weather_node(_mapping_get(_mapping_get(nodes, node_id), "weather"))
+        if city:
+            return city, node_id
+    return None, None
 
 
 def _detach_after_transaction_observer(ydoc, *, sub_id: int | None, callback) -> bool:
@@ -194,40 +258,47 @@ def _ensure_city_observer(webspace_id: str, ydoc):
         _LAST_NO_CITY_LOG_AT[key] = now
         _log.debug("weather observer check webspace=%s city=None", key)
 
-    def _emit_event(city: str) -> None:
+    def _emit_event(city: str, target_node_id: Optional[str] = None) -> None:
+        payload: dict[str, Any] = {"webspace_id": key, "workspace_id": key, "city": city}
+        if target_node_id:
+            payload["target_node_id"] = target_node_id
+            payload["_meta"] = {"webspace_id": key, "workspace_id": key, "target_node_id": target_node_id}
         try:
             ctx = get_ctx()
             ev = DomainEvent(
                 type="weather.city_changed",
-                payload={"webspace_id": key, "workspace_id": key, "city": city},
+                payload=payload,
                 source="weather_observer",
                 ts=time.time(),
             )
             ctx.bus.publish(ev)
         except Exception:
             try:
-                bus_emit(ctx.bus, "weather.city_changed", {"webspace_id": key, "city": city}, "weather_observer")
+                bus_emit(ctx.bus, "weather.city_changed", payload, "weather_observer")
             except Exception:
                 pass
 
     def _emit_current() -> None:
         stats["emit_check_total"] = int(stats.get("emit_check_total") or 0) + 1
         stats["last_check_at"] = time.time()
-        city = _current_city_from_doc(ydoc)
+        city, target_node_id = _current_city_from_doc(ydoc)
         if not city:
             _LAST_CITY_IN_DOC[key] = None
+            _LAST_CITY_TARGET_NODE[key] = None
             stats["no_city_total"] = int(stats.get("no_city_total") or 0) + 1
             _log_no_city()
             return
-        if _LAST_CITY_IN_DOC.get(key) == city:
+        if _LAST_CITY_IN_DOC.get(key) == city and _LAST_CITY_TARGET_NODE.get(key) == target_node_id:
             stats["same_city_skip_total"] = int(stats.get("same_city_skip_total") or 0) + 1
             return
-        _log.debug("weather observer check webspace=%s city=%s", key, city)
+        _log.debug("weather observer check webspace=%s city=%s target_node_id=%s", key, city, target_node_id or "-")
         _LAST_CITY_IN_DOC[key] = city
+        _LAST_CITY_TARGET_NODE[key] = target_node_id
         stats["emit_total"] = int(stats.get("emit_total") or 0) + 1
         stats["last_emit_at"] = time.time()
         stats["last_city"] = city
-        _emit_event(city)
+        stats["last_target_node_id"] = target_node_id
+        _emit_event(city, target_node_id=target_node_id)
 
     def _maybe_emit(event=None) -> None:  # noqa: ARG001
         stats["callback_total"] = int(stats.get("callback_total") or 0) + 1
@@ -313,6 +384,7 @@ def forget_weather_room_observer(webspace_id: str, ydoc_id: int | None = None) -
             _YDOC_LOOPS.pop(key, None)
             _PENDING_DOC_CHECKS.pop(key, None)
             _LAST_CITY_IN_DOC.pop(key, None)
+            _LAST_CITY_TARGET_NODE.pop(key, None)
             _LAST_NO_CITY_LOG_AT.pop(key, None)
     _LAST_DOC_CHECK_AT.pop(key, None)
 

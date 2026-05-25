@@ -596,6 +596,102 @@ def test_member_snapshot_refreshed_skips_rebuild_when_remote_catalog_projection_
     assert calls == []
 
 
+def test_member_catalog_projection_missing_repairs_live_room_when_persisted_catalog_is_present(monkeypatch) -> None:
+    node_id = "member-1"
+    snapshot = {
+        "desktop_catalog": {
+            "apps": [{"id": "weather_app"}],
+            "widgets": [{"id": "weather"}],
+        }
+    }
+    directory_module = types.ModuleType("adaos.services.registry.subnet_directory")
+    directory_module.get_directory = lambda: SimpleNamespace(
+        get_node=lambda _node_id: {"runtime_projection": {"snapshot": snapshot}}
+    )
+    monkeypatch.setitem(sys.modules, "adaos.services.registry.subnet_directory", directory_module)
+
+    class _Doc:
+        def __init__(self, catalog: dict[str, object]) -> None:
+            self.catalog = catalog
+
+        def get_map(self, name: str) -> dict[str, object]:
+            assert name == "data"
+            return {"catalog": self.catalog}
+
+    class _AsyncDoc:
+        async def __aenter__(self) -> _Doc:
+            return _Doc(
+                {
+                    "apps": [{"id": "node:member-1:weather_app"}],
+                    "widgets": [{"id": "node:member-1:weather"}],
+                }
+            )
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    refreshes: list[tuple[str, str]] = []
+
+    async def _refresh(webspace_id: str, *, node_id: str) -> bool:
+        refreshes.append((webspace_id, node_id))
+        return True
+
+    monkeypatch.setattr(webspace_runtime_module, "_resolve_live_room_ydoc", lambda _webspace_id: _Doc({"apps": [], "widgets": []}))
+    monkeypatch.setattr(webspace_runtime_module, "async_read_ydoc", lambda *_args, **_kwargs: _AsyncDoc())
+    monkeypatch.setattr(webspace_runtime_module, "_refresh_live_room_for_member_catalog_projection", _refresh)
+
+    async def _exercise() -> bool:
+        return await webspace_runtime_module._member_catalog_projection_missing(webspace_id="desktop", node_id=node_id)
+
+    assert asyncio.run(_exercise()) is False
+    assert refreshes == [("desktop", node_id)]
+
+
+def test_member_catalog_projection_missing_rebuilds_when_live_and_persisted_catalogs_are_missing(monkeypatch) -> None:
+    node_id = "member-1"
+    snapshot = {
+        "desktop_catalog": {
+            "widgets": [{"id": "weather"}],
+        }
+    }
+    directory_module = types.ModuleType("adaos.services.registry.subnet_directory")
+    directory_module.get_directory = lambda: SimpleNamespace(
+        get_node=lambda _node_id: {"runtime_projection": {"snapshot": snapshot}}
+    )
+    monkeypatch.setitem(sys.modules, "adaos.services.registry.subnet_directory", directory_module)
+
+    class _Doc:
+        def __init__(self, catalog: dict[str, object]) -> None:
+            self.catalog = catalog
+
+        def get_map(self, name: str) -> dict[str, object]:
+            assert name == "data"
+            return {"catalog": self.catalog}
+
+    class _AsyncDoc:
+        async def __aenter__(self) -> _Doc:
+            return _Doc({"apps": [], "widgets": []})
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    refreshes: list[tuple[str, str]] = []
+
+    async def _refresh(webspace_id: str, *, node_id: str) -> bool:
+        refreshes.append((webspace_id, node_id))
+        return True
+
+    monkeypatch.setattr(webspace_runtime_module, "_resolve_live_room_ydoc", lambda _webspace_id: _Doc({"apps": [], "widgets": []}))
+    monkeypatch.setattr(webspace_runtime_module, "async_read_ydoc", lambda *_args, **_kwargs: _AsyncDoc())
+    monkeypatch.setattr(webspace_runtime_module, "_refresh_live_room_for_member_catalog_projection", _refresh)
+
+    async def _exercise() -> bool:
+        return await webspace_runtime_module._member_catalog_projection_missing(webspace_id="desktop", node_id=node_id)
+
+    assert asyncio.run(_exercise()) is True
+    assert refreshes == []
+
+
 def test_remote_member_catalog_entries_are_node_scoped_and_auto_installed(monkeypatch) -> None:
     previous_directory_module = sys.modules.get("adaos.services.registry.subnet_directory")
     directory_module = types.ModuleType("adaos.services.registry.subnet_directory")
