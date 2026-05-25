@@ -6,7 +6,6 @@ _RESERVED_DATA_ROOTS = {
     "catalog",
     "desktop",
     "installed",
-    "media",
     "nlu",
     "nlu_teacher",
     "routing",
