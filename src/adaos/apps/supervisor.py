@@ -1425,6 +1425,73 @@ def _reconcile_failed_attempt_after_terminal_success(
     )
 
 
+def _reconcile_failed_target_mismatch_after_active_switch(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+    runtime: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    status_map = status if isinstance(status, dict) else {}
+    attempt_map = attempt if isinstance(attempt, dict) else {}
+    if str(attempt_map.get("state") or "").strip().lower() != "failed":
+        return None
+    if str(attempt_map.get("action") or "update").strip().lower() != "update":
+        return None
+    mismatch = bool(status_map.get("active_slot_target_mismatch")) or (
+        str(attempt_map.get("completion_reason") or "").strip().lower() == "active slot target mismatch"
+    )
+    if not mismatch:
+        return None
+    if not _runtime_payload_ready(runtime):
+        return None
+    target_version = str(attempt_map.get("target_version") or status_map.get("target_version") or "").strip()
+    if not target_version:
+        return None
+    try:
+        manifest = active_slot_manifest()
+    except Exception:
+        manifest = None
+    if not _manifest_matches_target_version(manifest, target_version):
+        return None
+
+    now = time.time()
+    slot = str((manifest or {}).get("slot") or active_slot() or "").strip().upper()
+    payload = dict(status_map)
+    payload.update(
+        {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": str(attempt_map.get("target_rev") or status_map.get("target_rev") or ""),
+            "target_version": target_version,
+            "target_slot": slot,
+            "message": (
+                f"runtime boot validated on slot {slot}; supervisor reconciled target mismatch after active switch"
+                if slot
+                else "runtime boot validated; supervisor reconciled target mismatch after active switch"
+            ),
+            "manifest": manifest if isinstance(manifest, dict) else {},
+            "active_slot_target_mismatch": False,
+            "active_slot_target_mismatch_reconciled": True,
+            "active_slot_target_mismatch_reconciled_at": now,
+            "validated_at": now,
+            "finished_at": now,
+            "scheduled_for": None,
+            "candidate_prewarm_state": None,
+            "candidate_prewarm_message": None,
+            "candidate_prewarm_ready_at": None,
+        }
+    )
+    recovered_status = write_core_update_status(payload)
+    with contextlib.suppress(Exception):
+        clear_core_update_plan()
+    return _complete_update_attempt(
+        state="completed",
+        status=recovered_status,
+        reason="active slot target mismatch reconciled",
+    )
+
+
 def _fail_root_restart_attempt(
     *,
     status: dict[str, Any],
@@ -1481,6 +1548,16 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         payload["status"] = recovered_status
         payload["attempt"] = _read_update_attempt() or payload["attempt"]
         payload["_served_by"] = "supervisor_active_target_recovery"
+        return payload
+    recovered_attempt = _reconcile_failed_target_mismatch_after_active_switch(
+        status=status,
+        attempt=attempt,
+        runtime=runtime,
+    )
+    if isinstance(recovered_attempt, dict):
+        payload["status"] = read_core_update_status() or status
+        payload["attempt"] = recovered_attempt
+        payload["_served_by"] = "supervisor_failed_target_mismatch_reconciled"
         return payload
 
     now = time.time()
