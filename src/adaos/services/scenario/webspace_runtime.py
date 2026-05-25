@@ -5226,23 +5226,87 @@ async def _on_scenario_removed(evt: Dict[str, Any]) -> None:
     )
 
 
-@subscribe("subnet.member.snapshot.changed")
-async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
+def _member_snapshot_rebuild_targets() -> list[str]:
+    try:
+        rows = [row for row in workspace_index.list_workspaces() if not bool(getattr(row, "is_dev", False))]
+    except Exception:
+        rows = []
+    return [
+        str(getattr(row, "workspace_id", "") or "").strip()
+        for row in rows
+        if str(getattr(row, "workspace_id", "") or "").strip()
+    ] or [default_webspace_id()]
+
+
+def _member_desktop_catalog_expected_ids(node_id: str, snapshot: Mapping[str, Any]) -> dict[str, set[str]]:
+    catalog = snapshot.get("desktop_catalog") if isinstance(snapshot.get("desktop_catalog"), Mapping) else {}
+    expected: dict[str, set[str]] = {"apps": set(), "widgets": set()}
+    for kind in ("apps", "widgets"):
+        items = catalog.get(kind) if isinstance(catalog.get(kind), list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if _catalog_entry_is_foreign_relay(item, node_id=node_id):
+                continue
+            entry = _scope_remote_catalog_entry_id(_clone_json_like(item), node_id=node_id)
+            entry_id = str(entry.get("id") or "").strip()
+            if entry_id:
+                expected[kind].add(entry_id)
+    return expected
+
+
+def _catalog_ids_from_snapshot(catalog: Any, kind: str) -> set[str]:
+    if not isinstance(catalog, Mapping):
+        return set()
+    items = catalog.get(kind) if isinstance(catalog.get(kind), list) else []
+    return {str(item.get("id") or "").strip() for item in items if isinstance(item, Mapping) and str(item.get("id") or "").strip()}
+
+
+async def _member_catalog_projection_missing(*, webspace_id: str, node_id: str) -> bool:
+    try:
+        from adaos.services.registry.subnet_directory import get_directory
+
+        node = get_directory().get_node(node_id) or {}
+    except Exception:
+        return False
+    runtime_projection = node.get("runtime_projection") if isinstance(node.get("runtime_projection"), Mapping) else {}
+    snapshot = runtime_projection.get("snapshot") if isinstance(runtime_projection.get("snapshot"), Mapping) else {}
+    expected = _member_desktop_catalog_expected_ids(node_id, snapshot)
+    if not expected["apps"] and not expected["widgets"]:
+        return False
+
+    catalog: Any = _YDOC_PATH_MISSING
+    live_ydoc = _resolve_live_room_ydoc(webspace_id)
+    if live_ydoc is not None:
+        catalog = _read_current_ydoc_path_value(live_ydoc, "data/catalog")
+    if catalog is _YDOC_PATH_MISSING:
+        try:
+            async with async_read_ydoc(webspace_id) as ydoc:
+                catalog = _read_current_ydoc_path_value(ydoc, "data/catalog")
+        except Exception:
+            catalog = _YDOC_PATH_MISSING
+    if catalog is _YDOC_PATH_MISSING:
+        return True
+
+    current_apps = _catalog_ids_from_snapshot(catalog, "apps")
+    current_widgets = _catalog_ids_from_snapshot(catalog, "widgets")
+    return bool((expected["apps"] - current_apps) or (expected["widgets"] - current_widgets))
+
+
+async def _schedule_member_snapshot_rebuild_from_event(
+    evt: Any,
+    *,
+    only_when_catalog_missing: bool = False,
+) -> None:
     payload = _payload(evt)
     node_id = str(payload.get("node_id") or "").strip() or "member"
     reason = _member_snapshot_rebuild_reason(evt, payload)
     now = time.monotonic()
     interval_s = _member_snapshot_rebuild_min_interval_s()
-    try:
-        rows = [row for row in workspace_index.list_workspaces() if not bool(getattr(row, "is_dev", False))]
-    except Exception:
-        rows = []
-    targets = [
-        str(getattr(row, "workspace_id", "") or "").strip()
-        for row in rows
-        if str(getattr(row, "workspace_id", "") or "").strip()
-    ] or [default_webspace_id()]
+    targets = _member_snapshot_rebuild_targets()
     for webspace_id in targets:
+        if only_when_catalog_missing and not await _member_catalog_projection_missing(webspace_id=webspace_id, node_id=node_id):
+            continue
         key = f"{node_id}\0{webspace_id}"
         stats = _member_snapshot_rebuild_stats(key)
         request_id = _member_snapshot_rebuild_request_id(webspace_id=webspace_id, node_id=node_id)
@@ -5267,6 +5331,16 @@ async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
             continue
         _MEMBER_SNAPSHOT_REBUILD_AT[key] = now
         _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id, reason=reason, request_id=request_id)
+
+
+@subscribe("subnet.member.snapshot.changed")
+async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
+    await _schedule_member_snapshot_rebuild_from_event(evt)
+
+
+@subscribe("subnet.member.snapshot.refreshed")
+async def _on_subnet_member_snapshot_refreshed(evt: Any) -> None:
+    await _schedule_member_snapshot_rebuild_from_event(evt, only_when_catalog_missing=True)
 
 
 def _schedule_member_snapshot_rebuild(

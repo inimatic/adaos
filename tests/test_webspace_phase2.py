@@ -510,6 +510,8 @@ def test_member_snapshot_changed_rebuilds_shared_workspaces_with_rate_limit(monk
     )
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 60.0)
     webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
 
     async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
         calls.append((webspace_id, action, source_of_truth))
@@ -527,6 +529,71 @@ def test_member_snapshot_changed_rebuilds_shared_workspaces_with_rate_limit(monk
     asyncio.run(_exercise())
 
     assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
+
+
+def test_member_snapshot_refreshed_rebuilds_when_remote_catalog_projection_is_missing(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
+    )
+    monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 0.0)
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
+
+    async def _missing(**_kwargs):
+        return True
+
+    async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
+        calls.append((webspace_id, action, source_of_truth))
+        return {"accepted": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "_member_catalog_projection_missing", _missing)
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    async def _exercise() -> None:
+        await webspace_runtime_module._on_subnet_member_snapshot_refreshed({"node_id": "member-1"})
+        await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+    assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
+
+
+def test_member_snapshot_refreshed_skips_rebuild_when_remote_catalog_projection_is_present(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
+    )
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
+
+    async def _missing(**_kwargs):
+        return False
+
+    async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
+        calls.append((webspace_id, action, source_of_truth))
+        return {"accepted": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "_member_catalog_projection_missing", _missing)
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    async def _exercise() -> None:
+        await webspace_runtime_module._on_subnet_member_snapshot_refreshed({"node_id": "member-1"})
+        await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+    assert calls == []
 
 
 def test_remote_member_catalog_entries_are_node_scoped_and_auto_installed(monkeypatch) -> None:

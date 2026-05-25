@@ -280,6 +280,15 @@ def _member_infrastate_projection_min_interval_s() -> float:
     return max(5.0, min(300.0, value))
 
 
+def _member_snapshot_refresh_event_min_interval_s() -> float:
+    raw = str(os.getenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_REFRESH_EVENT_MIN_INTERVAL_S") or "").strip()
+    try:
+        value = float(raw or 30.0)
+    except Exception:
+        value = 30.0
+    return max(0.0, min(300.0, value))
+
+
 def _core_public_version(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -611,6 +620,7 @@ class HubLinkManager:
         self._last_member_infrastate_projection_at = 0.0
         self._last_member_infrastate_projection_node_id = ""
         self._last_member_infrastate_projection_webspace_id = ""
+        self._member_snapshot_refresh_event_last_at: dict[str, float] = {}
 
     @staticmethod
     def _member_snapshot_followup_delay_s() -> float:
@@ -881,6 +891,27 @@ class HubLinkManager:
             self._last_member_infrastate_projection_node_id = node_key
             self._last_member_infrastate_projection_webspace_id = ws_id
 
+    def _maybe_publish_member_snapshot_refreshed_event(
+        self,
+        node_id: str,
+        *,
+        snapshot: dict[str, Any],
+        payload: dict[str, Any],
+        changed: bool,
+    ) -> None:
+        node_key = str(node_id or "").strip()
+        if not node_key or changed or not _snapshot_has_desktop_material(snapshot):
+            return
+        now = time.time()
+        min_interval = _member_snapshot_refresh_event_min_interval_s()
+        last_at = float(self._member_snapshot_refresh_event_last_at.get(node_key) or 0.0)
+        if min_interval > 0 and last_at > 0 and now - last_at < min_interval:
+            return
+        event_payload = dict(payload or {})
+        event_payload["refresh_reason"] = "unchanged_snapshot_with_desktop_material"
+        if _publish_link_event("subnet.member.snapshot.refreshed", event_payload):
+            self._member_snapshot_refresh_event_last_at[node_key] = now
+
     async def update_member_snapshot(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
         link = await self._get_link(node_id)
         if not link:
@@ -948,6 +979,13 @@ class HubLinkManager:
             _log.debug("failed to schedule member infrastate projection after snapshot node_id=%s", node_id, exc_info=True)
         if changed:
             _publish_link_event("subnet.member.snapshot.changed", payload)
+        else:
+            self._maybe_publish_member_snapshot_refreshed_event(
+                node_id,
+                snapshot=snap,
+                payload=payload,
+                changed=changed,
+            )
         return {"ok": True, "changed": changed, **payload}
 
     async def update_member_snapshot_heartbeat(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -1023,6 +1061,13 @@ class HubLinkManager:
             _log.debug("failed to schedule member infrastate projection after snapshot heartbeat node_id=%s", node_id, exc_info=True)
         if changed:
             _publish_link_event("subnet.member.snapshot.changed", payload)
+        else:
+            self._maybe_publish_member_snapshot_refreshed_event(
+                node_id,
+                snapshot=merged_snapshot,
+                payload=payload,
+                changed=changed,
+            )
         return {"ok": True, "changed": changed, **payload}
 
     async def set_member_node_names(self, node_id: str, *, node_names: list[str]) -> dict[str, Any]:
