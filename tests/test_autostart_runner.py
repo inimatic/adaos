@@ -596,6 +596,118 @@ def test_autostart_runner_prepared_restart_preserves_plan_until_validation(monke
     assert payload["target_slot"] == "B"
     assert payload["manifest"]["target_version"] == "target-sha"
     assert payload["skill_runtime_migration"]["ok"] is True
+    assert payload["prepared_restart_manifest_wait"]["found"] is True
+
+
+def test_autostart_runner_prepared_restart_waits_for_manifest(monkeypatch, tmp_path: Path) -> None:
+    calls: list[object] = []
+    target_manifest = {
+        "slot": "B",
+        "target_version": "target-sha",
+        "env": {},
+        "cwd": str(tmp_path),
+        "skill_runtime_migration": {"deferred": True},
+    }
+    manifests = [None, target_manifest]
+
+    monkeypatch.setattr(
+        autostart_runner,
+        "_parse_args",
+        lambda: type("Args", (), {"host": "127.0.0.1", "port": 8777, "token": None})(),
+    )
+    monkeypatch.setattr(autostart_runner, "init_ctx", lambda: None)
+    monkeypatch.setattr(
+        autostart_runner,
+        "read_plan",
+        lambda: {
+            "state": "prepared_restart",
+            "action": "update",
+            "target_slot": "B",
+            "target_version": "target-sha",
+            "target_rev": "rev2026",
+            "prepared_at": 10.0,
+        },
+    )
+    monkeypatch.setattr(autostart_runner, "load_config", lambda: None)
+    monkeypatch.setattr(autostart_runner, "_prepared_restart_manifest_wait_timeout_sec", lambda: 1.0)
+    monkeypatch.setattr(autostart_runner, "_prepared_restart_manifest_poll_sec", lambda: 0.05)
+    monkeypatch.setattr(autostart_runner, "read_slot_manifest", lambda slot: manifests.pop(0))
+    monkeypatch.setattr(
+        autostart_runner,
+        "_run_prepared_restart_skill_migration",
+        lambda slot, manifest: (
+            {"ok": True, "total": 1, "failed_total": 0, "rollback_total": 0, "deferred": False, "skills": []},
+            dict(manifest),
+        ),
+    )
+    monkeypatch.setattr(autostart_runner, "clear_plan", lambda: calls.append("clear_plan"))
+    monkeypatch.setattr(autostart_runner, "write_status", lambda payload: calls.append(("write_status", dict(payload))))
+    monkeypatch.setattr(autostart_runner, "_resolve_bind", lambda conf, host, port: (host, port))
+    monkeypatch.setattr(autostart_runner, "_advertise_base", lambda host, port: f"http://{host}:{port}")
+    monkeypatch.setattr(autostart_runner, "_stop_previous_server", lambda host, port: None)
+    monkeypatch.setattr(autostart_runner, "_pidfile_path", lambda host, port: tmp_path / "serve.json")
+    monkeypatch.setattr(autostart_runner, "_write_pidfile", lambda path, **kwargs: path.write_text("{}", encoding="utf-8"))
+    monkeypatch.setattr(
+        autostart_runner,
+        "_launch_active_slot_if_needed",
+        lambda *args, **kwargs: (_ for _ in ()).throw(SystemExit(0)),
+    )
+
+    try:
+        autostart_runner.main()
+    except SystemExit:
+        pass
+
+    assert "clear_plan" not in calls
+    payload = [item for item in calls if isinstance(item, tuple) and item[0] == "write_status"][0][1]
+    wait = payload["prepared_restart_manifest_wait"]
+    assert wait["found"] is True
+    assert wait["attempts"] == 2
+    assert wait["target_slot"] == "B"
+
+
+def test_autostart_runner_prepared_restart_manifest_timeout_clears_plan(monkeypatch) -> None:
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        autostart_runner,
+        "_parse_args",
+        lambda: type("Args", (), {"host": "127.0.0.1", "port": 8777, "token": None})(),
+    )
+    monkeypatch.setattr(autostart_runner, "init_ctx", lambda: None)
+    monkeypatch.setattr(
+        autostart_runner,
+        "read_plan",
+        lambda: {
+            "state": "prepared_restart",
+            "action": "update",
+            "target_slot": "A",
+            "target_version": "target-sha",
+            "target_rev": "rev2026",
+            "prepared_at": 10.0,
+        },
+    )
+    monkeypatch.setattr(autostart_runner, "load_config", lambda: None)
+    monkeypatch.setattr(autostart_runner, "_prepared_restart_manifest_wait_timeout_sec", lambda: 0.0)
+    monkeypatch.setattr(autostart_runner, "read_slot_manifest", lambda slot: None)
+    monkeypatch.setattr(autostart_runner, "clear_plan", lambda: calls.append("clear_plan"))
+    monkeypatch.setattr(autostart_runner, "write_status", lambda payload: calls.append(("write_status", dict(payload))))
+
+    try:
+        autostart_runner.main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("expected SystemExit")
+
+    assert "clear_plan" in calls
+    payload = [item for item in calls if isinstance(item, tuple) and item[0] == "write_status"][0][1]
+    assert payload["state"] == "failed"
+    assert payload["phase"] == "prepared_restart"
+    assert payload["target_slot"] == "A"
+    assert payload["prepared_restart_manifest_wait"]["found"] is False
+    assert payload["prepared_restart_manifest_wait"]["attempts"] == 1
+    assert payload["plan"]["target_version"] == "target-sha"
 
 
 def test_prepared_restart_skill_migration_timeout_is_safe_for_core_update(monkeypatch, tmp_path: Path) -> None:

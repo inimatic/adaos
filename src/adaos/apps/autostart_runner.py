@@ -88,6 +88,60 @@ def _skip_pending_update_requested() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _prepared_restart_manifest_wait_timeout_sec() -> float:
+    try:
+        return max(0.0, float(str(os.getenv("ADAOS_PREPARED_RESTART_MANIFEST_WAIT_SEC") or "20").strip() or "20"))
+    except Exception:
+        return 20.0
+
+
+def _prepared_restart_manifest_poll_sec() -> float:
+    try:
+        return min(5.0, max(0.05, float(str(os.getenv("ADAOS_PREPARED_RESTART_MANIFEST_POLL_SEC") or "0.25").strip() or "0.25")))
+    except Exception:
+        return 0.25
+
+
+def _wait_for_prepared_restart_manifest(
+    target_slot: str,
+    *,
+    plan: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    slot_name = str(target_slot or "").strip().upper()
+    timeout_sec = _prepared_restart_manifest_wait_timeout_sec()
+    poll_sec = _prepared_restart_manifest_poll_sec()
+    started_at = time.time()
+    deadline = started_at + timeout_sec
+    attempts = 0
+    manifest: dict[str, Any] | None = None
+
+    while slot_name:
+        attempts += 1
+        candidate = read_slot_manifest(slot_name)
+        if isinstance(candidate, dict):
+            manifest = candidate
+            break
+        if time.time() >= deadline:
+            break
+        time.sleep(min(poll_sec, max(0.0, deadline - time.time())))
+
+    finished_at = time.time()
+    diagnostics = {
+        "target_slot": slot_name,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "deadline_at": deadline,
+        "timeout_sec": timeout_sec,
+        "poll_sec": poll_sec,
+        "attempts": attempts,
+        "waited_s": round(max(0.0, finished_at - started_at), 3),
+        "found": isinstance(manifest, dict),
+        "target_version": str(plan.get("target_version") or ""),
+        "target_rev": str(plan.get("target_rev") or ""),
+    }
+    return manifest, diagnostics
+
+
 def _runtime_profile_mode() -> str:
     mode = str(os.getenv("ADAOS_SUPERVISOR_PROFILE_MODE") or "normal").strip().lower()
     return mode if mode in {"normal", "sampled_profile", "trace_profile"} else "normal"
@@ -1077,9 +1131,35 @@ def main() -> None:
             if plan_state == "prepared_restart" and plan_action == "update":
                 phase = "prepared_restart"
                 target_slot = str(plan.get("target_slot") or active_slot() or "").strip().upper()
-                manifest = read_slot_manifest(target_slot) if target_slot else None
+                manifest, manifest_wait = _wait_for_prepared_restart_manifest(target_slot, plan=plan)
                 if not isinstance(manifest, dict):
-                    raise RuntimeError(f"prepared restart target slot {target_slot or '<missing>'} manifest is missing")
+                    clear_plan()
+                    message = f"prepared restart target slot {target_slot or '<missing>'} manifest did not appear before deadline"
+                    _LOG.error("%s diagnostics=%s", message, manifest_wait)
+                    write_status(
+                        {
+                            "state": "failed",
+                            "phase": "prepared_restart",
+                            "message": message,
+                            "action": plan_action,
+                            "target_rev": str(plan.get("target_rev") or ""),
+                            "target_version": str(plan.get("target_version") or ""),
+                            "target_slot": target_slot,
+                            "plan": plan,
+                            "prepared_restart_manifest_wait": manifest_wait,
+                            "error_type": "RuntimeError",
+                            "error": message,
+                            "started_at": float(plan.get("prepared_at") or plan.get("created_at") or time.time()),
+                            "finished_at": time.time(),
+                        }
+                    )
+                    raise SystemExit(1)
+                if manifest_wait.get("attempts", 0) > 1 or float(manifest_wait.get("waited_s") or 0.0) > 0.0:
+                    _LOG.info(
+                        "prepared restart target slot %s manifest became available diagnostics=%s",
+                        target_slot,
+                        manifest_wait,
+                    )
                 manifest = dict(manifest) if isinstance(manifest, dict) else {}
                 try:
                     skill_runtime_migration, manifest = _run_prepared_restart_skill_migration(target_slot, manifest)
@@ -1126,6 +1206,7 @@ def main() -> None:
                     "finished_at": time.time(),
                     "manifest": manifest,
                     "skill_runtime_migration": skill_runtime_migration,
+                    "prepared_restart_manifest_wait": manifest_wait,
                 }
                 write_status(payload)
             else:
