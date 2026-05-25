@@ -443,6 +443,50 @@ def test_new_face_vision_discovers_legacy_uploads_without_manifest(tmp_path: Pat
     assert (tmp_path / "state" / "state_manifest.json").exists()
 
 
+def test_new_face_vision_merges_missing_manifest_entries_from_uploads(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_cls = _load_engine_class()
+    upload_root = tmp_path / "runtime" / "data" / "files" / "uploads"
+    frames_zip = upload_root / "frames" / "frames.zip"
+    masks_zip = upload_root / "masks" / "masks.zip"
+    metadata = upload_root / "metadata" / "meta.jsonl"
+    for path in (frames_zip, masks_zip, metadata):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    _frames_zip(frames_zip)
+    _frames_zip(masks_zip)
+    _metadata_file(metadata)
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "state_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "new_face_vision.state.v1",
+                "files": {
+                    "model": None,
+                    "frames": None,
+                    "masks": None,
+                    "metadata": None,
+                },
+                "thresholds": {
+                    "prediction": 0.35,
+                    "warning": 0.05,
+                    "alarm": 0.15,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    engine = engine_cls(state_dir, upload_root=upload_root)
+    snapshot = engine.snapshot()
+
+    assert snapshot["stats"]["total_frames"] == 2
+    assert snapshot["stats"]["loaded_masks"] == 2
+    assert snapshot["stats"]["loaded_metadata"] == 2
+    assert {item["id"] for item in snapshot["file_items"]} >= {"frames", "masks", "metadata"}
+
+
 def test_new_face_vision_clear_tombstone_prevents_upload_resurrection(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
     engine_cls = _load_engine_class()
