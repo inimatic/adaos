@@ -29,6 +29,7 @@ router = APIRouter()
 _log = logging.getLogger("adaos.api.tool_bridge")
 _HUB_LOCAL_TOOL_PREFIXES: tuple[str, ...] = (
     "browsers_skill:",
+    "infra_access_skill:",
     "infrastate_skill:",
 )
 _SNAPSHOT_UNAVAILABLE_TTL_S = max(0.0, float(os.getenv("ADAOS_TOOL_BRIDGE_SNAPSHOT_UNAVAILABLE_TTL_S") or "20"))

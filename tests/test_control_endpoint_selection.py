@@ -504,6 +504,17 @@ def test_member_link_ws_control_ping_env_override(monkeypatch) -> None:
     assert MemberLinkClient._ws_control_ping_timeout_s(interval) == 7.0
 
 
+def test_member_link_semantic_ping_send_timeout_env(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SUBNET_WS_SEMANTIC_PING_SEND_TIMEOUT_S", raising=False)
+    assert MemberLinkClient._ws_semantic_ping_send_timeout_s() == 10.0
+
+    monkeypatch.setenv("ADAOS_SUBNET_WS_SEMANTIC_PING_SEND_TIMEOUT_S", "0")
+    assert MemberLinkClient._ws_semantic_ping_send_timeout_s() is None
+
+    monkeypatch.setenv("ADAOS_SUBNET_WS_SEMANTIC_PING_SEND_TIMEOUT_S", "0.1")
+    assert MemberLinkClient._ws_semantic_ping_send_timeout_s() == 1.0
+
+
 @pytest.mark.asyncio
 async def test_member_link_ping_loop_exits_when_pong_goes_stale(monkeypatch) -> None:
     class _FakeWs:
@@ -532,6 +543,38 @@ async def test_member_link_ping_loop_exits_when_pong_goes_stale(monkeypatch) -> 
     await client._ping_loop(ws)
 
     assert ws.sent == [json.dumps({"t": "ping", "ts": 110.0})]
+
+
+@pytest.mark.asyncio
+async def test_member_link_ping_loop_exits_when_ping_send_times_out(monkeypatch) -> None:
+    class _SlowWs:
+        async def send(self, _payload: str) -> None:
+            await asyncio.Future()
+
+    now = {"value": 100.0}
+    waited: list[float] = []
+
+    async def _fake_sleep(_seconds: float) -> None:
+        now["value"] += 3.0
+
+    async def _fake_wait_for(coro, *, timeout: float):
+        waited.append(timeout)
+        coro.close()
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr("adaos.services.subnet.link_client.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("adaos.services.subnet.link_client.asyncio.wait_for", _fake_wait_for)
+    monkeypatch.setattr("adaos.services.subnet.link_client.time.time", lambda: now["value"])
+
+    client = MemberLinkClient()
+    client._ws_url = "ws://hub/ws/subnet"
+    client._connected_at = 100.0
+    client._last_pong_at = 100.0
+    monkeypatch.setattr(client, "_ws_semantic_ping_send_timeout_s", lambda: 2.5)
+
+    await client._ping_loop(_SlowWs())
+
+    assert waited == [2.5]
 
 
 @pytest.mark.asyncio
