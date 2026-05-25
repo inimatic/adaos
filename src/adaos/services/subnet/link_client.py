@@ -393,6 +393,7 @@ class MemberLinkClient:
 
             desktop_catalog = build_local_desktop_catalog_snapshot(mode="workspace", include_remote=False)
         except Exception:
+            _log.debug("failed to build local desktop catalog snapshot; sending empty catalog", exc_info=True)
             desktop_catalog = {"apps": [], "widgets": []}
         return self._compose_local_node_snapshot(desktop_catalog=desktop_catalog)
 
@@ -402,6 +403,7 @@ class MemberLinkClient:
 
             desktop_catalog = await build_local_desktop_catalog_snapshot_async(mode="workspace", include_remote=False)
         except Exception:
+            _log.debug("failed to build async local desktop catalog snapshot; sending empty catalog", exc_info=True)
             desktop_catalog = {"apps": [], "widgets": []}
         return self._compose_local_node_snapshot(desktop_catalog=desktop_catalog)
 

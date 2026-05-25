@@ -497,6 +497,52 @@ async def test_build_local_desktop_catalog_snapshot_async_reads_local_unscoped_s
     }
 
 
+@pytest.mark.asyncio
+async def test_build_local_desktop_catalog_snapshot_async_keeps_catalog_when_ydoc_overlay_times_out(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_MEMBER_DESKTOP_CATALOG_YDOC_OVERLAY_TIMEOUT_S", "0.1")
+    monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: SimpleNamespace())
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "node-1")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Node 1",
+            "node_compact_label": "N1",
+            "node_index": 1,
+            "node_color": "#F28E2B",
+        },
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="member", node_id="node-1", node_settings=SimpleNamespace(node_names=[])),
+    )
+
+    def _fake_collect(self, mode: str = "mixed", *, include_remote: bool = True) -> list[dict[str, object]]:  # noqa: ARG001
+        return [
+            {
+                "skill": "member_skill",
+                "space": "default",
+                "apps": [{"id": "member_app", "title": "Member App"}],
+                "widgets": [{"id": "member_widget", "title": "Member Widget"}],
+                "ydoc_defaults": {"data/member/current": {"value": "declared"}},
+            }
+        ]
+
+    async def _slow_overlay(snapshot: dict[str, object], *, webspace_id: str) -> dict[str, object]:  # noqa: ARG001
+        await asyncio.sleep(10)
+        return snapshot
+
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_collect_skill_decls", _fake_collect)
+    monkeypatch.setattr(webspace_runtime_module, "_overlay_current_ydoc_defaults_async", _slow_overlay)
+
+    snapshot = await webspace_runtime_module.build_local_desktop_catalog_snapshot_async()
+
+    assert snapshot["apps"][0]["id"] == "member_app"
+    assert snapshot["widgets"][0]["id"] == "member_widget"
+    assert snapshot["ydoc_defaults"]["data/nodes/node-1/member/current"] == {"value": "declared"}
+
+
 def test_member_snapshot_changed_rebuilds_shared_workspaces_with_rate_limit(monkeypatch) -> None:
     calls: list[tuple[str, str, str]] = []
 

@@ -1147,13 +1147,31 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
 def build_local_desktop_catalog_snapshot(*, mode: str = "workspace", include_remote: bool = True) -> dict[str, Any]:
     runtime = WebspaceScenarioRuntime()
     snapshot = _local_catalog_decl_entries(runtime._collect_skill_decls(mode=mode, include_remote=include_remote))
-    return _overlay_current_ydoc_defaults(snapshot, webspace_id=default_webspace_id())
+    try:
+        return _overlay_current_ydoc_defaults(snapshot, webspace_id=default_webspace_id())
+    except Exception:
+        _log.debug("failed to overlay local desktop catalog defaults from YDoc", exc_info=True)
+        return snapshot
 
 
 async def build_local_desktop_catalog_snapshot_async(*, mode: str = "workspace", include_remote: bool = True) -> dict[str, Any]:
     runtime = WebspaceScenarioRuntime()
     snapshot = _local_catalog_decl_entries(runtime._collect_skill_decls(mode=mode, include_remote=include_remote))
-    return await _overlay_current_ydoc_defaults_async(snapshot, webspace_id=default_webspace_id())
+    timeout_s = _local_catalog_ydoc_overlay_timeout_s()
+    try:
+        return await asyncio.wait_for(
+            _overlay_current_ydoc_defaults_async(snapshot, webspace_id=default_webspace_id()),
+            timeout=timeout_s,
+        )
+    except asyncio.TimeoutError:
+        _log.warning(
+            "timed out overlaying local desktop catalog defaults from YDoc timeout_s=%.3f; using declaration catalog",
+            timeout_s,
+        )
+        return snapshot
+    except Exception:
+        _log.debug("failed to overlay local desktop catalog defaults from YDoc", exc_info=True)
+        return snapshot
 
 
 _YDOC_PATH_MISSING = object()
@@ -1200,6 +1218,15 @@ def _sync_ydoc_read_allowed() -> bool:
     except RuntimeError:
         return True
     return False
+
+
+def _local_catalog_ydoc_overlay_timeout_s() -> float:
+    raw = str(os.getenv("ADAOS_MEMBER_DESKTOP_CATALOG_YDOC_OVERLAY_TIMEOUT_S") or "").strip()
+    try:
+        value = float(raw or 2.5)
+    except Exception:
+        value = 2.5
+    return max(0.1, min(30.0, value))
 
 
 def _overlay_current_ydoc_defaults(snapshot: dict[str, Any], *, webspace_id: str) -> dict[str, Any]:
