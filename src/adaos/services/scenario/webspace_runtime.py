@@ -2382,6 +2382,9 @@ def _collect_materialization_missing_branches(
     has_widgets_catalog_modal: bool,
     has_catalog_apps: bool,
     has_catalog_widgets: bool,
+    has_data_desktop: bool,
+    has_installed_apps: bool,
+    has_installed_widgets: bool,
 ) -> list[str]:
     missing: list[str] = []
     if not has_ui_application:
@@ -2398,6 +2401,12 @@ def _collect_materialization_missing_branches(
         missing.append("data.catalog.apps")
     if not has_catalog_widgets:
         missing.append("data.catalog.widgets")
+    if not has_data_desktop:
+        missing.append("data.desktop")
+    if not has_installed_apps:
+        missing.append("data.installed.apps")
+    if not has_installed_widgets:
+        missing.append("data.installed.widgets")
     return missing
 
 
@@ -2412,13 +2421,21 @@ def _derive_materialization_readiness_state(
     has_widgets_catalog_modal: bool,
     has_catalog_apps: bool,
     has_catalog_widgets: bool,
+    has_data_desktop: bool,
+    has_installed_apps: bool,
+    has_installed_widgets: bool,
 ) -> str:
     if ready:
         return "ready"
-    if has_desktop_page_schema and has_catalog_apps and has_catalog_widgets:
+    has_effective_data = has_data_desktop and has_installed_apps and has_installed_widgets
+    if has_desktop_page_schema and has_catalog_apps and has_catalog_widgets and has_effective_data:
         return "interactive"
     if has_desktop_page_schema and (
-        has_catalog_apps or has_catalog_widgets or has_apps_catalog_modal or has_widgets_catalog_modal
+        has_catalog_apps
+        or has_catalog_widgets
+        or has_apps_catalog_modal
+        or has_widgets_catalog_modal
+        or has_effective_data
     ):
         return "hydrating"
     if has_desktop_page_schema:
@@ -2508,11 +2525,16 @@ def _build_materialization_snapshot(
     has_widgets_catalog_modal: bool,
     has_catalog_apps: bool,
     has_catalog_widgets: bool,
+    has_data_desktop: bool,
+    has_installed_apps: bool,
+    has_installed_widgets: bool,
     has_scenario_ui_application: bool,
     has_scenario_registry_entry: bool,
     has_scenario_catalog: bool,
     catalog_apps_count: int,
     catalog_widgets_count: int,
+    installed_apps_count: int,
+    installed_widgets_count: int,
     topbar_count: int,
     page_widget_count: int,
     rebuild_state: Mapping[str, Any] | None = None,
@@ -2528,6 +2550,9 @@ def _build_materialization_snapshot(
         has_widgets_catalog_modal=has_widgets_catalog_modal,
         has_catalog_apps=has_catalog_apps,
         has_catalog_widgets=has_catalog_widgets,
+        has_data_desktop=has_data_desktop,
+        has_installed_apps=has_installed_apps,
+        has_installed_widgets=has_installed_widgets,
     )
     ready = not missing_branches
     readiness_state = _derive_materialization_readiness_state(
@@ -2540,6 +2565,9 @@ def _build_materialization_snapshot(
         has_widgets_catalog_modal=has_widgets_catalog_modal,
         has_catalog_apps=has_catalog_apps,
         has_catalog_widgets=has_catalog_widgets,
+        has_data_desktop=has_data_desktop,
+        has_installed_apps=has_installed_apps,
+        has_installed_widgets=has_installed_widgets,
     )
     compatibility_caches = _describe_compatibility_caches(
         current_scenario=current_scenario,
@@ -2563,9 +2591,16 @@ def _build_materialization_snapshot(
         "has_widgets_catalog_modal": bool(has_widgets_catalog_modal),
         "has_catalog_apps": bool(has_catalog_apps),
         "has_catalog_widgets": bool(has_catalog_widgets),
+        "has_data_desktop": bool(has_data_desktop),
+        "has_installed_apps": bool(has_installed_apps),
+        "has_installed_widgets": bool(has_installed_widgets),
         "catalog_counts": {
             "apps": int(catalog_apps_count or 0),
             "widgets": int(catalog_widgets_count or 0),
+        },
+        "installed_counts": {
+            "apps": int(installed_apps_count or 0),
+            "widgets": int(installed_widgets_count or 0),
         },
         "topbar_count": int(topbar_count or 0),
         "page_widget_count": int(page_widget_count or 0),
@@ -2596,11 +2631,16 @@ def _pending_materialization_snapshot(
         has_widgets_catalog_modal=False,
         has_catalog_apps=False,
         has_catalog_widgets=False,
+        has_data_desktop=False,
+        has_installed_apps=False,
+        has_installed_widgets=False,
         has_scenario_ui_application=False,
         has_scenario_registry_entry=False,
         has_scenario_catalog=False,
         catalog_apps_count=0,
         catalog_widgets_count=0,
+        installed_apps_count=0,
+        installed_widgets_count=0,
         topbar_count=0,
         page_widget_count=0,
         rebuild_state=rebuild_state,
@@ -3839,6 +3879,7 @@ class WebspaceScenarioRuntime:
             page_schema = _coerce_dict(desktop.get("pageSchema") or {})
             topbar = desktop.get("topbar") if isinstance(desktop.get("topbar"), list) else []
             page_widgets = page_schema.get("widgets") if isinstance(page_schema.get("widgets"), list) else []
+            installed = _coerce_dict(resolved.installed or {})
             include_catalog = phase_name != "structure"
             snapshot = _build_materialization_snapshot(
                 webspace_id=webspace_id,
@@ -3850,11 +3891,16 @@ class WebspaceScenarioRuntime:
                 has_widgets_catalog_modal="widgets_catalog" in modals,
                 has_catalog_apps=include_catalog and isinstance(resolved.catalog.get("apps"), list),
                 has_catalog_widgets=include_catalog and isinstance(resolved.catalog.get("widgets"), list),
+                has_data_desktop=include_catalog and isinstance(resolved.desktop, Mapping),
+                has_installed_apps=include_catalog and isinstance(installed.get("apps"), list),
+                has_installed_widgets=include_catalog and isinstance(installed.get("widgets"), list),
                 has_scenario_ui_application=bool(compatibility_presence.get("scenario_ui_application")),
                 has_scenario_registry_entry=bool(compatibility_presence.get("scenario_registry_entry")),
                 has_scenario_catalog=bool(compatibility_presence.get("scenario_catalog")),
                 catalog_apps_count=len(resolved.catalog.get("apps") or []) if include_catalog else 0,
                 catalog_widgets_count=len(resolved.catalog.get("widgets") or []) if include_catalog else 0,
+                installed_apps_count=len(installed.get("apps") or []) if include_catalog else 0,
+                installed_widgets_count=len(installed.get("widgets") or []) if include_catalog else 0,
                 topbar_count=len(topbar),
                 page_widget_count=len(page_widgets),
                 rebuild_state=describe_webspace_rebuild_state(webspace_id),

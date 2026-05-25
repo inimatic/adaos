@@ -1310,6 +1310,13 @@ def test_describe_yjs_materialization_reports_ready_readiness_and_no_missing_bra
                     "apps": [{"id": "prompt_ide"}],
                     "widgets": [{"id": "weather"}],
                 },
+                "desktop": {
+                    "pageSchema": {"id": "desktop", "widgets": [{"id": "main-widget"}]},
+                },
+                "installed": {
+                    "apps": ["scenario:prompt_engineer_scenario"],
+                    "widgets": ["weather"],
+                },
                 "scenarios": {
                     "hub-1": {
                         "prompt_engineer_scenario": {
@@ -1334,6 +1341,53 @@ def test_describe_yjs_materialization_reports_ready_readiness_and_no_missing_bra
     assert result["compatibility_caches"]["complete"] is True
     assert result["compatibility_caches"]["client_fallback_readable"] is True
     assert result["compatibility_caches"]["runtime_removal_ready"] is True
+    assert result["has_data_desktop"] is True
+    assert result["has_installed_apps"] is True
+    assert result["has_installed_widgets"] is True
+    assert result["installed_counts"] == {"apps": 1, "widgets": 1}
+
+
+def test_describe_yjs_materialization_reports_partial_installed_as_missing(monkeypatch) -> None:
+    fake_state = {
+        "ui": _FakeMap(
+            {
+                "current_scenario": "prompt_engineer_scenario",
+                "application": {
+                    "desktop": {
+                        "pageSchema": {"id": "desktop", "widgets": [{"id": "main-widget"}]},
+                    },
+                    "modals": {
+                        "apps_catalog": {"title": "Apps"},
+                        "widgets_catalog": {"title": "Widgets"},
+                    },
+                },
+            }
+        ),
+        "registry": _FakeMap({}),
+        "data": _FakeMap(
+            {
+                "catalog": {
+                    "apps": [{"id": "prompt_ide"}],
+                    "widgets": [{"id": "weather"}],
+                },
+                "desktop": {},
+                "installed": {},
+            }
+        ),
+    }
+
+    monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
+
+    result = asyncio.run(node_api_module._describe_yjs_materialization("default"))
+
+    assert result["ready"] is False
+    assert result["readiness_state"] == "hydrating"
+    assert result["has_data_desktop"] is True
+    assert result["has_installed_apps"] is False
+    assert result["has_installed_widgets"] is False
+    assert "data.installed.apps" in result["missing_branches"]
+    assert "data.installed.widgets" in result["missing_branches"]
+    assert "effective_materialization_not_ready" in result["compatibility_caches"]["runtime_removal_blockers"]
 
 
 def test_describe_yjs_materialization_reports_hydrating_readiness_and_missing_branches(monkeypatch) -> None:

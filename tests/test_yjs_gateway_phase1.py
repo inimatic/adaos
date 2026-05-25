@@ -188,6 +188,59 @@ def test_gateway_coerces_legacy_default_webspace_to_runtime_default() -> None:
     assert gateway_module._coerce_gateway_webspace_id("lab") == "lab"
 
 
+def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
+
+    class _Doc:
+        def __init__(self, state: dict[str, dict[str, object]]) -> None:
+            self._state = state
+
+        def get_map(self, name: str) -> dict[str, object]:
+            return self._state.setdefault(name, {})
+
+    ready_doc = _Doc(
+        {
+            "ui": {
+                "application": {
+                    "desktop": {"pageSchema": {"widgets": []}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                }
+            },
+            "data": {
+                "catalog": {"apps": [], "widgets": []},
+                "installed": {"apps": [], "widgets": []},
+                "desktop": {},
+            },
+            "registry": {},
+        }
+    )
+    partial_installed_doc = _Doc(
+        {
+            "ui": {
+                "application": {
+                    "desktop": {"pageSchema": {"widgets": []}},
+                    "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                }
+            },
+            "data": {
+                "catalog": {"apps": [], "widgets": []},
+                "installed": {},
+                "desktop": {},
+            },
+            "registry": {},
+        }
+    )
+
+    assert gateway_module._room_effective_branches_ready(ready_doc) is True
+    assert gateway_module._room_effective_top_level_ready(ready_doc) is True
+    assert gateway_module._room_effective_branches_ready(partial_installed_doc) is False
+    assert gateway_module._room_effective_top_level_ready(partial_installed_doc) is False
+    snapshot = gateway_module._room_effective_branch_snapshot(partial_installed_doc)
+    assert snapshot["ready"] is False
+    assert snapshot["has_installed_apps"] is False
+    assert snapshot["has_installed_widgets"] is False
+
+
 def test_browser_auth_response_marks_denial_as_terminal_login() -> None:
     payload = gateway_module._browser_auth_response_payload(
         dev_id="dev_tv",

@@ -4244,26 +4244,53 @@ def _room_effective_branches_ready(ydoc: Any) -> bool:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         application = ui_map.get("application")
-        if not isinstance(application, dict) or not application:
-            return False
-        desktop = application.get("desktop")
-        modals = application.get("modals")
-        if not isinstance(desktop, dict) or not desktop:
-            return False
-        if not isinstance(modals, dict) or "apps_catalog" not in modals or "widgets_catalog" not in modals:
+        if not _room_effective_application_ready(application):
             return False
         catalog = data_map.get("catalog")
-        if not isinstance(catalog, dict):
+        if not _room_effective_catalog_ready(catalog):
             return False
-        if not isinstance(catalog.get("apps"), list) or not isinstance(catalog.get("widgets"), list):
+        installed = data_map.get("installed")
+        if not _room_effective_installed_ready(installed):
             return False
-        if not isinstance(data_map.get("installed"), dict):
-            return False
-        if not isinstance(data_map.get("desktop"), dict):
+        if not _room_effective_data_desktop_ready(data_map.get("desktop")):
             return False
         return True
     except Exception:
         return False
+
+
+def _room_effective_application_ready(application: Any) -> bool:
+    if not isinstance(application, dict) or not application:
+        return False
+    desktop = application.get("desktop")
+    modals = application.get("modals")
+    if not isinstance(desktop, dict) or not desktop:
+        return False
+    if not isinstance(desktop.get("pageSchema"), dict):
+        return False
+    if not isinstance(modals, dict) or "apps_catalog" not in modals or "widgets_catalog" not in modals:
+        return False
+    return True
+
+
+def _room_effective_catalog_ready(catalog: Any) -> bool:
+    return (
+        isinstance(catalog, dict)
+        and isinstance(catalog.get("apps"), list)
+        and isinstance(catalog.get("widgets"), list)
+    )
+
+
+def _room_effective_installed_ready(installed: Any) -> bool:
+    return (
+        isinstance(installed, dict)
+        and isinstance(installed.get("apps"), list)
+        and isinstance(installed.get("widgets"), list)
+    )
+
+
+def _room_effective_data_desktop_ready(desktop: Any) -> bool:
+    return isinstance(desktop, dict)
 
 
 def _ymap_contains_key(y_map: Any, key: str) -> bool:
@@ -4291,11 +4318,19 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         ydoc.get_map("registry")
+        application = ui_map.get("application")
+        catalog = data_map.get("catalog")
+        installed = data_map.get("installed")
+        desktop = data_map.get("desktop")
         return (
             _ymap_contains_key(ui_map, "application")
             and _ymap_contains_key(data_map, "catalog")
             and _ymap_contains_key(data_map, "installed")
             and _ymap_contains_key(data_map, "desktop")
+            and _room_effective_application_ready(application)
+            and _room_effective_catalog_ready(catalog)
+            and _room_effective_installed_ready(installed)
+            and _room_effective_data_desktop_ready(desktop)
         )
     except Exception:
         return False
@@ -4366,9 +4401,16 @@ def _room_effective_branch_snapshot(ydoc: Any) -> dict[str, Any]:
             "registry_keys": registry_keys,
             "has_application": isinstance(application, dict) and bool(application),
             "has_application_desktop": isinstance(application_desktop, dict) and bool(application_desktop),
+            "has_application_page_schema": isinstance(application_desktop, dict)
+            and isinstance(application_desktop.get("pageSchema"), dict),
             "modal_count": _branch_collection_count(modals),
             "has_apps_catalog_modal": isinstance(modals, dict) and "apps_catalog" in modals,
             "has_widgets_catalog_modal": isinstance(modals, dict) and "widgets_catalog" in modals,
+            "has_catalog_apps": isinstance(catalog, dict) and isinstance(catalog.get("apps"), list),
+            "has_catalog_widgets": isinstance(catalog, dict) and isinstance(catalog.get("widgets"), list),
+            "has_installed_apps": isinstance(installed, dict) and isinstance(installed.get("apps"), list),
+            "has_installed_widgets": isinstance(installed, dict) and isinstance(installed.get("widgets"), list),
+            "has_data_desktop": isinstance(desktop, dict),
             "catalog_app_count": _branch_collection_count(catalog.get("apps") if isinstance(catalog, dict) else None),
             "catalog_widget_count": _branch_collection_count(catalog.get("widgets") if isinstance(catalog, dict) else None),
             "installed_key_count": _branch_collection_count(installed),
