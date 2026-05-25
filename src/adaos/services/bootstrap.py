@@ -157,6 +157,40 @@ def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int
     return int(raw)
 
 
+def _hub_route_normalize_resend_chunk_indexes(
+    missing: Any,
+    total: Any,
+    *,
+    max_items: int = 128,
+) -> list[int]:
+    try:
+        total_i = int(total or 0)
+    except Exception:
+        total_i = 0
+    if total_i <= 0:
+        return []
+    try:
+        max_i = max(1, int(max_items or 1))
+    except Exception:
+        max_i = 128
+    if not isinstance(missing, (list, tuple)):
+        return []
+    indexes: list[int] = []
+    seen: set[int] = set()
+    for item in missing:
+        try:
+            idx = int(item)
+        except Exception:
+            continue
+        if idx < 0 or idx >= total_i or idx in seen:
+            continue
+        indexes.append(idx)
+        seen.add(idx)
+        if len(indexes) >= max_i:
+            break
+    return indexes
+
+
 def _hub_route_path_token(path: Any) -> str:
     token = str(path or "").strip().split("?", 1)[0].rstrip("/")
     return token or "/"
@@ -5013,6 +5047,8 @@ class BootstrapService:
                         media_relay_sessions: dict[str, dict[str, Any]] = {}
                         http_body_relay_sessions: dict[str, dict[str, Any]] = {}
                         pending_chunks: dict[str, dict[str, Any]] = {}
+                        outbound_chunk_cache: dict[str, dict[str, Any]] = {}
+                        outbound_chunk_cache_bytes = 0
                         pending_tunnel_events: dict[str, list[dict[str, Any]]] = {}
                         pending_tunnel_meta: dict[str, dict[str, Any]] = {}
                         pending_tunnel_close_tasks: dict[str, asyncio.Task] = {}
@@ -5199,6 +5235,36 @@ class BootstrapService:
                                 )
                             except Exception:
                                 pass
+                        _route_outbound_chunk_cache_ttl_s = _bounded_interval_seconds(
+                            os.getenv("HUB_ROUTE_OUTBOUND_CHUNK_CACHE_TTL_S"),
+                            default=30.0,
+                            minimum=1.0,
+                        )
+                        try:
+                            _route_outbound_chunk_cache_max_frames = int(
+                                os.getenv("HUB_ROUTE_OUTBOUND_CHUNK_CACHE_MAX_FRAMES", "64") or "64"
+                            )
+                        except Exception:
+                            _route_outbound_chunk_cache_max_frames = 64
+                        if _route_outbound_chunk_cache_max_frames < 0:
+                            _route_outbound_chunk_cache_max_frames = 0
+                        try:
+                            _route_outbound_chunk_cache_max_bytes = int(
+                                os.getenv("HUB_ROUTE_OUTBOUND_CHUNK_CACHE_MAX_BYTES", str(8 * 1024 * 1024))
+                                or str(8 * 1024 * 1024)
+                            )
+                        except Exception:
+                            _route_outbound_chunk_cache_max_bytes = 8 * 1024 * 1024
+                        if _route_outbound_chunk_cache_max_bytes < 0:
+                            _route_outbound_chunk_cache_max_bytes = 0
+                        try:
+                            _route_outbound_chunk_resend_max_indexes = int(
+                                os.getenv("HUB_ROUTE_OUTBOUND_CHUNK_RESEND_MAX_INDEXES", "128") or "128"
+                            )
+                        except Exception:
+                            _route_outbound_chunk_resend_max_indexes = 128
+                        if _route_outbound_chunk_resend_max_indexes < 1:
+                            _route_outbound_chunk_resend_max_indexes = 1
 
                         route_diag_state: dict[str, Any] = {
                             "open_request_total": 0,
@@ -5222,6 +5288,15 @@ class BootstrapService:
                             "last_http_resp_resend_key_tag": "",
                             "last_http_resp_resend_delay_s": 0.0,
                             "last_http_resp_resend_payload_bytes": 0,
+                            "outbound_chunk_cache_frames": 0,
+                            "outbound_chunk_cache_bytes": 0,
+                            "outbound_chunk_resend_req_total": 0,
+                            "outbound_chunk_resend_sent_total": 0,
+                            "outbound_chunk_resend_miss_total": 0,
+                            "last_outbound_chunk_resend_key_tag": "",
+                            "last_outbound_chunk_resend_id": "",
+                            "last_outbound_chunk_resend_missing": 0,
+                            "last_outbound_chunk_resend_sent": 0,
                             "last_publish_slow_key_tag": "",
                             "last_publish_slow_ms": 0.0,
                             "last_flush_slow_key_tag": "",
@@ -5600,6 +5675,218 @@ class BootstrapService:
                             except Exception:
                                 pass
 
+                        def _sync_outbound_chunk_cache_diag() -> None:
+                            try:
+                                route_diag_state["outbound_chunk_cache_frames"] = len(outbound_chunk_cache)
+                                route_diag_state["outbound_chunk_cache_bytes"] = int(outbound_chunk_cache_bytes)
+                            except Exception:
+                                pass
+
+                        def _trim_outbound_chunk_cache(now: float | None = None) -> None:
+                            nonlocal outbound_chunk_cache_bytes
+                            try:
+                                now0 = time.monotonic() if now is None else float(now)
+                            except Exception:
+                                now0 = time.monotonic()
+                            ttl = max(1.0, float(_route_outbound_chunk_cache_ttl_s))
+                            for cid, st in list(outbound_chunk_cache.items()):
+                                try:
+                                    created = float(st.get("created_at") or 0.0)
+                                except Exception:
+                                    created = 0.0
+                                if created <= 0.0 or now0 - created > ttl:
+                                    outbound_chunk_cache.pop(cid, None)
+                                    try:
+                                        outbound_chunk_cache_bytes = max(
+                                            0,
+                                            outbound_chunk_cache_bytes - int(st.get("bytes") or 0),
+                                        )
+                                    except Exception:
+                                        pass
+                            try:
+                                max_frames = int(_route_outbound_chunk_cache_max_frames or 0)
+                            except Exception:
+                                max_frames = 0
+                            try:
+                                max_bytes = int(_route_outbound_chunk_cache_max_bytes or 0)
+                            except Exception:
+                                max_bytes = 0
+                            if max_frames <= 0 or max_bytes <= 0:
+                                for cid, st in list(outbound_chunk_cache.items()):
+                                    outbound_chunk_cache.pop(cid, None)
+                                    try:
+                                        outbound_chunk_cache_bytes = max(
+                                            0,
+                                            outbound_chunk_cache_bytes - int(st.get("bytes") or 0),
+                                        )
+                                    except Exception:
+                                        pass
+                                _sync_outbound_chunk_cache_diag()
+                                return
+                            while len(outbound_chunk_cache) > max_frames or outbound_chunk_cache_bytes > max_bytes:
+                                oldest_id = ""
+                                oldest_at = float("inf")
+                                for cid, st in outbound_chunk_cache.items():
+                                    try:
+                                        created = float(st.get("created_at") or 0.0)
+                                    except Exception:
+                                        created = 0.0
+                                    if created < oldest_at:
+                                        oldest_id = cid
+                                        oldest_at = created
+                                if not oldest_id:
+                                    break
+                                st = outbound_chunk_cache.pop(oldest_id, None) or {}
+                                try:
+                                    outbound_chunk_cache_bytes = max(
+                                        0,
+                                        outbound_chunk_cache_bytes - int(st.get("bytes") or 0),
+                                    )
+                                except Exception:
+                                    pass
+                            _sync_outbound_chunk_cache_diag()
+
+                        def _drop_outbound_chunk_cache_for_key(key: str) -> None:
+                            nonlocal outbound_chunk_cache_bytes
+                            try:
+                                for cid, st in list(outbound_chunk_cache.items()):
+                                    if st.get("key") != key:
+                                        continue
+                                    outbound_chunk_cache.pop(cid, None)
+                                    try:
+                                        outbound_chunk_cache_bytes = max(
+                                            0,
+                                            outbound_chunk_cache_bytes - int(st.get("bytes") or 0),
+                                        )
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                            _sync_outbound_chunk_cache_diag()
+
+                        def _cache_outbound_chunk_payloads(
+                            key: str,
+                            cid: str,
+                            frame_kind: str,
+                            total: int,
+                            payloads: list[dict[str, Any]],
+                        ) -> None:
+                            nonlocal outbound_chunk_cache_bytes
+                            try:
+                                if not cid or not key or total <= 0 or not payloads:
+                                    return
+                                if _route_outbound_chunk_cache_max_frames <= 0 or _route_outbound_chunk_cache_max_bytes <= 0:
+                                    return
+                                payload_bytes = 0
+                                for payload in payloads:
+                                    try:
+                                        payload_bytes += len(_json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                                    except Exception:
+                                        payload_bytes += 0
+                                if payload_bytes <= 0 or payload_bytes > int(_route_outbound_chunk_cache_max_bytes):
+                                    return
+                                _trim_outbound_chunk_cache()
+                                old = outbound_chunk_cache.pop(cid, None)
+                                if old:
+                                    try:
+                                        outbound_chunk_cache_bytes = max(
+                                            0,
+                                            outbound_chunk_cache_bytes - int(old.get("bytes") or 0),
+                                        )
+                                    except Exception:
+                                        pass
+                                outbound_chunk_cache[cid] = {
+                                    "key": key,
+                                    "kind": frame_kind,
+                                    "total": int(total),
+                                    "chunks": list(payloads),
+                                    "created_at": time.monotonic(),
+                                    "bytes": int(payload_bytes),
+                                }
+                                outbound_chunk_cache_bytes += int(payload_bytes)
+                                _trim_outbound_chunk_cache()
+                            except Exception:
+                                pass
+                            _sync_outbound_chunk_cache_diag()
+
+                        async def _resend_outbound_chunks(key: str, payload: dict[str, Any]) -> None:
+                            nonlocal outbound_chunk_cache_bytes
+                            try:
+                                route_diag_state["outbound_chunk_resend_req_total"] = int(
+                                    route_diag_state.get("outbound_chunk_resend_req_total") or 0
+                                ) + 1
+                                cid = str((payload or {}).get("id") or "")
+                                total = int((payload or {}).get("total") or 0)
+                                missing = _hub_route_normalize_resend_chunk_indexes(
+                                    (payload or {}).get("missing"),
+                                    total,
+                                    max_items=_route_outbound_chunk_resend_max_indexes,
+                                )
+                                route_diag_state["last_outbound_chunk_resend_key_tag"] = _key_tag(key)
+                                route_diag_state["last_outbound_chunk_resend_id"] = cid
+                                route_diag_state["last_outbound_chunk_resend_missing"] = len(missing)
+                                route_diag_state["last_outbound_chunk_resend_sent"] = 0
+                                if not cid or not missing:
+                                    return
+                                _trim_outbound_chunk_cache()
+                                st = outbound_chunk_cache.get(cid)
+                                if not isinstance(st, dict) or st.get("key") != key or int(st.get("total") or 0) != total:
+                                    route_diag_state["outbound_chunk_resend_miss_total"] = int(
+                                        route_diag_state.get("outbound_chunk_resend_miss_total") or 0
+                                    ) + 1
+                                    return
+                                chunks = st.get("chunks")
+                                if not isinstance(chunks, list):
+                                    route_diag_state["outbound_chunk_resend_miss_total"] = int(
+                                        route_diag_state.get("outbound_chunk_resend_miss_total") or 0
+                                    ) + 1
+                                    return
+                                sent = 0
+                                for idx in missing:
+                                    if idx < 0 or idx >= len(chunks):
+                                        continue
+                                    chunk_payload = chunks[idx]
+                                    if not isinstance(chunk_payload, dict):
+                                        continue
+                                    await _route_reply(key, chunk_payload)
+                                    sent += 1
+                                route_diag_state["outbound_chunk_resend_sent_total"] = int(
+                                    route_diag_state.get("outbound_chunk_resend_sent_total") or 0
+                                ) + sent
+                                route_diag_state["last_outbound_chunk_resend_sent"] = sent
+                                if sent <= 0:
+                                    route_diag_state["outbound_chunk_resend_miss_total"] = int(
+                                        route_diag_state.get("outbound_chunk_resend_miss_total") or 0
+                                    ) + 1
+                                try:
+                                    _update_route_protocol_runtime()
+                                except Exception:
+                                    pass
+                                if (_route_verbose or _route_trace) and sent > 0:
+                                    try:
+                                        _route_log(
+                                            f"[hub-route] resend chunks key={_key_tag(key)} id={cid} "
+                                            f"missing={len(missing)} sent={sent}"
+                                        )
+                                    except Exception:
+                                        pass
+                            except Exception as e:
+                                try:
+                                    route_diag_state["outbound_chunk_resend_miss_total"] = int(
+                                        route_diag_state.get("outbound_chunk_resend_miss_total") or 0
+                                    ) + 1
+                                except Exception:
+                                    pass
+                                if _route_verbose or _route_trace:
+                                    try:
+                                        _route_log(
+                                            f"[hub-route] resend chunks failed key={_key_tag(key)}: {type(e).__name__}: {e}"
+                                        )
+                                    except Exception:
+                                        pass
+                            finally:
+                                _sync_outbound_chunk_cache_diag()
+
                         def _mark_pending(key: str) -> None:
                             try:
                                 st = pending_tunnel_meta.get(key)
@@ -5711,6 +5998,11 @@ class BootstrapService:
                                                 for st in pending_chunks.values()
                                                 if isinstance(st, dict) and st.get("key")
                                             ],
+                                            *[
+                                                str(st.get("key"))
+                                                for st in outbound_chunk_cache.values()
+                                                if isinstance(st, dict) and st.get("key")
+                                            ],
                                         ]
                                     )
                                 )
@@ -5741,6 +6033,10 @@ class BootstrapService:
                                         pass
                                 try:
                                     _drop_pending_chunks_for_key(key)
+                                except Exception:
+                                    pass
+                                try:
+                                    _drop_outbound_chunk_cache_for_key(key)
                                 except Exception:
                                     pass
                                 try:
@@ -6829,10 +7125,10 @@ class BootstrapService:
                                             cid = f"c_{uuid.uuid4().hex}"
                                             total = (len(raw) + MAX_CHUNK_RAW - 1) // MAX_CHUNK_RAW
                                             flow0 = _route_tunnel_flow(key)
+                                            payloads: list[dict[str, Any]] = []
                                             for idx in range(total):
                                                 chunk = raw[idx * MAX_CHUNK_RAW : (idx + 1) * MAX_CHUNK_RAW]
-                                                await _route_reply(
-                                                    key,
+                                                payloads.append(
                                                     {
                                                         "t": "chunk",
                                                         "flow": flow0,
@@ -6841,8 +7137,11 @@ class BootstrapService:
                                                         "idx": idx,
                                                         "total": total,
                                                         "data_b64": base64.b64encode(chunk).decode("ascii"),
-                                                    },
+                                                    }
                                                 )
+                                            _cache_outbound_chunk_payloads(key, cid, "bin", total, payloads)
+                                            for payload in payloads:
+                                                await _route_reply(key, payload)
                                         else:
                                             await _route_reply(
                                                 key,
@@ -6906,9 +7205,9 @@ class BootstrapService:
                                             cid = f"c_{uuid.uuid4().hex}"
                                             parts = [text[i : i + MAX_CHUNK_RAW] for i in range(0, len(text), MAX_CHUNK_RAW)]
                                             flow0 = _route_tunnel_flow(key)
+                                            payloads = []
                                             for idx, part in enumerate(parts):
-                                                await _route_reply(
-                                                    key,
+                                                payloads.append(
                                                     {
                                                         "t": "chunk",
                                                         "flow": flow0,
@@ -6917,8 +7216,11 @@ class BootstrapService:
                                                         "idx": idx,
                                                         "total": len(parts),
                                                         "data": part,
-                                                    },
+                                                    }
                                                 )
+                                            _cache_outbound_chunk_payloads(key, cid, "text", len(parts), payloads)
+                                            for payload in payloads:
+                                                await _route_reply(key, payload)
                                         else:
                                             await _route_reply(
                                                 key,
@@ -6975,6 +7277,10 @@ class BootstrapService:
                                     pass
                                 try:
                                     _drop_pending_chunks_for_key(key)
+                                except Exception:
+                                    pass
+                                try:
+                                    _drop_outbound_chunk_cache_for_key(key)
                                 except Exception:
                                     pass
                                 try:
@@ -7408,6 +7714,10 @@ class BootstrapService:
                                                 await old["ws"].close()
                                             except Exception:
                                                 pass
+                                            try:
+                                                _drop_outbound_chunk_cache_for_key(key)
+                                            except Exception:
+                                                pass
                                     except Exception:
                                         pass
                                     try:
@@ -7519,6 +7829,10 @@ class BootstrapService:
                                     except Exception:
                                         pass
                                     try:
+                                        _drop_outbound_chunk_cache_for_key(key)
+                                    except Exception:
+                                        pass
+                                    try:
                                         _update_route_protocol_runtime()
                                     except Exception:
                                         pass
@@ -7529,6 +7843,17 @@ class BootstrapService:
                                         pass
                                     if _route_trace:
                                         _route_log(f"[hub-route] upstream close req key={_key_tag(key)}")
+                                    return
+
+                                if t == "resend_chunks":
+                                    route_outcome = "resend_chunks"
+                                    _route_observe_flow(
+                                        "frame",
+                                        "resend_chunks",
+                                        direction="to_browser",
+                                        payload=data,
+                                    )
+                                    await _resend_outbound_chunks(key, data)
                                     return
 
                                 if t == "frame":
