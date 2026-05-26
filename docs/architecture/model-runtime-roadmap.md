@@ -65,6 +65,9 @@ exist in specialized systems:
   labels unchanged; upload during `skill push` happens only when the model
   changed.
 - [ ] Use root `previous` as the rollback source for skill model artifacts.
+- [ ] Add the SDK artifact-control surface for skill-owned model storage:
+  upload, update-if-changed, current/previous metadata, current download, and
+  previous download without requiring `skill install`.
 - [ ] Enforce the MVP retention rule: at most two stored model slots per
   `skill_id`, `current` and `previous`.
 - [ ] Ensure root records a globally observable model version id for every
@@ -159,6 +162,8 @@ exist in specialized systems:
 - [ ] Add model manifest for the current DeepLabV3 binary segmentation model.
 - [ ] Register uploaded `.pt` files as local model artifacts with checksum and
   provenance.
+- [ ] Use `data/files/uploads/models` for transient model uploads and keep
+  `data/files/uploads/model` only as a legacy migration fallback.
 - [ ] Move Torch/TorchVision dependency from skill-level dependency to a shared
   dependency profile where feasible.
 - [ ] Replace direct model materialization in the skill engine with
