@@ -253,7 +253,6 @@ def _run_suite(
             timeout=timeout,
             env=env,
         )
-        print(proc)
         log.write(f"$ {' '.join(command)}\n")
         log.write(proc.stdout or "")
         log.write("\n")

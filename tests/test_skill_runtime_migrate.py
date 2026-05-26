@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 
 def test_migrate_installed_skills_runs_tests_and_rolls_back_on_failure(monkeypatch) -> None:
     import adaos.apps.skill_runtime_migrate as mod
@@ -80,6 +82,29 @@ def test_migrate_installed_skills_runs_tests_and_rolls_back_on_failure(monkeypat
     assert payload["skills"][1]["rollback_performed"] is True
     assert payload["skills"][1]["rollback_slot"] == "A"
     assert payload["skills"][1]["tests"] == {"suite": "failed"}
+
+
+def test_main_json_redirects_noisy_migration_stdout(monkeypatch, capsys) -> None:
+    import adaos.apps.skill_runtime_migrate as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_parse_args",
+        lambda: SimpleNamespace(json=True, skip_tests=False, post_commit=False, deactivate_on_failure=False),
+    )
+
+    def noisy_migrate(*, run_tests: bool = True):
+        assert run_tests is True
+        print("migration progress must not corrupt stdout")
+        return {"ok": True, "skills": []}
+
+    monkeypatch.setattr(mod, "migrate_installed_skills", noisy_migrate)
+
+    mod.main()
+
+    captured = capsys.readouterr()
+    assert captured.out == '{"ok": true, "skills": []}\n'
+    assert "migration progress" in captured.err
 
 
 def test_migrate_installed_skills_can_skip_tests(monkeypatch) -> None:
