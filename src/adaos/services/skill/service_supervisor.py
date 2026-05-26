@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+import hashlib
 import json
 import logging
 import os
@@ -997,6 +998,7 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         venv_dir = spec.venv_dir or (self._service_state_dir(spec.skill) / "venv")
         python = self._venv_python(venv_dir)
         if python.exists():
+            self._install_deps_if_needed(python, spec, venv_dir)
             return python
 
         selector = spec.python_selector or "3.11"
@@ -1008,7 +1010,7 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         subprocess.run(cmd, check=True)
 
         python = self._venv_python(venv_dir)
-        self._install_deps(python, spec)
+        self._install_deps_if_needed(python, spec, venv_dir)
         return python
 
     @staticmethod
@@ -1040,6 +1042,39 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         )
         if dependency_args:
             subprocess.run([*base, *dependency_args], check=True)
+
+    def _install_deps_if_needed(self, python: Path, spec: ServiceSpec, venv_dir: Path) -> None:
+        marker_path = venv_dir / ".adaos-service-deps.json"
+        marker = self._dependency_marker(spec)
+        try:
+            current = marker_path.read_text(encoding="utf-8")
+        except Exception:
+            current = ""
+        if current == marker:
+            return
+        self._install_deps(python, spec)
+        try:
+            marker_path.write_text(marker, encoding="utf-8")
+        except Exception:
+            _log.warning("failed to write service dependency marker skill=%s path=%s", spec.skill, marker_path, exc_info=True)
+
+    def _dependency_marker(self, spec: ServiceSpec) -> str:
+        requirement: dict[str, Any] | None = None
+        if spec.requirements_file:
+            try:
+                raw = spec.requirements_file.read_bytes()
+                requirement = {
+                    "path": str(spec.requirements_file.resolve()),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            except Exception:
+                requirement = {"path": str(spec.requirements_file)}
+        payload = {
+            "skill_root": str(spec.skill_root.resolve()),
+            "dependencies": list(spec.dependencies),
+            "requirements_file": requirement,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     @staticmethod
     def _build_command(python: Path, argv: list[str]) -> list[str]:
