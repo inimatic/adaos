@@ -222,3 +222,57 @@ def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(mo
     assert terminated == [4242]
     assert spawned
     assert supervisor.status(spec.skill)["running"] is True
+
+
+def test_service_supervisor_installs_changed_dependencies_for_existing_venv(tmp_path, monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "dep_service"
+    skill_root.mkdir(parents=True)
+    venv_dir = tmp_path / "venv"
+    python = venv_dir / ("Scripts/python.exe" if mod.os.name == "nt" else "bin/python")
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+
+    def _spec(dependencies: list[str]) -> mod.ServiceSpec:
+        return mod.ServiceSpec(
+            skill="dep_service",
+            skill_root=skill_root,
+            host="127.0.0.1",
+            port=18111,
+            command=["-m", "handlers.main"],
+            workdir=skill_root,
+            env_mode="venv",
+            python_selector="3.11",
+            venv_dir=venv_dir,
+            dependencies=dependencies,
+            requirements_file=None,
+            health_path="/health",
+            health_timeout_ms=1000,
+            self_managed_enabled=False,
+            crash_max_in_window=3,
+            crash_window_s=60,
+            crash_cooloff_s=60,
+            health_interval_s=10,
+            health_failures_before_issue=3,
+            hook_on_issue=None,
+            hook_on_self_heal=None,
+            hook_timeout_s=10.0,
+            doctor_enabled=False,
+            doctor_cooldown_s=300,
+            doctor_issue_types=[],
+            doctor_include_log_tail_lines=0,
+        )
+
+    installs: list[list[str]] = []
+    supervisor = mod.ServiceSkillSupervisor()
+    monkeypatch.setattr(supervisor, "_install_deps", lambda _python, spec: installs.append(list(spec.dependencies)))
+
+    assert supervisor._select_python(_spec(["demo-dep==1"])) == python
+    assert installs == [["demo-dep==1"]]
+
+    assert supervisor._select_python(_spec(["demo-dep==1"])) == python
+    assert installs == [["demo-dep==1"]]
+
+    assert supervisor._select_python(_spec(["demo-dep==2"])) == python
+    assert installs == [["demo-dep==1"], ["demo-dep==2"]]
