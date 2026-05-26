@@ -6786,15 +6786,16 @@ class SupervisorManager:
         install_installer = None
         venv_seed_source = None
         venv_seeded = False
-        prepare_result = prepare_pending_update(
-            {
-                "action": action,
-                "target_rev": target_rev,
-                "target_version": target_version,
-                "reason": reason,
-            }
-        )
         try:
+            prepare_result = await asyncio.to_thread(
+                prepare_pending_update,
+                {
+                    "action": action,
+                    "target_rev": target_rev,
+                    "target_version": target_version,
+                    "reason": reason,
+                },
+            )
             if str(prepare_result.get("state") or "").strip().lower() != "prepared":
                 status = write_core_update_status(
                     {

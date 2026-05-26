@@ -539,6 +539,110 @@ def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> s
     return ""
 
 
+def _member_core_reconcile_min_interval_s() -> float:
+    try:
+        value = float(str(os.getenv("ADAOS_SUBNET_MEMBER_CORE_RECONCILE_MIN_INTERVAL_S", "120") or "120").strip())
+    except Exception:
+        value = 120.0
+    return max(5.0, min(value, 3600.0))
+
+
+def _member_core_in_progress_max_age_s() -> float:
+    try:
+        value = float(str(os.getenv("ADAOS_SUBNET_MEMBER_CORE_IN_PROGRESS_MAX_AGE_S", "1800") or "1800").strip())
+    except Exception:
+        value = 1800.0
+    return max(60.0, min(value, 24 * 3600.0))
+
+
+def _coerce_epoch(value: Any) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return 0.0
+
+
+def _core_update_target(payload: dict[str, Any]) -> tuple[str, str, str]:
+    if not isinstance(payload, dict):
+        return "", "", ""
+    manifest = payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
+    target_rev = str(payload.get("target_rev") or manifest.get("target_rev") or "").strip()
+    target_version = str(payload.get("target_version") or manifest.get("target_version") or "").strip()
+    build_version = str(payload.get("build_version") or manifest.get("build_version") or "").strip()
+    if not target_version:
+        target_version = str(manifest.get("git_commit") or manifest.get("git_short_commit") or "").strip()
+    return target_rev, target_version, build_version
+
+
+def _version_matches_target(value: Any, target_version: str) -> bool:
+    value_norm = str(value or "").strip()
+    target_norm = str(target_version or "").strip()
+    if not value_norm or not target_norm:
+        return False
+    if value_norm == target_norm:
+        return True
+    if len(target_norm) >= 7 and value_norm.startswith(target_norm):
+        return True
+    if len(value_norm) >= 7 and target_norm.startswith(value_norm):
+        return True
+    return False
+
+
+def _manifest_matches_core_target(manifest: dict[str, Any], target_version: str, build_version: str = "") -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    for key in ("target_version", "git_commit", "git_short_commit"):
+        if _version_matches_target(manifest.get(key), target_version):
+            return True
+    manifest_build = str(manifest.get("build_version") or "").strip()
+    if build_version and manifest_build == build_version:
+        return True
+    if target_version and len(target_version) >= 7 and target_version[:7] in manifest_build:
+        return True
+    return False
+
+
+def _member_snapshot_matches_core_target(snapshot: dict[str, Any], target_version: str, build_version: str = "") -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    slots = snapshot.get("slots") if isinstance(snapshot.get("slots"), dict) else {}
+    active_manifest = slots.get("active_manifest") if isinstance(slots.get("active_manifest"), dict) else {}
+    if _manifest_matches_core_target(active_manifest, target_version, build_version):
+        return True
+    build = snapshot.get("build") if isinstance(snapshot.get("build"), dict) else {}
+    for key in ("runtime_target_version", "runtime_git_commit", "runtime_git_short_commit"):
+        if _version_matches_target(build.get(key), target_version):
+            return True
+    runtime_build = str(build.get("runtime_build_version") or build.get("runtime_version") or "").strip()
+    if build_version and runtime_build == build_version:
+        return True
+    if target_version and len(target_version) >= 7 and target_version[:7] in runtime_build:
+        return True
+    return False
+
+
+def _member_update_in_progress(snapshot: dict[str, Any], target_version: str) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    hub_control = snapshot.get("hub_control_request") if isinstance(snapshot.get("hub_control_request"), dict) else {}
+    hub_result = hub_control.get("result") if isinstance(hub_control.get("result"), dict) else {}
+    hub_request = hub_control.get("request") if isinstance(hub_control.get("request"), dict) else {}
+    if hub_result.get("ok") is False and _version_matches_target(hub_request.get("target_version"), target_version):
+        return False
+    update_status = snapshot.get("update_status") if isinstance(snapshot.get("update_status"), dict) else {}
+    state = str(update_status.get("state") or "").strip().lower()
+    action = str(update_status.get("action") or "").strip().lower()
+    if action not in {"", "update", "start"}:
+        return False
+    if state not in {"scheduled", "preparing", "countdown", "draining", "stopping", "restarting", "applying"}:
+        return False
+    updated_at = _coerce_epoch(update_status.get("updated_at"))
+    if updated_at > 0.0 and time.time() - updated_at > _member_core_in_progress_max_age_s():
+        return False
+    status_target = str(update_status.get("target_version") or "").strip()
+    return not status_target or _version_matches_target(status_target, target_version)
+
+
 @dataclass
 class HubMemberLink:
     node_id: str
@@ -556,6 +660,8 @@ class HubMemberLink:
     last_control_request_at: float | None = None
     last_control_action: str | None = None
     last_control_reason: str | None = None
+    last_control_target_rev: str | None = None
+    last_control_target_version: str | None = None
     last_control_result_at: float | None = None
     last_control_result: dict[str, Any] = field(default_factory=dict)
     last_snapshot_at: float | None = None
@@ -654,6 +760,53 @@ class HubLinkManager:
         link.last_hub_core_update_state = str(payload.get("state") or "").strip() or None
         link.last_hub_core_update_action = str(payload.get("action") or "").strip() or None
 
+    async def _reconcile_member_core_update(
+        self,
+        node_id: str,
+        *,
+        snapshot: dict[str, Any] | None = None,
+        reason: str = "hub.member_reconcile.core_update",
+    ) -> dict[str, Any]:
+        link = await self._get_link(node_id)
+        if not link:
+            return {"ok": False, "accepted": False, "error": "member_not_connected", "node_id": node_id}
+        try:
+            from adaos.services.core_update import read_status as read_core_update_status
+
+            hub_status = read_core_update_status() or {}
+        except Exception:
+            return {"ok": False, "accepted": False, "error": "hub_core_update_status_unavailable", "node_id": node_id}
+        if not isinstance(hub_status, dict) or not hub_status:
+            return {"ok": True, "accepted": False, "reason": "hub_status_empty", "node_id": node_id}
+        action = str(hub_status.get("action") or "").strip().lower() or "update"
+        state = str(hub_status.get("state") or "").strip().lower()
+        if action not in {"update", "start"} or state not in {"succeeded", "validated"}:
+            return {"ok": True, "accepted": False, "reason": "hub_update_not_final", "node_id": node_id, "state": state}
+        target_rev, target_version, build_version = _core_update_target(hub_status)
+        if not target_version and not build_version:
+            return {"ok": True, "accepted": False, "reason": "hub_target_missing", "node_id": node_id}
+        member_snapshot = snapshot if isinstance(snapshot, dict) else link.node_snapshot
+        if _member_snapshot_matches_core_target(member_snapshot, target_version, build_version):
+            return {"ok": True, "accepted": False, "reason": "member_already_current", "node_id": node_id}
+        if _member_update_in_progress(member_snapshot, target_version):
+            return {"ok": True, "accepted": False, "reason": "member_update_in_progress", "node_id": node_id}
+        now = time.time()
+        if (
+            link.last_control_action == "update"
+            and _version_matches_target(link.last_control_target_version, target_version)
+            and link.last_control_request_at is not None
+            and now - float(link.last_control_request_at or 0.0) < _member_core_reconcile_min_interval_s()
+        ):
+            return {"ok": True, "accepted": False, "reason": "recent_request_exists", "node_id": node_id}
+        return await self.request_member_update(
+            node_id,
+            action="update",
+            target_rev=target_rev,
+            target_version=target_version,
+            countdown_sec=5.0,
+            reason=str(reason or "hub.member_reconcile.core_update"),
+        )
+
     async def register(
         self,
         node_id: str,
@@ -716,6 +869,10 @@ class HubLinkManager:
             await self._push_current_core_update_status(node_id)
         except Exception:
             _log.debug("failed to push current core.update.status after connect node_id=%s", node_id, exc_info=True)
+        try:
+            await self._reconcile_member_core_update(node_id, reason="hub.member_reconcile.connect")
+        except Exception:
+            _log.debug("failed to reconcile member core update after connect node_id=%s", node_id, exc_info=True)
         payload = {"node_id": node_id, "reason": str(reason or "member_link_connected"), "requested": sent}
         _publish_link_event("subnet.member.state.refresh.requested", payload)
         return {"ok": True, **payload}
@@ -916,6 +1073,14 @@ class HubLinkManager:
         except Exception:
             _log.debug("failed to push node display assignment after status node_id=%s", node_id, exc_info=True)
         try:
+            await self._reconcile_member_core_update(
+                node_id,
+                snapshot=snap,
+                reason="hub.member_reconcile.snapshot",
+            )
+        except Exception:
+            _log.debug("failed to reconcile member core update after status node_id=%s", node_id, exc_info=True)
+        try:
             await self._publish_member_infrastate_projection(
                 node_id,
                 node_names=list(link.node_names),
@@ -1005,6 +1170,8 @@ class HubLinkManager:
         link.last_control_request_at = time.time()
         link.last_control_action = action_norm
         link.last_control_reason = str(reason or "hub.member_control")
+        link.last_control_target_rev = str(target_rev or "")
+        link.last_control_target_version = str(target_version or "")
         link.last_control_result_at = None
         link.last_control_result = {"ok": None, "state": "requested", "request_id": request_id}
         payload = {
@@ -1031,6 +1198,12 @@ class HubLinkManager:
             link.last_control_request_id = request_id
         if action:
             link.last_control_action = action
+        target_rev = str(payload.get("target_rev") or "").strip()
+        target_version = str(payload.get("target_version") or "").strip()
+        if target_rev:
+            link.last_control_target_rev = target_rev
+        if target_version:
+            link.last_control_target_version = target_version
         outbound = {
             "node_id": node_id,
             "result": dict(link.last_control_result),
@@ -1110,6 +1283,8 @@ class HubLinkManager:
                     ),
                     "last_control_action": link.last_control_action,
                     "last_control_reason": link.last_control_reason,
+                    "last_control_target_rev": link.last_control_target_rev,
+                    "last_control_target_version": link.last_control_target_version,
                     "last_control_result_ago_s": (
                         round(max(0.0, now - float(link.last_control_result_at)), 3)
                         if link.last_control_result_at
