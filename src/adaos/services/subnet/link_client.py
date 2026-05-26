@@ -88,6 +88,27 @@ def _member_link_transition_snapshot() -> dict[str, Any]:
     }
 
 
+def _target_version_matches(left: Any, right: Any) -> bool:
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
+
+
+def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_version: str) -> bool:
+    expected = str(target_version or "").strip()
+    if not expected:
+        return False
+    data = manifest if isinstance(manifest, dict) else {}
+    for key in ("target_version", "build_version", "git_commit", "git_short_commit"):
+        if _target_version_matches(expected, data.get(key)):
+            return True
+    return False
+
+
 class MemberLinkClient:
     def __init__(self) -> None:
         self._stop = asyncio.Event()
@@ -1261,15 +1282,20 @@ class MemberLinkClient:
             return
         state = str(payload.get("state") or "").strip().lower()
         action = str(payload.get("action") or "update").strip().lower()
-        target_rev = str(payload.get("target_rev") or "").strip()
-        target_version = str(payload.get("target_version") or "").strip()
+        manifest = payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
+        target_rev = str(payload.get("target_rev") or manifest.get("target_rev") or "").strip()
+        target_version = str(
+            payload.get("target_version")
+            or manifest.get("target_version")
+            or manifest.get("git_commit")
+            or manifest.get("git_short_commit")
+            or ""
+        ).strip()
         scheduled_for = payload.get("scheduled_for")
         follow_key = f"{action}:{target_rev}:{target_version}:{scheduled_for}:{state}"
         if follow_key == self._last_follow_key and self._last_follow_at > 0:
             return
         if action not in {"update", "rollback"}:
-            return
-        if state not in {"countdown", "draining", "stopping", "cancelled"}:
             return
         if action == "update" and state != "cancelled" and not (target_rev or target_version):
             return
@@ -1277,13 +1303,22 @@ class MemberLinkClient:
 
         local_status = read_core_update_status()
         local_state = str(local_status.get("state") or "").strip().lower()
+        local_active_manifest = active_slot_manifest()
+        if state not in {"countdown", "draining", "stopping", "cancelled"}:
+            if not (
+                action == "update"
+                and state in {"succeeded", "validated"}
+                and target_version
+                and not _manifest_matches_target_version(local_active_manifest, target_version)
+            ):
+                return
         if state == "cancelled":
             if local_state not in {"countdown", "draining", "stopping"}:
                 return
             path = "/api/admin/update/cancel"
             body = {"reason": "hub.member_follow.cancel"}
         elif action == "rollback":
-            if local_state in {"countdown", "draining", "stopping", "restarting", "applying"}:
+            if local_state in {"preparing", "countdown", "draining", "stopping", "restarting", "applying"}:
                 return
             body = {
                 "reason": "hub.member_follow.rollback",
@@ -1293,13 +1328,20 @@ class MemberLinkClient:
             }
             path = "/api/admin/update/rollback"
         else:
-            if local_state in {"countdown", "draining", "stopping", "restarting", "applying"}:
+            if _manifest_matches_target_version(local_active_manifest, target_version):
                 return
+            if local_state in {"preparing", "countdown", "draining", "stopping", "restarting", "applying"}:
+                return
+            reason = "hub.member_follow.update"
+            countdown_default = 15.0
+            if state in {"succeeded", "validated"}:
+                reason = "hub.member_follow.catchup"
+                countdown_default = 30.0
             body = {
-                "reason": "hub.member_follow.update",
+                "reason": reason,
                 "target_rev": target_rev,
                 "target_version": target_version,
-                "countdown_sec": self._remaining_countdown_s(scheduled_for, default=15.0),
+                "countdown_sec": self._remaining_countdown_s(scheduled_for, default=countdown_default),
                 "drain_timeout_sec": float(payload.get("drain_timeout_sec") or 10.0),
                 "signal_delay_sec": float(payload.get("signal_delay_sec") or 0.25),
             }

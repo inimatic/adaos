@@ -137,6 +137,111 @@ def test_member_link_client_skips_hub_follow_in_dev_environment(monkeypatch) -> 
     assert client._last_follow_result == {}
 
 
+def test_member_link_client_catches_up_after_hub_succeeded_status(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
+    monkeypatch.delenv("ENV_TYPE", raising=False)
+    monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(core_update_enabled=True)))
+    monkeypatch.setattr(mod, "core_update_reactions_disabled_reason", lambda: None)
+    monkeypatch.setattr(mod, "read_core_update_status", lambda: {"state": "succeeded", "target_version": "old1234"})
+    monkeypatch.setattr(mod, "active_slot_manifest", lambda: {"target_version": "old1234", "git_short_commit": "old1234"})
+
+    def _post_local_admin(path, body):
+        calls.append((path, dict(body)))
+        return {"ok": True, "accepted": True}
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_post_local_admin", staticmethod(_post_local_admin))
+
+    asyncio.run(
+        client._follow_hub_core_update(
+            {
+                "state": "succeeded",
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "new1234567890",
+            }
+        )
+    )
+
+    assert calls == [
+        (
+            "/api/admin/update/start",
+            {
+                "reason": "hub.member_follow.catchup",
+                "target_rev": "rev2026",
+                "target_version": "new1234567890",
+                "countdown_sec": 30.0,
+                "drain_timeout_sec": 10.0,
+                "signal_delay_sec": 0.25,
+            },
+        )
+    ]
+    assert client._last_follow_result == {"ok": True, "accepted": True}
+
+
+def test_member_link_client_skips_hub_succeeded_status_when_already_current(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
+    monkeypatch.delenv("ENV_TYPE", raising=False)
+    monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(core_update_enabled=True)))
+    monkeypatch.setattr(mod, "core_update_reactions_disabled_reason", lambda: None)
+    monkeypatch.setattr(mod, "read_core_update_status", lambda: {"state": "succeeded", "target_version": "new1234567890"})
+    monkeypatch.setattr(mod, "active_slot_manifest", lambda: {"target_version": "new1234567890"})
+
+    def _fail_post_local_admin(*_args, **_kwargs):
+        raise AssertionError("local admin must not be called")
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_post_local_admin", staticmethod(_fail_post_local_admin))
+
+    asyncio.run(
+        client._follow_hub_core_update(
+            {
+                "state": "succeeded",
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "new1234567890",
+            }
+        )
+    )
+
+    assert client._last_follow_result == {}
+
+
+def test_member_link_client_catchup_reads_target_from_hub_manifest(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
+    monkeypatch.delenv("ENV_TYPE", raising=False)
+    monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(core_update_enabled=True)))
+    monkeypatch.setattr(mod, "core_update_reactions_disabled_reason", lambda: None)
+    monkeypatch.setattr(mod, "read_core_update_status", lambda: {"state": "succeeded", "target_version": "old1234"})
+    monkeypatch.setattr(mod, "active_slot_manifest", lambda: {"target_version": "old1234"})
+
+    def _post_local_admin(path, body):
+        calls.append((path, dict(body)))
+        return {"ok": True}
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_post_local_admin", staticmethod(_post_local_admin))
+
+    asyncio.run(
+        client._follow_hub_core_update(
+            {
+                "state": "succeeded",
+                "action": "update",
+                "manifest": {
+                    "target_rev": "rev2026",
+                    "git_commit": "feed1234567890",
+                },
+            }
+        )
+    )
+
+    assert calls[0][0] == "/api/admin/update/start"
+    assert calls[0][1]["target_rev"] == "rev2026"
+    assert calls[0][1]["target_version"] == "feed1234567890"
+
+
 def test_member_link_schedules_yjs_node_state_in_background(monkeypatch) -> None:
     async def _exercise() -> None:
         client = mod.MemberLinkClient()
