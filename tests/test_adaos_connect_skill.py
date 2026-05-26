@@ -109,8 +109,8 @@ def test_browser_current_uses_zone_and_new_app_domain(monkeypatch, tmp_path: Pat
         }
     ]
     assert current["status"] == "ready"
-    assert current["app_base_url"] == "https://inimatic.web.app"
-    assert current["link"] == "https://inimatic.web.app/?mode=registration&user_code=PAIR1234&zone=ru"
+    assert current["app_base_url"] == "https://inimatic.com"
+    assert current["link"] == "https://inimatic.com/?mode=registration&user_code=PAIR1234&zone=ru"
     assert current["qr_text"] == current["link"]
     assert current["expires_at_epoch"] == expires_at
     assert current["expires_at"] == mod._format_expiry_iso(expires_at)
