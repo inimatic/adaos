@@ -43,7 +43,7 @@ This document describes the current production MVP direction for intent detectio
      latency summary, confidence bands, accept/abstain/reject counts,
      canonicalization buckets, and review samples)
    - notebook outputs can be prepared for runtime with
-     `skills/neural_nlu_service_skill/scripts/prepare_artifacts.py`
+     `.adaos/workspace/skills/neural_nlu_service_skill/scripts/prepare_artifacts.py`
    - on high confidence -> emits `nlp.intent.detected { via: "neural" }`
    - on abstain/error -> falls back to `nlp.intent.detect.rasa`
 5. If an intent is found:

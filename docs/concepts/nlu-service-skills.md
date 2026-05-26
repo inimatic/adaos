@@ -34,8 +34,7 @@ The hub NLU pipeline uses:
 
 Target skill:
 
-- Source skill: `skills/neural_nlu_service_skill`
-- Installed skill: `.adaos/workspace/skills/neural_nlu_service_skill`
+- Source/installed skill: `.adaos/workspace/skills/neural_nlu_service_skill`
 - Active source: `.adaos/workspace/skills/.runtime/neural_nlu_service_skill/v<major>.<minor>/slots/<A|B>/src/skills/neural_nlu_service_skill`
 - Supervisor: `src/adaos/services/skill/service_supervisor.py`
 - Bridge: `src/adaos/services/nlu/neural_service_bridge.py`
@@ -96,7 +95,7 @@ Target artifacts are service-owned runtime data:
 Notebook outputs can be normalized into this layout with:
 
 ```powershell
-.\.venv\Scripts\python.exe skills\neural_nlu_service_skill\scripts\prepare_artifacts.py `
+.\.venv\Scripts\python.exe .adaos\workspace\skills\neural_nlu_service_skill\scripts\prepare_artifacts.py `
   --source-root example `
   --out-dir .adaos\state\nlu\neural
 ```
@@ -124,8 +123,9 @@ can apply a small confidence penalty when the positive/negative margin is too
 small.
 
 The active artifacts can be smoke-tested with
-`skills/neural_nlu_service_skill/scripts/evaluate_golden.py`, which writes
-`golden_report.json` and can fail the command with `--min-accuracy`.
+`.adaos/workspace/skills/neural_nlu_service_skill/scripts/evaluate_golden.py`,
+which writes `golden_report.json` and can fail the command with
+`--min-accuracy`.
 The hub-side bridge can be probed with
 `adaos interpreter neural-probe "какая погода в москве" --locale ru`; this
 uses the same service discovery/start, confidence gates, canonicalized payload,
