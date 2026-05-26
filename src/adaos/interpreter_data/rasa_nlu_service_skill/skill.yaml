@@ -1,5 +1,5 @@
 name: rasa_nlu_service_skill
-version: 0.1.3
+version: 0.1.4
 description: Local Rasa NLU-only service for AdaOS intent detection
 runtime:
   kind: service
@@ -21,4 +21,4 @@ events:
     - nlp.rasa.train
   publish:
     - nlp.intent.detected
-updated_at: "2026-05-19T06:21:00+00:00"
+updated_at: "2026-05-26T14:27:30+00:00"

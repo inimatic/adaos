@@ -54,6 +54,46 @@ def test_ensure_rasa_service_skill_installed_refreshes_managed_files():
     assert (target / "custom.txt").read_text(encoding="utf-8").strip() == "keep me"
 
 
+def test_ensure_rasa_service_skill_installed_does_not_downgrade_newer_workspace_skill(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import rasa_skill_installer as installer
+
+    monkeypatch.setattr(installer, "_prepare_slotted_runtime", lambda target, fingerprint: None)
+
+    ctx = get_ctx()
+    target = Path(ctx.paths.skills_dir()) / "rasa_nlu_service_skill"
+    (target / "handlers").mkdir(parents=True)
+    (target / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: rasa_nlu_service_skill",
+                "version: 9.9.9",
+                "runtime:",
+                "  kind: service",
+                "  env:",
+                "    mode: venv",
+                "service:",
+                "  host: 127.0.0.1",
+                "  port: 18092",
+                "  command: ['-m', 'handlers.main']",
+                "dependencies:",
+                "- --no-deps",
+                "- adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (target / "handlers" / "main.py").write_text("sentinel = 'keep-newer'\n", encoding="utf-8")
+
+    installed = installer.ensure_rasa_service_skill_installed()
+
+    assert installed == target
+    manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
+    assert manifest["version"] == "9.9.9"
+    assert "keep-newer" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
+    assert (target / ".adaos-managed.json").exists()
+
+
 def test_ensure_rasa_service_skill_installed_respects_disabled_flag(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import rasa_skill_installer as installer

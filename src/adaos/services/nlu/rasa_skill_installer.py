@@ -334,6 +334,52 @@ def _write_rasa_port_dependency(target: Path, ctx: Any) -> list[str]:
     return dependencies
 
 
+def _manifest_payload(root: Path) -> dict[str, Any]:
+    manifest_path = root / "skill.yaml"
+    try:
+        payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _manifest_version(root: Path) -> str:
+    value = _manifest_payload(root).get("version")
+    return str(value or "").strip()
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for raw in str(value or "").split("."):
+        digits = ""
+        for ch in raw:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        parts.append(int(digits or "0"))
+    return tuple(parts or [0])
+
+
+def _manifest_dependencies(root: Path) -> list[str]:
+    deps = _manifest_payload(root).get("dependencies") or []
+    if not isinstance(deps, list):
+        return []
+    return [str(item) for item in deps if isinstance(item, str) and item.strip()]
+
+
+def _should_refresh_template(src: Path, target: Path) -> bool:
+    if not (target / "skill.yaml").exists():
+        return True
+    source_version = _manifest_version(src)
+    target_version = _manifest_version(target)
+    if not target_version:
+        return True
+    if source_version and _version_key(target_version) < _version_key(source_version):
+        return True
+    return False
+
+
 def _managed_file_payload(target: Path, dependencies: list[str]) -> dict[str, Any]:
     files: dict[str, str] = {}
     for rel in ("skill.yaml", "requirements.in", "README.md"):
@@ -433,8 +479,14 @@ def ensure_rasa_service_skill_installed() -> Path | None:
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         with resources.as_file(src_dir) as src:
-            _copy_template_tree(Path(src), target)
-        dependencies = _write_rasa_port_dependency(target, ctx)
+            src_path = Path(src)
+            if _should_refresh_template(src_path, target):
+                _copy_template_tree(src_path, target)
+                dependencies = _write_rasa_port_dependency(target, ctx)
+            else:
+                dependencies = _manifest_dependencies(target)
+                if not dependencies:
+                    dependencies = _write_rasa_port_dependency(target, ctx)
         meta = _write_managed_metadata(target, dependencies)
         _prepare_slotted_runtime(target, str(meta["fingerprint"]))
     except Exception:
