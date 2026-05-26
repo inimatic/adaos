@@ -57,9 +57,12 @@ switch A/B runtime slots. Install/update flows own provider preparation.
 
 Target install policy:
 
-- `adaos install` prepares Neural NLU by default.
-- `ADAOS_NLU_NEURAL=0` disables the runtime stage.
-- Weak devices may skip installing the service skill.
+- `adaos install --neural-nlu` prepares Neural NLU; plain `adaos install`
+  skips the provider and its heavy dependencies.
+- `ADAOS_NLU_NEURAL=1` forces the runtime stage, and `ADAOS_NLU_NEURAL=0`
+  disables it.
+- With the flag unset, the pipeline uses Neural only when
+  `neural_nlu_service_skill` is installed/active.
 - Rasa remains available as a long-term fallback after neural abstain/error.
 
 Responsibilities:
@@ -92,7 +95,13 @@ Response:
     "knn": 0.88,
     "skill_prior": 0.9,
     "matched_examples": ["поставь будильник на {time}"],
-    "canonicalized_text": "поставь будильник на {time}"
+    "canonicalized_text": "поставь будильник на {time}",
+    "source_intent": "alarm.set",
+    "intent_mapping": {
+      "source_label": "alarm.set",
+      "canonical_intent": "alarm.set",
+      "action_id": "system.alarm.set"
+    }
   }
 }
 ```
@@ -120,11 +129,23 @@ Versioned runtime artifacts:
 
 - `model.pt`
 - `faiss.index`
+- `faiss.index.json` for index provenance/invalidation metadata
+- `negative_faiss.index`
+- `negative_faiss.index.json` for negative-index provenance/invalidation metadata
 - `intents_manifest.json`
+- `intent_map.json` for mapping research labels to canonical intents and
+  optional system action ids
 - `masking_rules.json`
 - `examples_manifest.jsonl`
 - `ranker_config.json`
 - `metrics.json`
+
+Current implementation note: the service can already create and reuse lazy
+positive-example and negative-example FAISS indexes when `faiss` is installed
+in the service venv. If FAISS is unavailable, it falls back to persisted Torch
+tensor caches. The active artifact layout also includes `intent_map.json` so
+notebook labels can map to AdaOS canonical intents and optional action ids
+without changing the model.
 
 Model lifecycle:
 

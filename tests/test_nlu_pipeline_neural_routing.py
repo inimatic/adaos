@@ -58,3 +58,30 @@ async def test_pipeline_routes_to_rasa_when_flag_disabled(monkeypatch):
     assert payload["webspace_id"] == "ws2"
     assert payload["request_id"] == "rid2"
     assert source == "nlu.pipeline"
+
+
+@pytest.mark.anyio
+async def test_pipeline_auto_routes_to_neural_when_service_skill_installed(monkeypatch):
+    monkeypatch.delenv("ADAOS_NLU_NEURAL", raising=False)
+    from adaos.services.nlu import pipeline
+
+    module = importlib.reload(pipeline)
+
+    emitted = []
+
+    async def _no_regex(_text: str, *, webspace_id: str):
+        return (None, {}, "regex", {})
+
+    monkeypatch.setattr(module, "_seen_recent", lambda _rid: False)
+    monkeypatch.setattr(module, "_try_regex_intent", _no_regex)
+    monkeypatch.setattr(module, "_neural_service_skill_installed", lambda: True)
+    monkeypatch.setattr(module, "get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(module, "bus_emit", lambda _bus, et, payload, source=None: emitted.append((et, payload, source)))
+
+    await module._on_detect_request({"text": "auto neural", "webspace_id": "ws-auto", "request_id": "rid-auto"})
+
+    event_type, payload, source = emitted[-1]
+    assert event_type == "nlp.intent.detect.neural"
+    assert payload["webspace_id"] == "ws-auto"
+    assert payload["request_id"] == "rid-auto"
+    assert source == "nlu.pipeline"

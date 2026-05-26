@@ -19,11 +19,16 @@ This document describes the current production MVP direction for intent detectio
      - workspace skills (`skill.yaml:nlu.regex_rules`)
      - legacy per-webspace cache (`data.nlu.regex_rules`)
 3. If regex does not match:
-   - if `ADAOS_NLU_NEURAL=1`: emits `nlp.intent.detect.neural`
+   - if `ADAOS_NLU_NEURAL=1`, or if the variable is unset and
+     `neural_nlu_service_skill` is installed/active: emits
+     `nlp.intent.detect.neural`
    - otherwise emits `nlp.intent.detect.rasa`
 4. Neural bridge:
    - calls `neural_nlu_service_skill:/parse`
-   - if the skill is missing, hub bootstraps it from packaged template (`adaos.interpreter_data/neural_nlu_service_skill`)
+   - if the skill is missing, hub falls back to Rasa; `adaos install --neural-nlu`
+     or update flows prepare the service skill from the workspace/registry source
+   - service runs in its own venv and declares `torch`/`numpy` as skill
+     dependencies, outside the hub/root venv
    - upstream detector code is ported into `handlers/upstream_detector_port.py` (service-side runtime module)
    - neural service can run notebook-compatible Char-CNN + BiLSTM weights via:
      - `ADAOS_NEURAL_MODEL_PATH` (state_dict `.pt`)
@@ -33,6 +38,12 @@ This document describes the current production MVP direction for intent detectio
      - `<ADAOS_BASE_DIR>/state/nlu/neural/model.pt`
      - `<ADAOS_BASE_DIR>/state/nlu/neural/labels.json`
      - `<ADAOS_BASE_DIR>/state/nlu/neural/vocab.json`
+   - node-local usage statistics are written to
+     `<ADAOS_BASE_DIR>/state/nlu/neural_usage.json` (request/fallback counts,
+     latency summary, confidence bands, accept/abstain/reject counts,
+     canonicalization buckets, and review samples)
+   - notebook outputs can be prepared for runtime with
+     `skills/neural_nlu_service_skill/scripts/prepare_artifacts.py`
    - on high confidence -> emits `nlp.intent.detected { via: "neural" }`
    - on abstain/error -> falls back to `nlp.intent.detect.rasa`
 5. If an intent is found:
