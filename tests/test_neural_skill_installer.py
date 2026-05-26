@@ -18,7 +18,9 @@ def _write_neural_skill_fixture(root: Path) -> Path:
                 "    mode: venv",
                 "    python: '3.11'",
                 "dependencies:",
-                "- torch",
+                "- --extra-index-url",
+                "- https://download.pytorch.org/whl/cpu",
+                "- torch==2.12.0+cpu",
                 "- numpy",
                 "- faiss-cpu",
                 "service:",
@@ -73,7 +75,8 @@ def test_ensure_neural_service_skill_installed_creates_skill_tree(monkeypatch, t
     assert "AdaOSNeuralNLU/0.2" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
     manifest_text = (target / "skill.yaml").read_text(encoding="utf-8")
     assert "mode: venv" in manifest_text
-    assert "- torch" in manifest_text
+    assert "https://download.pytorch.org/whl/cpu" in manifest_text
+    assert "- torch==2.12.0+cpu" in manifest_text
     assert "- numpy" in manifest_text
     assert "- faiss-cpu" in manifest_text
 
