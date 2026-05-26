@@ -432,19 +432,32 @@ class MemberLinkClient:
             include_capacity=False,
         )
 
-    def _queue_node_snapshot_heartbeat(self) -> None:
+    def _local_node_status(self, *, include_capacity: bool = False) -> dict[str, Any]:
+        return self._compose_local_node_snapshot(
+            desktop_catalog=None,
+            include_capacity=include_capacity,
+        )
+
+    def _queue_node_status(self, *, include_capacity: bool = False) -> None:
         try:
             self._out_q.put_nowait(
                 {
-                    "t": "node.snapshot.heartbeat",
-                    "snapshot": self._local_node_snapshot_heartbeat(),
+                    "t": "node.status",
+                    "status": self._local_node_status(include_capacity=include_capacity),
                     "ts": time.time(),
                 }
             )
         except Exception:
             return
 
+    def _queue_node_snapshot_heartbeat(self) -> None:
+        self._queue_node_status(include_capacity=False)
+
     def _queue_node_snapshot(self) -> None:
+        self._last_forced_snapshot_at = time.time()
+        self._queue_node_status(include_capacity=True)
+
+    def _queue_node_catalog_snapshot(self) -> None:
         self._last_forced_snapshot_at = time.time()
         loop = self._loop
         if loop and loop.is_running():
@@ -456,7 +469,7 @@ class MemberLinkClient:
         try:
             self._out_q.put_nowait(
                 {
-                    "t": "node.snapshot",
+                    "t": "node.catalog",
                     "snapshot": self._local_node_snapshot(),
                     "ts": time.time(),
                 }
@@ -477,9 +490,8 @@ class MemberLinkClient:
             return False
         if source.startswith("projection_service") or channel.startswith("projection."):
             return False
-        # Catalog/scenario mutations are structural desktop changes; a bounded
-        # full snapshot is still useful so the hub can rebuild app/widget
-        # listings without waiting for the periodic snapshot loop.
+        # Catalog/scenario mutations are structural desktop changes; send a
+        # bounded structural catalog refresh, not a full periodic state snapshot.
         structural_tokens = (
             "catalog",
             "desktop_catalog",
@@ -512,7 +524,7 @@ class MemberLinkClient:
         if now - float(self._last_yjs_write_snapshot_at or 0.0) < min_interval:
             return
         self._last_yjs_write_snapshot_at = now
-        self._queue_node_snapshot()
+        self._queue_node_catalog_snapshot()
 
     def _ensure_snapshot_task(self) -> None:
         if self._snapshot_task is not None and not self._snapshot_task.done():
@@ -533,7 +545,7 @@ class MemberLinkClient:
         try:
             self._out_q.put_nowait(
                 {
-                    "t": "node.snapshot",
+                    "t": "node.catalog",
                     "snapshot": snapshot,
                     "ts": time.time(),
                 }
@@ -872,29 +884,38 @@ class MemberLinkClient:
                         pass
                     try:
                         now = time.time()
-                        min_full_interval = self._connect_full_snapshot_min_interval_s()
-                        send_full_snapshot = (
-                            self._last_connect_full_snapshot_at <= 0.0
-                            or (now - self._last_connect_full_snapshot_at) >= min_full_interval
-                        )
-                        if send_full_snapshot:
-                            snapshot = await self._local_node_snapshot_async()
-                            self._last_connect_full_snapshot_at = now
-                            msg_type = "node.snapshot"
-                        else:
-                            snapshot = self._local_node_snapshot_heartbeat()
-                            msg_type = "node.snapshot.heartbeat"
                         await ws.send(
                             json.dumps(
                                 {
-                                    "t": msg_type,
-                                    "snapshot": snapshot,
+                                    "t": "node.status",
+                                    "status": self._local_node_status(include_capacity=True),
                                     "ts": now,
                                 }
                             )
                         )
                     except Exception:
                         pass
+                    try:
+                        now = time.time()
+                        min_full_interval = self._connect_full_snapshot_min_interval_s()
+                        send_catalog = (
+                            self._last_connect_full_snapshot_at <= 0.0
+                            or (now - self._last_connect_full_snapshot_at) >= min_full_interval
+                        )
+                        if send_catalog:
+                            self._last_connect_full_snapshot_at = now
+                            catalog_snapshot = await self._local_node_snapshot_async()
+                            await ws.send(
+                                json.dumps(
+                                    {
+                                        "t": "node.catalog",
+                                        "snapshot": catalog_snapshot,
+                                        "ts": now,
+                                    }
+                                )
+                            )
+                    except Exception:
+                        _log.debug("failed to send member desktop catalog on connect", exc_info=True)
                     now = time.time()
                     min_yjs_interval = self._connect_yjs_state_min_interval_s()
                     if (
@@ -954,8 +975,11 @@ class MemberLinkClient:
                             if t == "hub.event":
                                 await self._on_hub_event(msg)
                                 continue
-                            if t == "node.snapshot.request":
-                                self._request_local_snapshot_sync(reason=str(msg.get("reason") or "node.snapshot.request"))
+                            if t == "node.status.request":
+                                self._queue_node_status(include_capacity=True)
+                                continue
+                            if t in {"node.catalog.request", "node.snapshot.request"}:
+                                self._queue_node_catalog_snapshot()
                                 continue
                             if t == "node.display.assignment":
                                 await self._on_node_display_assignment(msg)
@@ -970,21 +994,25 @@ class MemberLinkClient:
                                 await self._on_rpc(ws, msg)
                                 continue
 
-                    async def _snapshot_loop() -> None:
-                        interval_raw = str(os.getenv("ADAOS_SUBNET_SNAPSHOT_INTERVAL_S") or "").strip()
+                    async def _status_loop() -> None:
+                        interval_raw = str(
+                            os.getenv("ADAOS_SUBNET_STATUS_INTERVAL_S")
+                            or os.getenv("ADAOS_SUBNET_SNAPSHOT_INTERVAL_S")
+                            or ""
+                        ).strip()
                         try:
                             interval = max(5.0, min(120.0, float(interval_raw or 20.0)))
                         except Exception:
                             interval = 20.0
                         while True:
                             await asyncio.sleep(interval)
-                            self._queue_node_snapshot_heartbeat()
+                            self._queue_node_status(include_capacity=False)
 
                     sender_t = asyncio.create_task(_sender(), name="subnet-link-sender")
                     receiver_t = asyncio.create_task(_receiver(), name="subnet-link-receiver")
                     ping_t = asyncio.create_task(self._ping_loop(ws), name="subnet-link-ping")
-                    snapshot_t = asyncio.create_task(_snapshot_loop(), name="subnet-link-snapshot")
-                    tasks = [sender_t, receiver_t, ping_t, snapshot_t]
+                    status_t = asyncio.create_task(_status_loop(), name="subnet-link-status")
+                    tasks = [sender_t, receiver_t, ping_t, status_t]
                     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                     for p in pending:
                         p.cancel()

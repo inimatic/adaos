@@ -44,11 +44,13 @@ Today the system is split like this:
   - persists `role`, `subnet_id`, `hub_url`
   - persists member upstream session token in runtime state
 - runtime boot
-  - starts member register + heartbeat loop
+  - starts member register + lightweight status loop
   - starts member subnet link client
 - hub runtime
-  - receives member link events
-  - rebuilds member snapshot projection into shared desktop/webspace state
+  - receives member lifecycle events
+  - mirrors member-owned Yjs state into the hub-side runtime document
+  - materializes desktop/webspace state from member status, capacity, Yjs state,
+    and a bounded structural catalog refresh
 
 This works once the runtime is restarted or booted as `member`, but it is weaker than
 the target lifecycle because the connectivity contract is not yet owned by a stable
@@ -63,9 +65,52 @@ As of the current implementation increment:
 - reliability/CLI surfaces now expose the active `required_upstream_link` view for the current node role
 - supervisor status now also publishes a unified `required_upstream_link` contract over role-specific watchdog internals
 - reliability/CLI now enrich that contract with sidecar handoff readiness and restart recovery policy
+- member reconnect now has explicit lifecycle events:
+  `subnet.member.connected`, `subnet.member.reconnected`, and
+  `subnet.member.lost`
+- reconnect refresh requests are split by responsibility:
+  `node.status.request` refreshes small control/status state, while
+  `node.catalog.request` refreshes structural desktop catalog only when needed
+- member-owned runtime data is replicated through `yjs.node_state` semantic
+  merge for `data.nodes/<member_node_id>`; the hub is the replica/materializer,
+  not the source of truth for that branch
 
 This closes the biggest developer-experience gap, but it is still not the final
 production model because sidecar-aware ownership and deeper recovery policy are not implemented yet.
+
+## Data Ownership
+
+The member is the authoritative writer for its own runtime data. It writes local
+skill and node state into its local Yjs/YStore under:
+
+- `data.nodes/<member_node_id>`
+
+The hub receives that state over the member link as `yjs.node_state` and merges
+only that member-owned branch into the hub-side webspace document. This semantic
+merge avoids clobbering sibling nodes in the shared `data.nodes` envelope.
+
+The hub owns:
+
+- member connectivity and lifecycle assessment
+- subnet directory and display assignment
+- browser-facing desktop/webspace materialization
+- fanout of accepted Yjs updates to other live peers
+
+The hub must not use periodic full member snapshots as the normal data path.
+Full snapshot frames remain a legacy compatibility alias, but the expected
+runtime contract is:
+
+- `node.status`: frequent, lightweight control/status/capacity state
+- `yjs.node_state`: member-owned Yjs data branch
+- `node.catalog`: bounded structural desktop catalog refresh
+- `subnet.member.connected` / `subnet.member.reconnected`: request status,
+  catalog, and Yjs state refresh
+- `subnet.member.lost`: mark link absence without fabricating member data
+
+When a member has not yet sent `node.catalog`, the hub may build a display-only
+desktop projection from `capacity.skills` and local web UI declarations for
+known standard skills. That projection is not the source of truth for member
+data; it is a browser materialization fallback.
 
 ## Target architecture
 

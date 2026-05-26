@@ -2724,10 +2724,17 @@ async def node_infrastate_action(payload: InfrastateActionRequest) -> dict[str, 
             _log.debug("wait_for_idle failed after infrastate.action", exc_info=True)
 
     def _load_snapshot() -> dict[str, Any]:
+        snapshot_args: dict[str, Any] = {
+            "webspace_id": target_webspace_id,
+            "project": False,
+            "force_refresh": True,
+        }
+        if target_node_id:
+            snapshot_args["target_node_id"] = target_node_id
         result = mgr.run_tool(
             "infrastate_skill",
             "get_snapshot",
-            {"webspace_id": target_webspace_id, "project": False, "force_refresh": True},
+            snapshot_args,
         )
         return result if isinstance(result, dict) else {"summary": {}, "raw": result}
 

@@ -3292,6 +3292,9 @@ class WebspaceScenarioRuntime:
                 if isinstance(runtime_projection.get("snapshot"), Mapping)
                 else {}
             )
+            snapshot_node_id = str(snapshot.get("node_id") or "").strip() if isinstance(snapshot, Mapping) else ""
+            if snapshot_node_id and snapshot_node_id != node_id:
+                continue
             catalog = (
                 snapshot.get("desktop_catalog")
                 if isinstance(snapshot.get("desktop_catalog"), Mapping)
@@ -3302,6 +3305,53 @@ class WebspaceScenarioRuntime:
             registry = catalog.get("registry") if isinstance(catalog.get("registry"), Mapping) else {}
             webio = catalog.get("webio") if isinstance(catalog.get("webio"), Mapping) else {}
             ydoc_defaults = catalog.get("ydoc_defaults") if isinstance(catalog.get("ydoc_defaults"), Mapping) else {}
+            if not apps and not widgets and not registry and not webio and not ydoc_defaults:
+                capacity = node.get("capacity") if isinstance(node.get("capacity"), Mapping) else {}
+                skills = capacity.get("skills") if isinstance(capacity.get("skills"), list) else []
+                fallback_apps: list[dict[str, Any]] = []
+                fallback_widgets: list[dict[str, Any]] = []
+                fallback_registry: Dict[str, Any] = {"modals": {}, "widgets": {}}
+                fallback_webio: Dict[str, Any] = {"receivers": {}}
+                fallback_ydoc_defaults: Dict[str, Any] = {}
+                seen_skills: set[str] = set()
+                for rec in skills:
+                    if not isinstance(rec, Mapping):
+                        continue
+                    skill_name = str(rec.get("name") or rec.get("skill") or "").strip()
+                    if not skill_name or skill_name in seen_skills:
+                        continue
+                    seen_skills.add(skill_name)
+                    try:
+                        local_decl = self._load_webui(skill_name, "default")
+                    except Exception:
+                        local_decl = None
+                    if not isinstance(local_decl, Mapping) or not local_decl:
+                        continue
+                    local_apps = local_decl.get("apps") if isinstance(local_decl.get("apps"), list) else []
+                    local_widgets = local_decl.get("widgets") if isinstance(local_decl.get("widgets"), list) else []
+                    fallback_apps.extend([dict(item) for item in local_apps if isinstance(item, dict)])
+                    fallback_widgets.extend([dict(item) for item in local_widgets if isinstance(item, dict)])
+                    local_registry = local_decl.get("registry") if isinstance(local_decl.get("registry"), Mapping) else {}
+                    for group in ("modals", "widgets"):
+                        src = local_registry.get(group) if isinstance(local_registry.get(group), Mapping) else {}
+                        dst = fallback_registry.setdefault(group, {})
+                        if isinstance(dst, dict):
+                            for key, value in src.items():
+                                dst.setdefault(str(key), value)
+                    local_webio = local_decl.get("webio") if isinstance(local_decl.get("webio"), Mapping) else {}
+                    local_receivers = local_webio.get("receivers") if isinstance(local_webio.get("receivers"), Mapping) else {}
+                    receivers_dst = fallback_webio.setdefault("receivers", {})
+                    if isinstance(receivers_dst, dict):
+                        for key, value in local_receivers.items():
+                            receivers_dst.setdefault(str(key), value)
+                    local_defaults = local_decl.get("ydoc_defaults") if isinstance(local_decl.get("ydoc_defaults"), Mapping) else {}
+                    for key, value in local_defaults.items():
+                        fallback_ydoc_defaults.setdefault(str(key), value)
+                apps = fallback_apps
+                widgets = fallback_widgets
+                registry = fallback_registry
+                webio = fallback_webio
+                ydoc_defaults = fallback_ydoc_defaults
             if not apps and not widgets and not registry and not webio and not ydoc_defaults:
                 continue
             display = node_display_from_directory_node(node)
@@ -5490,11 +5540,6 @@ async def _schedule_member_snapshot_rebuild_from_event(
 @subscribe("subnet.member.snapshot.changed")
 async def _on_subnet_member_snapshot_changed(evt: Any) -> None:
     await _schedule_member_snapshot_rebuild_from_event(evt)
-
-
-@subscribe("subnet.member.snapshot.refreshed")
-async def _on_subnet_member_snapshot_refreshed(evt: Any) -> None:
-    await _schedule_member_snapshot_rebuild_from_event(evt, only_when_catalog_missing=True)
 
 
 def _schedule_member_snapshot_rebuild(

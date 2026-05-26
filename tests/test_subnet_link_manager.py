@@ -250,12 +250,11 @@ def test_update_member_snapshot_heartbeat_refreshes_runtime_snapshot(monkeypatch
     assert changed_events[-1].payload["snapshot_build"]["runtime_git_short_commit"] == "6ae4ddb"
 
 
-def test_update_member_snapshot_heartbeat_publishes_refresh_event_for_unchanged_desktop_material(monkeypatch) -> None:
+def test_update_member_snapshot_heartbeat_does_not_publish_refresh_event_for_unchanged_desktop_material(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
     monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
     monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
-    monkeypatch.setattr(mod, "_member_snapshot_refresh_event_min_interval_s", lambda: 0.0)
 
     manager = mod.HubLinkManager()
     manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
@@ -292,9 +291,7 @@ def test_update_member_snapshot_heartbeat_publishes_refresh_event_for_unchanged_
 
     assert result["changed"] is False
     refreshed_events = [event for event in fake_bus.events if event.type == "subnet.member.snapshot.refreshed"]
-    assert len(refreshed_events) == 1
-    assert refreshed_events[0].payload["node_id"] == "member-1"
-    assert refreshed_events[0].payload["refresh_reason"] == "unchanged_snapshot_with_desktop_material"
+    assert refreshed_events == []
 
 
 def test_member_infrastate_projection_carries_core_slot_version() -> None:
@@ -530,7 +527,7 @@ def test_update_member_snapshot_logs_publish_failure(monkeypatch) -> None:
     assert result["changed"] is True
     assert warnings
     assert warnings[0][0] == "failed to publish subnet link event type=%s node_id=%s"
-    assert warnings[0][1] == ("subnet.member.snapshot.changed", "member-1")
+    assert warnings[0][1] == ("subnet.member.status.changed", "member-1")
     assert warnings[0][2].get("exc_info") is True
 
 
@@ -566,7 +563,7 @@ def test_update_member_snapshot_logs_directory_failure(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert warnings
-    assert warnings[0][0] == "failed to update subnet directory from member snapshot node_id=%s"
+    assert warnings[0][0] == "failed to update subnet directory from member status node_id=%s"
     assert warnings[0][1] == ("member-1",)
     assert warnings[0][2].get("exc_info") is True
 
@@ -592,7 +589,7 @@ def test_broadcast_event_sends_node_targeted_payload_only_to_matching_member() -
     assert member_2_ws.messages[0]["event"]["payload"]["target_node_id"] == "member-2"
 
 
-def test_register_requests_initial_member_snapshot(monkeypatch) -> None:
+def test_register_requests_initial_member_refresh_after_ack(monkeypatch) -> None:
     manager = mod.HubLinkManager()
     ws = _FakeWebSocket()
     monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
@@ -607,13 +604,14 @@ def test_register_requests_initial_member_snapshot(monkeypatch) -> None:
             node_names=["Node 1"],
         )
     )
+    asyncio.run(manager.refresh_member_after_connect("member-1"))
 
-    snapshot_requests = [msg for msg in ws.messages if msg.get("t") == "node.snapshot.request"]
-    assert len(snapshot_requests) == 1
-    assert snapshot_requests[0]["reason"] == "member_link_up"
+    refresh_requests = [msg for msg in ws.messages if msg.get("t") in {"node.status.request", "node.catalog.request"}]
+    assert [msg.get("t") for msg in refresh_requests] == ["node.status.request", "node.catalog.request"]
+    assert {msg["reason"] for msg in refresh_requests} == {"member_link_connected"}
 
 
-def test_register_keeps_followup_snapshot_refresh_until_desktop_catalog_arrives(monkeypatch) -> None:
+def test_register_does_not_send_member_refresh_before_hello_ack(monkeypatch) -> None:
     manager = mod.HubLinkManager()
     ws = _FakeWebSocket()
     fake_bus = _FakeBus()
@@ -622,7 +620,6 @@ def test_register_keeps_followup_snapshot_refresh_until_desktop_catalog_arrives(
     monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
     monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
     monkeypatch.setattr(manager, "_push_current_core_update_status", _noop_push)
-    monkeypatch.setenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_FOLLOWUP_DELAY_S", "0.5")
 
     async def _exercise() -> None:
         await manager.register(
@@ -632,23 +629,13 @@ def test_register_keeps_followup_snapshot_refresh_until_desktop_catalog_arrives(
             roles=["member"],
             node_names=["Node 1"],
         )
-        await manager.update_member_snapshot(
-            "member-1",
-            snapshot={
-                "node_id": "member-1",
-                "captured_at": 100.0,
-                "desktop_catalog": {"apps": [], "widgets": []},
-            },
-        )
-        await asyncio.sleep(0.7)
 
     asyncio.run(_exercise())
 
-    snapshot_requests = [msg for msg in ws.messages if msg.get("t") == "node.snapshot.request"]
-    assert [msg.get("reason") for msg in snapshot_requests] == ["member_link_up", "member_link_followup"]
+    assert [msg for msg in ws.messages if msg.get("t") in {"node.status.request", "node.catalog.request"}] == []
 
 
-def test_snapshot_with_desktop_catalog_material_cancels_followup_refresh(monkeypatch) -> None:
+def test_refresh_member_after_connect_requests_status_and_catalog(monkeypatch) -> None:
     manager = mod.HubLinkManager()
     ws = _FakeWebSocket()
     fake_bus = _FakeBus()
@@ -657,7 +644,6 @@ def test_snapshot_with_desktop_catalog_material_cancels_followup_refresh(monkeyp
     monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
     monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
     monkeypatch.setattr(manager, "_push_current_core_update_status", _noop_push)
-    monkeypatch.setenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_FOLLOWUP_DELAY_S", "0.5")
 
     async def _exercise() -> None:
         await manager.register(
@@ -667,17 +653,10 @@ def test_snapshot_with_desktop_catalog_material_cancels_followup_refresh(monkeyp
             roles=["member"],
             node_names=["Node 1"],
         )
-        await manager.update_member_snapshot(
-            "member-1",
-            snapshot={
-                "node_id": "member-1",
-                "captured_at": 100.0,
-                "desktop_catalog": {"apps": [{"id": "weather"}], "widgets": []},
-            },
-        )
-        await asyncio.sleep(0.7)
+        await manager.refresh_member_after_connect("member-1", reason="test")
 
     asyncio.run(_exercise())
 
-    snapshot_requests = [msg for msg in ws.messages if msg.get("t") == "node.snapshot.request"]
-    assert [msg.get("reason") for msg in snapshot_requests] == ["member_link_up"]
+    refresh_requests = [msg for msg in ws.messages if msg.get("t") in {"node.status.request", "node.catalog.request"}]
+    assert [msg.get("t") for msg in refresh_requests] == ["node.status.request", "node.catalog.request"]
+    assert {msg["reason"] for msg in refresh_requests} == {"test"}

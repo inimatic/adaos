@@ -422,7 +422,15 @@ def current_topology_projection(object_id: str, *, webspace_id: str | None = Non
 def current_task_packet(object_id: str, *, task_goal: str | None = None, webspace_id: str | None = None):
     tenant_id, owner_id = _control_plane_scope_refs()
     subject = current_object_model(object_id, webspace_id=webspace_id)
-    neighborhood = _neighborhood_objects_for(subject, current_control_plane_objects(webspace_id=webspace_id))
+    current_id = current_node_object().id
+    if str(getattr(subject, "id", "") or "").strip() == current_id:
+        # The current-node neighborhood has subnet-directory peers injected
+        # explicitly. Generic relation traversal misses members because they
+        # relate to the subnet rather than directly to the hub object.
+        neighborhood_projection = _current_node_neighborhood_projection(webspace_id=webspace_id)
+        neighborhood = list(getattr(neighborhood_projection, "objects", []) or [])
+    else:
+        neighborhood = _neighborhood_objects_for(subject, current_control_plane_objects(webspace_id=webspace_id))
     return apply_projection_governance(
         canonical_task_packet(subject, neighborhood, task_goal=task_goal),
         tenant_id=tenant_id,
