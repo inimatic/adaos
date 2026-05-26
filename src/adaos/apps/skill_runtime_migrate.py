@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import sys
 from typing import Any
 
 from adaos.adapters.db import SqliteSkillRegistry
@@ -273,13 +275,18 @@ def post_commit_check_installed_skills(*, deactivate_on_failure: bool = False) -
 
 def main() -> None:
     args = _parse_args()
+    if args.json:
+        with contextlib.redirect_stdout(sys.stderr):
+            if bool(args.post_commit):
+                payload = post_commit_check_installed_skills(deactivate_on_failure=bool(args.deactivate_on_failure))
+            else:
+                payload = migrate_installed_skills(run_tests=not bool(args.skip_tests))
+        print(json.dumps(payload, ensure_ascii=False))
+        return
     if bool(args.post_commit):
         payload = post_commit_check_installed_skills(deactivate_on_failure=bool(args.deactivate_on_failure))
     else:
         payload = migrate_installed_skills(run_tests=not bool(args.skip_tests))
-    if args.json:
-        print(json.dumps(payload, ensure_ascii=False))
-        return
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
