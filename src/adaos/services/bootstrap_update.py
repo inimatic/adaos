@@ -52,6 +52,8 @@ RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/sdk/data/bus.py",
     "src/adaos/services/skills_loader_importlib.py",
     "src/adaos/services/skill/manager.py",
+    "src/adaos/services/models/__init__.py",
+    "src/adaos/services/models/artifacts.py",
 )
 
 BOOTSTRAP_CRITICAL_PATHS: tuple[str, ...] = tuple(
