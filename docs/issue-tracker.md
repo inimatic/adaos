@@ -16,14 +16,15 @@ than a future base branch.
 
 ### Current Status
 
-Snapshot date: 2026-05-24.
+Snapshot date: 2026-05-26.
 
 Local comparison found that `inimatic/rev2026` and `stipot-com/rev2026` have
-diverged rather than forming a simple behind/ahead chain. `inimatic/rev2026`
-keeps 126 commits that are not in `stipot-com/rev2026`; `stipot-com/rev2026`
-keeps 42 commits that are not in `inimatic/rev2026`. A direct merge would risk
-reverting newer Inimatic work such as projection demand handling, status-card
-services, eventbus unsubscribe helpers, self-hygiene, update/install behavior,
+diverged rather than forming a simple behind/ahead chain. After the latest
+fetch, `inimatic/rev2026` keeps 303 commits that are not in
+`stipot-com/rev2026`; `stipot-com/rev2026` keeps 42 commits that are not in
+`inimatic/rev2026`. A direct merge would risk reverting newer Inimatic work
+such as projection demand handling, status-card services, eventbus unsubscribe
+helpers, self-hygiene, update/install behavior, client hosting/domain changes,
 and repository branding.
 
 `stipot-com/adaos#86` is the main useful donor slice. It is an open PR from
@@ -31,120 +32,177 @@ and repository branding.
 Its content is valuable, but it should be integrated as a topic harvest over
 `inimatic/rev2026`, not by adopting the `stipot-com` branch.
 
+Execution update, 2026-05-26: the useful PR #86 topic has been merged into
+`integration/stipot-final-harvest` and adjusted for Inimatic defaults. Neural
+NLU installation is opt-in (`adaos install --neural-nlu`), while runtime routing
+auto-detects an installed/active `neural_nlu_service_skill` when
+`ADAOS_NLU_NEURAL` is unset. The high-confidence donor patches for status
+registry initialization, stream owner metadata, bounded browser-session event
+pressure, supervisor memory finalization diagnostics, and skill-update handler
+reload have been reimplemented locally.
+
 ### Tasks
 
 #### SFH-001: Freeze donor references
 
-Status: planned.
+Status: completed locally.
 
 Actions:
 
-- [ ] Create an integration branch from current `inimatic/rev2026`, for
+- [x] Create an integration branch from current `inimatic/rev2026`, for
   example `integration/stipot-final-harvest`.
-- [ ] Record donor refs before integration:
+- [x] Record donor refs before integration:
   `stipot-com/rev2026` at `37f53cc4` and `stipot-com/pr-86` at `093cc861`.
-- [ ] Treat `stipot-com` as read-only donor input for this effort.
-- [ ] Avoid direct merge of `stipot-com/rev2026` into `inimatic/rev2026`.
+- [x] Treat `stipot-com` as read-only donor input for this effort.
+- [x] Avoid direct merge of `stipot-com/rev2026` into `inimatic/rev2026`.
 
 #### SFH-002: Integrate PR #86 Neural NLU package
 
-Status: planned.
+Status: implemented locally; external stand rollout still pending.
 
 Actions:
 
-- [ ] Harvest the PR #86 topic using merge-base `53e39b58`, not the current
+- [x] Harvest the PR #86 topic using merge-base `53e39b58`, not the current
   `stipot-com/rev2026` tip.
-- [ ] Resolve the expected conflict in
+- [x] Integrate the PR in layers: service-skill delivery, bridge diagnostics,
+  model/artifact workflows, Teacher/system-action feedback, then optional
+  voice-chat demo.
+- [x] Resolve the expected conflict in
   `src/adaos/apps/cli/commands/setup.py` by preserving current Inimatic
   install/autostart/update/retention behavior while adding
   `--neural-nlu/--no-neural-nlu`.
-- [ ] Move `neural_nlu_service_skill` to normal skill delivery if packaging and
+- [x] Move `neural_nlu_service_skill` to normal skill delivery if packaging and
   install/update flows can carry `skills/neural_nlu_service_skill`.
-- [ ] Keep Neural NLU dependencies isolated in the service-skill venv; do not
+- [x] Keep hot `nlp.intent.detect.neural` handling read-only with respect to
+  workspace/slot mutation; installation should happen through setup/update
+  paths, not parse fallback.
+- [x] Keep Neural NLU dependencies isolated in the service-skill venv; do not
   add `torch`, `numpy`, or `faiss-cpu` to the hub root venv.
-- [ ] Add Neural readiness, probe, diagnostics, reindex, and rebuild CLI
+- [x] Decide the production default separately from the code merge:
+  `adaos install` skips Neural NLU by default, `--neural-nlu` opts in, and the
+  pipeline auto-routes to Neural only when the service skill is installed/active
+  unless `ADAOS_NLU_NEURAL` explicitly forces or disables the stage.
+- [x] Add Neural readiness, probe, diagnostics, reindex, and rebuild CLI
   commands.
-- [ ] Add Neural usage statistics and `neural -> rasa` fallback outcome
+- [x] Add Neural usage statistics and `neural -> rasa` fallback outcome
   linkage.
-- [ ] Add NLU Teacher save-example backend and curated Neural training export.
-- [ ] Add the system action catalog and default NLU examples for current
+- [x] Add NLU Teacher save-example backend and curated Neural training export.
+- [x] Add the system action catalog and default NLU examples for current
   runtime-backed host actions.
-- [ ] Decide whether voice-chat Neural intent demo is enabled by default,
-  behind `ADAOS_VOICE_CHAT_INTENT_DEMO`, or kept as operator-only tooling.
+- [x] Decide whether voice-chat Neural intent demo is enabled by default,
+  behind `ADAOS_VOICE_CHAT_INTENT_DEMO`, or kept as operator-only tooling:
+  it is operator-only with `ADAOS_VOICE_CHAT_INTENT_DEMO=1`.
 
 #### SFH-003: Harvest small high-confidence patches from the 42 commits
 
-Status: planned.
+Status: completed locally.
 
 Actions:
 
-- [ ] Apply or reimplement `73c02720`: initialize lazy `ctx.status_registry`
+- [x] Apply or reimplement `73c02720`: initialize lazy `ctx.status_registry`
   before SDK status events are emitted.
-- [ ] Apply or reimplement `c2e5a0f0`: tag stream publishes with
+- [x] Apply or reimplement `c2e5a0f0`: tag stream publishes with
   `_meta.owner`, `_meta.skill_id`, and `_meta.skill_name`.
-- [ ] Keep these as small, reviewable patches rather than pulling the full
+- [x] Apply or reimplement the additive part of `8d4e7cd`: bound
+  `browser.session.changed` event pressure by default. Do not drop current Yjs
+  stream-control bounded topics while doing this.
+- [x] Apply or reimplement the additive memory summary fields from `8d4e7cd`:
+  `failure_reason` and `failure_stage`, plus the finalizing-session marker
+  diagnostics for missing runtime profile finalize markers.
+- [x] Apply or reimplement `eed06cf1`: reload live skill handlers after
+  `/api/skills/update`, using the current `_reload_live_skill_handlers` helper
+  already present in Inimatic code.
+- [x] Keep these as small, reviewable patches rather than pulling the full
   `stipot-com/rev2026` diff.
 
 #### SFH-004: Audit larger behavior from the 42 commits
 
-Status: planned.
+Status: audited locally; no additional broad donor patch accepted.
 
 Actions:
 
-- [ ] Check whether current Inimatic code already covers YWS client attempt
+- [x] Check whether current Inimatic code already covers YWS client attempt
   overlap guards, browser-session churn coalescing, and reconnect-storm
   behavior.
-- [ ] Check whether current supervisor code already covers compact watchdog
-  state, control-plane memory tripwire behavior, target mismatch recovery,
-  orphan slot cleanup, and slow-prewarm active-runtime preservation.
-- [ ] Check whether current core update code already covers slot venv reuse or
+- [x] Audit larger supervisor behavior: compact watchdog state, memory pressure
+  and tripwire overlap, target mismatch recovery, orphan slot cleanup, and
+  slow-prewarm active-runtime preservation.
+- [x] Check whether current core update code already covers slot venv reuse or
   equivalent seeded slot install behavior.
-- [ ] For any real gap, port behavior as a focused Inimatic-style patch instead
+- [x] Treat `d821f59f` as obsolete unless a newer `adaos-client` equivalent is
+  missing; current Inimatic submodule is already past the donor commit.
+- [x] For any real gap, port behavior as a focused Inimatic-style patch instead
   of cherry-picking branch history.
+
+Notes:
+
+- Deferred skill runtime migration, YWS attempt/churn guards, warm-switch memory
+  admission, seeded slot venv reuse, compact watchdog state, target mismatch
+  recovery, orphan-slot cleanup, and slow-prewarm preservation are already
+  present or superseded in current Inimatic code.
+- The donor control-plane memory tripwire was not ported as-is because its
+  default supervisor/runtime restart and state-file containment policy overlaps
+  current memory supervision and has higher production blast radius.
 
 #### SFH-005: Exclude known unsafe donor changes
 
-Status: planned.
+Status: completed locally.
 
 Actions:
 
-- [ ] Do not restore `stipot-com` repository URLs or branding into runtime
+- [x] Do not restore `stipot-com` repository URLs or branding into runtime
   defaults.
-- [ ] Do not delete current status-card service modules.
-- [ ] Do not remove projection demand APIs without an explicit replacement.
-- [ ] Do not remove eventbus unsubscribe helpers used by current runtime code.
-- [ ] Do not remove self-hygiene or current maintenance/update behavior as part
+- [x] Do not rewind `src/adaos/integrations/adaos-client`; keep current Inimatic
+  hosting/domain fixes unless a newer client donor commit is explicitly chosen.
+- [x] Do not delete current status-card service modules.
+- [x] Do not remove projection demand APIs without an explicit replacement.
+- [x] Do not remove eventbus unsubscribe helpers used by current runtime code.
+- [x] Do not remove self-hygiene or current maintenance/update behavior as part
   of the harvest.
-- [ ] Do not accept broad documentation cleanup that rewrites current Inimatic
+- [x] Do not accept broad documentation cleanup that rewrites current Inimatic
   roadmap state without matching code.
 
 #### SFH-006: Verify the harvest
 
-Status: planned.
+Status: partially verified locally; external stand rollout pending.
 
 Actions:
 
-- [ ] Run NLU-focused tests:
+- [x] Run NLU-focused tests:
   `test_neural_service_bridge.py`, `test_neural_skill_installer.py`,
   `test_interpreter_neural_cli.py`, `test_neural_usage_stats.py`,
   `test_nlu_teacher_save_example.py`, `test_system_actions_catalog.py`,
-  `test_rasa_service_bridge.py`, and `test_router_voice_chat.py`.
-- [ ] Run setup/install tests that cover `adaos install`, Rasa NLU bootstrap,
+  `test_rasa_service_bridge.py`, `test_nlu_pipeline_neural_routing.py`, and
+  `test_router_voice_chat.py`.
+- [x] Run setup/install tests that cover `adaos install`, Rasa NLU bootstrap,
   Neural NLU bootstrap, and `--no-neural-nlu`.
-- [ ] Run regression tests for status cards, projection runtime, eventbus,
+- [x] Run API/eventbus tests that cover skill-update handler reload and bounded
+  `browser.session.changed` pressure.
+- [x] Run regression tests for status cards, projection runtime, eventbus,
   supervisor, YWS, and core update behavior.
 - [ ] On a clean workspace, verify that Neural NLU install can prepare an
   isolated service-skill runtime without mutating the hot parse path.
 
+Local test evidence:
+
+- Passed targeted NLU/API/eventbus/status/projection/supervisor-memory suite.
+- Passed install/update/slot-migration/autostart/router/neural-artifact suite.
+- Passed `tests/test_nats_ws_transport.py` standalone.
+- A full `pytest` run without explicit ordering is still blocked by pre-existing
+  test collection pollution where older tests replace `sys.modules["nats"]`
+  before `test_nats_ws_transport.py` imports `nats.errors`.
+- A full run with `--ignore=tests/test_nats_ws_transport.py` was killed with
+  exit code 137 before completion in the local environment.
+
 #### SFH-007: Cut over away from `stipot-com`
 
-Status: planned.
+Status: in progress.
 
 Actions:
 
-- [ ] Update docs introduced by the harvest so they describe Inimatic current
+- [x] Update docs introduced by the harvest so they describe Inimatic current
   behavior and do not overstate roadmap completion.
-- [ ] Remove remaining runtime/doc/script references that point users to
+- [x] Remove remaining runtime/doc/script references that point users to
   `stipot-com` as an active upstream.
 - [ ] Record the final harvest summary: transferred features, intentionally
   skipped changes, tests run, and remaining risks.

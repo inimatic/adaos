@@ -44,7 +44,49 @@ _WEATHER_CITY_EN_RE = re.compile(
 _RULES_CACHE_TTL_S = 2.0
 _rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _rules_lock = asyncio.Lock()
-_USE_NEURAL_STAGE = os.getenv("ADAOS_NLU_NEURAL", "0").strip().lower() in {"1", "true", "yes", "on"}
+_NEURAL_SKILL_NAME = "neural_nlu_service_skill"
+_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
+_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled", "none"}
+
+
+def _neural_stage_policy() -> str:
+    raw = str(os.getenv("ADAOS_NLU_NEURAL", "auto") or "auto").strip().lower()
+    if raw in _TRUE_VALUES:
+        return "enabled"
+    if raw in _FALSE_VALUES:
+        return "disabled"
+    return "auto"
+
+
+def _neural_service_skill_installed() -> bool:
+    try:
+        ctx = get_ctx()
+        skills_root = Path(ctx.paths.skills_dir()).expanduser().resolve()
+    except Exception:
+        return False
+    if (skills_root / _NEURAL_SKILL_NAME / "skill.yaml").exists():
+        return True
+    try:
+        from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+        env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_NEURAL_SKILL_NAME)
+        version = env.resolve_active_version()
+        if not version:
+            return False
+        slot = env.read_active_slot(version)
+        runtime_skill = env.build_slot_paths(version, slot).src_dir / "skills" / _NEURAL_SKILL_NAME
+        return (runtime_skill / "skill.yaml").exists()
+    except Exception:
+        return False
+
+
+def _use_neural_stage() -> bool:
+    policy = _neural_stage_policy()
+    if policy == "enabled":
+        return True
+    if policy == "disabled":
+        return False
+    return _neural_service_skill_installed()
 
 
 def invalidate_dynamic_regex_cache(*, webspace_id: str | None = None) -> None:
@@ -97,6 +139,31 @@ def _resolve_webspace_id(payload: Mapping[str, Any]) -> str:
     if isinstance(token, str) and token.strip():
         return token.strip()
     return default_webspace_id()
+
+
+def _request_locale(payload: Mapping[str, Any]) -> str | None:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    token = payload.get("request_locale") or payload.get("locale") or meta.get("request_locale") or meta.get("locale")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def _preferred_locales(payload: Mapping[str, Any]) -> list[str]:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    raw = payload.get("preferred_locales") or meta.get("preferred_locales")
+    if isinstance(raw, str):
+        items: list[Any] = raw.split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        items = []
+    out: list[str] = []
+    for item in items:
+        token = str(item or "").strip()
+        if token and token not in out:
+            out.append(token)
+    return out
 
 
 def _request_id(payload: Mapping[str, Any], *, text: str, webspace_id: str) -> str:
@@ -388,6 +455,8 @@ async def _on_detect_request(evt: Any) -> None:
     text = text.strip()
 
     meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    locale = _request_locale(payload)
+    preferred_locales = _preferred_locales(payload)
 
     ctx = get_ctx()
     webspace_id = _resolve_webspace_id(payload)
@@ -441,7 +510,8 @@ async def _on_detect_request(evt: Any) -> None:
         raw=raw,
         meta=meta,
     )
-    downstream_event = "nlp.intent.detect.neural" if _USE_NEURAL_STAGE else "nlp.intent.detect.rasa"
+    use_neural_stage = _use_neural_stage()
+    downstream_event = "nlp.intent.detect.neural" if use_neural_stage else "nlp.intent.detect.rasa"
     _emit_stage(
         ctx,
         stage="pipeline",
@@ -449,13 +519,14 @@ async def _on_detect_request(evt: Any) -> None:
         text=text,
         webspace_id=webspace_id,
         request_id=rid,
-        via="neural" if _USE_NEURAL_STAGE else "rasa",
+        via="neural" if use_neural_stage else "rasa",
         reason=downstream_event,
         meta=meta,
     )
-    bus_emit(
-        ctx.bus,
-        downstream_event,
-        {"text": text, "webspace_id": webspace_id, "request_id": rid, "_meta": meta},
-        source="nlu.pipeline",
-    )
+    downstream_payload: dict[str, Any] = {"text": text, "webspace_id": webspace_id, "request_id": rid, "_meta": meta}
+    if locale:
+        downstream_payload["locale"] = locale
+        downstream_payload["request_locale"] = locale
+    if preferred_locales:
+        downstream_payload["preferred_locales"] = preferred_locales
+    bus_emit(ctx.bus, downstream_event, downstream_payload, source="nlu.pipeline")
