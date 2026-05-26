@@ -119,3 +119,14 @@ adaos node yjs scenario --webspace default --scenario-id web_desktop
 ```
 
 The `node yjs` command group is the current operator-facing interface for synchronized webspace and desktop state.
+
+For a browser-side Yjs snapshot, enable the client debug console in DevTools and reload the page:
+
+```js
+localStorage.setItem('adaos.debug', '1')
+location.reload()
+```
+
+After the reload, press `Alt+W` in the browser window. The client prints
+`[YDoc Snapshot]` to the browser console with the current `ui`, `data`, and
+`registry` branches.

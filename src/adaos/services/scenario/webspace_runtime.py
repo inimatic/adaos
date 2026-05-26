@@ -3416,6 +3416,9 @@ class WebspaceScenarioRuntime:
                     continue
                 if _catalog_entry_is_foreign_relay(item, node_id=node_id):
                     continue
+                scenario_id = str(item.get("scenario_id") or "").strip()
+                if scenario_id and not _scenario_exists_for_switch(scenario_id, space="workspace"):
+                    continue
                 entry = _scope_remote_catalog_entry_id(
                     _apply_node_context_to_ui(item, display, node_id=node_id, modal_id_map=modal_id_map),
                     node_id=node_id,

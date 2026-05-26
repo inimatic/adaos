@@ -12,10 +12,10 @@ from adaos.services.router.media_routes import resolve_media_route_intent
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
-MEDIA_SKILL_NAME = "infrastate_skill"
+MEDIA_SKILL_NAME = "mediaserver"
 MEDIA_STORAGE_SUBPATH = "data/files"
 ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES = 2 * 1024 * 1024
-MEDIA_RUNTIME_SCOPE = "hub_local_media_debug"
+MEDIA_RUNTIME_SCOPE = "media_server"
 ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 # Keep chunks below the default 1 MiB NATS payload limit after base64/json overhead.
 ROOT_MEDIA_RELAY_CHUNK_BYTES = 512 * 1024
