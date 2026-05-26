@@ -398,7 +398,7 @@ def _managed_file_payload(target: Path, dependencies: list[str]) -> dict[str, An
 
 def _write_managed_metadata(target: Path, dependencies: list[str]) -> dict[str, Any]:
     payload = _managed_file_payload(target, dependencies)
-    (target / _MANAGED_META).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (target / _MANAGED_META).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return payload
 
 
