@@ -8,6 +8,9 @@ import httpx
 import ssl, os
 import logging
 import time
+import json
+import hashlib
+import uuid
 
 
 class RootHttpError(RuntimeError):
@@ -542,6 +545,198 @@ class RootHttpClient:
     def get_scenario_draft_archive(self, **kw) -> dict:
         kw["kind"] = "scenarios"
         return self.get_draft_archive(**kw)
+
+    def get_skill_model_manifest(
+        self,
+        *,
+        name: str,
+        label: str = "current",
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+        timeout: float = 15.0,
+    ) -> dict:
+        return dict(
+            self._request(
+                "GET",
+                f"/v1/skills/{name}/models/{label}/manifest",
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=timeout,
+            )
+        )
+
+    def upload_skill_model_artifact(
+        self,
+        *,
+        name: str,
+        artifact: str,
+        file_path: Path,
+        sha256: str,
+        size_bytes: int,
+        label: str = "current",
+        metadata: Mapping[str, Any] | None = None,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+        timeout: float = 900.0,
+    ) -> dict:
+        if size_bytes > 16 * 1024 * 1024:
+            return self.upload_skill_model_artifact_chunked(
+                name=name,
+                artifact=artifact,
+                file_path=file_path,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                label=label,
+                metadata=metadata,
+                verify=verify,
+                cert=cert,
+                timeout=timeout,
+            )
+        params: dict[str, Any] = {"sha256": sha256, "size_bytes": str(size_bytes)}
+        if metadata:
+            params["metadata"] = json.dumps(dict(metadata), ensure_ascii=False, separators=(",", ":"))
+        with Path(file_path).open("rb") as fh:
+            return dict(
+                self._request(
+                    "POST",
+                    f"/v1/skills/{name}/models/{label}/{artifact}",
+                    data=fh,
+                    params=params,
+                    headers={"Content-Type": "application/octet-stream"},
+                    verify=(self.verify if verify is None else verify),
+                    cert=(self.cert if cert is None else cert),
+                    timeout=timeout,
+                )
+            )
+
+    def upload_skill_model_artifact_chunked(
+        self,
+        *,
+        name: str,
+        artifact: str,
+        file_path: Path,
+        sha256: str,
+        size_bytes: int,
+        label: str = "current",
+        metadata: Mapping[str, Any] | None = None,
+        chunk_size: int = 512 * 1024,
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+        timeout: float = 900.0,
+    ) -> dict:
+        upload_id = uuid.uuid4().hex
+        total_chunks = 0
+        with Path(file_path).open("rb") as fh:
+            while True:
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    break
+                chunk_sha = hashlib.sha256(chunk).hexdigest()
+                for attempt in range(5):
+                    try:
+                        self._request(
+                            "POST",
+                            f"/v1/skills/{name}/models/{label}/{artifact}/chunks/{upload_id}/{total_chunks}",
+                            data=chunk,
+                            params={"chunk_sha256": chunk_sha},
+                            headers={"Content-Type": "application/octet-stream"},
+                            verify=(self.verify if verify is None else verify),
+                            cert=(self.cert if cert is None else cert),
+                            timeout=timeout,
+                        )
+                        break
+                    except RootHttpError as exc:
+                        if attempt >= 4 or exc.status_code not in {0, 502, 503, 504}:
+                            raise
+                        time.sleep(min(8.0, 0.5 * (2 ** attempt)))
+                total_chunks += 1
+        payload: dict[str, Any] = {
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "total_chunks": total_chunks,
+        }
+        if metadata:
+            payload["metadata"] = dict(metadata)
+        return dict(
+            self._request(
+                "POST",
+                f"/v1/skills/{name}/models/{label}/{artifact}/chunks/{upload_id}/complete",
+                json=payload,
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=timeout,
+            )
+        )
+
+    def download_skill_model_artifact(
+        self,
+        *,
+        name: str,
+        artifact: str,
+        dest_path: Path,
+        label: str = "current",
+        verify: str | bool | ssl.SSLContext = None,
+        cert: tuple[str, str] | None = None,
+        timeout: float = 900.0,
+    ) -> dict:
+        dest = Path(dest_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        effective_verify = self.verify if verify is None else verify
+        if isinstance(effective_verify, str):
+            mode = (os.getenv("ADAOS_ROOT_CA_MODE") or "append").strip().lower()
+            if mode == "append":
+                ca_path = Path(effective_verify)
+                if ca_path.exists():
+                    ctx = ssl.create_default_context()
+                    ctx.load_verify_locations(cafile=str(ca_path))
+                    effective_verify = ctx
+        started = time.perf_counter()
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        try:
+            with httpx.Client(
+                base_url=self.base_url,
+                timeout=timeout,
+                verify=effective_verify,
+                cert=(self.cert if cert is None else cert),
+            ) as client:
+                with client.stream(
+                    "GET",
+                    f"/v1/skills/{name}/models/{label}/{artifact}",
+                    headers=dict(self.default_headers) or None,
+                ) as response:
+                    if response.status_code >= 400:
+                        content: Any | None = None
+                        try:
+                            content = response.json()
+                        except Exception:
+                            content = response.text
+                        message = response.text or f"HTTP {response.status_code}"
+                        error_code = None
+                        if isinstance(content, Mapping):
+                            detail = content.get("detail") or content.get("message") or content.get("error")
+                            if isinstance(detail, str):
+                                message = detail
+                            code = content.get("code") or content.get("error")
+                            if isinstance(code, str):
+                                error_code = code
+                        raise RootHttpError(message, status_code=response.status_code, error_code=error_code, payload=content)
+                    with tmp.open("wb") as fh:
+                        for chunk in response.iter_bytes():
+                            if chunk:
+                                fh.write(chunk)
+                    meta = {
+                        "sha256": response.headers.get("x-adaos-model-sha256"),
+                        "size_bytes": response.headers.get("x-adaos-model-size"),
+                        "version_id": response.headers.get("x-adaos-model-version"),
+                    }
+            os.replace(tmp, dest)
+            _log_root_http_success("GET", f"/v1/skills/{name}/models/{label}/{artifact}", time.perf_counter() - started, 200)
+            return {key: value for key, value in meta.items() if value}
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def push_scenario_draft(
         self,

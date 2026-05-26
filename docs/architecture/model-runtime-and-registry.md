@@ -220,6 +220,7 @@ models:
   artifacts:
     weights:
       path: models/face-defect/model.pt
+      install_path: data/files/models/model.pt
       capability: image-segmentation
       dependency_profile: torch-cpu-py311
 ```
@@ -267,11 +268,14 @@ The MVP storage design is:
 Root-hosted artifact store
   /models/<skill_id>/<label-or-global_model_version>/<artifact>
 
-Node-local cache
+Node-local shared/system cache
   .adaos/models/cache/<sha256-or-model-id>/
 
-Node-local installed state
+Node-local shared/system installed state
   .adaos/models/installed/<model-id>/<version>/
+
+Skill-owned installed state
+  skills/.runtime/<skill_id>/<runtime-bucket>/data/files/models/<artifact>
 
 Runtime active/candidate state
   .adaos/state/models/
@@ -288,8 +292,11 @@ state:
 - each skill may keep up to two root-hosted model slots: `current` and
   `previous`;
 - `skill push` calculates the model hash from the single declared weight file;
-- when that weight-file hash differs from `current`, root moves the old
+- when that weight-file hash equals root `current`, `skill push` skips model
+  upload and leaves root labels unchanged;
+- when that weight-file hash differs from root `current`, root moves the old
   `current` to `previous` and writes the new artifact as `current`;
+- rollback uses the root-hosted `previous` slot as the source artifact set;
 - every accepted model upload receives a globally observable root version id;
   the exact format is not important for MVP as long as it supports audit,
   diagnostics, and rollback inspection;
@@ -316,6 +323,14 @@ https://...
 file://...
 oci://...
 ```
+
+The node-local `.adaos/models/cache` and `.adaos/models/installed` directories
+are reserved for core, system, or explicitly shared registry-managed models.
+They must not become the default storage for private skill artifacts. A skill
+owns its runtime data, including model weights, FAISS indexes, and model-side
+metadata, through its own runtime bucket under `data/files/models`. Shared cache
+entries require an explicit sharing/lease policy; otherwise the install path is
+skill-local.
 
 ## Python Dependency Environments
 

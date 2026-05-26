@@ -42,8 +42,10 @@ exist in specialized systems:
 - [ ] Support model requirements in skill manifests without forcing immediate
   skill migration.
 - [ ] Add local registry state under `.adaos/models/registry`.
-- [ ] Add installed model state under `.adaos/models/installed`.
-- [ ] Add cache state under `.adaos/models/cache`.
+- [ ] Add shared/system installed model state under `.adaos/models/installed`.
+- [ ] Add shared/system cache state under `.adaos/models/cache`.
+- [ ] Keep skill-owned installed artifacts under the skill runtime bucket,
+  `data/files/models`, not under the global model cache.
 - [ ] Record provenance: source URI, checksum, size, created time, installed
   time, owning skill or system component, and active/candidate status.
 - [ ] Add checksum verification for every non-test artifact.
@@ -59,8 +61,10 @@ exist in specialized systems:
 - [ ] Make root move labels on accepted upload: old `current` becomes
   `previous`, new artifact becomes `current`.
 - [ ] Calculate model rotation hash from the single declared weight file.
-- [ ] If the pushed weight-file hash equals `current`, skip upload and keep
-  labels unchanged.
+- [ ] If the pushed weight-file hash equals root `current`, skip upload and keep
+  labels unchanged; upload during `skill push` happens only when the model
+  changed.
+- [ ] Use root `previous` as the rollback source for skill model artifacts.
 - [ ] Enforce the MVP retention rule: at most two stored model slots per
   `skill_id`, `current` and `previous`.
 - [ ] Ensure root records a globally observable model version id for every
@@ -75,8 +79,10 @@ exist in specialized systems:
 - [ ] Keep URI resolver design compatible with future `oci://`.
 - [ ] On partial or failed download, mark install unsuccessful and delete the
   temporary file.
-- [ ] Add artifact lock files so concurrent installs do not corrupt cache.
-- [ ] Add disk quota and pruning policy for node-local cache.
+- [ ] Add artifact lock files so concurrent installs do not corrupt
+  `data/files/models`.
+- [ ] Add disk quota and pruning policy for node-local shared cache separately
+  from skill-owned runtime data.
 - [ ] Add CLI commands:
   `adaos models list`, `search`, `show`, `install`, `verify`, `prune`.
 
@@ -112,6 +118,8 @@ exist in specialized systems:
 ## Phase 6: Skill Manifest and CLI Integration
 
 - [ ] Add `models.artifacts.weights` or equivalent section to skill manifests.
+- [ ] Support `install_path` under `models.artifacts.weights`, defaulting to
+  `data/files/models/<declared-file-name>`.
 - [ ] Add dependency profile requirements to skill manifests.
 - [ ] Add install-time planning for model artifacts and dependency profiles.
 - [ ] Support optional model requirements and degraded skill mode.
@@ -212,6 +220,10 @@ artifact/dependency MVP and the Neural NLU / face vision pilots.
 - [ ] A skill can declare a model requirement without placing weights in git.
 - [ ] `skill push` uploads changed model artifacts to root under `skill_id`.
 - [ ] Model rotation hash is based on the declared weight file only.
+- [ ] If the declared weight-file hash did not change, `skill push` does not
+  re-upload the model.
+- [ ] Installed skill-owned artifacts land in
+  `skills/.runtime/<skill_id>/<bucket>/data/files/models`.
 - [ ] Installed artifacts are checksummed and listed by CLI.
 - [ ] Partial downloads leave no installed artifact behind.
 - [ ] Root keeps only `current` and `previous` model versions per

@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import time
@@ -31,7 +32,14 @@ from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext, get_ctx, use_ctx
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
-from adaos.services.skill.tests_runner import TestResult, run_tests
+from adaos.services.skill.tests_runner import TestResult, run_tests as run_skill_tests
+from adaos.services.models.artifacts import (
+    declared_model_artifacts,
+    install_downloaded_artifact,
+    install_local_artifact,
+    local_artifact_state,
+)
+from adaos.services.root.client import RootHttpClient, RootHttpError
 from adaos.skills.runtime_runner import execute_tool
 from adaos.services.skill.validation import SkillValidationService, ValidationReport
 from adaos.services.crypto.secrets_service import SecretsService
@@ -1311,6 +1319,7 @@ class SkillManager:
         self._ensure_skill_subpath_materialized(root, sub)
         version = self._bump_skill_manifest_for_push(root / "skills" / sub) if bump else None
         upsert_workspace_registry_entry(root, "skills", root / "skills" / sub)
+        self._push_declared_model_artifacts(root / "skills" / sub, skill_name=sub)
         if version and getattr(self, "reg", None) is not None:
             try:
                 self.reg.register(sub, active_version=version)
@@ -1351,6 +1360,157 @@ class SkillManager:
         if sha != "nothing-to-commit":
             self.ctx.git.push(str(root))
         return sha
+
+    def _root_client(self) -> RootHttpClient:
+        settings = self.ctx.settings if getattr(self, "ctx", None) is not None else self.settings
+        if settings is None:
+            settings = get_ctx().settings
+        client = RootHttpClient.from_settings(settings)
+        try:
+            from adaos.services.node_config import load_config
+
+            cfg = load_config()
+            base_url = str(getattr(cfg.root_settings, "base_url", "") or "").strip()
+            if base_url:
+                client.base_url = base_url
+            ca_path = cfg.ca_cert_path()
+            cert_path = cfg.hub_cert_path()
+            key_path = cfg.hub_key_path()
+            if ca_path.exists():
+                verify_ctx = ssl.create_default_context()
+                verify_ctx.load_verify_locations(cafile=str(ca_path))
+                client.verify = verify_ctx
+            if cert_path.exists() and key_path.exists():
+                client.cert = (str(cert_path), str(key_path))
+        except Exception:
+            pass
+        return client
+
+    def _push_declared_model_artifacts(self, skill_dir: Path, *, skill_name: str) -> list[dict[str, Any]]:
+        manifest = self._load_manifest(skill_dir)
+        artifacts = declared_model_artifacts(manifest, skill_dir=skill_dir)
+        if not artifacts:
+            return []
+        client = self._root_client()
+        pushed: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            state = local_artifact_state(artifact)
+            if state is None:
+                raise FileNotFoundError(
+                    f"model artifact '{artifact.key}' for skill '{skill_name}' is declared but source file is missing: "
+                    f"{artifact.source_path or artifact.uri or artifact.artifact_name}"
+                )
+            try:
+                current = client.get_skill_model_manifest(name=skill_name, label="current")
+            except RootHttpError as exc:
+                if exc.status_code != 404:
+                    raise
+                current = {}
+            manifest_payload = current.get("manifest") if isinstance(current.get("manifest"), Mapping) else current
+            if (
+                isinstance(manifest_payload, Mapping)
+                and manifest_payload.get("sha256") == state.sha256
+                and manifest_payload.get("artifact") == artifact.artifact_name
+            ):
+                pushed.append(
+                    {
+                        "key": artifact.key,
+                        "artifact": artifact.artifact_name,
+                        "sha256": state.sha256,
+                        "size_bytes": state.size_bytes,
+                        "skipped": True,
+                    }
+                )
+                continue
+            result = client.upload_skill_model_artifact(
+                name=skill_name,
+                artifact=artifact.artifact_name,
+                file_path=state.path,
+                sha256=state.sha256,
+                size_bytes=state.size_bytes,
+                metadata={
+                    "key": artifact.key,
+                    "capability": artifact.capability,
+                    "dependency_profile": artifact.dependency_profile,
+                    "install_path": str(artifact.install_path).replace("\\", "/"),
+                },
+            )
+            pushed.append(
+                {
+                    "key": artifact.key,
+                    "artifact": artifact.artifact_name,
+                    "sha256": state.sha256,
+                    "size_bytes": state.size_bytes,
+                    "skipped": bool(result.get("skipped")),
+                    "version_id": (result.get("manifest") or {}).get("version_id") if isinstance(result.get("manifest"), Mapping) else None,
+                }
+            )
+        return pushed
+
+    def _install_declared_model_artifacts(
+        self,
+        *,
+        name: str,
+        manifest: Mapping[str, Any],
+        skill_dir: Path,
+        slot: SkillSlotPaths,
+    ) -> list[dict[str, Any]]:
+        artifacts = declared_model_artifacts(manifest, skill_dir=skill_dir)
+        if not artifacts:
+            return []
+        slot.data_root.mkdir(parents=True, exist_ok=True)
+        client: RootHttpClient | None = None
+        installed: list[dict[str, Any]] = []
+        for artifact in artifacts:
+            state = local_artifact_state(artifact)
+            if state is not None:
+                installed.append(
+                    install_local_artifact(
+                        state,
+                        data_root=slot.data_root,
+                        provenance={"source_path": str(state.path)},
+                    )
+                )
+                continue
+            if client is None:
+                client = self._root_client()
+            remote = client.get_skill_model_manifest(name=name, label="current")
+            manifest_payload = remote.get("manifest") if isinstance(remote.get("manifest"), Mapping) else remote
+            if not isinstance(manifest_payload, Mapping):
+                raise RuntimeError(f"root did not return model manifest for skill '{name}'")
+            expected_sha = str(manifest_payload.get("sha256") or artifact.expected_sha256 or "").strip()
+            if not expected_sha:
+                raise RuntimeError(f"model artifact '{artifact.key}' has no checksum in root manifest")
+            expected_size_raw = manifest_payload.get("size_bytes") or artifact.expected_size_bytes
+            expected_size = int(expected_size_raw) if expected_size_raw not in (None, "") else None
+            tmp = slot.tmp_dir / "models" / f"{artifact.artifact_name}.download"
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                client.download_skill_model_artifact(
+                    name=name,
+                    artifact=artifact.artifact_name,
+                    dest_path=tmp,
+                    label="current",
+                )
+                installed.append(
+                    install_downloaded_artifact(
+                        artifact,
+                        data_root=slot.data_root,
+                        downloaded_path=tmp,
+                        expected_sha256=expected_sha,
+                        expected_size_bytes=expected_size,
+                        provenance={
+                            "root_version_id": manifest_payload.get("version_id"),
+                            "label": "current",
+                        },
+                    )
+                )
+            finally:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        return installed
 
     def _ensure_skill_subpath_materialized(self, root: Path, name: str) -> None:
         skill_dir = root / "skills" / name
@@ -1467,6 +1627,14 @@ class SkillManager:
             python_paths=python_paths,
         )
         lifecycle["migrate"] = {"ok": True, "mode": str(data_migration.get("mode") or "shared")}
+        model_artifacts = self._install_declared_model_artifacts(
+            name=name,
+            manifest=resolved,
+            skill_dir=skill_dir,
+            slot=slot,
+        )
+        if model_artifacts:
+            lifecycle["models"] = {"ok": True, "artifacts": model_artifacts}
 
         tests: Dict[str, TestResult] = {}
         package_dir = getattr(self.ctx.paths, "package_dir", None)
@@ -1480,7 +1648,7 @@ class SkillManager:
             extra_paths = list(python_paths)
             if package_root:
                 extra_paths.append(str(package_root))
-            tests = run_tests(
+            tests = run_skill_tests(
                 staged_dir,
                 log_path=log_file,
                 interpreter=interpreter,
@@ -2598,7 +2766,16 @@ class SkillManager:
         if destination_root.exists():
             self._remove_tree(destination_root)
         namespace_root.mkdir(parents=True, exist_ok=True)
-        ignore = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "*.pyo", ".runtime")
+        ignore = shutil.ignore_patterns(
+            ".git",
+            "__pycache__",
+            "*.pyc",
+            "*.pyo",
+            ".runtime",
+            "*.pt",
+            "*.bin",
+            "*.safetensors",
+        )
         shutil.copytree(source, target, ignore=ignore)
         package_init = target / "__init__.py"
         if not package_init.exists():
@@ -3827,6 +4004,7 @@ class SkillManager:
             "policy_overrides": dict(policy_overrides),
             "secrets": self._preserve_secret_placeholders(manifest.get("secrets", [])),
             "events": manifest.get("events"),
+            "models": manifest.get("models"),
             "slot_root": str(slot.root),
         }
 
@@ -3950,11 +4128,19 @@ class SkillManager:
             python_paths=python_paths,
         )
         lifecycle["migrate"] = {"ok": True, "mode": str(data_migration.get("mode") or "shared")}
+        model_artifacts = self._install_declared_model_artifacts(
+            name=name,
+            manifest=resolved,
+            skill_dir=skill_dir,
+            slot=slot,
+        )
+        if model_artifacts:
+            lifecycle["models"] = {"ok": True, "artifacts": model_artifacts}
 
         tests: Dict[str, TestResult] = {}
         if run_tests:
             log_file = slot.logs_dir / "tests.log"
-            tests = run_tests(
+            tests = run_skill_tests(
                 staged_dir,
                 log_path=log_file,
                 interpreter=interpreter,
