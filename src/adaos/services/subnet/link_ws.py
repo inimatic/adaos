@@ -139,6 +139,10 @@ async def subnet_ws(websocket: WebSocket) -> None:
         await link.send_json(
             {"t": "hello.ack", "ok": True, "hub_node_id": conf.node_id, "subnet_id": conf.subnet_id, "server_time": time.time()}
         )
+        try:
+            await mgr.refresh_member_after_connect(node_id, reason="member_link_connected")
+        except Exception:
+            _log.debug("failed to request member state refresh after connect node_id=%s", node_id, exc_info=True)
 
         while True:
             try:
@@ -179,6 +183,21 @@ async def subnet_ws(websocket: WebSocket) -> None:
                 node_names = msg.get("node_names") or []
                 if isinstance(node_names, list):
                     await mgr.update_member_metadata(node_id, node_names=list(node_names))
+                continue
+
+            if t == "node.status":
+                status = msg.get("status")
+                if isinstance(status, dict):
+                    await mgr.update_member_status(node_id, status=status)
+                continue
+
+            if t == "node.catalog":
+                snapshot = msg.get("snapshot")
+                catalog = msg.get("catalog")
+                if isinstance(snapshot, dict):
+                    await mgr.update_member_status(node_id, status=snapshot)
+                elif isinstance(catalog, dict):
+                    await mgr.update_member_status(node_id, status={"desktop_catalog": catalog, "captured_at": time.time()})
                 continue
 
             if t == "node.snapshot":

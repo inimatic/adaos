@@ -280,15 +280,6 @@ def _member_infrastate_projection_min_interval_s() -> float:
     return max(5.0, min(300.0, value))
 
 
-def _member_snapshot_refresh_event_min_interval_s() -> float:
-    raw = str(os.getenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_REFRESH_EVENT_MIN_INTERVAL_S") or "").strip()
-    try:
-        value = float(raw or 30.0)
-    except Exception:
-        value = 30.0
-    return max(0.0, min(300.0, value))
-
-
 def _core_public_version(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -594,7 +585,6 @@ class HubLinkManager:
         self._lock = asyncio.Lock()
         self._hub_event_total = 0
         self._hub_core_update_broadcast_total = 0
-        self._snapshot_refresh_tasks: dict[str, asyncio.Task] = {}
         self._yjs_ingest_total = 0
         self._yjs_ingest_bytes = 0
         self._yjs_live_apply_total = 0
@@ -620,55 +610,6 @@ class HubLinkManager:
         self._last_member_infrastate_projection_at = 0.0
         self._last_member_infrastate_projection_node_id = ""
         self._last_member_infrastate_projection_webspace_id = ""
-        self._member_snapshot_refresh_event_last_at: dict[str, float] = {}
-
-    @staticmethod
-    def _member_snapshot_followup_delay_s() -> float:
-        raw = str(os.getenv("ADAOS_SUBNET_MEMBER_SNAPSHOT_FOLLOWUP_DELAY_S") or "").strip()
-        try:
-            value = float(raw or 3.0)
-        except Exception:
-            value = 3.0
-        return max(0.5, min(30.0, value))
-
-    def _cancel_snapshot_refresh_task(self, node_id: str) -> None:
-        task = self._snapshot_refresh_tasks.pop(str(node_id or "").strip(), None)
-        if task and not task.done():
-            task.cancel()
-
-    def _schedule_snapshot_followup_refresh(self, node_id: str) -> None:
-        node_key = str(node_id or "").strip()
-        if not node_key:
-            return
-        self._cancel_snapshot_refresh_task(node_key)
-
-        async def _runner() -> None:
-            try:
-                await asyncio.sleep(self._member_snapshot_followup_delay_s())
-                link = await self._get_link(node_key)
-                if not link:
-                    return
-                if _snapshot_has_desktop_material(link.node_snapshot):
-                    return
-                await self.request_member_snapshot(node_key, reason="member_link_followup")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.debug(
-                    "failed to request follow-up member snapshot node_id=%s",
-                    node_key,
-                    exc_info=True,
-                )
-            finally:
-                current = self._snapshot_refresh_tasks.get(node_key)
-                if current is task:
-                    self._snapshot_refresh_tasks.pop(node_key, None)
-
-        task = asyncio.create_task(
-            _runner(),
-            name=f"member-snapshot-followup:{node_key}",
-        )
-        self._snapshot_refresh_tasks[node_key] = task
 
     async def _push_node_display_assignment(self, node_id: str) -> None:
         link = await self._get_link(node_id)
@@ -740,32 +681,46 @@ class HubLinkManager:
                         fut.set_exception(ConnectionError("link_replaced"))
             except Exception:
                 pass
+        lifecycle_payload = {
+            "node_id": node_id,
+            "hostname": hostname,
+            "roles": list(roles or []),
+            "node_names": list(node_names or []),
+            "reconnected": bool(prev is not None),
+        }
+        _publish_link_event("subnet.member.link.up", lifecycle_payload)
         _publish_link_event(
-            "subnet.member.link.up",
-            {
-                "node_id": node_id,
-                "hostname": hostname,
-                "roles": list(roles or []),
-                "node_names": list(node_names or []),
-            },
+            "subnet.member.reconnected" if prev is not None else "subnet.member.connected",
+            lifecycle_payload,
         )
+        # Do not push hub frames before hello.ack; the member waits for ack as
+        # the first response and early frames can look like a failed handshake.
+        return link
+
+    async def refresh_member_after_connect(self, node_id: str, *, reason: str = "member_link_connected") -> dict[str, Any]:
+        link = await self._get_link(node_id)
+        if not link:
+            return {"ok": False, "error": "member_not_connected", "node_id": node_id}
+        sent: list[str] = []
+        for msg_type in ("node.status.request", "node.catalog.request"):
+            try:
+                await link.send_json({"t": msg_type, "reason": str(reason or "member_link_connected"), "ts": time.time()})
+                sent.append(msg_type)
+            except Exception:
+                _log.debug("failed to send %s after connect node_id=%s", msg_type, node_id, exc_info=True)
         try:
             await self._push_node_display_assignment(node_id)
         except Exception:
-            _log.debug("failed to push node display assignment on register node_id=%s", node_id, exc_info=True)
+            _log.debug("failed to push node display assignment after connect node_id=%s", node_id, exc_info=True)
         try:
             await self._push_current_core_update_status(node_id)
         except Exception:
-            _log.debug("failed to push current core.update.status on register node_id=%s", node_id, exc_info=True)
-        try:
-            await self.request_member_snapshot(node_id, reason="member_link_up")
-        except Exception:
-            _log.debug("failed to request initial member snapshot on register node_id=%s", node_id, exc_info=True)
-        self._schedule_snapshot_followup_refresh(node_id)
-        return link
+            _log.debug("failed to push current core.update.status after connect node_id=%s", node_id, exc_info=True)
+        payload = {"node_id": node_id, "reason": str(reason or "member_link_connected"), "requested": sent}
+        _publish_link_event("subnet.member.state.refresh.requested", payload)
+        return {"ok": True, **payload}
 
     async def unregister(self, node_id: str) -> None:
-        self._cancel_snapshot_refresh_task(node_id)
         async with self._lock:
             link = self._links.pop(node_id, None)
         if not link:
@@ -776,7 +731,9 @@ class HubLinkManager:
                     fut.set_exception(ConnectionError("link_closed"))
         except Exception:
             pass
-        _publish_link_event("subnet.member.link.down", {"node_id": node_id})
+        payload = {"node_id": node_id}
+        _publish_link_event("subnet.member.link.down", payload)
+        _publish_link_event("subnet.member.lost", payload)
 
     def is_connected(self, node_id: str) -> bool:
         return node_id in self._links
@@ -891,39 +848,31 @@ class HubLinkManager:
             self._last_member_infrastate_projection_node_id = node_key
             self._last_member_infrastate_projection_webspace_id = ws_id
 
-    def _maybe_publish_member_snapshot_refreshed_event(
-        self,
-        node_id: str,
-        *,
-        snapshot: dict[str, Any],
-        payload: dict[str, Any],
-        changed: bool,
-    ) -> None:
-        node_key = str(node_id or "").strip()
-        if not node_key or changed or not _snapshot_has_desktop_material(snapshot):
-            return
-        now = time.time()
-        min_interval = _member_snapshot_refresh_event_min_interval_s()
-        last_at = float(self._member_snapshot_refresh_event_last_at.get(node_key) or 0.0)
-        if min_interval > 0 and last_at > 0 and now - last_at < min_interval:
-            return
-        event_payload = dict(payload or {})
-        event_payload["refresh_reason"] = "unchanged_snapshot_with_desktop_material"
-        if _publish_link_event("subnet.member.snapshot.refreshed", event_payload):
-            self._member_snapshot_refresh_event_last_at[node_key] = now
-
-    async def update_member_snapshot(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
+    async def update_member_status(self, node_id: str, *, status: dict[str, Any]) -> dict[str, Any]:
         link = await self._get_link(node_id)
         if not link:
             return {"ok": False, "error": "member_not_connected"}
-        snap = dict(snapshot or {})
+        incoming = dict(status or {})
+        previous = link.node_snapshot if isinstance(link.node_snapshot, dict) else {}
+        snap = dict(previous)
+        snap.update(incoming)
+        if "capacity" not in incoming and isinstance(previous.get("capacity"), dict):
+            snap["capacity"] = dict(previous.get("capacity") or {})
+        if "desktop_catalog" in incoming:
+            if isinstance(incoming.get("desktop_catalog"), dict):
+                snap["desktop_catalog"] = dict(incoming.get("desktop_catalog") or {})
+            else:
+                snap.pop("desktop_catalog", None)
+        elif isinstance(previous.get("desktop_catalog"), dict):
+            snap["desktop_catalog"] = dict(previous.get("desktop_catalog") or {})
         snapshot_fingerprint = _snapshot_fingerprint(snap)
-        changed = snapshot_fingerprint != str(link.last_snapshot_fingerprint or "")
+        material_changed = not previous or snapshot_fingerprint != str(link.last_snapshot_fingerprint or "")
         node_names = snap.get("node_names")
         if isinstance(node_names, list):
             link.node_names = [str(item or "").strip() for item in node_names if str(item or "").strip()]
         link.node_snapshot = snap
-        link.last_snapshot_fingerprint = snapshot_fingerprint
+        if material_changed:
+            link.last_snapshot_fingerprint = snapshot_fingerprint
         link.last_snapshot_at = time.time()
         link.last_message_at = link.last_snapshot_at
         update_status = snap.get("update_status")
@@ -940,13 +889,11 @@ class HubLinkManager:
             snapshot=snap,
             captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
         )
-        if _snapshot_has_desktop_material(snap):
-            self._cancel_snapshot_refresh_task(node_id)
         try:
             from adaos.services.registry.subnet_directory import get_directory
 
             directory = get_directory()
-            if changed:
+            if material_changed:
                 directory.on_member_runtime_snapshot(node_id, snap)
             else:
                 try:
@@ -963,11 +910,11 @@ class HubLinkManager:
                     node_state=str(snap.get("node_state") or "").strip() or None,
                 )
         except Exception:
-            _log.warning("failed to update subnet directory from member snapshot node_id=%s", node_id, exc_info=True)
+            _log.warning("failed to update subnet directory from member status node_id=%s", node_id, exc_info=True)
         try:
             await self._push_node_display_assignment(node_id)
         except Exception:
-            _log.debug("failed to push node display assignment after snapshot node_id=%s", node_id, exc_info=True)
+            _log.debug("failed to push node display assignment after status node_id=%s", node_id, exc_info=True)
         try:
             await self._publish_member_infrastate_projection(
                 node_id,
@@ -976,99 +923,17 @@ class HubLinkManager:
                 captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
             )
         except Exception:
-            _log.debug("failed to schedule member infrastate projection after snapshot node_id=%s", node_id, exc_info=True)
-        if changed:
+            _log.debug("failed to schedule member infrastate projection after status node_id=%s", node_id, exc_info=True)
+        if material_changed:
+            _publish_link_event("subnet.member.status.changed", payload)
             _publish_link_event("subnet.member.snapshot.changed", payload)
-        else:
-            self._maybe_publish_member_snapshot_refreshed_event(
-                node_id,
-                snapshot=snap,
-                payload=payload,
-                changed=changed,
-            )
-        return {"ok": True, "changed": changed, **payload}
+        return {"ok": True, "changed": material_changed, "status_received": True, **payload}
+
+    async def update_member_snapshot(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
+        return await self.update_member_status(node_id, status=snapshot)
 
     async def update_member_snapshot_heartbeat(self, node_id: str, *, snapshot: dict[str, Any]) -> dict[str, Any]:
-        link = await self._get_link(node_id)
-        if not link:
-            return {"ok": False, "error": "member_not_connected"}
-        snap = dict(snapshot or {})
-        merged_snapshot = _merge_member_snapshot(link.node_snapshot, snap)
-        snapshot_fingerprint = _snapshot_fingerprint(merged_snapshot)
-        changed = snapshot_fingerprint != str(link.last_snapshot_fingerprint or "")
-        node_names = snap.get("node_names")
-        if isinstance(node_names, list):
-            link.node_names = [str(item or "").strip() for item in node_names if str(item or "").strip()]
-        link.node_snapshot = merged_snapshot
-        if changed:
-            link.last_snapshot_fingerprint = snapshot_fingerprint
-        link.last_snapshot_at = time.time()
-        link.last_message_at = link.last_snapshot_at
-        update_status = snap.get("update_status")
-        if isinstance(update_status, dict):
-            state = str(update_status.get("state") or "").strip()
-            action = str(update_status.get("action") or "").strip()
-            if state:
-                link.last_hub_core_update_state = state
-            if action:
-                link.last_hub_core_update_action = action
-        payload = _snapshot_event_payload(
-            node_id,
-            node_names=list(link.node_names),
-            snapshot=merged_snapshot,
-            captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
-        )
-        if _snapshot_has_desktop_material(merged_snapshot):
-            self._cancel_snapshot_refresh_task(node_id)
-        try:
-            from adaos.services.registry.subnet_directory import get_directory
-
-            directory = get_directory()
-            if changed:
-                directory.on_member_runtime_snapshot(node_id, merged_snapshot)
-            else:
-                try:
-                    projection_captured_at = (
-                        float(snap.get("captured_at"))
-                        if snap.get("captured_at") is not None
-                        else None
-                    )
-                except Exception:
-                    projection_captured_at = None
-                directory.on_member_runtime_snapshot_heartbeat(
-                    node_id,
-                    captured_at=projection_captured_at,
-                    node_state=str(snap.get("node_state") or "").strip() or None,
-                )
-        except Exception:
-            _log.warning(
-                "failed to update subnet directory from member snapshot heartbeat node_id=%s",
-                node_id,
-                exc_info=True,
-            )
-        try:
-            await self._push_node_display_assignment(node_id)
-        except Exception:
-            _log.debug("failed to push node display assignment after snapshot heartbeat node_id=%s", node_id, exc_info=True)
-        try:
-            await self._publish_member_infrastate_projection(
-                node_id,
-                node_names=list(link.node_names),
-                snapshot=merged_snapshot,
-                captured_at=_snapshot_captured_at(snap, fallback=link.last_snapshot_at),
-            )
-        except Exception:
-            _log.debug("failed to schedule member infrastate projection after snapshot heartbeat node_id=%s", node_id, exc_info=True)
-        if changed:
-            _publish_link_event("subnet.member.snapshot.changed", payload)
-        else:
-            self._maybe_publish_member_snapshot_refreshed_event(
-                node_id,
-                snapshot=merged_snapshot,
-                payload=payload,
-                changed=changed,
-            )
-        return {"ok": True, "changed": changed, **payload}
+        return await self.update_member_status(node_id, status=snapshot)
 
     async def set_member_node_names(self, node_id: str, *, node_names: list[str]) -> dict[str, Any]:
         link = await self._get_link(node_id)
@@ -1083,18 +948,18 @@ class HubLinkManager:
             return {"ok": False, "accepted": False, "error": "member_not_connected", "node_id": node_id}
         await link.send_json(
             {
-                "t": "node.snapshot.request",
+                "t": "node.catalog.request",
                 "reason": str(reason or "manual_refresh"),
                 "ts": time.time(),
             }
         )
         link.last_hub_event_at = time.time()
-        link.last_hub_event_type = "node.snapshot.request"
+        link.last_hub_event_type = "node.catalog.request"
         payload = {
             "node_id": node_id,
             "reason": str(reason or "manual_refresh"),
         }
-        _publish_link_event("subnet.member.snapshot.requested", payload)
+        _publish_link_event("subnet.member.catalog.requested", payload)
         return {"ok": True, "accepted": True, **payload}
 
     async def request_member_update(
