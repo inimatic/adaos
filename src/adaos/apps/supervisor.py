@@ -705,7 +705,10 @@ def _warm_switch_strict_cutover_enabled() -> bool:
 
 
 def _warm_switch_cold_fallback_enabled() -> bool:
-    return str(os.getenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK") or "").strip().lower() in {
+    raw = os.getenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK")
+    if raw is None:
+        return True
+    return str(raw or "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -6999,7 +7002,7 @@ class SupervisorManager:
                     "manifest": manifest,
                 }
             )
-            if candidate_prewarm_state == "ready" and not _warm_switch_cold_fallback_enabled():
+            if candidate_prewarm_state == "ready":
                 failure_phase = "launch"
                 old_active_proc = self._proc
                 old_active_url = self.runtime_base_url
