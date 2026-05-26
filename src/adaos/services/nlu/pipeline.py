@@ -40,6 +40,18 @@ _WEATHER_CITY_EN_RE = re.compile(
     r"\bweather\b(?:\s+in\s+(?P<city>[^?.!,;:]+))?",
     re.IGNORECASE | re.UNICODE,
 )
+_MARKETPLACE_RE = re.compile(
+    r"\b(?:\u043e\u0442\u043a\u0440\u043e\u0439|\u043f\u043e\u043a\u0430\u0436\u0438|\u0437\u0430\u043f\u0443\u0441\u0442\u0438|open|show)\s+(?:\u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441|marketplace)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+_TIME_NOW_RE = re.compile(
+    r"\b(?:\u0441\u043a\u043e\u043b\u044c\u043a\u043e\s+\u0432\u0440\u0435\u043c\u0435\u043d\u0438|\u043a\u043e\u0442\u043e\u0440\u044b\u0439\s+\u0447\u0430\u0441|what\s+time\s+is\s+it)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+_TIMER_START_RE = re.compile(
+    r"\b(?:\u043f\u043e\u0441\u0442\u0430\u0432\u044c|\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438|\u0437\u0430\u043f\u0443\u0441\u0442\u0438|set|start)\s+(?:a\s+)?(?:\u0442\u0430\u0439\u043c\u0435\u0440|timer)(?:\s+(?:\u043d\u0430|for))?\s+(?P<duration>\d+\s*(?:\u0441\u0435\u043a\u0443\u043d\u0434(?:\u0443|\u044b)?|\u0441\u0435\u043a|\u043c\u0438\u043d\u0443\u0442(?:\u0443|\u044b)?|\u043c\u0438\u043d|\u0447\u0430\u0441(?:\u0430|\u043e\u0432)?|seconds?|secs?|minutes?|mins?|hours?))\b",
+    re.IGNORECASE | re.UNICODE,
+)
 
 _RULES_CACHE_TTL_S = 2.0
 _rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -120,6 +132,24 @@ def describe_builtin_regex_rules() -> list[dict[str, Any]]:
             "intent": "desktop.open_weather",
             "pattern": _WEATHER_CITY_EN_RE.pattern,
             "notes": "EN weather queries, optional city captured as (?P<city>...).",
+        },
+        {
+            "id": "builtin.desktop.open_marketplace",
+            "intent": "desktop.open_marketplace",
+            "pattern": _MARKETPLACE_RE.pattern,
+            "notes": "RU/EN requests to open the desktop Marketplace.",
+        },
+        {
+            "id": "builtin.voice.time_now",
+            "intent": "voice.time.now",
+            "pattern": _TIME_NOW_RE.pattern,
+            "notes": "RU/EN current-time questions.",
+        },
+        {
+            "id": "builtin.voice.timer_start",
+            "intent": "voice.timer.start",
+            "pattern": _TIMER_START_RE.pattern,
+            "notes": "RU/EN timer start command with (?P<duration>...).",
         },
     ]
 
@@ -428,6 +458,18 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
         except Exception:
             pass
         return (intent, slots, "regex.dynamic", raw)
+
+    m_timer = _TIMER_START_RE.search(text)
+    if m_timer:
+        duration = _clean_city(m_timer.group("duration"))
+        slots = {"duration": duration} if duration else {}
+        return ("voice.timer.start", slots, "regex", {"builtin": "voice.timer.start"})
+
+    if _TIME_NOW_RE.search(text):
+        return ("voice.time.now", {}, "regex", {"builtin": "voice.time.now"})
+
+    if _MARKETPLACE_RE.search(text):
+        return ("desktop.open_marketplace", {}, "regex", {"builtin": "desktop.open_marketplace"})
 
     # 2) Built-in fallback (desktop weather MVP)
     if not _WEATHER_KEYWORD_RE.search(text):
