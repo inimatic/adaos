@@ -152,6 +152,13 @@ def test_media_runtime_snapshot_exposes_member_browser_direct_foundation(monkeyp
     assert runtime["route_profiles"]["live_stream"]["active_route"] == "hub_webrtc_loopback"
 
 
+def test_media_library_uses_media_server_runtime_store() -> None:
+    import adaos.services.media_library as media_library
+
+    assert media_library.MEDIA_SKILL_NAME == "mediaserver"
+    assert media_library.MEDIA_RUNTIME_SCOPE == "media_server"
+
+
 def test_media_runtime_snapshot_uses_live_member_snapshot_capacity_as_fallback(monkeypatch, tmp_path) -> None:
     import adaos.services.media_library as media_library
     import adaos.services.media_capability as media_capability

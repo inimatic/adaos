@@ -904,6 +904,67 @@ def test_remote_member_catalog_skips_foreign_relay_entries(monkeypatch) -> None:
     assert decls == []
 
 
+def test_remote_member_catalog_skips_unavailable_scenario_apps_from_capacity_fallback(monkeypatch) -> None:
+    previous_directory_module = sys.modules.get("adaos.services.registry.subnet_directory")
+    directory_module = types.ModuleType("adaos.services.registry.subnet_directory")
+    directory_module.get_directory = lambda: SimpleNamespace(
+        list_known_nodes=lambda: [
+            {
+                "node_id": "member-1",
+                "roles": ["member"],
+                "capacity": {"skills": [{"name": "prompt_engineer_skill"}]},
+            }
+        ]
+    )
+    sys.modules["adaos.services.registry.subnet_directory"] = directory_module
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="hub", node_id="hub-1", node_settings=SimpleNamespace(node_names=[])),
+    )
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "hub-1")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_scenario_exists_for_switch",
+        lambda scenario_id, *, space: scenario_id != "missing_prompt_scenario",
+    )
+
+    def _load_webui(self, skill_name: str, space: str = "default") -> dict[str, object]:  # noqa: ARG001
+        return {
+            "apps": [
+                {
+                    "id": "scenario:missing_prompt_scenario",
+                    "title": "Prompt IDE",
+                    "scenario_id": "missing_prompt_scenario",
+                },
+                {"id": "prompt_modal_app", "title": "Prompt Modal", "launchModal": "prompt_modal"},
+            ],
+            "registry": {"modals": {"prompt_modal": {"title": "Prompt Modal"}}},
+        }
+
+    monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "_load_webui", _load_webui)
+    try:
+        runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+        decls = runtime._collect_remote_skill_decls()
+    finally:
+        if previous_directory_module is None:
+            sys.modules.pop("adaos.services.registry.subnet_directory", None)
+        else:
+            sys.modules["adaos.services.registry.subnet_directory"] = previous_directory_module
+        importlib.invalidate_caches()
+
+    assert len(decls) == 1
+    assert [item["id"] for item in decls[0]["apps"]] == ["node:member-1:prompt_modal_app"]
+    assert decls[0]["contributions"] == [
+        {
+            "extensionPoint": "desktop.apps",
+            "type": "app",
+            "id": "node:member-1:prompt_modal_app",
+            "autoInstall": True,
+        }
+    ]
+
+
 def test_member_snapshot_change_seeds_ydoc_defaults_without_waiting_for_rebuild(monkeypatch) -> None:
     seeded: dict[str, object] = {}
 
