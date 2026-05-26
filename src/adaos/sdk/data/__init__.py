@@ -60,6 +60,13 @@ __all__ = [
     "skill_env_set",
     "entities_list",
     "entities_resolve_text",
+    "current_model_info",
+    "download_model",
+    "download_previous_model",
+    "get_model_manifest",
+    "previous_model_info",
+    "update_model_if_changed",
+    "upload_model",
     "get_tts_backend",
     "get_stt_backend",
     "get_audio_out_backend",
@@ -119,6 +126,13 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "skill_env_set": ("adaos.sdk.data.skill_env", "set_env"),
     "entities_list": ("adaos.sdk.data.entities", "list_entities"),
     "entities_resolve_text": ("adaos.sdk.data.entities", "resolve_text"),
+    "current_model_info": ("adaos.sdk.data.models", "current_model_info"),
+    "download_model": ("adaos.sdk.data.models", "download_model"),
+    "download_previous_model": ("adaos.sdk.data.models", "download_previous_model"),
+    "get_model_manifest": ("adaos.sdk.data.models", "get_model_manifest"),
+    "previous_model_info": ("adaos.sdk.data.models", "previous_model_info"),
+    "update_model_if_changed": ("adaos.sdk.data.models", "update_model_if_changed"),
+    "upload_model": ("adaos.sdk.data.models", "upload_model"),
 }
 
 

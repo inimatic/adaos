@@ -443,6 +443,23 @@ def test_new_face_vision_discovers_legacy_uploads_without_manifest(tmp_path: Pat
     assert (tmp_path / "state" / "state_manifest.json").exists()
 
 
+def test_new_face_vision_discovers_standard_models_upload_without_manifest(tmp_path: Path) -> None:
+    pytest.importorskip("PIL.Image")
+    engine_cls = _load_engine_class()
+    upload_root = tmp_path / "runtime" / "data" / "files" / "uploads"
+    model = upload_root / "models" / "best_full_finetune_v2.pt"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"model-placeholder")
+
+    engine = engine_cls(tmp_path / "state", upload_root=upload_root)
+    snapshot = engine.snapshot()
+
+    assert snapshot["stats"]["model_loaded"] is True
+    assert snapshot["files"]["model"]["name"] == "best_full_finetune_v2.pt"
+    manifest = json.loads((tmp_path / "state" / "state_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["files"]["model"]["source"]["purpose"] == "model"
+
+
 def test_new_face_vision_merges_missing_manifest_entries_from_uploads(tmp_path: Path) -> None:
     pytest.importorskip("PIL.Image")
     engine_cls = _load_engine_class()
@@ -667,6 +684,8 @@ def test_new_face_vision_compacts_uploads_into_modal() -> None:
 
     upload_widgets = application["modals"]["newface_upload_modal"]["schema"]["widgets"]
     assert [widget["type"] for widget in upload_widgets].count("input.fileUpload") == 4
+    model_upload = next(widget for widget in upload_widgets if widget.get("id") in {"newface_upload_model", "model-upload"})
+    assert model_upload["inputs"]["purpose"] == "models"
     file_list = next(widget for widget in upload_widgets if widget.get("id") == "loaded-files")
     assert file_list["type"] == "ui.list"
     assert file_list["dataSource"]["path"] == "data/new_face_vision/current/file_items"

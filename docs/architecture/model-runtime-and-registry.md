@@ -332,6 +332,63 @@ metadata, through its own runtime bucket under `data/files/models`. Shared cache
 entries require an explicit sharing/lease policy; otherwise the install path is
 skill-local.
 
+### Skill SDK Surface
+
+Skills can also manage model artifacts directly through `adaos.sdk.data.models`
+when the model is produced outside `skill push`, for example after manual
+fine-tuning or an operator upload in a skill UI. This path uses the same Root
+slots and retention rules as `skill push`, but it does not require
+`skill install`.
+
+The MVP SDK surface is intentionally small and LLM-friendly:
+
+```python
+from adaos.sdk.data.models import (
+    current_model_info,
+    previous_model_info,
+    update_model_if_changed,
+    upload_model,
+    download_model,
+    download_previous_model,
+)
+
+status = current_model_info("new_face_vision_skill")
+
+published = update_model_if_changed(
+    "data/files/uploads/models/best_full_finetune_v2.pt",
+    skill_id="new_face_vision_skill",
+    metadata={"source": "operator_upload"},
+)
+
+restored = download_previous_model(
+    "data/files/models",
+    skill_id="new_face_vision_skill",
+)
+```
+
+Operations:
+
+- `upload_model(path, skill_id=..., artifact=..., skip_if_same=True)` uploads a
+  file to Root and rotates `current` only when the content hash differs from the
+  current Root manifest.
+- `update_model_if_changed(...)` is the default helper for skill UIs and
+  fine-tuning jobs. It is an upload with `skip_if_same=True`.
+- `current_model_info(...)` and `previous_model_info(...)` return Root manifest
+  metadata for the active and rollback slots.
+- `download_model(dest, label="current", ...)` downloads a slot without
+  installing the skill.
+- `download_previous_model(dest, ...)` downloads the rollback slot and verifies
+  the checksum when Root exposes one.
+
+Skill-owned models downloaded through the SDK should land under the skill
+runtime bucket, normally `data/files/models`. UI uploads for model files should
+use `data/files/uploads/models` as the transient upload purpose. The singular
+`uploads/model` path is legacy-only and should be read only for migration.
+
+This SDK is artifact lifecycle control, not the final inference API. The
+long-term `ctx.models.infer` and `ctx.models.session` APIs still own portable
+model execution once the shared model runtime is ready.
+
 ## Python Dependency Environments
 
 The artifact registry solves model weights. It does not solve runtime bloat
