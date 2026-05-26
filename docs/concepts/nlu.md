@@ -29,7 +29,7 @@ skill source trees under the Python package.
 Concrete NLU engines are providers:
 
 - `neural_nlu_service_skill` is a registry/workspace service skill sourced from
-  `skills/neural_nlu_service_skill` and installed into `.adaos/workspace`.
+  `.adaos/workspace/skills/neural_nlu_service_skill`.
 - `rasa_nlu_service_skill` is a registry/workspace service skill.
 - Model artifacts and indexes are service-owned runtime data, not core package
   data.
@@ -89,7 +89,7 @@ Implemented now:
   - calls service `POST /reindex` to reload artifacts and rebuild stale
     positive/negative example indexes.
 - Notebook artifact preparation script for Neural NLU:
-  `skills/neural_nlu_service_skill/scripts/prepare_artifacts.py`.
+  `.adaos/workspace/skills/neural_nlu_service_skill/scripts/prepare_artifacts.py`.
 - Rasa NLU service-skill isolation from the hub Python environment.
 - Dry-run probe API for safe phrase checks:
   - `POST /api/nlu/teacher/{webspace_id}/probe`

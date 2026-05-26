@@ -18,6 +18,8 @@ import yaml
 from adaos.services.agent_context import AgentContext
 from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables, rasa_lookup_entries, summarize_lookup_tables
 
+_NEURAL_SKILL_NAME = "neural_nlu_service_skill"
+
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -848,16 +850,32 @@ class InterpreterWorkspace:
         return summary
 
     def _neural_train_script_path(self) -> Path:
-        repo_root = Path(__file__).resolve().parents[4]
-        source_script = repo_root / "skills" / "neural_nlu_service_skill" / "scripts" / "train_artifacts.py"
-        if source_script.exists():
-            return source_script.resolve()
-        workspace_script = Path(self._ctx.paths.skills_dir()) / "neural_nlu_service_skill" / "scripts" / "train_artifacts.py"
-        return workspace_script.resolve()
+        workspace_script = Path(self._ctx.paths.skills_dir()) / _NEURAL_SKILL_NAME / "scripts" / "train_artifacts.py"
+        candidates = [self._active_neural_train_script_path(), workspace_script]
+        for candidate in candidates:
+            if candidate is not None and candidate.exists():
+                return candidate.resolve()
+        raise FileNotFoundError(
+            "neural_nlu_service_skill training script is unavailable; install the skill before rebuilding neural artifacts"
+        )
+
+    def _active_neural_train_script_path(self) -> Path | None:
+        try:
+            from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+            skills_root = Path(self._ctx.paths.skills_dir())
+            env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_NEURAL_SKILL_NAME)
+            version = env.resolve_active_version()
+            if not version:
+                return None
+            slot = env.read_active_slot(version)
+            return env.build_slot_paths(version, slot).src_dir / "skills" / _NEURAL_SKILL_NAME / "scripts" / "train_artifacts.py"
+        except Exception:
+            return None
 
     def _neural_train_python(self) -> Path:
         skills_root = Path(self._ctx.paths.skills_dir())
-        runtime_root = skills_root / ".runtime" / "neural_nlu_service_skill"
+        runtime_root = skills_root / ".runtime" / _NEURAL_SKILL_NAME
         candidates: list[Path] = []
         if runtime_root.exists():
             candidates.extend(sorted(runtime_root.glob("v*/venv/Scripts/python.exe"), reverse=True))

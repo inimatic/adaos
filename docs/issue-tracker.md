@@ -71,8 +71,11 @@ Actions:
   `src/adaos/apps/cli/commands/setup.py` by preserving current Inimatic
   install/autostart/update/retention behavior while adding
   `--neural-nlu/--no-neural-nlu`.
-- [x] Move `neural_nlu_service_skill` to normal skill delivery if packaging and
-  install/update flows can carry `skills/neural_nlu_service_skill`.
+- [x] Move `neural_nlu_service_skill` to normal workspace skill delivery under
+  `.adaos/workspace/skills/neural_nlu_service_skill`.
+- [x] Move Neural NLU provider tests into the skill tree so core pytest no
+  longer imports provider internals; run them through `adaos skill test`
+  after the skill is installed.
 - [x] Keep hot `nlp.intent.detect.neural` handling read-only with respect to
   workspace/slot mutation; installation should happen through setup/update
   paths, not parse fallback.

@@ -1,10 +1,60 @@
 from pathlib import Path
 
 
-def test_ensure_neural_service_skill_installed_creates_skill_tree():
+def _write_neural_skill_fixture(root: Path) -> Path:
+    source = root / "neural_nlu_service_skill"
+    (source / "handlers").mkdir(parents=True)
+    (source / "scripts").mkdir(parents=True)
+    (source / "tests").mkdir(parents=True)
+    (source / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: neural_nlu_service_skill",
+                "version: 0.2.10",
+                "description: Local neural intent detector service for AdaOS NLU pipeline",
+                "runtime:",
+                "  kind: service",
+                "  env:",
+                "    mode: venv",
+                "    python: '3.11'",
+                "dependencies:",
+                "- torch",
+                "- numpy",
+                "- faiss-cpu",
+                "service:",
+                "  host: 127.0.0.1",
+                "  port: 18091",
+                "  command:",
+                "  - -m",
+                "  - handlers.main",
+                "  healthcheck:",
+                "    path: /health",
+                "    timeout_ms: 1000",
+                "permissions:",
+                "- network",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source / "README.md").write_text("neural fixture\n", encoding="utf-8")
+    (source / "handlers" / "__init__.py").write_text("", encoding="utf-8")
+    (source / "handlers" / "main.py").write_text(
+        'USER_AGENT = "AdaOSNeuralNLU/0.2"\n',
+        encoding="utf-8",
+    )
+    (source / "scripts" / "train_artifacts.py").write_text("def main():\n    return 0\n", encoding="utf-8")
+    (source / "tests" / "test_fixture.py").write_text("def test_fixture():\n    assert True\n", encoding="utf-8")
+    return source
+
+
+def test_ensure_neural_service_skill_installed_creates_skill_tree(monkeypatch, tmp_path):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.neural_skill_installer import ensure_neural_service_skill_installed
     from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+    source = _write_neural_skill_fixture(tmp_path)
+    monkeypatch.setenv("ADAOS_NEURAL_NLU_SKILL_SOURCE", str(source))
 
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
@@ -17,6 +67,8 @@ def test_ensure_neural_service_skill_installed_creates_skill_tree():
     assert installed == target
     assert (target / "skill.yaml").exists()
     assert (target / "handlers" / "main.py").exists()
+    assert (target / "scripts" / "train_artifacts.py").exists()
+    assert (target / "tests" / "test_fixture.py").exists()
     assert (target / ".adaos-managed.json").exists()
     assert "AdaOSNeuralNLU/0.2" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
     manifest_text = (target / "skill.yaml").read_text(encoding="utf-8")

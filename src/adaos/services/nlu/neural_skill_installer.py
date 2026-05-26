@@ -91,13 +91,13 @@ def _candidate_source_roots(ctx: Any, target: Path) -> list[Path]:
     ):
         if not base:
             continue
-        candidates.append(base / "skills" / _SKILL_NAME)
-        candidates.append(base.parent / "skills" / _SKILL_NAME)
-        candidates.append(base.parent.parent / "skills" / _SKILL_NAME)
+        candidates.append(base / ".adaos" / "workspace" / "skills" / _SKILL_NAME)
+        candidates.append(base.parent / ".adaos" / "workspace" / "skills" / _SKILL_NAME)
+        candidates.append(base.parent.parent / ".adaos" / "workspace" / "skills" / _SKILL_NAME)
 
     try:
         cwd = Path.cwd().resolve()
-        candidates.append(cwd / "skills" / _SKILL_NAME)
+        candidates.append(cwd / ".adaos" / "workspace" / "skills" / _SKILL_NAME)
     except Exception:
         pass
 
@@ -136,14 +136,17 @@ def _copy_template_tree(src: Path, target: Path) -> None:
 
 def _managed_file_payload(target: Path) -> dict[str, Any]:
     files: dict[str, str] = {}
-    for rel in ("skill.yaml", "README.md"):
+    for rel in ("skill.yaml", "requirements.in", "README.md"):
         path = target / rel
         if path.exists():
             files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    handlers = target / "handlers"
-    if handlers.exists():
-        for path in sorted(handlers.rglob("*.py")):
-            files[path.relative_to(target).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for tree_name in ("handlers", "scripts", "tests"):
+        tree = target / tree_name
+        if tree.exists():
+            for path in sorted(tree.rglob("*.py")):
+                if "__pycache__" in path.parts:
+                    continue
+                files[path.relative_to(target).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     payload: dict[str, Any] = {"files": files}
     payload["fingerprint"] = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")

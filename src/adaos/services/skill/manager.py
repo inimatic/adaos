@@ -599,6 +599,84 @@ class SkillManager:
         interpreter: Path | None = None
         python_paths: list[str] = []
         skill_source = skill_dir
+        skill_env_path: Path | None = None
+
+        if not version:
+            raise RuntimeError("no versions installed")
+
+        env.prepare_version(version)
+        current_link = env.ensure_current_link(version)
+        metadata = env.read_version_metadata(version)
+        active_slot = env.read_active_slot(version)
+        slot_paths = env.build_slot_paths(version, active_slot)
+        slot_meta = metadata.get("slots", {}).get(active_slot, {})
+        manifest_override = slot_meta.get("resolved_manifest") if isinstance(slot_meta, dict) else None
+        manifest_path = Path(manifest_override or slot_paths.resolved_manifest)
+        if not manifest_path.exists():
+            for candidate in env.iter_slot_paths(version):
+                candidate_meta = metadata.get("slots", {}).get(candidate.slot, {})
+                override = candidate_meta.get("resolved_manifest") if isinstance(candidate_meta, dict) else None
+                candidate_manifest = Path(override or candidate.resolved_manifest)
+                if candidate_manifest.exists():
+                    slot_paths = candidate
+                    manifest_path = candidate_manifest
+                    break
+
+        if not manifest_path.exists():
+            raise RuntimeError("no prepared slot with resolved manifest; install the skill first")
+
+        log_path = slot_paths.logs_dir / "tests.manual.log"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+
+        runtime_info = manifest.get("runtime", {}) if isinstance(manifest, dict) else {}
+        if not isinstance(runtime_info, Mapping):
+            runtime_info = {}
+        interpreter_value = runtime_info.get("interpreter")
+        if isinstance(interpreter_value, str) and interpreter_value.strip():
+            interpreter = Path(interpreter_value)
+        python_paths.extend([str(p) for p in runtime_info.get("python_paths", []) if p])
+
+        source_override = manifest.get("source") if isinstance(manifest, dict) else None
+        if isinstance(source_override, str) and source_override.strip():
+            skill_source = Path(source_override)
+        else:
+            candidate_source = slot_paths.src_dir / "skills" / name
+            skill_source = candidate_source if candidate_source.exists() else slot_paths.src_dir
+
+        skill_env_raw = runtime_info.get("skill_env")
+        if isinstance(skill_env_raw, str) and skill_env_raw.strip():
+            skill_env_path = Path(skill_env_raw)
+        if not skill_env_path:
+            skill_env_path = slot_paths.skill_env_path
+
+        if package_root:
+            python_paths.append(str(package_root))
+
+        python_paths.insert(0, str(skill_dir))
+        try:
+            dev_dir = self.ctx.paths.dev_dir()
+            python_paths.insert(0, str(dev_dir))
+        except Exception:
+            pass
+
+        results = run_skill_tests(
+            skill_source,
+            log_path=log_path,
+            interpreter=interpreter,
+            python_paths=python_paths,
+            skill_env_path=skill_env_path,
+            skill_name=name,
+            skill_version=version,
+            slot_current_dir=current_link,
+        )
+        for test_name, result in list(results.items()):
+            if result and result.status in ("error", "failed"):
+                detail = f"{result.detail} (log: {log_path})" if result.detail else f"log: {log_path}"
+                results[test_name] = replace(result, detail=detail)
+        return results
 
     # ------------------------------------------------------------------
     # Runtime update helpers (workspace/dev, used by DEBUG flows and LLM-assisted workflows)
@@ -1159,80 +1237,6 @@ class SkillManager:
             "space": space_normalized,
             "tools_added": [e["name"] for e in added_entries],
         }
-        skill_env_path: Path | None = None
-        log_path: Path
-
-        if not version:
-            raise RuntimeError("no versions installed")
-
-        env.prepare_version(version)
-        current_link = env.ensure_current_link(version)
-        metadata = env.read_version_metadata(version)
-        active_slot = env.read_active_slot(version)
-        slot_paths = env.build_slot_paths(version, active_slot)
-        slot_meta = metadata.get("slots", {}).get(active_slot, {})
-        manifest_override = slot_meta.get("resolved_manifest") if isinstance(slot_meta, dict) else None
-        manifest_path = Path(manifest_override or slot_paths.resolved_manifest)
-        if not manifest_path.exists():
-            for candidate in env.iter_slot_paths(version):
-                candidate_meta = metadata.get("slots", {}).get(candidate.slot, {})
-                override = candidate_meta.get("resolved_manifest") if isinstance(candidate_meta, dict) else None
-                candidate_manifest = Path(override or candidate.resolved_manifest)
-                if candidate_manifest.exists():
-                    slot_paths = candidate
-                    manifest_path = candidate_manifest
-                    break
-
-        if not manifest_path.exists():
-            raise RuntimeError("no prepared slot with resolved manifest; install the skill first")
-
-        log_path = slot_paths.logs_dir / "tests.manual.log"
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            manifest = {}
-
-        runtime_info = manifest.get("runtime", {})
-        interpreter_value = runtime_info.get("interpreter")
-        if interpreter_value:
-            interpreter = Path(interpreter_value)
-        python_paths.extend([p for p in runtime_info.get("python_paths", []) if p])
-
-        source_override = manifest.get("source")
-        skill_source = Path(source_override) if source_override else slot_paths.src_dir
-
-        skill_env_raw = runtime_info.get("skill_env")
-        if skill_env_raw:
-            skill_env_path = Path(skill_env_raw)
-        if not skill_env_path:
-            skill_env_path = slot_paths.skill_env_path
-
-        if package_root:
-            python_paths.append(str(package_root))
-
-        # Include dev/workspace convenience paths for compatibility with
-        # existing skill tests that import via `skills.*` from the developer
-        # workspace. This does not affect CLI test isolation which manages
-        # its own PYTHONPATH.
-        dev_dir = self.ctx.paths.dev_dir()
-        python_paths.insert(0, str(skill_dir))
-        python_paths.insert(0, str(dev_dir))
-
-        results = run_tests(
-            skill_source,
-            log_path=log_path,
-            interpreter=interpreter,
-            python_paths=python_paths,
-            skill_env_path=skill_env_path,
-            skill_name=name,
-            skill_version=version,
-            slot_current_dir=current_link,
-        )
-        for test_name, result in list(results.items()):
-            if result and result.status in ("error", "failed"):
-                detail = f"{result.detail} (log: {log_path})" if result.detail else f"log: {log_path}"
-                results[test_name] = replace(result, detail=detail)
-        return results
 
     def uninstall(self, name: str, *, safe: bool = False, force: bool = False) -> None:
         self.caps.require("core", "skills.manage", "net.git")
