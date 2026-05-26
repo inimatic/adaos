@@ -660,3 +660,131 @@ def test_refresh_member_after_connect_requests_status_and_catalog(monkeypatch) -
     refresh_requests = [msg for msg in ws.messages if msg.get("t") in {"node.status.request", "node.catalog.request"}]
     assert [msg.get("t") for msg in refresh_requests] == ["node.status.request", "node.catalog.request"]
     assert {msg["reason"] for msg in refresh_requests} == {"test"}
+
+
+def test_update_member_status_reconciles_stale_core_version(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
+    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
+    monkeypatch.setattr(
+        "adaos.services.core_update.read_status",
+        lambda: {
+            "state": "succeeded",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "new-target-abcdef0",
+            "manifest": {
+                "target_rev": "rev2026",
+                "target_version": "new-target-abcdef0",
+                "build_version": "0.1.111+1.abcdef0",
+            },
+        },
+    )
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=ws)
+
+    result = asyncio.run(
+        manager.update_member_status(
+            "member-1",
+            status={
+                "node_id": "member-1",
+                "role": "member",
+                "slots": {
+                    "active_manifest": {
+                        "target_version": "old-target-1234567",
+                        "build_version": "0.1.109+1.1234567",
+                    }
+                },
+                "update_status": {"state": "succeeded", "action": "update", "target_version": "old-target-1234567"},
+            },
+        )
+    )
+
+    update_requests = [msg for msg in ws.messages if msg.get("t") == "core.update.request"]
+    assert result["ok"] is True
+    assert len(update_requests) == 1
+    assert update_requests[0]["action"] == "update"
+    assert update_requests[0]["target_rev"] == "rev2026"
+    assert update_requests[0]["target_version"] == "new-target-abcdef0"
+    assert update_requests[0]["reason"] == "hub.member_reconcile.snapshot"
+
+
+def test_update_member_status_does_not_reconcile_current_core_version(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
+    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
+    monkeypatch.setattr(
+        "adaos.services.core_update.read_status",
+        lambda: {
+            "state": "succeeded",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "new-target-abcdef0",
+            "manifest": {"target_version": "new-target-abcdef0", "build_version": "0.1.111+1.abcdef0"},
+        },
+    )
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=ws)
+
+    asyncio.run(
+        manager.update_member_status(
+            "member-1",
+            status={
+                "node_id": "member-1",
+                "role": "member",
+                "slots": {
+                    "active_manifest": {
+                        "target_version": "new-target-abcdef0",
+                        "build_version": "0.1.111+1.abcdef0",
+                    }
+                },
+                "update_status": {"state": "succeeded", "action": "update", "target_version": "new-target-abcdef0"},
+            },
+        )
+    )
+
+    assert [msg for msg in ws.messages if msg.get("t") == "core.update.request"] == []
+
+
+def test_update_member_status_retries_failed_member_control_request(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
+    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
+    monkeypatch.setattr(
+        "adaos.services.core_update.read_status",
+        lambda: {
+            "state": "succeeded",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "new-target-abcdef0",
+            "manifest": {"target_version": "new-target-abcdef0", "build_version": "0.1.111+1.abcdef0"},
+        },
+    )
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=ws)
+
+    asyncio.run(
+        manager.update_member_status(
+            "member-1",
+            status={
+                "node_id": "member-1",
+                "role": "member",
+                "slots": {"active_manifest": {"target_version": "old-target-1234567"}},
+                "update_status": {"state": "preparing", "action": "update", "target_version": "new-target-abcdef0"},
+                "hub_control_request": {
+                    "request": {"target_version": "new-target-abcdef0"},
+                    "result": {"ok": False, "error": "supervisor_update_route_unavailable"},
+                },
+            },
+        )
+    )
+
+    update_requests = [msg for msg in ws.messages if msg.get("t") == "core.update.request"]
+    assert len(update_requests) == 1
+    assert update_requests[0]["target_version"] == "new-target-abcdef0"
