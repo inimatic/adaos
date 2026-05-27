@@ -19,6 +19,7 @@ import yaml
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
+from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
@@ -1052,6 +1053,12 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             current = ""
         if current == marker:
             return
+        ensure_dependency_disk_budget(
+            venv_dir,
+            spec.dependencies,
+            has_requirements_file=bool(spec.requirements_file),
+            skill_name=spec.skill,
+        )
         self._install_deps(python, spec)
         try:
             marker_path.write_text(marker, encoding="utf-8")
