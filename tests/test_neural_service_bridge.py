@@ -5,6 +5,30 @@ from types import SimpleNamespace
 import pytest
 
 
+def test_neural_bridge_artifact_root_prefers_active_skill_runtime(monkeypatch, tmp_path):
+    from adaos.services.nlu import neural_service_bridge as bridge
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+    skills_root = tmp_path / "workspace" / "skills"
+    state_root = tmp_path / "state"
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name="neural_nlu_service_skill")
+    env.prepare_version("0.2.13", activate_slot="B")
+    expected = (env.files_dir("0.2.13") / "nlu" / "neural").resolve()
+
+    monkeypatch.setattr(
+        bridge,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(
+                skills_dir=lambda: skills_root,
+                state_dir=lambda: state_root,
+            )
+        ),
+    )
+
+    assert bridge._neural_artifact_root() == expected
+
+
 @pytest.mark.anyio
 async def test_neural_bridge_passes_canonicalization_evidence(monkeypatch):
     from adaos.services.nlu import neural_service_bridge as bridge

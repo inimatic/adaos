@@ -26,6 +26,7 @@ _ACCEPT_CONFIDENCE = float(
     os.getenv("ADAOS_NLU_NEURAL_ACCEPT_CONFIDENCE", os.getenv("ADAOS_NLU_NEURAL_MIN_CONFIDENCE", "0.80")) or "0.80"
 )
 _REJECT_CONFIDENCE = float(os.getenv("ADAOS_NLU_NEURAL_REJECT_CONFIDENCE", "0.45") or "0.45")
+_NEURAL_SKILL_NAME = "neural_nlu_service_skill"
 
 
 def _payload(evt: Any) -> Dict[str, Any]:
@@ -287,8 +288,22 @@ async def _ensure_neural_service_base_url(supervisor: Any) -> str | None:
 
 
 def _neural_artifact_root() -> Path:
+    explicit = os.getenv("ADAOS_NEURAL_ARTIFACT_ROOT", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
     try:
-        state_dir = Path(get_ctx().paths.state_dir()).expanduser().resolve()
+        ctx = get_ctx()
+        try:
+            from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+            skills_root = Path(ctx.paths.skills_dir()).expanduser().resolve()
+            env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_NEURAL_SKILL_NAME)
+            version = env.resolve_active_version()
+            if version:
+                return (env.files_dir(version) / "nlu" / "neural").resolve()
+        except Exception:
+            pass
+        state_dir = Path(ctx.paths.state_dir()).expanduser().resolve()
         return state_dir / "nlu" / "neural"
     except Exception:
         base_dir = os.getenv("ADAOS_BASE_DIR", "").strip()
