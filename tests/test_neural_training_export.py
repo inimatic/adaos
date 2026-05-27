@@ -60,6 +60,20 @@ def test_neural_training_export_preserves_ownership_and_plain_text() -> None:
     assert "skill.weather.lookup" in labels
 
 
+def test_neural_artifact_root_prefers_active_skill_runtime() -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.interpreter.workspace import InterpreterWorkspace
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+    ctx = get_ctx()
+    ws = InterpreterWorkspace(ctx)
+    env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name="neural_nlu_service_skill")
+    env.prepare_version("0.2.13", activate_slot="B")
+    expected = (env.files_dir("0.2.13") / "nlu" / "neural").resolve()
+
+    assert ws._neural_artifact_root() == expected
+
+
 def test_neural_curated_reindex_plan_blocks_unknown_active_labels() -> None:
     from adaos.services.agent_context import get_ctx
     from adaos.services.interpreter.workspace import IntentMapping, InterpreterWorkspace

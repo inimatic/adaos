@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -601,9 +602,9 @@ class InterpreterWorkspace:
         Export curated interpreter examples as a Neural NLU training bundle.
 
         The bundle is deliberately separate from the active provider artifacts
-        under ``state/nlu/neural``. It gives rebuild/reindex tooling a stable
-        source of skill/scenario/system-owned examples without mutating the
-        running model.
+        in the Neural NLU skill runtime state. It gives rebuild/reindex tooling
+        a stable source of skill/scenario/system-owned examples without mutating
+        the running model.
         """
         self.generate_dataset_from_skills()
         manual = self.list_intents()
@@ -715,6 +716,19 @@ class InterpreterWorkspace:
         return summary
 
     def _neural_artifact_root(self) -> Path:
+        explicit = os.getenv("ADAOS_NEURAL_ARTIFACT_ROOT", "").strip()
+        if explicit:
+            return Path(explicit).expanduser().resolve()
+        try:
+            from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+            skills_root = Path(self._ctx.paths.skills_dir()).expanduser().resolve()
+            env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_NEURAL_SKILL_NAME)
+            version = env.resolve_active_version()
+            if version:
+                return (env.files_dir(version) / "nlu" / "neural").resolve()
+        except Exception:
+            pass
         return (Path(self._ctx.paths.state_dir()) / "nlu" / "neural").resolve()
 
     def plan_neural_curated_reindex(self, *, export: bool = True) -> Dict[str, Any]:
