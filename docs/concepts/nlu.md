@@ -26,6 +26,12 @@ entity canonicalization, and the fallback/governance loop. Core AdaOS must not
 bundle concrete NLU engines, Torch/FAISS dependencies, model weights, or service
 skill source trees under the Python package.
 
+The NLU Teacher LLM is also outside the execution boundary. It may propose
+intent/action candidates, template patches, entity corrections, or development
+tasks, but it must not call SDK functions, publish events, invoke tools, or
+mutate UI state directly. AdaOS validates those proposals, records trace/audit
+evidence, and dispatches only through normal intent/action surfaces.
+
 Concrete NLU engines are providers:
 
 - `neural_nlu_service_skill` is a registry/workspace service skill sourced from
@@ -332,7 +338,10 @@ When `regex` and `rasa` do not produce an intent, AdaOS calls an LLM teacher to:
 
 - propose a **dataset revision** (existing intent + new examples + slots), or
 - propose a **regex rule** to improve the `regex` stage, or
+- propose an **action candidate** that maps a phrase to an existing skill,
+  interface action, scenario flow, or system action, or
 - propose a **new capability** (skill / scenario candidate), or
+- propose an **entity correction** such as an alias patch, or
 - decide to ignore (non-actionable).
 
 Teacher receives scenario + skill context, including:
@@ -345,6 +354,13 @@ Teacher receives scenario + skill context, including:
 - intent routing hints (`intent_routes`: scenario intent -> callSkill topic -> skill)
 - system/host actions catalog (`system_actions`, `host_actions`), including
   stable action ids, linked intents, slots, and training examples
+
+The target MCP-assisted loop classifies candidates as `skill_action`,
+`interface_action`, `scenario_flow`, `entity_correction`, `nlu_correction`,
+`development_task`, or `non_actionable`. Verified action candidates are
+dispatched through AdaOS after phrase-check evidence confirms that the applied
+template returns the planned intent. User corrections such as "no, that is not
+it" are linked back to the previous candidate and start another teacher cycle.
 
 Teacher state is projected into YJS under `data.nlu_teacher.*` for UI inspection, and also persisted on disk
 under `.adaos/state/skills/nlu_teacher/<webspace_id>.json` so it survives YJS reload/reset.
