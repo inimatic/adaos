@@ -70,6 +70,7 @@ adaos = [
   "skills_templates/**/*.yaml",
   "skills_templates/**/*.py",
   "skills_templates/**/tests/**/*",
+  "services/skill/*.json",
   "locales/*.json",
   "interpreter_data/**/*",
 ]
