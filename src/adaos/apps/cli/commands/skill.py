@@ -476,14 +476,20 @@ def _release_changed_skills(
         name = str(item.get("name") or "").strip()
         if not name:
             continue
+        reasons = {str(reason or "").strip() for reason in item.get("reasons") or []}
+        # A registry-only drift means the manifest version was already advanced
+        # by a previous source change; publishing should catch registry.json up,
+        # not allocate another version number.
+        bump = bool(reasons - {"registry-version", "registry-missing"})
         message = _default_skill_release_message(name)
-        revision = mgr.push(name, message, signoff=signoff)
+        revision = mgr.push(name, message, signoff=signoff, bump=bump)
         released.append(
             {
                 "name": name,
                 "revision": revision,
                 "message": message,
                 "reasons": list(item.get("reasons") or []),
+                "bump": bump,
             }
         )
 
@@ -1120,6 +1126,7 @@ def push_command(
     message: Optional[str] = typer.Option(None, "--message", "-m", help=_("cli.commit_message.help")),
     signoff: bool = typer.Option(False, "--signoff", help=_("cli.option.signoff")),
     remote: str = typer.Option("origin", "--remote", help="workspace git remote for release candidate comparison"),
+    bump: bool = typer.Option(True, "--bump/--no-bump", help="increment skill.yaml version before publishing"),
 ):
     """
     Release workspace skill changes through manifest version bump, registry
@@ -1164,7 +1171,7 @@ def push_command(
 
     _resolve_skill_path(skill_name)
     mgr = _mgr()
-    res = mgr.push(skill_name, message, signoff=signoff)
+    res = mgr.push(skill_name, message, signoff=signoff, bump=bump)
     if res in {"nothing-to-push", "nothing-to-commit"}:
         typer.echo(_("cli.skill.push.nothing"))
     else:

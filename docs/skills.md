@@ -95,6 +95,10 @@ That split is important when reading older documentation.
 - `adaos skill push <name> -m "message"`: update that skill's registry entry,
   bump the manifest version, commit `skills/<name>` plus `registry.json`, and
   push.
+- `adaos skill push <name> -m "message" --no-bump`: publish a registry-only
+  catch-up when `skill.yaml` already contains the intended version. This keeps
+  numbering monotonic without allocating an extra patch number just because
+  `registry.json` lagged behind.
 
 Use the no-argument form when one or more skills show `git-dirty`, `git-ahead`,
 or when `skill.yaml` and `registry.json` disagree on the skill version. Use the

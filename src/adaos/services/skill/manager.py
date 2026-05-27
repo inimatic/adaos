@@ -1392,7 +1392,10 @@ class SkillManager:
         return client
 
     def _push_declared_model_artifacts(self, skill_dir: Path, *, skill_name: str) -> list[dict[str, Any]]:
-        manifest = self._load_manifest(skill_dir)
+        try:
+            manifest = self._load_manifest(skill_dir)
+        except FileNotFoundError:
+            return []
         artifacts = declared_model_artifacts(manifest, skill_dir=skill_dir)
         if not artifacts:
             return []
