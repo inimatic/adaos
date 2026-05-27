@@ -971,6 +971,8 @@ class RouterService:
             _route_cache[(src_ws, route_id)] = (now, base_ids)
             return base_ids
 
+        _voice_chat_stream_cache: dict[tuple[str, str], dict[str, Any]] = {}
+
         def _voice_chat_data_path(target_node_id: str | None) -> str:
             return node_scope_data_path("data/voice_chat", str(target_node_id or "").strip())
 
@@ -1046,11 +1048,12 @@ class RouterService:
             *,
             source: str = "router.service",
             channel: str = "core.router.live_room",
+            prefer_live_room: bool = True,
         ) -> None:
             def _apply(ydoc: Any, txn: Any) -> None:
                 mutator(ydoc.get_map("data"), txn)
 
-            if mutate_live_room(
+            if prefer_live_room and mutate_live_room(
                 webspace_id,
                 _apply,
                 root_names=["data"],
@@ -1086,7 +1089,66 @@ class RouterService:
                     },
                 )
 
-            await _mutate_data_map(webspace_id, _mutator, channel="core.router.voice_chat.live_room")
+            await _mutate_data_map(
+                webspace_id,
+                _mutator,
+                channel="core.router.voice_chat.live_room",
+                prefer_live_room=False,
+            )
+
+        def _publish_voice_chat_stream(
+            webspace_id: str,
+            target_node_id: str | None,
+            messages: list[dict[str, Any]],
+            last_refresh_ts: float,
+        ) -> None:
+            cached_messages = [dict(item) for item in messages[-80:] if isinstance(item, dict)]
+            _voice_chat_stream_cache[(str(webspace_id or "").strip(), str(target_node_id or "").strip())] = {
+                "messages": cached_messages,
+                "last_refresh_ts": last_refresh_ts,
+                "message_count": len(cached_messages),
+            }
+            payload: dict[str, Any] = {
+                "receiver": "voice_chat.messages",
+                "webspace_id": webspace_id,
+                "owner": "skill:voice_chat_skill",
+                "data": {
+                    "messages": cached_messages,
+                    "last_refresh_ts": last_refresh_ts,
+                    "message_count": len(cached_messages),
+                },
+                "_meta": {
+                    "webspace_id": webspace_id,
+                    "route_id": "voice_chat",
+                },
+            }
+            if target_node_id:
+                payload["node_id"] = target_node_id
+                payload["source_node_id"] = target_node_id
+                payload["_meta"]["target_node_id"] = target_node_id
+                payload["_meta"]["node_id"] = target_node_id
+                payload["_meta"]["source_node_id"] = target_node_id
+            try:
+                self.bus.publish(
+                    Event(
+                        type="io.out.stream.publish",
+                        source="router.voice_chat",
+                        ts=time.time(),
+                        payload=payload,
+                    )
+                )
+            except Exception:
+                pass
+
+        async def _publish_voice_chat_snapshot(
+            webspace_id: str,
+            target_node_id: str | None,
+        ) -> None:
+            current = _voice_chat_stream_cache.get((str(webspace_id or "").strip(), str(target_node_id or "").strip())) or {}
+            raw_messages = current.get("messages") if isinstance(current, dict) else None
+            messages = [dict(item) for item in raw_messages if isinstance(item, dict)] if isinstance(raw_messages, list) else []
+            last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
+            _publish_voice_chat_stream(webspace_id, target_node_id, messages, last_refresh_ts)
 
         async def _append_voice_chat_message(
             webspace_id: str,
@@ -1094,9 +1156,11 @@ class RouterService:
             target_node_id: str | None = None,
         ) -> None:
             count = 0
+            messages_snapshot: list[dict[str, Any]] = []
+            last_refresh_ts = time.time()
 
             def _mutator(data_map: Any, txn: Any) -> None:
-                nonlocal count
+                nonlocal count, messages_snapshot, last_refresh_ts
                 current = _read_voice_chat_state(data_map, target_node_id)
                 messages = []
                 if isinstance(current, dict) and isinstance(current.get("messages"), list):
@@ -1105,17 +1169,26 @@ class RouterService:
                 if len(messages) > 60:
                     messages = messages[-60:]
                 count = len(messages)
+                messages_snapshot = [dict(item) for item in messages if isinstance(item, dict)]
+                last_refresh_ts = time.time()
                 _write_voice_chat_state(
                     data_map,
                     txn,
                     target_node_id,
                     {
                         "messages": messages,
-                        "last_refresh_ts": time.time(),
+                        "last_refresh_ts": last_refresh_ts,
                     },
                 )
 
-            await _mutate_data_map(webspace_id, _mutator, channel="core.router.voice_chat.live_room")
+            await _mutate_data_map(
+                webspace_id,
+                _mutator,
+                channel="core.router.voice_chat.live_room",
+                prefer_live_room=False,
+            )
+            if messages_snapshot:
+                _publish_voice_chat_stream(webspace_id, target_node_id, messages_snapshot, last_refresh_ts)
             try:
                 self._vlog.debug(
                     "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
@@ -1940,6 +2013,31 @@ class RouterService:
                     receiver_meta=receiver_meta,
                 )
 
+        async def _on_voice_chat_stream_snapshot(ev: Event) -> None:
+            payload = ev.payload or {}
+            if not isinstance(payload, dict):
+                return
+            receiver = str(payload.get("receiver") or "").strip()
+            try:
+                self._vlog.debug(
+                    "voice_chat.snapshot requested type=%s receiver=%s",
+                    ev.type,
+                    receiver,
+                )
+            except Exception:
+                pass
+            if receiver != "voice_chat.messages":
+                return
+            if ev.type == "webio.stream.subscription.changed":
+                action = str(payload.get("action") or "").strip().lower()
+                if action == "unsubscribed":
+                    return
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=False)
+            targets = await _resolve_webspace_ids(payload)
+            for ws in targets:
+                await _publish_voice_chat_snapshot(ws, target_node_id)
+
         async def _on_browser_session_changed(ev: Event) -> None:
             payload = ev.payload or {}
             if not isinstance(payload, dict):
@@ -2209,6 +2307,8 @@ class RouterService:
         self.bus.subscribe("io.out.say", _on_io_out_say)
         self.bus.subscribe("io.out.media.route", _on_io_out_media_route)
         self.bus.subscribe("io.out.stream.publish", _on_io_out_stream_publish)
+        self.bus.subscribe("webio.stream.snapshot.requested", _on_voice_chat_stream_snapshot)
+        self.bus.subscribe("webio.stream.subscription.changed", _on_voice_chat_stream_snapshot)
         self.bus.subscribe("browser.session.changed", _on_browser_session_changed)
         self.bus.subscribe("subnet.member.snapshot.changed", _on_member_media_inventory_changed)
         self.bus.subscribe("subnet.member.link.up", _on_member_media_inventory_changed)

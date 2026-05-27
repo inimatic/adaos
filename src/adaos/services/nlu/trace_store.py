@@ -112,6 +112,7 @@ def _compact_raw(raw: Any) -> Any:
         "flags",
         "active_stages",
         "policy",
+        "neuro_lite_policy",
         "neural_policy",
     ):
         value = raw.get(key)

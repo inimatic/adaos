@@ -57,13 +57,14 @@ _TIMER_START_RE = re.compile(
 _RULES_CACHE_TTL_S = 2.0
 _rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _rules_lock = asyncio.Lock()
+_NEURO_LITE_SKILL_NAME = "neuro_nlu_lite_skill"
 _NEURAL_SKILL_NAME = "neural_nlu_service_skill"
 _TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled", "none"}
 
 
-def _neural_stage_policy() -> str:
-    raw = str(os.getenv("ADAOS_NLU_NEURAL", "auto") or "auto").strip().lower()
+def _stage_policy(env_name: str) -> str:
+    raw = str(os.getenv(env_name, "auto") or "auto").strip().lower()
     if raw in _TRUE_VALUES:
         return "enabled"
     if raw in _FALSE_VALUES:
@@ -71,26 +72,51 @@ def _neural_stage_policy() -> str:
     return "auto"
 
 
-def _neural_service_skill_installed() -> bool:
+def _neuro_lite_stage_policy() -> str:
+    return _stage_policy("ADAOS_NLU_NEURO_LITE")
+
+
+def _neural_stage_policy() -> str:
+    return _stage_policy("ADAOS_NLU_NEURAL")
+
+
+def _service_skill_installed(skill_name: str) -> bool:
     try:
         ctx = get_ctx()
         skills_root = Path(ctx.paths.skills_dir()).expanduser().resolve()
     except Exception:
         return False
-    if (skills_root / _NEURAL_SKILL_NAME / "skill.yaml").exists():
+    if (skills_root / skill_name / "skill.yaml").exists():
         return True
     try:
         from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
-        env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_NEURAL_SKILL_NAME)
+        env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name)
         version = env.resolve_active_version()
         if not version:
             return False
         slot = env.read_active_slot(version)
-        runtime_skill = env.build_slot_paths(version, slot).src_dir / "skills" / _NEURAL_SKILL_NAME
+        runtime_skill = env.build_slot_paths(version, slot).src_dir / "skills" / skill_name
         return (runtime_skill / "skill.yaml").exists()
     except Exception:
         return False
+
+
+def _neuro_lite_service_skill_installed() -> bool:
+    return _service_skill_installed(_NEURO_LITE_SKILL_NAME)
+
+
+def _neural_service_skill_installed() -> bool:
+    return _service_skill_installed(_NEURAL_SKILL_NAME)
+
+
+def _use_neuro_lite_stage() -> bool:
+    policy = _neuro_lite_stage_policy()
+    if policy == "enabled":
+        return True
+    if policy == "disabled":
+        return False
+    return _neuro_lite_service_skill_installed()
 
 
 def _use_neural_stage() -> bool:
@@ -509,6 +535,7 @@ async def _on_detect_request(evt: Any) -> None:
 
     flags = await get_runtime_flags(webspace_id)
     regex_enabled = bool(flags.get("regex_enabled", True))
+    neuro_lite_runtime_enabled = bool(flags.get("neuro_lite_enabled", True))
     neural_runtime_enabled = bool(flags.get("neural_enabled", True))
     rasa_enabled = bool(flags.get("rasa_enabled", True))
 
@@ -573,6 +600,35 @@ async def _on_detect_request(evt: Any) -> None:
             meta=meta,
         )
 
+    neuro_lite_policy_enabled = _use_neuro_lite_stage()
+    use_neuro_lite_stage = neuro_lite_runtime_enabled and neuro_lite_policy_enabled
+    if not neuro_lite_runtime_enabled:
+        _emit_stage(
+            ctx,
+            stage="neuro_lite",
+            status="skipped",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via="neuro_lite",
+            reason="runtime_disabled",
+            raw={"flags": flags},
+            meta=meta,
+        )
+    elif not neuro_lite_policy_enabled:
+        _emit_stage(
+            ctx,
+            stage="neuro_lite",
+            status="skipped",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via="neuro_lite",
+            reason="not_installed_or_policy_disabled",
+            raw={"flags": flags, "policy": _neuro_lite_stage_policy()},
+            meta=meta,
+        )
+
     neural_policy_enabled = _use_neural_stage()
     use_neural_stage = neural_runtime_enabled and neural_policy_enabled
     if not neural_runtime_enabled:
@@ -602,7 +658,7 @@ async def _on_detect_request(evt: Any) -> None:
             meta=meta,
         )
 
-    if not use_neural_stage and not rasa_enabled:
+    if not use_neuro_lite_stage and not use_neural_stage and not rasa_enabled:
         _emit_stage(
             ctx,
             stage="rasa",
@@ -623,7 +679,11 @@ async def _on_detect_request(evt: Any) -> None:
             webspace_id=webspace_id,
             request_id=rid,
             reason="no_active_downstream_stages",
-            raw={"flags": flags, "neural_policy": _neural_stage_policy()},
+            raw={
+                "flags": flags,
+                "neuro_lite_policy": _neuro_lite_stage_policy(),
+                "neural_policy": _neural_stage_policy(),
+            },
             meta=meta,
         )
         bus_emit(
@@ -641,7 +701,15 @@ async def _on_detect_request(evt: Any) -> None:
         )
         return
 
-    downstream_event = "nlp.intent.detect.neural" if use_neural_stage else "nlp.intent.detect.rasa"
+    if use_neuro_lite_stage:
+        downstream_event = "nlp.intent.detect.neuro_lite"
+        downstream_via = "neuro_lite"
+    elif use_neural_stage:
+        downstream_event = "nlp.intent.detect.neural"
+        downstream_via = "neural"
+    else:
+        downstream_event = "nlp.intent.detect.rasa"
+        downstream_via = "rasa"
     _emit_stage(
         ctx,
         stage="pipeline",
@@ -649,15 +717,17 @@ async def _on_detect_request(evt: Any) -> None:
         text=text,
         webspace_id=webspace_id,
         request_id=rid,
-        via="neural" if use_neural_stage else "rasa",
+        via=downstream_via,
         reason=downstream_event,
         raw={
             "flags": flags,
             "active_stages": {
                 "regex": regex_enabled,
+                "neuro_lite": use_neuro_lite_stage,
                 "neural": use_neural_stage,
                 "rasa": rasa_enabled,
             },
+            "neuro_lite_policy": _neuro_lite_stage_policy(),
             "neural_policy": _neural_stage_policy(),
         },
         meta=meta,

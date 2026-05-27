@@ -21,11 +21,18 @@ _FLAG_KEYS = {
     "neural": "neural_enabled",
     "neure": "neural_enabled",
     "neural_enabled": "neural_enabled",
+    "neuro": "neuro_lite_enabled",
+    "neuro_lite": "neuro_lite_enabled",
+    "neuro_light": "neuro_lite_enabled",
+    "neurolite": "neuro_lite_enabled",
+    "lite": "neuro_lite_enabled",
+    "neuro_lite_enabled": "neuro_lite_enabled",
     "rasa": "rasa_enabled",
     "rasa_enabled": "rasa_enabled",
 }
 DEFAULT_FLAGS: dict[str, bool] = {
     "regex_enabled": True,
+    "neuro_lite_enabled": True,
     "neural_enabled": True,
     "rasa_enabled": True,
 }
@@ -64,6 +71,7 @@ def _coerce_bool(value: Any) -> bool | None:
 def _env_default(stage: str, fallback: bool) -> bool:
     env_name = {
         "regex_enabled": "ADAOS_NLU_REGEX",
+        "neuro_lite_enabled": "ADAOS_NLU_NEURO_LITE_RUNTIME",
         "neural_enabled": "ADAOS_NLU_NEURAL_RUNTIME",
         "rasa_enabled": "ADAOS_NLU_RASA_RUNTIME",
     }.get(stage)

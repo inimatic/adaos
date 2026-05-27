@@ -263,6 +263,7 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     doc = _Doc()
     bus = LocalEventBus()
     seen_nlu: list[Event] = []
+    seen_stream: list[Event] = []
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
     monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
@@ -273,6 +274,7 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
     bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
 
     bus.publish(
         Event(
@@ -297,6 +299,29 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     assert seen_nlu
     assert "target_node_id" not in seen_nlu[0].payload["_meta"]
     assert seen_nlu[0].payload["_meta"]["voice_chat_scope"] == "shared"
+    assert seen_stream
+    assert seen_stream[0].payload["receiver"] == "voice_chat.messages"
+    assert seen_stream[0].payload["data"]["messages"][0]["text"] == "weather in Moscow"
+    assert seen_stream[0].payload["data"]["message_count"] == 1
+
+    seen_stream.clear()
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            source="test",
+            ts=2.0,
+            payload={
+                "receiver": "voice_chat.messages",
+                "webspace_id": "desktop",
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+
+    assert seen_stream
+    assert seen_stream[0].payload["receiver"] == "voice_chat.messages"
+    assert seen_stream[0].payload["data"]["messages"][0]["text"] == "weather in Moscow"
+    assert seen_stream[0].payload["data"]["message_count"] == 1
 
 
 async def test_voice_chat_user_appends_neural_intent_demo(monkeypatch) -> None:
