@@ -20,6 +20,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 
 from .ycoerce import coerce_dict, iter_mappings
 from .regex_usage_runtime import record_regex_rule_hit
+from .runtime_flags import get_runtime_flags
 
 _log = logging.getLogger("adaos.nlu.pipeline")
 
@@ -506,53 +507,140 @@ async def _on_detect_request(evt: Any) -> None:
     if _seen_recent(rid):
         return
 
-    intent, slots, via, raw = await _try_regex_intent(text, webspace_id=webspace_id)
-    if intent:
+    flags = await get_runtime_flags(webspace_id)
+    regex_enabled = bool(flags.get("regex_enabled", True))
+    neural_runtime_enabled = bool(flags.get("neural_enabled", True))
+    rasa_enabled = bool(flags.get("rasa_enabled", True))
+
+    if regex_enabled:
+        intent, slots, via, raw = await _try_regex_intent(text, webspace_id=webspace_id)
+        if intent:
+            _emit_stage(
+                ctx,
+                stage="regex",
+                status="hit",
+                text=text,
+                webspace_id=webspace_id,
+                request_id=rid,
+                via=via,
+                intent=intent,
+                confidence=1.0,
+                slots=slots,
+                raw=raw,
+                meta=meta,
+            )
+            bus_emit(
+                ctx.bus,
+                "nlp.intent.detected",
+                {
+                    "intent": intent,
+                    "confidence": 1.0,
+                    "slots": slots,
+                    "text": text,
+                    "webspace_id": webspace_id,
+                    "request_id": rid,
+                    "via": via,
+                    "_raw": raw,
+                    "_meta": meta,
+                },
+                source="nlu.pipeline",
+            )
+            return
+
         _emit_stage(
             ctx,
             stage="regex",
-            status="hit",
+            status="miss",
             text=text,
             webspace_id=webspace_id,
             request_id=rid,
-            via=via,
-            intent=intent,
-            confidence=1.0,
-            slots=slots,
+            via=via or "regex",
+            reason="no_match",
             raw=raw,
+            meta=meta,
+        )
+    else:
+        _emit_stage(
+            ctx,
+            stage="regex",
+            status="skipped",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via="regex",
+            reason="runtime_disabled",
+            raw={"flags": flags},
+            meta=meta,
+        )
+
+    neural_policy_enabled = _use_neural_stage()
+    use_neural_stage = neural_runtime_enabled and neural_policy_enabled
+    if not neural_runtime_enabled:
+        _emit_stage(
+            ctx,
+            stage="neural",
+            status="skipped",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via="neural",
+            reason="runtime_disabled",
+            raw={"flags": flags},
+            meta=meta,
+        )
+    elif not neural_policy_enabled:
+        _emit_stage(
+            ctx,
+            stage="neural",
+            status="skipped",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via="neural",
+            reason="not_installed_or_policy_disabled",
+            raw={"flags": flags, "policy": _neural_stage_policy()},
+            meta=meta,
+        )
+
+    if not use_neural_stage and not rasa_enabled:
+        _emit_stage(
+            ctx,
+            stage="rasa",
+            status="skipped",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via="rasa",
+            reason="runtime_disabled",
+            raw={"flags": flags},
+            meta=meta,
+        )
+        _emit_stage(
+            ctx,
+            stage="pipeline",
+            status="miss",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            reason="no_active_downstream_stages",
+            raw={"flags": flags, "neural_policy": _neural_stage_policy()},
             meta=meta,
         )
         bus_emit(
             ctx.bus,
-            "nlp.intent.detected",
+            "nlp.intent.not_obtained",
             {
-                "intent": intent,
-                "confidence": 1.0,
-                "slots": slots,
+                "reason": "no_active_nlu_stages",
                 "text": text,
                 "webspace_id": webspace_id,
                 "request_id": rid,
-                "via": via,
-                "_raw": raw,
+                "via": "pipeline",
                 "_meta": meta,
             },
             source="nlu.pipeline",
         )
         return
 
-    _emit_stage(
-        ctx,
-        stage="regex",
-        status="miss",
-        text=text,
-        webspace_id=webspace_id,
-        request_id=rid,
-        via=via or "regex",
-        reason="no_match",
-        raw=raw,
-        meta=meta,
-    )
-    use_neural_stage = _use_neural_stage()
     downstream_event = "nlp.intent.detect.neural" if use_neural_stage else "nlp.intent.detect.rasa"
     _emit_stage(
         ctx,
@@ -563,6 +651,15 @@ async def _on_detect_request(evt: Any) -> None:
         request_id=rid,
         via="neural" if use_neural_stage else "rasa",
         reason=downstream_event,
+        raw={
+            "flags": flags,
+            "active_stages": {
+                "regex": regex_enabled,
+                "neural": use_neural_stage,
+                "rasa": rasa_enabled,
+            },
+            "neural_policy": _neural_stage_policy(),
+        },
         meta=meta,
     )
     downstream_payload: dict[str, Any] = {"text": text, "webspace_id": webspace_id, "request_id": rid, "_meta": meta}

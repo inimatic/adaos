@@ -12,6 +12,7 @@ from . import pipeline as _pipeline  # noqa: F401
 from . import neural_service_bridge as _neural_service_bridge  # noqa: F401
 from . import rasa_service_bridge as _rasa_service_bridge  # noqa: F401
 from . import rasa_training_bridge as _rasa_training_bridge  # noqa: F401
+from . import runtime_flags as _runtime_flags  # noqa: F401
 from . import trace_store as _trace_store  # noqa: F401
 from . import entity_resolver_runtime as _entity_resolver_runtime  # noqa: F401
 from . import teacher_bridge as _teacher_bridge  # noqa: F401

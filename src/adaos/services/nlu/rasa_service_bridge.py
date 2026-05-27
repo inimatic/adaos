@@ -13,6 +13,7 @@ from adaos.services.eventbus import emit as bus_emit
 from adaos.services.skill.service_supervisor import get_service_supervisor
 from .neural_usage_stats import record_neural_fallback_outcome
 from .rasa_skill_installer import is_rasa_nlu_enabled
+from .runtime_flags import is_stage_enabled
 
 _log = logging.getLogger("adaos.nlu.rasa")
 _SEMAPHORE = asyncio.Semaphore(2)
@@ -208,6 +209,9 @@ async def parse_text(
 ) -> Dict[str, Any]:
     meta = meta if isinstance(meta, Mapping) else {}
 
+    if not await is_stage_enabled(webspace_id, "rasa"):
+        return {"ok": False, "reason": "rasa_runtime_disabled", "via": "rasa"}
+
     if not is_rasa_nlu_enabled():
         return {"ok": False, "reason": "rasa_disabled", "via": "rasa"}
 
@@ -306,6 +310,11 @@ async def _parse_and_emit(
 ) -> None:
     ctx = get_ctx()
     meta = meta if isinstance(meta, Mapping) else {}
+
+    if not await is_stage_enabled(webspace_id, "rasa"):
+        _emit_stage(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, status="skipped", reason="runtime_disabled")
+        _emit_not_obtained(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, reason="rasa_runtime_disabled")
+        return
 
     if not is_rasa_nlu_enabled():
         _emit_stage(ctx=ctx, text=text, webspace_id=webspace_id, request_id=request_id, meta=meta, status="skipped", reason="rasa_disabled")

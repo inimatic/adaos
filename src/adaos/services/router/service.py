@@ -988,6 +988,15 @@ class RouterService:
         ) -> str | None:
             payload_dict = payload if isinstance(payload, dict) else {}
             meta_dict = meta if isinstance(meta, dict) else {}
+            scope = str(
+                payload_dict.get("voice_chat_scope")
+                or meta_dict.get("voice_chat_scope")
+                or payload_dict.get("scope")
+                or meta_dict.get("scope")
+                or ""
+            ).strip().lower()
+            if scope in {"shared", "workspace", "local"}:
+                return None
             token = str(
                 payload_dict.get("target_node_id")
                 or payload_dict.get("node_id")
