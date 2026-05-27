@@ -67,6 +67,19 @@ class _FakeGit:
         self.push_calls.append(root)
 
 
+class _FakeRootClient:
+    def __init__(self) -> None:
+        self.manifest: dict[str, object] = {}
+        self.uploads: list[dict[str, object]] = []
+
+    def get_skill_model_manifest(self, **kwargs) -> dict[str, object]:
+        return dict(self.manifest)
+
+    def upload_skill_model_artifact(self, **kwargs) -> dict[str, object]:
+        self.uploads.append(dict(kwargs))
+        return {"manifest": {"version_id": "v-test"}}
+
+
 class _FakeTxn:
     def __enter__(self):
         return self
@@ -246,6 +259,76 @@ def test_skill_push_uses_existing_registry_entry_when_manifest_is_missing(monkey
     assert git.pull_calls == [str(workspace)]
     assert git.commit_calls[0]["subpath"] == ["skills/browsers_skill", "registry.json"]
     assert git.push_calls == [str(workspace)]
+
+
+def test_private_model_artifacts_are_not_uploaded_by_default(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "demo_skill"
+    (skill_dir / "models").mkdir(parents=True)
+    (skill_dir / "models" / "model.pt").write_bytes(b"private-weights")
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: demo_skill",
+                "models:",
+                "  private: true",
+                "  artifacts:",
+                "    weights:",
+                "      path: models/model.pt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    manager = object.__new__(SkillManager)
+    manager._root_client = lambda: (_ for _ in ()).throw(AssertionError("private models should not contact root"))
+
+    result = manager._push_declared_model_artifacts(skill_dir, skill_name="demo_skill")
+
+    assert result == [
+        {
+            "key": "weights",
+            "artifact": "model.pt",
+            "private": True,
+            "skipped": True,
+            "reason": "private_model",
+        }
+    ]
+
+
+def test_private_model_artifacts_upload_with_explicit_override(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "demo_skill"
+    (skill_dir / "models").mkdir(parents=True)
+    (skill_dir / "models" / "model.pt").write_bytes(b"private-weights")
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: demo_skill",
+                "models:",
+                "  private: true",
+                "  artifacts:",
+                "    weights:",
+                "      path: models/model.pt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    client = _FakeRootClient()
+    manager = object.__new__(SkillManager)
+    manager._root_client = lambda: client
+
+    result = manager._push_declared_model_artifacts(
+        skill_dir,
+        skill_name="demo_skill",
+        publish_private=True,
+    )
+
+    assert result[0]["key"] == "weights"
+    assert result[0]["skipped"] is False
+    assert client.uploads[0]["name"] == "demo_skill"
+    assert client.uploads[0]["artifact"] == "model.pt"
 
 
 def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Path) -> None:

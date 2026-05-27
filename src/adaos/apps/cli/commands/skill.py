@@ -453,6 +453,7 @@ def _release_changed_skills(
     skill_name: str | None = None,
     remote: str = "origin",
     signoff: bool = False,
+    publish_private_models: bool = False,
 ) -> dict[str, object]:
     candidates = _collect_skill_release_candidates(skill_name=skill_name, remote=remote)
     candidate_items = [item for item in candidates.get("skills") or [] if isinstance(item, dict)]
@@ -482,7 +483,13 @@ def _release_changed_skills(
         # not allocate another version number.
         bump = bool(reasons - {"registry-version", "registry-missing"})
         message = _default_skill_release_message(name)
-        revision = mgr.push(name, message, signoff=signoff, bump=bump)
+        revision = mgr.push(
+            name,
+            message,
+            signoff=signoff,
+            bump=bump,
+            publish_private_models=publish_private_models,
+        )
         released.append(
             {
                 "name": name,
@@ -1127,6 +1134,11 @@ def push_command(
     signoff: bool = typer.Option(False, "--signoff", help=_("cli.option.signoff")),
     remote: str = typer.Option("origin", "--remote", help="workspace git remote for release candidate comparison"),
     bump: bool = typer.Option(True, "--bump/--no-bump", help="increment skill.yaml version before publishing"),
+    publish_private_models: bool = typer.Option(
+        False,
+        "--publish-private-models",
+        help="Upload model artifacts marked models.private/private to Root during this push.",
+    ),
 ):
     """
     Release workspace skill changes through manifest version bump, registry
@@ -1140,7 +1152,12 @@ def push_command(
 
     if message is None:
         try:
-            result = _release_changed_skills(skill_name=skill_name, remote=remote, signoff=signoff)
+            result = _release_changed_skills(
+                skill_name=skill_name,
+                remote=remote,
+                signoff=signoff,
+                publish_private_models=publish_private_models,
+            )
         except Exception as exc:
             typer.secho(f"push failed: {exc}", fg=typer.colors.RED)
             raise typer.Exit(1) from exc
@@ -1171,7 +1188,13 @@ def push_command(
 
     _resolve_skill_path(skill_name)
     mgr = _mgr()
-    res = mgr.push(skill_name, message, signoff=signoff, bump=bump)
+    res = mgr.push(
+        skill_name,
+        message,
+        signoff=signoff,
+        bump=bump,
+        publish_private_models=publish_private_models,
+    )
     if res in {"nothing-to-push", "nothing-to-commit"}:
         typer.echo(_("cli.skill.push.nothing"))
     else:

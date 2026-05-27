@@ -24,6 +24,7 @@ class ModelArtifact:
     uri: str | None = None
     expected_sha256: str | None = None
     expected_size_bytes: int | None = None
+    private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ def declared_model_artifacts(manifest: Mapping[str, Any], *, skill_dir: Path) ->
     models = manifest.get("models")
     if not isinstance(models, Mapping):
         return []
+    models_private = _optional_bool(models.get("private"))
     artifacts = models.get("artifacts")
     if not isinstance(artifacts, Mapping):
         return []
@@ -69,6 +71,7 @@ def declared_model_artifacts(manifest: Mapping[str, Any], *, skill_dir: Path) ->
                 uri=uri_token or None,
                 expected_sha256=_optional_string(raw.get("sha256")),
                 expected_size_bytes=_optional_int(raw.get("size_bytes")),
+                private=_optional_bool(raw.get("private"), default=models_private),
             )
         )
     return result
@@ -261,3 +264,16 @@ def _optional_int(value: Any) -> int | None:
     except Exception:
         return None
     return parsed if parsed >= 0 else None
+
+
+def _optional_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default

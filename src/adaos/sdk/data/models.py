@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+import yaml
+
 from adaos.services.models.artifacts import hash_file
 from adaos.services.root.client import RootHttpClient, RootHttpError
 
@@ -85,6 +87,48 @@ def _safe_artifact_name(value: str | None, fallback_path: Path | None = None) ->
     return name
 
 
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _skill_models_private(skill_id: str, artifact_key: str | None = None) -> bool:
+    skill_dir_token = str(os.getenv("ADAOS_DEV_SKILL_DIR") or "").strip()
+    if not skill_dir_token:
+        return False
+    skill_dir = Path(skill_dir_token)
+    manifest_path = skill_dir / "skill.yaml"
+    if not manifest_path.exists():
+        return False
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return False
+    if not isinstance(manifest, Mapping):
+        return False
+    manifest_name = str(manifest.get("name") or manifest.get("id") or "").strip()
+    if manifest_name and manifest_name != skill_id:
+        return False
+    models = manifest.get("models")
+    if not isinstance(models, Mapping):
+        return False
+    default_private = _truthy(models.get("private"))
+    artifacts = models.get("artifacts")
+    if artifact_key and isinstance(artifacts, Mapping):
+        raw_artifact = artifacts.get(artifact_key)
+        if isinstance(raw_artifact, Mapping) and "private" in raw_artifact:
+            return _truthy(raw_artifact.get("private"), default=default_private)
+    return default_private
+
+
 def _manifest_error_payload(exc: BaseException, *, label: str) -> dict[str, Any]:
     if isinstance(exc, RootHttpError) and int(getattr(exc, "status_code", 0) or 0) == 404:
         return {"ok": False, "label": label, "missing": True, "error": str(exc)}
@@ -124,6 +168,7 @@ def upload_model(
     label: str = "current",
     metadata: Mapping[str, Any] | None = None,
     skip_if_same: bool = True,
+    publish_private: bool = False,
     root_url: str | None = None,
 ) -> dict[str, Any]:
     """Upload a model artifact to Root and rotate the target label on change."""
@@ -134,6 +179,18 @@ def upload_model(
         raise FileNotFoundError(str(file_path))
     artifact_name = _safe_artifact_name(artifact, file_path)
     sha256, size_bytes = hash_file(file_path)
+    if _skill_models_private(resolved_skill, artifact_key=artifact_name) and not publish_private:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "private_model",
+            "skill_id": resolved_skill,
+            "label": str(label or "current"),
+            "artifact": artifact_name,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "manifest": {},
+        }
     client, _ = _root_http_client(root_url=root_url)
 
     current: dict[str, Any] | None = None
@@ -184,6 +241,7 @@ def update_model_if_changed(
     skill_id: str | None = None,
     artifact: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    publish_private: bool = False,
     root_url: str | None = None,
 ) -> dict[str, Any]:
     return upload_model(
@@ -191,6 +249,7 @@ def update_model_if_changed(
         skill_id=skill_id,
         artifact=artifact,
         metadata=metadata,
+        publish_private=publish_private,
         skip_if_same=True,
         root_url=root_url,
     )
