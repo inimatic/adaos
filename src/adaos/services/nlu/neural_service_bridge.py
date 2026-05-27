@@ -15,6 +15,7 @@ from adaos.services.eventbus import emit as bus_emit
 from adaos.services.skill.service_supervisor import get_service_supervisor
 from .entity_resolver_runtime import build_entity_trace_stage
 from .neural_usage_stats import record_neural_usage
+from .runtime_flags import is_stage_enabled
 
 _log = logging.getLogger("adaos.nlu.neural")
 
@@ -169,6 +170,60 @@ def _emit_stage(
         bus_emit(ctx.bus, "nlu.trace.stage", payload, source="nlu.neural")
     except Exception:
         pass
+
+
+def _emit_pipeline_stage(
+    *,
+    ctx: Any,
+    stage: str,
+    status: str,
+    text: str,
+    webspace_id: str | None,
+    request_id: str | None,
+    meta: Mapping[str, Any],
+    via: str,
+    reason: str | None = None,
+    raw: Mapping[str, Any] | None = None,
+) -> None:
+    payload: Dict[str, Any] = {
+        "stage": stage,
+        "status": status,
+        "text": text,
+        "via": via,
+    }
+    if webspace_id:
+        payload["webspace_id"] = webspace_id
+    if request_id:
+        payload["request_id"] = request_id
+    if reason:
+        payload["reason"] = reason
+    if raw:
+        payload["raw"] = dict(raw)
+    if isinstance(meta, Mapping) and meta:
+        payload["_meta"] = dict(meta)
+    try:
+        bus_emit(ctx.bus, "nlu.trace.stage", payload, source="nlu.neural")
+    except Exception:
+        pass
+
+
+def _emit_not_obtained(
+    *,
+    ctx: Any,
+    text: str,
+    webspace_id: str | None,
+    request_id: str | None,
+    meta: Mapping[str, Any],
+    reason: str,
+) -> None:
+    payload: Dict[str, Any] = {"reason": reason, "text": text, "via": "neural"}
+    if webspace_id:
+        payload["webspace_id"] = webspace_id
+    if request_id:
+        payload["request_id"] = request_id
+    if isinstance(meta, Mapping) and meta:
+        payload["_meta"] = dict(meta)
+    bus_emit(ctx.bus, "nlp.intent.not_obtained", payload, source="nlu.neural")
 
 
 def _record_usage_safe(
@@ -679,6 +734,48 @@ async def _on_nlp_intent_detect_neural(evt: Any) -> None:
             "preferred_locales": preferred_locales,
         }
     )
+    if not await is_stage_enabled(webspace_id, "neural"):
+        _emit_stage(
+            ctx=ctx,
+            text=text,
+            webspace_id=webspace_id,
+            request_id=request_id,
+            meta=meta,
+            status="skipped",
+            reason="runtime_disabled",
+        )
+        if await is_stage_enabled(webspace_id, "rasa"):
+            _emit_rasa_fallback(
+                text=text,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                meta=meta,
+                neural_reason="neural_runtime_disabled",
+                locale=locale,
+                preferred_locales=preferred_locales,
+            )
+        else:
+            _emit_pipeline_stage(
+                ctx=ctx,
+                stage="rasa",
+                status="skipped",
+                text=text,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                meta=meta,
+                via="rasa",
+                reason="runtime_disabled",
+            )
+            _emit_not_obtained(
+                ctx=ctx,
+                text=text,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                meta=meta,
+                reason="no_active_nlu_stages",
+            )
+        return
+
     result = await parse_text(
         text,
         webspace_id=webspace_id,
@@ -710,15 +807,36 @@ async def _on_nlp_intent_detect_neural(evt: Any) -> None:
             slots=slots,
             raw=raw,
         )
-        _emit_rasa_fallback(
-            text=text,
-            webspace_id=webspace_id,
-            request_id=request_id,
-            meta=meta,
-            neural_reason=str(result.get("reason") or "neural_failed"),
-            locale=locale,
-            preferred_locales=preferred_locales,
-        )
+        if await is_stage_enabled(webspace_id, "rasa"):
+            _emit_rasa_fallback(
+                text=text,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                meta=meta,
+                neural_reason=str(result.get("reason") or "neural_failed"),
+                locale=locale,
+                preferred_locales=preferred_locales,
+            )
+        else:
+            _emit_pipeline_stage(
+                ctx=ctx,
+                stage="rasa",
+                status="skipped",
+                text=text,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                meta=meta,
+                via="rasa",
+                reason="runtime_disabled",
+            )
+            _emit_not_obtained(
+                ctx=ctx,
+                text=text,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                meta=meta,
+                reason=str(result.get("reason") or "neural_failed"),
+            )
         return
 
     out: Dict[str, Any] = {

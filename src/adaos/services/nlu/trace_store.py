@@ -109,6 +109,10 @@ def _compact_raw(raw: Any) -> Any:
         "preferred_locales",
         "service",
         "reason",
+        "flags",
+        "active_stages",
+        "policy",
+        "neural_policy",
     ):
         value = raw.get(key)
         if value is not None:
