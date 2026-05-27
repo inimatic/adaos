@@ -422,7 +422,9 @@ async def diagnose_readiness(*, start_service: bool = False, stop_after: bool = 
     health = service.get("health") if isinstance(service.get("health"), Mapping) else {}
     health_ok = bool(health.get("ok")) if start_service else True
     model_loaded = bool(health.get("model_loaded")) if start_service else True
-    ok = bool(artifacts.get("ok")) and bool(service.get("installed")) and health_ok and model_loaded
+    template_backend_ready = bool(health.get("template_backend_ready")) if start_service else False
+    detector_ready = bool(model_loaded or template_backend_ready) if start_service else True
+    ok = bool(service.get("installed")) and health_ok and detector_ready and bool(artifacts.get("ok") or template_backend_ready)
     return {
         "ok": ok,
         "artifacts": artifacts,
@@ -432,6 +434,8 @@ async def diagnose_readiness(*, start_service: bool = False, stop_after: bool = 
             "service_installed": bool(service.get("installed")),
             "health_ok": health_ok,
             "model_loaded": model_loaded,
+            "template_backend_ready": template_backend_ready,
+            "detector_ready": detector_ready,
         },
         "warnings": warnings,
     }
