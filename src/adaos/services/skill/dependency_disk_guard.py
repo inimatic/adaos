@@ -62,14 +62,14 @@ def _install_specs(args: Iterable[str]) -> list[str]:
 
 def dependency_disk_budget_bytes(args: Iterable[str], *, has_requirements_file: bool = False) -> int:
     specs = _install_specs(args)
+    lowered = " ".join(specs).lower()
+    if any(token in lowered for token in _HEAVY_DEP_TOKENS):
+        return _env_bytes("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", 5.0)
+
     base = _env_bytes("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", 2.0)
     per_spec = _env_bytes("ADAOS_SKILL_DEP_DISK_PER_SPEC_GIB", 1.0)
     req_file = _env_bytes("ADAOS_SKILL_DEP_DISK_REQUIREMENTS_GIB", 4.0) if has_requirements_file else 0
-    required = base + per_spec * len(specs) + req_file
-    lowered = " ".join(specs).lower()
-    if any(token in lowered for token in _HEAVY_DEP_TOKENS):
-        required = max(required, _env_bytes("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", 14.0))
-    return required
+    return base + per_spec * len(specs) + req_file
 
 
 def ensure_dependency_disk_budget(
@@ -96,4 +96,3 @@ def ensure_dependency_disk_budget(
         "not enough free disk space to install Python dependencies"
         f"{label}: required>={_format_gib(required)}, available={_format_gib(free)}, path={probe}"
     )
-
