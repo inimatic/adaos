@@ -364,3 +364,41 @@ async def test_neural_diagnose_readiness_fails_when_required_artifact_missing(mo
     assert result["ok"] is False
     assert result["artifacts"]["missing_required"] == ["model.pt"]
     assert result["checks"]["service_installed"] is True
+
+
+@pytest.mark.anyio
+async def test_neural_diagnose_readiness_accepts_template_backend_without_model(monkeypatch, tmp_path):
+    from adaos.services.nlu import neural_service_bridge as bridge
+
+    (tmp_path / "state" / "nlu" / "neural").mkdir(parents=True)
+
+    class Supervisor:
+        async def refresh_discovered(self, force=False):
+            pass
+
+        async def start(self, name):
+            pass
+
+        def resolve_base_url(self, name):
+            return "http://127.0.0.1:18091"
+
+    monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path / "state")))
+    monkeypatch.setattr(bridge, "get_service_supervisor", lambda: Supervisor())
+    monkeypatch.setattr(
+        bridge,
+        "_http_get_json",
+        lambda url, *, timeout_ms: {
+            "ok": True,
+            "model_loaded": False,
+            "template_backend_ready": True,
+            "active_backend": "templates",
+        },
+    )
+
+    result = await bridge.diagnose_readiness(start_service=True)
+
+    assert result["ok"] is True
+    assert result["checks"]["artifacts"] is False
+    assert result["checks"]["model_loaded"] is False
+    assert result["checks"]["template_backend_ready"] is True
+    assert result["checks"]["detector_ready"] is True
