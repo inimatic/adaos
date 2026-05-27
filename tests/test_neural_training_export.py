@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 
 def test_neural_training_export_preserves_ownership_and_plain_text() -> None:
@@ -172,3 +175,38 @@ def test_promote_neural_candidate_backs_up_active_model_and_writes_pointer() -> 
     assert pointer["rollback_dir"]
     assert (active_root / "rollback" / "latest.json").exists()
     assert (Path(pointer["rollback_dir"]) / "model.pt").read_text(encoding="utf-8") == "old model"
+
+
+def test_neural_train_python_keeps_skill_venv_launcher_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.interpreter.workspace import InterpreterWorkspace
+
+    ctx = get_ctx()
+    ws = InterpreterWorkspace(ctx)
+    version_root = tmp_path / ".runtime" / "neural_nlu_service_skill" / "v0.2"
+    script = (
+        version_root
+        / "slots"
+        / "B"
+        / "src"
+        / "skills"
+        / "neural_nlu_service_skill"
+        / "scripts"
+        / "train_artifacts.py"
+    )
+    script.parent.mkdir(parents=True)
+    script.write_text("# training script\n", encoding="utf-8")
+    target = tmp_path / "base-python"
+    target.write_text("#!/usr/bin/env python\n", encoding="utf-8")
+    launcher = version_root / "venv" / "bin" / "python"
+    launcher.parent.mkdir(parents=True)
+    try:
+        launcher.symlink_to(target)
+    except (OSError, NotImplementedError):
+        if os.name == "nt":
+            pytest.skip("symlink creation is not available on this Windows environment")
+        raise
+
+    monkeypatch.setattr(ws, "_active_neural_train_script_path", lambda: None)
+
+    assert ws._neural_train_python(script_path=script) == launcher
