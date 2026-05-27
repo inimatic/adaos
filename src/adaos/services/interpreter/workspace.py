@@ -873,17 +873,48 @@ class InterpreterWorkspace:
         except Exception:
             return None
 
-    def _neural_train_python(self) -> Path:
-        skills_root = Path(self._ctx.paths.skills_dir())
-        runtime_root = skills_root / ".runtime" / _NEURAL_SKILL_NAME
+    def _neural_train_python(self, *, script_path: Path | None = None) -> Path:
         candidates: list[Path] = []
-        if runtime_root.exists():
-            candidates.extend(sorted(runtime_root.glob("v*/venv/Scripts/python.exe"), reverse=True))
-            candidates.extend(sorted(runtime_root.glob("v*/venv/bin/python"), reverse=True))
+
+        script_candidates: list[Path] = []
+        if script_path is not None:
+            script_candidates.append(script_path)
+        active_script = self._active_neural_train_script_path()
+        if active_script is not None:
+            script_candidates.append(active_script)
+
+        for active_script in script_candidates:
+            for parent in active_script.resolve().parents:
+                if parent.name.startswith("v") and (parent / "venv").exists():
+                    candidates.extend(
+                        [
+                            parent / "venv" / "Scripts" / "python.exe",
+                            parent / "venv" / "bin" / "python",
+                        ]
+                    )
+                    break
+
+        skills_root = Path(self._ctx.paths.skills_dir())
+        runtime_roots = [skills_root / ".runtime" / _NEURAL_SKILL_NAME]
+        try:
+            base_runtime = Path(self._ctx.paths.base_dir()) / "workspace" / "skills" / ".runtime" / _NEURAL_SKILL_NAME
+            if base_runtime not in runtime_roots:
+                runtime_roots.append(base_runtime)
+        except Exception:
+            pass
+        user_runtime = Path.home() / ".adaos" / "workspace" / "skills" / ".runtime" / _NEURAL_SKILL_NAME
+        if user_runtime not in runtime_roots:
+            runtime_roots.append(user_runtime)
+
+        for runtime_root in runtime_roots:
+            if runtime_root.exists():
+                candidates.extend(sorted(runtime_root.glob("v*/venv/Scripts/python.exe"), reverse=True))
+                candidates.extend(sorted(runtime_root.glob("v*/venv/bin/python"), reverse=True))
+
         for candidate in candidates:
             if candidate.exists():
-                return candidate.resolve()
-        return Path(sys.executable).resolve()
+                return candidate
+        return Path(sys.executable)
 
     def rebuild_neural_candidate_from_examples(
         self,
@@ -902,7 +933,7 @@ class InterpreterWorkspace:
         out_dir = candidate_dir or _unique_path(candidate_root / f"candidate.{_utc_filename_stamp()}")
         out_dir = out_dir.expanduser().resolve()
         script = self._neural_train_script_path()
-        python = self._neural_train_python()
+        python = self._neural_train_python(script_path=script)
         cmd = [
             str(python),
             str(script),
