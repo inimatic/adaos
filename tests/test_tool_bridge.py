@@ -68,6 +68,135 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     assert result["trace_id"] == "trace-123"
 
 
+def test_call_tool_skips_workspace_autosync_for_readonly_snapshots(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+    (tmp_path / "workspace" / "skills" / "infrastate_skill").mkdir(parents=True, exist_ok=True)
+
+    class _Paths:
+        def skills_workspace_dir(self):
+            return tmp_path / "workspace" / "skills"
+
+        def repo_root(self):
+            return tmp_path
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=_Paths(),
+        caps=None,
+        settings=None,
+        bus=None,
+    )
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            return {"ready": True}
+
+        def runtime_update(self, name: str, *, space: str = "workspace") -> dict[str, object]:
+            calls.append(f"update:{name}:{space}")
+            return {"ok": True}
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"run:{skill_name}:{tool_name}")
+            return {"skill": skill_name, "tool": tool_name, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    monkeypatch.setenv("ADAOS_LOG_LEVEL", "DEBUG")
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(tool="infrastate_skill:get_snapshot", arguments={"webspace_id": "desktop"}),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=ctx,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["run_sync", "run:infrastate_skill:get_snapshot"]
+
+
+def test_call_tool_runs_workspace_autosync_inside_worker(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+    (tmp_path / "workspace" / "skills" / "prompt_engineer_skill").mkdir(parents=True, exist_ok=True)
+
+    class _Paths:
+        def skills_workspace_dir(self):
+            return tmp_path / "workspace" / "skills"
+
+        def repo_root(self):
+            return tmp_path
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=_Paths(),
+        caps=None,
+        settings=None,
+        bus=None,
+    )
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            calls.append("runtime_status")
+            return {"ready": True}
+
+        def runtime_update(self, name: str, *, space: str = "workspace") -> dict[str, object]:
+            calls.append(f"update:{name}:{space}")
+            return {"ok": True}
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"run:{skill_name}:{tool_name}")
+            return {"skill": skill_name, "tool": tool_name, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync:start")
+        result = func(*args, **kwargs)
+        calls.append("run_sync:end")
+        return result
+
+    monkeypatch.setenv("ADAOS_LOG_LEVEL", "DEBUG")
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(tool="prompt_engineer_skill:prompt_list_project_objects", arguments={}),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=ctx,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        "run_sync:start",
+        "runtime_status",
+        "update:prompt_engineer_skill:workspace",
+        "run:prompt_engineer_skill:prompt_list_project_objects",
+        "run_sync:end",
+    ]
+
+
 def test_call_tool_repairs_workspace_runtime_when_runtime_missing(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     (tmp_path / "workspace" / "skills" / "infrascope_skill").mkdir(parents=True, exist_ok=True)
