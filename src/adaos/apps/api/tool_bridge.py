@@ -51,8 +51,19 @@ def _readonly_snapshot_rpc_timeout_s(requested_timeout: float | None) -> float |
 
 
 def _debug_autosync_enabled() -> bool:
+    raw = str(os.getenv("ADAOS_TOOL_BRIDGE_WORKSPACE_AUTOSYNC") or "").strip().lower()
+    if raw:
+        return raw in {"1", "true", "yes", "on"}
     level = (os.getenv("ADAOS_LOG_LEVEL") or "").strip().upper()
-    return not level or level == "DEBUG"
+    return level == "DEBUG"
+
+
+def _should_autosync_workspace_runtime(*, tool_name: str) -> bool:
+    if not _debug_autosync_enabled():
+        return False
+    if _is_readonly_snapshot_tool(tool_name):
+        return False
+    return True
 
 
 def _repo_workspace_skill_dir(ctx: AgentContext, skill_name: str) -> Path | None:
@@ -474,10 +485,9 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     # Пробуем локально; если навык отсутствует на узле-хабе — проксируем на member
     try:
         started_at = time.perf_counter()
-        if not body.dev:
-            _maybe_sync_workspace_runtime(ctx, mgr, skill_name)
-
         def _run_local_tool() -> Any:
+            if not body.dev and _should_autosync_workspace_runtime(tool_name=body.tool):
+                _maybe_sync_workspace_runtime(ctx, mgr, skill_name)
             if body.dev:
                 return mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
             try:
