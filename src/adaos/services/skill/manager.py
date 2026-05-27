@@ -31,6 +31,7 @@ from adaos.services.git.workspace_guard import ensure_clean
 from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext, get_ctx, use_ctx
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
+from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
 from adaos.services.skill.tests_runner import TestResult, run_tests as run_skill_tests
 from adaos.services.models.artifacts import (
@@ -2924,6 +2925,13 @@ class SkillManager:
         vendor_dir = slot.vendor_dir
         
         run_cwd = skill_dir if skill_dir.exists() else slot.src_dir
+        has_requirements_file = requirements_file.exists()
+        ensure_dependency_disk_budget(
+            Path(sys.prefix),
+            python_args,
+            has_requirements_file=has_requirements_file,
+            skill_name=slot.skill_name,
+        )
 
         def _run(cmd: list[str]) -> tuple[bool, str]:
             try:
@@ -2954,6 +2962,12 @@ class SkillManager:
 
         # 2) Fallback: pip --target vendor (after ensurepip)
         vendor_dir.mkdir(parents=True, exist_ok=True)
+        ensure_dependency_disk_budget(
+            vendor_dir,
+            python_args,
+            has_requirements_file=has_requirements_file,
+            skill_name=slot.skill_name,
+        )
         vendor_cmd = [
             *base_cmd,
             "--target",
