@@ -150,6 +150,23 @@ implemented. Until then, the API/CLI checklist remains the source of truth.
 For the teacher to decide which skill/tool owns a phrase, it needs governed machine-readable context, not only free-form prompt text.
 The target architecture uses `Root MCP Foundation` as the agent-facing context and authorization layer.
 
+The LLM is not allowed to call SDK functions, event publishers, skill tools, or host/UI actions directly. It may only propose an
+AdaOS-owned interpretation, candidate, or patch. AdaOS then validates, traces, previews, applies, and dispatches through its own event and
+authoring surfaces. This keeps every step observable in `nlu.trace`, `data.nlu_teacher.*`, Root MCP audit, and the normal runtime event bus.
+
+The target loop is:
+
+1. NLU misses or returns a low-confidence result.
+2. AdaOS builds an authoring context through MCP/API surfaces.
+3. LLM proposes one or more candidates: intent/action, regex/Rasa/neural template, entity correction, or development task.
+4. AdaOS validates the candidate with `nlu.check_phrase` / preview APIs and records trace.
+5. If the proposed template produces the LLM-planned intent, AdaOS may dispatch the normal runtime intent to the user-facing system.
+6. If the user says "no, that is not it" or gives a correction, AdaOS treats the new phrase as a correction linked to the previous
+   request/candidate and starts another analysis/training cycle.
+7. Durable training changes require preview, ownership resolution, audit, and either operator approval or an explicit per-owner trust policy.
+
+This makes the LLM an authoring assistant, not an execution authority.
+
 Token/session flow:
 
 1. The web **MCP Server** modal exposes an **Issue token** button.
@@ -165,6 +182,9 @@ Required Root MCP surfaces for NLU Teacher:
 
 - `nlu.describe_pipeline`: regex/neural/rasa stages, thresholds, supported template types, and apply capabilities.
 - `nlu.check_phrase`: dry-run phrase interpretation with trace, ranking, entities, and action preview.
+- `nlu.get_trace`: fetch the stored trace for a request/candidate without re-running inference.
+- `nlu.get_dialog_context`: recent user/system turns, previous failures, current route, and the active correction target.
+- `nlu.get_recent_failures`: last not-obtained/low-confidence requests grouped by request/thread.
 - `nlu.list_templates`: current regex/Rasa/neural/lookup templates with stable ids, owners, fingerprints, and status.
 - `nlu.get_template`: one current template with full editable content and provenance.
 - `nlu.list_training_targets`: scenario and skill locations where examples/rules may be saved.
@@ -172,10 +192,57 @@ Required Root MCP surfaces for NLU Teacher:
 - `nlu.preview_template_patch`: validate a proposed correction and return a diff without writing.
 - `nlu.apply_template_patch`: apply an approved correction with audit and stale-write protection.
 - `desktop.registry.lookup`: current `modal_id`, `node_ref`, `app_id`, `scenario_id`, webspace, and installed desktop objects.
+- `desktop.describe_actions`: runtime-backed host/UI actions such as modal open/close, scenario switch, home scenario, reload/reset, and
+  app install toggle.
+- `desktop.get_state`: current scenario, home scenario, open modals, installed apps, focused node/browser, and current route.
+- `desktop.preview_action`: validate an action candidate and show the event/action preview without dispatching it.
 - `skill.describe_tools`: skill tools, event subscriptions/publications, input schemas, and ownership hints.
+- `skill.describe_nlu`: skill-owned intents, examples, slots, regex rules, and `llm_policy`.
+- `scenario.describe_nlu`: scenario-owned intents, actions, examples, and routing hints.
+- `sdk.describe_surface`: SDK functions/events/projections as read-only descriptors for ownership and affordance discovery. This is not an
+  execution surface for the LLM.
 
 This keeps the existing regex model intact: Root MCP supplies descriptors and governed operations, while the current runtime pipeline remains
 `regex-first` and data-owned rules stay in scenario/skill artifacts.
+
+## NLU action classes
+
+The teacher should classify every actionable phrase into one of these classes before proposing templates:
+
+- `skill_action`: an existing skill owns the behavior. The output should resolve to an existing intent/action route, skill event, or skill tool
+  ownership hint. Training data belongs to the skill unless the scenario deliberately overrides routing.
+- `interface_action`: the phrase controls the AdaOS shell/client, for example open/close modal, switch scenario, go home, reload/reset
+  webspace, install/toggle app, or route output to a node. Training data belongs to the scenario or system-action overlay; dispatch goes
+  through host/UI action descriptors, not through SDK calls from the LLM.
+- `scenario_flow`: the phrase selects or advances scenario-level behavior. Training data belongs to the scenario, and actions should be
+  represented as scenario intent actions (`callHost`, `callSkill`, or future governed action descriptors).
+- `entity_correction`: the phrase changes how AdaOS should understand a name, alias, node, device, app, modal, scenario, webspace, or skill.
+  It should produce a named-entity patch, not a new intent.
+- `nlu_correction`: the phrase corrects a previous NLU miss or false positive. It must be linked to the previous request/candidate and should
+  prefer patching an existing template.
+- `development_task`: the user asks for behavior that does not exist yet. The teacher should create a task/candidate for the LLM programmer
+  to modify an existing skill/scenario or create a new one. It should not pretend the capability exists.
+- `non_actionable`: the utterance is chat/noise/out of scope. The teacher should not mutate training data.
+
+This classification prevents the teacher from forcing every phrase into regex/Rasa examples. It also tells the UI whether the next step is
+dispatch, correction, template patching, or a development backlog item.
+
+## Candidate lifecycle
+
+The initial closed-loop implementation can stay narrow and regex-first:
+
+1. LLM proposes a candidate with planned `intent`, optional `target`, and a template patch such as a regex rule for an existing AdaOS intent.
+2. AdaOS applies the candidate only in preview or trusted-autoapply mode.
+3. AdaOS runs the same phrase through the normal dry-run pipeline.
+4. If the returned intent matches the planned intent, AdaOS records the verification and may dispatch the resulting runtime intent/action
+   through the normal event bus.
+5. If dispatch succeeds, the user sees the requested behavior.
+6. If the user corrects it, the correction references the same request/candidate and the teacher receives both the failed action and the new
+   phrase.
+7. Only after repeated success or explicit approval does the candidate become durable training data.
+
+The key invariant: runtime execution always uses AdaOS intent dispatch and host/skill surfaces. The LLM never bypasses tracing by calling an
+SDK function, publishing an event, or invoking a tool directly.
 
 ## NLU authoring contract
 
@@ -356,45 +423,102 @@ After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 
 ## Roadmap
 
-### Phase 0 - Current baseline polish
+The canonical execution checklist lives in [nlu-roadmap.md](./nlu-roadmap.md).
+This section keeps the compact Teacher-specific sequence.
+
+### Phase 0 - Teacher contracts and baseline guardrails
+
+- Define request/thread, candidate, lifecycle, event, idempotency, response-policy, MCP capability, and LLM prompt-data contracts.
+- Add RU/EN Unicode fixtures for Teacher probes, correction threads, and template patch previews.
+- Keep the existing API as the implementation backend; Root MCP wraps governed capabilities instead of becoming a second source of truth.
+- Keep LLM output limited to candidates and patches; no direct SDK/tool/event/UI execution.
 
 - Keep `regex -> Rasa -> fallback/teacher` working through event bus.
 - Preserve low-confidence fallback to `nlp.intent.not_obtained`.
 - Keep service skills out of the user NLU fingerprint unless they provide training metadata.
 - Maintain smoke coverage for `[homepoint] Voice -> Rasa -> desktop.modal.open`.
 
-### Phase 1 - Trace and dry-run foundation
+### Phase 1 - Use existing APIs as the working loop
 
-- Add a structured `nlu.trace` record for each phrase.
-- Add dry-run `nlu.check_phrase` service/API/MCP contract.
-- Surface stage decisions, confidence, ranking, entities, and action preview.
+- Use the existing Teacher API as the first source of truth:
+  - `POST /api/nlu/teacher/{webspace_id}/probe`
+  - `GET /api/nlu/teacher/{webspace_id}/lookups`
+  - `POST /api/nlu/teacher/{webspace_id}/example/save`
+- Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
+- Record planned intent, owner hint, proposed template, verification status, dispatch status, and correction-thread link.
+- After previewing or trusted-applying a regex/template candidate, immediately run the probe; mark the candidate verified only if the returned
+  intent matches the planned intent.
+- Dispatch only through the normal AdaOS intent/action path and only when the candidate's action side-effect class allows auto-dispatch.
+- Link "no, that is not it" corrections to the previous request/candidate so the next teacher pass has the failure context.
+- Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
+- Surface stage decisions, confidence, ranking, entities, fallback reasons, and action preview in trace data before expanding the MCP plane.
 
-### Phase 2 - MCP token and descriptor context
+### Phase 2 - Minimal MCP descriptive plane
 
-- Add **Issue token** to the MCP Server modal.
-- Issue target-scoped Root MCP session leases with `NLUTeacherAuthor` capability profile.
-- Publish NLU pipeline, skill tool, scenario action, and desktop registry descriptors through Root MCP.
+- Add **Issue token** to the MCP Server modal or another operator-controlled surface.
+- Issue target-scoped Root MCP session leases with an initial `NLUTeacherAuthor`/read-mostly capability profile.
+- Publish read-only MCP contracts for:
+  - `nlu.describe_pipeline`
+  - `nlu.check_phrase` backed by the current probe service
+  - `nlu.get_trace`
+  - `nlu.get_dialog_context`
+  - `nlu.get_recent_failures`
+  - `desktop.registry.lookup` backed by the current lookup service
+  - `skill.describe_tools`
+  - `skill.describe_nlu`
+  - `scenario.describe_nlu`
+  - `sdk.describe_surface` as descriptors only
+- Keep write/apply operations behind the existing Teacher UI/API until preview and audit are stable.
+
+### Phase 3 - Action and ownership surfaces
+
+- Publish `desktop.describe_actions` for runtime-backed interface actions:
+  modal open/close, scenario switch, home scenario navigation, reload/reset, and app install toggle.
+- Publish `desktop.get_state` so the teacher can distinguish "open X" from "close the currently open modal" and can resolve current/home
+  scenario context.
+- Publish `desktop.preview_action` so a candidate can show the event/action that would be dispatched without mutating the UI.
+- Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, or development task ownership.
+- Classify teacher decisions into `skill_action`, `interface_action`, `scenario_flow`, `entity_correction`, `nlu_correction`,
+  `development_task`, or `non_actionable`.
+- Define action side-effect classes and owner conflict policy before allowing generic action candidates.
+
+### Phase 4 - Template inventory and safe patching
+
 - Publish current NLU template inventory with `template_id`, owner, status, fingerprint, and provenance.
+- Add:
+  - `nlu.list_templates`
+  - `nlu.get_template`
+  - `nlu.list_training_targets`
+  - `nlu.preview_template_patch`
+  - `nlu.apply_template_patch`
+- Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
+- Apply only through owning scenario/skill/system-action/named-entity services, never by LLM raw file writes.
+- Add rollback pointers and audit events for every applied patch.
+- Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
 
-### Phase 3 - Useful Teacher UI
+### Phase 5 - Useful Teacher UI
 
 - Add Check phrase field.
 - Show intent ranking/entities/action preview.
 - Show existing templates relevant to the phrase/intent and allow selecting one for correction.
 - Add Correct/Fix actions.
 - Save curated examples into scenario/skill training content.
+- Show previous failure/correction thread when the current phrase looks like a correction.
+- Show candidate verification state: proposed, previewed, intent-matched, dispatched, accepted, corrected, applied.
 
-### Phase 4 - Multi-engine template application
+### Phase 6 - Multi-engine template application
 
 - Accept Teacher template bundles for regex, Rasa, neural, and lookup metadata.
 - Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
 - Apply only the supported subset safely.
 - Keep regex deterministic and data-owned.
 - Feed Rasa from actual desktop registry lookups.
+- Store neural examples as curated training metadata until provider rebuild/reindex gates approve promotion.
 
-### Phase 5 - Feedback and promotion
+### Phase 7 - Feedback, regression, and promotion
 
 - Collect statistics by phrase, intent, stage, confidence, and operator feedback.
 - Promote high-value examples into training sets.
 - Tune confidence thresholds from observed misses and false accepts.
 - Add rollout/rollback controls for neural and Rasa model updates.
+- Add regex blast-radius checks, duplicate-template detection, golden phrase regression, and false-positive review queues.
