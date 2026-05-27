@@ -26,10 +26,11 @@ def test_skill_push_rejoins_split_message(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(skill_cmd, "_resolve_skill_path", lambda target: skill_dir)
 
     class _Mgr:
-        def push(self, skill_name: str, message: str, signoff: bool = False) -> str:
+        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
             assert skill_name == "demo_skill"
             assert message == "initial commit"
             assert signoff is False
+            assert bump is True
             return "rev-1"
 
     monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
@@ -43,8 +44,8 @@ def test_skill_push_without_message_releases_changed_skills(monkeypatch, tmp_pat
     pushed: list[tuple[str, str, bool]] = []
 
     class _Mgr:
-        def push(self, skill_name: str, message: str, signoff: bool = False) -> str:
-            pushed.append((skill_name, message, signoff))
+        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
+            pushed.append((skill_name, message, signoff, bump))
             return f"rev-{skill_name}"
 
     monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
@@ -66,11 +67,41 @@ def test_skill_push_without_message_releases_changed_skills(monkeypatch, tmp_pat
 
     assert result.exit_code == 0, result.output
     assert pushed == [
-        ("browsers_skill", "chore(browsers_skill): release workspace changes", True),
-        ("infrastate_skill", "chore(infrastate_skill): release workspace changes", True),
+        ("browsers_skill", "chore(browsers_skill): release workspace changes", True, True),
+        ("infrastate_skill", "chore(infrastate_skill): release workspace changes", True, False),
     ]
     assert "released skill changes" in result.output
     assert "browsers_skill, infrastate_skill" in result.output
+
+
+def test_skill_push_without_message_does_not_bump_registry_only_drift(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    pushed: list[tuple[str, bool]] = []
+
+    class _Mgr:
+        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
+            pushed.append((skill_name, bump))
+            return f"rev-{skill_name}"
+
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(
+        skill_cmd,
+        "_collect_skill_release_candidates",
+        lambda **kwargs: {
+            "base_ref": "origin/main",
+            "ahead_count": 0,
+            "behind_count": 0,
+            "skills": [
+                {"name": "weather_skill", "reasons": ["registry-version"]},
+                {"name": "rasa_nlu_service_skill", "reasons": ["registry-missing"]},
+            ],
+        },
+    )
+
+    result = runner.invoke(skill_cmd.app, ["push"])
+
+    assert result.exit_code == 0, result.output
+    assert pushed == [("weather_skill", False), ("rasa_nlu_service_skill", False)]
 
 
 def test_skill_push_without_message_reports_when_named_skill_has_no_release_changes(monkeypatch, tmp_path: Path) -> None:
@@ -101,3 +132,24 @@ def test_skill_push_message_requires_skill_name(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "skill name is required" in result.output
+
+
+def test_skill_push_message_can_disable_version_bump(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    skill_dir = tmp_path / "demo_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    pushed: list[tuple[str, str, bool]] = []
+
+    monkeypatch.setattr(skill_cmd, "_resolve_skill_path", lambda target: skill_dir)
+
+    class _Mgr:
+        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
+            pushed.append((skill_name, message, bump))
+            return "rev-1"
+
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+
+    result = runner.invoke(skill_cmd.app, ["push", "demo_skill", "--message", "catch up registry", "--no-bump"])
+
+    assert result.exit_code == 0, result.output
+    assert pushed == [("demo_skill", "catch up registry", False)]

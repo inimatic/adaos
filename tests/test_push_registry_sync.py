@@ -140,6 +140,57 @@ def test_skill_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Path)
     assert git.push_calls == [str(workspace)]
 
 
+def test_skill_push_without_bump_catches_registry_up_to_manifest(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    skill_dir = workspace / "skills" / "weather_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "id: weather_skill",
+                "name: Weather Skill",
+                "version: '2.6.5'",
+                "description: Weather",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "registry.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-05-26T00:00:00+00:00",
+                "skills": [{"kind": "skill", "id": "weather_skill", "name": "weather_skill", "version": "2.6.4"}],
+                "scenarios": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    git = _FakeGit()
+    monkeypatch.setattr("adaos.services.skill.manager.get_git_availability", lambda base_dir=None: SimpleNamespace(enabled=True), raising=False)
+
+    manager = object.__new__(SkillManager)
+    manager.caps = _FakeCaps()
+    manager.settings = SimpleNamespace(git_author_name="Ada Tester", git_author_email="tester@adaos.local")
+    manager.ctx = _workspace_ctx(workspace, git)
+    manager.reg = None
+
+    revision = manager.push("weather_skill", "catch registry up", bump=False)
+
+    registry = json.loads((workspace / "registry.json").read_text(encoding="utf-8"))
+    skill_yaml = (skill_dir / "skill.yaml").read_text(encoding="utf-8")
+    assert revision == "rev-1"
+    assert "version: '2.6.5'" in skill_yaml
+    assert registry["skills"][0]["version"] == "2.6.5"
+    assert git.commit_calls[0]["subpath"] == ["skills/weather_skill", "registry.json"]
+
+
 def test_skill_push_uses_existing_registry_entry_when_manifest_is_missing(monkeypatch, tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / ".git").mkdir(parents=True)
