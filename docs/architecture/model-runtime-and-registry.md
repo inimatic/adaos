@@ -217,6 +217,7 @@ the skill-owned model requirement. The weight file is the hash boundary used by
 
 ```yaml
 models:
+  private: true
   artifacts:
     weights:
       path: models/face-defect/model.pt
@@ -224,6 +225,19 @@ models:
       capability: image-segmentation
       dependency_profile: torch-cpu-py311
 ```
+
+`models.private: true` marks declared model artifacts as private by default.
+Private artifacts are still valid install inputs: if the source file is present
+in the skill workspace, install copies it into the skill data area; if only a
+Root manifest is available, install can still download the last Root-published
+version. The privacy flag only changes publication: `adaos skill push` skips
+uploading private model modifications to Root unless the command is run with
+`--publish-private-models`. An individual artifact can override the model-level
+default with `models.artifacts.<key>.private: false`.
+
+Runtime helpers follow the same default. `adaos.sdk.data.models.upload_model()`
+and `update_model_if_changed()` skip Root upload for a private skill manifest
+unless called with `publish_private=True`.
 
 Example for Neural NLU:
 

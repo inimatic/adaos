@@ -26,8 +26,48 @@ def test_declared_model_artifact_defaults_to_skill_data_models(tmp_path):
     state = local_artifact_state(artifact)
 
     assert artifact.install_path.as_posix() == "data/files/models/model.pt"
+    assert artifact.private is False
     assert state is not None
     assert state.size_bytes == len(b"weights")
+
+
+def test_declared_model_artifact_inherits_models_private_flag(tmp_path):
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    manifest = {
+        "models": {
+            "private": True,
+            "artifacts": {
+                "weights": {
+                    "path": "model.pt",
+                }
+            },
+        }
+    }
+
+    [artifact] = declared_model_artifacts(manifest, skill_dir=skill_dir)
+
+    assert artifact.private is True
+
+
+def test_declared_model_artifact_private_can_be_overridden(tmp_path):
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    manifest = {
+        "models": {
+            "private": True,
+            "artifacts": {
+                "weights": {
+                    "path": "model.pt",
+                    "private": False,
+                }
+            },
+        }
+    }
+
+    [artifact] = declared_model_artifacts(manifest, skill_dir=skill_dir)
+
+    assert artifact.private is False
 
 
 def test_install_local_artifact_writes_skill_owned_manifest(tmp_path):

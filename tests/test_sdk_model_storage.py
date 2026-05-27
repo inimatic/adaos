@@ -59,6 +59,61 @@ def test_upload_model_uploads_changed_artifact(tmp_path, monkeypatch):
     assert client.uploads[0]["metadata"] == {"source": "test"}
 
 
+def test_upload_model_skips_private_skill_manifest_by_default(tmp_path, monkeypatch):
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: demo_skill",
+                "models:",
+                "  private: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    model_path = tmp_path / "model.pt"
+    model_path.write_bytes(b"private")
+    client = FakeRootClient({"artifact": "model.pt", "sha256": "old"})
+    monkeypatch.setenv("ADAOS_DEV_SKILL_DIR", str(skill_dir))
+    monkeypatch.setattr(models, "_root_http_client", lambda **_: (client, object()))
+
+    result = models.update_model_if_changed(model_path, skill_id="demo_skill")
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "private_model"
+    assert client.uploads == []
+
+
+def test_upload_model_can_publish_private_with_explicit_override(tmp_path, monkeypatch):
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    (skill_dir / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: demo_skill",
+                "models:",
+                "  private: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    model_path = tmp_path / "model.pt"
+    model_path.write_bytes(b"private")
+    client = FakeRootClient({"artifact": "model.pt", "sha256": "old"})
+    monkeypatch.setenv("ADAOS_DEV_SKILL_DIR", str(skill_dir))
+    monkeypatch.setattr(models, "_root_http_client", lambda **_: (client, object()))
+
+    result = models.update_model_if_changed(model_path, skill_id="demo_skill", publish_private=True)
+
+    assert result["ok"] is True
+    assert result["skipped"] is False
+    assert client.uploads[0]["artifact"] == "model.pt"
+
+
 def test_download_previous_model_resolves_artifact_from_manifest(tmp_path, monkeypatch):
     payload = b"previous"
     model_path = tmp_path / "previous.pt"

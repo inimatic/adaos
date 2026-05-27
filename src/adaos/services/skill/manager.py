@@ -1305,7 +1305,15 @@ class SkillManager:
         except Exception:
             pass
 
-    def push(self, name: str, message: str, *, signoff: bool = False, bump: bool = True) -> str:
+    def push(
+        self,
+        name: str,
+        message: str,
+        *,
+        signoff: bool = False,
+        bump: bool = True,
+        publish_private_models: bool = False,
+    ) -> str:
         self.caps.require("core", "skills.manage", "git.write", "net.git")
         root = self.ctx.paths.workspace_dir()
         try:
@@ -1324,7 +1332,11 @@ class SkillManager:
         self._ensure_skill_subpath_materialized(root, sub)
         version = self._bump_skill_manifest_for_push(root / "skills" / sub) if bump else None
         upsert_workspace_registry_entry(root, "skills", root / "skills" / sub)
-        self._push_declared_model_artifacts(root / "skills" / sub, skill_name=sub)
+        self._push_declared_model_artifacts(
+            root / "skills" / sub,
+            skill_name=sub,
+            publish_private=publish_private_models,
+        )
         if version and getattr(self, "reg", None) is not None:
             try:
                 self.reg.register(sub, active_version=version)
@@ -1391,7 +1403,13 @@ class SkillManager:
             pass
         return client
 
-    def _push_declared_model_artifacts(self, skill_dir: Path, *, skill_name: str) -> list[dict[str, Any]]:
+    def _push_declared_model_artifacts(
+        self,
+        skill_dir: Path,
+        *,
+        skill_name: str,
+        publish_private: bool = False,
+    ) -> list[dict[str, Any]]:
         try:
             manifest = self._load_manifest(skill_dir)
         except FileNotFoundError:
@@ -1399,15 +1417,28 @@ class SkillManager:
         artifacts = declared_model_artifacts(manifest, skill_dir=skill_dir)
         if not artifacts:
             return []
-        client = self._root_client()
+        client: RootHttpClient | None = None
         pushed: list[dict[str, Any]] = []
         for artifact in artifacts:
+            if artifact.private and not publish_private:
+                pushed.append(
+                    {
+                        "key": artifact.key,
+                        "artifact": artifact.artifact_name,
+                        "private": True,
+                        "skipped": True,
+                        "reason": "private_model",
+                    }
+                )
+                continue
             state = local_artifact_state(artifact)
             if state is None:
                 raise FileNotFoundError(
                     f"model artifact '{artifact.key}' for skill '{skill_name}' is declared but source file is missing: "
                     f"{artifact.source_path or artifact.uri or artifact.artifact_name}"
                 )
+            if client is None:
+                client = self._root_client()
             try:
                 current = client.get_skill_model_manifest(name=skill_name, label="current")
             except RootHttpError as exc:

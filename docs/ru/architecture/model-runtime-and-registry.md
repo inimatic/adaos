@@ -123,12 +123,25 @@ runtime:
 
 ```yaml
 models:
+  private: true
   artifacts:
     weights:
       path: models/face-defect/model.pt
       capability: image-segmentation
       dependency_profile: torch-cpu-py311
 ```
+
+`models.private: true` marks model artifacts as private by default. Private
+artifacts remain installable: install can copy a local source file into the
+skill data area, or download the last Root-published version when only Root
+metadata is available. The flag only affects publication: `adaos skill push`
+does not upload private model changes to Root unless it is run with
+`--publish-private-models`. A specific artifact can opt out with
+`models.artifacts.<key>.private: false`.
+
+Runtime helpers use the same default. `adaos.sdk.data.models.upload_model()`
+and `update_model_if_changed()` skip Root upload for a private skill manifest
+unless they are called with `publish_private=True`.
 
 Пример для Neural NLU:
 
