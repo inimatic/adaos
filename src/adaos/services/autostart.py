@@ -350,7 +350,35 @@ def _write_linux_cli_shim(path: Path, spec: AutostartSpec) -> None:
     for key, value in spec.env.items():
         if key not in _LINUX_CLI_SHIM_ENV_KEYS:
             continue
+        if key == "PYTHONPATH":
+            continue
         lines.append(f"export {key}={_sh_quote(str(value))}")
+    lines.extend(
+        [
+            'BASE_DIR="${ADAOS_BASE_DIR:-$HOME/.adaos}"',
+            'ACTIVE_FILE="$BASE_DIR/state/core_slots/active"',
+            'ACTIVE_SLOT=""',
+            'if [ -f "$ACTIVE_FILE" ]; then',
+            '  ACTIVE_SLOT="$(tr -d \'[:space:]\' < "$ACTIVE_FILE")"',
+            "fi",
+            'if [ "$ACTIVE_SLOT" = "A" ] || [ "$ACTIVE_SLOT" = "B" ]; then',
+            '  SLOT_DIR="$BASE_DIR/state/core_slots/slots/$ACTIVE_SLOT"',
+            '  REPO_DIR="$SLOT_DIR/repo"',
+            '  VENV_DIR="$SLOT_DIR/venv"',
+            '  if [ -x "$VENV_DIR/bin/python" ]; then',
+            '    export ADAOS_ACTIVE_CORE_SLOT="$ACTIVE_SLOT"',
+            '    export ADAOS_ACTIVE_CORE_SLOT_DIR="$SLOT_DIR"',
+            '    export ADAOS_SLOT_REPO_ROOT="$REPO_DIR"',
+            '    if [ -d "$REPO_DIR/src" ]; then',
+            '      export PYTHONPATH="$REPO_DIR/src${PYTHONPATH:+:$PYTHONPATH}"',
+            "    fi",
+            '    exec "$VENV_DIR/bin/python" -m adaos.apps.cli.app "$@"',
+            "  fi",
+            "fi",
+        ]
+    )
+    if "PYTHONPATH" in spec.env:
+        lines.append(f"export PYTHONPATH={_sh_quote(str(spec.env['PYTHONPATH']))}")
     lines.append(f"exec {_sh_quote(python)} -m adaos.apps.cli.app \"$@\"")
     _write_text(path, "\n".join(lines) + "\n")
     try:
