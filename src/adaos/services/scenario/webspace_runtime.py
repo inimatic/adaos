@@ -177,6 +177,12 @@ def schedule_skill_runtime_rebuild(
     reason: str = "",
 ) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
+    invalidate_webspace_materialization_cache(
+        key,
+        reason=reason or action,
+        action=action,
+        source_of_truth=source_of_truth,
+    )
     stats = _skill_runtime_rebuild_stats(key)
     stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
     pending = _merge_skill_runtime_rebuild_request(
@@ -2765,10 +2771,61 @@ def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, A
     target = str(webspace_id or "").strip()
     current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
     current.update(fields)
+    if str(current.get("status") or "").strip() == "ready" and "invalidation_reason" not in fields:
+        current.pop("invalidation_reason", None)
     current["webspace_id"] = target
     current["updated_at"] = time.time()
     _WEBSPACE_REBUILD_STATUS[target] = current
     return dict(current)
+
+
+def invalidate_webspace_materialization_cache(
+    webspace_id: str | None = None,
+    *,
+    reason: str,
+    action: str | None = None,
+    source_of_truth: str | None = None,
+    scenario_id: str | None = None,
+) -> dict[str, Any]:
+    target = str(webspace_id or "").strip() or default_webspace_id()
+    current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+    current_materialization = (
+        current.get("materialization") if isinstance(current.get("materialization"), Mapping) else {}
+    )
+    effective_scenario = (
+        str(scenario_id or "").strip()
+        or str(current.get("scenario_id") or "").strip()
+        or str(current_materialization.get("current_scenario") or "").strip()
+        or None
+    )
+    reason_token = str(reason or "").strip() or "runtime_mutation"
+    materialization = _pending_materialization_snapshot(
+        target,
+        scenario_id=effective_scenario,
+        snapshot_source=f"invalidate:{reason_token}",
+        rebuild_state=current,
+    )
+    materialization["stale_reason"] = reason_token
+    previous_source = str(current_materialization.get("snapshot_source") or "").strip()
+    if previous_source:
+        materialization["previous_snapshot_source"] = previous_source
+    if current_materialization.get("observed_at") is not None:
+        materialization["previous_observed_at"] = current_materialization.get("observed_at")
+    return _set_webspace_rebuild_status(
+        target,
+        status="invalidated",
+        pending=True,
+        background=False,
+        action=str(action or current.get("action") or "").strip() or "materialization_cache_invalidated",
+        source_of_truth=str(source_of_truth or current.get("source_of_truth") or "").strip() or "runtime_mutation",
+        scenario_id=effective_scenario,
+        requested_at=time.time(),
+        started_at=time.time(),
+        finished_at=None,
+        invalidation_reason=reason_token,
+        materialization=materialization,
+        error=None,
+    )
 
 
 def _elapsed_ms(started_at: float) -> float:
@@ -2964,6 +3021,7 @@ def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
         "scenario_id": str(current.get("scenario_id") or "") or None,
         "scenario_resolution": str(current.get("scenario_resolution") or "") or None,
         "switch_mode": str(current.get("switch_mode") or "") or None,
+        "invalidation_reason": str(current.get("invalidation_reason") or "") or None,
         "requested_at": current.get("requested_at"),
         "started_at": current.get("started_at"),
         "finished_at": current.get("finished_at"),
@@ -7692,6 +7750,7 @@ __all__ = [
     "describe_webspace_overlay_state",
     "describe_webspace_projection_state",
     "describe_webspace_rebuild_state",
+    "invalidate_webspace_materialization_cache",
     "set_current_webspace_home",
     "rebuild_webspace_from_sources",
 ]

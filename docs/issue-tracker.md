@@ -138,6 +138,38 @@ Follow-up profiler-threshold experiment, same stand, 2026-05-28:
   `room_reset:*`, `creating YRoom`, `initial_client_update_reconcile`, and
   `scenario-based seed failed ... scenario 'web_desktop' has no scenario.json`
   messages.
+- Hotpatch validation, 2026-05-28: normal materialization polling was changed
+  on the `.30` stand to prefer `rebuild_state.materialization` and mark old
+  cached values stale instead of replaying detached YStore updates. Isolated
+  materialization polling improved from `266 MiB -> 1498 MiB` RSS in 75 seconds
+  before the patch to `407 MiB -> 469 MiB` RSS with `21738/21738` responses
+  served from `rebuild_cache` after the patch. The repeated mixed 180-second
+  polling run served materialization `379/379` from `rebuild_cache`, had no
+  endpoint failures, and held RSS around `331 MiB -> 416 MiB`, still about
+  `416 MiB` after 180 seconds idle.
+- Source patch validation, 2026-05-28: the hotpatch was turned into a guarded
+  source change. Normal
+  `/api/node/yjs/webspaces/{webspace_id}/materialization` no longer performs
+  detached YDoc/YStore replay; live replay is available only as explicit
+  `verify_live=true` diagnostics. Cached materialization uses a short default
+  TTL (`ADAOS_YJS_MATERIALIZATION_CACHE_MAX_AGE_SEC`, default `3s`) and returns
+  stale metadata instead of falling back to live replay. Resetters now cover
+  accepted install operations and skill runtime install/update/activate/uninstall
+  flows. Deferred skill flows intentionally remain invalidated until the batch
+  rebuild runs. Desktop live-room overlay mutations were deliberately left out
+  of the resetter list because they do not always schedule a rebuild and would
+  otherwise create a sticky pending state.
+  Stand checks: hard reload stayed on `rebuild_cache` while reporting
+  pending/stale during rebuild and returned to ready; `skills/runtime/notify-activated`
+  invalidated the cache, then the coalesced skill rebuild restored
+  `ready` and cleared `invalidation_reason`. Isolated materialization soak after
+  the source patch served `48838/48838` responses from `rebuild_cache` with RSS
+  about `315 MiB -> 338 MiB`, `342 MiB` after 60 seconds idle. Mixed
+  UI/operator polling served all materialization-bearing responses from
+  `rebuild_cache`, had `2511/2511` successful responses, and held RSS around
+  `345 MiB -> 421 MiB`, `420 MiB` after 60 seconds idle. Final post-restart
+  materialization soak served `26883/26883` responses from `rebuild_cache`, RSS
+  about `429 MiB -> 444 MiB`, `444 MiB` after 30 seconds idle.
 
 Status by priority:
 
@@ -145,13 +177,13 @@ Status by priority:
   profiler from interrupting the 180-second baseline test, but boot still showed
   an early `runtime.listener_lost` respawn, and the `infrastate/snapshot`
   endpoint timed out under polling.
-- [ ] P1 is not closed. Guardrails are visible and prevented the older
-  multi-gigabyte runaway during the measured window, but RSS still grew by
-  hundreds of MiB under read-heavy polling. The repeat run shows this is not
-  only a profiler-threshold artifact. The high-water experiment shows the more
-  important failure mode: memory does not relax after load stops. Current
-  evidence narrows the first fix target to materialization reads that rebuild a
-  detached YDoc by replaying YStore updates on every request.
+- [ ] P1 is materially improved but not closed. The first retained-growth
+  amplifier was patched: normal materialization polling no longer rebuilds a
+  detached YDoc by replaying YStore updates on every request. The stand no
+  longer reproduces the older `>1 GiB` materialization runaway in isolated or
+  mixed polling. Remaining risk: RSS still moves upward under mixed read load
+  and does not relax meaningfully after idle, so retained-owner inspection must
+  continue outside the materialization path.
 - [ ] P2 is partially implemented, not yet an operator source of truth. Thin
   summary and status-card endpoints are cheap and available, but the stand still
   requires full reliability/Yjs/infrastate reads to interpret pressure, and the
@@ -2340,9 +2372,32 @@ Actions:
 - [x] Identify the first retained/allocation-heavy owner after the 3 GiB
   high-water run: repeated materialization reads rebuild a detached YDoc and
   replay YStore updates through `Y.apply_update`.
-- [ ] Change `/api/node/yjs/webspaces/{webspace_id}/materialization` so normal
+- [x] Change `/api/node/yjs/webspaces/{webspace_id}/materialization` so normal
   polling uses cached materialization/runtime state or a cheap live-room summary,
   not detached YStore replay on every request.
+- [x] Validate the cached materialization hotpatch on `.30`: isolated
+  materialization polling and mixed polling no longer reproduce the `>1 GiB`
+  detached YStore replay growth.
+- [x] Add cache invalidation for accepted install operations and skill runtime
+  install/update/activate/uninstall paths, with rebuild success as the point
+  that returns materialization to ready.
+- [ ] Add operator/UI semantics for `snapshot_source`, `cache_fresh`, and
+  `stale`: stale materialization must not be treated as a green source of truth,
+  but the browser should not disturb end users with low-level Yjs cache age
+  details.
+- [ ] Add a low-frequency live verifier or cheap live-room summary refresh that
+  updates separate `live_verification` status off the request path and prevents
+  long stale plateaus without reintroducing per-request detached replay.
+- [ ] Define the deferred skill-update contract: when
+  `defer_webspace_rebuild=true`, materialization remains invalidated until the
+  explicit batch rebuild; operator UI should show this as deferred/rebuild
+  required, not as an active failure.
+- [ ] Decide how desktop live-room overlay mutations (`toggle-install`,
+  pinned widgets, direct desktop patch) should refresh materialization summary.
+  Do not simply mark them pending unless the mutation also schedules a rebuild.
+- [ ] Cover initial startup before `room_bootstrap` fills
+  `rebuild_state.materialization`: normal status currently returns
+  `rebuild_cache_missing` until the bootstrap cache appears.
 - [ ] Add a regression test or stand soak that polls materialization for at
   least 75 seconds and requires RSS plateau/relaxation instead of `>1 GiB`
   retained growth.

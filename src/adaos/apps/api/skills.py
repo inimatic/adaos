@@ -22,6 +22,7 @@ from adaos.services.skill.update import SkillUpdateService
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
+from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 from adaos.services.workspace_registry import build_registry_entry, find_workspace_registry_entry, list_workspace_registry_entries
 from adaos.services.yjs.webspace import default_webspace_id
@@ -471,6 +472,12 @@ async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
         "prepared": getattr(prep, "slot", None),
         "webspace_id": webspace_id,
     }
+    invalidate_webspace_materialization_cache(
+        webspace_id,
+        reason=f"skill_install:{skill_name}",
+        action="skill_install_sync",
+        source_of_truth="skill_runtime",
+    )
     try:
         await rebuild_webspace_projection(
             webspace_id=webspace_id,
@@ -494,6 +501,12 @@ async def uninstall(body: UninstallReq, mgr: SkillManager = Depends(_get_manager
         body.name,
         force=bool(body.force),
     )
+    invalidate_webspace_materialization_cache(
+        webspace_id,
+        reason=f"skill_uninstall:{body.name}",
+        action="skill_uninstall_sync",
+        source_of_truth="skill_runtime",
+    )
     try:
         await rebuild_webspace_projection(
             webspace_id=webspace_id,
@@ -516,6 +529,12 @@ async def get_skill(name: str, mgr: SkillManager = Depends(_get_manager)):
 @router.delete("/{name}")
 async def remove(name: str, mgr: SkillManager = Depends(_get_manager)):
     mgr.uninstall(name)
+    invalidate_webspace_materialization_cache(
+        default_webspace_id(),
+        reason=f"skill_delete:{name}",
+        action="skill_uninstall_sync",
+        source_of_truth="skill_runtime",
+    )
     try:
         await rebuild_webspace_projection(
             webspace_id=default_webspace_id(),
@@ -589,7 +608,13 @@ async def runtime_activate(
     try:
         slot = mgr.activate_for_space(body.name, version=body.version, slot=body.slot, space="default", webspace_id=webspace_id)
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
-        return {"ok": True, "slot": slot, "handler_reload": reload_result}
+        materialization_cache = invalidate_webspace_materialization_cache(
+            webspace_id,
+            reason=f"skill_activate:{body.name}",
+            action="skill_activation_sync",
+            source_of_truth="skill_runtime",
+        )
+        return {"ok": True, "slot": slot, "handler_reload": reload_result, "materialization_cache": materialization_cache}
     except RuntimeError as exc:
         msg = str(exc).lower()
         if not body.auto_prepare or ("is not prepared" not in msg and "no installed versions" not in msg):
@@ -602,7 +627,13 @@ async def runtime_activate(
         prep = mgr.prepare_runtime(body.name, run_tests=False, preferred_slot=pref_slot)
         slot = mgr.activate_for_space(body.name, version=prep.version, slot=prep.slot, space="default", webspace_id=webspace_id)
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
-        return {"ok": True, "slot": slot, "prepared": prep.slot, "handler_reload": reload_result}
+        materialization_cache = invalidate_webspace_materialization_cache(
+            webspace_id,
+            reason=f"skill_activate:{body.name}",
+            action="skill_activation_sync",
+            source_of_truth="skill_runtime",
+        )
+        return {"ok": True, "slot": slot, "prepared": prep.slot, "handler_reload": reload_result, "materialization_cache": materialization_cache}
 
 
 @router.post("/runtime/notify-activated")
@@ -624,8 +655,14 @@ async def runtime_notify_activated(body: RuntimeNotifyActivatedReq):
         "defer_webspace_rebuild": bool(body.defer_webspace_rebuild),
     }
     reload_result = await _reload_live_skill_handlers(ctx, body.name)
+    materialization_cache = invalidate_webspace_materialization_cache(
+        webspace_id,
+        reason=f"skills_activated:{body.name}",
+        action="skill_activation_sync",
+        source_of_truth="skill_runtime",
+    )
     bus_emit(bus, "skills.activated", payload, "api.skills")
-    return {"ok": True, "handler_reload": reload_result}
+    return {"ok": True, "handler_reload": reload_result, "materialization_cache": materialization_cache}
 
 
 @router.post("/runtime/rebuild-webspace")
@@ -713,6 +750,12 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
             log.exception("runtime refresh failed after skill update: %s", body.name)
             raise HTTPException(status_code=409, detail=f"runtime refresh failed after skill update: {exc}") from exc
         handler_reload = await _reload_live_skill_handlers(ctx, body.name)
+        materialization_cache = invalidate_webspace_materialization_cache(
+            webspace_id,
+            reason=f"skill_update:{body.name}",
+            action="skill_update_sync",
+            source_of_truth="skill_runtime",
+        )
         bus = getattr(ctx, "bus", None)
         if bus is not None:
             bus_emit(
@@ -749,5 +792,6 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
         "version": result.version,
         "runtime_refresh": runtime_refresh,
         "handler_reload": handler_reload,
+        "materialization_cache": materialization_cache if not body.dry_run else {},
         "webspace_rebuild": webspace_rebuild,
     }

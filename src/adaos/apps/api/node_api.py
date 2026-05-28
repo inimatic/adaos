@@ -1571,34 +1571,119 @@ def _describe_compatibility_caches(
 def _cached_materialization_from_rebuild(
     rebuild_state: Mapping[str, Any] | None,
     *,
-    max_age_sec: float = 1.0,
+    max_age_sec: float | None = None,
 ) -> dict[str, Any] | None:
     state = rebuild_state if isinstance(rebuild_state, Mapping) else {}
     cached = state.get("materialization") if isinstance(state.get("materialization"), Mapping) else {}
     if not cached:
         return None
+    if max_age_sec is None:
+        try:
+            max_age_sec = float(os.getenv("ADAOS_YJS_MATERIALIZATION_CACHE_MAX_AGE_SEC", "3") or "3")
+        except Exception:
+            max_age_sec = 3.0
     pending = bool(state.get("pending"))
     observed_at = cached.get("observed_at")
     try:
         age_sec = max(0.0, time.time() - float(observed_at)) if observed_at is not None else None
     except Exception:
         age_sec = None
+    result = dict(cached)
+    result["snapshot_source"] = "rebuild_cache"
+    max_age = max(float(max_age_sec or 0.0), 0.0)
+    result["cache_ttl_s"] = round(max_age, 3)
+    if age_sec is not None:
+        result["cache_age_s"] = round(age_sec, 3)
+    stale_by_age = age_sec is not None and age_sec > max_age
     if pending:
-        return dict(cached)
-    if age_sec is not None and age_sec <= max(float(max_age_sec or 0.0), 0.0):
-        return dict(cached)
-    return None
+        result["stale"] = True
+        if not str(result.get("stale_reason") or "").strip():
+            result["stale_reason"] = "rebuild_pending"
+    if stale_by_age:
+        result["stale"] = True
+        if not str(result.get("stale_reason") or "").strip():
+            result["stale_reason"] = "rebuild_cache_ttl_exceeded"
+    result["cache_fresh"] = not bool(result.get("stale")) and not stale_by_age
+    return result
+
+
+def _missing_materialization_cache_snapshot(
+    webspace_id: str,
+    *,
+    rebuild_state: Mapping[str, Any] | None = None,
+    stale_reason: str = "rebuild_cache_missing",
+) -> dict[str, Any]:
+    state = rebuild_state if isinstance(rebuild_state, Mapping) else {}
+    cached = state.get("materialization") if isinstance(state.get("materialization"), Mapping) else {}
+    current_scenario = (
+        str(state.get("scenario_id") or "").strip()
+        or str(cached.get("current_scenario") or "").strip()
+        or None
+    )
+    missing_branches = _collect_materialization_missing_branches(
+        has_ui_application=False,
+        has_desktop_config=False,
+        has_desktop_page_schema=False,
+        has_apps_catalog_modal=False,
+        has_widgets_catalog_modal=False,
+        has_catalog_apps=False,
+        has_catalog_widgets=False,
+        has_data_desktop=False,
+        has_installed_apps=False,
+        has_installed_widgets=False,
+    )
+    compatibility_caches = _describe_compatibility_caches(
+        current_scenario=current_scenario,
+        has_scenario_ui_application=False,
+        has_scenario_registry_entry=False,
+        has_scenario_catalog=False,
+        effective_ready=False,
+        rebuild_state=rebuild_state,
+    )
+    return {
+        "ready": False,
+        "readiness_state": "status_cache_missing",
+        "missing_branches": missing_branches,
+        "compatibility_caches": compatibility_caches,
+        "webspace_id": _coerce_node_webspace_id(webspace_id),
+        "current_scenario": current_scenario,
+        "has_ui_application": False,
+        "has_desktop_config": False,
+        "has_desktop_page_schema": False,
+        "has_apps_catalog_modal": False,
+        "has_widgets_catalog_modal": False,
+        "has_catalog_apps": False,
+        "has_catalog_widgets": False,
+        "has_data_desktop": False,
+        "has_installed_apps": False,
+        "has_installed_widgets": False,
+        "catalog_counts": {"apps": 0, "widgets": 0},
+        "installed_counts": {"apps": 0, "widgets": 0},
+        "topbar_count": 0,
+        "page_widget_count": 0,
+        "snapshot_source": "rebuild_cache_missing",
+        "observed_at": time.time(),
+        "stale": True,
+        "stale_reason": str(stale_reason or "").strip() or "rebuild_cache_missing",
+        "cache_fresh": False,
+    }
 
 
 async def _describe_yjs_materialization(
     webspace_id: str,
     *,
     rebuild_state: Mapping[str, Any] | None = None,
+    verify_live: bool = False,
 ) -> dict[str, Any]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     cached = _cached_materialization_from_rebuild(rebuild_state)
-    if cached:
+    if cached and not verify_live:
         return cached
+    if not verify_live:
+        return _missing_materialization_cache_snapshot(
+            target_webspace_id,
+            rebuild_state=rebuild_state,
+        )
     try:
         async with async_read_ydoc(target_webspace_id, prefer_live_room=False) as ydoc:
             ui_map = ydoc.get_map("ui")
@@ -1701,7 +1786,7 @@ async def _describe_yjs_materialization(
                 },
                 "topbar_count": len(topbar),
                 "page_widget_count": len(page_widgets),
-                "snapshot_source": "live_ydoc",
+                "snapshot_source": "live_ydoc_verification",
                 "observed_at": time.time(),
                 "stale": False,
             }
@@ -1747,7 +1832,7 @@ async def _describe_yjs_materialization(
             "installed_counts": {"apps": 0, "widgets": 0},
             "topbar_count": 0,
             "page_widget_count": 0,
-            "snapshot_source": "live_ydoc_error",
+            "snapshot_source": "live_ydoc_verification_error",
             "observed_at": time.time(),
             "stale": True,
             "error": f"{exc.__class__.__name__}: {exc}",
@@ -2998,17 +3083,23 @@ async def node_yjs_webspace_rebuild_state(
 async def node_yjs_webspace_materialization_state(
     webspace_id: str,
     include_runtime: bool = False,
+    verify_live: bool = False,
 ) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     rebuild = describe_webspace_rebuild_state(target_webspace_id)
-    materialization = await _describe_yjs_materialization(target_webspace_id, rebuild_state=rebuild)
+    materialization = await _describe_yjs_materialization(
+        target_webspace_id,
+        rebuild_state=rebuild,
+        verify_live=verify_live,
+    )
     result = {
         "ok": True,
         "accepted": True,
         "webspace_id": target_webspace_id,
         "materialization": materialization,
         "rebuild": rebuild,
+        "live_verification": bool(verify_live),
     }
     if include_runtime:
         result["runtime"] = yjs_sync_runtime_snapshot(

@@ -21,7 +21,10 @@ from adaos.services.scenario.manager import (
     dependency_failure_blocks_scenario_activation,
     dependency_failure_message,
 )
-from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+from adaos.services.scenario.webspace_runtime import (
+    invalidate_webspace_materialization_cache,
+    rebuild_webspace_from_sources,
+)
 from adaos.services.skill.manager import SkillManager
 from adaos.services.yjs.doc import async_get_ydoc, get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata, ystore_write_metadata_sync
@@ -578,6 +581,15 @@ def submit_install_operation(
         scope=_operation_scope(target_kind=target_kind, target_id=target_id, action=operation_action),
         message=f"Accepted {target_kind} {operation_action}",
     )
+    try:
+        invalidate_webspace_materialization_cache(
+            ws,
+            reason=f"{target_kind}_{operation_action}_accepted:{target_id}",
+            action=f"{target_kind}_{operation_action}_operation",
+            source_of_truth="operation_manager",
+        )
+    except Exception:
+        _log.debug("failed to invalidate materialization cache for operation=%s", operation.operation_id, exc_info=True)
 
     async def _worker(handle: OperationHandle) -> None:
         if operation_action == "install" and _use_subprocess_install():
