@@ -4,7 +4,7 @@ This document describes the current production MVP direction for intent detectio
 
 ## MVP baseline
 
-- Pipeline: `regex` -> `neural (service-skill, optional when installed)` -> `rasa (service-skill, long-term fallback)` -> `teacher (LLM in the loop)`
+- Pipeline: `regex` -> `neuro_lite (experimental weak-device service-skill, optional)` -> `neural (service-skill, optional when installed)` -> `rasa (service-skill, long-term fallback)` -> `teacher (LLM in the loop)`
 - System boundary: NLU runtime code is one; only **data** varies per scenario/skill.
 - Transport: intent detection is integrated into AdaOS event bus (not CLI-only).
 
@@ -15,6 +15,10 @@ The target install policy is:
 - Runtime dispatch uses Neural automatically only when
   `neural_nlu_service_skill` is installed/active. `ADAOS_NLU_NEURAL=1` forces
   the stage and `ADAOS_NLU_NEURAL=0` disables it.
+- Neuro Lite is experimental and separate from the production Neural NLU
+  provider. It is controlled by `ADAOS_NLU_NEURO_LITE` and the runtime
+  `neuro_lite_enabled` flag, and is intended for weak-device validation before
+  changing the production neural path.
 - Rasa remains a long-term fallback, not only a temporary migration bridge.
 - The hot request path must only discover/start installed service skills. It
   must not create workspace skills or A/B runtime slots on demand.
@@ -36,6 +40,8 @@ Concrete NLU engines are providers:
 
 - `neural_nlu_service_skill` is a registry/workspace service skill sourced from
   `.adaos/workspace/skills/neural_nlu_service_skill`.
+- `neuro_nlu_lite_skill` is an experimental registry/workspace service skill
+  sourced from `.adaos/workspace/skills/neuro_nlu_lite_skill`.
 - `rasa_nlu_service_skill` is a registry/workspace service skill.
 - Model artifacts and indexes are service-owned runtime data, not core package
   data.
@@ -52,6 +58,9 @@ Implemented now:
 - Regex-first event pipeline with optional Rasa service-skill fallback.
 - Optional neural delegation event behind `ADAOS_NLU_NEURAL` or installed
   `neural_nlu_service_skill` auto-detection.
+- Optional experimental Neuro Lite delegation stage behind
+  `ADAOS_NLU_NEURO_LITE` / `neuro_lite_enabled`, using
+  `neuro_nlu_lite_skill` and `nlp.intent.detect.neuro_lite`.
 - Neural NLU service-skill install preparation from normal workspace/registry
   source during install flow.
 - Neural bridge discovery/start of installed service only; no hot-path
@@ -167,11 +176,18 @@ and `ADAOS_NLU_NEURAL=0` keeps Rasa as the next stage.
      - workspace skills (`skill.yaml:nlu.regex_rules`)
      - legacy per-webspace cache (`data.nlu.regex_rules`)
 4. If regex does not match:
+   - if Neuro Lite is enabled by runtime flag and policy, emits
+     `nlp.intent.detect.neuro_lite`
    - if `ADAOS_NLU_NEURAL=1`, or if the variable is unset and
      `neural_nlu_service_skill` is installed/active: emits
      `nlp.intent.detect.neural`
    - otherwise emits `nlp.intent.detect.rasa`
-5. Neural bridge:
+5. Neuro Lite bridge:
+   - calls `neuro_nlu_lite_skill:/parse`;
+   - uses a weak-device oriented hash n-gram prototype baseline;
+   - on high confidence -> emits `nlp.intent.detected { via: "neuro_lite" }`;
+   - on abstain/error -> falls through to the next configured provider stage.
+6. Neural bridge:
    - calls `neural_nlu_service_skill:/parse`
    - the service skill is installed/prepared by install/update flows, not by
      the hot parse path;
@@ -190,17 +206,17 @@ and `ADAOS_NLU_NEURAL=0` keeps Rasa as the next stage.
      review.
    - on high confidence -> emits `nlp.intent.detected { via: "neural" }`
    - on abstain/error -> falls back to `nlp.intent.detect.rasa`
-6. Rasa bridge:
+7. Rasa bridge:
    - calls the installed `rasa_nlu_service_skill`;
    - remains a supported long-term fallback, especially for ambiguous neural
      outputs and domains where Rasa training data is already stronger;
    - can be disabled on weak devices if neural/regex coverage is sufficient.
-7. If an intent is found:
+8. If an intent is found:
    - `nlp.intent.detected { intent, confidence, slots, text, webspace_id, request_id, via }`
-8. If intent is not obtained:
+9. If intent is not obtained:
    - `nlp.intent.not_obtained { reason, text, via, webspace_id, request_id }`
    - Router emits a human-friendly `io.out.chat.append` and records the request for NLU Teacher.
-9. If teacher is enabled:
+10. If teacher is enabled:
    - `nlp.teacher.request { webspace_id, request }` is emitted for teacher runtimes.
 
 ## Runtime trace

@@ -189,8 +189,10 @@ Current checkpoint as of 2026-05-15:
 - eventbus backpressure and incident observability are implemented for selected
   hot topics, but this is a guardrail over the current bus, not yet the shared
   event envelope contract
-- platform emitters remain partially defined through diagnostics and the
-  planned status-card work; they need one explicit ABI before migration
+- platform emitters remain partially defined through diagnostics and the first
+  status-card implementation slice; status cards now provide the initial ABI,
+  but notifications and diagnostics still need the shared projection lifecycle
+  contract
 
 Primary source:
 
@@ -204,7 +206,7 @@ Primary source:
 - [ ] `phase2.restore_demand`: define startup restoration from Yjs demand state for core and skills
 - [ ] `phase2.platform_projection_families`: define the initial platform-owned projection families, starting with status cards and runtime diagnostics
 - [x] `phase2.named_entity_runtime_abi`: define `NamedEntityRecord`, localized label metadata, `EntityResolutionResult`, and `entity.registry.changed` invalidation semantics
-- [ ] `phase2.status_card_abi`: align the shared status-card contract with projection lifecycle, platform emitters, and thin reliability summaries
+- [x] `phase2.status_card_abi`: align the shared status-card contract with projection lifecycle, platform emitters, and thin reliability summaries
 
 Current checkpoint as of 2026-05-15:
 
@@ -217,8 +219,13 @@ Current checkpoint as of 2026-05-15:
   add/remove/deprecate paths
 - the core runtime still uses a minimal event object; envelope metadata is
   carried inconsistently in payload `_meta`
-- status-card work in `issue-tracker.md` should become the first explicit
-  platform-emitter ABI instead of a separate monitoring-only feature
+- status-card work has become the first explicit platform-emitter ABI:
+  `StatusCard`, `StatusRegistry`, SDK publish helpers, guard cards, thin
+  reliability summaries, ETag-aware client cache, CLI metrics, and compact
+  boundary diagnostics exist
+- the remaining platform-emitter work is not the status-card contract itself;
+  it is moving notifications, diagnostics, and workspace-manager surfaces onto
+  the shared projection lifecycle and dispatcher
 
 Primary sources:
 
@@ -336,7 +343,7 @@ Primary sources:
 
 ### Phase 6. Platform Emitters First
 
-- [ ] `phase6.status_cards_pilot`: implement shared status cards as the first small platform-emitter family
+- [x] `phase6.status_cards_pilot`: implement shared status cards as the first small platform-emitter family
 - [ ] `phase6.notifications_pilot`: migrate notifications through the shared projection contract
 - [ ] `phase6.diagnostics_pilot`: migrate diagnostics and operator-visible failures through the shared projection contract
 - [ ] `phase6.workspace_manager_pilot`: migrate shared workspace-manager and similar platform surfaces

@@ -21,6 +21,11 @@ The existing API remains the implementation backend. Root MCP should wrap or
 proxy governed NLU authoring capabilities; it should not become a second source
 of truth for templates, candidates, or dispatch behavior.
 
+Current provider note: `neuro_nlu_lite_skill` is an experimental weak-device
+provider stage. It is intentionally separate from `neural_nlu_service_skill`
+and should not be counted as a replacement for the production Neural NLU
+provider or the Teacher governance loop.
+
 ## Phase 0: Teacher Contracts and Guardrails
 
 - [ ] Define the teacher request/thread model:
@@ -269,12 +274,30 @@ of truth for templates, candidates, or dispatch behavior.
 
 - [x] Move `neural_nlu_service_skill` out of `src/adaos/interpreter_data` into
   normal registry/workspace skill delivery.
+- [x] Add separate experimental `neuro_nlu_lite_skill` delivery for weak-device
+  validation without changing the production Neural NLU provider.
 - [x] Add opt-in `adaos install --neural-nlu` preparation for Neural NLU.
 - [x] Keep plain `adaos install` free of Neural NLU heavy dependencies.
 - [x] Make the neural bridge discover/start only installed service skills.
 - [x] Remove hot-path workspace mutation/bootstrap from neural parse handling.
 - [x] Keep provider dependencies (`torch`, `faiss-cpu`, etc.) out of the hub
   root venv.
+- [x] Keep Neuro Lite free of Torch/FAISS/Rasa dependencies for the first
+  prototype baseline.
+
+### Neuro Lite Experimental Stage
+
+- [x] Add `nlp.intent.detect.neuro_lite` bridge and stage trace events.
+- [x] Add runtime policy/flag support for `neuro_lite_enabled` and
+  `ADAOS_NLU_NEURO_LITE`.
+- [x] Add `neuro_nlu_lite_skill` with `/health`, `/parse`, and `/rebuild`.
+- [x] Implement the first hash n-gram prototype baseline with accept/abstain
+  behavior.
+- [x] Fall through to Neural/Rasa when Neuro Lite abstains or is disabled.
+- [ ] Add real hard-negative evaluation before considering attention or a tiny
+  encoder.
+- [ ] Decide whether Neuro Lite should remain a separate provider, become a
+  low-resource Neural profile, or be retired after evaluation.
 
 ### Inference Contract
 
@@ -336,6 +359,8 @@ of truth for templates, candidates, or dispatch behavior.
   so `neural -> Rasa -> Teacher` can be measured end to end.
 - [x] Add operator diagnostics that combine Neural readiness and usage
   aggregates.
+- [x] Add experimental Neuro Lite runtime stage and weak-device service-skill
+  baseline, separate from the production Neural NLU service.
 
 ### Training Data Feedback
 
@@ -393,4 +418,7 @@ of truth for templates, candidates, or dispatch behavior.
 - `adaos interpreter neural-rebuild --from-curated` now trains a candidate Neural model for curated examples with new
   labels; explicit `--promote` backs up the active model, writes rollback pointers, clears stale indexes, and reindexes
   the service.
+- `neuro_nlu_lite_skill` now provides an experimental weak-device
+  `neuro_lite` provider stage with hash n-gram prototype matching and fallback
+  to the next configured provider.
 - NLU documentation now includes a human verification checklist and clearly separates current UI, backend/API-only behavior, and target UI.

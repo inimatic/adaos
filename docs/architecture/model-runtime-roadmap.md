@@ -7,8 +7,19 @@ dependencies before building a broad inference framework.
 
 ## Current Estimate
 
-Implementation estimate: **0%** for the shared model runtime. Related pieces
-exist in specialized systems:
+Implementation estimate: **20%** for the shared model runtime track.
+
+The completed work is the artifact-control MVP, not a generalized inference
+runtime. AdaOS now has `models.artifacts.<key>` manifest parsing, verified
+skill-runtime artifact install, Root upload/download client helpers, SDK
+artifact-control helpers, and `skill push` upload integration for non-private
+changed artifacts.
+
+The shared model runtime itself remains mostly open: there is still no shared
+`ModelRegistry`, capability lookup, dependency-profile environment manager,
+`ctx.models.infer`, `ctx.models.session`, or model job system.
+
+Related pieces exist in specialized systems:
 
 - Neural NLU already has a service-skill provider boundary and artifact
   lifecycle.
@@ -18,20 +29,22 @@ exist in specialized systems:
 
 ## Phase 1: MVP Scope and Contracts
 
-- [ ] Define model vocabulary: `ModelManifest`, `ModelArtifact`,
-  `ModelRegistry`, `ArtifactStore`, `DependencyProfile`, `ModelBackend`,
-  `Capability`, `ModelRef`, and `ArtifactRef`.
+- [x] Define the initial target vocabulary and implement the
+  artifact-control MVP `ModelArtifact` subset.
+- [ ] Implement concrete runtime contracts for `ModelRegistry`,
+  `ArtifactStore`, `DependencyProfile`, `ModelBackend`, `Capability`,
+  `ModelRef`, and `ArtifactRef`.
 - [ ] Explicitly mark `ctx.models.infer`, `ctx.models.session`, model jobs, and
   external API convergence as target-state items, not first-slice deliverables.
 - [ ] Define the first supported capabilities only as metadata:
   `intent-detection` and `image-segmentation`.
-- [ ] Define error/readiness shapes for artifact install and dependency
-  environment readiness.
+- [x] Define error/readiness shapes for artifact install.
+- [ ] Define dependency environment readiness shapes.
 - [ ] Define the minimum manifest fields required for install:
   id, capability, owning skill, version, artifacts, checksums, size, backend,
   dependency profile.
-- [ ] Define the MVP skill manifest field for a model weight file under
-  `models.artifacts.weights`.
+- [x] Define the MVP skill manifest field for model artifacts under
+  `models.artifacts.<key>`.
 
 ## Phase 2: Manifest and Registry MVP
 
@@ -39,33 +52,34 @@ exist in specialized systems:
 - [ ] Add local registry service under core runtime.
 - [ ] Support registry lookup by `model_id`.
 - [ ] Support registry lookup by `capability` plus constraints.
-- [ ] Support model requirements in skill manifests without forcing immediate
+- [x] Support model requirements in skill manifests without forcing immediate
   skill migration.
 - [ ] Add local registry state under `.adaos/models/registry`.
 - [ ] Add shared/system installed model state under `.adaos/models/installed`.
 - [ ] Add shared/system cache state under `.adaos/models/cache`.
-- [ ] Keep skill-owned installed artifacts under the skill runtime bucket,
+- [x] Keep skill-owned installed artifacts under the skill runtime bucket,
   `data/files/models`, not under the global model cache.
-- [ ] Record provenance: source URI, checksum, size, created time, installed
-  time, owning skill or system component, and active/candidate status.
-- [ ] Add checksum verification for every non-test artifact.
-- [ ] Record root observable model version separately from skill-local labels such
-  as `current` and `previous`.
+- [x] Record artifact checksum, size, install path, source, install time, and
+  optional provenance in the skill-local model manifest.
+- [x] Add checksum verification for copied and downloaded artifacts.
+- [x] Record root observable model version separately from skill-local labels such
+  as `current` and `previous` for Root-uploaded artifacts.
 
 ## Phase 3: Root-Hosted Artifact Store MVP
 
 - [ ] Allocate a root-server storage location for development and small pilots.
 - [ ] Define the root layout as
   `/models/<skill_id>/<label-or-global_model_version>/<artifact>`.
-- [ ] Make `skill push` responsible for uploading model artifacts.
+- [x] Make `skill push` responsible for uploading declared non-private model
+  artifacts.
 - [ ] Make root move labels on accepted upload: old `current` becomes
   `previous`, new artifact becomes `current`.
-- [ ] Calculate model rotation hash from the single declared weight file.
-- [ ] If the pushed weight-file hash equals root `current`, skip upload and keep
+- [x] Calculate model rotation hash from the declared artifact file.
+- [x] If the pushed artifact hash equals root `current`, skip upload and keep
   labels unchanged; upload during `skill push` happens only when the model
   changed.
 - [ ] Use root `previous` as the rollback source for skill model artifacts.
-- [ ] Add the SDK artifact-control surface for skill-owned model storage:
+- [x] Add the SDK artifact-control surface for skill-owned model storage:
   upload, update-if-changed, current/previous metadata, current download, and
   previous download without requiring `skill install`.
 - [ ] Enforce the MVP retention rule: at most two stored model slots per
@@ -76,6 +90,8 @@ exist in specialized systems:
 - [ ] Do not add subnet-specific model variants or per-model ACLs yet.
 - [ ] Use existing root backend skill-publication routes for upload/download in
   MVP, for example `/api/skills/{skill_id}/models/...`.
+- [x] Use current Root model artifact endpoints through `RootHttpClient`,
+  including chunked upload for large files.
 - [ ] Keep a future static/object-storage facade as a delivery optimization.
 - [ ] Add URI resolver for `adaos-models://`.
 - [ ] Add resolver support for `https://` and `file://`.
@@ -120,11 +136,12 @@ exist in specialized systems:
 
 ## Phase 6: Skill Manifest and CLI Integration
 
-- [ ] Add `models.artifacts.weights` or equivalent section to skill manifests.
-- [ ] Support `install_path` under `models.artifacts.weights`, defaulting to
+- [x] Add `models.artifacts.weights` or equivalent section to skill manifests.
+- [x] Support `install_path` under `models.artifacts.<key>`, defaulting to
   `data/files/models/<declared-file-name>`.
-- [ ] Add dependency profile requirements to skill manifests.
-- [ ] Add install-time planning for model artifacts and dependency profiles.
+- [x] Add dependency profile metadata to declared artifacts.
+- [x] Add install-time materialization for declared model artifacts.
+- [ ] Add install-time planning for dependency profiles.
 - [ ] Support optional model requirements and degraded skill mode.
 - [ ] Add CLI output that shows model artifact status and dependency
   environment status together.
@@ -222,15 +239,18 @@ artifact/dependency MVP and the Neural NLU / face vision pilots.
 
 ## MVP Acceptance Criteria
 
-- [ ] A skill can declare a model requirement without placing weights in git.
-- [ ] `skill push` uploads changed model artifacts to root under `skill_id`.
-- [ ] Model rotation hash is based on the declared weight file only.
-- [ ] If the declared weight-file hash did not change, `skill push` does not
+- [x] A skill can declare a model requirement without placing weights in git if
+  Root has a published `current` artifact for that skill.
+- [x] `skill push` uploads changed non-private model artifacts to root under
+  `skill_id`.
+- [x] Model rotation hash is based on the declared artifact file.
+- [x] If the declared artifact-file hash did not change, `skill push` does not
   re-upload the model.
-- [ ] Installed skill-owned artifacts land in
+- [x] Installed skill-owned artifacts land in
   `skills/.runtime/<skill_id>/<bucket>/data/files/models`.
-- [ ] Installed artifacts are checksummed and listed by CLI.
-- [ ] Partial downloads leave no installed artifact behind.
+- [x] Installed artifacts are checksummed and recorded in the skill-local
+  `files/models/manifest.json`.
+- [x] Partial or checksum-failed downloads leave no installed artifact behind.
 - [ ] Root keeps only `current` and `previous` model versions per
   `skill_id`.
 - [ ] A skill can declare a heavy dependency profile without forcing a private

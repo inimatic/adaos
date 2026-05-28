@@ -57,11 +57,31 @@ What is missing is one coherent contract that connects them.
 
 ## What Does Not Exist Yet
 
-- `skill push` and `scenario push` do not update the shared `adaos-registry` catalog snapshot directly.
-- install/update API calls are still mostly synchronous request/response flows
-- there is no reusable `OperationManager`-like runtime abstraction for accepted/queued/running/completed work
-- there is no canonical Yjs subtree for live operations and recent notifications
+- shared remote `adaos-registry` catalog semantics are still not fully
+  normalized across every skill/scenario push path
 - marketplace content is not yet modeled as a client-facing catalog adapter separate from raw `registry.json`
+- operation state is not yet durable across runtime restart
+- cancellation and operator retry policy are not yet a complete contract
+
+## Current Implementation Update: 2026-05-27
+
+The operations part of this roadmap now has a first implementation slice:
+
+- `src/adaos/services/operations/manager.py` defines `OperationManager`,
+  `OperationState`, `OperationHandle`, and `OperationNotification`.
+- `/api/skills/install`, `/api/scenarios/install`, `/api/scenarios/update`, and
+  `node_api` infrastate actions can submit accepted async operations.
+- active and recent operations are projected into Yjs under
+  `runtime.operations`.
+- operation notifications are projected under `runtime.notifications` and also
+  mirrored into existing desktop toasts for compatibility.
+- skill install can run through an isolated subprocess path; scenario
+  install/update runs through bounded lifecycle phases and webspace rebuild.
+
+That means Phase 3 and the operation-projection part of Phase 4 are no longer
+pure target-state work. The remaining gaps are durability, cancellation,
+complete UI affordances, marketplace catalog binding, and registry-sync
+normalization.
 
 ## Target Architecture
 
@@ -347,10 +367,10 @@ Define stable contracts before wiring UI and background workers.
 
 ### Deliverables
 
-- shared catalog entry model for registry sync
-- shared operation state model
-- Yjs projection schema for `runtime.operations` and `runtime.notifications`
-- explicit rule that Yjs is projection-only
+- [ ] shared catalog entry model for registry sync
+- [x] shared operation state model
+- [x] Yjs projection schema for `runtime.operations` and `runtime.notifications`
+- [x] explicit rule that Yjs is projection-only
 
 ### Current anchors
 
@@ -366,9 +386,9 @@ Make `skill push` and `scenario push` update `adaos-registry/registry.json`.
 
 ### Deliverables
 
-- shared upsert helper reused by both artifact kinds
-- tests for create/update behavior
-- deterministic output ordering
+- [ ] shared upsert helper reused by both artifact kinds across local and remote registry sync
+- [ ] tests for create/update behavior
+- [x] deterministic local workspace registry output ordering
 
 ### Current anchors
 
@@ -383,10 +403,10 @@ Expose a marketplace catalog in `InfrastateSkill`.
 
 ### Deliverables
 
-- `Marketplace` action next to `Update skills & scenarios`
-- catalog adapter service
-- modal view with skills/scenarios sections
-- filtering against installed artifacts
+- [ ] `Marketplace` action next to `Update skills & scenarios`
+- [ ] catalog adapter service
+- [ ] modal view with skills/scenarios sections
+- [ ] filtering against installed artifacts
 
 ## Phase 3: Async Install Operations
 
@@ -396,10 +416,12 @@ Convert install/update flows from blocking request/response into accepted async 
 
 ### Deliverables
 
-- `OperationManager`
-- async install command handlers
-- `operation_id` response contract
-- operation projection into Yjs
+- [x] `OperationManager`
+- [x] async install command handlers
+- [x] `operation_id` response contract
+- [x] operation projection into Yjs
+- [ ] durable recovery for accepted/running operations after runtime restart
+- [ ] cancellation/retry policy
 
 ## Phase 4: UI Binding and Notifications
 
@@ -409,10 +431,12 @@ Make the client react to projected operations instead of waiting on request comp
 
 ### Deliverables
 
-- disable install button for same target while active
-- show progress and current step
-- show active operations list in infra UI
-- show success/error notifications on completion
+- [ ] disable install button for same target while active
+- [x] show progress and current step through projected operation state
+- [x] show active operations list in infra UI
+- [x] show success/error notifications on completion
+- [ ] remove transitional per-skill active-operation mirrors after status-card
+  and operation projection consumers are fully migrated
 
 ## Suggested File and Module Changes
 
@@ -423,9 +447,9 @@ Smallest coherent change set:
 - `src/adaos/services/root/service.py`
   - hook shared registry upsert into push flow for remote `adaos-registry`
 - `src/adaos/apps/api/skills.py`
-  - add accepted async install endpoint or extend current install endpoint to return operation metadata
+  - current install endpoint returns accepted operation metadata
 - `src/adaos/apps/api/scenarios.py`
-  - same for scenarios
+  - current install/update endpoints return accepted operation metadata
 - `src/adaos/apps/api/node_api.py`
   - expose marketplace snapshot and operation-aware infrastate actions
 - `src/adaos/services/operations/*`
