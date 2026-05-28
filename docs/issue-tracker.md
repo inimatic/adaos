@@ -186,9 +186,15 @@ Follow-up profiler-threshold experiment, same stand, 2026-05-28:
   around `476-477 MiB` through a 90-second idle tail. A quick repeated hard
   reload produced only the two explicit operator resets and two ignored
   completion events; it did not create a completion-driven reset/reload loop.
-  Remaining debt: materialization still reports `stale=true` on this stand, and
-  RSS can drift upward during idle/reconnect windows, so stale plateau and
-  retained-owner work remain open.
+  Official rollout validation for build `0.1.138+1.12e79a4` on active slot `A`
+  confirmed the same behavior: runtime ready on `8777`, `root_promotion_required=false`,
+  one hard reload plus 30 seconds of 8-worker materialization polling completed
+  `7137/7137` successful responses from `rebuild_cache`, with one explicit
+  reset, one ignored completion event, no `room_reset:semantic_rebuild:reset`,
+  and no slow reload handler for `desktop.webspace.reloaded`. Remaining debt:
+  materialization still reports `stale=true` on this stand, and RSS can drift
+  upward during idle/reconnect windows, so stale plateau and retained-owner work
+  remain open.
 
 Status by priority:
 
