@@ -533,17 +533,23 @@ def test_webspace_reload_emits_reloaded_event_after_rebuild(monkeypatch) -> None
 
     fake_ctx = SimpleNamespace(bus=_Bus())
 
-    async def _fake_seed(_webspace_id: str, _scenario_id: str, *, dev: bool | None = None) -> None:
+    async def _fake_project(
+        _webspace_id: str,
+        _scenario_id: str,
+        *,
+        dev: bool | None = None,  # noqa: ARG001
+        emit_event: bool = True,  # noqa: ARG001
+    ) -> None:
         return None
 
     async def _fake_sync_listing() -> None:
         return None
 
-    async def _fake_rebuild(self, webspace_id: str):
+    async def _fake_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG002
         assert webspace_id == "default"
         return SimpleNamespace()
 
-    monkeypatch.setattr(webspace_runtime_module, "_seed_webspace_from_scenario", _fake_seed)
+    monkeypatch.setattr(webspace_runtime_module, "_project_webspace_from_scenario", _fake_project)
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
     monkeypatch.setattr(webspace_runtime_module, "get_ctx", lambda: fake_ctx)
@@ -565,7 +571,37 @@ def test_webspace_reload_emits_reloaded_event_after_rebuild(monkeypatch) -> None
     assert emitted == [
         (
             "desktop.webspace.reloaded",
-            {"webspace_id": "default", "scenario_id": "web_desktop", "action": "reload"},
+            {
+                "webspace_id": "default",
+                "scenario_id": "web_desktop",
+                "action": "reload",
+                "_event_type": "desktop.webspace.reloaded",
+            },
             "scenario.webspace_runtime",
         )
     ]
+
+
+def test_webspace_reload_handler_ignores_reloaded_completion(monkeypatch) -> None:
+    import asyncio
+
+    calls: list[tuple[str, str | None, str]] = []
+
+    async def _fake_reload(webspace_id: str, *, scenario_id: str | None = None, action: str = "reload", event_payload=None):
+        calls.append((webspace_id, scenario_id, action))
+        return {"accepted": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "reload_webspace_from_scenario", _fake_reload)
+
+    asyncio.run(
+        webspace_runtime_module._on_webspace_reload(
+            {
+                "_event_type": "desktop.webspace.reloaded",
+                "webspace_id": "default",
+                "scenario_id": "web_desktop",
+                "action": "reset",
+            }
+        )
+    )
+
+    assert calls == []
