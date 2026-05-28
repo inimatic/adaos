@@ -8,6 +8,7 @@ import os
 import time
 import threading
 import tracemalloc
+import uuid
 from functools import partial
 from typing import Any, Mapping, Optional
 
@@ -1296,10 +1297,13 @@ def _trace_yjs_control_ingress(
         payload["scenario_id"] = scenario_id
     if recreate_room:
         payload["recreate_room"] = True
+    header_cmd_id = str(request.headers.get("x-request-id") or request.headers.get("x-trace-id") or "").strip()
+    cmd_id = header_cmd_id or f"api-{uuid.uuid4().hex[:16]}"
+    trace_id = str(request.headers.get("x-trace-id") or request.headers.get("x-request-id") or "").strip() or cmd_id
     meta = {
-        "cmd_id": str(request.headers.get("x-request-id") or request.headers.get("x-trace-id") or "").strip() or None,
+        "cmd_id": cmd_id,
         "gateway_client": _request_client_label(request, endpoint=endpoint),
-        "trace_id": str(request.headers.get("x-trace-id") or request.headers.get("x-request-id") or "").strip() or None,
+        "trace_id": trace_id,
         "device_id": str(request.headers.get("x-adaos-device-id") or "").strip() or None,
     }
     try:

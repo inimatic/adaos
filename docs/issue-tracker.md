@@ -170,6 +170,25 @@ Follow-up profiler-threshold experiment, same stand, 2026-05-28:
   `345 MiB -> 421 MiB`, `420 MiB` after 60 seconds idle. Final post-restart
   materialization soak served `26883/26883` responses from `rebuild_cache`, RSS
   about `429 MiB -> 444 MiB`, `444 MiB` after 30 seconds idle.
+- Hard reload loop fix validation, 2026-05-28: active slot `B` on `.30` was
+  hotpatched so HTTP control reloads always get a command id, completion event
+  payloads carry `_event_type=desktop.webspace.reloaded` and no longer carry
+  `recreate_room`, and reload/reset handlers ignore non-command completion
+  events. Hard reset now performs the destructive room/YStore reset before
+  reseed, then refreshes live effective branches after semantic rebuild instead
+  of issuing a second `semantic_rebuild:reset` room reset. One hard reload plus
+  a 60-second 16-worker materialization polling run completed `20829/20829`
+  successful responses, all from `rebuild_cache`; logs showed exactly one
+  `resetting webspace desktop`, one ignored `desktop.webspace.reloaded`
+  completion, no slow `_on_webspace_reload` handler for
+  `type=desktop.webspace.reloaded`, and no `room_reset:semantic_rebuild:reset`
+  loop. Runtime RSS moved about `389 MiB -> 417 MiB -> 472 MiB`, then stayed
+  around `476-477 MiB` through a 90-second idle tail. A quick repeated hard
+  reload produced only the two explicit operator resets and two ignored
+  completion events; it did not create a completion-driven reset/reload loop.
+  Remaining debt: materialization still reports `stale=true` on this stand, and
+  RSS can drift upward during idle/reconnect windows, so stale plateau and
+  retained-owner work remain open.
 
 Status by priority:
 
@@ -181,9 +200,10 @@ Status by priority:
   amplifier was patched: normal materialization polling no longer rebuilds a
   detached YDoc by replaying YStore updates on every request. The stand no
   longer reproduces the older `>1 GiB` materialization runaway in isolated or
-  mixed polling. Remaining risk: RSS still moves upward under mixed read load
-  and does not relax meaningfully after idle, so retained-owner inspection must
-  continue outside the materialization path.
+  mixed polling, and hard reload no longer re-enters reload from its own
+  `desktop.webspace.reloaded` completion event. Remaining risk: RSS still moves
+  upward under mixed read/reconnect load and does not reliably relax after idle,
+  so retained-owner inspection must continue outside the materialization path.
 - [ ] P2 is partially implemented, not yet an operator source of truth. Thin
   summary and status-card endpoints are cheap and available, but the stand still
   requires full reliability/Yjs/infrastate reads to interpret pressure, and the
@@ -2401,10 +2421,13 @@ Actions:
 - [ ] Add a regression test or stand soak that polls materialization for at
   least 75 seconds and requires RSS plateau/relaxation instead of `>1 GiB`
   retained growth.
-- [ ] Make manual webspace reset safe under an active YWS client: prevent
-  reset/bootstrap/reconcile loops, and only use room reset as a memory
-  relaxation tool when it has an acceptance check proving RSS drops and stays
-  down.
+- [x] Make hard/manual webspace reset safe under an active YWS client by
+  preventing completion events from re-entering reload handlers and by replacing
+  the post-rebuild `semantic_rebuild:reset` room reset with a live effective
+  branch refresh.
+- [ ] Only use room reset as a memory relaxation tool after an acceptance check
+  proves RSS drops and stays down without triggering reset/bootstrap/reconcile
+  loops.
 - [ ] Continue retained-owner inspection after materialization is fixed. Next
   candidate areas: full reliability payload construction, infrastate snapshots,
   and cached model/object structures that survive request completion.

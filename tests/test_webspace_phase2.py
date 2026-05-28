@@ -4080,6 +4080,7 @@ def test_phase3_reload_and_reset_rebuild_sync_workflow_for_target_scenario(monke
                     "webspace_id": f"phase3-{action}-workflow-sync",
                     "action": action,
                     "scenario_id": "prompt_engineer_scenario",
+                    "_event_type": "desktop.webspace.reloaded",
                 },
                 "scenario.webspace_runtime",
             )
@@ -4201,6 +4202,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     project_calls: list[tuple[str, str, bool]] = []
     seed_calls: list[tuple[str, str, bool]] = []
     reset_calls: list[tuple[str, str]] = []
+    emitted: list[tuple[str, dict[str, object], str]] = []
 
     async def _fake_project(
         webspace_id: str,
@@ -4257,6 +4259,11 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_listing)
     monkeypatch.setattr(webspace_runtime_module.WebspaceScenarioRuntime, "rebuild_webspace_async", _fake_rebuild)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "emit",
+        lambda bus, topic, payload, source: emitted.append((topic, dict(payload), source)),
+    )
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.gateway",
@@ -4276,12 +4283,26 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
             scenario_resolution="explicit",
             source_of_truth="scenario",
             reseed_from_scenario=True,
+            event_payload={"recreate_room": True, "_meta": {"cmd_id": "cmd-hard-reload"}},
         )
     )
 
     assert project_calls == []
     assert seed_calls == [("phase3-hard-reset", "prompt_engineer_scenario", False)]
     assert reset_calls == [("room", "webspace_reset"), ("ystore", "reset")]
+    assert emitted == [
+        (
+            "desktop.webspace.reloaded",
+            {
+                "webspace_id": "phase3-hard-reset",
+                "action": "reset",
+                "scenario_id": "prompt_engineer_scenario",
+                "_meta": {"cmd_id": "cmd-hard-reload"},
+                "_event_type": "desktop.webspace.reloaded",
+            },
+            "scenario.webspace_runtime",
+        )
+    ]
     assert result["accepted"] is True
     assert "reset_runtime_state" in result["timings_ms"]
     assert "seed_from_scenario" in result["timings_ms"]

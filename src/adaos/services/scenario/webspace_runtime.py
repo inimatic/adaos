@@ -4451,6 +4451,27 @@ def _payload(evt: Any) -> Dict[str, Any]:
     return {}
 
 
+def _event_type(evt: Any) -> str | None:
+    if hasattr(evt, "type"):
+        token = str(getattr(evt, "type") or "").strip()
+        if token:
+            return token
+    if isinstance(evt, dict):
+        direct = str(evt.get("_event_type") or "").strip()
+        if direct:
+            return direct
+        if "payload" in evt and "type" in evt:
+            token = str(evt.get("type") or "").strip()
+            if token:
+                return token
+        meta = evt.get("_meta")
+        if isinstance(meta, dict):
+            token = str(meta.get("event_type") or "").strip()
+            if token:
+                return token
+    return None
+
+
 def _webspace_id(payload: Dict[str, Any]) -> str:
     """
     Resolve target webspace id for an event payload.
@@ -6173,7 +6194,7 @@ async def rebuild_webspace_from_sources(
     if should_refresh_live_room:
         stage_started = time.perf_counter()
         try:
-            if requested_action in {"scenario_switch_rebuild", "reload"}:
+            if requested_action in {"scenario_switch_rebuild", "reload", "reset"}:
                 from adaos.services.yjs.gateway import refresh_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
 
                 live_room_refresh_result = await refresh_live_webspace_effective_branches(
@@ -6249,6 +6270,12 @@ async def rebuild_webspace_from_sources(
                 payload["scenario_id"] = target_scenario
             if isinstance(event_payload, dict):
                 payload.update(event_payload)
+            payload["webspace_id"] = webspace_id
+            payload["action"] = requested_action
+            if target_scenario:
+                payload["scenario_id"] = target_scenario
+            payload["_event_type"] = event_topic
+            payload.pop("recreate_room", None)
             emit(ctx.bus, event_topic, payload, "scenario.webspace_runtime")
         except Exception:
             _log.debug("failed to emit %s for webspace=%s", event_topic, webspace_id, exc_info=True)
@@ -7630,6 +7657,10 @@ async def _on_webspace_reload(evt: Dict[str, Any]) -> None:
     rebuilding ui/data/registry for debugging or recovery.
     """
     payload = _payload(evt)
+    event_type = _event_type(evt) or _event_type(payload)
+    if event_type and event_type != "desktop.webspace.reload":
+        _log.debug("ignoring non-command webspace reload event type=%s", event_type)
+        return
     webspace_id = _webspace_id(payload)
     if not webspace_id:
         return
@@ -7651,6 +7682,10 @@ async def _on_webspace_reset(evt: Dict[str, Any]) -> None:
     the live room and persisted YStore before reseeding the scenario payload.
     """
     payload = _payload(evt)
+    event_type = _event_type(evt) or _event_type(payload)
+    if event_type and event_type != "desktop.webspace.reset":
+        _log.debug("ignoring non-command webspace reset event type=%s", event_type)
+        return
     webspace_id = _webspace_id(payload)
     if not webspace_id:
         return
