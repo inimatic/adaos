@@ -112,6 +112,32 @@ Follow-up profiler-threshold experiment, same stand, 2026-05-28:
   `min_uptime=900 s`, `window=300 s`) and `adaos.service` was restarted to
   release memory. Backup before restore:
   `/root/adaos/.env.bak-after-3gb-restore-20260528T060145Z`.
+- Focused profiling follow-up, 2026-05-28: `memray` was installed into the
+  active slot venv on the `.30` stand for operator diagnostics only. Native
+  aggregate capture with `--native --aggregate` reproduced RSS growth but
+  `memray summary/flamegraph` failed with an `AssertionError` while resolving
+  native stacks without debug symbols, so a second Python-side aggregate capture
+  was used for attribution.
+- The Python-side `memray` run points at the materialization read path, not
+  generic YWS status reads. A 120-second mixed polling run grew runtime RSS
+  from about `292 MiB` to about `1053 MiB`; the top captured stack was
+  `/api/node/yjs/webspaces/desktop/materialization` through
+  `_describe_yjs_materialization()` and `YStore.apply_updates()` at
+  `src/adaos/services/yjs/store.py:546` (`Y.apply_update`), with about
+  `202 MiB` of captured allocations and 3.5M+ allocation records in that stack.
+- A/B after restart confirmed the narrow amplifier: polling only
+  `/api/node/yjs/webspaces/desktop/materialization` for 75 seconds produced
+  about `266 MiB -> 1498 MiB` runtime RSS and did not relax after 60 seconds
+  idle. Polling only `/api/node/yjs/runtime` for the same 75 seconds handled
+  `11504` requests and grew only about `219 MiB -> 313 MiB`.
+- Manual `/api/node/yjs/webspaces/desktop/reset` is not a safe relaxation
+  mechanism while a browser/YWS client is active. In the profiled run it first
+  trimmed RSS slightly, then triggered repeated room reset/bootstrap/effective
+  branch repair activity and grew the runtime from about `1.45 GiB` to about
+  `3.0 GiB` within the post-reset idle window. Logs showed repeated
+  `room_reset:*`, `creating YRoom`, `initial_client_update_reconcile`, and
+  `scenario-based seed failed ... scenario 'web_desktop' has no scenario.json`
+  messages.
 
 Status by priority:
 
@@ -123,7 +149,9 @@ Status by priority:
   multi-gigabyte runaway during the measured window, but RSS still grew by
   hundreds of MiB under read-heavy polling. The repeat run shows this is not
   only a profiler-threshold artifact. The high-water experiment shows the more
-  important failure mode: memory does not relax after load stops.
+  important failure mode: memory does not relax after load stops. Current
+  evidence narrows the first fix target to materialization reads that rebuild a
+  detached YDoc by replaying YStore updates on every request.
 - [ ] P2 is partially implemented, not yet an operator source of truth. Thin
   summary and status-card endpoints are cheap and available, but the stand still
   requires full reliability/Yjs/infrastate reads to interpret pressure, and the
@@ -2309,10 +2337,22 @@ Actions:
 - [ ] Optimize or reroute `infrastate/snapshot` so repeated read-only polling
   cannot produce 12 second client timeouts or sustained active-runtime RSS
   growth.
-- [ ] Identify retained heap owners after the 3 GiB high-water run. Candidate
-  areas to inspect first: full reliability payload construction, Yjs runtime
-  diagnostics serialization, materialization/infrastate snapshots, and cached
-  model/object structures that survive request completion.
+- [x] Identify the first retained/allocation-heavy owner after the 3 GiB
+  high-water run: repeated materialization reads rebuild a detached YDoc and
+  replay YStore updates through `Y.apply_update`.
+- [ ] Change `/api/node/yjs/webspaces/{webspace_id}/materialization` so normal
+  polling uses cached materialization/runtime state or a cheap live-room summary,
+  not detached YStore replay on every request.
+- [ ] Add a regression test or stand soak that polls materialization for at
+  least 75 seconds and requires RSS plateau/relaxation instead of `>1 GiB`
+  retained growth.
+- [ ] Make manual webspace reset safe under an active YWS client: prevent
+  reset/bootstrap/reconcile loops, and only use room reset as a memory
+  relaxation tool when it has an acceptance check proving RSS drops and stays
+  down.
+- [ ] Continue retained-owner inspection after materialization is fixed. Next
+  candidate areas: full reliability payload construction, infrastate snapshots,
+  and cached model/object structures that survive request completion.
 
 ### Operating Checklist
 
