@@ -99,7 +99,6 @@ Client version:
 
 ```bash
 curl -sS https://inimatic.com/version.json
-curl -sS https://inimatic.web.app/version.json
 ```
 
 Client hosting builds are documented in

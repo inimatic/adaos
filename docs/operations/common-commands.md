@@ -24,8 +24,8 @@ Notes:
   `local_api_url`, and the next `adaos api serve` reuses it.
 - `8777` and `8778` are the normal browser-discoverable local hub ports.
 - Use a different port such as `8779` when you do not want
-  `https://inimatic.web.app/` or `https://inimatic.com/` to auto-attach to the
-  local runtime and prefer it to stay on Root.
+  `https://inimatic.com/` to auto-attach to the local runtime and prefer it to
+  stay on Root.
 - Supervisor-managed runtime mode is separate: it owns port `8776`, manages
   slots, and sets `ADAOS_SUPERVISOR_ENABLED=1`.
 - Development runtimes with `ENV_TYPE=dev` do not follow hub/root core-update
@@ -243,11 +243,10 @@ The full list of client URL parameters lives in
 `src/adaos/integrations/adaos-client/README.md#client-url-parameters`.
 
 ```text
-https://inimatic.web.app/?zone=ru&mode=login&auto_login=1
-https://inimatic.web.app/?boot_debug=1
-https://inimatic.web.app/?runtime_debug=0
-https://inimatic.web.app/?yjs_persist=0
 https://inimatic.com/?zone=ru&mode=login&auto_login=1
+https://inimatic.com/?boot_debug=1
+https://inimatic.com/?runtime_debug=0
+https://inimatic.com/?yjs_persist=0
 ```
 
 ## Linux non-login SSH CLI shim
