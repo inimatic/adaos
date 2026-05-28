@@ -79,11 +79,42 @@ def route_info(role: str) -> tuple[str | None, bool | None]:
     return route_mode, connected
 
 
+def _node_status_supervisor_runtime(base_dir: Path) -> dict[str, Any]:
+    runtime_state = _read_json_file((base_dir / "state" / "supervisor" / "runtime.json").resolve())
+    update_attempt = _read_json_file((base_dir / "state" / "supervisor" / "update_attempt.json").resolve())
+    update_status = read_core_update_status() or {}
+    supervisor_enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    runtime_url = str(runtime_state.get("runtime_url") or "").strip()
+    supervisor_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
+    if not supervisor_url and supervisor_enabled:
+        host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+        port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
+        supervisor_url = f"http://{host}:{port}"
+    return {
+        "available": bool(supervisor_enabled or runtime_state),
+        "enabled": bool(supervisor_enabled),
+        "status": update_status if isinstance(update_status, dict) else {},
+        "attempt": update_attempt if isinstance(update_attempt, dict) else {},
+        "runtime": runtime_state if isinstance(runtime_state, dict) else {},
+        "runtime_url": runtime_url.rstrip("/") or None,
+        "supervisor_url": supervisor_url.rstrip("/") or None,
+        "_served_by": "api.node.status",
+    }
+
+
 def current_node_status_payload() -> dict[str, Any]:
     conf = load_config()
     route_mode, connected = route_info(conf.role)
     lifecycle = runtime_lifecycle_snapshot()
     runtime_environment = runtime_environment_payload()
+    base_dir = current_base_dir()
+    supervisor_runtime = _node_status_supervisor_runtime(base_dir)
+    core_update_status = supervisor_runtime.get("status")
     return {
         "node_id": conf.node_id,
         "subnet_id": conf.subnet_id,
@@ -98,6 +129,9 @@ def current_node_status_payload() -> dict[str, Any]:
         "connected_to_hub": connected,
         "runtime": {
             "environment": runtime_environment,
+            "supervisor_available": bool(supervisor_runtime.get("available")),
+            "supervisor_runtime": supervisor_runtime,
+            "core_update_status": core_update_status if isinstance(core_update_status, dict) else {},
         },
         "environment": runtime_environment,
     }

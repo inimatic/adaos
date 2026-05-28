@@ -499,6 +499,53 @@ def _dev_without_supervisor() -> bool:
     }
 
 
+def _read_json_file_silent(path: Path) -> dict[str, Any]:
+    try:
+        if not path.exists():
+            return {}
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _hub_route_node_status_supervisor_runtime(ctx: AgentContext) -> dict[str, Any]:
+    try:
+        base_dir = ctx.paths.base_dir()
+    except Exception:
+        base_dir = Path(os.getenv("ADAOS_BASE_DIR") or Path.home() / ".adaos").expanduser()
+    runtime_state = _read_json_file_silent((base_dir / "state" / "supervisor" / "runtime.json").resolve())
+    update_attempt = _read_json_file_silent((base_dir / "state" / "supervisor" / "update_attempt.json").resolve())
+    try:
+        from adaos.services.core_update import read_status as _read_core_update_status
+
+        update_status = _read_core_update_status() or {}
+    except Exception:
+        update_status = {}
+    supervisor_enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    runtime_url = str(runtime_state.get("runtime_url") or "").strip()
+    supervisor_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
+    if not supervisor_url and supervisor_enabled:
+        host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+        port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
+        supervisor_url = f"http://{host}:{port}"
+    return {
+        "available": bool(supervisor_enabled or runtime_state),
+        "enabled": bool(supervisor_enabled),
+        "status": update_status if isinstance(update_status, dict) else {},
+        "attempt": update_attempt if isinstance(update_attempt, dict) else {},
+        "runtime": runtime_state if isinstance(runtime_state, dict) else {},
+        "runtime_url": runtime_url.rstrip("/") or None,
+        "supervisor_url": supervisor_url.rstrip("/") or None,
+        "_served_by": "hub_route_inline_node_status",
+    }
+
+
 def _dev_api_serve_core_update_sync_disabled() -> bool:
     try:
         from adaos.services.core_update_policy import core_update_reactions_disabled_reason
@@ -8467,6 +8514,13 @@ class BootstrapService:
                                                     "subnet_id": str(getattr(cfg, "subnet_id", "") or ""),
                                                     "role": str(getattr(cfg, "role", "") or ""),
                                                     "ready": bool(is_ready()),
+                                                }
+                                                supervisor_runtime = _hub_route_node_status_supervisor_runtime(ctx)
+                                                core_update_status = supervisor_runtime.get("status")
+                                                payload0["runtime"] = {
+                                                    "supervisor_available": bool(supervisor_runtime.get("available")),
+                                                    "supervisor_runtime": supervisor_runtime,
+                                                    "core_update_status": core_update_status if isinstance(core_update_status, dict) else {},
                                                 }
                                             else:
                                                 payload0 = {"ok": True, "ts": time.time()}
