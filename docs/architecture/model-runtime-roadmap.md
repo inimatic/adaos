@@ -108,6 +108,16 @@ Related pieces exist in specialized systems:
 ## Phase 4: Shared Python Dependency Environments
 
 - [ ] Add dependency profile schema for heavy model stacks.
+- [ ] Keep dependency profiles core-owned and built-in; skills may request a
+  logical profile name but must not define arbitrary shared environments.
+- [ ] Add the first logical profile allowlist, starting with `ml-torch` and
+  concrete CPU/CUDA variants for Python 3.11.
+- [ ] Add accelerator request schema to skill manifests:
+  `runtime.accelerator.policy` (`auto`, `cpu`, `gpu-required`) and
+  `runtime.accelerator.backends`.
+- [ ] Resolve logical profiles to concrete variants from node capabilities:
+  Python version, OS, architecture, CPU/GPU/CUDA availability, driver
+  compatibility, and minimum readiness probes.
 - [ ] Compute immutable environment keys from Python version, OS, architecture,
   CPU/GPU/CUDA variant, and resolved package pins.
 - [ ] Add shared environment state under `.adaos/runtimes/python/envs`.
@@ -116,9 +126,25 @@ Related pieces exist in specialized systems:
 - [ ] Add lease records under `.adaos/runtimes/python/leases`.
 - [ ] Let service skills request a dependency profile instead of owning a
   unique physical venv when the profile matches an existing environment.
+- [ ] Let non-service skills use shared profiles as the base interpreter/source
+  for heavyweight libraries while keeping skill-specific Python dependencies in
+  the bucket `vendor/`.
+- [ ] Validate that packages supplied by the selected shared profile are not
+  duplicated in skill-local dependencies for the same staged runtime.
 - [ ] Never mutate an active shared environment; create a new environment when
   dependencies change.
+- [ ] Record requested profile, resolved profile variant, environment hash,
+  accelerator choice, device, and fallback reason in `resolved.manifest.json`.
+- [ ] Add install fallback sequencing: shared best variant, shared CPU when
+  allowed, isolated skill runtime, then normal failed install/rollback.
+- [ ] Add managed CPU/GPU switching diagnostics for environments that can change
+  between runs, including Google Colab-style CPU-only vs GPU-backed sessions.
+- [ ] Treat system dependencies such as `ffmpeg`, Tesseract, CUDA drivers, and
+  OS libraries as separate validation/reporting inputs rather than Python
+  shared-env contents.
 - [ ] Add prune logic for unused environments after leases are released.
+- [ ] Make prune conservative: keep environments referenced by active and
+  previous skill runtime buckets and by currently running service skills.
 - [ ] Add readiness diagnostics for dependency profile availability.
 
 ## Phase 5: Minimal Backend Adapter Rails
@@ -142,9 +168,16 @@ Related pieces exist in specialized systems:
 - [x] Add dependency profile metadata to declared artifacts.
 - [x] Add install-time materialization for declared model artifacts.
 - [ ] Add install-time planning for dependency profiles.
+- [ ] Add manifest validation for `runtime.dependency_profile`,
+  `runtime.dependency_mode`, and `runtime.accelerator`.
+- [ ] Add CLI flags to control fallback during installation, including a way to
+  disable isolated fallback for diagnostics or low-disk nodes.
 - [ ] Support optional model requirements and degraded skill mode.
 - [ ] Add CLI output that shows model artifact status and dependency
   environment status together.
+- [ ] Surface CPU/GPU resolution in CLI/API diagnostics:
+  requested accelerator, resolved accelerator, concrete device, and reason for
+  any fallback.
 - [ ] Add test helpers for fake installed models and fake dependency profiles.
 
 ## Phase 7: Jobs and ModelOps Target State
@@ -164,8 +197,10 @@ Related pieces exist in specialized systems:
 
 - [ ] Register Neural NLU artifacts through model registry while preserving the
   existing service-owned layout.
-- [ ] Move Neural NLU heavy dependencies toward a shared dependency profile when
-  compatible with service-skill isolation.
+- [ ] Move Neural NLU heavy dependencies toward `ml-torch` shared profile when
+  compatible with service-skill isolation, keeping isolated venv fallback.
+- [ ] Verify Neural NLU install on CPU-only and GPU-capable nodes, recording the
+  selected accelerator in runtime diagnostics.
 - [ ] Represent `/parse` as `intent-detection`.
 - [ ] Represent `/reindex` as a model job.
 - [ ] Represent curated rebuild as a train job.
@@ -183,6 +218,10 @@ Related pieces exist in specialized systems:
   `data/files/uploads/model` only as a legacy migration fallback.
 - [ ] Move Torch/TorchVision dependency from skill-level dependency to a shared
   dependency profile where feasible.
+- [ ] Keep skill-local dependencies such as Pillow in the bucket runtime while
+  resolving Torch/TorchVision/Numpy from the shared profile.
+- [ ] Add CPU/GPU selectable model loading and inference diagnostics before
+  replacing direct model materialization.
 - [ ] Replace direct model materialization in the skill engine with
   `ctx.models.session(...)` only after the registry and dependency environment
   layers are stable.
