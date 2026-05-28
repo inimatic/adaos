@@ -140,6 +140,11 @@ and platform operational emitters.
 - [x] `phase0.node_browser_ready`: Realtime Reliability now treats browser/member semantic channels, `Yjs as SyncChannel`, and the current transport-only `/yws` handoff through sidecar local websocket ingress as complete for the current scope
 - [x] `phase0.runtime_comm_ready`: hub-root Class A hardening, browser-safe supervisor transition state, routed-browser active-runtime selection, and the current transport-only `/ws` plus `/yws` sidecar handoff are now explicit and complete for the current scope
 - [x] `phase0.webspace_runtime_baseline`: webspace rebuild/materialization ownership is aligned with the pointer/projection roadmap, and the browser runtime now consumes that baseline through lightweight diagnostics plus shared page-runtime adapters instead of bespoke component-only reads
+- [ ] `phase0.stand_rollout_reconfirmed`: on `.30`, verify the live reliability
+  surfaces agree with the completed transport-only scope. The 2026-05-28 check
+  reported `event_model.phase0.communication` `in_progress` and sidecar disabled
+  by `role_default`, so the implementation checklist is closed but the stand
+  rollout is not accepted.
 
 Current checkpoint as of 2026-04-21:
 
@@ -161,6 +166,10 @@ Current checkpoint as of 2026-04-21:
 - for Event Model `Phase 0`, the current transport-only communication prerequisites are now complete across runtime, CLI, control-plane, and browser surfaces; deeper sidecar continuity, media, and sidecar-owned Yjs session runtime remain separate follow-on work rather than hidden acceptance criteria for this phase
 - webspace pointer/projection ownership remains materially aligned, and with realtime transport cutover now complete for the current scope, all four Event Model `Phase 0` checklist items are closed
 - dependency reading rule for this roadmap: subordinate status still wins over local convenience adapters, but the subordinate Realtime Reliability note now marks the current transport-only prerequisite set as sufficient to close Event Model `Phase 0`
+- stand rollout caveat, 2026-05-28: `.30` did not report the completed
+  transport-only sidecar state live; do not treat Phase 0 as accepted on that
+  stand until Realtime Reliability and browser diagnostics both show the same
+  ready handoff state.
 
 References:
 

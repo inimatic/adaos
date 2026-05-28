@@ -17,6 +17,17 @@ The project must not start with sidecar or transport adapters as if they alone s
 
 ## Current status: 2026-04-21
 
+### Stand checkpoint: 2026-05-28
+
+The `.30` stand did not match the completed transport-only sidecar claims during
+the latest stabilization check. `adaos node reliability` reported sidecar
+disabled by `role_default`, `event_model.phase0.communication` still
+`in_progress`, and blockers stating that browser route websocket and Yjs
+websocket/session ownership still terminate in the runtime FastAPI/gateway.
+Treat the implementation as present in code/docs but not accepted on this stand
+until rollout/config is reconciled and the same reliability surfaces report the
+transport-only `/ws` and `/yws` handoff as ready.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -67,6 +78,9 @@ Phase 0 dependency tracking, the current implementation should be read as:
 - `local supervisor browser-safe continuity`: default browser/runtime surfaces now read one shared `supervisor_runtime` snapshot, and routed-browser `/ws` continuity now exposes supervisor-aware active-runtime selection explicitly; the remaining work is warm-switch soak/recovery and final hardening, not visibility
 - `sidecar continuity`: now only blocks Event Model Phase 0 when the current runtime/media contract actually marks it as required
 - `/ws` and `/yws` ownership migration: complete for the current transport-only scope, with root-routed browser ingress now preferring sidecar local websocket listeners and runtime diagnostics reporting `current_owner=sidecar` plus `handoff_ready=true`; full sidecar-owned Yjs room/session runtime remains deferred beyond current Event Model `Phase 0`
+- 2026-05-28 `.30` rollout caveat: the live stand reported sidecar disabled and
+  `event_model.phase0.communication` `in_progress`; reconfirm this checklist on
+  the target stand before using it as acceptance evidence.
 
 That means Realtime Reliability is already strong enough to support Event Model
 baseline alignment work and now closes the current Event Model `Phase 0`
@@ -83,6 +97,8 @@ communication prerequisite set, even though broader reliability work remains ope
 ### Confirmed gaps
 
 - transport/resource isolation is still weaker than subject naming suggests
+- `.30` rollout/config can still run with sidecar disabled, leaving the
+  transport-only `/ws` and `/yws` handoff unaccepted on that stand
 - hub-root message inventory is not yet fully classified by delivery class and idempotency policy
 - route/session incidents are still underrepresented compared to root-control incidents
 - update-state visibility still disappears when the main runtime is intentionally down for restart/apply/validate

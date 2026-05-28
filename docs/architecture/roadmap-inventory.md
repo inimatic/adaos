@@ -94,6 +94,8 @@ Current status:
   `registry.named_entities`.
 - [x] Status-card ABI exists: `StatusCard`, `StatusRegistry`, SDK publish
   helpers, guard cards, thin summary, ETags, and boundary diagnostics.
+- [ ] Status-card population is not yet sufficient for the thin plane to be the
+  operator source of truth during memory-profile/runtime-unavailable incidents.
 - [x] `status` / `statusPlane` are rejected as data routes in manifest schema
   and docs.
 - [ ] Minimal shared event envelope remains open.
@@ -140,6 +142,9 @@ Current status:
 
 - [x] Hub-root protocol hardening is complete for the current flow inventory.
 - [x] Sidecar owns current transport-only `/ws` and `/yws` handoff scope.
+- [ ] `.30` stand rollout/config for transport-only sidecar handoff was not
+  accepted on 2026-05-28: live reliability reported sidecar disabled and Event
+  Model Phase 0 communication `in_progress`.
 - [x] Browser/member semantic channel ownership exists for the current scope.
 - [x] WebRTC data paths for events/Yjs and media loopback are represented in
   client runtime diagnostics.
@@ -411,6 +416,13 @@ Current status:
 - [x] Eventbus backlog and selected hot-topic guardrails exist.
 - [x] Status-card boundary diagnostics expose oversized-card misuse.
 - [x] Root MCP diagnostic snapshots and initial typed subnet timeline exist.
+- [ ] Managed memory-profile policy and memory containment are not accepted on
+  `.30`: the first 180-second polling soak triggered sampled-profile restart
+  near the default small-machine threshold; a repeat with relaxed thresholds
+  avoided restart but still showed active-runtime RSS growth from about
+  `345 MiB` to about `850 MiB` and `infrastate/snapshot` timeouts. A high-water
+  follow-up reached active runtime RSS about `3.07 GiB`; after the load stopped,
+  a 15-minute idle tail did not release memory materially.
 - [ ] Post-deploy browser E2E is still a roadmap, not a universal rollout gate.
 - [ ] Full subnet historical reconstruction remains incomplete.
 
