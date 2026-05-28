@@ -409,23 +409,55 @@ The artifact registry solves model weights. It does not solve runtime bloat
 from repeated Python ML libraries. AdaOS therefore needs a small shared
 dependency environment registry for heavyweight model stacks.
 
-The unit of reuse is a dependency profile, not a skill venv:
+The unit of reuse is a dependency profile, not a skill venv. A skill requests a
+logical built-in profile; the node resolves that request to a concrete CPU or
+GPU variant during installation:
 
 ```yaml
-dependency_profiles:
-  torch-cpu-py311:
-    python: "3.11"
-    packages:
-      - torch==2.2.*
-      - torchvision==0.17.*
-      - numpy>=1.24
+runtime:
+  dependency_profile: ml-torch
+  dependency_mode: shared-preferred
+  accelerator:
+    policy: auto
+    backends: [cuda, cpu]
+
+dependencies:
+  python:
+    - pillow>=10
+  system:
+    - ffmpeg
+```
+
+Profiles are core-owned and come from a small allowlist such as `ml-torch`,
+`ml-torch-vision`, or `ml-transformers`. Skills must not define arbitrary
+shared profiles. AdaOS resolves the logical profile to a concrete variant such
+as `ml-torch-cpu-py311` or `ml-torch-cuda121-py311` from node capabilities:
+Python version, OS, architecture, driver/CUDA availability, GPU memory, and
+profile readiness probes.
+
+The resolved manifest records the concrete choice:
+
+```json
+{
+  "dependency_profile_requested": "ml-torch",
+  "dependency_profile_resolved": "ml-torch-cuda121-py311",
+  "dependency_env_hash": "sha256:...",
+  "dependency_mode_resolved": "shared",
+  "accelerator_requested": "auto",
+  "accelerator_resolved": "cuda",
+  "device": "nvidia:0"
+}
 ```
 
 AdaOS computes an environment key from Python version, OS, architecture,
 CPU/GPU/CUDA variant, and resolved package lock. The environment is immutable:
 if requirements change, a new environment is created. Active skills and service
 skills hold leases on shared environments, and unused environments can be
-pruned.
+pruned. Skill-specific Python dependencies remain in the skill bucket
+`vendor/` or isolated fallback `venv`; they are not installed into the shared
+profile. System dependencies such as `ffmpeg`, Tesseract, CUDA drivers, or OS
+libraries are validated and reported separately from Python dependency
+resolution.
 
 MVP layout:
 
@@ -438,6 +470,35 @@ MVP layout:
 
 This keeps process isolation for service skills while avoiding one physical
 copy of `torch` or `tensorflow` per skill when profiles are compatible.
+
+Shared environments are not a replacement for isolation. The default remains a
+skill-owned runtime. A skill may opt into `shared-preferred` for heavyweight
+stacks; installation first tries the resolved shared profile and tests the
+staged slot. If tests fail, AdaOS may retry a less capable shared variant
+(`cuda` to `cpu` when the accelerator policy allows it) and then an isolated
+skill runtime. If all attempts fail, activation is not switched and the normal
+runtime failure/rollback path applies.
+
+Accelerator policy is explicit:
+
+- `auto` uses the best available healthy accelerator and falls back to CPU.
+- `cpu` forces CPU even when GPU is present.
+- `gpu-required` fails installation when no healthy GPU profile is available.
+
+This is important for portable nodes such as Google Colab, where the same
+workspace may start in CPU-only or GPU-backed sessions. `skill.yaml` remains
+portable, while `resolved.manifest.json` captures the machine-specific runtime
+choice, fallback reason, and diagnostics.
+
+Shared profile boundaries are deliberately strict:
+
+- profile contents are built-in and core-owned
+- active shared environments are never mutated in place
+- heavy packages supplied by a shared profile must not be duplicated in
+  skill-local dependencies for the same staged runtime
+- fallback to isolated runtime is the compatibility escape hatch
+- pruning must account for active and previous skill runtime buckets plus
+  currently running service skills
 
 ## External APIs and Local Models
 
