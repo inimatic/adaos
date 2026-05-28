@@ -4,7 +4,7 @@ AdaOS publishes three independently versioned surfaces:
 
 - **Core**: the Python package and slot runtime in this repository.
 - **Root/backend**: the public API service at `api.inimatic.com` and zoned Root hosts.
-- **Client**: the hosted web client at `inimatic.com` and `inimatic.web.app`.
+- **Client**: the hosted web client at `inimatic.com`.
 
 ## Core version
 
@@ -70,7 +70,6 @@ After deployment, check the hosted client version:
 
 ```bash
 curl -sS https://inimatic.com/version.json
-curl -sS https://inimatic.web.app/version.json
 ```
 
 Expected fields include:

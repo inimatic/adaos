@@ -6,7 +6,6 @@ public development environment.
 ## Public surfaces
 
 - Client: `https://inimatic.com`
-- Firebase Hosting fallback: `https://inimatic.web.app`
 - Root/backend: `https://api.inimatic.com`
 - RU Root/backend zone: `https://ru.api.inimatic.com`
 
@@ -24,7 +23,6 @@ Client:
 
 ```bash
 curl -sS https://inimatic.com/version.json
-curl -sS https://inimatic.web.app/version.json
 ```
 
 See [Versioning and Public Build Checks](../operations/versioning.md) for the

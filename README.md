@@ -147,7 +147,6 @@ Check deployed backend and client versions:
 curl -sS https://api.inimatic.com/healthz
 curl -sS https://ru.api.inimatic.com/healthz
 curl -sS https://inimatic.com/version.json
-curl -sS https://inimatic.web.app/version.json
 ```
 
 Local runtime slot version:
