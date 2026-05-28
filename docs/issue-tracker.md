@@ -6,6 +6,140 @@ and delivery work.
 Use sections as goals. Each goal owns task groups that can be extended,
 executed, and closed without creating a separate tracker document.
 
+## Platform Stabilization Stand Checkpoint 2026-05-28
+
+Target stand:
+`ssh -i c:/Users/Zver/.ssh/adaos_linux_exp root@192.168.0.30`.
+
+Scope checked against the current stabilization priorities:
+
+- P0. Stable baseline
+- P1. Memory/fanout containment
+- P2. Thin status plane as the operator source of truth
+- P3. Runtime/catalog/install integrity
+- P4. Browser startup/progressive hydration and UI diagnostics
+
+Observed runtime before the stress window:
+
+- `adaos autostart status --json` reported system autostart active, API at
+  `http://127.0.0.1:8777`, supervisor at `http://127.0.0.1:8776`, active slot
+  `A`, and core update status `succeeded/validate` for target
+  `0ae3de84634421be39c8284acaa71df4be2bbbb1`.
+- `adaos node reliability` reported `hub_root` and `hub_root_browser`
+  `ready/stable`, `state_sync` for `desktop` `ready/fresh`, eventbus
+  `pending=0`, stream guard `total=0`, and media runtime available.
+- The same reliability snapshot also reported
+  `event_model.phase0.communication: in_progress done=0/2` with blockers that
+  browser route websocket and Yjs websocket/session ownership still terminate in
+  the runtime gateway. Sidecar was disabled by `role_default` on this stand.
+- `hub_member_links` was `pressure` with `known=7` and `linkless=7`, so member
+  sync integrity remains degraded even while the local hub looked ready.
+
+Experiment:
+
+- Ran a 180-second polling soak against:
+  `/api/node/reliability/summary?mode=thin&webspace_id=desktop`,
+  `/api/node/reliability/summary?webspace_id=desktop`,
+  `/api/node/reliability/summary/metrics?webspace_id=desktop`,
+  `/api/node/status/cards?webspace_id=desktop`,
+  `/api/node/yjs/runtime`,
+  `/api/node/yjs/webspaces/desktop/materialization`, and
+  `/api/node/infrastate/snapshot?webspace_id=desktop`.
+- Each endpoint completed 63 successful responses and 0 HTTP failures inside
+  the window.
+- Thin summary stayed small (`728` bytes, max observed latency about `240 ms`).
+  Full summary stayed around `12.5-14.3 KiB` with max observed latency about
+  `1002 ms`. `infrastate/snapshot` was still expensive: max observed latency
+  about `3418 ms`.
+- Runtime RSS rose materially during the run. The measured supervisor/runtime
+  tree went from about `662812 KiB` to `937088 KiB` final, with an intermediate
+  peak sample above `1002116 KiB`. The active runtime process grew from about
+  `510856 KiB` to `785132 KiB` final.
+- Immediately after the soak, supervisor applied sampled memory-profile mode
+  and shut the runtime down. The API on `8777` returned `connection refused`;
+  `adaos autostart status --json` showed `listening=false` and a newly spawned
+  runtime, but the runtime did not become API-ready in the control window.
+- The journal contained `yroom pressure`, Yjs owner-flow warnings for core and
+  `skill_weather_skill`, slow async handler warnings, and a failed
+  `supervisor.memory.complete_profile_mode.sampled_profile` shutdown request
+  after the runtime was already unavailable.
+- SSH then disconnected and the stand stopped responding to ping, so follow-up
+  browser/UI and post-restart API checks could not be completed.
+
+Follow-up profiler-threshold experiment, same stand, 2026-05-28:
+
+- After the stand was booted again, the only memory-profile setting in
+  `/root/adaos/.env` was
+  `ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC=300`.
+- For the repeat run, stand-local thresholds were relaxed to avoid profiler
+  intervention during a short polling soak:
+  `ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES=1073741824`,
+  `ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN=536870912`,
+  `ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC=900`, and
+  `ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC=300`. Backup:
+  `/root/adaos/.env.bak-memory-profile-20260528T051432Z`.
+- With relaxed thresholds, the 180-second soak completed without a
+  memory-profile restart; 45 seconds later `adaos autostart status --json`
+  showed `listening=true`, runtime `ready`, and the same validated slot `A`.
+- The profiler threshold was therefore a confounding factor for the previous
+  post-soak outage. It should be tracked as policy calibration, not treated as
+  proof by itself that runtime code must restart.
+- The underlying memory/fanout problem remains: the active runtime RSS grew from
+  about `345 MiB` to about `850 MiB` in 180 seconds. Process-tree RSS grew from
+  about `446 MiB` to about `963 MiB`.
+- Endpoint results with relaxed thresholds: thin/full summary, metrics, status
+  cards, Yjs runtime, and materialization all completed 65/65 requests; the
+  expensive `infrastate/snapshot` path completed 63/65 and timed out twice at
+  the 12 second client deadline.
+- Reliability after the run stayed `ready`; `hub_member_links` improved from
+  `pressure` to `nominal` with one fresh member, but sidecar/Phase0 remained
+  `in_progress` and status registry still reported `cards=0`.
+- High-water relaxation experiment, 2026-05-28: profiler thresholds were raised
+  above the target (`growth=4 GiB`, `slope=4 GiB/min`, `min_uptime=7200 s`) and
+  the same polling loop was allowed to run until process-tree RSS crossed
+  `3 GiB`.
+- The system could inflate quickly: process-tree RSS reached about `3.18 GiB`
+  and active runtime RSS about `3.07 GiB` in `371 s`; `MemAvailable` fell to
+  about `720 MiB`. During this load, all seven endpoints completed `585/585`
+  requests with no failures; `infrastate/snapshot` max latency was about
+  `2817 ms`.
+- After the load stopped, a 15-minute idle-relaxation tail showed no meaningful
+  RSS release. Active runtime RSS stayed around `3.15 GiB` and drifted slightly
+  upward to about `3.09 GiB`/`3162316 KiB` by the end; `MemAvailable` stayed
+  around `713-722 MiB`, swap stayed unused, and runtime remained `ready`.
+- After the experiment, profiler thresholds were restored to the previous
+  relaxed stand profile (`growth=1 GiB`, `slope=512 MiB/min`,
+  `min_uptime=900 s`, `window=300 s`) and `adaos.service` was restarted to
+  release memory. Backup before restore:
+  `/root/adaos/.env.bak-after-3gb-restore-20260528T060145Z`.
+
+Status by priority:
+
+- [ ] P0 is not fully accepted on this stand. Relaxed profiling prevents the
+  profiler from interrupting the 180-second baseline test, but boot still showed
+  an early `runtime.listener_lost` respawn, and the `infrastate/snapshot`
+  endpoint timed out under polling.
+- [ ] P1 is not closed. Guardrails are visible and prevented the older
+  multi-gigabyte runaway during the measured window, but RSS still grew by
+  hundreds of MiB under read-heavy polling. The repeat run shows this is not
+  only a profiler-threshold artifact. The high-water experiment shows the more
+  important failure mode: memory does not relax after load stops.
+- [ ] P2 is partially implemented, not yet an operator source of truth. Thin
+  summary and status-card endpoints are cheap and available, but the stand still
+  requires full reliability/Yjs/infrastate reads to interpret pressure, and the
+  status registry reported no published cards in the initial metrics snapshot.
+- [ ] P3 is partially implemented. Slot update/validation status was correct on
+  the stand, but member sync links were under pressure, operation recovery is
+  still memory-first, and the supervisor/runtime restart incident was not
+  represented as a durable operator operation.
+- [ ] P4 is partially implemented. The runtime had evidence of browser UI
+  diagnostics ingestion (`POST:/api/node/ui/diagnostics` in route requests), and
+  `desktop` materialization was `ready/fresh`, but the stand failure prevented a
+  browser reload/progressive-hydration acceptance run.
+
+Follow-up tasks created from this checkpoint are recorded in the related
+sections below instead of as a separate tracker.
+
 ## Stipot Final Harvest and Cutover
 
 ### Goal
@@ -323,6 +457,13 @@ node ingests bounded runtime-debug breadcrumbs through
 `/api/node/ui/diagnostics`. The export path remains diagnostic-only and does not
 write browser logs into primary Yjs state.
 
+Checkpoint on `.30`, 2026-05-28: reliability route diagnostics showed recent
+`POST:/api/node/ui/diagnostics`, so browser UI diagnostic ingestion is active on
+the stand. The host became unreachable before log-file attribution and
+skill-scoped persistence could be rechecked, so the implementation remains
+complete for ingestion but not re-accepted for end-to-end operator debugging on
+this stand.
+
 ### Tasks
 
 #### UILOG-001: Complete skill-scoped diagnostics pipeline
@@ -345,6 +486,9 @@ Actions:
 - [ ] Add a typed ABI schema for UI diagnostic payloads.
 - [ ] Add rate limiting and duplicate suppression for repeated renderer errors.
 - [ ] Feed skill logs into the future LLM skill-debugging MCP workflow.
+- [ ] Add a post-restart acceptance check that browser UI diagnostics submitted
+  before a runtime restart remain available in skill/runtime logs after
+  recovery.
 
 ## Browser Startup and Progressive Hydration
 
@@ -368,6 +512,11 @@ that arrive while Yjs bootstrap is still pending are now treated as transient
 load failures instead of forcing a page reload, preventing startup reload loops
 when cached first paint races ahead of live runtime authorization.
 
+Checkpoint on `.30`, 2026-05-28: live reliability showed `desktop`
+materialization `ready/fresh` and first sync complete before the soak. The stand
+failure prevented a browser reload/progressive-hydration acceptance run, so P4
+remains partially implemented rather than accepted on this stand.
+
 ### Tasks
 
 #### BSPH-001: Render desktop before Yjs first-sync completion
@@ -389,6 +538,9 @@ Actions:
   paint, without hiding normal link/Yjs diagnostics.
 - [ ] Add an end-to-end timing assertion for login-to-first-desktop-paint once
   the browser E2E harness is available.
+- [ ] Add a managed-restart browser acceptance case: after supervisor restarts
+  the runtime, a browser reload must first paint from cached/local state, then
+  reconnect to live Yjs/materialization without hiding the restart cause.
 
 ## Operational Event Model Roadmap Consolidation
 
@@ -632,6 +784,16 @@ The same checkpoint found that `.40` could finish booting the new slot while
 supervisor finalization state, not a failed runtime. Supervisor reconciliation
 now finalizes boot status when the managed runtime is API-ready on the target
 slot, even if the previous attempt record has already been completed.
+
+Checkpoint on `.30`, 2026-05-28: the active core update state was correct at
+the start of the run (`succeeded/validate`, active slot `A`, target
+`0ae3de84634421be39c8284acaa71df4be2bbbb1`), which confirms the slot
+validation path for the deployed build. The same stand still showed
+`hub_member_links: pressure` with `known=7` and `linkless=7`, and the later
+memory-profile restart was not available as a durable operator operation while
+the runtime API was down. P3 therefore remains partially implemented: slot
+integrity is working for the current update, but member/catalog sync and
+operation durability are not yet an operator-grade source of truth.
 
 ### Product Rules
 
@@ -921,6 +1083,9 @@ Actions:
   dependency lifecycle artifacts.
 - [ ] Persist operation diagnostics needed by operators and LLM developers
   beyond the in-memory `OperationManager` retention window.
+- [ ] Persist supervisor/runtime memory-profile restart incidents as operation
+  or operation-like records so a runtime outage is visible after recovery and
+  through MCP/operator surfaces.
 - [ ] Expose inventory, scenario health, operation details, and log/detail
   resources through stable API and Root MCP surfaces.
 - [ ] Refactor `infrastate_skill` to consume the core inventory/health/detail
@@ -1008,6 +1173,32 @@ Working hypothesis:
 - Guardrails must therefore be designed as observability-first reducers of
   amplification, not as opaque drops that erase the evidence needed to improve
   core and skills.
+
+2026-05-28 `.30` checkpoint:
+
+- The old runaway pattern was reduced but not eliminated. A read-heavy
+  180-second polling soak hit 0 endpoint failures, yet the runtime process RSS
+  still grew by about `274 MiB` final and supervisor immediately moved into
+  sampled-profile restart behavior.
+- A repeat run with relaxed stand-local profiler thresholds did not restart the
+  runtime, proving the previous post-soak outage was partly policy-threshold
+  driven. It also made the underlying RSS growth clearer: active runtime RSS
+  grew from about `345 MiB` to about `850 MiB` over 180 seconds.
+- A high-water follow-up with profiler intervention delayed past the target
+  reached process-tree RSS about `3.18 GiB` and active runtime RSS about
+  `3.07 GiB` in `371 s`. After all load stopped, a 15-minute idle tail did not
+  relax the active runtime RSS; it stayed around `3.15 GiB` and then slightly
+  increased. This is the current primary P1 failure, more important than the
+  transient growth during load.
+- `infrastate/snapshot` remained an expensive read path under polling. In the
+  first run max observed latency was about `3.4 s`; in the relaxed-threshold run
+  it completed 63/65 requests and timed out twice at 12 seconds.
+- Guard evidence was visible (`yjs_pressure`, stream guard, eventbus counters),
+  but the post-soak incident did not leave a complete operator story because the
+  runtime API was unavailable during follow-up and the stand became unreachable.
+- This reclassifies P1 as "guarded but not contained": the system can observe
+  and interrupt pressure, but containment/recovery still breaks the stable
+  baseline.
 
 ### Tasks
 
@@ -1169,6 +1360,19 @@ Actions:
   snapshot/request counters where still missing.
 - [x] Publish enough local-only artifacts to debug the next incident even if
   root publication is unavailable.
+- [ ] Keep supervisor memory-profile apply/complete from taking the managed
+  stand out of the operator control plane; `8776` status and browser-safe
+  transition state must remain available when `8777` is intentionally down.
+- [ ] Capture a durable incident artifact for the `.30` 2026-05-28
+  sampled-profile restart: trigger reason, runtime pid, RSS series,
+  profile-state transition, shutdown result, respawn result, and API-ready
+  deadline outcome.
+- [ ] Calibrate default memory-profile thresholds separately from leak/fanout
+  fixes. A short 180-second read-heavy soak should not be interrupted merely
+  because RSS crosses the current small-machine default near `256 MiB`.
+- [ ] Add an explicit relaxation acceptance gate: after a high-water polling or
+  browser-load run, stop all heavy requests and require RSS to drop materially
+  or prove retained heap ownership before marking memory containment accepted.
 
 #### HMG-006: Fix skill-level amplifiers in snapshot and webio hot paths
 
@@ -1893,7 +2097,7 @@ Checklist:
 
 #### F3M-007: First-3-minute memory footprint
 
-Status: closed for the current 3-minute goal.
+Status: reopened for managed-stand baseline stability.
 
 Evidence:
 
@@ -1906,12 +2110,42 @@ Resolution:
 - Memory reached a startup plateau and stayed bounded: process-tree peak PrivateMemory was 230.555 MB and the last sample was 228.117 MB.
 - Repeat final acceptance with browser `/ws` attach stayed bounded as well: process-tree peak PrivateMemory was 145.211 MB and the last sample was 145.211 MB.
 
+2026-05-28 stand checkpoint:
+
+- On `.30`, a read-heavy 180-second API polling soak completed without HTTP
+  failures but did not reach a clean managed baseline. Runtime RSS grew from
+  about `510856 KiB` to `785132 KiB` final, with a sampled process-tree peak
+  above `1002116 KiB`.
+- Supervisor then applied sampled memory-profile mode and shut the runtime down;
+  the runtime API was unavailable on `8777` during the follow-up control window,
+  and the stand later stopped responding to SSH/ping.
+- After relaxing stand-local profiler thresholds to `growth=1 GiB`,
+  `slope=512 MiB/min`, and `min_uptime=900 s`, the same 180-second polling
+  pattern did not trigger a memory-profile restart and the API remained ready
+  after the run. Active runtime RSS still grew from about `345 MiB` to about
+  `850 MiB`, so the memory baseline is not accepted even though the previous
+  restart is now understood as threshold-sensitive.
+- A later high-water run reached active runtime RSS about `3.07 GiB`; after
+  stopping the load, 15 minutes of idle sampling showed no relaxation. The
+  runtime stayed ready, but RSS remained near the high-water mark.
+
 Actions:
 
 - [x] Add process-tree memory sampling to the final soak verification.
 - [x] Capture first, ready, peak, and final memory samples.
 - [x] Confirm peak and final memory values are in the same plateau range.
 - [x] Confirm no memory-related traceback, supervisor failure, or event-loop lag appears in the final accepted run.
+- [ ] Add managed-stand acceptance that treats memory-profile restart plus
+  non-ready API recovery as a P0 baseline failure, even when the first
+  180-second polling window has zero HTTP errors.
+- [ ] Ensure supervisor memory-profile apply/complete leaves `8776` and the
+  browser-safe transition/status surface available while the runtime API is
+  down.
+- [ ] Split acceptance into two checks: profiler policy calibration, and raw
+  runtime RSS plateau under the same polling/browser load with profiler
+  intervention disabled or delayed.
+- [ ] Add a post-load relaxation window to baseline acceptance. Passing under
+  load is insufficient if RSS remains pinned after the load stops.
 
 #### F3M-008: Remote root-routed Yjs attach closes under browser load
 
@@ -1999,7 +2233,7 @@ Actions:
 
 #### F3M-011: Linux remote-browser attach triggers runaway memory growth
 
-Status: fixed for the first-3-minute goal; long-run plateau confirmation pending.
+Status: reopened for managed Linux stand memory/profile recovery.
 
 Evidence:
 
@@ -2026,6 +2260,15 @@ Working hypothesis:
 - A second amplifier was `/api/node/infrastate/snapshot`: root-routed browser fallback probes called `get_snapshot`, which projected the full diagnostic snapshot into Yjs and returned multi-megabyte payloads.
 - A third amplifier was supervisor policy profiling: the memory detector could restart the runtime into `sampled_profile` during the first browser attach, causing recovery/degraded oscillation even after transport was healthy.
 - A fourth amplifier is any skill `@subscribe(...)` path that writes to Yjs without passing through `SkillManager.run_tool`; owner quarantine must gate skill event handlers as well as public tools.
+- The first 2026-05-28 `.30` polling soak did not reproduce the older 3 GiB
+  runaway, but it still showed hundreds of MiB of RSS growth and then a
+  supervisor memory-profile restart with API recovery failure. The repeat with
+  relaxed profiler thresholds avoided the restart but still showed active
+  runtime RSS growth from about `345 MiB` to about `850 MiB`. Treat the restart
+  as profiler-policy calibration debt, and the RSS slope as containment debt.
+- The 3 GiB follow-up proves the worse condition: when load stops, RSS does not
+  return to the pre-load working set or even materially decrease during a
+  15-minute idle window.
 
 Actions:
 
@@ -2060,6 +2303,16 @@ Actions:
 - [ ] Run a destructive `infrastate` browser-load soak after the client deploy and confirm skill subscription quarantine stops the memory climb.
 - [ ] Design safe off-hot-path YStore replay compaction for live browser load; direct live backup can exceed a 60s request window.
 - [ ] Tune YStore replay defaults or background compaction so `sync_runtime` leaves `pressure` after browser warm-up.
+- [ ] Re-run `.30` after memory-profile recovery hardening and require: no API
+  loss after the soak, no host-level shutdown/unreachability, final RSS near the
+  plateau, and captured profile artifacts if supervisor still intervenes.
+- [ ] Optimize or reroute `infrastate/snapshot` so repeated read-only polling
+  cannot produce 12 second client timeouts or sustained active-runtime RSS
+  growth.
+- [ ] Identify retained heap owners after the 3 GiB high-water run. Candidate
+  areas to inspect first: full reliability payload construction, Yjs runtime
+  diagnostics serialization, materialization/infrastate snapshots, and cached
+  model/object structures that survive request completion.
 
 ### Operating Checklist
 
@@ -2194,6 +2447,13 @@ expensive build; when the build exceeded the 1 second TTL, the cache entry was
 stale on arrival. The cache is now stamped after build completion and protected
 by per-webspace build locks so compact Overview/API and direct stream snapshot
 bursts reuse the same materialized model instead of rebuilding it in parallel.
+The 2026-05-28 `.30` stabilization checks confirmed that thin summary is cheap
+under polling (`728` bytes; 63/63 and then 65/65 successful responses), but P2
+is not yet accepted as an operator source of truth: full
+reliability/Yjs/infrastate endpoints were still needed to explain the incident,
+`/api/node/status/cards` returned only a small empty snapshot during the runs,
+and the memory-growth / profiler-policy story was not visible as durable
+status-card or operation state.
 
 Problem statement:
 
@@ -2687,7 +2947,7 @@ Expected behavior:
 
 Actions:
 
-- [ ] Measure current response size and polling frequency.
+- [x] Measure current response size and polling frequency.
 - [x] Expose registry-backed `statusPlane` data inside the compatibility
   summary response and through `/api/node/status/cards`.
 - [x] Add derived Yjs/stream guard cards to `statusPlane` so thin status
@@ -2781,6 +3041,9 @@ Actions:
   the last YWS/provider evidence separate from the member core-update failure.
 - [ ] Verify the client no longer requests large summary payloads repeatedly
   during the first 3 minutes.
+- [ ] Ensure a memory-profile restart/runtime-unavailable transition is visible
+  through thin status/operator surfaces without requiring full reliability or
+  infrastate snapshots while `8777` is unavailable.
 
 Human verification:
 
@@ -2847,6 +3110,9 @@ Acceptance criteria:
 - Runtime `/api/admin/update/start` must behave as a compatibility shim in
   managed autostart, forwarding to `/api/supervisor/update/start` before using
   its legacy countdown-only fallback.
+- Managed memory-profile restart must be represented in the same operator
+  status family as other supervisor transitions, including reason, active pid,
+  shutdown result, respawn result, and API-ready deadline.
 
 Actions:
 

@@ -186,7 +186,10 @@ Current status:
 
 ### 7. Early Pilot Sequence
 
-- [ ] `pilot.status_cards_first`: implement status cards as the first small platform-emitter projection family
+- [x] `pilot.status_cards_first`: implement status cards as the first small platform-emitter projection family
+- [ ] `pilot.status_cards_operator_population`: populate the status-card family
+  enough that a managed runtime restart/memory-profile incident is visible from
+  the thin operator plane without falling back to full diagnostics
 - [ ] `pilot.platform_surfaces_first`: prepare `web_desktop` and the shared platform surfaces first: notifications, diagnostics, workspace manager, and related modals
 - [ ] `pilot.platform_emitter_validated`: validate platform-as-emitter semantics before migrating one heavy skill
 - [ ] `pilot.infrascope_after_prereqs`: migrate `Infrascope` only after the core/runtime and client projection contracts are in place
