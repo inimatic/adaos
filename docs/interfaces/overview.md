@@ -23,4 +23,4 @@ This section describes AdaOS I/O routing and integrations.
 - Modern outbound: `tg.output.<bot_id>.chat.<chat_id>`.
 - Legacy outbound: `io.tg.out`.
 
-See `docs/io/telegram.md` for the Telegram user flow and commands.
+See `docs/interfaces/telegram.md` for the Telegram user flow and commands.

@@ -7,7 +7,7 @@ The old copy of this guide was outdated and contained legacy CLI advice. Use the
 - [Skills](../skills.md)
 - [Skill Runtime Lifecycle](../skill_runtime.md)
 - [LLM-Safe Skill Development Guide](llm-skill-development.md)
-- the repository note `docs/io/webio.md`
+- the repository note `docs/interfaces/webio.md`
 - [Semantic State Plane](../architecture/semantic-state-plane.md)
 
 Key current rules:

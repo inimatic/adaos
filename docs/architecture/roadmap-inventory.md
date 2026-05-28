@@ -124,7 +124,7 @@ Authoritative docs:
 - [Authority and Degraded Mode](authority-and-degraded-mode.md)
 - [Routing](../concepts/routing.md)
 - [SDK IO](../sdk/io.md)
-- [WebIO](../io/webio.md)
+- [WebIO](../interfaces/webio.md)
 
 Code anchors:
 
@@ -333,7 +333,7 @@ Authoritative docs:
 - [Webspace Evolution Roadmap](webspace-evolution-roadmap.md)
 - [UI Runtime Diagnostics](ui-runtime-diagnostics.md)
 - [UI Addressing](ui-addressing.md)
-- [WebIO](../io/webio.md)
+- [WebIO](../interfaces/webio.md)
 
 Code anchors:
 
