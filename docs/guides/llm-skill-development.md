@@ -9,7 +9,7 @@ governance.
 
 Read this together with:
 
-- the repository note `docs/io/webio.md`
+- the repository note `docs/interfaces/webio.md`
 - [UI Addressing](../architecture/ui-addressing.md)
 - [Named Entities and Canonical Naming](../architecture/named-entities.md)
 - [Semantic State Plane](../architecture/semantic-state-plane.md)

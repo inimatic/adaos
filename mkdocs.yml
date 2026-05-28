@@ -185,6 +185,10 @@ nav:
       - Decorators: sdk/decorators.md
       - Adapters: sdk/adapters.md
       - Control Plane: sdk_control_plane.md
+  - IO:
+      - Overview: interfaces/overview.md
+      - Telegram: interfaces/telegram.md
+      - WebIO: interfaces/webio.md
   - Skills: skills.md
   - Scenarios: scenarios.md
   - DevPortal: devportal.md

@@ -42,7 +42,7 @@ This note covers:
 For current implementation details see also:
 
 - [Scenarios and Target State](../concepts/scenarios-target-state.md)
-- the repository note `docs/io/webio.md`
+- the repository note `docs/interfaces/webio.md`
 - [UI Addressing](ui-addressing.md)
 - [Web UI Architecture](web-ui-architecture.md)
 
