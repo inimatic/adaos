@@ -3313,11 +3313,16 @@ def _yws_guard_reject_reason(
                     webspace_recent_10s=recent_10s,
                     webspace_distinct_clients_10s=webspace_distinct_clients_10s,
                 )
-                quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
-                    client_key,
-                    now,
-                )
-                reason = "client_reconnect_storm"
+                if webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S:
+                    dependency_recovery_allowed = True
+                    dependency_recovery_reason = "single_client_reconnect_storm_replacement"
+                    _record_dependency_recovery()
+                else:
+                    quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
+                        client_key,
+                        now,
+                    )
+                    reason = "client_reconnect_storm"
             client_short_session_storm = client_short_sessions >= _YWS_GUARD_SHORT_SESSION_LIMIT
             if client_short_session_storm and not reason:
                 if _dependency_allows_recovery("client_short_session_storm"):
