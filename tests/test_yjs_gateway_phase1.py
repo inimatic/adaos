@@ -1467,11 +1467,11 @@ def test_yws_guard_limits_browser_session_not_whole_device(monkeypatch) -> None:
     gateway_module._untrack_yws_connection("ops", tab_a)
 
 
-def test_yws_guard_default_keeps_scoped_replacement_overflow_based(monkeypatch) -> None:
+def test_yws_guard_default_replaces_scoped_client_sessions(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     gateway_module._YWS_GUARD_DIAG.clear()
-    assert gateway_module._YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS is False
+    assert gateway_module._YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS is True
     monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_CLIENT", 2)
 
     class _FakeWebSocket:
@@ -1495,13 +1495,14 @@ def test_yws_guard_default_keeps_scoped_replacement_overflow_based(monkeypatch) 
         )
     )
 
-    assert closed == 0
-    assert first.closed == []
+    assert closed == 1
+    assert first.closed == [(1012, "replaced_by_new_yws_session")]
     assert gateway_module._active_yws_connection_total_for_client(
         "ops",
         "dev-2",
         browser_session_id="tab-a",
-    ) == 1
+    ) == 0
+    assert gateway_module._YWS_GUARD_DIAG["scoped_replaced_total"] == 1
     gateway_module._untrack_yws_connection("ops", first)
 
 
@@ -1957,6 +1958,52 @@ def test_yws_guard_allows_rescue_connection_when_client_backoff_has_no_active_yw
     assert reason == ""
     assert diag["client_quarantine_cleared"] is False
     assert client_key in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_scoped_replacement_allows_client_backoff_recovery(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS", True)
+    client_key = gateway_module._yws_guard_client_history_key(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+    gateway_module._YWS_GUARD_QUARANTINE_UNTIL[client_key] = time.time() + 300.0
+
+    class _FakeWebSocket:
+        query_params = {"dev": "dev-hot", "browser_session_id": "tab-a"}
+
+        def __init__(self) -> None:
+            self.closed: list[tuple[int, str]] = []
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed.append((code, str(reason or "")))
+
+    stale = _FakeWebSocket()
+    gateway_module._track_yws_connection("desktop", stale, device_id="dev-hot")
+
+    closed = asyncio.run(
+        gateway_module._close_existing_yws_client_connections(
+            "desktop",
+            "dev-hot",
+            browser_session_id="tab-a",
+        )
+    )
+    reason, diag = gateway_module._yws_guard_reject_reason(
+        "desktop",
+        "dev-hot",
+        browser_session_id="tab-a",
+    )
+
+    assert closed == 1
+    assert stale.closed == [(1012, "replaced_by_new_yws_session")]
+    assert reason == ""
+    assert diag["active_total"] == 0
+    assert diag["dependency_recovery_allowed"] is False
     _clear_yws_guard_state()
 
 
