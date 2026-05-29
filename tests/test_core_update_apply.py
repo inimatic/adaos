@@ -704,6 +704,7 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/services/core_update_policy.py" in critical
     assert "src/adaos/services/nlu/rasa_skill_installer.py" in critical
     assert "src/adaos/services/runtime_refresh.py" in critical
+    assert "src/adaos/services/self_hygiene.py" in critical
     assert "src/adaos/apps/cli/commands/node.py" in critical
     assert "src/adaos/services/node_display.py" in critical
     assert "src/adaos/services/node_runtime_state.py" in critical

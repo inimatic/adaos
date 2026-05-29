@@ -39,6 +39,7 @@ UPDATE_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/services/bootstrap_update.py",
     "src/adaos/services/node_display.py",
     "src/adaos/services/runtime_refresh.py",
+    "src/adaos/services/self_hygiene.py",
     "src/adaos/services/scenario/webspace_runtime.py",
     "src/adaos/services/subnet/link_client.py",
     "src/adaos/services/subnet/link_manager.py",
