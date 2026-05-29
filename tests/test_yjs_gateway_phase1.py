@@ -1803,7 +1803,7 @@ def test_yws_guard_reject_hold_follows_guard_quarantine_ttl(monkeypatch) -> None
     )
 
 
-def test_yws_guard_rejects_repeated_short_sessions_with_active_yws(monkeypatch) -> None:
+def test_yws_guard_allows_single_client_short_session_recovery(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
@@ -1813,6 +1813,7 @@ def test_yws_guard_rejects_repeated_short_sessions_with_active_yws(monkeypatch) 
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
     monkeypatch.setattr(
         gateway_module,
         "_yws_guard_route_dependency_snapshot",
@@ -1826,13 +1827,51 @@ def test_yws_guard_rejects_repeated_short_sessions_with_active_yws(monkeypatch) 
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
 
+    assert reason == ""
+    assert diag["client_short_sessions"] == 3
+    assert diag["client_short_session_storm"] is True
+    assert diag["dependency_recovery_allowed"] is True
+    assert diag["dependency_recovery_reason"] == "single_client_short_session_replacement"
+    assert diag["quarantine_ttl_s"] is None
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+
+    reason_again, _diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+    assert reason_again == ""
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_rejects_multi_client_short_session_storm(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_LIMIT", 3)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_SHORT_SESSION_WINDOW_S", 60.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MIN_STABLE_SESSION_S", 20.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_route_dependency_snapshot",
+        lambda *, now_ts=None: {"ready": False, "reason": "route_signal_not_ready"},
+    )
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object()]
+
+    for _idx in range(3):
+        gateway_module._record_yws_short_session("desktop", "dev-hot", lifetime_s=6.0)
+        gateway_module._record_yws_guard_attempt("desktop", "dev-hot")
+    gateway_module._record_yws_guard_attempt("desktop", "dev-other")
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
+
     assert reason == "client_short_session_storm"
     assert diag["client_short_sessions"] == 3
     assert diag["client_short_session_storm"] is True
+    assert diag["webspace_distinct_clients_10s"] == 2
     assert diag["quarantine_ttl_s"] == 30.0
-
-    reason_again, _diag_again = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
-    assert reason_again == "client_reconnect_backoff"
+    assert gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     _clear_yws_guard_state()
 

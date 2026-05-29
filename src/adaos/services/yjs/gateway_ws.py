@@ -3331,6 +3331,10 @@ def _yws_guard_reject_reason(
                     dependency_recovery_allowed = True
                     dependency_recovery_reason = "client_short_session_storm_no_active_yws"
                     _record_dependency_recovery()
+                elif webspace_distinct_clients_10s < _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S:
+                    dependency_recovery_allowed = True
+                    dependency_recovery_reason = "single_client_short_session_replacement"
+                    _record_dependency_recovery()
                 else:
                     quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
                         client_key,
