@@ -121,7 +121,7 @@ def _patch_reload_dependencies(
     async def _fake_sync_listing() -> None:
         return None
 
-    async def _fake_rebuild(self, webspace_id: str):
+    async def _fake_rebuild(self, webspace_id: str, **_kwargs):
         return SimpleNamespace(webspace_id=webspace_id)
 
     monkeypatch.setattr(webspace_runtime_module, "_seed_webspace_from_scenario", _fake_seed)
@@ -480,6 +480,42 @@ def test_list_workspaces_dedupes_stringified_workspace_id_rows() -> None:
     assert all(not str(row.workspace_id).startswith("{") for row in rows)
 
 
+def test_list_workspaces_dedupes_legacy_default_workspace_row(monkeypatch) -> None:
+    monkeypatch.setattr(workspace_index_module, "default_webspace_id", lambda: "desktop")
+    ctx = get_ctx()
+    ensure_workspace("desktop")
+    with ctx.sql.connect() as con:
+        workspace_index_module._ensure_schema(con)
+        con.execute(
+            """
+            INSERT OR REPLACE INTO y_workspaces(
+                workspace_id, path, created_at, display_name,
+                kind, home_scenario, source_mode, owner_scope, profile_scope, device_binding, ui_overlay_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "default",
+                "state/ystores/default.sqlite3",
+                1,
+                "default",
+                "workspace",
+                "web_desktop",
+                "workspace",
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        con.commit()
+
+    rows = workspace_index_module.list_workspaces()
+    ids = [row.workspace_id for row in rows]
+
+    assert ids.count("desktop") == 1
+    assert "default" not in ids
+
+
 def test_set_workspace_manifest_emits_workspace_event(monkeypatch) -> None:
     workspace_id = "manifest-event-space"
     events: list[tuple[str, dict[str, object], str]] = []
@@ -571,6 +607,8 @@ def test_workspace_desktop_overlay_roundtrip() -> None:
         "installed": {
             "apps": ["scenario:prompt_engineer_scenario"],
             "widgets": ["weather"],
+            "removedApps": [],
+            "removedWidgets": [],
         },
         "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile"}],
         "iconOrder": ["scenario:prompt_engineer_scenario"],
@@ -582,6 +620,8 @@ def test_workspace_desktop_overlay_roundtrip() -> None:
             "installed": {
                 "apps": ["scenario:prompt_engineer_scenario"],
                 "widgets": ["weather"],
+                "removedApps": [],
+                "removedWidgets": [],
             },
             "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile"}],
             "iconOrder": ["scenario:prompt_engineer_scenario"],
@@ -592,6 +632,8 @@ def test_workspace_desktop_overlay_roundtrip() -> None:
     assert get_workspace_installed_overlay(webspace_id) == {
         "apps": ["scenario:prompt_engineer_scenario"],
         "widgets": ["weather"],
+        "removedApps": [],
+        "removedWidgets": [],
     }
     assert get_workspace_pinned_widgets_overlay(webspace_id) == [
         {"id": "infra-status", "type": "visual.metricTile"}
@@ -621,10 +663,14 @@ def test_web_desktop_service_ignores_legacy_yjs_installed_without_overlay(monkey
     assert installed.to_dict() == {
         "apps": [],
         "widgets": [],
+        "removedApps": [],
+        "removedWidgets": [],
     }
     assert get_workspace_installed_overlay(webspace_id) == {
         "apps": [],
         "widgets": [],
+        "removedApps": [],
+        "removedWidgets": [],
     }
 
 
@@ -703,12 +749,15 @@ def test_web_desktop_service_get_snapshot_returns_overlay_state(monkeypatch) -> 
         "installed": {
             "apps": ["scenario:prompt_engineer_scenario"],
             "widgets": ["weather"],
+            "removedApps": [],
+            "removedWidgets": [],
         },
         "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile", "title": "Infra"}],
         "topbar": [],
         "pageSchema": {},
         "iconOrder": ["scenario:prompt_engineer_scenario"],
         "widgetOrder": ["weather"],
+        "hiddenSections": [],
     }
 
 
@@ -776,12 +825,15 @@ def test_web_desktop_service_get_snapshot_async_prefers_read_only_live_doc(monke
         "installed": {
             "apps": ["scenario:prompt_engineer_scenario"],
             "widgets": ["weather"],
+            "removedApps": [],
+            "removedWidgets": [],
         },
         "pinnedWidgets": [{"id": "infra-status", "type": "visual.metricTile", "title": "Infra"}],
         "topbar": [],
         "pageSchema": {},
         "iconOrder": ["scenario:prompt_engineer_scenario"],
         "widgetOrder": ["weather"],
+        "hiddenSections": [],
     }
 
 
@@ -811,7 +863,7 @@ def test_web_desktop_service_set_snapshot_updates_overlay_and_live_doc(monkeypat
 
     assert get_workspace_topbar_overlay(webspace_id) == []
     assert get_workspace_page_schema_overlay(webspace_id) == {}
-    assert get_workspace_hidden_sections_overlay(webspace_id) == ["node:member-01"]
+    assert get_workspace_hidden_sections_overlay(webspace_id) == []
     assert get_workspace_icon_order_overlay(webspace_id) == ["scenario:web_desktop"]
     assert get_workspace_widget_order_overlay(webspace_id) == ["weather"]
     assert fake_state["ui"]["application"]["desktop"]["topbar"] == [{"id": "home", "label": "Home"}]

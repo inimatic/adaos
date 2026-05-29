@@ -163,6 +163,47 @@ async def test_local_event_bus_reports_webio_stream_control_pressure():
     assert seen == ["infrastate.realtime"]
 
 
+@pytest.mark.asyncio
+async def test_local_event_bus_preserves_each_webio_stream_control_handler(monkeypatch):
+    monkeypatch.delenv("ADAOS_EVENTBUS_BOUNDED_TOPICS", raising=False)
+    monkeypatch.delenv("ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS", raising=False)
+    bus = LocalEventBus()
+    seen: list[str] = []
+
+    async def first_handler(event: Event):
+        await asyncio.sleep(0.01)
+        seen.append(f"first:{event.payload.get('receiver')}")
+
+    async def second_handler(event: Event):
+        await asyncio.sleep(0.01)
+        seen.append(f"second:{event.payload.get('receiver')}")
+
+    bus.subscribe("webio.stream.snapshot.requested", first_handler)
+    bus.subscribe("webio.stream.snapshot.requested", second_handler)
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            payload={
+                "webspace_id": "desktop",
+                "receiver": "infrastate.skills",
+                "source": "events_ws",
+            },
+            source="test",
+            ts=0.0,
+        )
+    )
+
+    controls = bus.backlog_snapshot()["top_webio_stream_controls"]
+    row = next(item for item in controls if item["receiver"] == "infrastate.skills")
+    assert row["queued_total"] == 2
+    assert int(row.get("superseded_total") or 0) == 0
+
+    ok = await bus.wait_for_idle(timeout=1.0)
+
+    assert ok is True
+    assert seen == ["first:infrastate.skills", "second:infrastate.skills"]
+
+
 def test_local_event_bus_keeps_distinct_webio_stream_receivers_for_same_handler():
     async def _run() -> None:
         bus = LocalEventBus()
