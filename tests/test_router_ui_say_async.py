@@ -142,6 +142,70 @@ async def test_io_out_stream_publish_emits_node_qualified_topics_when_node_owned
     assert "webio.stream.nodes.member-01.telemetry_feed" in seen
 
 
+async def test_io_out_stream_publish_keeps_remote_node_events_off_unqualified_topic(monkeypatch) -> None:
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(node_id="hub-node")),
+    )
+    bus = LocalEventBus()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    seen: list[str] = []
+    bus.subscribe("webio.stream.default.telemetry_feed", lambda ev: seen.append(getattr(ev, "type", "")))
+    bus.subscribe("webio.stream.default.nodes.member-01.telemetry_feed", lambda ev: seen.append(getattr(ev, "type", "")))
+    bus.subscribe("webio.stream.nodes.member-01.telemetry_feed", lambda ev: seen.append(getattr(ev, "type", "")))
+    bus.publish(
+        Event(
+            type="io.out.stream.publish",
+            source="test",
+            ts=123.0,
+            payload={
+                "receiver": "telemetry_feed",
+                "data": {"value": 42},
+                "_meta": {"webspace_id": "default", "node_id": "member-01"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert "webio.stream.default.telemetry_feed" not in seen
+    assert "webio.stream.default.nodes.member-01.telemetry_feed" in seen
+    assert "webio.stream.nodes.member-01.telemetry_feed" in seen
+
+
+async def test_io_out_stream_publish_keeps_local_node_events_on_unqualified_topic(monkeypatch) -> None:
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(node_id="hub-node")),
+    )
+    bus = LocalEventBus()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    seen: list[str] = []
+    bus.subscribe("webio.stream.default.telemetry_feed", lambda ev: seen.append(getattr(ev, "type", "")))
+    bus.subscribe("webio.stream.default.nodes.hub-node.telemetry_feed", lambda ev: seen.append(getattr(ev, "type", "")))
+    bus.publish(
+        Event(
+            type="io.out.stream.publish",
+            source="test",
+            ts=123.0,
+            payload={
+                "receiver": "telemetry_feed",
+                "data": {"value": 42},
+                "_meta": {"webspace_id": "default", "node_id": "hub-node"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert "webio.stream.default.telemetry_feed" in seen
+    assert "webio.stream.default.nodes.hub-node.telemetry_feed" in seen
+
+
 async def test_webio_stream_guard_denied_owner_does_not_crash(monkeypatch) -> None:
     import adaos.services.yjs.owner_guard as owner_guard
 
