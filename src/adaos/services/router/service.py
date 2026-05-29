@@ -1301,6 +1301,32 @@ class RouterService:
 
             await _mutate_data_map(webspace_id, _mutator, channel="core.router.tts.live_room")
 
+        def _local_stream_node_id() -> str:
+            try:
+                return str(get_ctx().config.node_id or "").strip()
+            except Exception:
+                return ""
+
+        def _webio_stream_topics(webspace_id: str, receiver: str, node_id: str) -> list[str]:
+            ws = coerce_webspace_id(webspace_id, fallback="default")
+            receiver_id = str(receiver or "").strip()
+            if not receiver_id:
+                return []
+            source_node_id = str(node_id or "").strip()
+            local_node_id = _local_stream_node_id()
+            publish_unqualified = (
+                not source_node_id
+                or not local_node_id
+                or source_node_id == local_node_id
+            )
+            topics: list[str] = []
+            if publish_unqualified:
+                topics.append(f"webio.stream.{ws}.{receiver_id}")
+            if source_node_id:
+                topics.append(f"webio.stream.{ws}.nodes.{source_node_id}.{receiver_id}")
+                topics.append(f"webio.stream.nodes.{source_node_id}.{receiver_id}")
+            return topics
+
         def _publish_webio_stream_event(
             webspace_id: str,
             receiver: str,
@@ -1309,7 +1335,6 @@ class RouterService:
             source: str,
             ts: float,
         ) -> None:
-            ws = coerce_webspace_id(webspace_id, fallback="default")
             receiver_id = str(receiver or "").strip()
             if not receiver_id:
                 return
@@ -1323,11 +1348,7 @@ class RouterService:
                 )
                 or ""
             ).strip()
-            topics = [f"webio.stream.{ws}.{receiver_id}"]
-            if node_id:
-                topics.append(f"webio.stream.{ws}.nodes.{node_id}.{receiver_id}")
-                topics.append(f"webio.stream.nodes.{node_id}.{receiver_id}")
-            for topic in topics:
+            for topic in _webio_stream_topics(webspace_id, receiver_id, node_id):
                 self.bus.publish(
                     Event(
                         type=topic,
@@ -1966,7 +1987,7 @@ class RouterService:
             ).strip()
             targets = await _resolve_webspace_ids(payload)
             for ws in targets:
-                fanout_total = 1 + (2 if node_id else 0)
+                fanout_total = len(_webio_stream_topics(ws, receiver, node_id)) or 1
                 receiver_meta = await self._webio_receiver_metadata(ws, receiver)
                 effective_owner = owner or _receiver_declared_owner(receiver_meta)
                 if not _webio_stream_admit(
