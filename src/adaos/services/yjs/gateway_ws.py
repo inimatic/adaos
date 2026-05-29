@@ -261,7 +261,7 @@ _YWS_MAX_ACTIVE_PER_CLIENT = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_CLIENT", 2, mini
 _YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS = _env_flag("ADAOS_YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS", True)
 _YWS_GUARD_RECENT_OPEN_10S = _env_int("ADAOS_YWS_GUARD_RECENT_OPEN_10S", 8, minimum=1)
 _YWS_GUARD_CLIENT_OPEN_15S = _env_int("ADAOS_YWS_GUARD_CLIENT_OPEN_15S", 4, minimum=1)
-_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S = _env_int("ADAOS_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2, minimum=1)
+_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S = _env_int("ADAOS_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 3, minimum=1)
 _YWS_GUARD_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_COOLDOWN_S", 300.0, minimum=0.0)
 _YWS_GUARD_MAX_COOLDOWN_S = _env_float("ADAOS_YWS_GUARD_MAX_COOLDOWN_S", 1800.0, minimum=0.0)
 _YWS_GUARD_ESCALATION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_ESCALATION_WINDOW_S", 3600.0, minimum=1.0)
@@ -3017,7 +3017,7 @@ def _yws_guard_note_client_storm(
             return
         _YWS_GUARD_LAST_LOG_AT[log_key] = now
     _ylog.warning(
-        "yws guard observed client reconnect storm webspace=%s dev=%s action=allow_reconnect active=%s client_open_15s=%s webspace_open_10s=%s webspace_clients_10s=%s",
+        "yws guard observed client reconnect storm webspace=%s dev=%s action=observed active=%s client_open_15s=%s webspace_open_10s=%s webspace_clients_10s=%s",
         webspace_id,
         dev_id,
         active_total,
@@ -3052,7 +3052,7 @@ def _yws_guard_note_webspace_storm(
             return
         _YWS_GUARD_LAST_LOG_AT[log_key] = now
     _ylog.warning(
-        "yws guard observed webspace reconnect storm webspace=%s dev=%s action=allow_reconnect active=%s recent_open_10s=%s client_open_15s=%s webspace_clients_10s=%s",
+        "yws guard observed webspace reconnect storm webspace=%s dev=%s action=observed active=%s recent_open_10s=%s client_open_15s=%s webspace_clients_10s=%s",
         webspace_id,
         dev_id,
         active_total,
