@@ -1455,6 +1455,7 @@ class StreamRuntime:
                 receiver=receiver_name,
                 params=_params_from_payload(payload),
                 event_topic=_event_topic(event),
+                node_id=_node_id_from_payload(payload),
                 reason="snapshot_requested",
             ),
         )
@@ -1495,6 +1496,7 @@ class StreamRuntime:
                 receiver=receiver_name,
                 params=_params_from_payload(payload),
                 event_topic=_event_topic(event),
+                node_id=_node_id_from_payload(payload),
                 reason="subscription_changed",
             ),
         )
@@ -1581,6 +1583,22 @@ def _params_from_payload(payload: Any) -> Mapping[str, Any] | None:
         params = meta.get("params")
         if isinstance(params, Mapping):
             return dict(params)
+    return None
+
+
+def _node_id_from_payload(payload: Any) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    for key in ("target_node_id", "node_target_id", "node_id", "source_node_id"):
+        token = str(payload.get(key) or "").strip()
+        if token:
+            return token
+    meta = payload.get("_meta")
+    if isinstance(meta, Mapping):
+        for key in ("target_node_id", "node_target_id", "node_id", "source_node_id"):
+            token = str(meta.get(key) or "").strip()
+            if token:
+                return token
     return None
 
 

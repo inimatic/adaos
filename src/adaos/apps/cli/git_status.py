@@ -40,12 +40,19 @@ class GitPathStatus:
 
 
 def _run_git(workdir: Path, args: list[str], *, timeout_s: float = 10.0) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(workdir), *args],
-        text=True,
-        capture_output=True,
-        timeout=timeout_s,
-    )
+    cmd = ["git", "-C", str(workdir), *args]
+    try:
+        return subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.output.decode("utf-8", errors="replace") if isinstance(exc.output, bytes) else (exc.output or "")
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        message = stderr or f"git command timed out after {timeout_s:.1f}s: {' '.join(cmd)}"
+        return subprocess.CompletedProcess(cmd, 124, stdout=stdout, stderr=message)
 
 
 def _git_ok(proc: subprocess.CompletedProcess[str]) -> bool:

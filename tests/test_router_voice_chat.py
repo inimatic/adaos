@@ -324,6 +324,32 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     assert seen_stream[0].payload["data"]["message_count"] == 1
 
 
+async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_history(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    seen_stream: list[Event] = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            source="test",
+            ts=1.0,
+            payload={
+                "receiver": "voice_chat.messages",
+                "webspace_id": "desktop",
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+
+    assert seen_stream == []
+
+
 async def test_voice_chat_user_appends_neural_intent_demo(monkeypatch) -> None:
     class _Txn:
         def __enter__(self):

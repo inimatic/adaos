@@ -481,6 +481,7 @@ def test_stream_runtime_handles_snapshot_requested_event() -> None:
                     "receiver": context.receiver,
                     "webspace": context.webspace_id,
                     "params": dict(context.params or {}),
+                    "node": context.node_id,
                     "reason": context.reason,
                 },
             )
@@ -492,7 +493,7 @@ def test_stream_runtime_handles_snapshot_requested_event() -> None:
         {
             "receiver": "browsers.devices",
             "params": {"online_only": True},
-            "_meta": {"webspace_id": "desktop"},
+            "_meta": {"webspace_id": "desktop", "target_node_id": "member-1"},
         },
         receiver_prefix="browsers.",
     )
@@ -506,6 +507,7 @@ def test_stream_runtime_handles_snapshot_requested_event() -> None:
                 "receiver": "browsers.devices",
                 "webspace": "desktop",
                 "params": {"online_only": True},
+                "node": "member-1",
                 "reason": "snapshot_requested",
             },
             {
@@ -538,3 +540,48 @@ def test_stream_runtime_handles_subscription_changed_unsubscribed() -> None:
 
     assert len(calls) == 1
     assert runtime.active_receivers_snapshot() == []
+
+
+def test_stream_runtime_passes_target_node_to_subscription_builders() -> None:
+    calls: list[tuple[str, object, dict]] = []
+
+    runtime = StreamRuntime(
+        "infrastate_skill",
+        receivers=[
+            StreamReceiver(
+                "infrastate.marketplace.skills",
+                build=lambda context: {
+                    "receiver": context.receiver,
+                    "webspace": context.webspace_id,
+                    "node": context.node_id,
+                },
+            )
+        ],
+        stream_publish=lambda receiver, data, *, ts=None, _meta=None: calls.append((receiver, data, dict(_meta or {}))) or {"ok": True},
+    )
+
+    runtime.handle_subscription_changed(
+        {
+            "receiver": "infrastate.marketplace.skills",
+            "webspace_id": "homepoint",
+            "_meta": {"target_node_id": "member-42"},
+        },
+        receiver_prefix="infrastate.",
+    )
+
+    assert calls == [
+        (
+            "infrastate.marketplace.skills",
+            {
+                "receiver": "infrastate.marketplace.skills",
+                "webspace": "homepoint",
+                "node": "member-42",
+            },
+            {
+                "webspace_id": "homepoint",
+                "owner": "skill:infrastate_skill",
+                "skill_id": "infrastate_skill",
+                "skill_name": "infrastate_skill",
+            },
+        )
+    ]
