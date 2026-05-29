@@ -70,6 +70,9 @@ Current autostart-managed flow for bootstrap/self-update:
 1. run `adaos autostart update-start`
 2. wait for slot validation; if bootstrap-managed files changed, supervisor will automatically move through root promotion and request an autostart-service restart
 3. during that handoff `update-status` may briefly show `phase: root_promotion_pending`, then `phase: root_promoted` / `supervisor attempt: awaiting_root_restart`, before the restarted service converges under the updated root-based supervisor/bootstrap code
+4. after the runtime reports `state: succeeded` / `phase: validate`, verify the hub-member control link from both sides before accepting the rollout:
+   run `adaos node members` on the hub and on each updated member.  The hub must report the updated member as connected (`member_total` / `connected_total` include it, recent `last_message_ago_s`), and the member must report `connected_to_hub: true` with the same target update version.
+5. if the member reports `connected_to_hub: true` but the hub still shows the member as linkless, treat that as an incomplete rollout action, not a passive observation: request a hub-side snapshot refresh with `adaos node member-refresh --node-id <member-node-id>`, then retry the member local reconnect endpoint (`POST /api/node/member-hub/reconnect`) or restart the member service if the split view persists.
 
 If the supervisor enforces a minimum interval between updates, `update-start` may return a planned transition instead of an immediate countdown. In that case:
 
