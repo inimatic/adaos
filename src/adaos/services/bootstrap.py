@@ -119,6 +119,16 @@ from adaos.services.subnet_alias import save_subnet_alias
 from adaos.integrations.telegram.sender import TelegramSender
 
 
+def _ensure_managed_nlu_service_skills(log: logging.Logger) -> None:
+    try:
+        from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed, is_rasa_nlu_enabled
+
+        if is_rasa_nlu_enabled():
+            ensure_rasa_service_skill_installed()
+    except Exception:
+        log.warning("failed to ensure managed NLU service skills", exc_info=True)
+
+
 def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> float:
     try:
         interval_s = float(raw)
@@ -1950,6 +1960,8 @@ class BootstrapService:
         except Exception:
             pass
         await bus.emit("sys.boot.start", {"role": conf.role, "node_id": conf.node_id, "subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
+        if not _runtime_candidate_mode():
+            await asyncio.to_thread(_ensure_managed_nlu_service_skills, self._log)
         await self.skills_loader.import_all_handlers(self.ctx.paths.skills_dir())
         # Start service-type skills (external processes).
         if _runtime_candidate_mode():

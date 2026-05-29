@@ -47,7 +47,14 @@ UPDATE_CONTROL_PATHS: tuple[str, ...] = (
 )
 
 RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
+    "src/adaos/domain/__init__.py",
+    "src/adaos/domain/event_envelope.py",
+    "src/adaos/domain/projection_keys.py",
+    "src/adaos/domain/projection_record.py",
+    "src/adaos/domain/projection_subscription.py",
+    "src/adaos/interpreter_data/rasa_nlu_service_skill/skill.yaml",
     "src/adaos/services/eventbus.py",
+    "src/adaos/services/nlu/rasa_skill_installer.py",
     "src/adaos/sdk/core/decorators.py",
     "src/adaos/sdk/data/bus.py",
     "src/adaos/services/skills_loader_importlib.py",

@@ -9,6 +9,7 @@ import subprocess
 from importlib import resources
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import yaml
 
@@ -368,6 +369,49 @@ def _manifest_dependencies(root: Path) -> list[str]:
     return [str(item) for item in deps if isinstance(item, str) and item.strip()]
 
 
+def _file_uri_path(value: str) -> Path | None:
+    parsed = urlparse(str(value or "").strip())
+    if parsed.scheme.lower() != "file":
+        return None
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        return None
+    path_text = unquote(parsed.path or "")
+    if not path_text:
+        return None
+    if os.name == "nt" and len(path_text) >= 3 and path_text[0] == "/" and path_text[2] == ":":
+        path_text = path_text[1:]
+    if os.name != "nt" and len(path_text) >= 4 and path_text[0] == "/" and path_text[2] == ":":
+        return None
+    try:
+        return Path(path_text).expanduser().resolve()
+    except Exception:
+        return None
+
+
+def _dependencies_need_rasa_port_refresh(dependencies: list[str], ctx: Any) -> bool:
+    for item in dependencies:
+        token = str(item or "").strip()
+        if not token or token in {"--no-deps", "-e", "--editable"}:
+            continue
+        lowered = token.lower()
+        if "rasa-port" not in lowered and "adaos-rasa-nlu" not in lowered:
+            continue
+        if lowered.startswith("file:"):
+            path = _file_uri_path(token)
+            local_path = _local_rasa_port_path(ctx)
+            return (
+                path is None
+                or local_path is None
+                or not _same_path(path, local_path)
+                or not _is_rasa_port_checkout(path)
+            )
+        if lowered.startswith(("git+", "adaos-rasa-nlu @ git+")):
+            continue
+        if ":/" in token or ":\\" in token:
+            return True
+    return False
+
+
 def _should_refresh_template(src: Path, target: Path) -> bool:
     if not (target / "skill.yaml").exists():
         return True
@@ -485,7 +529,7 @@ def ensure_rasa_service_skill_installed() -> Path | None:
                 dependencies = _write_rasa_port_dependency(target, ctx)
             else:
                 dependencies = _manifest_dependencies(target)
-                if not dependencies:
+                if not dependencies or _dependencies_need_rasa_port_refresh(dependencies, ctx):
                     dependencies = _write_rasa_port_dependency(target, ctx)
         meta = _write_managed_metadata(target, dependencies)
         _prepare_slotted_runtime(target, str(meta["fingerprint"]))
