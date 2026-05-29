@@ -695,7 +695,14 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     critical = set(BOOTSTRAP_CRITICAL_PATHS)
 
     assert "src/adaos/build_info.py" in critical
+    assert "src/adaos/domain/__init__.py" in critical
+    assert "src/adaos/domain/event_envelope.py" in critical
+    assert "src/adaos/domain/projection_keys.py" in critical
+    assert "src/adaos/domain/projection_record.py" in critical
+    assert "src/adaos/domain/projection_subscription.py" in critical
+    assert "src/adaos/interpreter_data/rasa_nlu_service_skill/skill.yaml" in critical
     assert "src/adaos/services/core_update_policy.py" in critical
+    assert "src/adaos/services/nlu/rasa_skill_installer.py" in critical
     assert "src/adaos/services/runtime_refresh.py" in critical
     assert "src/adaos/apps/cli/commands/node.py" in critical
     assert "src/adaos/services/node_display.py" in critical

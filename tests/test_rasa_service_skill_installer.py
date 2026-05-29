@@ -94,6 +94,50 @@ def test_ensure_rasa_service_skill_installed_does_not_downgrade_newer_workspace_
     assert (target / ".adaos-managed.json").exists()
 
 
+def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import rasa_skill_installer as installer
+
+    monkeypatch.setattr(installer, "_prepare_slotted_runtime", lambda target, fingerprint: None)
+    monkeypatch.setattr(installer, "_ensure_rasa_port_submodule_checkout", lambda ctx: None)
+
+    ctx = get_ctx()
+    target = Path(ctx.paths.skills_dir()) / "rasa_nlu_service_skill"
+    (target / "handlers").mkdir(parents=True)
+    (target / "skill.yaml").write_text(
+        "\n".join(
+            [
+                "name: rasa_nlu_service_skill",
+                "version: 0.1.5",
+                "runtime:",
+                "  kind: service",
+                "  env:",
+                "    mode: venv",
+                "service:",
+                "  host: 127.0.0.1",
+                "  port: 18092",
+                "  command: ['-m', 'handlers.main']",
+                "dependencies:",
+                "- --no-deps",
+                "- -e",
+                "- file:///D:/git/adaos/src/adaos/integrations/rasa-port",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (target / "handlers" / "main.py").write_text("sentinel = 'same-version'\n", encoding="utf-8")
+
+    installed = installer.ensure_rasa_service_skill_installed()
+
+    assert installed == target
+    manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
+    assert manifest["dependencies"] == [
+        "--no-deps",
+        "adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main",
+    ]
+    assert "same-version" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
+
+
 def test_ensure_rasa_service_skill_installed_respects_disabled_flag(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import rasa_skill_installer as installer
