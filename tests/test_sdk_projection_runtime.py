@@ -480,6 +480,7 @@ def test_stream_runtime_handles_snapshot_requested_event() -> None:
                 build=lambda context: {
                     "receiver": context.receiver,
                     "webspace": context.webspace_id,
+                    "params": dict(context.params or {}),
                     "reason": context.reason,
                 },
             )
@@ -490,6 +491,7 @@ def test_stream_runtime_handles_snapshot_requested_event() -> None:
     result = runtime.handle_snapshot_requested(
         {
             "receiver": "browsers.devices",
+            "params": {"online_only": True},
             "_meta": {"webspace_id": "desktop"},
         },
         receiver_prefix="browsers.",
@@ -500,9 +502,15 @@ def test_stream_runtime_handles_snapshot_requested_event() -> None:
     assert calls == [
         (
             "browsers.devices",
-            {"receiver": "browsers.devices", "webspace": "desktop", "reason": "snapshot_requested"},
+            {
+                "receiver": "browsers.devices",
+                "webspace": "desktop",
+                "params": {"online_only": True},
+                "reason": "snapshot_requested",
+            },
             {
                 "webspace_id": "desktop",
+                "params": {"online_only": True},
                 "owner": "skill:browsers_skill",
                 "skill_id": "browsers_skill",
                 "skill_name": "browsers_skill",

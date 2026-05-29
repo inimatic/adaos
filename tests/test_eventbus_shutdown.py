@@ -242,3 +242,47 @@ def test_local_event_bus_keeps_distinct_webio_stream_receivers_for_same_handler(
             assert int(by_receiver[receiver].get("superseded_total") or 0) == 0
 
     asyncio.run(_run())
+
+
+def test_local_event_bus_keeps_distinct_webio_stream_params_for_same_receiver():
+    async def _run() -> None:
+        bus = LocalEventBus()
+        seen: list[dict] = []
+
+        async def handler(event: Event):
+            await asyncio.sleep(0.01)
+            seen.append(dict(event.payload.get("params") or {}))
+
+        bus.subscribe("webio.stream.snapshot.requested", handler)
+        for online_only in (True, False):
+            bus.publish(
+                Event(
+                    type="webio.stream.snapshot.requested",
+                    payload={
+                        "webspace_id": "desktop",
+                        "receiver": "browsers.devices",
+                        "source": "events_ws",
+                        "params": {"online_only": online_only},
+                    },
+                    source="test",
+                    ts=0.0,
+                )
+            )
+
+        ok = await bus.wait_for_idle(timeout=1.0)
+
+        assert ok is True
+        assert seen == [{"online_only": True}, {"online_only": False}]
+
+        controls = [
+            item
+            for item in bus.backlog_snapshot()["top_webio_stream_controls"]
+            if item["receiver"] == "browsers.devices"
+        ]
+        assert len(controls) == 2
+        assert {item["params"] for item in controls} == {
+            '{"online_only":true}',
+            '{"online_only":false}',
+        }
+
+    asyncio.run(_run())

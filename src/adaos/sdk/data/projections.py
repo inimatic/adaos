@@ -52,6 +52,7 @@ class ProjectionContext:
     skill_id: str
     webspace_id: str | None = None
     receiver: str | None = None
+    params: Mapping[str, Any] | None = None
     event_topic: str | None = None
     node_id: str | None = None
     reason: str | None = None
@@ -1421,7 +1422,10 @@ class StreamRuntime:
             with self._lock:
                 self._diagnostics.record(result)
             return result
-        return self.publish_snapshot(receiver_name, data, webspace_id=ws_id, force=force, meta=meta)
+        effective_meta = dict(meta or {})
+        if isinstance(build_context.params, Mapping):
+            effective_meta.setdefault("params", dict(build_context.params))
+        return self.publish_snapshot(receiver_name, data, webspace_id=ws_id, force=force, meta=effective_meta)
 
     def handle_snapshot_requested(
         self,
@@ -1449,6 +1453,7 @@ class StreamRuntime:
                 skill_id=self.skill_id,
                 webspace_id=ws_id,
                 receiver=receiver_name,
+                params=_params_from_payload(payload),
                 event_topic=_event_topic(event),
                 reason="snapshot_requested",
             ),
@@ -1488,6 +1493,7 @@ class StreamRuntime:
                 skill_id=self.skill_id,
                 webspace_id=ws_id,
                 receiver=receiver_name,
+                params=_params_from_payload(payload),
                 event_topic=_event_topic(event),
                 reason="subscription_changed",
             ),
@@ -1562,6 +1568,20 @@ def _webspace_from_payload(payload: Any) -> str:
             if token:
                 return token
     return "default"
+
+
+def _params_from_payload(payload: Any) -> Mapping[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    params = payload.get("params")
+    if isinstance(params, Mapping):
+        return dict(params)
+    meta = payload.get("_meta")
+    if isinstance(meta, Mapping):
+        params = meta.get("params")
+        if isinstance(params, Mapping):
+            return dict(params)
+    return None
 
 
 async def _call_build(build: BuildFn, context: ProjectionContext) -> Any:

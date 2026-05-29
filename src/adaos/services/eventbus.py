@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import json
 import logging
 import os
 import time
@@ -48,6 +49,15 @@ def _handler_label(handler: Handler) -> str:
     if topic:
         parts.append(f"topic={topic}")
     return " ".join(parts)
+
+
+def _stable_mapping_key(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except Exception:
+        return str(value)
 
 
 def _slow_handler_threshold_s(kind: str, default: float) -> float:
@@ -262,14 +272,21 @@ class LocalEventBus(EventBus):
         self,
         event_type: str,
         event: Event,
-    ) -> tuple[str, str, str, str, str] | None:
+    ) -> tuple[str, str, str, str, str, str] | None:
         if event_type not in _WEBIO_STREAM_CONTROL_EVENTS:
             return None
         webspace_id = str(self._event_field(event, "webspace_id") or "default").strip() or "default"
         target_node_id = str(self._event_field(event, "target_node_id", "node_id") or "").strip()
         stream_id = str(self._event_field(event, "stream_id", "receiver", "slot", "projection", "id") or "").strip()
         source = str(self._event_field(event, "source") or getattr(event, "source", "") or "").strip()
-        return (event_type, webspace_id, target_node_id, stream_id, source)
+        payload = getattr(event, "payload", None)
+        params: Any = None
+        if isinstance(payload, dict):
+            params = payload.get("params")
+            meta = payload.get("_meta")
+            if not isinstance(params, dict) and isinstance(meta, dict):
+                params = meta.get("params")
+        return (event_type, webspace_id, target_node_id, stream_id, source, _stable_mapping_key(params))
 
     def _prune_webio_stream_control_stats_locked(self, *, limit: int = 500) -> None:
         if len(self._webio_stream_control_stats) <= limit:
@@ -298,6 +315,7 @@ class LocalEventBus(EventBus):
         current["target_node_id"] = key[2] or None
         current["receiver"] = key[3] or None
         current["source"] = key[4] or None
+        current["params"] = key[5] or None
         current["last_action"] = str(self._event_field(event, "action", "change") or "").strip() or None
         if handler_name:
             current["last_handler"] = handler_name
