@@ -8,9 +8,8 @@ import json
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
-from adaos.services.webspace_id import coerce_webspace_id
 from adaos.services.yjs.store import ystore_path_for_webspace
-from adaos.services.yjs.webspace import default_webspace_id, dev_webspace_id
+from adaos.services.yjs.webspace import coerce_webspace_id, default_webspace_id, dev_webspace_id
 
 DEFAULT_HOME_SCENARIO = "web_desktop"
 KIND_WORKSPACE = "workspace"
