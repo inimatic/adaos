@@ -109,6 +109,48 @@ def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_ver
     return False
 
 
+def _payload_source_node_id(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    return str(
+        payload.get("node_id")
+        or payload.get("source_node_id")
+        or meta.get("node_id")
+        or meta.get("source_node_id")
+        or ""
+    ).strip()
+
+
+def _is_node_qualified_webio_stream_event(event_type: str) -> bool:
+    parts = str(event_type or "").strip().split(".")
+    if len(parts) < 4 or parts[0] != "webio" or parts[1] != "stream":
+        return False
+    return parts[2] == "nodes" or (len(parts) >= 5 and parts[3] == "nodes")
+
+
+def _is_unqualified_webio_stream_data_event(event_type: str) -> bool:
+    topic = str(event_type or "").strip()
+    if topic in {
+        "webio.stream.snapshot.requested",
+        "webio.stream.subscription.changed",
+    }:
+        return False
+    parts = topic.split(".")
+    if len(parts) < 4 or parts[0] != "webio" or parts[1] != "stream":
+        return False
+    return not _is_node_qualified_webio_stream_event(topic)
+
+
+def _should_forward_member_bus_event(event_type: str, payload: Any) -> bool:
+    if (
+        _is_unqualified_webio_stream_data_event(event_type)
+        and _payload_source_node_id(payload)
+    ):
+        return False
+    return True
+
+
 class MemberLinkClient:
     def __init__(self) -> None:
         self._stop = asyncio.Event()
@@ -816,6 +858,8 @@ class MemberLinkClient:
                 if isinstance(meta, dict) and (
                     bool(meta.get("subnet_hub_mirrored")) or bool(meta.get("subnet_origin_node_id"))
                 ):
+                    return
+                if not _should_forward_member_bus_event(typ, payload_dict):
                     return
                 source = getattr(ev, "source", None) if hasattr(ev, "source") else (ev.get("source") if isinstance(ev, dict) else None)
                 ts = getattr(ev, "ts", None) if hasattr(ev, "ts") else (ev.get("ts") if isinstance(ev, dict) else None)
