@@ -1814,6 +1814,7 @@ def test_yws_guard_allows_single_client_short_session_recovery(monkeypatch) -> N
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 4)
     monkeypatch.setattr(
         gateway_module,
         "_yws_guard_route_dependency_snapshot",
@@ -1841,7 +1842,7 @@ def test_yws_guard_allows_single_client_short_session_recovery(monkeypatch) -> N
     _clear_yws_guard_state()
 
 
-def test_yws_guard_rejects_multi_client_short_session_storm(monkeypatch) -> None:
+def test_yws_guard_rejects_multi_client_short_sessions_under_webspace_storm(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
@@ -1852,6 +1853,7 @@ def test_yws_guard_rejects_multi_client_short_session_storm(monkeypatch) -> None
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_COOLDOWN_S", 30.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_MAX_COOLDOWN_S", 30.0)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 4)
     monkeypatch.setattr(
         gateway_module,
         "_yws_guard_route_dependency_snapshot",
@@ -1866,7 +1868,7 @@ def test_yws_guard_rejects_multi_client_short_session_storm(monkeypatch) -> None
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
 
-    assert reason == "client_short_session_storm"
+    assert reason == "webspace_reconnect_storm"
     assert diag["client_short_sessions"] == 3
     assert diag["client_short_session_storm"] is True
     assert diag["webspace_distinct_clients_10s"] == 2

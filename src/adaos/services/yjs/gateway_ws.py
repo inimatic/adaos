@@ -3304,6 +3304,10 @@ def _yws_guard_reject_reason(
             reason = "active_limit"
         else:
             client_reconnect_storm = client_15s >= _YWS_GUARD_CLIENT_OPEN_15S
+            webspace_reconnect_storm = (
+                recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
+                and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
+            )
             if client_reconnect_storm and active_total > 0:
                 _yws_guard_note_client_storm(
                     webspace_id=webspace_key,
@@ -3335,6 +3339,10 @@ def _yws_guard_reject_reason(
                     dependency_recovery_allowed = True
                     dependency_recovery_reason = "single_client_short_session_replacement"
                     _record_dependency_recovery()
+                elif not webspace_reconnect_storm:
+                    dependency_recovery_allowed = True
+                    dependency_recovery_reason = "client_short_session_storm_without_webspace_pressure"
+                    _record_dependency_recovery()
                 else:
                     quarantine_until, quarantine_ttl_s, quarantine_incident_count = _set_yws_guard_quarantine_locked(
                         client_key,
@@ -3348,10 +3356,6 @@ def _yws_guard_reject_reason(
                     _YWS_GUARD_DIAG["last_client_short_session_storm_webspace_id"] = webspace_key
                     _YWS_GUARD_DIAG["last_client_short_session_storm_dev_id"] = dev_key
                     _YWS_GUARD_DIAG["last_client_short_session_storm_recent"] = client_short_sessions
-            webspace_reconnect_storm = (
-                recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
-                and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
-            )
             if webspace_reconnect_storm and active_total > 0:
                 _yws_guard_note_webspace_storm(
                     webspace_id=webspace_key,
