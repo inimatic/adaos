@@ -1147,7 +1147,7 @@ class RouterService:
             current = _voice_chat_stream_cache.get((str(webspace_id or "").strip(), str(target_node_id or "").strip())) or {}
             raw_messages = current.get("messages") if isinstance(current, dict) else None
             messages = [dict(item) for item in raw_messages if isinstance(item, dict)] if isinstance(raw_messages, list) else []
-            if not messages and not (isinstance(current, dict) and current.get("last_refresh_ts")):
+            if not messages:
                 return
             last_refresh_ts = float(current.get("last_refresh_ts") or time.time()) if isinstance(current, dict) else time.time()
             _publish_voice_chat_stream(webspace_id, target_node_id, messages, last_refresh_ts)
