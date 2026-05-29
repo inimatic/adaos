@@ -21,6 +21,7 @@ _WEBIO_STREAM_CONTROL_EVENTS = {
     "webio.yjs.snapshot.requested",
     "webio.yjs.subscription.changed",
 }
+_IO_OUT_STREAM_PUBLISH_EVENT = "io.out.stream.publish"
 _BROWSER_SESSION_CHANGED_EVENT = "browser.session.changed"
 _STATUS_CARD_CHANGED_EVENT = "adaos.status.card.changed"
 _PROJECTION_LIFECYCLE_EVENT = "adaos.projection.lifecycle.changed"
@@ -91,6 +92,7 @@ def _bounded_event_topics() -> tuple[str, ...]:
             "ADAOS_EVENTBUS_BOUNDED_TOPICS",
             "webio.stream.snapshot.requested,webio.stream.subscription.changed,"
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
+            "io.out.stream.publish,"
             "subnet.member.snapshot.changed,browser.session.changed,"
             "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
@@ -106,6 +108,7 @@ def _bounded_supersede_by_handler_topics() -> tuple[str, ...]:
             "ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS",
             "webio.stream.snapshot.requested,webio.stream.subscription.changed,"
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
+            "io.out.stream.publish,"
             "browser.session.changed,adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""
@@ -244,6 +247,8 @@ class LocalEventBus(EventBus):
     def _bounded_supersede_key(self, event_type: str, event: Event) -> tuple[Any, ...] | None:
         if event_type in _WEBIO_STREAM_CONTROL_EVENTS:
             return self._webio_stream_control_key(event_type, event)
+        if event_type == _IO_OUT_STREAM_PUBLISH_EVENT:
+            return self._io_out_stream_publish_key(event_type, event)
         if event_type == "subnet.member.snapshot.changed":
             node_id = str(self._event_field(event, "target_node_id", "node_id", "member_id") or "").strip()
             webspace_id = str(self._event_field(event, "webspace_id") or "").strip()
@@ -287,6 +292,41 @@ class LocalEventBus(EventBus):
             if not isinstance(params, dict) and isinstance(meta, dict):
                 params = meta.get("params")
         return (event_type, webspace_id, target_node_id, stream_id, source, _stable_mapping_key(params))
+
+    def _io_out_stream_publish_key(
+        self,
+        event_type: str,
+        event: Event,
+    ) -> tuple[str, str, str, str, str, str] | None:
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            return None
+        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+        webspace_id = str(
+            payload.get("webspace_id")
+            or payload.get("workspace_id")
+            or meta.get("webspace_id")
+            or meta.get("workspace_id")
+            or "default"
+        ).strip() or "default"
+        webspace_ids = meta.get("webspace_ids")
+        if isinstance(webspace_ids, list) and webspace_ids:
+            webspace_id = ",".join(str(item or "").strip() for item in webspace_ids if str(item or "").strip()) or webspace_id
+        node_id = str(
+            payload.get("target_node_id")
+            or payload.get("node_target_id")
+            or payload.get("node_id")
+            or payload.get("source_node_id")
+            or meta.get("target_node_id")
+            or meta.get("node_target_id")
+            or meta.get("node_id")
+            or meta.get("source_node_id")
+            or ""
+        ).strip()
+        receiver = str(payload.get("receiver") or "").strip()
+        source = str(getattr(event, "source", "") or payload.get("source") or meta.get("source") or "").strip()
+        semantics = str(meta.get("stream_semantics") or payload.get("stream_semantics") or "").strip()
+        return (event_type, webspace_id, node_id, receiver, source, semantics)
 
     def _prune_webio_stream_control_stats_locked(self, *, limit: int = 500) -> None:
         if len(self._webio_stream_control_stats) <= limit:
@@ -383,13 +423,15 @@ class LocalEventBus(EventBus):
         queue = self._bounded_queues.get(topic_key)
         if not queue:
             return []
-        preserve_distinct_webio_controls = event_type in _WEBIO_STREAM_CONTROL_EVENTS and supersede_key is not None
+        preserve_distinct_bounded_keys = (
+            event_type in _WEBIO_STREAM_CONTROL_EVENTS or event_type == _IO_OUT_STREAM_PUBLISH_EVENT
+        ) and supersede_key is not None
         kept: deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = deque()
         removed: list[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = []
         while queue:
             item = queue.popleft()
             if item[3] == event_type and item[4] == handler_name:
-                if preserve_distinct_webio_controls and item[5] != supersede_key:
+                if preserve_distinct_bounded_keys and item[5] != supersede_key:
                     kept.append(item)
                     continue
                 removed.append(item)

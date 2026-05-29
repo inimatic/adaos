@@ -43,6 +43,13 @@ _WEBIO_STREAM_GUARD_STATS_LOCK = threading.Lock()
 _WEBIO_STREAM_GUARD_STATS: dict[str, dict[str, Any]] = {}
 
 
+def _webio_receiver_metadata_timeout_s() -> float:
+    try:
+        return max(0.05, min(float(str(os.getenv("ADAOS_WEBIO_RECEIVER_METADATA_TIMEOUT_S") or "0.75").strip()), 10.0))
+    except Exception:
+        return 0.75
+
+
 def _webio_stream_guard_enabled() -> bool:
     return str(os.getenv("ADAOS_WEBIO_STREAM_GUARD_ENABLE") or "1").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -465,7 +472,18 @@ class RouterService:
         cached = self._webio_receiver_metadata_cache.get(key)
         if cached and cached[0] > now:
             return dict(cached[1])
-        metadata = await _read_webio_receiver_metadata(ws, receiver_id)
+        try:
+            metadata = await asyncio.wait_for(
+                _read_webio_receiver_metadata(ws, receiver_id),
+                timeout=_webio_receiver_metadata_timeout_s(),
+            )
+        except asyncio.TimeoutError:
+            _log.warning(
+                "webio receiver metadata lookup timed out webspace=%s receiver=%s",
+                ws,
+                receiver_id,
+            )
+            metadata = {}
         self._webio_receiver_metadata_cache[key] = (
             now + _WEBIO_RECEIVER_METADATA_CACHE_TTL_S,
             dict(metadata),
