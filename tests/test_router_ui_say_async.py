@@ -66,6 +66,39 @@ async def test_io_out_stream_publish_routes_to_webspace_scoped_browser_topic() -
     assert getattr(event, "payload", {}).get("webspace_id") == "default"
 
 
+async def test_io_out_stream_publish_routes_when_receiver_metadata_times_out(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_WEBIO_RECEIVER_METADATA_TIMEOUT_S", "0.01")
+
+    async def _slow_metadata(_webspace_id: str, _receiver: str) -> dict[str, object]:
+        await asyncio.sleep(1.0)
+        return {"owner": "skill:slow"}
+
+    monkeypatch.setattr(router_service_module, "_read_webio_receiver_metadata", _slow_metadata)
+    bus = LocalEventBus()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    seen: list[object] = []
+    bus.subscribe("webio.stream.default.telemetry_feed", lambda ev: seen.append(ev))
+    bus.publish(
+        Event(
+            type="io.out.stream.publish",
+            source="test",
+            ts=123.0,
+            payload={
+                "receiver": "telemetry_feed",
+                "owner": "skill:test",
+                "data": {"value": 42},
+                "_meta": {"webspace_id": "default"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert len(seen) == 1
+    assert getattr(seen[0], "payload", {}).get("data") == {"value": 42}
+
+
 async def test_io_out_stream_publish_unwraps_nested_webspace_id() -> None:
     bus = LocalEventBus()
     router = RouterService(eventbus=bus, base_dir=Path("."))

@@ -61,6 +61,7 @@ def test_browser_session_changed_is_bounded_by_default(monkeypatch):
     snapshot = bus.backlog_snapshot()
 
     assert "browser.session.changed" in snapshot["bounded_topics"]
+    assert "io.out.stream.publish" in snapshot["bounded_topics"]
 
 
 @pytest.mark.asyncio
@@ -284,5 +285,58 @@ def test_local_event_bus_keeps_distinct_webio_stream_params_for_same_receiver():
             '{"online_only":true}',
             '{"online_only":false}',
         }
+
+    asyncio.run(_run())
+
+
+def test_local_event_bus_coalesces_io_out_stream_publish_by_receiver():
+    async def _run() -> None:
+        bus = LocalEventBus()
+        seen: list[tuple[str, int]] = []
+
+        async def handler(event: Event):
+            seen.append((str(event.payload.get("receiver") or ""), int(event.payload.get("data", {}).get("seq") or 0)))
+
+        bus.subscribe("io.out.stream.publish", handler)
+        for seq in range(5):
+            bus.publish(
+                Event(
+                    type="io.out.stream.publish",
+                    payload={
+                        "receiver": "browsers.devices",
+                        "data": {"seq": seq},
+                        "_meta": {"webspace_id": "desktop"},
+                    },
+                    source="test",
+                    ts=0.0,
+                )
+            )
+        for seq in range(2):
+            bus.publish(
+                Event(
+                    type="io.out.stream.publish",
+                    payload={
+                        "receiver": "infrastate.marketplace.skills",
+                        "data": {"seq": seq},
+                        "_meta": {"webspace_id": "desktop"},
+                    },
+                    source="test",
+                    ts=0.0,
+                )
+            )
+
+        snapshot = bus.backlog_snapshot()
+        superseded = dict(snapshot["top_bounded_superseded_types"])
+
+        assert snapshot["bounded_queue_total"] <= 2
+        assert superseded["io.out.stream.publish"] >= 4
+
+        ok = await bus.wait_for_idle(timeout=1.0)
+
+        assert ok is True
+        assert seen == [
+            ("browsers.devices", 4),
+            ("infrastate.marketplace.skills", 1),
+        ]
 
     asyncio.run(_run())
