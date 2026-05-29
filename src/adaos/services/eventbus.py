@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from threading import RLock
 from typing import Callable, Awaitable, Any, DefaultDict, List
 
-from adaos.domain import Event
+from adaos.domain import Event, enrich_event_payload
 from adaos.ports import EventBus
 
 
@@ -21,6 +21,8 @@ _WEBIO_STREAM_CONTROL_EVENTS = {
     "webio.yjs.subscription.changed",
 }
 _BROWSER_SESSION_CHANGED_EVENT = "browser.session.changed"
+_STATUS_CARD_CHANGED_EVENT = "adaos.status.card.changed"
+_PROJECTION_LIFECYCLE_EVENT = "adaos.projection.lifecycle.changed"
 
 
 def _trace_subscribe_enabled() -> bool:
@@ -79,7 +81,8 @@ def _bounded_event_topics() -> tuple[str, ...]:
             "ADAOS_EVENTBUS_BOUNDED_TOPICS",
             "webio.stream.snapshot.requested,webio.stream.subscription.changed,"
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
-            "subnet.member.snapshot.changed,browser.session.changed",
+            "subnet.member.snapshot.changed,browser.session.changed,"
+            "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""
     ).strip()
@@ -93,7 +96,7 @@ def _bounded_supersede_by_handler_topics() -> tuple[str, ...]:
             "ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS",
             "webio.stream.snapshot.requested,webio.stream.subscription.changed,"
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
-            "browser.session.changed",
+            "browser.session.changed,adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""
     ).strip()
@@ -241,6 +244,18 @@ class LocalEventBus(EventBus):
                 self._event_field(event, "device_id", "dev_id", "browser_key_id", "session_id") or ""
             ).strip()
             return (event_type, webspace_id, device_id)
+        if event_type == _STATUS_CARD_CHANGED_EVENT:
+            payload = getattr(event, "payload", None)
+            card = payload.get("card") if isinstance(payload, dict) and isinstance(payload.get("card"), dict) else {}
+            webspace_id = str(
+                self._event_field(event, "webspace_id", "workspace_id") or card.get("webspace_id") or "default"
+            ).strip() or "default"
+            card_id = str(card.get("id") or self._event_field(event, "card_id", "id") or "").strip()
+            return (event_type, webspace_id, card_id)
+        if event_type == _PROJECTION_LIFECYCLE_EVENT:
+            webspace_id = str(self._event_field(event, "webspace_id", "workspace_id") or "default").strip() or "default"
+            projection_key = str(self._event_field(event, "projection_key", "projection") or "").strip()
+            return (event_type, webspace_id, projection_key)
         return None
 
     def _webio_stream_control_key(
@@ -706,9 +721,10 @@ class LocalEventBus(EventBus):
                             supersede_key = self._bounded_supersede_key(event_type, event)
                             with self._lock:
                                 queue = self._bounded_queues[topic_key]
-                                superseded_coro = self._bounded_remove_superseded_locked(topic_key, supersede_key)
-                                if superseded_coro is not None:
-                                    superseded_coros.append(superseded_coro)
+                                if not self._bounded_supersede_by_handler_enabled(event_type):
+                                    superseded_coro = self._bounded_remove_superseded_locked(topic_key, supersede_key)
+                                    if superseded_coro is not None:
+                                        superseded_coros.append(superseded_coro)
                                 superseded_coros.extend(
                                     self._bounded_remove_handler_superseded_locked(
                                         topic_key,
@@ -777,6 +793,36 @@ class LocalEventBus(EventBus):
                         )
 
 
-def emit(bus: EventBus, type_: str, payload: dict, source: str) -> None:
-    bus.publish(Event(type=type_, payload=payload, source=source, ts=time.time()))
+def emit(
+    bus: EventBus,
+    type_: str,
+    payload: dict,
+    source: str,
+    *,
+    source_authority: str | None = None,
+    actor: Any | None = None,
+    scope: Any | None = None,
+    trace_id: str | None = None,
+    cause_event_id: str | None = None,
+    schema: str | None = None,
+    version: str | int | None = None,
+    priority: str | int | None = None,
+    event_id: str | None = None,
+    generate_event_id: bool = False,
+    ts: float | None = None,
+) -> None:
+    data = enrich_event_payload(
+        payload,
+        event_id=event_id,
+        generate_event_id=generate_event_id,
+        source_authority=source_authority,
+        actor=actor,
+        scope=scope,
+        trace_id=trace_id,
+        cause_event_id=cause_event_id,
+        schema=schema,
+        version=version,
+        priority=priority,
+    )
+    bus.publish(Event(type=type_, payload=data, source=source, ts=float(ts if ts is not None else time.time())))
 
