@@ -84,6 +84,79 @@ def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> No
     assert snapshot["slots"]["active_manifest"]["build_version"] == "0.1.0+1.6ae4ddb"
 
 
+def test_member_link_client_does_not_forward_unqualified_node_webio_streams(monkeypatch) -> None:
+    class _FakeBus:
+        def __init__(self) -> None:
+            self.subscriber = None
+
+        def subscribe(self, prefix, handler) -> None:
+            assert prefix == "*"
+            self.subscriber = handler
+
+    fake_bus = _FakeBus()
+    fake_ctx = SimpleNamespace(bus=fake_bus, config=SimpleNamespace(node_id="member-1"))
+    monkeypatch.setattr(mod, "get_ctx", lambda: fake_ctx)
+
+    client = mod.MemberLinkClient()
+    client._connected.set()
+    client._bus_prefixes = None
+    client._ensure_bus_subscription()
+
+    assert fake_bus.subscriber is not None
+    fake_bus.subscriber(
+        SimpleNamespace(
+            type="webio.stream.homepoint.browsers.devices",
+            payload={
+                "receiver": "browsers.devices",
+                "node_id": "member-1",
+                "data": [],
+                "_meta": {"webspace_id": "homepoint", "node_id": "member-1"},
+            },
+            source="sdk.io.out",
+            ts=123.0,
+        )
+    )
+
+    assert client._out_q.empty()
+
+
+def test_member_link_client_forwards_node_qualified_webio_streams(monkeypatch) -> None:
+    class _FakeBus:
+        def __init__(self) -> None:
+            self.subscriber = None
+
+        def subscribe(self, prefix, handler) -> None:
+            assert prefix == "*"
+            self.subscriber = handler
+
+    fake_bus = _FakeBus()
+    fake_ctx = SimpleNamespace(bus=fake_bus, config=SimpleNamespace(node_id="member-1"))
+    monkeypatch.setattr(mod, "get_ctx", lambda: fake_ctx)
+
+    client = mod.MemberLinkClient()
+    client._connected.set()
+    client._bus_prefixes = None
+    client._ensure_bus_subscription()
+
+    assert fake_bus.subscriber is not None
+    fake_bus.subscriber(
+        SimpleNamespace(
+            type="webio.stream.homepoint.nodes.member-1.browsers.devices",
+            payload={
+                "receiver": "browsers.devices",
+                "node_id": "member-1",
+                "data": [],
+                "_meta": {"webspace_id": "homepoint", "node_id": "member-1"},
+            },
+            source="sdk.io.out",
+            ts=123.0,
+        )
+    )
+
+    queued = client._out_q.get_nowait()
+    assert queued["event"]["type"] == "webio.stream.homepoint.nodes.member-1.browsers.devices"
+
+
 def test_member_link_client_skips_hub_follow_when_node_config_disables_updates(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
