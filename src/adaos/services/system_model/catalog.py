@@ -209,7 +209,8 @@ def device_objects() -> list[Any]:
         device_kind = str(item.get("kind") or "device").strip().lower() or "device"
         browser_device_id = str(identity.get("browser_device_id") or identity.get("link_id") or "").strip()
         member_node_id = str(identity.get("node_id") or identity.get("link_id") or "").strip()
-        device_key = browser_device_id if device_kind == "browser" and browser_device_id else str(item.get("ref") or member_node_id or "unknown").strip() or "unknown"
+        redevice_endpoint_id = str(identity.get("endpoint_id") or identity.get("link_id") or "").strip()
+        device_key = browser_device_id if device_kind == "browser" and browser_device_id else str(item.get("ref") or redevice_endpoint_id or member_node_id or "unknown").strip() or "unknown"
         workspace_ids: list[str] = []
         last_webspace_id = str(observation.get("last_webspace_id") or "").strip()
         if last_webspace_id:
@@ -219,6 +220,8 @@ def device_objects() -> list[Any]:
             session_ids.append(f"browser:{browser_device_id}")
         elif device_kind == "member" and member_node_id:
             session_ids.append(f"member:{member_node_id}")
+        elif device_kind == "redevice" and redevice_endpoint_id:
+            session_ids.append(f"redevice:{redevice_endpoint_id}")
         records[device_key] = {
             **item,
             "device_id": device_key,
