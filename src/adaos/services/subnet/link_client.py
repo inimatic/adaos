@@ -204,6 +204,8 @@ class MemberLinkClient:
         self._last_yjs_node_state_timeout_at = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._snapshot_task: asyncio.Task | None = None
+        self._yjs_node_state_tasks: dict[str, asyncio.Task] = {}
+        self._yjs_node_state_reasons: dict[str, str] = {}
         self._last_connect_full_snapshot_at = 0.0
         self._last_connect_yjs_state_at = 0.0
         self._link_session_end_total = 0
@@ -276,6 +278,15 @@ class MemberLinkClient:
         if value <= 0.0:
             return None
         return max(0.25, min(value, 60.0))
+
+    @staticmethod
+    def _yjs_node_state_debounce_s() -> float:
+        raw = str(os.getenv("ADAOS_SUBNET_YJS_NODE_STATE_DEBOUNCE_S") or "").strip()
+        try:
+            value = float(raw or 0.75)
+        except Exception:
+            value = 0.75
+        return max(0.0, min(value, 10.0))
 
     @staticmethod
     def _parse_bus_prefixes(raw: str | None) -> list[str] | None:
@@ -692,6 +703,16 @@ class MemberLinkClient:
             except BaseException:
                 pass
         self._snapshot_task = None
+        for task in list(self._yjs_node_state_tasks.values()):
+            if task and not task.done():
+                task.cancel()
+        if self._yjs_node_state_tasks:
+            try:
+                await asyncio.gather(*self._yjs_node_state_tasks.values(), return_exceptions=True)
+            except Exception:
+                pass
+        self._yjs_node_state_tasks.clear()
+        self._yjs_node_state_reasons.clear()
         try:
             if self._remove_ystore_listener:
                 self._remove_ystore_listener()
@@ -812,18 +833,41 @@ class MemberLinkClient:
     def _schedule_yjs_node_state(self, *, webspace_id: str, reason: str) -> bool:
         if not self._yjs_enabled:
             return False
+        ws_id = str(webspace_id or "").strip() or "default"
+        reason_token = str(reason or "member_link_snapshot").strip() or "member_link_snapshot"
         try:
             loop = self._loop or asyncio.get_running_loop()
         except Exception:
             self._yjs_write_drop_queue_total += 1
             return False
+        existing = self._yjs_node_state_tasks.get(ws_id)
+        if existing is not None and not existing.done():
+            self._yjs_node_state_reasons[ws_id] = reason_token
+            return True
+
+        async def _coalesced_node_state() -> None:
+            try:
+                delay_s = self._yjs_node_state_debounce_s()
+                if delay_s > 0.0:
+                    await asyncio.sleep(delay_s)
+                queued_reason = self._yjs_node_state_reasons.pop(ws_id, reason_token)
+                await self._queue_yjs_node_state(webspace_id=ws_id, reason=queued_reason)
+            finally:
+                current = self._yjs_node_state_tasks.get(ws_id)
+                if current is asyncio.current_task():
+                    self._yjs_node_state_tasks.pop(ws_id, None)
+                    self._yjs_node_state_reasons.pop(ws_id, None)
+
         try:
-            loop.create_task(
-                self._queue_yjs_node_state(webspace_id=webspace_id or "default", reason=reason),
-                name=f"member-link-yjs-node-state:{webspace_id or 'default'}",
+            self._yjs_node_state_reasons[ws_id] = reason_token
+            self._yjs_node_state_tasks[ws_id] = loop.create_task(
+                _coalesced_node_state(),
+                name=f"member-link-yjs-node-state:{ws_id}",
             )
             return True
         except Exception:
+            self._yjs_node_state_tasks.pop(ws_id, None)
+            self._yjs_node_state_reasons.pop(ws_id, None)
             self._yjs_write_drop_queue_total += 1
             return False
 

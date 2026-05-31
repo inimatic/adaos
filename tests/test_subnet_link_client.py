@@ -329,11 +329,37 @@ def test_member_link_schedules_yjs_node_state_in_background(monkeypatch) -> None
             await release.wait()
 
         monkeypatch.setattr(client, "_queue_yjs_node_state", _slow_queue)
+        monkeypatch.setattr(client, "_yjs_node_state_debounce_s", lambda: 0.0)
 
         assert client._schedule_yjs_node_state(webspace_id="desktop", reason="member_link_connected") is True
         await asyncio.wait_for(started.wait(), timeout=1.0)
         release.set()
         await asyncio.sleep(0)
+
+    asyncio.run(_exercise())
+
+
+def test_member_link_coalesces_yjs_node_state_schedules(monkeypatch) -> None:
+    async def _exercise() -> None:
+        client = mod.MemberLinkClient()
+        client._loop = asyncio.get_running_loop()
+        calls: list[tuple[str, str]] = []
+
+        async def _queue(*, webspace_id: str, reason: str) -> None:
+            calls.append((webspace_id, reason))
+
+        monkeypatch.setattr(client, "_queue_yjs_node_state", _queue)
+        monkeypatch.setattr(client, "_yjs_node_state_debounce_s", lambda: 0.01)
+
+        assert client._schedule_yjs_node_state(webspace_id="desktop", reason="first") is True
+        assert client._schedule_yjs_node_state(webspace_id="desktop", reason="second") is True
+        assert client._schedule_yjs_node_state(webspace_id="desktop", reason="third") is True
+
+        await asyncio.sleep(0.05)
+
+        assert calls == [("desktop", "third")]
+        assert client._yjs_node_state_tasks == {}
+        assert client._yjs_node_state_reasons == {}
 
     asyncio.run(_exercise())
 
