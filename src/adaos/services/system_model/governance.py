@@ -21,6 +21,7 @@ _DEFAULT_ROLES_BY_KIND: dict[str, list[str]] = {
     "node": _INFRA_ROLES,
     "hub": _INFRA_ROLES,
     "member": _INFRA_ROLES,
+    "redevice": _WORKSPACE_ROLES,
     "runtime": _INFRA_ROLES,
     "connection": _INFRA_ROLES,
     "capacity": _INFRA_ROLES,

@@ -6,7 +6,7 @@ from typing import Any, Literal, Mapping
 
 from adaos.adapters.db import sqlite as sqlite_db
 
-LinkKind = Literal["browser", "member"]
+LinkKind = Literal["browser", "member", "redevice"]
 
 _NS = "access_links"
 _KEY = "registry"
@@ -32,9 +32,11 @@ def _load_registry() -> dict[str, Any]:
     payload = sqlite_db.durable_state_get(_NS, _KEY) or {}
     browsers = payload.get("browsers")
     members = payload.get("members")
+    redevices = payload.get("redevices")
     return {
         "browsers": dict(browsers) if isinstance(browsers, Mapping) else {},
         "members": dict(members) if isinstance(members, Mapping) else {},
+        "redevices": dict(redevices) if isinstance(redevices, Mapping) else {},
     }
 
 
@@ -45,12 +47,17 @@ def _save_registry(registry: Mapping[str, Any]) -> None:
         {
             "browsers": dict(registry.get("browsers") or {}),
             "members": dict(registry.get("members") or {}),
+            "redevices": dict(registry.get("redevices") or {}),
         },
     )
 
 
 def _entry_bucket(kind: LinkKind) -> str:
-    return "browsers" if kind == "browser" else "members"
+    if kind == "browser":
+        return "browsers"
+    if kind == "redevice":
+        return "redevices"
+    return "members"
 
 
 def _normalize_text_list(value: Any) -> list[str]:
@@ -258,7 +265,8 @@ _ENTITY_REGISTRY_FIELDS = {
 def _entity_registry_view(entry: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(entry, Mapping):
         return {}
-    kind: LinkKind = "member" if str(entry.get("kind") or "").strip() == "member" else "browser"
+    kind_token = str(entry.get("kind") or "").strip()
+    kind: LinkKind = "redevice" if kind_token == "redevice" else ("member" if kind_token == "member" else "browser")
     normalized = _normalize_entry(kind, str(entry.get("id") or ""), entry)
     return {key: normalized.get(key) for key in sorted(_ENTITY_REGISTRY_FIELDS)}
 
@@ -371,7 +379,7 @@ def list_links(kind: LinkKind | None = None) -> list[dict[str, Any]]:
     registry = _load_registry()
     _purge_expired_browsers(registry)
     result: list[dict[str, Any]] = []
-    kinds: list[LinkKind] = [kind] if kind else ["browser", "member"]
+    kinds: list[LinkKind] = [kind] if kind else ["browser", "member", "redevice"]
     now = _now_ts()
     for token in kinds:
         bucket = registry.get(_entry_bucket(token))
@@ -479,6 +487,48 @@ def touch_member_link(
     saved = _put_entry(registry, "member", entry)
     _save_registry(registry)
     _emit_entity_registry_changed_if_needed("member", previous, saved, reason="member_link.changed")
+    return saved
+
+
+def touch_redevice_link(
+    endpoint_id: str,
+    *,
+    display_name: str | None = None,
+    online: bool | None = None,
+    connection_state: str | None = None,
+    trust_level: str | None = None,
+    endpoint_policy: Mapping[str, Any] | None = None,
+    diagnostic_report: Mapping[str, Any] | None = None,
+    endpoint_health: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    token = str(endpoint_id or "").strip()
+    if not token:
+        return None
+    registry = _load_registry()
+    entry = _get_entry(registry, "redevice", token) or _normalize_entry("redevice", token, {})
+    previous = dict(entry)
+    entry.setdefault("access_class", "device")
+    entry.setdefault("autorotate", True)
+    entry.setdefault("lifetime_mode", "permanent")
+    if display_name is not None:
+        entry["display_name"] = str(display_name or "").strip()
+    if online is not None:
+        entry["online"] = bool(online)
+    if connection_state is not None:
+        entry["connection_state"] = str(connection_state or "").strip().lower() or None
+    if trust_level is not None:
+        entry["trust_level"] = str(trust_level or "").strip().lower() or None
+    if endpoint_policy is not None:
+        entry["endpoint_policy"] = dict(endpoint_policy)
+    if diagnostic_report is not None:
+        entry["diagnostic_report"] = dict(diagnostic_report)
+    if endpoint_health is not None:
+        entry["endpoint_health"] = dict(endpoint_health)
+    entry["last_seen_at"] = _now_ts()
+    entry = _updated(entry)
+    saved = _put_entry(registry, "redevice", entry)
+    _save_registry(registry)
+    _emit_entity_registry_changed_if_needed("redevice", previous, saved, reason="redevice_link.changed")
     return saved
 
 
@@ -867,6 +917,10 @@ def browser_snapshot() -> list[dict[str, Any]]:
 
 def member_snapshot() -> list[dict[str, Any]]:
     return list_links("member")
+
+
+def redevice_snapshot() -> list[dict[str, Any]]:
+    return list_links("redevice")
 
 
 def lifetime_label(entry: Mapping[str, Any]) -> str:

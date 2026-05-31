@@ -171,7 +171,7 @@ def canonical_object_from_node_status(payload: Any) -> CanonicalObject:
     )
     summary = f"{role} node" + (f" in subnet {subnet_id}" if subnet_id else "")
 
-    kind = role if role in {"hub", "member"} else CanonicalKind.NODE.value
+    kind = role if role in {"hub", "member", "redevice"} else CanonicalKind.NODE.value
     return CanonicalObject(
         id=canonical_ref(kind, node_id) or f"{kind}:{node_id}",
         kind=kind,
@@ -565,6 +565,10 @@ def canonical_object_from_device_endpoint(payload: Any) -> CanonicalObject:
                 node_id = str(identity.get("node_id") or identity.get("link_id") or "").strip()
                 if node_id:
                     session_ids.append(f"member:{node_id}")
+            elif device_kind == "redevice":
+                endpoint_id = str(identity.get("endpoint_id") or identity.get("link_id") or data.get("device_id") or data.get("id") or "").strip()
+                if endpoint_id:
+                    session_ids.append(f"redevice:{endpoint_id}")
         online = observation.get("online")
         last_seen = observation.get("last_seen_at")
         display_name = str(policy.get("display_name") or "").strip() or None
