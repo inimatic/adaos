@@ -14,3 +14,7 @@
 	path = src/adaos/integrations/rasa-port
 	url = https://github.com/inimatic/rasa-port.git
 	branch = main
+[submodule "src/adaos/integrations/redevice-agent"]
+	path = src/adaos/integrations/redevice-agent
+	url = https://github.com/inimatic/adaos-redevice-agent.git
+	branch = main
