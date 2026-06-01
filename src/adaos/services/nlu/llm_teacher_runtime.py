@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -36,6 +37,14 @@ _LLM_TEACHER_ENABLED = os.getenv("ADAOS_NLU_LLM_TEACHER") == "1"
 _MODEL = os.getenv("ADAOS_NLU_LLM_MODEL") or os.getenv("OPENAI_RESPONSES_MODEL") or "gpt-4o-mini"
 _MAX_TOKENS = int(os.getenv("ADAOS_NLU_LLM_MAX_TOKENS", "500") or "500")
 _TIMEOUT_S = float(os.getenv("ADAOS_NLU_LLM_TIMEOUT_S", "20") or "20")
+_DUPLICATE_ACTIVE_STATUSES = {
+    "pending",
+    "proposed",
+    "previewed",
+    "applied",
+    "intent_matched",
+    "verification_failed",
+}
 
 
 def _nlu_llm_write_meta():
@@ -66,6 +75,112 @@ def _resolve_webspace_id(payload: Mapping[str, Any]) -> str:
 
 def _teacher_obj(data_map: Any) -> dict[str, Any]:
     return coerce_dict(data_map.get("nlu_teacher"))
+
+
+def _stable_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        try:
+            return json.dumps(str(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return "\"<unserializable>\""
+
+
+def _sha256_payload(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
+
+
+def _target_key(target: Any) -> tuple[str, str]:
+    if not isinstance(target, Mapping):
+        return ("", "")
+    t_type = target.get("type")
+    t_id = target.get("id")
+    return (
+        str(t_type or "").strip(),
+        str(t_id or "").strip(),
+    )
+
+
+def _compact_candidate_for_context(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    rr = candidate.get("regex_rule") if isinstance(candidate.get("regex_rule"), Mapping) else {}
+    verification = candidate.get("verification") if isinstance(candidate.get("verification"), Mapping) else {}
+    applied = candidate.get("applied") if isinstance(candidate.get("applied"), Mapping) else {}
+    out = {
+        "candidate_id": candidate.get("id"),
+        "status": candidate.get("status"),
+        "kind": candidate.get("kind"),
+        "text": candidate.get("text"),
+        "request_id": candidate.get("request_id"),
+        "target": dict(candidate.get("target") or {}) if isinstance(candidate.get("target"), Mapping) else None,
+        "regex_rule": {
+            "intent": rr.get("intent") if isinstance(rr.get("intent"), str) else None,
+            "pattern": rr.get("pattern") if isinstance(rr.get("pattern"), str) else None,
+        },
+        "verification": {
+            "status": verification.get("status"),
+            "expected_intent": verification.get("expected_intent"),
+            "probe_intent": (verification.get("probe") or {}).get("intent")
+            if isinstance(verification.get("probe"), Mapping)
+            else None,
+        },
+        "applied": {
+            "rule_id": applied.get("rule_id"),
+            "target": dict(applied.get("target") or {}) if isinstance(applied.get("target"), Mapping) else None,
+        },
+    }
+    return {k: v for k, v in out.items() if v not in (None, {}, [])}
+
+
+def _looks_like_correction(text: str) -> bool:
+    lower = " " + str(text or "").strip().lower() + " "
+    if not lower.strip():
+        return False
+    if re.search(r"(^|\W)(no|nope|нет)(\W|$)", lower):
+        return True
+    markers = (
+        " wrong ",
+        " not that ",
+        " that's not ",
+        " that is not ",
+        " instead ",
+        " correct it ",
+        " i meant ",
+        " не то ",
+        " неверно ",
+        " неправильно ",
+        " нужно ",
+        " надо ",
+        " имел в виду ",
+        " я имел в виду ",
+    )
+    return any(marker in lower for marker in markers)
+
+
+def _correction_thread_context(*, teacher: Mapping[str, Any], text: str, request_id: str) -> dict[str, Any] | None:
+    if not _looks_like_correction(text):
+        return None
+    candidates = list(iter_mappings(teacher.get("candidates")))
+    if not candidates:
+        return None
+    for item in sorted(candidates, key=lambda x: float(x.get("ts") or 0.0), reverse=True):
+        candidate_id = item.get("id")
+        if not isinstance(candidate_id, str) or not candidate_id.strip():
+            continue
+        status = item.get("status") if isinstance(item.get("status"), str) else ""
+        if status in {"rolled_back", "rejected"}:
+            continue
+        previous = _compact_candidate_for_context(item)
+        previous_request_id = previous.get("request_id")
+        thread_id = f"thread.{previous_request_id or candidate_id}"
+        return {
+            "active": True,
+            "thread_id": thread_id,
+            "request_id": request_id,
+            "correction_text": text,
+            "previous_candidate": previous,
+        }
+    return None
 
 
 def _ydoc_to_snapshot(ydoc: Any) -> dict[str, Any]:
@@ -676,6 +791,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Prefer existing intents from context (scenario_nlu.intents keys) over inventing new ones.\n"
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
         "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
+        "- If context.correction_thread.active=true, the utterance is a correction of a previous candidate. Use the previous candidate only as failure context, and propose a corrected candidate rather than repeating the same rule.\n"
         "- host_actions entries include stable system action ids, host event names, slots, examples, and linked intents.\n"
         "- If it matches a known app/widget/scenario through an existing executable intent, prefer teaching that intent with propose_regex_rule.\n"
         "- If this is a fallback after NLU missed and an existing intent/action is the right match, prefer propose_regex_rule so AdaOS can replay the phrase through regex.dynamic.\n"
@@ -852,6 +968,32 @@ async def _append_candidate(webspace_id: str, candidate: dict[str, Any]) -> None
                 data_map.set(txn, "nlu_teacher", teacher)
 
 
+async def _find_duplicate_regex_candidate(
+    webspace_id: str,
+    *,
+    intent: str,
+    pattern: str,
+    target: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    target_token = _target_key(target)
+    async with async_get_ydoc(webspace_id) as ydoc:
+        data_map = ydoc.get_map("data")
+        teacher = _teacher_obj(data_map)
+        for item in reversed(list(iter_mappings(teacher.get("candidates")))):
+            status = item.get("status") if isinstance(item.get("status"), str) else ""
+            if status and status not in _DUPLICATE_ACTIVE_STATUSES:
+                continue
+            rr = item.get("regex_rule") if isinstance(item.get("regex_rule"), Mapping) else {}
+            if rr.get("intent") != intent:
+                continue
+            if rr.get("pattern") != pattern:
+                continue
+            if _target_key(item.get("target") if isinstance(item.get("target"), Mapping) else None) != target_token:
+                continue
+            return dict(item)
+    return None
+
+
 @subscribe("nlp.teacher.request")
 async def _on_teacher_request(evt: Any) -> None:
     if not (_TEACHER_ENABLED and _LLM_TEACHER_ENABLED):
@@ -890,6 +1032,14 @@ async def _on_teacher_request(evt: Any) -> None:
         except Exception:
             snapshot = {}
         context = _extract_webspace_context(snapshot if isinstance(snapshot, dict) else {})
+        teacher_snapshot = coerce_dict(coerce_dict((snapshot or {}).get("data")).get("nlu_teacher")) if isinstance(snapshot, dict) else {}
+        correction_context = _correction_thread_context(
+            teacher=teacher_snapshot,
+            text=text,
+            request_id=request_id,
+        )
+        if correction_context:
+            context["correction_thread"] = correction_context
         context["scenario_nlu"] = _extract_scenario_nlu(scenario_id=context.get("current_scenario"))
         try:
             routes, skill_policies, skill_manifests = _build_intent_routes_and_policies(
@@ -936,6 +1086,20 @@ async def _on_teacher_request(evt: Any) -> None:
             context["root_mcp"] = mcp_evidence
 
         messages = _build_prompt(request=dict(req), webspace_id=webspace_id, context=context)
+        prompt_audit = {
+            "request_hash": _sha256_payload({"webspace_id": webspace_id, "request": dict(req)}),
+            "context_hash": _sha256_payload(context),
+            "prompt_hash": _sha256_payload(messages),
+            "correction_thread": {
+                "active": True,
+                "thread_id": correction_context.get("thread_id"),
+                "previous_candidate_id": (correction_context.get("previous_candidate") or {}).get("candidate_id")
+                if isinstance(correction_context.get("previous_candidate"), Mapping)
+                else None,
+            }
+            if isinstance(correction_context, Mapping)
+            else {"active": False},
+        }
 
         log_id = f"llm.{int(time.time() * 1000)}"
         started_at = time.time()
@@ -949,6 +1113,7 @@ async def _on_teacher_request(evt: Any) -> None:
                     "request_id": request_id,
                     "webspace_id": webspace_id,
                     "model": _MODEL,
+                    "audit": dict(prompt_audit),
                     "request": {
                         "messages": _redact_messages(messages),
                         "max_tokens": _MAX_TOKENS,
@@ -976,6 +1141,7 @@ async def _on_teacher_request(evt: Any) -> None:
                         "messages": _redact_messages(messages),
                         "max_tokens": _MAX_TOKENS,
                         "timeout_s": _TIMEOUT_S,
+                        "audit": dict(prompt_audit),
                     },
                     meta=req_meta,
                 ),
@@ -1052,7 +1218,13 @@ async def _on_teacher_request(evt: Any) -> None:
             confidence_f = 0.0
         notes = suggestion.get("notes") if isinstance(suggestion.get("notes"), str) else ""
 
-        llm_meta = {"model": _MODEL, "ts": time.time(), "decision": decision, "confidence": confidence_f}
+        llm_meta = {
+            "model": _MODEL,
+            "ts": time.time(),
+            "decision": decision,
+            "confidence": confidence_f,
+            "audit": dict(prompt_audit),
+        }
 
         try:
             await append_event(
@@ -1079,6 +1251,16 @@ async def _on_teacher_request(evt: Any) -> None:
                 "note": notes or "LLM proposed NLU revision.",
                 "proposed_at": time.time(),
             }
+            if isinstance(correction_context, Mapping):
+                previous_candidate = correction_context.get("previous_candidate")
+                patch["thread_id"] = correction_context.get("thread_id")
+                patch["correction_of"] = {
+                    "candidate_id": previous_candidate.get("candidate_id")
+                    if isinstance(previous_candidate, Mapping)
+                    else None,
+                    "request_id": previous_candidate.get("request_id") if isinstance(previous_candidate, Mapping) else None,
+                    "status": previous_candidate.get("status") if isinstance(previous_candidate, Mapping) else None,
+                }
             try:
                 updated = await _update_revision_by_request_id(webspace_id, request_id=request_id, patch=patch)
             except Exception:
@@ -1154,6 +1336,69 @@ async def _on_teacher_request(evt: Any) -> None:
                     "preview": preview,
                     "status": "pending" if preview.get("ok") else "quarantined",
                 }
+                if isinstance(correction_context, Mapping):
+                    previous_candidate = correction_context.get("previous_candidate")
+                    entry["thread_id"] = correction_context.get("thread_id")
+                    entry["correction_of"] = {
+                        "candidate_id": previous_candidate.get("candidate_id")
+                        if isinstance(previous_candidate, Mapping)
+                        else None,
+                        "request_id": previous_candidate.get("request_id")
+                        if isinstance(previous_candidate, Mapping)
+                        else None,
+                        "status": previous_candidate.get("status") if isinstance(previous_candidate, Mapping) else None,
+                    }
+                try:
+                    duplicate = await _find_duplicate_regex_candidate(
+                        webspace_id,
+                        intent=rr_intent.strip(),
+                        pattern=rr_pattern,
+                        target=target_out,
+                    )
+                except Exception:
+                    duplicate = None
+                if isinstance(duplicate, Mapping):
+                    duplicate_payload = {
+                        "webspace_id": webspace_id,
+                        "request_id": request_id,
+                        "candidate_id": duplicate.get("id"),
+                        "duplicate_of": duplicate.get("id"),
+                        "suppressed": {
+                            "intent": rr_intent.strip(),
+                            "pattern": rr_pattern,
+                            "target": dict(target_out or {}),
+                            "preview": preview,
+                            "llm": llm_meta,
+                        },
+                        "_meta": dict(req_meta),
+                    }
+                    bus_emit(
+                        ctx.bus,
+                        "nlp.teacher.candidate.duplicate_suppressed",
+                        duplicate_payload,
+                        source="nlu.teacher.llm",
+                    )
+                    try:
+                        await append_event(
+                            webspace_id,
+                            make_event(
+                                webspace_id=webspace_id,
+                                request_id=request_id,
+                                request_text=text,
+                                kind="candidate.duplicate_suppressed",
+                                title="Candidate duplicate suppressed",
+                                subtitle=f"regex_rule: {rr_intent.strip()}",
+                                raw=duplicate_payload,
+                                meta=req_meta,
+                            ),
+                        )
+                    except Exception:
+                        _log.debug(
+                            "failed to append teacher event (candidate.duplicate_suppressed) webspace=%s",
+                            webspace_id,
+                            exc_info=True,
+                        )
+                    return
                 try:
                     await _append_candidate(webspace_id, entry)
                 except Exception:
