@@ -35,6 +35,7 @@ async def test_candidate_apply_persists_rule_and_notifies():
     ctx.bus.subscribe("nlp.teacher.regex_rule.apply", _on_regex_rule_apply)
 
     notified: list[str] = []
+    acquired: list[dict] = []
 
     def _capture_notify(ev):
         try:
@@ -45,10 +46,16 @@ async def test_candidate_apply_persists_rule_and_notifies():
         except Exception:
             pass
 
+    def _capture_acquired(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            acquired.append(dict(payload))
+
     ctx.bus.subscribe("ui.notify", _capture_notify)
+    ctx.bus.subscribe("nlp.teacher.understanding.acquired", _capture_acquired)
 
     candidate_id = "cand.test"
-    pattern = r"\bтемператур\w*\b\s+(?:в|во)\s+(?P<city>[^?.!,;:]+)"
+    pattern = r"\btemperature\b(?:\s+in\s+(?P<city>[^?.!,;:]+))?"
 
     async with async_get_ydoc(webspace_id) as ydoc:
         ui_map = ydoc.get_map("ui")
@@ -63,7 +70,7 @@ async def test_candidate_apply_persists_rule_and_notifies():
                         {
                             "id": candidate_id,
                             "kind": "regex_rule",
-                            "text": "Покажи температуру в Берлине",
+                            "text": "show temperature in Berlin",
                             "request_id": "nlu.test",
                             "regex_rule": {"intent": "desktop.open_weather", "pattern": pattern},
                             "status": "pending",
@@ -76,7 +83,7 @@ async def test_candidate_apply_persists_rule_and_notifies():
 
     # Give the LocalEventBus time to run async subscribers scheduled via create_task.
     for _ in range(50):
-        if notified:
+        if notified and acquired:
             break
         await asyncio.sleep(0.01)
 
@@ -84,4 +91,6 @@ async def test_candidate_apply_persists_rule_and_notifies():
     rules = (saved.get("nlu") or {}).get("regex_rules") or []
     assert any(r.get("intent") == "desktop.open_weather" and r.get("pattern") == pattern for r in rules if isinstance(r, dict))
 
-    assert any("Правило распознавания установлено" in t for t in notified)
+    assert any("NLU Teacher acquired a new understanding" in t for t in notified)
+    assert acquired
+    assert acquired[-1]["intent"] == "desktop.open_weather"

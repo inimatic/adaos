@@ -72,6 +72,7 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert contract.metadata["published_by"] == "plane:nlu_authoring"
     assert [item.id for item in plane_contracts] == [
         "nlu_authoring.get_context",
+        "nlu_authoring.check_phrase",
         "nlu_authoring.add_device_alias",
         "nlu_authoring.remove_device_alias",
         "nlu_authoring.deprecate_device_alias",
@@ -82,6 +83,66 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert context["canonicalization"]["canonical_ref_required"] is True
     assert context["authoring_boundaries"]["mode"] == "read_only_context"
     assert context["named_entities"]["items"][0]["canonical_ref"] == "skill:weather_skill"
+
+
+def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:
+    async def _fake_probe_phrase(
+        text,
+        *,
+        webspace_id=None,
+        use_rasa=True,
+        emit_trace=True,
+        request_locale=None,
+        preferred_locales=None,
+    ):
+        return {
+            "ok": True,
+            "accepted": True,
+            "text": text,
+            "webspace_id": webspace_id,
+            "intent": "desktop.open_weather",
+            "via": "regex",
+            "slots": {"city": "Berlin"},
+            "request_locale": request_locale,
+            "preferred_locales": preferred_locales,
+            "use_rasa": use_rasa,
+            "emit_trace": emit_trace,
+        }
+
+    from adaos.services.nlu import probe as probe_module
+
+    monkeypatch.setattr(probe_module, "probe_phrase", _fake_probe_phrase)
+
+    contract = root_mcp_service.get_tool_contract("nlu_authoring.check_phrase")
+    result = root_mcp_service._handle_nlu_authoring_check_phrase(  # type: ignore[attr-defined]
+        {
+            "text": "weather in Berlin",
+            "webspace_id": "desktop",
+            "use_rasa": False,
+            "emit_trace": False,
+            "request_locale": "en",
+            "preferred_locales": ["ru"],
+        },
+        dry_run=False,
+    )
+
+    assert contract is not None
+    assert contract.required_capability == "development.read.descriptors"
+    assert contract.side_effects == "trace_optional"
+    assert contract.metadata["published_by"] == "plane:nlu_authoring"
+    assert result["check"]["ok"] is True
+    assert result["check"]["intent"] == "desktop.open_weather"
+    assert result["check"]["use_rasa"] is False
+    assert result["check"]["request_locale"] == "en"
+    assert result["authoring_boundaries"]["dispatch"] is False
+    assert result["authoring_boundaries"]["training_mutation"] is False
+
+    dry_result = root_mcp_service._handle_nlu_authoring_check_phrase(  # type: ignore[attr-defined]
+        {"text": "weather in Berlin", "emit_trace": True},
+        dry_run=True,
+    )
+    assert dry_result["check"]["emit_trace"] is False
+    assert dry_result["authoring_boundaries"]["side_effects"] == "none"
 
 
 def test_root_mcp_exposes_governed_device_alias_write(monkeypatch) -> None:

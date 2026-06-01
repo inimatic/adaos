@@ -167,6 +167,38 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def check_nlu_authoring_phrase(
+        self,
+        text: str,
+        *,
+        webspace_id: str | None = None,
+        use_rasa: bool = True,
+        emit_trace: bool = False,
+        request_locale: str | None = None,
+        preferred_locales: list[str] | tuple[str, ...] | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "text": str(text or ""),
+            "use_rasa": bool(use_rasa),
+            "emit_trace": bool(emit_trace),
+        }
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if request_locale:
+            arguments["request_locale"] = str(request_locale)
+        if preferred_locales:
+            arguments["preferred_locales"] = [str(item) for item in preferred_locales if str(item).strip()]
+        return self.call(
+            "nlu_authoring.check_phrase",
+            arguments=arguments,
+            request_id=request_id,
+            trace_id=trace_id,
+            dry_run=dry_run,
+        )
+
     def add_nlu_authoring_device_alias(
         self,
         *,

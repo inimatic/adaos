@@ -96,3 +96,84 @@ async def test_teacher_regex_rule_applies_to_scenario_and_pipeline_picks_it_up()
     rule_id = str((_raw or {}).get("rule_id") or "")
     assert rule_id
     assert any(rule_id in line for line in last_lines)
+
+
+@pytest.mark.anyio
+async def test_teacher_regex_rule_verifies_candidate_after_apply():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.regex_rules_runtime import _on_regex_rule_apply
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    scenario_id = "web_desktop"
+    webspace_id = "ws-test-regex-verify"
+    candidate_id = "cand.verify"
+    request_text = "show temperature in Berlin"
+    pattern = r"\btemperature\b(?:\s+in\s+(?P<city>[^?.!,;:]+))?"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    scenario_json = scenario_root / "scenario.json"
+    scenario_json.write_text(
+        json.dumps(
+            {"id": scenario_id, "version": "0.0.1", "nlu": {"intents": {"desktop.open_weather": {"actions": []}}}},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    acquired: list[dict] = []
+
+    def _capture_acquired(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            acquired.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.understanding.acquired", _capture_acquired)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(
+                txn,
+                "nlu_teacher",
+                {
+                    "candidates": [
+                        {
+                            "id": candidate_id,
+                            "kind": "regex_rule",
+                            "text": request_text,
+                            "request_id": "req.verify",
+                            "regex_rule": {"intent": "desktop.open_weather", "pattern": pattern},
+                            "status": "pending",
+                        }
+                    ]
+                },
+            )
+
+    await _on_regex_rule_apply(
+        {
+            "webspace_id": webspace_id,
+            "candidate_id": candidate_id,
+            "intent": "desktop.open_weather",
+            "pattern": pattern,
+            "target": {"type": "scenario", "id": scenario_id},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        data_map = ydoc.get_map("data")
+        teacher = data_map.get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    candidate = next(item for item in candidates if item.get("id") == candidate_id)
+    assert candidate["status"] == "intent_matched"
+    assert candidate["verification"]["status"] == "intent_matched"
+    assert candidate["verification"]["expected_intent"] == "desktop.open_weather"
+    assert candidate["verification"]["probe"]["intent"] == "desktop.open_weather"
+    assert acquired
+    assert acquired[-1]["intent"] == "desktop.open_weather"

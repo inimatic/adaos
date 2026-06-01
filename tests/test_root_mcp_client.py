@@ -94,6 +94,13 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
         base_fingerprint="fp-3",
         dry_run=True,
     )
+    client.check_nlu_authoring_phrase(
+        "weather in Berlin",
+        webspace_id="desktop",
+        use_rasa=False,
+        request_locale="en",
+        preferred_locales=["ru"],
+    )
 
     assert config.headers()["Authorization"] == "Bearer access-123"
     assert config.headers()["X-AdaOS-Subnet-Id"] == "subnet:test-zone"
@@ -206,3 +213,9 @@ def test_root_mcp_client_uses_root_url_scope_and_bearer_headers() -> None:
     assert stub.calls[53][2]["json"]["arguments"]["alias"] == "old browser"
     assert stub.calls[53][2]["json"]["arguments"]["base_fingerprint"] == "fp-3"
     assert stub.calls[53][2]["json"]["dry_run"] is True
+    assert stub.calls[54][2]["json"]["tool_id"] == "nlu_authoring.check_phrase"
+    assert stub.calls[54][2]["json"]["arguments"]["text"] == "weather in Berlin"
+    assert stub.calls[54][2]["json"]["arguments"]["webspace_id"] == "desktop"
+    assert stub.calls[54][2]["json"]["arguments"]["use_rasa"] is False
+    assert stub.calls[54][2]["json"]["arguments"]["request_locale"] == "en"
+    assert stub.calls[54][2]["json"]["arguments"]["preferred_locales"] == ["ru"]
