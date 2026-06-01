@@ -82,6 +82,8 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
         "sdk.describe_surface",
         "nlu_authoring.list_templates",
         "nlu_authoring.list_training_targets",
+        "nlu_authoring.preview_template_patch",
+        "desktop.preview_action",
         "nlu_authoring.add_device_alias",
         "nlu_authoring.remove_device_alias",
         "nlu_authoring.deprecate_device_alias",
@@ -135,6 +137,14 @@ def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
         calls.append(("targets", dict(kwargs)))
         return {"ok": True, "targets": [{"id": "weather_skill"}], "authoring_boundaries": {}}
 
+    def _fake_preview_patch(**kwargs):
+        calls.append(("preview_patch", dict(kwargs)))
+        return {"ok": True, "status": "ready", "checks": [], "authoring_boundaries": {}}
+
+    def _fake_preview_action(**kwargs):
+        calls.append(("preview_action", dict(kwargs)))
+        return {"ok": True, "status": "ready", "would_dispatch": {}, "authoring_boundaries": {}}
+
     monkeypatch.setattr(teacher_read_model, "get_nlu_trace", _fake_trace)
     monkeypatch.setattr(teacher_read_model, "get_nlu_dialog_context", _fake_dialog)
     monkeypatch.setattr(teacher_read_model, "get_nlu_recent_failures", _fake_failures)
@@ -144,6 +154,8 @@ def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
     monkeypatch.setattr(teacher_read_model, "describe_sdk_surface", _fake_sdk)
     monkeypatch.setattr(teacher_read_model, "list_nlu_templates", _fake_templates)
     monkeypatch.setattr(teacher_read_model, "list_training_targets", _fake_targets)
+    monkeypatch.setattr(teacher_read_model, "preview_template_patch", _fake_preview_patch)
+    monkeypatch.setattr(teacher_read_model, "preview_interface_action", _fake_preview_action)
 
     scope_context = {
         "_mcp_context": {
@@ -188,8 +200,28 @@ def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
         {"webspace_id": "desktop", **scope_context},
         dry_run=True,
     )
+    preview_patch = root_mcp_service._handle_nlu_authoring_preview_template_patch(  # type: ignore[attr-defined]
+        {
+            "webspace_id": "desktop",
+            "operation": "add_regex_rule",
+            "target": {"type": "skill", "id": "weather_skill"},
+            "intent": "desktop.open_weather",
+            "pattern": r"\bweather\b",
+            **scope_context,
+        },
+        dry_run=True,
+    )
+    preview_action = root_mcp_service._handle_desktop_preview_action(  # type: ignore[attr-defined]
+        {
+            "webspace_id": "desktop",
+            "action_id": "host.desktop.modal.open",
+            "params": {"modal_id": "nlu_teacher_modal"},
+            **scope_context,
+        },
+        dry_run=True,
+    )
 
-    for result in (trace, dialog, failures, lookup, skill, scenario, sdk, templates, targets):
+    for result in (trace, dialog, failures, lookup, skill, scenario, sdk, templates, targets, preview_patch, preview_action):
         assert result["ok"] is True
         assert result["target_id"] == "hub:teacher"
         assert result["root_scope"]["subnet_id"] == "subnet:teacher"
@@ -204,6 +236,8 @@ def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
         "sdk",
         "templates",
         "targets",
+        "preview_patch",
+        "preview_action",
     ]
 
 

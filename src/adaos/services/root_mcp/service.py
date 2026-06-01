@@ -625,6 +625,52 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_list_training_targets"},
         ),
         RootMcpToolContract(
+            id="nlu_authoring.preview_template_patch",
+            title="Preview NLU template patch",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Dry-run a Teacher training/template patch and return validation gates without mutating artifacts.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "operation": {"type": "string", "enum": ["add_regex_rule", "save_example"]},
+                    "target": {
+                        "type": "object",
+                        "properties": {"type": {"type": "string"}, "id": {"type": "string"}},
+                        "additionalProperties": True,
+                    },
+                    "intent": {"type": "string"},
+                    "text": {"type": "string"},
+                    "pattern": {"type": "string"},
+                    "slots": {"type": "object", "additionalProperties": True},
+                    "base_fingerprint": {"type": "string"},
+                },
+                required=["operation", "target", "intent"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_preview_template_patch"},
+        ),
+        RootMcpToolContract(
+            id="desktop.preview_action",
+            title="Preview desktop action",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Dry-run a desktop/system action and return validation gates without dispatching UI events.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "action_id": {"type": "string"},
+                    "intent": {"type": "string"},
+                    "host_action": {"type": "string"},
+                    "params": {"type": "object", "additionalProperties": True},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "desktop_preview_action"},
+        ),
+        RootMcpToolContract(
             id="nlu_authoring.add_device_alias",
             title="Add device alias",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1648,6 +1694,46 @@ def _handle_nlu_authoring_list_training_targets(arguments: dict[str, Any], *, dr
     return result
 
 
+def _handle_nlu_authoring_preview_template_patch(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import preview_template_patch
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    target = arguments.get("target") if isinstance(arguments.get("target"), Mapping) else {}
+    slots = arguments.get("slots") if isinstance(arguments.get("slots"), Mapping) else {}
+    result = preview_template_patch(
+        webspace_id=webspace_id,
+        operation=_text_or_none(arguments.get("operation")) or "",
+        target=target,
+        intent=_text_or_none(arguments.get("intent")) or "",
+        text=_text_or_none(arguments.get("text")),
+        pattern=_text_or_none(arguments.get("pattern")),
+        slots=slots,
+        base_fingerprint=_text_or_none(arguments.get("base_fingerprint")),
+    )
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_desktop_preview_action(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import preview_interface_action
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    params = arguments.get("params") if isinstance(arguments.get("params"), Mapping) else {}
+    result = preview_interface_action(
+        webspace_id=webspace_id,
+        action_id=_text_or_none(arguments.get("action_id")),
+        intent=_text_or_none(arguments.get("intent")),
+        host_action=_text_or_none(arguments.get("host_action")),
+        params=params,
+    )
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
 def _append_named_entity_alias_audit(
     arguments: dict[str, Any],
     result: dict[str, Any],
@@ -2519,6 +2605,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "sdk.describe_surface": lambda arguments, dry_run=False: _handle_sdk_describe_surface(arguments, dry_run=dry_run),
     "nlu_authoring.list_templates": lambda arguments, dry_run=False: _handle_nlu_authoring_list_templates(arguments, dry_run=dry_run),
     "nlu_authoring.list_training_targets": lambda arguments, dry_run=False: _handle_nlu_authoring_list_training_targets(arguments, dry_run=dry_run),
+    "nlu_authoring.preview_template_patch": lambda arguments, dry_run=False: _handle_nlu_authoring_preview_template_patch(arguments, dry_run=dry_run),
+    "desktop.preview_action": lambda arguments, dry_run=False: _handle_desktop_preview_action(arguments, dry_run=dry_run),
     "nlu_authoring.add_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.remove_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_remove_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.deprecate_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_deprecate_device_alias(arguments, dry_run=dry_run),

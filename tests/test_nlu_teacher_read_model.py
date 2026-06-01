@@ -8,7 +8,14 @@ import yaml
 
 def test_nlu_teacher_read_model_lists_templates_and_targets():
     from adaos.services.agent_context import get_ctx
-    from adaos.services.nlu.teacher_read_model import describe_scenario_nlu, describe_skill_nlu, list_nlu_templates, list_training_targets
+    from adaos.services.nlu.teacher_read_model import (
+        describe_scenario_nlu,
+        describe_skill_nlu,
+        list_nlu_templates,
+        list_training_targets,
+        preview_interface_action,
+        preview_template_patch,
+    )
 
     ctx = get_ctx()
     skill_id = "test_teacher_inventory_skill"
@@ -102,3 +109,49 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
     assert ("scenario", scenario_id) in target_by_key
     assert any(item.get("type") == "system_action" and item.get("intent") == "desktop.open_modal" for item in targets["targets"])
 
+    preview = preview_template_patch(
+        webspace_id="desktop",
+        operation="add_regex_rule",
+        target={"type": "skill", "id": skill_id},
+        intent="inventory.weather",
+        text="show inventory temperature in Berlin",
+        pattern=r"\binventory temperature\b(?:\s+in\s+(?P<city>[^?.!,;:]+))?",
+    )
+    duplicate = preview_template_patch(
+        webspace_id="desktop",
+        operation="add_regex_rule",
+        target={"type": "skill", "id": skill_id},
+        intent="inventory.weather",
+        text="inventory weather",
+        pattern=r"\binventory weather\b",
+    )
+    stale = preview_template_patch(
+        webspace_id="desktop",
+        operation="save_example",
+        target={"type": "scenario", "id": scenario_id},
+        intent="inventory.open_panel",
+        text="show inventory workspace",
+        base_fingerprint="stale-fingerprint",
+    )
+    action_preview = preview_interface_action(
+        webspace_id="desktop",
+        action_id="host.desktop.modal.open",
+        params={"modal_id": "nlu_teacher_modal"},
+    )
+    missing_action_slot = preview_interface_action(
+        webspace_id="desktop",
+        action_id="host.desktop.modal.open",
+        params={},
+    )
+
+    assert preview["ok"] is True
+    assert preview["regex_preview"]["slots"]["city"] == "Berlin"
+    assert duplicate["ok"] is False
+    assert any(item["name"] == "duplicate_regex" and item["status"] == "duplicate" for item in duplicate["checks"])
+    assert stale["ok"] is False
+    assert any(item["name"] == "base_fingerprint" and item["status"] == "stale" for item in stale["checks"])
+    assert action_preview["ok"] is True
+    assert action_preview["would_dispatch"]["target"] == "desktop.modal.open"
+    assert action_preview["would_dispatch"]["params"]["webspace_id"] == "desktop"
+    assert missing_action_slot["ok"] is False
+    assert any(item["name"] == "required_slots" and item["missing"] == ["modal_id"] for item in missing_action_slot["checks"])

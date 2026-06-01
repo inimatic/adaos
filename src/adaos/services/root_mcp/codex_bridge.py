@@ -466,6 +466,46 @@ class CodexRootMcpBridge:
                 },
             },
             {
+                "name": "preview_nlu_template_patch",
+                "description": "Dry-run an NLU Teacher template/training patch and return validation gates without mutation.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "operation": {"type": "string", "enum": ["add_regex_rule", "save_example"]},
+                        "target": {
+                            "type": "object",
+                            "properties": {"type": {"type": "string"}, "id": {"type": "string"}},
+                            "additionalProperties": True,
+                        },
+                        "intent": {"type": "string"},
+                        "text": {"type": "string", "description": "Source utterance/example text."},
+                        "pattern": {"type": "string", "description": "Python regex for add_regex_rule."},
+                        "slots": {"type": "object", "additionalProperties": True},
+                        "base_fingerprint": {"type": "string", "description": "Optional target fingerprint for stale-write protection."},
+                    },
+                    "required": ["operation", "target", "intent"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "preview_desktop_action",
+                "description": "Dry-run a desktop/system action and return would-dispatch payload without dispatching.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "action_id": {"type": "string", "description": "System action id, such as host.desktop.modal.open."},
+                        "intent": {"type": "string", "description": "Optional NLU intent linked to a system action."},
+                        "host_action": {"type": "string", "description": "Optional host event name, such as desktop.modal.open."},
+                        "params": {"type": "object", "additionalProperties": True},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "add_device_alias",
                 "description": "Add a governed alias for a browser/member device through NLUAuthoringPlane. Requires a write-capable Root MCP session.",
                 "inputSchema": {
@@ -994,6 +1034,34 @@ class CodexRootMcpBridge:
                     target_id=_normalize_text(args.get("target_id")),
                     webspace_id=_normalize_text(args.get("webspace_id")),
                     include_system_actions=bool(args.get("include_system_actions", True)),
+                )
+            )
+        if tool == "preview_nlu_template_patch":
+            target = args.get("target") if isinstance(args.get("target"), Mapping) else {}
+            slots = args.get("slots") if isinstance(args.get("slots"), Mapping) else {}
+            return _tool_text(
+                client.preview_nlu_authoring_template_patch(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    operation=str(args.get("operation") or ""),
+                    target=target,
+                    intent=str(args.get("intent") or ""),
+                    text=_normalize_text(args.get("text")),
+                    pattern=_normalize_text(args.get("pattern")),
+                    slots=slots,
+                    base_fingerprint=_normalize_text(args.get("base_fingerprint")),
+                )
+            )
+        if tool == "preview_desktop_action":
+            params = args.get("params") if isinstance(args.get("params"), Mapping) else {}
+            return _tool_text(
+                client.preview_desktop_action(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    action_id=_normalize_text(args.get("action_id")),
+                    intent=_normalize_text(args.get("intent")),
+                    host_action=_normalize_text(args.get("host_action")),
+                    params=params,
                 )
             )
         if tool == "add_device_alias":

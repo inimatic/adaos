@@ -19,6 +19,8 @@ from adaos.services.nlu.teacher_read_model import (
     get_nlu_trace,
     list_nlu_templates,
     list_training_targets,
+    preview_interface_action,
+    preview_template_patch,
 )
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
@@ -76,6 +78,23 @@ class ProbePhraseRequest(BaseModel):
     emit_trace: bool = True
     request_locale: Optional[str] = None
     preferred_locales: list[str] = Field(default_factory=list)
+
+
+class PreviewTemplatePatchRequest(BaseModel):
+    operation: str = Field(..., min_length=1)
+    target: SaveExampleTarget
+    intent: str = Field(..., min_length=1)
+    text: Optional[str] = None
+    pattern: Optional[str] = None
+    slots: Dict[str, Any] = Field(default_factory=dict)
+    base_fingerprint: Optional[str] = None
+
+
+class PreviewInterfaceActionRequest(BaseModel):
+    action_id: Optional[str] = None
+    intent: Optional[str] = None
+    host_action: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("/nlu/teacher/{webspace_id}", dependencies=[Depends(require_token)])
@@ -138,6 +157,33 @@ async def get_templates(
 async def get_training_targets(webspace_id: str, include_system_actions: bool = True):
     ws = _resolve_webspace_id(webspace_id)
     return list_training_targets(webspace_id=ws, include_system_actions=include_system_actions)
+
+
+@router.post("/nlu/teacher/{webspace_id}/template-patch/preview", dependencies=[Depends(require_token)])
+async def preview_template_patch_api(webspace_id: str, body: PreviewTemplatePatchRequest):
+    ws = _resolve_webspace_id(webspace_id)
+    return preview_template_patch(
+        webspace_id=ws,
+        operation=body.operation,
+        target=body.target.model_dump(exclude_none=True),
+        intent=body.intent,
+        text=body.text,
+        pattern=body.pattern,
+        slots=body.slots,
+        base_fingerprint=body.base_fingerprint,
+    )
+
+
+@router.post("/nlu/teacher/{webspace_id}/interface-action/preview", dependencies=[Depends(require_token)])
+async def preview_interface_action_api(webspace_id: str, body: PreviewInterfaceActionRequest):
+    ws = _resolve_webspace_id(webspace_id)
+    return preview_interface_action(
+        webspace_id=ws,
+        action_id=body.action_id,
+        intent=body.intent,
+        host_action=body.host_action,
+        params=body.params,
+    )
 
 
 @router.get("/nlu/teacher/{webspace_id}/skills/{skill_id}/nlu", dependencies=[Depends(require_token)])
