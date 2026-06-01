@@ -321,7 +321,7 @@ async def _mark_candidate_verification(
     if not isinstance(candidate_id, str) or not candidate_id.strip():
         return
     async with _nlu_regex_rules_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             next_candidates: list[dict[str, Any]] = []
@@ -359,7 +359,7 @@ async def _on_regex_rule_rollback(evt: Any) -> None:
 
     try:
         async with _nlu_regex_rules_write_meta():
-            async with async_get_ydoc(webspace_id) as ydoc:
+            async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
                 data_map = ydoc.get_map("data")
                 teacher = _teacher_obj(data_map)
                 next_candidates: list[dict[str, Any]] = []
@@ -515,7 +515,7 @@ async def _on_regex_rule_apply(evt: Any) -> None:
 
     try:
         async with _nlu_regex_rules_write_meta():
-            async with async_get_ydoc(webspace_id) as ydoc:
+            async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data", "ui"]) as ydoc:
                 data_map = ydoc.get_map("data")
 
                 # Prefer writing regex rules into scenario/skill definitions (workspace),

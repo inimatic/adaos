@@ -116,7 +116,7 @@ def _merge_teacher(*, current: dict[str, Any], saved: dict[str, Any]) -> dict[st
 
 
 async def _read_teacher_from_ydoc(webspace_id: str) -> dict[str, Any]:
-    async with async_get_ydoc(webspace_id) as ydoc:
+    async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
         data_map = ydoc.get_map("data")
         current = data_map.get("nlu_teacher")
         teacher = coerce_dict(current)
@@ -125,7 +125,7 @@ async def _read_teacher_from_ydoc(webspace_id: str) -> dict[str, Any]:
 
 async def _write_teacher_to_ydoc(webspace_id: str, teacher: dict[str, Any]) -> None:
     async with _nlu_teacher_store_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)

@@ -17,7 +17,22 @@ from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 _log = logging.getLogger("adaos.nlu.teacher")
 
 _MAX_ITEMS = int(os.getenv("ADAOS_NLU_TEACHER_MAX", "200") or "200")
-_ENABLED = os.getenv("ADAOS_NLU_TEACHER") == "1"
+_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
+_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled"}
+
+
+def _env_enabled(value: str | None) -> bool | None:
+    token = str(value or "").strip().lower()
+    if not token:
+        return None
+    if token in _TRUE_VALUES:
+        return True
+    if token in _FALSE_VALUES:
+        return False
+    return None
+
+
+_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_TEACHER"))
 _PROVIDER_ISSUE_REASONS = {
     "no_active_nlu_stages",
     "rasa_runtime_disabled",
@@ -110,11 +125,20 @@ def _classify_not_obtained_for_teacher(*, reason: str, via: str | None) -> dict[
     return {"teachable": True, "class": "nlu_gap", "reason": token or "unknown", "via": via_token or None}
 
 
+def _teacher_enabled(ctx: Any) -> bool:
+    if _ENABLED is not None:
+        return bool(_ENABLED)
+    try:
+        return bool(getattr(getattr(ctx.config, "root_settings", None), "llm", None).allow_nlu_teacher)  # type: ignore[attr-defined]
+    except Exception:
+        return True
+
+
 async def _append_teacher_item(webspace_id: str, item: dict) -> None:
     from adaos.services.yjs.doc import async_get_ydoc
 
     async with _nlu_teacher_bridge_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             current = data_map.get("nlu_teacher")
             teacher: dict = coerce_dict(current)
@@ -130,15 +154,8 @@ async def _append_teacher_item(webspace_id: str, item: dict) -> None:
 
 @subscribe("nlp.intent.not_obtained")
 async def _on_not_obtained(evt: Any) -> None:
-    if not _ENABLED:
-        return
-
     ctx = get_ctx()
-    try:
-        allow = bool(getattr(getattr(ctx.config, "root_settings", None), "llm", None).allow_nlu_teacher)  # type: ignore[attr-defined]
-    except Exception:
-        allow = True
-    if not allow:
+    if not _teacher_enabled(ctx):
         return
 
     payload = _payload(evt)

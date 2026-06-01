@@ -1,4 +1,52 @@
 import pytest
+from types import SimpleNamespace
+
+
+@pytest.mark.anyio
+async def test_teacher_bridge_uses_root_policy_when_env_unset(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_bridge
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-root-policy"
+    monkeypatch.setattr(teacher_bridge, "_ENABLED", None)
+    monkeypatch.setattr(
+        teacher_bridge,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            bus=ctx.bus,
+            config=SimpleNamespace(root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True))),
+        ),
+    )
+
+    requests: list[dict] = []
+
+    def _capture_request(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            requests.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.request", _capture_request)
+
+    await teacher_bridge._on_not_obtained(
+        {
+            "text": "Покажи Infrascope",
+            "webspace_id": webspace_id,
+            "request_id": "req.root.policy",
+            "via": "neuro_lite",
+            "reason": "below_margin_threshold",
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    assert requests
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+
+    assert list(teacher.get("items") or [])[-1]["text"] == "Покажи Infrascope"
+    assert list(teacher.get("threads_by_request") or [])
 
 
 @pytest.mark.anyio

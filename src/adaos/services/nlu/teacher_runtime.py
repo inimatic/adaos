@@ -74,7 +74,7 @@ def _bounded(items: list[dict[str, Any]], *, max_items: int) -> list[dict[str, A
 
 async def _get_current_scenario_id(webspace_id: str) -> str | None:
     try:
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=["ui"]) as ydoc:
             ui_map = ydoc.get_map("ui")
             raw = ui_map.get("current_scenario")
             if isinstance(raw, str) and raw.strip():
@@ -146,7 +146,7 @@ def _apply_revision_to_scenario_file(*, scenario_id: str, intent: str, examples:
 
 async def _append_revision(webspace_id: str, revision: dict[str, Any]) -> None:
     async with _nlu_teacher_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _read_teacher_obj(data_map)
             revisions = _list_of_dicts(teacher.get("revisions"))
@@ -165,7 +165,7 @@ async def _update_revision(
     patch: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
     async with _nlu_teacher_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _read_teacher_obj(data_map)
             revisions = teacher.get("revisions")
@@ -194,7 +194,7 @@ async def _update_revision(
 
 async def _append_dataset_item(webspace_id: str, item: dict[str, Any]) -> None:
     async with _nlu_teacher_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _read_teacher_obj(data_map)
             dataset = _list_of_dicts(teacher.get("dataset"))

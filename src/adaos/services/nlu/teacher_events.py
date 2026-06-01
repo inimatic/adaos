@@ -533,7 +533,7 @@ def make_event(
 
 async def append_event(webspace_id: str, event: Mapping[str, Any]) -> None:
     async with _nlu_teacher_events_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             current = data_map.get("nlu_teacher")
             teacher: dict[str, Any] = coerce_dict(current)
