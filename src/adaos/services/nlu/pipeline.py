@@ -56,11 +56,21 @@ _TIMER_START_RE = re.compile(
 
 _RULES_CACHE_TTL_S = 2.0
 _rules_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-_rules_lock = asyncio.Lock()
+_rules_lock: asyncio.Lock | None = None
+_rules_lock_loop: asyncio.AbstractEventLoop | None = None
 _NEURO_LITE_SKILL_NAME = "neuro_nlu_lite_skill"
 _NEURAL_SKILL_NAME = "neural_nlu_service_skill"
 _TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled", "none"}
+
+
+def _get_rules_lock() -> asyncio.Lock:
+    global _rules_lock, _rules_lock_loop
+    loop = asyncio.get_running_loop()
+    if _rules_lock is None or _rules_lock_loop is not loop:
+        _rules_lock = asyncio.Lock()
+        _rules_lock_loop = loop
+    return _rules_lock
 
 
 def _stage_policy(env_name: str) -> str:
@@ -393,7 +403,7 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
     if cached and now - cached[0] < _RULES_CACHE_TTL_S:
         return cached[1]
 
-    async with _rules_lock:
+    async with _get_rules_lock():
         cached = _rules_cache.get(webspace_id)
         if cached and now - cached[0] < _RULES_CACHE_TTL_S:
             return cached[1]

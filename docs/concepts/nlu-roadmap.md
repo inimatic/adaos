@@ -99,6 +99,9 @@ for the current NLU Teacher implementation gate.
   LLM-planned intent.
 - [x] Successful candidate verification emits
   `nlp.teacher.understanding.acquired` and records Teacher audit events.
+- [x] Regex candidate rollback is available through
+  `POST /api/nlu/teacher/{webspace_id}/candidate/rollback` and removes the
+  applied rule from owner artifact plus runtime cache.
 - [x] Teacher can apply dataset revisions into scenario training content.
 - [x] Dry-run phrase probe API for Teacher UI:
   - `POST /api/nlu/teacher/{webspace_id}/probe`
@@ -209,6 +212,11 @@ for the current NLU Teacher implementation gate.
 - [ ] Record dispatch status and correction-thread link.
 - [x] LLM Teacher prompt includes governed Root MCP evidence from
   `nlu_authoring.get_context` and `nlu_authoring.check_phrase`.
+- [x] Add repeatable LLM-training smoke examples for:
+  - `skill_action`: LLM proposes a regex for an existing skill-routed intent,
+    Apply stores it in `skill.yaml`, replay matches, rollback restores miss.
+  - `interface_action`: LLM proposes a regex for a scenario-owned host action,
+    Apply stores it in `scenario.json`, replay matches, rollback restores miss.
 - [x] After a regex/template candidate is trusted-applied, re-run phrase check and mark it verified only if the returned intent
   matches the LLM-planned intent.
 - [ ] Dispatch verified candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
@@ -225,6 +233,9 @@ for the current NLU Teacher implementation gate.
 - [ ] Root resolves token to subnet/zone/capabilities.
 - [x] Add Root MCP `nlu_authoring.get_context` for named-entity and authoring-boundary evidence.
 - [x] Add Root MCP `nlu_authoring.check_phrase` backed by the current probe service.
+- [x] Root MCP passes bearer/session subnet scope into NLU authoring handlers
+  and returns `root_scope` / `target_id` so the LLM sees which subnet target the
+  context belongs to.
 - [x] Add Codex bridge tool `check_nlu_phrase`.
 - [ ] Add/read remaining MCP surfaces:
   - `[deferred]` `nlu.describe_pipeline`
@@ -425,13 +436,19 @@ for the current NLU Teacher implementation gate.
 - Regex candidate Apply now re-probes the original phrase, records
   `candidate.verified`, marks matching candidates as `intent_matched`, and
   emits `nlp.teacher.understanding.acquired`.
+- Regex candidate rollback removes applied Teacher rules and invalidates the
+  dynamic regex cache so smoke checks are repeatable.
 - Root MCP now exposes read-only `nlu_authoring.check_phrase`, and the Codex
   bridge exposes it as `check_nlu_phrase`.
+- Root MCP NLU authoring results now carry bearer-derived `root_scope` and
+  `target_id` evidence.
 - LLM Teacher now includes read-only Root MCP authoring evidence
   (`nlu_authoring.get_context` and `nlu_authoring.check_phrase`) in the prompt
   before asking Root/OpenAI for a candidate.
 - A closed-loop test now covers: regex miss -> LLM regex candidate -> Apply ->
   `understanding.acquired` -> repeated phrase resolves through `regex.dynamic`.
+- Added repeatable test examples for `skill_action` and `interface_action`
+  training with rollback to the original miss state.
 - Rasa is packaged as an optional default-on service-skill and installed into skill runtime slots.
 - NLU Teacher has a dry-run phrase probe API with regex-first and optional Rasa fallback.
 - NLU Teacher exposes baseline desktop lookup tables for `modal_id`, `node_ref`, `app_id`, `scenario_id`, and `webspace_id`.

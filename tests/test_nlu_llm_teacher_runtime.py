@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 
 def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
@@ -274,3 +275,248 @@ async def test_llm_teacher_closed_loop_regex_candidate_can_be_applied_and_replay
     assert intent == "desktop.open_weather"
     assert via == "regex.dynamic"
     assert slots.get("city") == "Berlin"
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_trains_skill_action_regex_and_rolls_back(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.nlu.candidates_runtime import _on_candidate_apply
+    from adaos.services.nlu.pipeline import _try_regex_intent
+    from adaos.services.nlu.regex_rules_runtime import _on_regex_rule_apply, _on_regex_rule_rollback
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-skill-action-teacher"
+    scenario_id = "test_skill_action_teacher"
+    skill_id = "test_weather_action_skill"
+    request_text = "skillprobeweather in Oslo"
+    intent_name = "demo.skill_action.weather"
+    pattern = r"\bskillprobeweather\b(?:\s+in\s+(?P<city>[^?.!,;:]+))?"
+
+    skill_root = Path(ctx.paths.skills_dir()) / skill_id
+    skill_root.mkdir(parents=True, exist_ok=True)
+    skill_yaml = skill_root / "skill.yaml"
+    skill_yaml.write_text(
+        yaml.safe_dump(
+            {
+                "name": skill_id,
+                "version": "0.0.1",
+                "events": {"subscribe": ["demo.weather.fetch"]},
+                "nlu": {"regex_rules": []},
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        intent_name: {
+                            "actions": [{"type": "callSkill", "target": "demo.weather.fetch", "params": {"city": "$slot.city"}}]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(txn, "catalog", {"apps": [{"id": "weather", "origin": f"skill:{skill_id}"}]})
+            data_map.set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+            data_map.set(txn, "nlu", {"regex_rules": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": intent_name,
+                                    "regex_rule": {"intent": intent_name, "pattern": pattern},
+                                    "target": None,
+                                    "examples": [request_text],
+                                    "slots": {"city": {"type": "string"}},
+                                    "confidence": 0.9,
+                                    "notes": "Skill action should route to the weather skill owner.",
+                                    "candidate": None,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    ctx.bus.subscribe("nlp.teacher.regex_rule.apply", _on_regex_rule_apply)
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {"id": "teach.skill", "request_id": "req.skill", "text": request_text, "reason": "fallback", "via": "rasa"},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+    assert candidates[-1]["target"] == {"type": "skill", "id": skill_id}
+    candidate_id = candidates[-1]["id"]
+
+    await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate_id, "_meta": {"webspace_id": webspace_id}})
+    for _ in range(50):
+        intent, slots, via, _raw = await _try_regex_intent(request_text, webspace_id=webspace_id)
+        if intent == intent_name:
+            break
+        await asyncio.sleep(0.01)
+
+    assert intent == intent_name
+    assert via == "regex.dynamic"
+    assert slots.get("city") == "Oslo"
+    saved_skill = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
+    assert (saved_skill.get("nlu") or {}).get("regex_rules")
+
+    await _on_regex_rule_rollback({"webspace_id": webspace_id, "candidate_id": candidate_id, "_meta": {"webspace_id": webspace_id}})
+    intent, slots, via, _raw = await _try_regex_intent(request_text, webspace_id=webspace_id)
+    assert intent is None
+    assert slots == {}
+    saved_skill = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
+    assert not ((saved_skill.get("nlu") or {}).get("regex_rules") or [])
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_trains_interface_action_regex_and_rolls_back(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.nlu.candidates_runtime import _on_candidate_apply
+    from adaos.services.nlu.pipeline import _try_regex_intent
+    from adaos.services.nlu.regex_rules_runtime import _on_regex_rule_apply, _on_regex_rule_rollback
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-interface-action-teacher"
+    scenario_id = "test_interface_action_teacher"
+    request_text = "launch opsconsole"
+    intent_name = "demo.interface_action.open_ops_console"
+    pattern = r"\bopsconsole\b"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    scenario_json = scenario_root / "scenario.json"
+    scenario_json.write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        intent_name: {
+                            "actions": [
+                                {"type": "callHost", "target": "desktop.modal.open", "params": {"modal_id": "ops_console"}}
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+            data_map.set(txn, "nlu", {"regex_rules": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": intent_name,
+                                    "regex_rule": {"intent": intent_name, "pattern": pattern},
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "confidence": 0.88,
+                                    "notes": "Interface action should stay scenario-owned.",
+                                    "candidate": None,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    ctx.bus.subscribe("nlp.teacher.regex_rule.apply", _on_regex_rule_apply)
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {"id": "teach.interface", "request_id": "req.interface", "text": request_text, "reason": "fallback", "via": "rasa"},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+    assert candidates[-1]["target"] == {"type": "scenario", "id": scenario_id}
+    candidate_id = candidates[-1]["id"]
+
+    await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate_id, "_meta": {"webspace_id": webspace_id}})
+    for _ in range(50):
+        intent, slots, via, _raw = await _try_regex_intent(request_text, webspace_id=webspace_id)
+        if intent == intent_name:
+            break
+        await asyncio.sleep(0.01)
+
+    assert intent == intent_name
+    assert via == "regex.dynamic"
+    saved_scenario = json.loads(scenario_json.read_text(encoding="utf-8"))
+    assert (saved_scenario.get("nlu") or {}).get("regex_rules")
+
+    await _on_regex_rule_rollback({"webspace_id": webspace_id, "candidate_id": candidate_id, "_meta": {"webspace_id": webspace_id}})
+    intent, slots, via, _raw = await _try_regex_intent(request_text, webspace_id=webspace_id)
+    assert intent is None
+    assert slots == {}
+    saved_scenario = json.loads(scenario_json.read_text(encoding="utf-8"))
+    assert not ((saved_scenario.get("nlu") or {}).get("regex_rules") or [])

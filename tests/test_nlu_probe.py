@@ -233,3 +233,34 @@ async def test_nlu_teacher_apply_candidate_api_emits_event(monkeypatch):
     assert emitted["payload"]["candidate_id"] == "cand-api"
     assert emitted["payload"]["target"] == {"type": "scenario", "id": "web_desktop"}
     assert emitted["source"] == "api.nlu.teacher"
+
+
+@pytest.mark.anyio
+async def test_nlu_teacher_rollback_candidate_api_emits_event(monkeypatch):
+    from adaos.apps.api import nlu_teacher_api as api
+
+    emitted = {}
+
+    def _fake_emit(bus, event_type, payload, *, source=None):
+        emitted["event_type"] = event_type
+        emitted["payload"] = payload
+        emitted["source"] = source
+
+    monkeypatch.setattr(api, "bus_emit", _fake_emit)
+
+    result = await api.rollback_candidate(
+        "ws-api",
+        api.RollbackCandidateRequest(
+            candidate_id="cand-api",
+            rule_id="rx.test",
+            target=api.SaveExampleTarget(type="scenario", id="web_desktop"),
+        ),
+    )
+
+    assert result == {"ok": True, "webspace_id": "ws-api", "candidate_id": "cand-api"}
+    assert emitted["event_type"] == "nlp.teacher.regex_rule.rollback"
+    assert emitted["payload"]["webspace_id"] == "ws-api"
+    assert emitted["payload"]["candidate_id"] == "cand-api"
+    assert emitted["payload"]["rule_id"] == "rx.test"
+    assert emitted["payload"]["target"] == {"type": "scenario", "id": "web_desktop"}
+    assert emitted["source"] == "api.nlu.teacher"

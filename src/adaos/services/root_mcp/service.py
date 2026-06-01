@@ -4,7 +4,7 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from adaos.build_info import BUILD_INFO
 from adaos.services.agent_context import get_ctx
@@ -103,6 +103,28 @@ def _run_async_from_sync(coro: Any) -> Any:
     if "error" in box:
         raise box["error"]
     return box.get("result")
+
+
+def _mcp_context(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    raw = arguments.get("_mcp_context")
+    return dict(raw) if isinstance(raw, Mapping) else {}
+
+
+def _mcp_root_scope(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    context = _mcp_context(arguments)
+    scope = context.get("scope") if isinstance(context.get("scope"), Mapping) else {}
+    auth_context = context.get("auth_context") if isinstance(context.get("auth_context"), Mapping) else {}
+    subnet_id = _text_or_none(scope.get("subnet_id")) or _text_or_none(auth_context.get("subnet_id"))
+    zone = _text_or_none(scope.get("zone")) or _text_or_none(auth_context.get("zone"))
+    target_id = _text_or_none(arguments.get("target_id")) or _text_or_none(scope.get("target_id"))
+    if target_id is None:
+        allowed = auth_context.get("allowed_target_ids")
+        if isinstance(allowed, list):
+            target_id = next((str(item).strip() for item in allowed if str(item or "").strip()), None)
+    if target_id is None and subnet_id:
+        target_id = f"hub:{subnet_id}"
+    out = {"subnet_id": subnet_id, "zone": zone, "target_id": target_id}
+    return {k: v for k, v in out.items() if v}
 
 
 def _locale_order(*, request_locale: str | None, preferred_locales: list[str]) -> list[str]:
@@ -405,6 +427,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             summary="Return the compact read-only canonical named-entity registry through AdaOSDevPlane.",
             input_schema=schema_object(
                 properties={
+                    "target_id": {"type": "string"},
                     "webspace_id": {"type": "string"},
                     "kind": {"type": "string"},
                 },
@@ -438,6 +461,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={
                     "text": {"type": "string"},
+                    "target_id": {"type": "string"},
                     "webspace_id": {"type": "string"},
                     "use_rasa": {"type": "boolean"},
                     "emit_trace": {"type": "boolean"},
@@ -1269,6 +1293,7 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
     from adaos.services import named_entities
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
     kind = _text_or_none(arguments.get("kind"))
     request_locale = _text_or_none(arguments.get("request_locale"))
     preferred_locales = _text_list(arguments.get("preferred_locales"))
@@ -1279,6 +1304,8 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
             "plane_id": "nlu_authoring",
             "version": 1,
             "webspace_id": webspace_id,
+            "target_id": root_scope.get("target_id"),
+            "root_scope": root_scope,
             "kind_filter": kind,
             "locale": {
                 "request_locale": request_locale,
@@ -1321,6 +1348,7 @@ def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bo
     if not text:
         return {"ok": False, "status": "invalid", "error": "text_required"}
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
     use_rasa = bool(arguments.get("use_rasa", True))
     emit_trace = False if dry_run else bool(arguments.get("emit_trace", False))
     request_locale = _text_or_none(arguments.get("request_locale"))
@@ -1336,6 +1364,8 @@ def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bo
         )
     )
     return {
+        "target_id": root_scope.get("target_id"),
+        "root_scope": root_scope,
         "check": dict(result) if isinstance(result, dict) else result,
         "authoring_boundaries": {
             "dispatch": False,
@@ -2557,6 +2587,8 @@ def invoke_tool(
                         "trace_id": effective_trace_id,
                         "actor": actor,
                         "auth_method": auth_method,
+                        "scope": scope_meta,
+                        "auth_context": dict(auth_context or {}),
                     }
                     result = handler(handler_arguments, dry_run=bool(dry_run))
                     summary = _result_summary(result)
