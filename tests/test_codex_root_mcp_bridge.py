@@ -185,6 +185,45 @@ class _FakeRootMcpClient:
         self.calls.append(("describe_sdk_surface", level, {"target_id": target_id}))
         return {"ok": True, "surface_id": "adaos.sdk.describe_surface.v1"}
 
+    def list_nlu_authoring_templates(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
+        include_system_actions: bool = True,
+    ) -> dict:
+        self.calls.append(
+            (
+                "list_nlu_authoring_templates",
+                webspace_id or "",
+                {
+                    "target_id": target_id,
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "include_system_actions": include_system_actions,
+                },
+            )
+        )
+        return {"ok": True, "templates": [{"id": "tpl.test", "owner": {"type": owner_type, "id": owner_id}}]}
+
+    def list_nlu_authoring_training_targets(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        include_system_actions: bool = True,
+    ) -> dict:
+        self.calls.append(
+            (
+                "list_nlu_authoring_training_targets",
+                webspace_id or "",
+                {"target_id": target_id, "include_system_actions": include_system_actions},
+            )
+        )
+        return {"ok": True, "targets": [{"type": "skill", "id": "weather_skill"}]}
+
     def add_nlu_authoring_device_alias(
         self,
         *,
@@ -625,6 +664,25 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "params": {"name": "describe_sdk_surface", "arguments": {"level": "mini"}},
         }
     )
+    nlu_templates = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 429,
+            "method": "tools/call",
+            "params": {
+                "name": "list_nlu_templates",
+                "arguments": {"webspace_id": "desktop", "owner_type": "skill", "owner_id": "weather_skill"},
+            },
+        }
+    )
+    nlu_targets = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 430,
+            "method": "tools/call",
+            "params": {"name": "list_nlu_training_targets", "arguments": {"webspace_id": "desktop", "include_system_actions": False}},
+        }
+    )
     add_alias = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -741,6 +799,8 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert "describe_skill_nlu" in tool_names
     assert "describe_scenario_nlu" in tool_names
     assert "describe_sdk_surface" in tool_names
+    assert "list_nlu_templates" in tool_names
+    assert "list_nlu_training_targets" in tool_names
     assert "add_device_alias" in tool_names
     assert "remove_device_alias" in tool_names
     assert "deprecate_device_alias" in tool_names
@@ -778,6 +838,10 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert scenario_nlu["result"]["structuredContent"]["owner"]["id"] == "web_desktop"
     assert sdk_surface is not None
     assert sdk_surface["result"]["structuredContent"]["surface_id"] == "adaos.sdk.describe_surface.v1"
+    assert nlu_templates is not None
+    assert nlu_templates["result"]["structuredContent"]["templates"][0]["id"] == "tpl.test"
+    assert nlu_targets is not None
+    assert nlu_targets["result"]["structuredContent"]["targets"][0]["id"] == "weather_skill"
     assert add_alias is not None
     assert add_alias["result"]["structuredContent"]["status"] == "proposed"
     assert remove_alias is not None
@@ -829,6 +893,16 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert ("describe_skill_nlu", "weather_skill", {"target_id": None}) in fake_client.calls
     assert ("describe_scenario_nlu", "web_desktop", {"target_id": None}) in fake_client.calls
     assert ("describe_sdk_surface", "mini", {"target_id": None}) in fake_client.calls
+    assert (
+        "list_nlu_authoring_templates",
+        "desktop",
+        {"target_id": None, "owner_type": "skill", "owner_id": "weather_skill", "include_system_actions": True},
+    ) in fake_client.calls
+    assert (
+        "list_nlu_authoring_training_targets",
+        "desktop",
+        {"target_id": None, "include_system_actions": False},
+    ) in fake_client.calls
     assert (
         "add_nlu_authoring_device_alias",
         "browser:browser-1",

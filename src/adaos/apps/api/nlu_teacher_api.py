@@ -11,6 +11,15 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
 from adaos.services.nlu.probe import probe_phrase
+from adaos.services.nlu.teacher_read_model import (
+    describe_scenario_nlu,
+    describe_skill_nlu,
+    get_nlu_dialog_context,
+    get_nlu_recent_failures,
+    get_nlu_trace,
+    list_nlu_templates,
+    list_training_targets,
+)
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
 
@@ -84,6 +93,63 @@ async def get_lookup_tables(webspace_id: str):
         return await collect_desktop_lookup_tables_async(webspace_id=ws, include_live=True)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"failed to collect lookup tables: {exc}")
+
+
+@router.get("/nlu/teacher/{webspace_id}/trace", dependencies=[Depends(require_token)])
+async def get_trace(webspace_id: str, request_id: Optional[str] = None, candidate_id: Optional[str] = None, limit: int = 80):
+    ws = _resolve_webspace_id(webspace_id)
+    return get_nlu_trace(webspace_id=ws, request_id=request_id, candidate_id=candidate_id, limit=limit)
+
+
+@router.get("/nlu/teacher/{webspace_id}/dialog-context", dependencies=[Depends(require_token)])
+async def get_dialog_context(
+    webspace_id: str,
+    request_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    limit: int = 25,
+):
+    ws = _resolve_webspace_id(webspace_id)
+    return get_nlu_dialog_context(webspace_id=ws, request_id=request_id, candidate_id=candidate_id, limit=limit)
+
+
+@router.get("/nlu/teacher/{webspace_id}/failures", dependencies=[Depends(require_token)])
+async def get_recent_failures(webspace_id: str, limit: int = 50):
+    ws = _resolve_webspace_id(webspace_id)
+    return get_nlu_recent_failures(webspace_id=ws, limit=limit)
+
+
+@router.get("/nlu/teacher/{webspace_id}/templates", dependencies=[Depends(require_token)])
+async def get_templates(
+    webspace_id: str,
+    owner_type: Optional[str] = None,
+    owner_id: Optional[str] = None,
+    include_system_actions: bool = True,
+):
+    ws = _resolve_webspace_id(webspace_id)
+    return list_nlu_templates(
+        webspace_id=ws,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        include_system_actions=include_system_actions,
+    )
+
+
+@router.get("/nlu/teacher/{webspace_id}/training-targets", dependencies=[Depends(require_token)])
+async def get_training_targets(webspace_id: str, include_system_actions: bool = True):
+    ws = _resolve_webspace_id(webspace_id)
+    return list_training_targets(webspace_id=ws, include_system_actions=include_system_actions)
+
+
+@router.get("/nlu/teacher/{webspace_id}/skills/{skill_id}/nlu", dependencies=[Depends(require_token)])
+async def get_skill_nlu(webspace_id: str, skill_id: str):
+    _resolve_webspace_id(webspace_id)
+    return describe_skill_nlu(skill_id)
+
+
+@router.get("/nlu/teacher/{webspace_id}/scenarios/{scenario_id}/nlu", dependencies=[Depends(require_token)])
+async def get_scenario_nlu(webspace_id: str, scenario_id: str):
+    _resolve_webspace_id(webspace_id)
+    return describe_scenario_nlu(scenario_id)
 
 
 @router.post("/nlu/teacher/{webspace_id}/revision/apply", dependencies=[Depends(require_token)])

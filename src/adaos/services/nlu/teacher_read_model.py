@@ -480,6 +480,111 @@ def _nlu_descriptor_from_manifest(payload: Mapping[str, Any], *, owner_type: str
     return descriptor
 
 
+def _target_matches(owner: Mapping[str, Any], *, owner_type: str | None, owner_id: str | None) -> bool:
+    if owner_type and str(owner.get("type") or "") != owner_type:
+        return False
+    if owner_id and str(owner.get("id") or "") != owner_id:
+        return False
+    return True
+
+
+def _template_id(payload: Mapping[str, Any]) -> str:
+    owner = payload.get("owner") if isinstance(payload.get("owner"), Mapping) else {}
+    kind = str(payload.get("kind") or "template").replace(".", "_")
+    owner_type = str(owner.get("type") or "owner")
+    owner_id = str(owner.get("id") or "unknown")
+    digest = _hash_payload(payload)[:16]
+    return f"tpl.{owner_type}.{owner_id}.{kind}.{digest}"
+
+
+def _template_row(
+    *,
+    owner: Mapping[str, Any],
+    intent: str | None,
+    kind: str,
+    path: Path | None,
+    payload: Mapping[str, Any],
+    mutation: str,
+    status: str = "active",
+) -> dict[str, Any]:
+    base = {
+        "owner": dict(owner),
+        "intent": intent,
+        "kind": kind,
+        "status": status,
+        "source_path": str(path) if path else None,
+        "payload": dict(payload),
+        "mutation": mutation,
+    }
+    base["fingerprint"] = _hash_payload(base)
+    base["id"] = _template_id(base)
+    return base
+
+
+def _iter_artifact_nlu_templates(
+    *,
+    owner_type: str,
+    owner_id: str,
+    payload: Mapping[str, Any],
+    path: Path | None,
+) -> list[dict[str, Any]]:
+    owner = {"type": owner_type, "id": owner_id}
+    nlu = payload.get("nlu") if isinstance(payload.get("nlu"), Mapping) else {}
+    rows: list[dict[str, Any]] = []
+    intents = nlu.get("intents") if isinstance(nlu.get("intents"), Mapping) else {}
+    for intent, spec in sorted(intents.items()):
+        if not isinstance(intent, str) or not isinstance(spec, Mapping):
+            continue
+        examples = spec.get("examples")
+        if isinstance(examples, list):
+            for index, example in enumerate(examples):
+                if not isinstance(example, str) or not example.strip():
+                    continue
+                rows.append(
+                    _template_row(
+                        owner=owner,
+                        intent=intent,
+                        kind="example",
+                        path=path,
+                        payload={"text": example.strip(), "index": index},
+                        mutation="append_example",
+                    )
+                )
+        actions = _intent_action_summary(spec)
+        if actions:
+            rows.append(
+                _template_row(
+                    owner=owner,
+                    intent=intent,
+                    kind="intent_route",
+                    path=path,
+                    payload={"actions": actions, "slots": _slots_from_actions(actions)},
+                    mutation="none",
+                )
+            )
+    for index, rule in enumerate(iter_mappings(nlu.get("regex_rules"))):
+        intent = rule.get("intent") if isinstance(rule.get("intent"), str) else None
+        rows.append(
+            _template_row(
+                owner=owner,
+                intent=intent,
+                kind="regex_rule",
+                path=path,
+                payload={
+                    "id": rule.get("id"),
+                    "pattern": rule.get("pattern"),
+                    "enabled": rule.get("enabled", True),
+                    "source": rule.get("source"),
+                    "candidate_id": rule.get("candidate_id"),
+                    "index": index,
+                },
+                mutation="append_regex_rule",
+                status="active" if bool(rule.get("enabled", True)) else "disabled",
+            )
+        )
+    return rows
+
+
 def describe_skill_nlu(skill_id: str, *, ctx: AgentContext | None = None) -> dict[str, Any]:
     token = str(skill_id or "").strip()
     payload, path = _read_skill_manifest(token, ctx=ctx)
@@ -494,6 +599,95 @@ def describe_scenario_nlu(scenario_id: str, *, ctx: AgentContext | None = None) 
     if payload is None:
         return {"ok": False, "status": "not_found", "owner": {"type": "scenario", "id": token}}
     return _nlu_descriptor_from_manifest(payload, owner_type="scenario", owner_id=token, path=path)
+
+
+def list_nlu_templates(
+    *,
+    webspace_id: str | None = None,
+    owner_type: str | None = None,
+    owner_id: str | None = None,
+    include_system_actions: bool = True,
+) -> dict[str, Any]:
+    from adaos.services.nlu.system_actions_catalog import system_action_nlu_intents
+
+    ctx = get_ctx()
+    owner_type_token = str(owner_type or "").strip() or None
+    owner_id_token = str(owner_id or "").strip() or None
+    rows: list[dict[str, Any]] = []
+    for root in _skill_roots(ctx):
+        if not root.exists():
+            continue
+        for skill_dir in sorted(child for child in root.iterdir() if child.is_dir() and not child.name.startswith(".")):
+            payload, path = _read_skill_manifest(skill_dir.name, ctx=ctx)
+            if payload is None:
+                continue
+            owner = {"type": "skill", "id": skill_dir.name}
+            if not _target_matches(owner, owner_type=owner_type_token, owner_id=owner_id_token):
+                continue
+            rows.extend(_iter_artifact_nlu_templates(owner_type="skill", owner_id=skill_dir.name, payload=payload, path=path))
+    for root in _scenario_roots(ctx):
+        if not root.exists():
+            continue
+        for scenario_dir in sorted(child for child in root.iterdir() if child.is_dir() and not child.name.startswith(".")):
+            payload, path = _read_scenario_manifest(scenario_dir.name, ctx=ctx)
+            if payload is None:
+                continue
+            owner = {"type": "scenario", "id": scenario_dir.name}
+            if not _target_matches(owner, owner_type=owner_type_token, owner_id=owner_id_token):
+                continue
+            rows.extend(_iter_artifact_nlu_templates(owner_type="scenario", owner_id=scenario_dir.name, payload=payload, path=path))
+    if include_system_actions:
+        for intent, spec in sorted(system_action_nlu_intents().items()):
+            owner = {"type": "system_action", "id": str(spec.get("action_id") or intent)}
+            if not _target_matches(owner, owner_type=owner_type_token, owner_id=owner_id_token):
+                continue
+            examples = spec.get("examples")
+            if isinstance(examples, list):
+                for index, example in enumerate(examples):
+                    if not isinstance(example, str) or not example.strip():
+                        continue
+                    rows.append(
+                        _template_row(
+                            owner=owner,
+                            intent=intent,
+                            kind="system_action_example",
+                            path=None,
+                            payload={"text": example.strip(), "index": index, "host_action": spec.get("host_action")},
+                            mutation="none",
+                        )
+                    )
+            actions = [dict(item) for item in iter_mappings(spec.get("actions"))]
+            rows.append(
+                _template_row(
+                    owner=owner,
+                    intent=intent,
+                    kind="system_action_route",
+                    path=None,
+                    payload={"host_action": spec.get("host_action"), "actions": actions, "slots": _slots_from_actions(actions)},
+                    mutation="none",
+                )
+            )
+
+    rows = sorted(rows, key=lambda item: (str((item.get("owner") or {}).get("type") or ""), str((item.get("owner") or {}).get("id") or ""), str(item.get("kind") or ""), str(item.get("intent") or "")))
+    return {
+        "ok": True,
+        "webspace_id": _webspace_id(webspace_id),
+        "templates": rows,
+        "summary": {
+            "count": len(rows),
+            "by_kind": {
+                kind: sum(1 for item in rows if item.get("kind") == kind)
+                for kind in sorted({str(item.get("kind") or "") for item in rows})
+                if kind
+            },
+            "by_owner_type": {
+                kind: sum(1 for item in rows if (item.get("owner") or {}).get("type") == kind)
+                for kind in sorted({str((item.get("owner") or {}).get("type") or "") for item in rows})
+                if kind
+            },
+        },
+        "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
+    }
 
 
 def describe_sdk_surface(*, level: str = "std") -> dict[str, Any]:
@@ -616,4 +810,3 @@ def list_training_targets(*, webspace_id: str | None = None, include_system_acti
         },
         "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
     }
-

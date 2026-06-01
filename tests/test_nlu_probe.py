@@ -175,6 +175,61 @@ async def test_nlu_teacher_lookup_api_returns_lookup_tables(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_nlu_teacher_read_model_api_delegates(monkeypatch):
+    from adaos.apps.api import nlu_teacher_api as api
+
+    calls = []
+
+    def _fake_trace(**kwargs):
+        calls.append(("trace", dict(kwargs)))
+        return {"ok": True, "trace": []}
+
+    def _fake_dialog(**kwargs):
+        calls.append(("dialog", dict(kwargs)))
+        return {"ok": True, "threads_by_request": []}
+
+    def _fake_failures(**kwargs):
+        calls.append(("failures", dict(kwargs)))
+        return {"ok": True, "failures": []}
+
+    def _fake_templates(**kwargs):
+        calls.append(("templates", dict(kwargs)))
+        return {"ok": True, "templates": [{"id": "tpl.test"}]}
+
+    def _fake_targets(**kwargs):
+        calls.append(("targets", dict(kwargs)))
+        return {"ok": True, "targets": [{"id": "weather_skill"}]}
+
+    monkeypatch.setattr(api, "get_nlu_trace", _fake_trace)
+    monkeypatch.setattr(api, "get_nlu_dialog_context", _fake_dialog)
+    monkeypatch.setattr(api, "get_nlu_recent_failures", _fake_failures)
+    monkeypatch.setattr(api, "list_nlu_templates", _fake_templates)
+    monkeypatch.setattr(api, "list_training_targets", _fake_targets)
+
+    trace = await api.get_trace("ws-api", request_id="req-1", limit=5)
+    dialog = await api.get_dialog_context("ws-api", candidate_id="cand-1", limit=6)
+    failures = await api.get_recent_failures("ws-api", limit=7)
+    templates = await api.get_templates("ws-api", owner_type="skill", owner_id="weather_skill", include_system_actions=False)
+    targets = await api.get_training_targets("ws-api", include_system_actions=False)
+
+    assert trace["ok"] is True
+    assert dialog["ok"] is True
+    assert failures["ok"] is True
+    assert templates["templates"][0]["id"] == "tpl.test"
+    assert targets["targets"][0]["id"] == "weather_skill"
+    assert calls == [
+        ("trace", {"webspace_id": "ws-api", "request_id": "req-1", "candidate_id": None, "limit": 5}),
+        ("dialog", {"webspace_id": "ws-api", "request_id": None, "candidate_id": "cand-1", "limit": 6}),
+        ("failures", {"webspace_id": "ws-api", "limit": 7}),
+        (
+            "templates",
+            {"webspace_id": "ws-api", "owner_type": "skill", "owner_id": "weather_skill", "include_system_actions": False},
+        ),
+        ("targets", {"webspace_id": "ws-api", "include_system_actions": False}),
+    ]
+
+
+@pytest.mark.anyio
 async def test_nlu_teacher_save_example_api_emits_event(monkeypatch):
     from adaos.apps.api import nlu_teacher_api as api
 
