@@ -49,6 +49,7 @@ def _thread_log_text(
     *,
     request_id: str,
     request_text: str,
+    items: list[dict[str, Any]],
     events: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
     revisions: list[dict[str, Any]],
@@ -59,6 +60,18 @@ def _thread_log_text(
     if request_text:
         lines.append(f"text: {request_text}")
     lines.append("")
+
+    if items:
+        lines.append("teacher_items:")
+        for item in sorted(items, key=lambda x: float(x.get("ts") or 0.0)):
+            status = item.get("status") if isinstance(item.get("status"), str) else ""
+            reason = item.get("reason") if isinstance(item.get("reason"), str) else ""
+            via = item.get("via") if isinstance(item.get("via"), str) else ""
+            lines.append(f"- id={item.get('id')} status={status} reason={reason} via={via}".rstrip())
+            classification = coerce_dict(item.get("classification"))
+            if classification:
+                lines.append(f"  classification: {_json_text(classification).strip()}")
+        lines.append("")
 
     if candidates:
         lines.append("candidates:")
@@ -143,11 +156,16 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
     - threads_by_candidate: 1 item per (candidate_id) with header=LLM candidate name
     """
     events = _as_list_of_dicts(teacher.get("events"))
+    items = _as_list_of_dicts(teacher.get("items"))
     candidates = _as_list_of_dicts(teacher.get("candidates"))
     revisions = _as_list_of_dicts(teacher.get("revisions"))
     llm_logs = _as_list_of_dicts(teacher.get("llm_logs"))
 
     request_ids: set[str] = set()
+    for item in items:
+        rid = item.get("request_id")
+        if isinstance(rid, str) and rid:
+            request_ids.add(rid)
     for e in events:
         rid = e.get("request_id")
         if isinstance(rid, str) and rid:
@@ -166,6 +184,9 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
             request_ids.add(rid)
 
     def _request_text_for(rid: str) -> str:
+        for item in items:
+            if item.get("request_id") == rid and isinstance(item.get("text"), str) and item.get("text"):
+                return item.get("text") or ""
         for e in events:
             if e.get("request_id") == rid and isinstance(e.get("request_text"), str) and e.get("request_text"):
                 return e.get("request_text") or ""
@@ -182,6 +203,7 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
 
     for rid in sorted(request_ids):
         req_text = _request_text_for(rid)
+        req_items = [item for item in items if item.get("request_id") == rid]
         ev = [e for e in events if e.get("request_id") == rid]
         cand = [c for c in candidates if c.get("request_id") == rid]
         rev = [r for r in revisions if r.get("request_id") == rid]
@@ -197,6 +219,7 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
         details = _thread_log_text(
             request_id=rid,
             request_text=req_text,
+            items=req_items,
             events=ev,
             candidates=cand,
             revisions=rev,
