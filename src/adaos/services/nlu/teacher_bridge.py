@@ -18,6 +18,27 @@ _log = logging.getLogger("adaos.nlu.teacher")
 
 _MAX_ITEMS = int(os.getenv("ADAOS_NLU_TEACHER_MAX", "200") or "200")
 _ENABLED = os.getenv("ADAOS_NLU_TEACHER") == "1"
+_PROVIDER_ISSUE_REASONS = {
+    "no_active_nlu_stages",
+    "rasa_runtime_disabled",
+    "rasa_disabled",
+    "rasa_start_failed",
+    "rasa_base_url_unresolved",
+    "rasa_timeout",
+    "rasa_failed",
+    "rasa_invalid_result",
+    "neural_runtime_disabled",
+    "neural_disabled",
+    "neural_service_unavailable",
+    "neural_timeout",
+    "neural_failed",
+    "neuro_lite_runtime_disabled",
+    "neuro_lite_disabled",
+    "neuro_lite_timeout",
+    "neuro_lite_failed",
+    "runtime_disabled",
+    "not_installed_or_policy_disabled",
+}
 
 
 def _nlu_teacher_bridge_write_meta():
@@ -50,6 +71,43 @@ def _list_of_dicts(value: Any) -> list[dict]:
     if isinstance(value, (str, bytes, bytearray)) or isinstance(value, Mapping) or not isinstance(value, Iterable):
         return []
     return [dict(x) for x in iter_mappings(value)]
+
+
+def _classify_not_obtained_for_teacher(*, reason: str, via: str | None) -> dict[str, Any]:
+    token = str(reason or "").strip()
+    via_token = str(via or "").strip()
+    if token in _PROVIDER_ISSUE_REASONS:
+        return {
+            "teachable": False,
+            "class": "provider_state",
+            "reason": token,
+            "via": via_token or None,
+            "skip_reason": "provider_or_stage_unavailable",
+        }
+    if token.startswith("low_confidence<"):
+        return {"teachable": True, "class": "nlu_gap", "reason": token, "via": via_token or None}
+    if token in {
+        "no_match",
+        "rasa_low_confidence",
+        "rasa_no_intent",
+        "rasa_not_ok",
+        "neural_low_confidence",
+        "neural_rejected",
+        "neuro_lite_low_confidence",
+        "fallback",
+        "not_obtained",
+        "unknown",
+    }:
+        return {"teachable": True, "class": "nlu_gap", "reason": token, "via": via_token or None}
+    if any(marker in token for marker in ("disabled", "timeout", "failed", "unresolved", "unavailable")):
+        return {
+            "teachable": False,
+            "class": "provider_state",
+            "reason": token,
+            "via": via_token or None,
+            "skip_reason": "provider_or_stage_unavailable",
+        }
+    return {"teachable": True, "class": "nlu_gap", "reason": token or "unknown", "via": via_token or None}
 
 
 async def _append_teacher_item(webspace_id: str, item: dict) -> None:
@@ -93,6 +151,7 @@ async def _on_not_obtained(evt: Any) -> None:
     reason = payload.get("reason") if isinstance(payload.get("reason"), str) else "unknown"
     via = payload.get("via") if isinstance(payload.get("via"), str) else None
     meta = coerce_dict(payload.get("_meta"))
+    classification = _classify_not_obtained_for_teacher(reason=reason, via=via)
 
     item = {
         "id": f"teach.{int(time.time()*1000)}",
@@ -101,6 +160,8 @@ async def _on_not_obtained(evt: Any) -> None:
         "reason": reason,
         "via": via,
         "request_id": request_id,
+        "classification": dict(classification),
+        "status": "pending" if classification.get("teachable") else "skipped",
         "_meta": dict(meta),
     }
 
@@ -116,8 +177,8 @@ async def _on_not_obtained(evt: Any) -> None:
                 webspace_id=webspace_id,
                 request_id=request_id,
                 request_text=text,
-                kind="not_obtained",
-                title="Intent not obtained",
+                kind="not_obtained" if classification.get("teachable") else "not_obtained.skipped",
+                title="Intent not obtained" if classification.get("teachable") else "Teacher skipped",
                 subtitle=f"{reason} via={via}" if via else reason,
                 raw=item,
                 meta=meta,
@@ -125,6 +186,15 @@ async def _on_not_obtained(evt: Any) -> None:
         )
     except Exception:
         _log.debug("failed to append nlu_teacher event webspace=%s", webspace_id, exc_info=True)
+
+    if not classification.get("teachable"):
+        bus_emit(
+            ctx.bus,
+            "nlp.teacher.skipped",
+            {"webspace_id": webspace_id, "request": item, "classification": dict(classification)},
+            source="nlu.teacher",
+        )
+        return
 
     # Emit a single, generic event to be consumed by an external teacher (LLM).
     bus_emit(

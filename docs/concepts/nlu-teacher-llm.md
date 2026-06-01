@@ -12,6 +12,9 @@ This document describes the minimal teacher-in-the-loop implementation for AdaOS
 4. If intent is not obtained -> `nlp.intent.not_obtained { reason, via, ... }`.
 5. Teacher bridge reacts to `nlp.intent.not_obtained` and emits:
    - `nlp.teacher.request { webspace_id, request }`
+   - if the reason is provider/stage unavailable (`rasa_timeout`,
+     `rasa_disabled`, `no_active_nlu_stages`, etc.), it records
+     `nlp.teacher.skipped` instead and does not call Root/OpenAI
 6. Teacher runtimes store state for UI inspection (YJS, per webspace):
    - `data.nlu_teacher.events[]` (includes `llm.request` / `llm.response`)
    - `data.nlu_teacher.candidates[]` (regex rules / skill candidates / scenario candidates)
@@ -55,6 +58,11 @@ LLM teacher receives a compact context snapshot (per webspace), including:
 - skill manifests (`skills_manifest`: tools/events/llm_policy summary for installed skills)
 
 Goal: prefer improving existing intents (regex rule / dataset revision) over creating a new capability, when possible.
+
+Teacher bridge classifies `nlp.intent.not_obtained.reason` before the LLM
+runtime receives a request. Low-confidence/no-intent outcomes are teachable NLU
+gaps; provider disabled/down/timeout/unresolved states are stored for
+diagnostics but skipped so the LLM does not create templates for outages.
 
 ## Target UI
 

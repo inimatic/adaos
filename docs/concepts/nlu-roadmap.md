@@ -231,7 +231,7 @@ for the current NLU Teacher implementation gate.
 - [ ] Dispatch verified candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
   allowed for auto-dispatch.
 - [x] Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
-- [ ] Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
+- [x] Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
 - [x] Add smoke tests for candidate apply -> regex persist -> probe match -> `understanding.acquired`.
 - [x] Add smoke tests for miss -> LLM candidate proposal, false candidate
   quarantine, duplicate candidate suppression, and correction-thread
@@ -438,13 +438,11 @@ for the current NLU Teacher implementation gate.
 
 1. Add safe dispatch preview/dispatch gates for verified candidates that are
    allowed to run through the normal AdaOS intent/action path.
-2. Distinguish true NLU gaps from service/provider outage before asking Root/OpenAI
-   to create templates.
-3. Expand read-only MCP wrappers for trace, dialog context, recent failures,
+2. Expand read-only MCP wrappers for trace, dialog context, recent failures,
    lookups, skill/scenario NLU descriptors, and SDK descriptors.
-4. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
+3. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
-5. Add full model promotion gates using macro-F1, abstain rate, latency,
+4. Add full model promotion gates using macro-F1, abstain rate, latency,
    false-positive checks, and rollback evidence.
 
 ## Last Completed Slice
@@ -470,6 +468,9 @@ for the current NLU Teacher implementation gate.
   candidates, suppresses duplicate active regex candidates, and passes
   correction-thread context into the next LLM prompt when the user says
   "no/not that/нет/не то/...".
+- Teacher bridge now classifies `nlp.intent.not_obtained` reasons and skips
+  Root/OpenAI for provider/stage unavailable cases such as `rasa_timeout`,
+  while still treating low-confidence/no-intent outcomes as teachable NLU gaps.
 - A closed-loop test now covers: regex miss -> LLM regex candidate -> Apply ->
   `understanding.acquired` -> repeated phrase resolves through `regex.dynamic`.
 - Added repeatable test examples for `skill_action` and `interface_action`
