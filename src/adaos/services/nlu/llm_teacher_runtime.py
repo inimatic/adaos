@@ -511,6 +511,88 @@ def _redact_messages(messages: list[dict[str, str]]) -> list[dict[str, Any]]:
     return out
 
 
+def _invoke_root_mcp_authoring_tool(
+    tool_id: str,
+    *,
+    arguments: dict[str, Any],
+    request_id: str | None,
+    trace_id: str | None,
+    dry_run: bool = True,
+) -> dict[str, Any] | None:
+    try:
+        from adaos.services.root_mcp.service import invoke_tool
+
+        response = invoke_tool(
+            tool_id,
+            arguments=arguments,
+            request_id=request_id,
+            trace_id=trace_id,
+            actor="nlu.teacher.llm",
+            auth_method="internal",
+            dry_run=dry_run,
+            auth_context={
+                "capabilities": ["development.read.descriptors"],
+                "grant_source": "internal_nlu_teacher",
+            },
+        )
+    except Exception:
+        _log.debug("failed to invoke Root MCP authoring tool %s", tool_id, exc_info=True)
+        return None
+    if not bool(getattr(response, "ok", False)):
+        return {
+            "ok": False,
+            "tool_id": getattr(response, "tool_id", tool_id),
+            "status": getattr(response, "status", "error"),
+            "error": getattr(getattr(response, "error", None), "code", None),
+        }
+    result = getattr(response, "result", None)
+    return dict(result) if isinstance(result, Mapping) else {"ok": True, "result": result}
+
+
+def _collect_root_mcp_authoring_evidence(
+    *,
+    webspace_id: str,
+    text: str,
+    request_id: str,
+    request_locale: str | None = None,
+    preferred_locales: list[str] | None = None,
+) -> dict[str, Any]:
+    evidence: dict[str, Any] = {}
+    base_args: dict[str, Any] = {"webspace_id": webspace_id}
+    if request_locale:
+        base_args["request_locale"] = request_locale
+    if preferred_locales:
+        base_args["preferred_locales"] = list(preferred_locales)
+
+    context_result = _invoke_root_mcp_authoring_tool(
+        "nlu_authoring.get_context",
+        arguments=dict(base_args),
+        request_id=request_id,
+        trace_id=f"{request_id}.mcp.context",
+        dry_run=True,
+    )
+    if isinstance(context_result, Mapping):
+        context_payload = context_result.get("context")
+        evidence["nlu_authoring_context"] = dict(context_payload) if isinstance(context_payload, Mapping) else dict(context_result)
+
+    check_args = {
+        **base_args,
+        "text": text,
+        "use_rasa": True,
+        "emit_trace": False,
+    }
+    check_result = _invoke_root_mcp_authoring_tool(
+        "nlu_authoring.check_phrase",
+        arguments=check_args,
+        request_id=request_id,
+        trace_id=f"{request_id}.mcp.check",
+        dry_run=True,
+    )
+    if isinstance(check_result, Mapping):
+        evidence["nlu_authoring_phrase_check"] = dict(check_result)
+    return evidence
+
+
 def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[str, Any]) -> list[dict[str, str]]:
     system = (
         "You are AdaOS NLU teacher. Decide what to do with a user utterance.\n"
@@ -531,6 +613,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- If the utterance is not actionable for AdaOS, decision=ignore.\n"
         "- Prefer existing intents from context (scenario_nlu.intents keys) over inventing new ones.\n"
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
+        "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
         "- host_actions entries include stable system action ids, host event names, slots, examples, and linked intents.\n"
         "- If it matches a known app/widget/scenario, prefer revise_nlu with an existing intent name.\n"
         "- If an existing intent is the right match but regex stage likely misses it, prefer propose_regex_rule.\n"
@@ -774,6 +857,20 @@ async def _on_teacher_request(evt: Any) -> None:
             context["builtin_regex"] = describe_builtin_regex_rules()
         except Exception:
             context["builtin_regex"] = []
+        request_locale = req.get("request_locale") if isinstance(req.get("request_locale"), str) else None
+        if request_locale is None:
+            request_locale = req_meta.get("request_locale") if isinstance(req_meta.get("request_locale"), str) else None
+        preferred_locales_raw = req.get("preferred_locales") or req_meta.get("preferred_locales")
+        preferred_locales = [str(x).strip() for x in iter_scalars(preferred_locales_raw) if str(x).strip()]
+        mcp_evidence = _collect_root_mcp_authoring_evidence(
+            webspace_id=webspace_id,
+            text=text,
+            request_id=request_id,
+            request_locale=request_locale,
+            preferred_locales=preferred_locales,
+        )
+        if mcp_evidence:
+            context["root_mcp"] = mcp_evidence
 
         messages = _build_prompt(request=dict(req), webspace_id=webspace_id, context=context)
 
