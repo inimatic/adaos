@@ -70,9 +70,9 @@ for the current NLU Teacher implementation gate.
 - [ ] Define MCP capability profiles:
   read-only context, probe/preview, authoring proposal, durable apply,
   dispatch preview, and operator-approved dispatch.
-- [ ] Define LLM prompt data policy: redact secrets/tokens, bound dialog
-  history, avoid embedding bearer tokens, and record which trace/context was
-  sent to the LLM.
+- [x] Define and implement the first LLM prompt data policy: redact stored
+  prompt logs, avoid embedding bearer tokens, bound context snapshots, and
+  record request/context/prompt hashes for audit.
 - [ ] Add RU/EN Unicode fixtures for Teacher probes, correction threads, and
   template patch previews.
 
@@ -210,7 +210,8 @@ for the current NLU Teacher implementation gate.
   - `POST /api/nlu/teacher/{webspace_id}/example/save`
 - [x] Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
 - [x] Record planned intent, owner hint, proposed regex template, and verification status.
-- [ ] Record dispatch status and correction-thread link.
+- [x] Record correction-thread link for follow-up correction phrases.
+- [ ] Record dispatch status.
 - [x] LLM Teacher prompt includes governed Root MCP evidence from
   `nlu_authoring.get_context` and `nlu_authoring.check_phrase`.
 - [x] LLM Teacher parses plain JSON and fenced JSON responses, previews regex
@@ -229,11 +230,12 @@ for the current NLU Teacher implementation gate.
   matches the LLM-planned intent.
 - [ ] Dispatch verified candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
   allowed for auto-dispatch.
-- [ ] Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
+- [x] Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
 - [ ] Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
 - [x] Add smoke tests for candidate apply -> regex persist -> probe match -> `understanding.acquired`.
-- [x] Add smoke tests for miss -> LLM candidate proposal and false candidate quarantine.
-- [ ] Add smoke tests for duplicate candidate suppression and correction-thread continuation.
+- [x] Add smoke tests for miss -> LLM candidate proposal, false candidate
+  quarantine, duplicate candidate suppression, and correction-thread
+  continuation.
 
 ### 5b: Minimal Read-Only MCP Plane
 
@@ -434,17 +436,15 @@ for the current NLU Teacher implementation gate.
 
 ## Immediate Next Steps
 
-1. Persist prompt/context hashes for live Root/OpenAI Teacher runs so later
-   audits can reproduce exactly which context produced a candidate.
-2. Add correction-thread state for user feedback such as "no, that is not it"
-   and feed that state into the next Teacher analysis cycle.
-3. Add safe dispatch preview/dispatch gates for verified candidates that are
+1. Add safe dispatch preview/dispatch gates for verified candidates that are
    allowed to run through the normal AdaOS intent/action path.
-4. Expand read-only MCP wrappers for trace, dialog context, recent failures,
+2. Distinguish true NLU gaps from service/provider outage before asking Root/OpenAI
+   to create templates.
+3. Expand read-only MCP wrappers for trace, dialog context, recent failures,
    lookups, skill/scenario NLU descriptors, and SDK descriptors.
-5. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
+4. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
-6. Add full model promotion gates using macro-F1, abstain rate, latency,
+5. Add full model promotion gates using macro-F1, abstain rate, latency,
    false-positive checks, and rollback evidence.
 
 ## Last Completed Slice
@@ -466,6 +466,10 @@ for the current NLU Teacher implementation gate.
 - LLM Teacher now accepts both plain JSON and fenced JSON model responses,
   previews proposed regex rules against the original phrase, and marks bad
   proposals as `quarantined` so Apply rejects them.
+- LLM Teacher now stores request/context/prompt hashes on LLM logs and
+  candidates, suppresses duplicate active regex candidates, and passes
+  correction-thread context into the next LLM prompt when the user says
+  "no/not that/нет/не то/...".
 - A closed-loop test now covers: regex miss -> LLM regex candidate -> Apply ->
   `understanding.acquired` -> repeated phrase resolves through `regex.dynamic`.
 - Added repeatable test examples for `skill_action` and `interface_action`

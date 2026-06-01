@@ -20,6 +20,17 @@ This document describes the minimal teacher-in-the-loop implementation for AdaOS
 7. Teacher state is also persisted on disk so it survives YJS reload/reset:
    - `.adaos/state/skills/nlu_teacher/<webspace_id>.json`
 
+Each LLM turn records audit fingerprints, not raw secrets:
+
+- `request_hash`
+- `context_hash`
+- `prompt_hash`
+
+These hashes are stored on `data.nlu_teacher.llm_logs[]` and on generated
+candidates through `candidate.llm.audit`. They let an operator correlate a
+candidate with the bounded prompt/context snapshot without embedding bearer
+tokens or unbounded dialog history.
+
 ## Enable
 
 Set env vars on hub:
@@ -135,6 +146,12 @@ proposals stay `pending` and carry `preview.status="regex_matched"` plus
 captured slots. Invalid or non-matching proposals are stored as
 `quarantined`; Apply rejects them and emits
 `nlp.teacher.candidate.apply.rejected`.
+
+LLM Teacher also suppresses duplicate active regex candidates with the same
+planned intent, pattern, and storage target. The duplicate is not appended to
+`data.nlu_teacher.candidates[]`; AdaOS emits
+`nlp.teacher.candidate.duplicate_suppressed` and records a
+`candidate.duplicate_suppressed` Teacher event instead.
 
 If the probe result matches the planned candidate intent, AdaOS:
 
@@ -530,6 +547,7 @@ functional slice.
 - Record planned intent, owner hint, proposed template, verification status, dispatch status, and correction-thread link.
 - Parse both plain JSON and fenced JSON LLM responses; quarantine regex
   proposals that fail compile/source-phrase preview.
+- Store request/context/prompt hashes and suppress duplicate active regex candidates.
 - After previewing or trusted-applying a regex/template candidate, immediately run the probe; mark the candidate verified only if the returned
   intent matches the planned intent.
 - Include Root MCP `nlu_authoring.get_context` and `nlu_authoring.check_phrase`

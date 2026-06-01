@@ -272,6 +272,226 @@ async def test_llm_teacher_quarantines_regex_candidate_that_misses_source_text(m
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_records_prompt_hashes_and_suppresses_duplicate_regex(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-teacher-dedupe"
+    scenario_id = "test_llm_teacher_dedupe"
+    request_text = "show temperature in Berlin"
+    pattern = r"\btemperature\b(?:\s+in\s+(?P<city>[^?.!,;:]+))?"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {"id": scenario_id, "version": "0.0.1", "nlu": {"intents": {"desktop.open_weather": {"actions": []}}}},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_weather",
+                                    "regex_rule": {"intent": "desktop.open_weather", "pattern": pattern},
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {"city": {"type": "string"}},
+                                    "confidence": 0.91,
+                                    "notes": "Duplicate suppression smoke.",
+                                    "candidate": None,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    duplicates: list[dict] = []
+
+    def _capture_duplicate(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            duplicates.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.candidate.duplicate_suppressed", _capture_duplicate)
+
+    for suffix in ("one", "two"):
+        await llm._on_teacher_request(
+            {
+                "webspace_id": webspace_id,
+                "request": {
+                    "id": f"teach.dedupe.{suffix}",
+                    "request_id": f"req.dedupe.{suffix}",
+                    "text": request_text,
+                    "reason": "fallback",
+                    "via": "rasa",
+                },
+            }
+        )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+        logs = list((teacher or {}).get("llm_logs") or [])
+
+    assert len(candidates) == 1
+    assert duplicates
+    assert duplicates[-1]["duplicate_of"] == candidates[0]["id"]
+    audit = candidates[0]["llm"]["audit"]
+    assert audit["prompt_hash"].startswith("sha256:")
+    assert audit["context_hash"].startswith("sha256:")
+    assert audit["request_hash"].startswith("sha256:")
+    assert logs[-1]["audit"]["prompt_hash"].startswith("sha256:")
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_includes_correction_thread_context(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-teacher-correction"
+    scenario_id = "test_llm_teacher_correction"
+    request_text = "no, open the operations console instead"
+    intent_name = "demo.interface_action.open_ops_console"
+    pattern = r"\boperations\s+console\b"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        intent_name: {"actions": [{"type": "callHost", "target": "desktop.modal.open"}]}
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(
+                txn,
+                "nlu_teacher",
+                {
+                    "candidates": [
+                        {
+                            "id": "cand.previous",
+                            "ts": 10.0,
+                            "kind": "regex_rule",
+                            "text": "open weather",
+                            "request_id": "req.previous",
+                            "regex_rule": {"intent": "desktop.open_weather", "pattern": r"\bweather\b"},
+                            "target": {"type": "scenario", "id": scenario_id},
+                            "status": "intent_matched",
+                        }
+                    ],
+                    "llm_logs": [],
+                },
+            )
+
+    captured_messages: list[list[dict[str, str]]] = []
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        captured_messages.append(messages)
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": intent_name,
+                                    "regex_rule": {"intent": intent_name, "pattern": pattern},
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "confidence": 0.87,
+                                    "notes": "Correction of the previous weather candidate.",
+                                    "candidate": None,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.correction",
+                "request_id": "req.correction",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    user_payload = json.loads(captured_messages[-1][1]["content"])
+    correction = user_payload["context"]["correction_thread"]
+    assert correction["active"] is True
+    assert correction["previous_candidate"]["candidate_id"] == "cand.previous"
+    assert correction["previous_candidate"]["regex_rule"]["intent"] == "desktop.open_weather"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    candidate = candidates[-1]
+    assert candidate["correction_of"]["candidate_id"] == "cand.previous"
+    assert candidate["thread_id"] == "thread.req.previous"
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_closed_loop_regex_candidate_can_be_applied_and_replayed(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
