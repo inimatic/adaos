@@ -26,6 +26,20 @@ provider stage. It is intentionally separate from `neural_nlu_service_skill`
 and should not be counted as a replacement for the production Neural NLU
 provider or the Teacher governance loop.
 
+## Status Labels
+
+Markdown checkboxes only distinguish done from not done. This roadmap keeps
+plain unchecked items for active planned work and uses explicit labels for
+work that should not block the next NLU Teacher slice:
+
+- `[deferred]`: intentionally postponed until the contract, working loop, or
+  owning surface is stable.
+- `[polish]`: useful hardening or operator experience work, but not required
+  for the first functional vertical slice.
+
+An unchecked `[deferred]` or `[polish]` item must not be counted as a blocker
+for the current NLU Teacher implementation gate.
+
 ## Phase 0: Teacher Contracts and Guardrails
 
 - [ ] Define the teacher request/thread model:
@@ -86,12 +100,12 @@ provider or the Teacher governance loop.
   - does not dispatch actions
 - [x] Human verification checklist separates current API/CLI checks from target UI behavior.
 - [ ] UI field for "check phrase" wired to the probe endpoint.
-- [ ] UI buttons: "correct", "fix", "save example".
+- [ ] `[deferred]` UI buttons: "correct", "fix", "save example".
 - [x] Operator-approved positive feedback stored with audit metadata.
 - [x] Route accepted feedback to the owning NLU training artifact:
   skill, scenario, or system action feedback overlay.
-- [ ] Route named-entity corrections to the governed named-entity source.
-- [ ] Add explicit correction targets for core/client actions that are not
+- [ ] `[deferred]` Route named-entity corrections to the governed named-entity source.
+- [ ] `[deferred]` Add explicit correction targets for core/client actions that are not
   implemented as skills.
 
 ## Phase 3: Observability
@@ -103,11 +117,11 @@ provider or the Teacher governance loop.
   - `pipeline delegate`
   - `rasa`
   - `dispatcher action/reject`
-- [ ] Trace UI should show `voice text -> regex/neural/rasa -> intent -> action`.
+- [ ] `[polish]` Trace UI should show `voice text -> regex/neural/rasa -> intent -> action`.
 - [x] Add machine-readable Neural NLU readiness check for artifacts, service
   discovery, live health, model load, and index backend.
-- [ ] Add latency per stage and service timing.
-- [ ] Add golden phrase regression reports.
+- [ ] `[polish]` Add latency per stage and service timing.
+- [ ] `[deferred]` Add golden phrase regression reports.
 - [x] Add neural usage statistics: request count, latency, confidence
   histogram, accept/abstain/reject counts, fallback ratio, and per-intent
   status evidence.
@@ -122,10 +136,10 @@ provider or the Teacher governance loop.
 - [x] Current implemented behavior has a manual checklist: [nlu-human-verification.md](./nlu-human-verification.md).
 - [x] Documentation marks which NLU Teacher behaviors are current UI, backend/API only, or target architecture.
 - [ ] NLU Teacher UI can run a phrase probe without terminal access.
-- [ ] NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
-- [ ] NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata for the currently safe existing-API flows.
-- [ ] Template correction flow uses stable ids and stale-write fingerprints.
-- [ ] Operator-facing evidence distinguishes NLU gap, service/provider outage, low confidence, unsupported action, and missing capability.
+- [ ] `[polish]` NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
+- [ ] `[deferred]` NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata for the currently safe existing-API flows.
+- [ ] `[deferred]` Template correction flow uses stable ids and stale-write fingerprints.
+- [ ] `[polish]` Operator-facing evidence distinguishes NLU gap, service/provider outage, low confidence, unsupported action, and missing capability.
 
 ## Phase 4a: Dynamic Lookups and Template Inventory
 
@@ -165,7 +179,7 @@ provider or the Teacher governance loop.
   [Named Entities and Canonical Naming](../architecture/named-entities.md).
 - [x] Feed canonicalized text and entity evidence into the neural provider
   contract.
-- [ ] Ensure Rasa and neural training fingerprints exclude runtime aliases by
+- [ ] `[polish]` Ensure Rasa and neural training fingerprints exclude runtime aliases by
   default.
 
 ## Phase 5: Teacher Authoring and MCP
@@ -221,7 +235,7 @@ provider or the Teacher governance loop.
   - `nlu_correction`
   - `development_task`
   - `non_actionable`
-- [ ] Publish runtime-backed interface action descriptors:
+- [ ] `[deferred]` Publish runtime-backed interface action descriptors:
   - modal open/close
   - scenario switch
   - go to home scenario
@@ -229,44 +243,44 @@ provider or the Teacher governance loop.
   - reload/reset webspace
   - app install/toggle
   - route output to a node/browser when supported
-- [ ] Add `desktop.get_state` for current scenario, home scenario, open modals, installed apps, focused route/node/browser.
-- [ ] Add `desktop.preview_action` to show the host event/action without dispatch.
-- [ ] Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, entity alias, or development task ownership.
-- [ ] Define action side-effect classes:
+- [ ] `[deferred]` Add `desktop.get_state` for current scenario, home scenario, open modals, installed apps, focused route/node/browser.
+- [ ] `[deferred]` Add `desktop.preview_action` to show the host event/action without dispatch.
+- [ ] `[deferred]` Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, entity alias, or development task ownership.
+- [ ] `[deferred]` Define action side-effect classes:
   read-only, UI navigation, reversible UI mutation, durable configuration
   mutation, external side effect, and unsupported.
-- [ ] Define owner conflict policy when a scenario route, skill NLU metadata, and system action catalog all match the same phrase.
+- [ ] `[deferred]` Define owner conflict policy when a scenario route, skill NLU metadata, and system action catalog all match the same phrase.
 
 ### 5d: Template Inventory and Safe Apply
 
-- [ ] Root MCP surfaces:
+- [ ] `[deferred]` Root MCP surfaces:
   - `nlu.list_templates`
   - `nlu.get_template`
   - `nlu.list_training_targets`
   - `nlu.preview_template_patch`
   - `nlu.apply_template_patch`
-- [ ] LLM receives current template inventory before proposing changes.
-- [ ] Template patches use stable `template_id` values and `base_fingerprint` stale-write protection.
-- [ ] Template patches are previewed and operator-approved before durable apply, except for explicit per-owner trusted-autoapply policies.
-- [ ] Durable apply writes only through owner services/APIs: skill, scenario, system-action feedback, or named-entity alias source.
-- [ ] Add rollback pointers and audit records for every applied patch.
-- [ ] Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
-- [ ] Decide migration policy for legacy `data.nlu.regex_rules[]` mirrors versus owner-authored scenario/skill artifacts.
+- [ ] `[deferred]` LLM receives current template inventory before proposing changes.
+- [ ] `[deferred]` Template patches use stable `template_id` values and `base_fingerprint` stale-write protection.
+- [ ] `[deferred]` Template patches are previewed and operator-approved before durable apply, except for explicit per-owner trusted-autoapply policies.
+- [ ] `[deferred]` Durable apply writes only through owner services/APIs: skill, scenario, system-action feedback, or named-entity alias source.
+- [ ] `[deferred]` Add rollback pointers and audit records for every applied patch.
+- [ ] `[deferred]` Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
+- [ ] `[deferred]` Decide migration policy for legacy `data.nlu.regex_rules[]` mirrors versus owner-authored scenario/skill artifacts.
 
 ### 5e: Development Task Candidates
 
-- [ ] Represent missing capabilities as development tasks, not fake intents.
-- [ ] Task candidate shape includes requested behavior, likely owner, missing action/tool surface, suggested skill/scenario change, and evidence.
-- [ ] Route task candidates to the LLM programmer workflow for existing skill/scenario modification or new skill/scenario creation.
-- [ ] After the skill/scenario is changed, re-run the original phrase and link the result back to the task candidate.
+- [ ] `[deferred]` Represent missing capabilities as development tasks, not fake intents.
+- [ ] `[deferred]` Task candidate shape includes requested behavior, likely owner, missing action/tool surface, suggested skill/scenario change, and evidence.
+- [ ] `[deferred]` Route task candidates to the LLM programmer workflow for existing skill/scenario modification or new skill/scenario creation.
+- [ ] `[deferred]` After the skill/scenario is changed, re-run the original phrase and link the result back to the task candidate.
 
 ### 5f: Teacher Acceptance Gates
 
-- [ ] Every phase has at least one test or smoke command that can be run without the UI.
+- [ ] `[polish]` Every phase has at least one test or smoke command that can be run without the UI.
 - [ ] Every accepted candidate stores trace, prompt/context hash, verification result, owner, and operator/trust policy evidence.
-- [ ] False positives can be rejected, quarantined, or rolled back without deleting unrelated user-authored training data.
-- [ ] RU and EN phrases pass through the same correction-thread and template-preview paths without mojibake or lossy normalization.
-- [ ] The UI can explain whether the result came from regex, Rasa, neural, lookup canonicalization, Teacher candidate, or provider fallback.
+- [ ] `[deferred]` False positives can be rejected, quarantined, or rolled back without deleting unrelated user-authored training data.
+- [ ] `[polish]` RU and EN phrases pass through the same correction-thread and template-preview paths without mojibake or lossy normalization.
+- [ ] `[polish]` The UI can explain whether the result came from regex, Rasa, neural, lookup canonicalization, Teacher candidate, or provider fallback.
 
 ## Phase 6: Neural NLU Provider
 
@@ -294,9 +308,9 @@ provider or the Teacher governance loop.
 - [x] Implement the first hash n-gram prototype baseline with accept/abstain
   behavior.
 - [x] Fall through to Neural/Rasa when Neuro Lite abstains or is disabled.
-- [ ] Add real hard-negative evaluation before considering attention or a tiny
+- [ ] `[deferred]` Add real hard-negative evaluation before considering attention or a tiny
   encoder.
-- [ ] Decide whether Neuro Lite should remain a separate provider, become a
+- [ ] `[deferred]` Decide whether Neuro Lite should remain a separate provider, become a
   low-resource Neural profile, or be retired after evaluation.
 
 ### Inference Contract
@@ -340,8 +354,8 @@ provider or the Teacher governance loop.
   notebook artifacts.
 - [x] Add rollback pointer for the node-level active model.
 - [x] Add golden phrase regression report before model promotion.
-- [ ] Add full quality gates using macro-F1, abstain rate, and latency.
-- [ ] Defer per-locale/webspace/profile models until usage statistics justify
+- [ ] `[polish]` Add full quality gates using macro-F1, abstain rate, and latency.
+- [ ] `[deferred]` Per-locale/webspace/profile models until usage statistics justify
   the added operational complexity.
 
 ### Usage Statistics
@@ -367,7 +381,7 @@ provider or the Teacher governance loop.
 - [x] Export skill-owned examples from skills.
 - [x] Export scenario-owned examples from scenarios.
 - [x] Export core/client command examples from the system action catalog.
-- [ ] Export named-entity classes as masks, not as local alias training data.
+- [ ] `[polish]` Export named-entity classes as masks, not as local alias training data.
 - [x] Let Teacher-approved corrections update regex, Neural, and Rasa datasets
   through the owning artifact.
 - [x] Add governed Neural reindex planning/apply flow for curated examples

@@ -425,6 +425,9 @@ After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 
 The canonical execution checklist lives in [nlu-roadmap.md](./nlu-roadmap.md).
 This section keeps the compact Teacher-specific sequence.
+Status labels mirror the canonical checklist: `[deferred]` means intentionally
+postponed, and `[polish]` means hardening/operator experience after the first
+functional slice.
 
 ### Phase 0 - Teacher contracts and baseline guardrails
 
@@ -472,53 +475,53 @@ This section keeps the compact Teacher-specific sequence.
 
 ### Phase 3 - Action and ownership surfaces
 
-- Publish `desktop.describe_actions` for runtime-backed interface actions:
+- `[deferred]` Publish `desktop.describe_actions` for runtime-backed interface actions:
   modal open/close, scenario switch, home scenario navigation, reload/reset, and app install toggle.
-- Publish `desktop.get_state` so the teacher can distinguish "open X" from "close the currently open modal" and can resolve current/home
+- `[deferred]` Publish `desktop.get_state` so the teacher can distinguish "open X" from "close the currently open modal" and can resolve current/home
   scenario context.
-- Publish `desktop.preview_action` so a candidate can show the event/action that would be dispatched without mutating the UI.
-- Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, or development task ownership.
-- Classify teacher decisions into `skill_action`, `interface_action`, `scenario_flow`, `entity_correction`, `nlu_correction`,
+- `[deferred]` Publish `desktop.preview_action` so a candidate can show the event/action that would be dispatched without mutating the UI.
+- `[deferred]` Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, or development task ownership.
+- `[deferred]` Classify teacher decisions into `skill_action`, `interface_action`, `scenario_flow`, `entity_correction`, `nlu_correction`,
   `development_task`, or `non_actionable`.
-- Define action side-effect classes and owner conflict policy before allowing generic action candidates.
+- `[deferred]` Define action side-effect classes and owner conflict policy before allowing generic action candidates.
 
 ### Phase 4 - Template inventory and safe patching
 
-- Publish current NLU template inventory with `template_id`, owner, status, fingerprint, and provenance.
-- Add:
+- `[deferred]` Publish current NLU template inventory with `template_id`, owner, status, fingerprint, and provenance.
+- `[deferred]` Add:
   - `nlu.list_templates`
   - `nlu.get_template`
   - `nlu.list_training_targets`
   - `nlu.preview_template_patch`
   - `nlu.apply_template_patch`
-- Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
-- Apply only through owning scenario/skill/system-action/named-entity services, never by LLM raw file writes.
-- Add rollback pointers and audit events for every applied patch.
-- Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
+- `[deferred]` Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
+- `[deferred]` Apply only through owning scenario/skill/system-action/named-entity services, never by LLM raw file writes.
+- `[deferred]` Add rollback pointers and audit events for every applied patch.
+- `[deferred]` Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
 
 ### Phase 5 - Useful Teacher UI
 
 - Add Check phrase field.
-- Show intent ranking/entities/action preview.
-- Show existing templates relevant to the phrase/intent and allow selecting one for correction.
-- Add Correct/Fix actions.
-- Save curated examples into scenario/skill training content.
-- Show previous failure/correction thread when the current phrase looks like a correction.
-- Show candidate verification state: proposed, previewed, intent-matched, dispatched, accepted, corrected, applied.
+- `[polish]` Show intent ranking/entities/action preview.
+- `[deferred]` Show existing templates relevant to the phrase/intent and allow selecting one for correction.
+- `[deferred]` Add Correct/Fix actions.
+- `[deferred]` Save curated examples into scenario/skill training content.
+- `[polish]` Show previous failure/correction thread when the current phrase looks like a correction.
+- `[polish]` Show candidate verification state: proposed, previewed, intent-matched, dispatched, accepted, corrected, applied.
 
 ### Phase 6 - Multi-engine template application
 
-- Accept Teacher template bundles for regex, Rasa, neural, and lookup metadata.
-- Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
-- Apply only the supported subset safely.
-- Keep regex deterministic and data-owned.
-- Feed Rasa from actual desktop registry lookups.
-- Store neural examples as curated training metadata until provider rebuild/reindex gates approve promotion.
+- `[deferred]` Accept Teacher template bundles for regex, Rasa, neural, and lookup metadata.
+- `[deferred]` Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
+- `[deferred]` Apply only the supported subset safely.
+- `[deferred]` Keep regex deterministic and data-owned.
+- `[deferred]` Feed Rasa from actual desktop registry lookups.
+- `[deferred]` Store neural examples as curated training metadata until provider rebuild/reindex gates approve promotion.
 
 ### Phase 7 - Feedback, regression, and promotion
 
-- Collect statistics by phrase, intent, stage, confidence, and operator feedback.
-- Promote high-value examples into training sets.
-- Tune confidence thresholds from observed misses and false accepts.
-- Add rollout/rollback controls for neural and Rasa model updates.
-- Add regex blast-radius checks, duplicate-template detection, golden phrase regression, and false-positive review queues.
+- `[polish]` Collect statistics by phrase, intent, stage, confidence, and operator feedback.
+- `[polish]` Promote high-value examples into training sets.
+- `[polish]` Tune confidence thresholds from observed misses and false accepts.
+- `[deferred]` Add rollout/rollback controls for neural and Rasa model updates.
+- `[deferred]` Add regex blast-radius checks, duplicate-template detection, golden phrase regression, and false-positive review queues.
