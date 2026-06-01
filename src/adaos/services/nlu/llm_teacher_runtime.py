@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -488,6 +489,67 @@ def _extract_first_output_text(res: Any) -> str:
     return ""
 
 
+def _parse_llm_json_object(text: str) -> dict[str, Any] | None:
+    """
+    Parse the first JSON object from an LLM response.
+
+    The prompt asks for plain JSON, but some providers still wrap the object in
+    markdown fences. Keep this tolerant so the Teacher does not silently ignore
+    an otherwise valid candidate.
+    """
+    if not isinstance(text, str):
+        return None
+    raw = text.strip()
+    if not raw:
+        return None
+    candidates = [raw]
+    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", raw, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        candidates.insert(0, fenced.group(1).strip())
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+        for idx, ch in enumerate(candidate):
+            if ch != "{":
+                continue
+            try:
+                parsed, _end = decoder.raw_decode(candidate[idx:])
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _preview_regex_candidate(*, pattern: str, text: str) -> dict[str, Any]:
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE | re.UNICODE)
+    except re.error as exc:
+        return {"ok": False, "status": "invalid_regex", "error": str(exc)}
+    try:
+        match = compiled.search(text)
+    except re.error as exc:
+        return {"ok": False, "status": "runtime_regex_error", "error": str(exc)}
+    if not match:
+        return {"ok": False, "status": "source_text_miss", "slots": {}}
+    slots: dict[str, Any] = {}
+    for key, value in match.groupdict().items():
+        if value is None:
+            continue
+        slots[str(key)] = value.strip() if isinstance(value, str) else value
+    return {
+        "ok": True,
+        "status": "regex_matched",
+        "matched": match.group(0),
+        "slots": slots,
+    }
+
+
 def _truncate(text: Any, limit: int) -> Any:
     if not isinstance(text, str):
         return text
@@ -615,8 +677,9 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
         "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
         "- host_actions entries include stable system action ids, host event names, slots, examples, and linked intents.\n"
-        "- If it matches a known app/widget/scenario, prefer revise_nlu with an existing intent name.\n"
-        "- If an existing intent is the right match but regex stage likely misses it, prefer propose_regex_rule.\n"
+        "- If it matches a known app/widget/scenario through an existing executable intent, prefer teaching that intent with propose_regex_rule.\n"
+        "- If this is a fallback after NLU missed and an existing intent/action is the right match, prefer propose_regex_rule so AdaOS can replay the phrase through regex.dynamic.\n"
+        "- Use revise_nlu only when a compact safe regex is not enough or the best next step is curated dataset examples for neural/Rasa.\n"
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
         "- Avoid proposing duplicate regex rules if builtin_regex or regex_rules already cover the utterance.\n"
         "- If user asks about weather/temperature but doesn't say the exact keyword, propose a regex rule for intent desktop.open_weather.\n"
@@ -956,10 +1019,7 @@ async def _on_teacher_request(evt: Any) -> None:
                 _log.debug("failed to patch llm log webspace=%s", webspace_id, exc_info=True)
             return
 
-        try:
-            suggestion = json.loads(raw_text)
-        except Exception:
-            suggestion = {"decision": "ignore", "notes": raw_text, "confidence": 0.0}
+        suggestion = _parse_llm_json_object(raw_text)
         if not isinstance(suggestion, dict):
             suggestion = {"decision": "ignore", "notes": raw_text, "confidence": 0.0}
 
@@ -1073,6 +1133,7 @@ async def _on_teacher_request(evt: Any) -> None:
                         scenario_id = context.get("current_scenario")
                         if isinstance(scenario_id, str) and scenario_id.strip():
                             target_out = {"type": "scenario", "id": scenario_id.strip()}
+                preview = _preview_regex_candidate(pattern=rr_pattern, text=text)
                 entry = {
                     "id": f"cand.{int(time.time()*1000)}",
                     "ts": time.time(),
@@ -1090,7 +1151,8 @@ async def _on_teacher_request(evt: Any) -> None:
                     **({"target": target_out} if target_out else {}),
                     "llm": llm_meta,
                     "notes": notes,
-                    "status": "pending",
+                    "preview": preview,
+                    "status": "pending" if preview.get("ok") else "quarantined",
                 }
                 try:
                     await _append_candidate(webspace_id, entry)
@@ -1104,7 +1166,7 @@ async def _on_teacher_request(evt: Any) -> None:
                 )
                 # Auto-apply if the owning skill explicitly trusts NLU Teacher output.
                 try:
-                    if isinstance(target_out, dict) and target_out.get("type") == "skill":
+                    if entry.get("status") == "pending" and isinstance(target_out, dict) and target_out.get("type") == "skill":
                         skill_name = target_out.get("id")
                         policy = skill_policies.get(skill_name) if isinstance(skill_name, str) else None
                         if isinstance(policy, Mapping) and bool(policy.get("autoapply_nlu_teacher")):

@@ -184,6 +184,22 @@ async def _on_candidate_apply(evt: Any) -> None:
 
                 request_id = candidate.get("request_id") if isinstance(candidate.get("request_id"), str) else None
                 request_text = candidate.get("text") if isinstance(candidate.get("text"), str) else ""
+                if candidate.get("status") == "quarantined":
+                    bus_emit(
+                        ctx.bus,
+                        "nlp.teacher.candidate.apply.rejected",
+                        {
+                            "webspace_id": webspace_id,
+                            "candidate_id": candidate_id,
+                            "reason": "candidate_quarantined",
+                            "preview": dict(candidate.get("preview") or {})
+                            if isinstance(candidate.get("preview"), Mapping)
+                            else {},
+                            "_meta": dict(meta),
+                        },
+                        source="nlu.teacher.candidates",
+                    )
+                    return
 
                 kind = candidate.get("kind")
                 if kind == "regex_rule":
