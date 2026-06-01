@@ -275,6 +275,112 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
     teacher["threads_by_candidate"] = threads_by_candidate
     return teacher
 
+
+def rebuild_workbench_signals(teacher: dict[str, Any]) -> dict[str, Any]:
+    events = _as_list_of_dicts(teacher.get("events"))
+    candidates = _as_list_of_dicts(teacher.get("candidates"))
+    items = _as_list_of_dicts(teacher.get("items"))
+    llm_logs = _as_list_of_dicts(teacher.get("llm_logs"))
+
+    status_counts: dict[str, int] = {}
+    for candidate in candidates:
+        status = str(candidate.get("status") or "unknown").strip() or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+    item_status_counts: dict[str, int] = {}
+    for item in items:
+        status = str(item.get("status") or "unknown").strip() or "unknown"
+        item_status_counts[status] = item_status_counts.get(status, 0) + 1
+
+    pending_candidates = [item for item in candidates if item.get("status") == "pending"]
+    quarantined_candidates = [item for item in candidates if item.get("status") == "quarantined"]
+    acquired_events = [item for item in events if item.get("kind") == "understanding.acquired"]
+    skipped_events = [item for item in events if item.get("kind") == "not_obtained.skipped"]
+    failed_logs = [item for item in llm_logs if str(item.get("status") or "").lower() not in {"", "ok", "success"}]
+
+    signals: list[dict[str, Any]] = [
+        {
+            "id": "teacher.queue",
+            "title": "Teacher queue",
+            "subtitle": f"pending candidates={len(pending_candidates)}, skipped requests={item_status_counts.get('skipped', 0)}",
+            "status": "attention" if pending_candidates else "ok",
+            "severity": "info",
+            "details": _json_text({"candidate_status_counts": status_counts, "request_status_counts": item_status_counts}),
+        },
+        {
+            "id": "teacher.acquired",
+            "title": "Acquired understandings",
+            "subtitle": str(len(acquired_events)),
+            "status": "ok",
+            "severity": "info",
+            "details": _json_text(acquired_events[-10:]),
+        },
+    ]
+    if quarantined_candidates:
+        signals.append(
+            {
+                "id": "teacher.quarantine",
+                "title": "Quarantined candidates",
+                "subtitle": str(len(quarantined_candidates)),
+                "status": "attention",
+                "severity": "warning",
+                "details": _json_text(quarantined_candidates[-10:]),
+            }
+        )
+    if skipped_events:
+        signals.append(
+            {
+                "id": "teacher.skipped",
+                "title": "Teacher skipped requests",
+                "subtitle": str(len(skipped_events)),
+                "status": "info",
+                "severity": "info",
+                "details": _json_text(skipped_events[-10:]),
+            }
+        )
+    if failed_logs:
+        signals.append(
+            {
+                "id": "teacher.llm_errors",
+                "title": "LLM Teacher errors",
+                "subtitle": str(len(failed_logs)),
+                "status": "attention",
+                "severity": "error",
+                "details": _json_text(failed_logs[-10:]),
+            }
+        )
+    if events:
+        def _ts(item: Mapping[str, Any]) -> float:
+            try:
+                return float(item.get("ts") or 0.0)
+            except Exception:
+                return 0.0
+
+        latest = sorted(events, key=_ts)[-1]
+        signals.append(
+            {
+                "id": "teacher.latest_event",
+                "title": "Latest Teacher event",
+                "subtitle": f"{latest.get('kind') or ''} {latest.get('subtitle') or ''}".strip(),
+                "status": "info",
+                "severity": "info",
+                "details": _json_text(latest),
+            }
+        )
+
+    teacher["workbench_summary"] = {
+        "candidate_status_counts": status_counts,
+        "request_status_counts": item_status_counts,
+        "event_count": len(events),
+        "candidate_count": len(candidates),
+        "llm_log_count": len(llm_logs),
+        "pending_candidate_count": len(pending_candidates),
+        "quarantined_candidate_count": len(quarantined_candidates),
+        "understanding_acquired_count": len(acquired_events),
+    }
+    teacher["workbench_signals"] = signals
+    return teacher
+
+
 def rebuild_events_by_candidate(teacher: dict[str, Any]) -> dict[str, Any]:
     """
     Builds a derived list that allows grouping the *full* request log by candidate name.
@@ -286,6 +392,8 @@ def rebuild_events_by_candidate(teacher: dict[str, Any]) -> dict[str, Any]:
 
     if isinstance(events, (str, bytes, bytearray)) or isinstance(events, Mapping) or not isinstance(events, Iterable):
         teacher["events_by_candidate"] = []
+        rebuild_threads(teacher)
+        rebuild_workbench_signals(teacher)
         return teacher
 
     cleaned_events = [dict(x) for x in iter_mappings(events)]
@@ -371,6 +479,7 @@ def rebuild_events_by_candidate(teacher: dict[str, Any]) -> dict[str, Any]:
         by_candidate = by_candidate[-_MAX_EVENTS_BY_CANDIDATE:]
     teacher["events_by_candidate"] = by_candidate
     rebuild_threads(teacher)
+    rebuild_workbench_signals(teacher)
     return teacher
 
 

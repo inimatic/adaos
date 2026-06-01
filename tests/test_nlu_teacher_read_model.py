@@ -155,3 +155,59 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
     assert action_preview["would_dispatch"]["params"]["webspace_id"] == "desktop"
     assert missing_action_slot["ok"] is False
     assert any(item["name"] == "required_slots" and item["missing"] == ["modal_id"] for item in missing_action_slot["checks"])
+
+
+def test_nlu_teacher_events_build_workbench_signals():
+    from adaos.services.nlu.teacher_events import rebuild_events_by_candidate
+
+    teacher = {
+        "items": [
+            {"id": "teach-1", "status": "pending"},
+            {"id": "teach-2", "status": "skipped"},
+        ],
+        "candidates": [
+            {
+                "id": "cand-1",
+                "request_id": "req-1",
+                "status": "pending",
+                "kind": "regex_rule",
+                "candidate": {"name": "Weather regex", "description": "test"},
+            },
+            {
+                "id": "cand-2",
+                "request_id": "req-2",
+                "status": "quarantined",
+                "kind": "regex_rule",
+                "candidate": {"name": "Bad regex", "description": "test"},
+            },
+        ],
+        "events": [
+            {
+                "ts": 1.0,
+                "kind": "candidate.proposed",
+                "request_id": "req-1",
+                "request_text": "weather pls",
+                "title": "Candidate proposed",
+                "subtitle": "regex_rule",
+                "raw": {"candidate": {"name": "Weather regex"}},
+            },
+            {
+                "ts": 2.0,
+                "kind": "understanding.acquired",
+                "request_id": "req-1",
+                "request_text": "weather pls",
+                "title": "Understanding acquired",
+                "subtitle": "desktop.open_weather",
+                "raw": {"candidate_id": "cand-1"},
+            },
+        ],
+        "llm_logs": [{"id": "log-1", "status": "error"}],
+    }
+
+    rebuild_events_by_candidate(teacher)
+
+    assert teacher["workbench_summary"]["pending_candidate_count"] == 1
+    assert teacher["workbench_summary"]["quarantined_candidate_count"] == 1
+    signal_ids = {item["id"] for item in teacher["workbench_signals"]}
+    assert {"teacher.queue", "teacher.acquired", "teacher.quarantine", "teacher.llm_errors", "teacher.latest_event"}.issubset(signal_ids)
+    assert teacher["threads_by_request"]
