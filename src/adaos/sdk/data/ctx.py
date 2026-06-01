@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+import logging
 from typing import Any, Optional
 
 from adaos.sdk.core._ctx import require_ctx
 from adaos.services.scenario import ProjectionService
 from adaos.services.user.profile import UserProfileService
 
-_SET_BRIDGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adaos-ctx-set")
+_LOG = logging.getLogger("adaos.sdk.data.ctx")
 
 
 class _ScopeCtx:
@@ -40,26 +40,34 @@ class _ScopeCtx:
         """
         Synchronous helper for ctx.<scope>.set(slot, value).
 
-        The call is intentionally durable: when invoked from a synchronous
-        tool handler that is already running inside an event loop, bridge the
-        projection through a small worker loop and wait for completion instead
-        of scheduling a fire-and-forget task that may outlive the handler.
+        Outside an event loop the call is durable and waits for completion.
+        Inside an event loop it must not block the loop; schedule the async
+        projection and return immediately. Async handlers should call
+        set_async() directly when they need explicit completion semantics.
         """
         import asyncio
 
         try:
-            asyncio.get_running_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             asyncio.run(self.set_async(slot, value, user_id=user_id, webspace_id=webspace_id))
             return
 
-        ctx = require_ctx(f"sdk.data.ctx.{self._scope}.set")
+        task = loop.create_task(self.set_async(slot, value, user_id=user_id, webspace_id=webspace_id))
 
-        async def _runner() -> None:
-            svc = ProjectionService.from_ctx(ctx)
-            await svc.apply(self._scope, slot, value, user_id=user_id, webspace_id=webspace_id)
+        def _log_projection_error(done: "asyncio.Task[None]") -> None:
+            try:
+                done.result()
+            except Exception:
+                _LOG.warning(
+                    "async projection scheduled by sync ctx.%s.set failed slot=%s webspace_id=%s",
+                    self._scope,
+                    slot,
+                    webspace_id,
+                    exc_info=True,
+                )
 
-        _SET_BRIDGE_EXECUTOR.submit(lambda: asyncio.run(_runner())).result()
+        task.add_done_callback(_log_projection_error)
 
 
 class _CurrentUserCtx(_ScopeCtx):
