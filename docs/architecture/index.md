@@ -51,6 +51,7 @@ Current target-state control-plane extensions are documented in:
 - [Runtime Guarding](runtime-guarding.md): target shared guard architecture and roadmap for memory, CPU, Yjs pressure, HTTP health, skill overload, quarantine, supervisor hard safety, and diagnostic snapshots
 - [Member-Hub Connectivity](member-hub-connectivity.md): target control-plane architecture for member join, member-hub lifecycle ownership, restart-aware health semantics, and QR onboarding
 - [Device Access and Browsers](device-access-and-browsers.md): target architecture for durable device identity, browser and member access policy, device-centric desktop UX, and reusable access management surfaces
+- [Endpoint Infrastructure](endpoint-infrastructure.md): target architecture for ReDevice/browser endpoints, endpoint registry, assignments, router-owned commands, events, streams, and the Yjs boundary
 - [Device Access Roadmap](device-access-roadmap.md): recommended migration order from bootstrap-only links and ad hoc UI actions to a shared access-link control plane
 - [Post-Deploy E2E Testing](post-deploy-e2e-testing.md): target post-deploy browser E2E architecture, evidence bundle model, runtime-contract checks, and roadmap toward rollout gates
 - [Semantic State Plane](semantic-state-plane.md): target kernel architecture for separating connectivity, shared-state sync freshness, and Yjs pressure governance without adding redundant status entities

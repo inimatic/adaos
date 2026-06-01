@@ -493,6 +493,7 @@ This separates:
 This design complements:
 
 - [Member-Hub Connectivity](member-hub-connectivity.md): lifecycle ownership of hub-member transport and restart-aware member semantics
+- [Endpoint Infrastructure](endpoint-infrastructure.md): endpoint-only ReDevice/browser surfaces, endpoint registry, assignments, command routing, streams, and the boundary that keeps endpoint execution out of Yjs
 - [Registry Marketplace And Operations](registry-marketplace-operations-roadmap.md): node-scoped marketplace publication and install flows
 - [Operational Event Model](operational-event-model.md): browser-facing projections and operator materialization
 - [Semantic State Plane](semantic-state-plane.md): separating access policy from short-lived transport status

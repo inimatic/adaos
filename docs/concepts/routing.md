@@ -54,7 +54,13 @@ This is the right place to model:
 - direct vs relayed browser delivery
 - local hub vs remote member execution
 - response routing for skills and scenarios
+- endpoint role to endpoint service routing for ReDevice and browser endpoints
 - later media delivery choices such as browser-hub vs browser-member direct media
+
+Endpoint routing is a separate execution plane from browser-visible Yjs
+projection. Yjs may show an operator panel or status card about an endpoint,
+but endpoint commands, endpoint events, and endpoint streams are routed through
+the EndpointRouter and transport adapters.
 
 ## IO Routing (stdout)
 
@@ -147,8 +153,47 @@ Target-state note:
   - skill responses
   - scenario responses
   - browser-directed outputs
+  - endpoint commands and endpoint streams
   - future direct media delivery
 - transport adapters should execute the chosen route, not own the decision of which runtime/browser/member answers the response
+
+## Endpoint Routing
+
+Endpoint routing covers commands and streams addressed to endpoint roles such
+as `demo_display`, `kitchen_panel`, or `runner_phone`.
+
+The normal path is:
+
+```text
+skill/scenario
+  -> EndpointRouter
+  -> EndpointAssignment
+  -> EndpointPolicy
+  -> endpoint service
+  -> transport adapter
+```
+
+Skills should not call a ReDevice agent directly. A skill running on a member
+uses the same route path as a hub-hosted skill: the request is forwarded to the
+hub-owned endpoint router, policy is evaluated there, and only then is the
+command delivered to the endpoint.
+
+Endpoint routing handles:
+
+- `EndpointCommand`: bounded requests such as `display.show_text`,
+  `display.show_image`, `audio.play_prompt`, or `diagnostics.run`.
+- `EndpointEvent`: normalized endpoint facts such as button presses, service
+  state changes, degraded-mode changes, and command acknowledgements.
+- `EndpointStream`: active subscriptions for audio, GPS, accelerometer,
+  camera/video, button tails, or service telemetry.
+
+Endpoint streams are not Yjs data routes. The router carries stream metadata,
+subscription lifecycle, policy checks, and backpressure state. Bulk bytes or
+high-frequency frames should use a dedicated transport, content reference,
+WebRTC/media path, or low-rate legacy polling fallback.
+
+See [Endpoint Infrastructure](../architecture/endpoint-infrastructure.md) for
+the target registry, assignment, command, event, stream, and content contracts.
 
 ## Capacity Reporting
 

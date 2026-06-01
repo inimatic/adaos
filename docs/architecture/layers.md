@@ -26,3 +26,7 @@ This split keeps most operational code out of the command layer:
 - scenario lifecycle: `apps/cli/commands/scenario.py` -> `services/scenario/*`
 - node operations: `apps/cli/commands/node.py` and `apps/api/node_api.py` -> node and subnet services
 - local API hosting: `apps/cli/commands/api.py` -> `apps/api/server.py`
+- endpoint infrastructure: API/CLI/skills -> `services/endpoint/*` target
+  services such as registry, assignment, router, policy checks, and transport
+  adapters; skills should use SDK endpoint helpers instead of calling ReDevice
+  agents or browser sessions directly

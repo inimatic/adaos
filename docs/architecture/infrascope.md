@@ -58,6 +58,9 @@ Describes what exists and what is happening:
 - `member`
 - `browser_session`
 - `device`
+- `endpoint`
+- `endpoint_service`
+- `endpoint_assignment`
 - `smart_home_endpoint`
 - `skill`
 - `scenario`
@@ -388,6 +391,7 @@ The design should extend current runtime surfaces rather than replace them whole
 - observations and events: `src/adaos/apps/api/observe_api.py`, `src/adaos/services/observe.py`, `src/adaos/services/eventbus.py`
 - workspaces, Yjs, and browser-facing overlays: `src/adaos/services/workspaces/*`, `src/adaos/services/yjs/*`, `src/adaos/services/scenario/webspace_runtime.py`
 - profiles and governance roots: `src/adaos/services/user/profile.py`, `src/adaos/services/policy/*`
+- endpoint control-plane target: [Endpoint Infrastructure](endpoint-infrastructure.md) defines how ReDevice and browser endpoints appear as registry records, assignments, endpoint services, command targets, and stream producers without becoming member desktops
 
 These are the existing producers from which the canonical model and projections should be composed.
 
