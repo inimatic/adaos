@@ -958,7 +958,7 @@ async def _llm_call(messages: list[dict[str, str]], *, request_id: str | None = 
 
 async def _append_llm_log(webspace_id: str, entry: dict[str, Any]) -> None:
     async with _nlu_llm_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             logs = list(iter_mappings(teacher.get("llm_logs")))
@@ -970,7 +970,7 @@ async def _append_llm_log(webspace_id: str, entry: dict[str, Any]) -> None:
 
 async def _patch_llm_log(webspace_id: str, *, log_id: str, patch: dict[str, Any]) -> None:
     async with _nlu_llm_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             logs = list(iter_mappings(teacher.get("llm_logs")))
@@ -994,7 +994,7 @@ async def _update_revision_by_request_id(
     patch: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
     async with _nlu_llm_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             revisions = list(iter_mappings(teacher.get("revisions")))
@@ -1015,7 +1015,7 @@ async def _update_revision_by_request_id(
 
 async def _append_candidate(webspace_id: str, candidate: dict[str, Any]) -> None:
     async with _nlu_llm_write_meta():
-        async with async_get_ydoc(webspace_id) as ydoc:
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             candidates = list(iter_mappings(teacher.get("candidates")))
@@ -1033,7 +1033,7 @@ async def _find_duplicate_regex_candidate(
     target: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     target_token = _target_key(target)
-    async with async_get_ydoc(webspace_id) as ydoc:
+    async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
         data_map = ydoc.get_map("data")
         teacher = _teacher_obj(data_map)
         for item in reversed(list(iter_mappings(teacher.get("candidates")))):
@@ -1084,7 +1084,7 @@ async def _on_teacher_request(evt: Any) -> None:
 
         # Build lightweight context snapshot for LLM.
         try:
-            async with async_get_ydoc(webspace_id) as ydoc:
+            async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=["data", "ui"]) as ydoc:
                 snapshot = _ydoc_to_snapshot(ydoc)
         except Exception:
             snapshot = {}

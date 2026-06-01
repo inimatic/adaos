@@ -149,6 +149,40 @@ async def test_nlu_teacher_probe_api_delegates_to_probe_phrase(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_nlu_teacher_state_api_prefers_live_room(monkeypatch):
+    from adaos.apps.api import nlu_teacher_api as api
+
+    class _Doc:
+        def get_map(self, name):
+            assert name == "data"
+            return {"nlu_teacher": {"items": [{"id": "req.1"}]}}
+
+    class _AsyncDoc:
+        async def __aenter__(self):
+            return _Doc()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    seen: dict = {}
+
+    def _fake_async_get_ydoc(webspace_id, **kwargs):
+        seen["webspace_id"] = webspace_id
+        seen["kwargs"] = dict(kwargs)
+        return _AsyncDoc()
+
+    monkeypatch.setattr(api, "async_get_ydoc", _fake_async_get_ydoc)
+
+    result = await api.get_teacher_state("desktop")
+
+    assert result["nlu_teacher"]["items"] == [{"id": "req.1"}]
+    assert seen == {
+        "webspace_id": "desktop",
+        "kwargs": {"read_only": True, "prefer_live_room": True, "load_mark_roots": ["data"]},
+    }
+
+
+@pytest.mark.anyio
 async def test_nlu_teacher_lookup_api_returns_lookup_tables(monkeypatch):
     from adaos.apps.api import nlu_teacher_api as api
 
@@ -368,3 +402,71 @@ async def test_nlu_teacher_rollback_candidate_api_emits_event(monkeypatch):
     assert emitted["payload"]["rule_id"] == "rx.test"
     assert emitted["payload"]["target"] == {"type": "scenario", "id": "web_desktop"}
     assert emitted["source"] == "api.nlu.teacher"
+
+
+@pytest.mark.anyio
+async def test_nlu_teacher_prune_requests_api_rebuilds_state(monkeypatch):
+    from adaos.apps.api import nlu_teacher_api as api
+
+    class _Map(dict):
+        def set(self, _txn, key, value):
+            self[key] = value
+
+    class _Doc:
+        def __init__(self):
+            self.data = _Map(
+                {
+                    "nlu_teacher": {
+                        "items": [
+                            {"id": "a", "request_id": "keep.1", "text": "keep"},
+                            {"id": "b", "request_id": "codex.debug.1", "text": "drop"},
+                        ],
+                        "events": [
+                            {"id": "e1", "request_id": "keep.1", "kind": "not_obtained"},
+                            {"id": "e2", "request_id": "codex.debug.1", "kind": "not_obtained"},
+                        ],
+                    }
+                }
+            )
+
+        def get_map(self, name):
+            assert name == "data"
+            return self.data
+
+        def begin_transaction(self):
+            class _Txn:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return _Txn()
+
+    class _AsyncDoc:
+        def __init__(self, doc):
+            self.doc = doc
+
+        async def __aenter__(self):
+            return self.doc
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    doc = _Doc()
+    saved: list[dict] = []
+    monkeypatch.setattr(api, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(api, "save_teacher_state", lambda **kwargs: saved.append(dict(kwargs)))
+
+    result = await api.prune_requests(
+        "ws-api",
+        api.PruneTeacherRequestsRequest(request_id_prefixes=["codex.debug."]),
+    )
+
+    teacher = doc.data["nlu_teacher"]
+    assert result["ok"] is True
+    assert result["removed"]["items"] == 1
+    assert result["removed"]["events"] == 1
+    assert teacher["items"] == [{"id": "a", "request_id": "keep.1", "text": "keep"}]
+    assert len(teacher["threads_by_request"]) == 1
+    assert saved[-1]["webspace_id"] == "ws-api"
