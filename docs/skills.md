@@ -64,6 +64,13 @@ materialization still uses `data_projections`, and live variables still use
 should stay small and point to Yjs, stream, or details routes instead of
 embedding the data itself.
 
+Endpoint-facing skills use a different interface. They should consume
+EndpointRegistry and EndpointRouter SDK helpers for ReDevice or browser
+endpoints rather than writing endpoint commands into Yjs or calling endpoint
+agents directly. Yjs may project a Connected Devices panel, but endpoint
+commands, events, and streams are routed through the endpoint infrastructure
+described in [Endpoint Infrastructure](architecture/endpoint-infrastructure.md).
+
 ## Service-type skills
 
 Some skills are exposed through the service supervisor:

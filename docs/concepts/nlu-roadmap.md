@@ -52,6 +52,7 @@ for the current NLU Teacher implementation gate.
 - [ ] Define supported candidate classes:
   - `skill_action`
   - `interface_action`
+  - `endpoint_command`
   - `scenario_flow`
   - `entity_correction`
   - `nlu_correction`
@@ -217,6 +218,10 @@ for the current NLU Teacher implementation gate.
     Apply stores it in `skill.yaml`, replay matches, rollback restores miss.
   - `interface_action`: LLM proposes a regex for a scenario-owned host action,
     Apply stores it in `scenario.json`, replay matches, rollback restores miss.
+  - `endpoint_command`: LLM proposes a regex for an existing endpoint-routed
+    action such as showing text on an assigned display endpoint; Apply stores
+    it in the owning skill/scenario artifact, replay matches, and dispatch
+    preview resolves the endpoint role before any command is sent.
 - [x] After a regex/template candidate is trusted-applied, re-run phrase check and mark it verified only if the returned intent
   matches the LLM-planned intent.
 - [ ] Dispatch verified candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
@@ -255,6 +260,7 @@ for the current NLU Teacher implementation gate.
 - [ ] Classify teacher decisions as:
   - `skill_action`
   - `interface_action`
+  - `endpoint_command`
   - `scenario_flow`
   - `entity_correction`
   - `nlu_correction`
@@ -267,10 +273,19 @@ for the current NLU Teacher implementation gate.
   - set home scenario
   - reload/reset webspace
   - app install/toggle
-  - route output to a node/browser when supported
+- [ ] `[deferred]` Publish runtime-backed endpoint command descriptors:
+  - resolve endpoint role or alias through `EndpointAssignment`
+  - show text or image on a `display_endpoint`
+  - play prompt or content through an `audio_output_endpoint`
+  - request endpoint diagnostics
+  - subscribe to endpoint streams when policy allows
+  - revoke, retire, or disable endpoint services through governed owner APIs
 - [ ] `[deferred]` Add `desktop.get_state` for current scenario, home scenario, open modals, installed apps, focused route/node/browser.
 - [ ] `[deferred]` Add `desktop.preview_action` to show the host event/action without dispatch.
-- [ ] `[deferred]` Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, entity alias, or development task ownership.
+- [ ] `[deferred]` Add `endpoint.preview_command` to show the resolved endpoint
+  role, concrete endpoint id, service, policy gate, expected transport, and
+  side-effect class without dispatch.
+- [ ] `[deferred]` Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, endpoint assignment/router, entity alias, or development task ownership.
 - [ ] `[deferred]` Define action side-effect classes:
   read-only, UI navigation, reversible UI mutation, durable configuration
   mutation, external side effect, and unsupported.
