@@ -146,10 +146,11 @@ for the current NLU Teacher implementation gate.
 
 - [x] Current implemented behavior has a manual checklist: [nlu-human-verification.md](./nlu-human-verification.md).
 - [x] Documentation marks which NLU Teacher behaviors are current UI, backend/API only, or target architecture.
+- [x] NLU Teacher UI has a Signals tab backed by `data.nlu_teacher.workbench_signals` for queue, quarantine, LLM error, skip, and acquired-understanding monitoring.
 - [ ] NLU Teacher UI can run a phrase probe without terminal access.
 - [ ] `[polish]` NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
 - [ ] `[deferred]` NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata for the currently safe existing-API flows.
-- [ ] `[deferred]` Template correction flow uses stable ids and stale-write fingerprints.
+- [x] Backend/API/MCP preview flow exposes stable template fingerprints and stale-write checks for template corrections.
 - [ ] `[polish]` Operator-facing evidence distinguishes NLU gap, service/provider outage, low confidence, unsupported action, and missing capability.
 
 ## Phase 4a: Dynamic Lookups and Template Inventory
@@ -164,8 +165,9 @@ for the current NLU Teacher implementation gate.
 - [x] Expose lookup tables for Teacher/LLM inspection:
   - `GET /api/nlu/teacher/{webspace_id}/lookups`
 - [x] Overlay live YJS desktop registry values on top of manifest lookups for Teacher API.
-- [ ] Expose stable template ids for regex, Rasa examples, neural labels, and lookup sets.
-- [ ] Implement stale-write protection using template fingerprints.
+- [x] Expose stable template ids/fingerprints for current regex rules, examples, intent routes, and system-action examples through API and MCP inventory.
+- [x] Implement preview-time stale-write checks using target/template fingerprints.
+- [ ] `[deferred]` Extend the same inventory to Rasa/neural labels and lookup-set patching.
 - [x] Define the system action catalog for currently runtime-backed core/client
   commands such as open, switch, reload, reset, and install toggle. Move,
   hide, and pin remain blocked on runtime host actions.
@@ -197,9 +199,9 @@ for the current NLU Teacher implementation gate.
 
 ### Ground Rule
 
-- [ ] LLM cannot call SDK functions, publish events, invoke skill tools, or mutate UI state directly.
-- [ ] LLM can only propose AdaOS-owned candidates and patches; AdaOS validates, traces, previews, applies, and dispatches them.
-- [ ] Every teacher step has a trace/audit surface: `nlu.trace`, `data.nlu_teacher.*`, Root MCP audit, or event bus evidence.
+- [x] LLM cannot call SDK functions, publish events, invoke skill tools, or mutate UI state directly in the current Teacher loop.
+- [x] LLM can only propose AdaOS-owned candidates and patches; AdaOS validates, traces, previews, applies, and dispatches them.
+- [x] Every implemented teacher step has a trace/audit surface: `nlu.trace`, `data.nlu_teacher.*`, Root MCP audit, or event bus evidence.
 
 ### 5a: Existing-API Working Loop
 
@@ -213,7 +215,9 @@ for the current NLU Teacher implementation gate.
 - [x] Record correction-thread link for follow-up correction phrases.
 - [ ] Record dispatch status.
 - [x] LLM Teacher prompt includes governed Root MCP evidence from
-  `nlu_authoring.get_context` and `nlu_authoring.check_phrase`.
+  `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
+  `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
+  `nlu_authoring.list_templates`, and `sdk.describe_surface`.
 - [x] LLM Teacher parses plain JSON and fenced JSON responses, previews regex
   candidates against the source phrase, and quarantines candidates that do not
   compile or do not match the phrase.
@@ -247,18 +251,17 @@ for the current NLU Teacher implementation gate.
   and returns `root_scope` / `target_id` so the LLM sees which subnet target the
   context belongs to.
 - [x] Add Codex bridge tool `check_nlu_phrase`.
-- [ ] Add/read remaining MCP surfaces:
-  - `[deferred]` `nlu.describe_pipeline`
-  - `nlu.get_trace`
-  - `nlu.get_dialog_context`
-  - `nlu.get_recent_failures`
+- [x] Add/read current MCP surfaces:
+  - `nlu_authoring.get_trace`
+  - `nlu_authoring.get_dialog_context`
+  - `nlu_authoring.get_recent_failures`
   - `desktop.registry.lookup`
-  - `skill.describe_tools`
   - `skill.describe_nlu`
   - `scenario.describe_nlu`
   - `sdk.describe_surface` (descriptors only, no execution)
-- [ ] Add request timeouts, result-size limits, and audit events for `nlu_authoring.check_phrase` and context-reading calls.
-- [ ] Keep MCP read-only until API-level preview, audit, and stale-write checks are stable.
+- [ ] `[deferred]` Add `nlu.describe_pipeline` and `skill.describe_tools`.
+- [x] Keep MCP read-only for context/inventory; preview APIs return dry-run gates without mutation or dispatch.
+- [ ] `[polish]` Add stricter request timeouts, result-size limits, and audit event summaries for every context-reading call.
 
 ### 5c: Action and Ownership Plane
 
@@ -286,7 +289,7 @@ for the current NLU Teacher implementation gate.
   - subscribe to endpoint streams when policy allows
   - revoke, retire, or disable endpoint services through governed owner APIs
 - [ ] `[deferred]` Add `desktop.get_state` for current scenario, home scenario, open modals, installed apps, focused route/node/browser.
-- [ ] `[deferred]` Add `desktop.preview_action` to show the host event/action without dispatch.
+- [x] Add `desktop.preview_action` to show the host event/action without dispatch for the current system-action catalog.
 - [ ] `[deferred]` Add `endpoint.preview_command` to show the resolved endpoint
   role, concrete endpoint id, service, policy gate, expected transport, and
   side-effect class without dispatch.
@@ -298,15 +301,16 @@ for the current NLU Teacher implementation gate.
 
 ### 5d: Template Inventory and Safe Apply
 
-- [ ] `[deferred]` Root MCP surfaces:
-  - `nlu.list_templates`
+- [x] Root MCP/API surfaces:
+  - `nlu_authoring.list_templates`
   - `nlu.get_template`
-  - `nlu.list_training_targets`
-  - `nlu.preview_template_patch`
+  - `nlu_authoring.list_training_targets`
+  - `nlu_authoring.preview_template_patch`
   - `nlu.apply_template_patch`
-- [ ] `[deferred]` LLM receives current template inventory before proposing changes.
-- [ ] `[deferred]` Template patches use stable `template_id` values and `base_fingerprint` stale-write protection.
-- [ ] `[deferred]` Template patches are previewed and operator-approved before durable apply, except for explicit per-owner trusted-autoapply policies.
+- [ ] `[deferred]` Add `nlu.get_template` and `nlu.apply_template_patch` as first-class MCP calls; current durable apply still uses candidate/example APIs.
+- [x] LLM receives current template inventory before proposing changes.
+- [x] Template preview uses stable template ids/fingerprints and `base_fingerprint` stale-write checks.
+- [x] Template patches can be previewed before durable apply; operator approval still uses existing candidate/example APIs.
 - [ ] `[deferred]` Durable apply writes only through owner services/APIs: skill, scenario, system-action feedback, or named-entity alias source.
 - [ ] `[deferred]` Add rollback pointers and audit records for every applied patch.
 - [ ] `[deferred]` Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.

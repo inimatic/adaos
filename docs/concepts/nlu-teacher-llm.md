@@ -70,11 +70,15 @@ The NLU Teacher modal should become the operator-facing workbench for testing an
 
 Current UI status:
 
-- Implemented: User requests tab, Candidates tab, raw JSON event inspection, revision Apply, and candidate Apply.
+- Implemented: User requests tab, Candidates tab, Signals tab, raw JSON event
+  inspection, revision Apply, and candidate Apply.
 - Implemented in backend/API: dry-run phrase probe, dynamic lookup inspection,
   and operator-approved example save with skill/scenario/system-action target
   selection.
-- Missing in UI: Check phrase, trace/ranking/entities/action preview, Correct/Fix/Save example, template inventory, and patch preview.
+- Implemented in backend/API/MCP: trace/dialog/failure read models, template
+  inventory, training target inventory, template patch preview, and desktop
+  action preview.
+- Missing in UI: Check phrase, trace/ranking/entities/action preview, Correct/Fix/Save example, template inventory, and patch preview controls.
 
 Target controls:
 
@@ -210,6 +214,22 @@ Rasa export intentionally consumes the stable manifest snapshot as native lookup
 `state/interpreter/rasa_project/data/lookup_tables.json`. That keeps training reproducible while the Teacher API can still show the current
 desktop registry.
 
+## Current workbench/read APIs
+
+The current backend also exposes the read/preview surfaces used by the MCP
+plane and future UI controls:
+
+- `GET /api/nlu/teacher/{webspace_id}/trace`
+- `GET /api/nlu/teacher/{webspace_id}/dialog-context`
+- `GET /api/nlu/teacher/{webspace_id}/failures`
+- `GET /api/nlu/teacher/{webspace_id}/templates`
+- `GET /api/nlu/teacher/{webspace_id}/training-targets`
+- `POST /api/nlu/teacher/{webspace_id}/template-patch/preview`
+- `POST /api/nlu/teacher/{webspace_id}/interface-action/preview`
+
+All preview endpoints are dry-run only: they do not write training data and do
+not dispatch UI/host events.
+
 ## Human verification contract
 
 The current implementation is considered verifiable only when the operator can reproduce the result through tests/API and, where available,
@@ -292,15 +312,28 @@ Current Root MCP implementation status:
 - implemented: `nlu_authoring.check_phrase`, backed by the same probe service
   as the Teacher API and returning `authoring_boundaries` with
   `dispatch=false` and `training_mutation=false`
-- implemented in the Codex bridge: `check_nlu_phrase`
+- implemented: `nlu_authoring.get_trace`,
+  `nlu_authoring.get_dialog_context`, and
+  `nlu_authoring.get_recent_failures`
+- implemented: `nlu_authoring.list_templates`,
+  `nlu_authoring.list_training_targets`, and
+  `nlu_authoring.preview_template_patch`
+- implemented: `desktop.registry.lookup` and `desktop.preview_action`
+- implemented: `skill.describe_nlu`, `scenario.describe_nlu`, and
+  `sdk.describe_surface`
+- implemented in the Codex bridge: `check_nlu_phrase` plus the read-plane,
+  inventory, and preview tools listed above
 - implemented in LLM Teacher: the prompt context includes read-only Root MCP
-  evidence from `nlu_authoring.get_context` and `nlu_authoring.check_phrase`
-  before Root/OpenAI is asked to propose a candidate
+  evidence from context, phrase check, dialog context, training targets,
+  templates, and SDK surface descriptors before Root/OpenAI is asked to
+  propose a candidate
 - implemented: NLU authoring MCP results include bearer/session-derived
   `root_scope` and `target_id`, so the LLM can see which subnet target the
   context belongs to
-- not yet implemented: trace/dialog/recent-failure/template inventory and
-  desktop action preview surfaces
+- not yet implemented: first-class `nlu.get_template`,
+  `nlu.apply_template_patch`, `nlu.describe_pipeline`, `skill.describe_tools`,
+  `desktop.get_state`, generic action classification, and generic dispatch
+  approval
 
 ## NLU action classes
 
@@ -558,9 +591,11 @@ functional slice.
 - Store request/context/prompt hashes and suppress duplicate active regex candidates.
 - After previewing or trusted-applying a regex/template candidate, immediately run the probe; mark the candidate verified only if the returned
   intent matches the planned intent.
-- Include Root MCP `nlu_authoring.get_context` and `nlu_authoring.check_phrase`
-  evidence in the LLM prompt so candidate generation uses the governed MCP
-  plane, not only ad-hoc runtime snapshots.
+- Include Root MCP evidence in the LLM prompt so candidate generation uses the
+  governed MCP plane, not only ad-hoc runtime snapshots:
+  `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
+  `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
+  `nlu_authoring.list_templates`, and `sdk.describe_surface`.
 - Dispatch only through the normal AdaOS intent/action path and only when the candidate's action side-effect class allows auto-dispatch.
 - Link "no, that is not it" corrections to the previous request/candidate so the next teacher pass has the failure context.
 - Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
@@ -571,17 +606,16 @@ functional slice.
 - Add **Issue token** to the MCP Server modal or another operator-controlled surface.
 - Issue target-scoped Root MCP session leases with an initial `NLUTeacherAuthor`/read-mostly capability profile.
 - Publish read-only MCP contracts for:
-  - `nlu.describe_pipeline`
   - `nlu_authoring.get_context`
   - `nlu_authoring.check_phrase` backed by the current probe service
-  - `nlu.get_trace`
-  - `nlu.get_dialog_context`
-  - `nlu.get_recent_failures`
+  - `nlu_authoring.get_trace`
+  - `nlu_authoring.get_dialog_context`
+  - `nlu_authoring.get_recent_failures`
   - `desktop.registry.lookup` backed by the current lookup service
-  - `skill.describe_tools`
   - `skill.describe_nlu`
   - `scenario.describe_nlu`
   - `sdk.describe_surface` as descriptors only
+- `[deferred]` Add `nlu.describe_pipeline` and `skill.describe_tools`.
 - Keep write/apply operations behind the existing Teacher UI/API until preview and audit are stable.
 
 ### Phase 3 - Action and ownership surfaces
@@ -590,7 +624,7 @@ functional slice.
   modal open/close, scenario switch, home scenario navigation, reload/reset, and app install toggle.
 - `[deferred]` Publish `desktop.get_state` so the teacher can distinguish "open X" from "close the currently open modal" and can resolve current/home
   scenario context.
-- `[deferred]` Publish `desktop.preview_action` so a candidate can show the event/action that would be dispatched without mutating the UI.
+- Publish `desktop.preview_action` so a candidate can show the event/action that would be dispatched without mutating the UI.
 - `[deferred]` Add `nlu.resolve_owner` to map intent/action candidates to skill, scenario, system action, or development task ownership.
 - `[deferred]` Classify teacher decisions into `skill_action`, `interface_action`, `scenario_flow`, `entity_correction`, `nlu_correction`,
   `development_task`, or `non_actionable`.
@@ -598,21 +632,24 @@ functional slice.
 
 ### Phase 4 - Template inventory and safe patching
 
-- `[deferred]` Publish current NLU template inventory with `template_id`, owner, status, fingerprint, and provenance.
-- `[deferred]` Add:
-  - `nlu.list_templates`
+- Publish current NLU template inventory with `template_id`, owner, status, fingerprint, and provenance.
+- Add:
+  - `nlu_authoring.list_templates`
   - `nlu.get_template`
-  - `nlu.list_training_targets`
-  - `nlu.preview_template_patch`
+  - `nlu_authoring.list_training_targets`
+  - `nlu_authoring.preview_template_patch`
   - `nlu.apply_template_patch`
-- `[deferred]` Accept correction patches against existing `template_id` values with `base_fingerprint` stale-write protection.
+- `[deferred]` Add first-class `nlu.get_template` and `nlu.apply_template_patch`; current durable apply still uses candidate/example APIs.
+- Accept correction previews against existing fingerprints with `base_fingerprint` stale-write protection.
 - `[deferred]` Apply only through owning scenario/skill/system-action/named-entity services, never by LLM raw file writes.
 - `[deferred]` Add rollback pointers and audit events for every applied patch.
 - `[deferred]` Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
 
 ### Phase 5 - Useful Teacher UI
 
-- Add Check phrase field.
+- Add Signals tab backed by `data.nlu_teacher.workbench_signals` for queue,
+  quarantine, skip, LLM error, and acquired-understanding monitoring.
+- `[deferred]` Add Check phrase field.
 - `[polish]` Show intent ranking/entities/action preview.
 - `[deferred]` Show existing templates relevant to the phrase/intent and allow selecting one for correction.
 - `[deferred]` Add Correct/Fix actions.

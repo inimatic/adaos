@@ -214,9 +214,11 @@ Open the NLU Teacher modal in the default web desktop scenario.
 
 Expected current behavior:
 
-- The modal has User requests and Candidates tabs.
+- The modal has User requests, Candidates, and Signals tabs.
 - Missed NLU requests are grouped by `request_id`.
 - Candidate events are grouped by candidate name and request id.
+- Signals show compact queue/quarantine/skipped/LLM-error/acquired-understanding
+  state from `data.nlu_teacher.workbench_signals`.
 - Raw JSON payloads are visible for inspection.
 - Apply actions can emit `nlp.teacher.revision.apply` or `nlp.teacher.candidate.apply`.
 
