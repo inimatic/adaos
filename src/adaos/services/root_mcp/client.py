@@ -364,6 +364,65 @@ class RootMcpClient:
             arguments["webspace_id"] = str(webspace_id)
         return self.call("nlu_authoring.list_training_targets", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
 
+    def preview_nlu_authoring_template_patch(
+        self,
+        *,
+        operation: str,
+        target: Mapping[str, Any],
+        intent: str,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        text: str | None = None,
+        pattern: str | None = None,
+        slots: Mapping[str, Any] | None = None,
+        base_fingerprint: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "operation": str(operation or ""),
+            "target": dict(target or {}),
+            "intent": str(intent or ""),
+        }
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if text:
+            arguments["text"] = str(text)
+        if pattern:
+            arguments["pattern"] = str(pattern)
+        if slots:
+            arguments["slots"] = dict(slots)
+        if base_fingerprint:
+            arguments["base_fingerprint"] = str(base_fingerprint)
+        return self.call("nlu_authoring.preview_template_patch", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def preview_desktop_action(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        action_id: str | None = None,
+        intent: str | None = None,
+        host_action: str | None = None,
+        params: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"params": dict(params or {}) if isinstance(params, Mapping) else {}}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if action_id:
+            arguments["action_id"] = str(action_id)
+        if intent:
+            arguments["intent"] = str(intent)
+        if host_action:
+            arguments["host_action"] = str(host_action)
+        return self.call("desktop.preview_action", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
     def add_nlu_authoring_device_alias(
         self,
         *,

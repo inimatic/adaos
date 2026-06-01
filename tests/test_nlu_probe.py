@@ -200,23 +200,49 @@ async def test_nlu_teacher_read_model_api_delegates(monkeypatch):
         calls.append(("targets", dict(kwargs)))
         return {"ok": True, "targets": [{"id": "weather_skill"}]}
 
+    def _fake_preview_patch(**kwargs):
+        calls.append(("preview_patch", dict(kwargs)))
+        return {"ok": True, "status": "ready"}
+
+    def _fake_preview_action(**kwargs):
+        calls.append(("preview_action", dict(kwargs)))
+        return {"ok": True, "status": "ready"}
+
     monkeypatch.setattr(api, "get_nlu_trace", _fake_trace)
     monkeypatch.setattr(api, "get_nlu_dialog_context", _fake_dialog)
     monkeypatch.setattr(api, "get_nlu_recent_failures", _fake_failures)
     monkeypatch.setattr(api, "list_nlu_templates", _fake_templates)
     monkeypatch.setattr(api, "list_training_targets", _fake_targets)
+    monkeypatch.setattr(api, "preview_template_patch", _fake_preview_patch)
+    monkeypatch.setattr(api, "preview_interface_action", _fake_preview_action)
 
     trace = await api.get_trace("ws-api", request_id="req-1", limit=5)
     dialog = await api.get_dialog_context("ws-api", candidate_id="cand-1", limit=6)
     failures = await api.get_recent_failures("ws-api", limit=7)
     templates = await api.get_templates("ws-api", owner_type="skill", owner_id="weather_skill", include_system_actions=False)
     targets = await api.get_training_targets("ws-api", include_system_actions=False)
+    preview_patch = await api.preview_template_patch_api(
+        "ws-api",
+        api.PreviewTemplatePatchRequest(
+            operation="add_regex_rule",
+            target=api.SaveExampleTarget(type="skill", id="weather_skill"),
+            intent="desktop.open_weather",
+            text="weather in Berlin",
+            pattern=r"\bweather\b",
+        ),
+    )
+    preview_action = await api.preview_interface_action_api(
+        "ws-api",
+        api.PreviewInterfaceActionRequest(action_id="host.desktop.modal.open", params={"modal_id": "nlu_teacher_modal"}),
+    )
 
     assert trace["ok"] is True
     assert dialog["ok"] is True
     assert failures["ok"] is True
     assert templates["templates"][0]["id"] == "tpl.test"
     assert targets["targets"][0]["id"] == "weather_skill"
+    assert preview_patch["status"] == "ready"
+    assert preview_action["status"] == "ready"
     assert calls == [
         ("trace", {"webspace_id": "ws-api", "request_id": "req-1", "candidate_id": None, "limit": 5}),
         ("dialog", {"webspace_id": "ws-api", "request_id": None, "candidate_id": "cand-1", "limit": 6}),
@@ -226,6 +252,29 @@ async def test_nlu_teacher_read_model_api_delegates(monkeypatch):
             {"webspace_id": "ws-api", "owner_type": "skill", "owner_id": "weather_skill", "include_system_actions": False},
         ),
         ("targets", {"webspace_id": "ws-api", "include_system_actions": False}),
+        (
+            "preview_patch",
+            {
+                "webspace_id": "ws-api",
+                "operation": "add_regex_rule",
+                "target": {"type": "skill", "id": "weather_skill"},
+                "intent": "desktop.open_weather",
+                "text": "weather in Berlin",
+                "pattern": r"\bweather\b",
+                "slots": {},
+                "base_fingerprint": None,
+            },
+        ),
+        (
+            "preview_action",
+            {
+                "webspace_id": "ws-api",
+                "action_id": "host.desktop.modal.open",
+                "intent": None,
+                "host_action": None,
+                "params": {"modal_id": "nlu_teacher_modal"},
+            },
+        ),
     ]
 
 

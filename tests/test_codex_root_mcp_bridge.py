@@ -224,6 +224,56 @@ class _FakeRootMcpClient:
         )
         return {"ok": True, "targets": [{"type": "skill", "id": "weather_skill"}]}
 
+    def preview_nlu_authoring_template_patch(
+        self,
+        *,
+        operation: str,
+        target: dict,
+        intent: str,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        text: str | None = None,
+        pattern: str | None = None,
+        slots: dict | None = None,
+        base_fingerprint: str | None = None,
+    ) -> dict:
+        self.calls.append(
+            (
+                "preview_nlu_authoring_template_patch",
+                webspace_id or "",
+                {
+                    "target_id": target_id,
+                    "operation": operation,
+                    "target": target,
+                    "intent": intent,
+                    "text": text,
+                    "pattern": pattern,
+                    "slots": slots or {},
+                    "base_fingerprint": base_fingerprint,
+                },
+            )
+        )
+        return {"ok": True, "status": "ready", "normalized_patch": {"operation": operation}}
+
+    def preview_desktop_action(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        action_id: str | None = None,
+        intent: str | None = None,
+        host_action: str | None = None,
+        params: dict | None = None,
+    ) -> dict:
+        self.calls.append(
+            (
+                "preview_desktop_action",
+                webspace_id or "",
+                {"target_id": target_id, "action_id": action_id, "intent": intent, "host_action": host_action, "params": params or {}},
+            )
+        )
+        return {"ok": True, "status": "ready", "would_dispatch": {"target": host_action or "desktop.modal.open"}}
+
     def add_nlu_authoring_device_alias(
         self,
         *,
@@ -683,6 +733,35 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "params": {"name": "list_nlu_training_targets", "arguments": {"webspace_id": "desktop", "include_system_actions": False}},
         }
     )
+    preview_patch = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 431,
+            "method": "tools/call",
+            "params": {
+                "name": "preview_nlu_template_patch",
+                "arguments": {
+                    "webspace_id": "desktop",
+                    "operation": "add_regex_rule",
+                    "target": {"type": "skill", "id": "weather_skill"},
+                    "intent": "desktop.open_weather",
+                    "text": "weather in Berlin",
+                    "pattern": r"\bweather\b",
+                },
+            },
+        }
+    )
+    preview_action = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 432,
+            "method": "tools/call",
+            "params": {
+                "name": "preview_desktop_action",
+                "arguments": {"webspace_id": "desktop", "action_id": "host.desktop.modal.open", "params": {"modal_id": "nlu_teacher_modal"}},
+            },
+        }
+    )
     add_alias = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -801,6 +880,8 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert "describe_sdk_surface" in tool_names
     assert "list_nlu_templates" in tool_names
     assert "list_nlu_training_targets" in tool_names
+    assert "preview_nlu_template_patch" in tool_names
+    assert "preview_desktop_action" in tool_names
     assert "add_device_alias" in tool_names
     assert "remove_device_alias" in tool_names
     assert "deprecate_device_alias" in tool_names
@@ -842,6 +923,10 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert nlu_templates["result"]["structuredContent"]["templates"][0]["id"] == "tpl.test"
     assert nlu_targets is not None
     assert nlu_targets["result"]["structuredContent"]["targets"][0]["id"] == "weather_skill"
+    assert preview_patch is not None
+    assert preview_patch["result"]["structuredContent"]["status"] == "ready"
+    assert preview_action is not None
+    assert preview_action["result"]["structuredContent"]["would_dispatch"]["target"] == "desktop.modal.open"
     assert add_alias is not None
     assert add_alias["result"]["structuredContent"]["status"] == "proposed"
     assert remove_alias is not None
@@ -902,6 +987,31 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
         "list_nlu_authoring_training_targets",
         "desktop",
         {"target_id": None, "include_system_actions": False},
+    ) in fake_client.calls
+    assert (
+        "preview_nlu_authoring_template_patch",
+        "desktop",
+        {
+            "target_id": None,
+            "operation": "add_regex_rule",
+            "target": {"type": "skill", "id": "weather_skill"},
+            "intent": "desktop.open_weather",
+            "text": "weather in Berlin",
+            "pattern": r"\bweather\b",
+            "slots": {},
+            "base_fingerprint": None,
+        },
+    ) in fake_client.calls
+    assert (
+        "preview_desktop_action",
+        "desktop",
+        {
+            "target_id": None,
+            "action_id": "host.desktop.modal.open",
+            "intent": None,
+            "host_action": None,
+            "params": {"modal_id": "nlu_teacher_modal"},
+        },
     ) in fake_client.calls
     assert (
         "add_nlu_authoring_device_alias",

@@ -17,11 +17,26 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
         calls.append({"tool_id": tool_id, **kwargs})
         if tool_id == "nlu_authoring.get_context":
             return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"context": {"plane_id": "nlu_authoring"}})
+        if tool_id == "nlu_authoring.check_phrase":
+            return SimpleNamespace(
+                ok=True,
+                tool_id=tool_id,
+                status="ok",
+                result={"check": {"ok": True, "accepted": False, "text": kwargs["arguments"]["text"]}},
+            )
+        if tool_id == "nlu_authoring.get_dialog_context":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"request_id": "req.llm", "events": []})
+        if tool_id == "nlu_authoring.list_training_targets":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"summary": {"count": 1}, "targets": [{"id": "weather_skill"}]})
+        if tool_id == "nlu_authoring.list_templates":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"summary": {"count": 1}, "templates": [{"id": "tpl.weather"}]})
+        if tool_id == "sdk.describe_surface":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"surface_id": "adaos.sdk.describe_surface.v1"})
         return SimpleNamespace(
-            ok=True,
+            ok=False,
             tool_id=tool_id,
-            status="ok",
-            result={"check": {"ok": True, "accepted": False, "text": kwargs["arguments"]["text"]}},
+            status="error",
+            error=SimpleNamespace(code="unexpected_tool"),
         )
 
     monkeypatch.setattr(root_mcp_service, "invoke_tool", _fake_invoke_tool)
@@ -36,7 +51,18 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
 
     assert evidence["nlu_authoring_context"]["plane_id"] == "nlu_authoring"
     assert evidence["nlu_authoring_phrase_check"]["check"]["accepted"] is False
-    assert [call["tool_id"] for call in calls] == ["nlu_authoring.get_context", "nlu_authoring.check_phrase"]
+    assert evidence["nlu_dialog_context"]["request_id"] == "req.llm"
+    assert evidence["nlu_training_targets"]["targets"][0]["id"] == "weather_skill"
+    assert evidence["nlu_templates"]["templates"][0]["id"] == "tpl.weather"
+    assert evidence["sdk_surface"]["surface_id"] == "adaos.sdk.describe_surface.v1"
+    assert [call["tool_id"] for call in calls] == [
+        "nlu_authoring.get_context",
+        "nlu_authoring.check_phrase",
+        "nlu_authoring.get_dialog_context",
+        "nlu_authoring.list_training_targets",
+        "nlu_authoring.list_templates",
+        "sdk.describe_surface",
+    ]
     assert calls[0]["auth_context"]["capabilities"] == ["development.read.descriptors"]
     assert calls[1]["arguments"]["emit_trace"] is False
     assert calls[1]["dry_run"] is True

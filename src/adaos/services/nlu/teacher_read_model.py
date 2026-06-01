@@ -810,3 +810,273 @@ def list_training_targets(*, webspace_id: str | None = None, include_system_acti
         },
         "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
     }
+
+
+def _compile_regex(pattern: str, *, text: str | None = None) -> dict[str, Any]:
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE | re.UNICODE)
+    except re.error as exc:
+        return {"ok": False, "status": "invalid_regex", "error": str(exc)}
+    if text is None or not str(text).strip():
+        return {"ok": True, "status": "compiled", "slots": {}}
+    match = compiled.search(str(text))
+    if not match:
+        return {"ok": False, "status": "source_text_miss", "slots": {}}
+    slots = {key: value.strip() if isinstance(value, str) else value for key, value in match.groupdict().items() if value is not None}
+    return {"ok": True, "status": "source_text_matched", "matched": match.group(0), "slots": slots}
+
+
+def _target_descriptor_for_preview(target: Mapping[str, Any]) -> dict[str, Any]:
+    target_type = str(target.get("type") or "").strip()
+    target_id = str(target.get("id") or "").strip()
+    if target_type == "skill":
+        return describe_skill_nlu(target_id)
+    if target_type == "scenario":
+        return describe_scenario_nlu(target_id)
+    if target_type == "system_action":
+        from adaos.services.nlu.system_actions_catalog import find_system_action_by_id, find_system_action_by_intent
+
+        action = find_system_action_by_id(target_id) or find_system_action_by_intent(target_id)
+        if action:
+            return {
+                "ok": True,
+                "owner": {"type": "system_action", "id": action.get("id")},
+                "fingerprint": _hash_payload(action),
+                "system_action": action,
+                "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
+            }
+        return {"ok": False, "status": "not_found", "owner": {"type": "system_action", "id": target_id}}
+    return {"ok": False, "status": "unsupported_target", "owner": {"type": target_type, "id": target_id}}
+
+
+def _template_duplicates(
+    *,
+    owner_type: str,
+    owner_id: str,
+    intent: str,
+    kind: str,
+    text: str | None = None,
+    pattern: str | None = None,
+) -> list[dict[str, Any]]:
+    templates = list_nlu_templates(owner_type=owner_type, owner_id=owner_id, include_system_actions=owner_type == "system_action")
+    rows = templates.get("templates") if isinstance(templates.get("templates"), list) else []
+    duplicates: list[dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("intent") or "") != intent:
+            continue
+        if str(item.get("kind") or "") != kind:
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+        if kind in {"example", "system_action_example"} and text and str(payload.get("text") or "").strip() == text.strip():
+            duplicates.append({"template_id": item.get("id"), "fingerprint": item.get("fingerprint"), "kind": kind})
+        if kind == "regex_rule" and pattern and str(payload.get("pattern") or "").strip() == pattern.strip():
+            duplicates.append({"template_id": item.get("id"), "fingerprint": item.get("fingerprint"), "kind": kind})
+    return duplicates
+
+
+def preview_template_patch(
+    *,
+    webspace_id: str | None = None,
+    operation: str,
+    target: Mapping[str, Any],
+    intent: str,
+    text: str | None = None,
+    pattern: str | None = None,
+    slots: Mapping[str, Any] | None = None,
+    base_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id)
+    op = str(operation or "").strip()
+    intent_token = str(intent or "").strip()
+    target_obj = {"type": str((target or {}).get("type") or "").strip(), "id": str((target or {}).get("id") or "").strip()}
+    target_type = target_obj["type"]
+    target_id = target_obj["id"]
+    checks: list[dict[str, Any]] = []
+
+    descriptor = _target_descriptor_for_preview(target_obj)
+    target_ok = bool(descriptor.get("ok"))
+    checks.append({"name": "target_exists", "ok": target_ok, "status": descriptor.get("status") or ("found" if target_ok else "not_found")})
+    descriptor_fingerprint = descriptor.get("fingerprint") if isinstance(descriptor.get("fingerprint"), str) else None
+    if base_fingerprint:
+        fresh = bool(descriptor_fingerprint and base_fingerprint == descriptor_fingerprint)
+        checks.append(
+            {
+                "name": "base_fingerprint",
+                "ok": fresh,
+                "status": "fresh" if fresh else "stale",
+                "expected": descriptor_fingerprint,
+                "actual": base_fingerprint,
+            }
+        )
+
+    if not intent_token:
+        checks.append({"name": "intent", "ok": False, "status": "missing"})
+    if op not in {"add_regex_rule", "save_example"}:
+        checks.append({"name": "operation", "ok": False, "status": "unsupported"})
+
+    duplicates: list[dict[str, Any]] = []
+    regex_preview: dict[str, Any] | None = None
+    normalized_patch: dict[str, Any] = {
+        "operation": op,
+        "target": target_obj,
+        "intent": intent_token,
+        "slots": dict(slots or {}) if isinstance(slots, Mapping) else {},
+    }
+
+    if op == "add_regex_rule":
+        if target_type not in {"skill", "scenario"}:
+            checks.append({"name": "target_mutability", "ok": False, "status": "regex_rules_require_skill_or_scenario"})
+        pattern_token = str(pattern or "").strip()
+        if not pattern_token:
+            checks.append({"name": "pattern", "ok": False, "status": "missing"})
+        else:
+            regex_preview = _compile_regex(pattern_token, text=text)
+            checks.append({"name": "regex_compile", "ok": regex_preview["status"] != "invalid_regex", "status": regex_preview["status"], "error": regex_preview.get("error")})
+            if text:
+                checks.append({"name": "source_text_match", "ok": bool(regex_preview.get("ok")), "status": regex_preview.get("status")})
+            if target_type and target_id and intent_token:
+                duplicates = _template_duplicates(
+                    owner_type=target_type,
+                    owner_id=target_id,
+                    intent=intent_token,
+                    kind="regex_rule",
+                    pattern=pattern_token,
+                )
+                checks.append({"name": "duplicate_regex", "ok": not duplicates, "status": "duplicate" if duplicates else "unique"})
+            normalized_patch["regex_rule"] = {"intent": intent_token, "pattern": pattern_token}
+    elif op == "save_example":
+        example = str(text or "").strip()
+        if target_type not in {"skill", "scenario", "system_action"}:
+            checks.append({"name": "target_mutability", "ok": False, "status": "examples_require_skill_scenario_or_system_action"})
+        if not example:
+            checks.append({"name": "example", "ok": False, "status": "missing"})
+        elif target_type and target_id and intent_token:
+            duplicates = _template_duplicates(
+                owner_type=target_type,
+                owner_id=target_id,
+                intent=intent_token,
+                kind="system_action_example" if target_type == "system_action" else "example",
+                text=example,
+            )
+            checks.append({"name": "duplicate_example", "ok": not duplicates, "status": "duplicate" if duplicates else "unique"})
+        normalized_patch["example"] = example
+
+    ok = bool(checks) and all(bool(item.get("ok")) for item in checks)
+    status = "ready" if ok else "blocked"
+    return {
+        "ok": ok,
+        "status": status,
+        "webspace_id": ws,
+        "operation": op,
+        "target": target_obj,
+        "intent": intent_token,
+        "checks": checks,
+        "duplicates": duplicates,
+        "regex_preview": regex_preview,
+        "normalized_patch": normalized_patch,
+        "target_fingerprint": descriptor_fingerprint,
+        "authoring_boundaries": {
+            "side_effects": "none",
+            "dispatch": False,
+            "training_mutation": False,
+            "dry_run": True,
+        },
+    }
+
+
+def _find_action_for_preview(*, action_id: str | None, intent: str | None, host_action: str | None) -> dict[str, Any] | None:
+    from adaos.services.nlu.system_actions_catalog import describe_system_actions, find_system_action_by_id, find_system_action_by_intent
+
+    if action_id:
+        found = find_system_action_by_id(action_id)
+        if found:
+            return found
+    if intent:
+        found = find_system_action_by_intent(intent)
+        if found:
+            return found
+    if host_action:
+        token = str(host_action or "").strip()
+        for action in describe_system_actions():
+            if str(action.get("action") or "").strip() == token:
+                return action
+    return None
+
+
+def _lookup_contains(lookup_payload: Mapping[str, Any], lookup: str, value: Any) -> bool | None:
+    token = str(value or "").strip()
+    if not token or token.startswith("$"):
+        return None
+    lookups = lookup_payload.get("lookups") if isinstance(lookup_payload.get("lookups"), Mapping) else {}
+    rows = lookups.get(lookup) if isinstance(lookups.get(lookup), list) else []
+    return any(isinstance(item, Mapping) and str(item.get("value") or "").strip() == token for item in rows)
+
+
+def preview_interface_action(
+    *,
+    webspace_id: str | None = None,
+    action_id: str | None = None,
+    intent: str | None = None,
+    host_action: str | None = None,
+    params: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id)
+    action = _find_action_for_preview(action_id=action_id, intent=intent, host_action=host_action)
+    params_obj = dict(params or {}) if isinstance(params, Mapping) else {}
+    checks: list[dict[str, Any]] = []
+    if not action:
+        checks.append({"name": "action_exists", "ok": False, "status": "not_found"})
+        return {
+            "ok": False,
+            "status": "blocked",
+            "webspace_id": ws,
+            "checks": checks,
+            "would_dispatch": None,
+            "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False, "dry_run": True},
+        }
+
+    checks.append({"name": "action_exists", "ok": True, "status": "found"})
+    slots = action.get("slots") if isinstance(action.get("slots"), Mapping) else {}
+    missing_slots: list[str] = []
+    for slot_name, slot_spec in slots.items():
+        if not isinstance(slot_name, str):
+            continue
+        required = bool(slot_spec.get("required")) if isinstance(slot_spec, Mapping) else False
+        if required and not params_obj.get(slot_name):
+            missing_slots.append(slot_name)
+    checks.append({"name": "required_slots", "ok": not missing_slots, "status": "complete" if not missing_slots else "missing", "missing": missing_slots})
+
+    lookup_payload = get_desktop_registry_lookup(webspace_id=ws, include_live=True)
+    for lookup in ("modal_id", "scenario_id", "app_id", "node_ref", "skill_id", "webspace_id"):
+        if lookup not in params_obj:
+            continue
+        found = _lookup_contains(lookup_payload, lookup, params_obj.get(lookup))
+        if found is None:
+            checks.append({"name": f"lookup.{lookup}", "ok": True, "status": "symbolic_or_empty"})
+        else:
+            checks.append({"name": f"lookup.{lookup}", "ok": bool(found), "status": "found" if found else "not_found", "value": params_obj.get(lookup)})
+
+    ok = all(bool(item.get("ok")) for item in checks)
+    host_event = str(action.get("action") or "").strip()
+    would_dispatch = {
+        "type": "callHost",
+        "target": host_event,
+        "params": {**params_obj, "webspace_id": params_obj.get("webspace_id") or ws},
+    }
+    return {
+        "ok": ok,
+        "status": "ready" if ok else "blocked",
+        "webspace_id": ws,
+        "action": action,
+        "checks": checks,
+        "would_dispatch": would_dispatch,
+        "lookup_fingerprint": lookup_payload.get("fingerprint"),
+        "authoring_boundaries": {
+            "side_effects": "none",
+            "dispatch": False,
+            "training_mutation": False,
+            "dry_run": True,
+        },
+    }

@@ -767,6 +767,61 @@ def _collect_root_mcp_authoring_evidence(
     )
     if isinstance(check_result, Mapping):
         evidence["nlu_authoring_phrase_check"] = dict(check_result)
+
+    dialog_args = {**base_args, "request_id": request_id, "limit": 5}
+    dialog_result = _invoke_root_mcp_authoring_tool(
+        "nlu_authoring.get_dialog_context",
+        arguments=dialog_args,
+        request_id=request_id,
+        trace_id=f"{request_id}.mcp.dialog",
+        dry_run=True,
+    )
+    if isinstance(dialog_result, Mapping):
+        evidence["nlu_dialog_context"] = {
+            "request_id": dialog_result.get("request_id"),
+            "candidate_id": dialog_result.get("candidate_id"),
+            "latest_candidate": dialog_result.get("latest_candidate"),
+            "correction_context": dialog_result.get("correction_context"),
+            "events": list(dialog_result.get("events") or [])[:10] if isinstance(dialog_result.get("events"), list) else [],
+        }
+
+    targets_result = _invoke_root_mcp_authoring_tool(
+        "nlu_authoring.list_training_targets",
+        arguments={**base_args, "include_system_actions": True},
+        request_id=request_id,
+        trace_id=f"{request_id}.mcp.targets",
+        dry_run=True,
+    )
+    if isinstance(targets_result, Mapping):
+        targets = list(targets_result.get("targets") or []) if isinstance(targets_result.get("targets"), list) else []
+        evidence["nlu_training_targets"] = {
+            "summary": dict(targets_result.get("summary") or {}) if isinstance(targets_result.get("summary"), Mapping) else {},
+            "targets": targets[:60],
+        }
+
+    templates_result = _invoke_root_mcp_authoring_tool(
+        "nlu_authoring.list_templates",
+        arguments={**base_args, "include_system_actions": True},
+        request_id=request_id,
+        trace_id=f"{request_id}.mcp.templates",
+        dry_run=True,
+    )
+    if isinstance(templates_result, Mapping):
+        templates = list(templates_result.get("templates") or []) if isinstance(templates_result.get("templates"), list) else []
+        evidence["nlu_templates"] = {
+            "summary": dict(templates_result.get("summary") or {}) if isinstance(templates_result.get("summary"), Mapping) else {},
+            "templates": templates[:80],
+        }
+
+    sdk_result = _invoke_root_mcp_authoring_tool(
+        "sdk.describe_surface",
+        arguments={"level": "mini"},
+        request_id=request_id,
+        trace_id=f"{request_id}.mcp.sdk",
+        dry_run=True,
+    )
+    if isinstance(sdk_result, Mapping):
+        evidence["sdk_surface"] = dict(sdk_result)
     return evidence
 
 
@@ -791,6 +846,8 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Prefer existing intents from context (scenario_nlu.intents keys) over inventing new ones.\n"
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
         "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
+        "- context.root_mcp.nlu_training_targets and nlu_templates are the governed placement/inventory surfaces; choose a target that exists there and avoid duplicate examples/regex patterns.\n"
+        "- SDK surfaces in context.root_mcp are descriptive only. The LLM must propose AdaOS actions/templates, not direct SDK calls.\n"
         "- If context.correction_thread.active=true, the utterance is a correction of a previous candidate. Use the previous candidate only as failure context, and propose a corrected candidate rather than repeating the same rule.\n"
         "- host_actions entries include stable system action ids, host event names, slots, examples, and linked intents.\n"
         "- If it matches a known app/widget/scenario through an existing executable intent, prefer teaching that intent with propose_regex_rule.\n"
