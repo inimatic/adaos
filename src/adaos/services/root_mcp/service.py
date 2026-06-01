@@ -476,6 +476,121 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_check_phrase"},
         ),
         RootMcpToolContract(
+            id="nlu_authoring.get_trace",
+            title="Get NLU trace",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return read-only NLU trace and Teacher evidence for a request or candidate.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "request_id": {"type": "string"},
+                    "candidate_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_trace"},
+        ),
+        RootMcpToolContract(
+            id="nlu_authoring.get_dialog_context",
+            title="Get NLU dialog context",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return read-only Teacher request/candidate thread context for correction-aware authoring.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "request_id": {"type": "string"},
+                    "candidate_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_dialog_context"},
+        ),
+        RootMcpToolContract(
+            id="nlu_authoring.get_recent_failures",
+            title="Get recent NLU failures",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return recent not-obtained/Teacher failure rows with teachable/provider-state classification.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_recent_failures"},
+        ),
+        RootMcpToolContract(
+            id="desktop.registry.lookup",
+            title="Lookup desktop registry",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return desktop lookup tables for app, modal, scenario, webspace, skill, and node references.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "include_live": {"type": "boolean"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "desktop_registry_lookup"},
+        ),
+        RootMcpToolContract(
+            id="skill.describe_nlu",
+            title="Describe skill NLU",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return read-only NLU intents, regex rules, event surface, and policy for a skill.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "skill_id": {"type": "string"},
+                },
+                required=["skill_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "skill_describe_nlu"},
+        ),
+        RootMcpToolContract(
+            id="scenario.describe_nlu",
+            title="Describe scenario NLU",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return read-only NLU intents and regex rules for a scenario.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "scenario_id": {"type": "string"},
+                },
+                required=["scenario_id"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "scenario_describe_nlu"},
+        ),
+        RootMcpToolContract(
+            id="sdk.describe_surface",
+            title="Describe SDK surface",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return descriptive SDK/function-call boundaries for NLU Teacher planning.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "level": {"type": "string", "enum": ["mini", "std", "rich"]},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "sdk_describe_surface"},
+        ),
+        RootMcpToolContract(
             id="nlu_authoring.add_device_alias",
             title="Add device alias",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1376,6 +1491,99 @@ def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bo
     }
 
 
+def _handle_nlu_authoring_trace(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import get_nlu_trace
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    result = get_nlu_trace(
+        webspace_id=webspace_id,
+        request_id=_text_or_none(arguments.get("request_id")),
+        candidate_id=_text_or_none(arguments.get("candidate_id")),
+        limit=int(arguments.get("limit") or 80),
+    )
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_nlu_authoring_dialog_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import get_nlu_dialog_context
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    result = get_nlu_dialog_context(
+        webspace_id=webspace_id,
+        request_id=_text_or_none(arguments.get("request_id")),
+        candidate_id=_text_or_none(arguments.get("candidate_id")),
+        limit=int(arguments.get("limit") or 25),
+    )
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_nlu_authoring_recent_failures(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import get_nlu_recent_failures
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    result = get_nlu_recent_failures(webspace_id=webspace_id, limit=int(arguments.get("limit") or 50))
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_desktop_registry_lookup(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import get_desktop_registry_lookup
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    result = get_desktop_registry_lookup(
+        webspace_id=webspace_id,
+        include_live=bool(arguments.get("include_live", True)),
+    )
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_skill_describe_nlu(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import describe_skill_nlu
+
+    skill_id = _text_or_none(arguments.get("skill_id"))
+    root_scope = _mcp_root_scope(arguments)
+    if not skill_id:
+        return {"ok": False, "status": "invalid", "error": "skill_id_required", "root_scope": root_scope}
+    result = describe_skill_nlu(skill_id)
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_scenario_describe_nlu(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import describe_scenario_nlu
+
+    scenario_id = _text_or_none(arguments.get("scenario_id"))
+    root_scope = _mcp_root_scope(arguments)
+    if not scenario_id:
+        return {"ok": False, "status": "invalid", "error": "scenario_id_required", "root_scope": root_scope}
+    result = describe_scenario_nlu(scenario_id)
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_sdk_describe_surface(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import describe_sdk_surface
+
+    root_scope = _mcp_root_scope(arguments)
+    result = describe_sdk_surface(level=_text_or_none(arguments.get("level")) or "std")
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
 def _append_named_entity_alias_audit(
     arguments: dict[str, Any],
     result: dict[str, Any],
@@ -2238,6 +2446,13 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
     "nlu_authoring.check_phrase": lambda arguments, dry_run=False: _handle_nlu_authoring_check_phrase(arguments, dry_run=dry_run),
+    "nlu_authoring.get_trace": lambda arguments, dry_run=False: _handle_nlu_authoring_trace(arguments, dry_run=dry_run),
+    "nlu_authoring.get_dialog_context": lambda arguments, dry_run=False: _handle_nlu_authoring_dialog_context(arguments, dry_run=dry_run),
+    "nlu_authoring.get_recent_failures": lambda arguments, dry_run=False: _handle_nlu_authoring_recent_failures(arguments, dry_run=dry_run),
+    "desktop.registry.lookup": lambda arguments, dry_run=False: _handle_desktop_registry_lookup(arguments, dry_run=dry_run),
+    "skill.describe_nlu": lambda arguments, dry_run=False: _handle_skill_describe_nlu(arguments, dry_run=dry_run),
+    "scenario.describe_nlu": lambda arguments, dry_run=False: _handle_scenario_describe_nlu(arguments, dry_run=dry_run),
+    "sdk.describe_surface": lambda arguments, dry_run=False: _handle_sdk_describe_surface(arguments, dry_run=dry_run),
     "nlu_authoring.add_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.remove_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_remove_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.deprecate_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_deprecate_device_alias(arguments, dry_run=dry_run),
