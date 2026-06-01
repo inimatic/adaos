@@ -70,6 +70,10 @@ endpoints rather than writing endpoint commands into Yjs or calling endpoint
 agents directly. Yjs may project a Connected Devices panel, but endpoint
 commands, events, and streams are routed through the endpoint infrastructure
 described in [Endpoint Infrastructure](architecture/endpoint-infrastructure.md).
+Skills that need ReDevice UI can declare endpoint surfaces in an optional
+`redui.json`; the file is a reviewable skill/scenario contract, not an
+application installed on the ReDevice. The runtime still sends concrete,
+policy-checked endpoint surface commands.
 
 ## Service-type skills
 

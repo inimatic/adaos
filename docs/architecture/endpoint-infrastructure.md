@@ -198,6 +198,126 @@ member. A member-hosted skill sends its endpoint request to the hub-owned
 endpoint router; the hub applies policy, resolves assignment, chooses the
 transport adapter, and records audit evidence.
 
+## ReDevice UI As Data
+
+ReDevice UI should be data-driven, but it should not use Yjs and it should not
+install a skill-owned UI bundle on the endpoint.
+
+The target split is:
+
+```text
+skill package
+  -> optional redui.json endpoint surface declarations
+  -> hub/member skill runtime chooses a surface
+  -> EndpointRouter validates policy and assignment
+  -> endpoint receives a concrete surface command
+  -> ReDevice native renderer displays it
+  -> endpoint sends normalized surface events back
+```
+
+`redui.json` is a declaration file owned by the skill or scenario. It describes
+endpoint-facing surface templates, controls, content slots, degraded fallbacks,
+voice prompts, and expected events. It is not copied to the ReDevice as an
+installed application. The ReDevice agent only receives concrete
+policy-checked commands and content references.
+
+This keeps three concerns separate:
+
+- `redui.json`: design-time contract and reviewable capability declaration;
+- `EndpointCommand`: runtime instruction selected for one endpoint role;
+- `EndpointPolicy`: authorization boundary that decides whether that command
+  is allowed for that endpoint, trust level, and service state.
+
+The router may reject a declared surface at runtime if policy, trust, degraded
+mode, assignment, content size, or service state does not allow it.
+
+### Minimal Surface Types
+
+MVP endpoint surface types:
+
+- `display.text`: full-screen text with optional prompt and acknowledgement.
+- `display.card`: title/body/action layout with large zones.
+- `display.choice`: deterministic choice surface backed by touch zones or
+  hardware buttons.
+- `display.image`: single image or poster frame by content reference.
+- `display.slideshow`: ordered image/content refs with next/previous/favorite
+  style events.
+- `display.progress`: bounded progress or waiting state.
+- `display.alert`: priority message that may require acknowledgement.
+- `diagnostics.step`: degraded-friendly diagnostic prompt with expected
+  buttons, touch zones, timeout, and voice prompt.
+- `voice.prompt`: play a stable voice-pack prompt id with text fallback and
+  replay/skip controls.
+
+Future surface types can add richer media, but they should remain explicit
+service contracts rather than arbitrary HTML or JavaScript.
+
+### `redui.json` Sketch
+
+```json
+{
+  "schema": "adaos.redui.v1",
+  "surfaces": {
+    "slideshow.viewer": {
+      "type": "display.slideshow",
+      "requires": ["display_endpoint"],
+      "events": ["next", "previous", "favorite_toggle", "hide_item"],
+      "controls": {
+        "touch": ["swipe_left", "swipe_right", "tap", "long_press"],
+        "hardware": {
+          "volume_up": "next",
+          "volume_down": "favorite_toggle"
+        }
+      },
+      "degraded_fallback": "slideshow.viewer.buttons"
+    },
+    "diagnostics.speaker_test": {
+      "type": "diagnostics.step",
+      "requires": ["display_endpoint", "audio_output_endpoint", "button_endpoint"],
+      "voice_prompt": "diagnostics.speaker_test.v1",
+      "timeout_ms": 30000,
+      "events": ["confirmed", "repeat", "unconfirmed"]
+    }
+  }
+}
+```
+
+Runtime command using a declared surface:
+
+```json
+{
+  "type": "display.render_surface",
+  "surface_ref": "slideshow.viewer",
+  "surface_id": "surface:album:summer",
+  "target": {
+    "role": "demo_display",
+    "service": "display_endpoint"
+  },
+  "payload": {
+    "items": [
+      {"content_ref": "content:sha256:...", "mime": "image/jpeg"}
+    ]
+  }
+}
+```
+
+Runtime command using an inline surface is allowed for simple system flows such
+as diagnostics and pairing, but it must still use one of the versioned surface
+types and pass the same policy checks.
+
+Surface event back from the endpoint:
+
+```json
+{
+  "type": "endpoint.surface.event",
+  "endpoint_id": "endpoint:redevice:tf201-01",
+  "surface_id": "surface:album:summer",
+  "action": "favorite_toggle",
+  "input": "hardware.volume_down",
+  "item_ref": "content:sha256:..."
+}
+```
+
 ## Endpoint Commands
 
 Commands are bounded, policy-checked requests with explicit delivery state.
@@ -336,6 +456,8 @@ references.
 
 Recommended split:
 
+- `display.render_surface`: render a versioned endpoint surface from
+  `redui.json` or an inline system surface.
 - `display.show_text`: inline small text.
 - `display.show_image`: `content_ref` plus fit/background options.
 - `display.start_slideshow`: ordered content refs and timing.
