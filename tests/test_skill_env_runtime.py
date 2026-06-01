@@ -51,6 +51,31 @@ def test_patch_versions_share_minor_runtime_bucket() -> None:
     assert env.version_root("1.0.0").name == "v1.0"
 
 
+def test_preferred_activation_slot_skips_stale_patch_slot(tmp_path: Path) -> None:
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="stale_patch_skill")
+    env.prepare_version("0.1.8")
+    env.set_active_slot("0.1.8", "A")
+
+    slot = env.build_slot_paths("0.1.8", "A")
+    slot.root.mkdir(parents=True, exist_ok=True)
+    slot.resolved_manifest.write_text(
+        json.dumps({"name": "stale_patch_skill", "version": "0.1.7"}),
+        encoding="utf-8",
+    )
+    metadata = {
+        "slots": {
+            "A": {
+                "version": "0.1.7",
+                "resolved_manifest": str(slot.resolved_manifest),
+            }
+        },
+        "history": {"last_install_slot": "A", "last_install_version": "0.1.7"},
+    }
+
+    assert mgr._preferred_activation_slot(env, "0.1.8", metadata) == "B"
+
+
 def test_internal_data_is_shared_inside_runtime_bucket() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())

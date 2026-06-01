@@ -1779,7 +1779,7 @@ class SkillManager:
         slot_meta = metadata.get("slots", {}).get(target_slot, {})
         manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
         target_manifest: dict[str, Any] = {}
-        slot_version = str(slot_meta.get("version") or "").strip()
+        slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
         needs_prepare = not manifest_path.exists()
         if (
             not needs_prepare
@@ -1790,6 +1790,13 @@ class SkillManager:
         ):
             needs_prepare = True
         if needs_prepare:
+            if slot is None:
+                active_slot = env.read_active_slot(target_version)
+                if target_slot == active_slot:
+                    target_slot = env.select_inactive_slot(target_version)
+                    slot_paths = env.build_slot_paths(target_version, target_slot)
+                    slot_meta = metadata.get("slots", {}).get(target_slot, {})
+                    manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
             if source_path is None:
                 raise RuntimeError(
                     f"slot {target_slot} of version {target_version} is not prepared; "
@@ -3923,9 +3930,22 @@ class SkillManager:
             slot_paths = env.build_slot_paths(version, preferred)
             slot_meta = metadata.get("slots", {}).get(preferred, {})
             manifest_path = Path(slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest)
-            if manifest_path.exists():
+            slot_version = self._prepared_slot_version(slot_meta=slot_meta, manifest_path=manifest_path)
+            if manifest_path.exists() and slot_version == str(version or "").strip():
                 return preferred
         return env.select_inactive_slot(version)
+
+    def _prepared_slot_version(self, *, slot_meta: Any, manifest_path: Path) -> str:
+        if isinstance(slot_meta, Mapping):
+            value = slot_meta.get("version")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        if manifest_path.exists():
+            payload = self._read_json_dict(manifest_path)
+            value = payload.get("version")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
 
     def _policy_defaults(self) -> PolicyDefaults:
         settings = self.ctx.settings
