@@ -11,7 +11,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
-from adaos.services.nlu.teacher_events import append_event, make_event
+from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_events_by_candidate
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 
 _log = logging.getLogger("adaos.nlu.teacher")
@@ -122,8 +122,9 @@ async def _append_teacher_item(webspace_id: str, item: dict) -> None:
             items.append(item)
             if _MAX_ITEMS > 0 and len(items) > _MAX_ITEMS:
                 items = items[-_MAX_ITEMS:]
+            teacher["items"] = items
+            rebuild_events_by_candidate(teacher)
             with ydoc.begin_transaction() as txn:
-                teacher["items"] = items
                 data_map.set(txn, "nlu_teacher", teacher)
 
 

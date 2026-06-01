@@ -173,6 +173,16 @@ async def _on_scenarios_synced(evt: Any) -> None:
 
 
 # Persist on all meaningful teacher mutations.
+@subscribe("nlp.teacher.request")
+async def _on_teacher_request(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
+@subscribe("nlp.teacher.skipped")
+async def _on_teacher_skipped(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
 @subscribe("nlp.teacher.revision.proposed")
 async def _on_revision_proposed(evt: Any) -> None:
     _schedule_persist(_resolve_webspace_id(_payload(evt)))
@@ -193,11 +203,36 @@ async def _on_candidate_proposed(evt: Any) -> None:
     _schedule_persist(_resolve_webspace_id(_payload(evt)))
 
 
+@subscribe("nlp.teacher.candidate.duplicate_suppressed")
+async def _on_candidate_duplicate_suppressed(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
+@subscribe("nlp.teacher.candidate.apply.rejected")
+async def _on_candidate_apply_rejected(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
+@subscribe("nlp.teacher.candidate.verified")
+async def _on_candidate_verified(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
 @subscribe("nlp.teacher.candidate.applied")
 async def _on_candidate_applied(evt: Any) -> None:
     _schedule_persist(_resolve_webspace_id(_payload(evt)))
 
 
+@subscribe("nlp.teacher.understanding.acquired")
+async def _on_understanding_acquired(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
 @subscribe("nlp.teacher.regex_rule.applied")
 async def _on_regex_rule_applied(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
+@subscribe("nlp.teacher.regex_rule.rolled_back")
+async def _on_regex_rule_rolled_back(evt: Any) -> None:
     _schedule_persist(_resolve_webspace_id(_payload(evt)))

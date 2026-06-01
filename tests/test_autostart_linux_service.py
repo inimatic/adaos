@@ -39,6 +39,22 @@ def test_linux_autostart_service_restarts_after_clean_exit(monkeypatch, tmp_path
     service_path = home / ".config" / "systemd" / "user" / "adaos.service"
     text = service_path.read_text(encoding="utf-8")
     assert "Restart=always" in text
+    assert "MemoryMax=" not in text
+
+
+def test_linux_system_service_sets_memory_limits(tmp_path: Path) -> None:
+    service_path = tmp_path / "adaos.service"
+    wrapper = tmp_path / "adaos-autostart.sh"
+    wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    autostart._linux_write_service_file(service_path, wrapper=wrapper, scope="system")
+
+    text = service_path.read_text(encoding="utf-8")
+    assert "MemoryHigh=2200M" in text
+    assert "MemoryMax=3000M" in text
+    assert "MemorySwapMax=1024M" in text
+    assert "OOMPolicy=stop" in text
+    assert "WantedBy=multi-user.target" in text
 
 
 def test_default_spec_exports_shared_dotenv(monkeypatch, tmp_path: Path) -> None:
