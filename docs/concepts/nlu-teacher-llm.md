@@ -244,6 +244,9 @@ Current Root MCP implementation status:
   as the Teacher API and returning `authoring_boundaries` with
   `dispatch=false` and `training_mutation=false`
 - implemented in the Codex bridge: `check_nlu_phrase`
+- implemented in LLM Teacher: the prompt context includes read-only Root MCP
+  evidence from `nlu_authoring.get_context` and `nlu_authoring.check_phrase`
+  before Root/OpenAI is asked to propose a candidate
 - not yet implemented: trace/dialog/recent-failure/template inventory and
   desktop action preview surfaces
 
@@ -497,6 +500,9 @@ functional slice.
 - Record planned intent, owner hint, proposed template, verification status, dispatch status, and correction-thread link.
 - After previewing or trusted-applying a regex/template candidate, immediately run the probe; mark the candidate verified only if the returned
   intent matches the planned intent.
+- Include Root MCP `nlu_authoring.get_context` and `nlu_authoring.check_phrase`
+  evidence in the LLM prompt so candidate generation uses the governed MCP
+  plane, not only ad-hoc runtime snapshots.
 - Dispatch only through the normal AdaOS intent/action path and only when the candidate's action side-effect class allows auto-dispatch.
 - Link "no, that is not it" corrections to the previous request/candidate so the next teacher pass has the failure context.
 - Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
@@ -508,7 +514,8 @@ functional slice.
 - Issue target-scoped Root MCP session leases with an initial `NLUTeacherAuthor`/read-mostly capability profile.
 - Publish read-only MCP contracts for:
   - `nlu.describe_pipeline`
-  - `nlu.check_phrase` backed by the current probe service
+  - `nlu_authoring.get_context`
+  - `nlu_authoring.check_phrase` backed by the current probe service
   - `nlu.get_trace`
   - `nlu.get_dialog_context`
   - `nlu.get_recent_failures`

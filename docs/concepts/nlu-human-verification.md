@@ -41,7 +41,7 @@ Expected result:
 The current Teacher candidate-apply and Root MCP phrase-check slice is covered by:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_nlu_teacher_regex_rules.py tests/test_nlu_teacher_candidate_apply.py tests/test_nlu_probe.py tests/test_root_mcp_named_entities.py tests/test_root_mcp_client.py tests/test_codex_root_mcp_bridge.py
+.\.venv\Scripts\python.exe -m pytest tests/test_nlu_llm_teacher_runtime.py tests/test_nlu_teacher_regex_rules.py tests/test_nlu_teacher_candidate_apply.py tests/test_nlu_probe.py tests/test_root_mcp_named_entities.py tests/test_root_mcp_client.py tests/test_codex_root_mcp_bridge.py
 ```
 
 Expected result:
@@ -52,6 +52,9 @@ Expected result:
 - `nlp.teacher.understanding.acquired` is emitted.
 - Root MCP exposes `nlu_authoring.check_phrase` without dispatching actions or
   mutating training data.
+- LLM Teacher includes Root MCP `nlu_authoring.get_context` and
+  `nlu_authoring.check_phrase` evidence in the prompt before proposing a regex
+  candidate.
 
 Neural provider readiness can be checked without dispatching an action:
 
