@@ -100,3 +100,65 @@ async def test_teacher_bridge_allows_low_confidence_as_nlu_gap(monkeypatch):
 
     assert items[-1]["status"] == "pending"
     assert events[-1]["kind"] == "not_obtained"
+
+
+@pytest.mark.anyio
+async def test_teacher_bridge_builds_ui_projection_from_primary_miss(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_bridge
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-primary-miss-ui"
+    monkeypatch.setattr(teacher_bridge, "_ENABLED", True)
+
+    requests: list[dict] = []
+
+    def _capture_request(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            requests.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.request", _capture_request)
+
+    await teacher_bridge._on_not_obtained(
+        {
+            "text": "Покажи Infrascope",
+            "webspace_id": webspace_id,
+            "request_id": "req.infrascope.miss",
+            "via": "neuro_lite",
+            "reason": "below_margin_threshold",
+        }
+    )
+
+    assert requests
+    assert requests[-1]["request"]["classification"]["class"] == "nlu_gap"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+
+    items = list(teacher.get("items") or [])
+    events = list(teacher.get("events") or [])
+    threads = list(teacher.get("threads_by_request") or [])
+    signals = list(teacher.get("workbench_signals") or [])
+
+    assert items[-1]["text"] == "Покажи Infrascope"
+    assert items[-1]["status"] == "pending"
+    assert events[-1]["kind"] == "not_obtained"
+    assert threads
+    assert threads[-1]["request_id"] == "req.infrascope.miss"
+    assert threads[-1]["title"] == "Покажи Infrascope"
+    assert any(signal.get("id") == "teacher.queue" for signal in signals)
+
+
+@pytest.mark.anyio
+async def test_teacher_store_runtime_persists_primary_teacher_events(monkeypatch):
+    from adaos.services.nlu import teacher_store_runtime
+
+    scheduled: list[str] = []
+    monkeypatch.setattr(teacher_store_runtime, "_schedule_persist", lambda webspace_id: scheduled.append(webspace_id))
+
+    await teacher_store_runtime._on_teacher_request({"webspace_id": "ws-teacher-store"})  # type: ignore[attr-defined]
+    await teacher_store_runtime._on_teacher_skipped({"webspace_id": "ws-teacher-store"})  # type: ignore[attr-defined]
+
+    assert scheduled == ["ws-teacher-store", "ws-teacher-store"]

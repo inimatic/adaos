@@ -1394,6 +1394,14 @@ def _best_effort_remove(path: Path) -> None:
         pass
 
 
+_LINUX_SYSTEM_SERVICE_RESOURCE_LIMITS = (
+    "MemoryHigh=2200M",
+    "MemoryMax=3000M",
+    "MemorySwapMax=1024M",
+    "OOMPolicy=stop",
+)
+
+
 def _linux_write_service_file(
     service_path: Path,
     *,
@@ -1414,6 +1422,8 @@ def _linux_write_service_file(
         "RestartSec=3",
         "Environment=PYTHONUNBUFFERED=1",
     ]
+    if scope == "system":
+        unit_lines += list(_LINUX_SYSTEM_SERVICE_RESOURCE_LIMITS)
     if scope == "system" and run_as:
         unit_lines += [f"User={run_as}", f"Group={run_as}"]
     unit_lines += [
