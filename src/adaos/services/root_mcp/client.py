@@ -205,6 +205,127 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def get_nlu_authoring_trace(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        request_id: str | None = None,
+        candidate_id: str | None = None,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if request_id:
+            arguments["request_id"] = str(request_id)
+        if candidate_id:
+            arguments["candidate_id"] = str(candidate_id)
+        if limit is not None:
+            arguments["limit"] = int(limit)
+        return self.call("nlu_authoring.get_trace", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def get_nlu_authoring_dialog_context(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        request_id: str | None = None,
+        candidate_id: str | None = None,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if request_id:
+            arguments["request_id"] = str(request_id)
+        if candidate_id:
+            arguments["candidate_id"] = str(candidate_id)
+        if limit is not None:
+            arguments["limit"] = int(limit)
+        return self.call("nlu_authoring.get_dialog_context", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def get_nlu_authoring_recent_failures(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if limit is not None:
+            arguments["limit"] = int(limit)
+        return self.call("nlu_authoring.get_recent_failures", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def get_desktop_registry_lookup(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        include_live: bool = True,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"include_live": bool(include_live)}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        return self.call("desktop.registry.lookup", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def describe_skill_nlu(
+        self,
+        skill_id: str,
+        *,
+        target_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"skill_id": str(skill_id or "")}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        return self.call("skill.describe_nlu", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def describe_scenario_nlu(
+        self,
+        scenario_id: str,
+        *,
+        target_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"scenario_id": str(scenario_id or "")}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        return self.call("scenario.describe_nlu", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def describe_sdk_surface(
+        self,
+        *,
+        target_id: str | None = None,
+        level: str = "std",
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"level": str(level or "std")}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        return self.call("sdk.describe_surface", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
     def add_nlu_authoring_device_alias(
         self,
         *,

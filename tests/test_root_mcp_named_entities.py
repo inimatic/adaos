@@ -73,6 +73,13 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert [item.id for item in plane_contracts] == [
         "nlu_authoring.get_context",
         "nlu_authoring.check_phrase",
+        "nlu_authoring.get_trace",
+        "nlu_authoring.get_dialog_context",
+        "nlu_authoring.get_recent_failures",
+        "desktop.registry.lookup",
+        "skill.describe_nlu",
+        "scenario.describe_nlu",
+        "sdk.describe_surface",
         "nlu_authoring.add_device_alias",
         "nlu_authoring.remove_device_alias",
         "nlu_authoring.deprecate_device_alias",
@@ -83,6 +90,91 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert context["canonicalization"]["canonical_ref_required"] is True
     assert context["authoring_boundaries"]["mode"] == "read_only_context"
     assert context["named_entities"]["items"][0]["canonical_ref"] == "skill:weather_skill"
+
+
+def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
+    from adaos.services.nlu import teacher_read_model
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_trace(**kwargs):
+        calls.append(("trace", dict(kwargs)))
+        return {"ok": True, "trace": [{"request_id": kwargs.get("request_id")}], "authoring_boundaries": {}}
+
+    def _fake_dialog(**kwargs):
+        calls.append(("dialog", dict(kwargs)))
+        return {"ok": True, "threads_by_request": [{"request_id": kwargs.get("request_id")}], "authoring_boundaries": {}}
+
+    def _fake_failures(**kwargs):
+        calls.append(("failures", dict(kwargs)))
+        return {"ok": True, "failures": [{"reason": "no_match"}], "authoring_boundaries": {}}
+
+    def _fake_lookup(**kwargs):
+        calls.append(("lookup", dict(kwargs)))
+        return {"ok": True, "lookups": {"modal_id": [{"value": "nlu_teacher_modal"}]}, "authoring_boundaries": {}}
+
+    def _fake_skill(skill_id):
+        calls.append(("skill", {"skill_id": skill_id}))
+        return {"ok": True, "owner": {"type": "skill", "id": skill_id}, "nlu": {"intents": {}}}
+
+    def _fake_scenario(scenario_id):
+        calls.append(("scenario", {"scenario_id": scenario_id}))
+        return {"ok": True, "owner": {"type": "scenario", "id": scenario_id}, "nlu": {"intents": {}}}
+
+    def _fake_sdk(*, level="std"):
+        calls.append(("sdk", {"level": level}))
+        return {"ok": True, "surface_id": "test.sdk", "authoring_boundaries": {"llm_direct_sdk_calls": False}}
+
+    monkeypatch.setattr(teacher_read_model, "get_nlu_trace", _fake_trace)
+    monkeypatch.setattr(teacher_read_model, "get_nlu_dialog_context", _fake_dialog)
+    monkeypatch.setattr(teacher_read_model, "get_nlu_recent_failures", _fake_failures)
+    monkeypatch.setattr(teacher_read_model, "get_desktop_registry_lookup", _fake_lookup)
+    monkeypatch.setattr(teacher_read_model, "describe_skill_nlu", _fake_skill)
+    monkeypatch.setattr(teacher_read_model, "describe_scenario_nlu", _fake_scenario)
+    monkeypatch.setattr(teacher_read_model, "describe_sdk_surface", _fake_sdk)
+
+    scope_context = {
+        "_mcp_context": {
+            "scope": {"subnet_id": "subnet:teacher", "zone": "lab"},
+            "auth_context": {"allowed_target_ids": ["hub:teacher"], "subnet_id": "subnet:teacher"},
+        }
+    }
+
+    trace = root_mcp_service._handle_nlu_authoring_trace(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "request_id": "req-1", **scope_context},
+        dry_run=True,
+    )
+    dialog = root_mcp_service._handle_nlu_authoring_dialog_context(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "request_id": "req-1", **scope_context},
+        dry_run=True,
+    )
+    failures = root_mcp_service._handle_nlu_authoring_recent_failures(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", **scope_context},
+        dry_run=True,
+    )
+    lookup = root_mcp_service._handle_desktop_registry_lookup(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "include_live": False, **scope_context},
+        dry_run=True,
+    )
+    skill = root_mcp_service._handle_skill_describe_nlu(  # type: ignore[attr-defined]
+        {"skill_id": "weather_skill", **scope_context},
+        dry_run=True,
+    )
+    scenario = root_mcp_service._handle_scenario_describe_nlu(  # type: ignore[attr-defined]
+        {"scenario_id": "web_desktop", **scope_context},
+        dry_run=True,
+    )
+    sdk = root_mcp_service._handle_sdk_describe_surface(  # type: ignore[attr-defined]
+        {"level": "mini", **scope_context},
+        dry_run=True,
+    )
+
+    for result in (trace, dialog, failures, lookup, skill, scenario, sdk):
+        assert result["ok"] is True
+        assert result["target_id"] == "hub:teacher"
+        assert result["root_scope"]["subnet_id"] == "subnet:teacher"
+
+    assert [name for name, _args in calls] == ["trace", "dialog", "failures", "lookup", "skill", "scenario", "sdk"]
 
 
 def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:

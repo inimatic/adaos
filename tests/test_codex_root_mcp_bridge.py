@@ -117,6 +117,74 @@ class _FakeRootMcpClient:
         )
         return {"check": {"ok": True, "intent": "desktop.open_weather", "text": text}}
 
+    def get_nlu_authoring_trace(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        request_id: str | None = None,
+        candidate_id: str | None = None,
+        limit: int = 80,
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_nlu_authoring_trace",
+                webspace_id or "",
+                {"target_id": target_id, "request_id": request_id, "candidate_id": candidate_id, "limit": limit},
+            )
+        )
+        return {"ok": True, "trace": [{"request_id": request_id}], "candidates": []}
+
+    def get_nlu_authoring_dialog_context(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        request_id: str | None = None,
+        candidate_id: str | None = None,
+        limit: int = 25,
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_nlu_authoring_dialog_context",
+                webspace_id or "",
+                {"target_id": target_id, "request_id": request_id, "candidate_id": candidate_id, "limit": limit},
+            )
+        )
+        return {"ok": True, "threads_by_request": [{"request_id": request_id}], "candidates": []}
+
+    def get_nlu_authoring_recent_failures(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        self.calls.append(("get_nlu_authoring_recent_failures", webspace_id or "", {"target_id": target_id, "limit": limit}))
+        return {"ok": True, "failures": [{"reason": "no_match"}]}
+
+    def get_desktop_registry_lookup(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        include_live: bool = True,
+    ) -> dict:
+        self.calls.append(("get_desktop_registry_lookup", webspace_id or "", {"target_id": target_id, "include_live": include_live}))
+        return {"ok": True, "lookups": {"modal_id": [{"value": "nlu_teacher_modal"}]}}
+
+    def describe_skill_nlu(self, skill_id: str, *, target_id: str | None = None) -> dict:
+        self.calls.append(("describe_skill_nlu", skill_id, {"target_id": target_id}))
+        return {"ok": True, "owner": {"type": "skill", "id": skill_id}, "nlu": {"intents": {}}}
+
+    def describe_scenario_nlu(self, scenario_id: str, *, target_id: str | None = None) -> dict:
+        self.calls.append(("describe_scenario_nlu", scenario_id, {"target_id": target_id}))
+        return {"ok": True, "owner": {"type": "scenario", "id": scenario_id}, "nlu": {"intents": {}}}
+
+    def describe_sdk_surface(self, *, target_id: str | None = None, level: str = "std") -> dict:
+        self.calls.append(("describe_sdk_surface", level, {"target_id": target_id}))
+        return {"ok": True, "surface_id": "adaos.sdk.describe_surface.v1"}
+
     def add_nlu_authoring_device_alias(
         self,
         *,
@@ -495,6 +563,68 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             },
         }
     )
+    nlu_trace = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 422,
+            "method": "tools/call",
+            "params": {
+                "name": "get_nlu_trace",
+                "arguments": {"webspace_id": "desktop", "request_id": "req-1", "limit": 12},
+            },
+        }
+    )
+    nlu_dialog = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 423,
+            "method": "tools/call",
+            "params": {
+                "name": "get_nlu_dialog_context",
+                "arguments": {"webspace_id": "desktop", "candidate_id": "cand-1", "limit": 7},
+            },
+        }
+    )
+    nlu_failures = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 424,
+            "method": "tools/call",
+            "params": {"name": "get_nlu_recent_failures", "arguments": {"webspace_id": "desktop", "limit": 9}},
+        }
+    )
+    desktop_lookup = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 425,
+            "method": "tools/call",
+            "params": {"name": "lookup_desktop_registry", "arguments": {"webspace_id": "desktop", "include_live": False}},
+        }
+    )
+    skill_nlu = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 426,
+            "method": "tools/call",
+            "params": {"name": "describe_skill_nlu", "arguments": {"skill_id": "weather_skill"}},
+        }
+    )
+    scenario_nlu = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 427,
+            "method": "tools/call",
+            "params": {"name": "describe_scenario_nlu", "arguments": {"scenario_id": "web_desktop"}},
+        }
+    )
+    sdk_surface = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 428,
+            "method": "tools/call",
+            "params": {"name": "describe_sdk_surface", "arguments": {"level": "mini"}},
+        }
+    )
     add_alias = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -604,6 +734,13 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert "get_named_entity_registry" in tool_names
     assert "get_nlu_authoring_context" in tool_names
     assert "check_nlu_phrase" in tool_names
+    assert "get_nlu_trace" in tool_names
+    assert "get_nlu_dialog_context" in tool_names
+    assert "get_nlu_recent_failures" in tool_names
+    assert "lookup_desktop_registry" in tool_names
+    assert "describe_skill_nlu" in tool_names
+    assert "describe_scenario_nlu" in tool_names
+    assert "describe_sdk_surface" in tool_names
     assert "add_device_alias" in tool_names
     assert "remove_device_alias" in tool_names
     assert "deprecate_device_alias" in tool_names
@@ -627,6 +764,20 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert nlu_context["result"]["structuredContent"]["context"]["plane_id"] == "nlu_authoring"
     assert nlu_check is not None
     assert nlu_check["result"]["structuredContent"]["check"]["intent"] == "desktop.open_weather"
+    assert nlu_trace is not None
+    assert nlu_trace["result"]["structuredContent"]["trace"][0]["request_id"] == "req-1"
+    assert nlu_dialog is not None
+    assert nlu_dialog["result"]["structuredContent"]["threads_by_request"][0]["request_id"] is None
+    assert nlu_failures is not None
+    assert nlu_failures["result"]["structuredContent"]["failures"][0]["reason"] == "no_match"
+    assert desktop_lookup is not None
+    assert desktop_lookup["result"]["structuredContent"]["lookups"]["modal_id"][0]["value"] == "nlu_teacher_modal"
+    assert skill_nlu is not None
+    assert skill_nlu["result"]["structuredContent"]["owner"]["id"] == "weather_skill"
+    assert scenario_nlu is not None
+    assert scenario_nlu["result"]["structuredContent"]["owner"]["id"] == "web_desktop"
+    assert sdk_surface is not None
+    assert sdk_surface["result"]["structuredContent"]["surface_id"] == "adaos.sdk.describe_surface.v1"
     assert add_alias is not None
     assert add_alias["result"]["structuredContent"]["status"] == "proposed"
     assert remove_alias is not None
@@ -663,6 +814,21 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "preferred_locales": [],
         },
     ) in fake_client.calls
+    assert (
+        "get_nlu_authoring_trace",
+        "desktop",
+        {"target_id": None, "request_id": "req-1", "candidate_id": None, "limit": 12},
+    ) in fake_client.calls
+    assert (
+        "get_nlu_authoring_dialog_context",
+        "desktop",
+        {"target_id": None, "request_id": None, "candidate_id": "cand-1", "limit": 7},
+    ) in fake_client.calls
+    assert ("get_nlu_authoring_recent_failures", "desktop", {"target_id": None, "limit": 9}) in fake_client.calls
+    assert ("get_desktop_registry_lookup", "desktop", {"target_id": None, "include_live": False}) in fake_client.calls
+    assert ("describe_skill_nlu", "weather_skill", {"target_id": None}) in fake_client.calls
+    assert ("describe_scenario_nlu", "web_desktop", {"target_id": None}) in fake_client.calls
+    assert ("describe_sdk_surface", "mini", {"target_id": None}) in fake_client.calls
     assert (
         "add_nlu_authoring_device_alias",
         "browser:browser-1",

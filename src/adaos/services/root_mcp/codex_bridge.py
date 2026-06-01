@@ -344,6 +344,100 @@ class CodexRootMcpBridge:
                 },
             },
             {
+                "name": "get_nlu_trace",
+                "description": "Read NLU trace and Teacher evidence for a request or candidate.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "request_id": {"type": "string", "description": "Optional Teacher/NLU request id filter."},
+                        "candidate_id": {"type": "string", "description": "Optional Teacher candidate id filter."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 80},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_nlu_dialog_context",
+                "description": "Read correction-aware NLU Teacher dialog/thread context.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "request_id": {"type": "string", "description": "Optional Teacher/NLU request id filter."},
+                        "candidate_id": {"type": "string", "description": "Optional Teacher candidate id filter."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "get_nlu_recent_failures",
+                "description": "Read recent NLU misses and Teacher skip/teachable classification.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "lookup_desktop_registry",
+                "description": "Read desktop lookup tables for apps, modals, scenarios, webspaces, skills, and nodes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "include_live": {"type": "boolean", "default": True, "description": "Include live YJS overlay when available."},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "describe_skill_nlu",
+                "description": "Read a skill's NLU intents, regex rules, event surface, and LLM policy.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "skill_id": {"type": "string", "description": "Skill id/folder name."},
+                    },
+                    "required": ["skill_id"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "describe_scenario_nlu",
+                "description": "Read a scenario's NLU intents and regex rules.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "scenario_id": {"type": "string", "description": "Scenario id/folder name."},
+                    },
+                    "required": ["scenario_id"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "describe_sdk_surface",
+                "description": "Read descriptive SDK/function-call boundaries for NLU Teacher planning; this does not allow direct SDK calls.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "level": {"type": "string", "enum": ["mini", "std", "rich"], "default": "std"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "add_device_alias",
                 "description": "Add a governed alias for a browser/member device through NLUAuthoringPlane. Requires a write-capable Root MCP session.",
                 "inputSchema": {
@@ -797,6 +891,63 @@ class CodexRootMcpBridge:
                     emit_trace=bool(args.get("emit_trace", False)),
                     request_locale=_normalize_text(args.get("request_locale")),
                     preferred_locales=preferred_locales,
+                )
+            )
+        if tool == "get_nlu_trace":
+            return _tool_text(
+                client.get_nlu_authoring_trace(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    request_id=_normalize_text(args.get("request_id")),
+                    candidate_id=_normalize_text(args.get("candidate_id")),
+                    limit=int(args.get("limit") or 80),
+                )
+            )
+        if tool == "get_nlu_dialog_context":
+            return _tool_text(
+                client.get_nlu_authoring_dialog_context(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    request_id=_normalize_text(args.get("request_id")),
+                    candidate_id=_normalize_text(args.get("candidate_id")),
+                    limit=int(args.get("limit") or 25),
+                )
+            )
+        if tool == "get_nlu_recent_failures":
+            return _tool_text(
+                client.get_nlu_authoring_recent_failures(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    limit=int(args.get("limit") or 50),
+                )
+            )
+        if tool == "lookup_desktop_registry":
+            return _tool_text(
+                client.get_desktop_registry_lookup(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    include_live=bool(args.get("include_live", True)),
+                )
+            )
+        if tool == "describe_skill_nlu":
+            return _tool_text(
+                client.describe_skill_nlu(
+                    str(args.get("skill_id") or ""),
+                    target_id=_normalize_text(args.get("target_id")),
+                )
+            )
+        if tool == "describe_scenario_nlu":
+            return _tool_text(
+                client.describe_scenario_nlu(
+                    str(args.get("scenario_id") or ""),
+                    target_id=_normalize_text(args.get("target_id")),
+                )
+            )
+        if tool == "describe_sdk_surface":
+            return _tool_text(
+                client.describe_sdk_surface(
+                    target_id=_normalize_text(args.get("target_id")),
+                    level=str(args.get("level") or "std"),
                 )
             )
         if tool == "add_device_alias":
