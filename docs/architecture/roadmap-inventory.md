@@ -184,13 +184,13 @@ Current status:
 - [x] Descriptor cache and `AdaOSDevPlane` exist.
 - [x] Session leases exist.
 - [x] `ProfileOps` read/control/audit paths exist.
-- [x] `NLUAuthoringPlane` exposes read-only context and governed device alias
-  add/remove/deprecate writes.
+- [x] `NLUAuthoringPlane` exposes read-only context, read-only phrase check,
+  and governed device alias add/remove/deprecate writes.
 - [ ] `NLUTeacherRead`, `NLUTeacherDryRun`, and `NLUTeacherAuthor` capability
   profile names still need final freezing.
 - [ ] Redaction policy for NLU authoring prompts/traces is not fully frozen.
-- [ ] `nlu.check_phrase`, template list/get, and safe template patch tools
-  remain open.
+- [x] `nlu_authoring.check_phrase` exists as the current read-only phrase check.
+- [ ] Template list/get and safe template patch tools remain open.
 - [ ] Subnet historical reconstruction is still weaker than current snapshot
   inspection.
 
@@ -273,7 +273,8 @@ Current status:
 - [ ] Teacher UI check phrase, trace, ranking, entity, and action preview are
   not complete.
 - [ ] Stable template ids and stale-write fingerprints are not complete.
-- [ ] Root MCP phrase-check and safe template apply tools remain open.
+- [x] Root MCP read-only phrase check exists as `nlu_authoring.check_phrase`.
+- [ ] Root MCP safe template apply tools remain open.
 - [ ] Full neural promotion gates using macro-F1, abstain rate, latency, and
   false-positive checks remain open.
 

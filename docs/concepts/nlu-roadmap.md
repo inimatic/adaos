@@ -92,6 +92,13 @@ for the current NLU Teacher implementation gate.
 
 - [x] NLU Teacher stores not-obtained requests per webspace.
 - [x] Teacher can apply regex candidates into scenario/skill-owned artifacts.
+- [x] Teacher candidate Apply is available through API:
+  `POST /api/nlu/teacher/{webspace_id}/candidate/apply`.
+- [x] Applied regex candidates are immediately checked against the original
+  phrase and marked `intent_matched` only when the runtime probe returns the
+  LLM-planned intent.
+- [x] Successful candidate verification emits
+  `nlp.teacher.understanding.acquired` and records Teacher audit events.
 - [x] Teacher can apply dataset revisions into scenario training content.
 - [x] Dry-run phrase probe API for Teacher UI:
   - `POST /api/nlu/teacher/{webspace_id}/probe`
@@ -192,28 +199,32 @@ for the current NLU Teacher implementation gate.
 
 ### 5a: Existing-API Working Loop
 
-- [ ] Use the current Teacher API as the first operational loop before adding new MCP write surfaces:
+- [x] Use the current Teacher API as the first operational loop before adding new MCP write surfaces:
   - `POST /api/nlu/teacher/{webspace_id}/probe`
   - `GET /api/nlu/teacher/{webspace_id}/lookups`
+  - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
   - `POST /api/nlu/teacher/{webspace_id}/example/save`
-- [ ] Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
-- [ ] Record planned intent, owner hint, proposed template, verification status, dispatch status, and correction-thread link.
-- [ ] After a regex/template candidate is previewed or trusted-applied, re-run phrase check and mark it verified only if the returned intent
+- [x] Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
+- [x] Record planned intent, owner hint, proposed regex template, and verification status.
+- [ ] Record dispatch status and correction-thread link.
+- [x] After a regex/template candidate is trusted-applied, re-run phrase check and mark it verified only if the returned intent
   matches the LLM-planned intent.
 - [ ] Dispatch verified candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
   allowed for auto-dispatch.
 - [ ] Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
 - [ ] Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
-- [ ] Add smoke tests for: miss -> candidate -> probe match, false candidate quarantine, duplicate candidate suppression, and correction-thread
+- [x] Add smoke tests for candidate apply -> regex persist -> probe match -> `understanding.acquired`.
+- [ ] Add smoke tests for miss -> LLM candidate proposal, false candidate quarantine, duplicate candidate suppression, and correction-thread
   continuation.
 
 ### 5b: Minimal Read-Only MCP Plane
 
 - [ ] MCP Server modal issues scoped NLU authoring token.
 - [ ] Root resolves token to subnet/zone/capabilities.
-- [ ] Add/read MCP surfaces:
-  - `nlu.describe_pipeline`
-  - `nlu.check_phrase`
+- [x] Add Root MCP `nlu_authoring.check_phrase` backed by the current probe service.
+- [x] Add Codex bridge tool `check_nlu_phrase`.
+- [ ] Add/read remaining MCP surfaces:
+  - `[deferred]` `nlu.describe_pipeline`
   - `nlu.get_trace`
   - `nlu.get_dialog_context`
   - `nlu.get_recent_failures`
@@ -222,7 +233,7 @@ for the current NLU Teacher implementation gate.
   - `skill.describe_nlu`
   - `scenario.describe_nlu`
   - `sdk.describe_surface` (descriptors only, no execution)
-- [ ] Add request timeouts, result-size limits, and audit events for `nlu.check_phrase` and context-reading calls.
+- [ ] Add request timeouts, result-size limits, and audit events for `nlu_authoring.check_phrase` and context-reading calls.
 - [ ] Keep MCP read-only until API-level preview, audit, and stale-write checks are stable.
 
 ### 5c: Action and Ownership Plane
@@ -391,20 +402,28 @@ for the current NLU Teacher implementation gate.
 
 ## Immediate Next Steps
 
-1. Freeze the Teacher request/thread, candidate, lifecycle, event, and
-   idempotency contracts from Phase 0.
-2. Implement the narrow existing-API loop: miss -> regex/template candidate ->
-   probe verification -> normal AdaOS dispatch when allowed -> linked
-   correction.
-3. Add read-only MCP wrappers for probe, trace, dialog context, recent failures,
+1. Connect the actual LLM proposal step: miss -> Root/OpenAI context -> regex
+   candidate for an existing AdaOS intent.
+2. Add correction-thread state for user feedback such as "no, that is not it"
+   and feed that state into the next Teacher analysis cycle.
+3. Add safe dispatch preview/dispatch gates for verified candidates that are
+   allowed to run through the normal AdaOS intent/action path.
+4. Expand read-only MCP wrappers for trace, dialog context, recent failures,
    lookups, skill/scenario NLU descriptors, and SDK descriptors.
-4. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
+5. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
-5. Add full model promotion gates using macro-F1, abstain rate, latency,
+6. Add full model promotion gates using macro-F1, abstain rate, latency,
    false-positive checks, and rollback evidence.
 
 ## Last Completed Slice
 
+- NLU Teacher candidate Apply is exposed through
+  `POST /api/nlu/teacher/{webspace_id}/candidate/apply`.
+- Regex candidate Apply now re-probes the original phrase, records
+  `candidate.verified`, marks matching candidates as `intent_matched`, and
+  emits `nlp.teacher.understanding.acquired`.
+- Root MCP now exposes read-only `nlu_authoring.check_phrase`, and the Codex
+  bridge exposes it as `check_nlu_phrase`.
 - Rasa is packaged as an optional default-on service-skill and installed into skill runtime slots.
 - NLU Teacher has a dry-run phrase probe API with regex-first and optional Rasa fallback.
 - NLU Teacher exposes baseline desktop lookup tables for `modal_id`, `node_ref`, `app_id`, `scenario_id`, and `webspace_id`.

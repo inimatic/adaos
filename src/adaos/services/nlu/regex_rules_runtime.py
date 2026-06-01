@@ -178,6 +178,47 @@ def _normalize_rule(rule: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
+def _compact_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": bool(result.get("ok")),
+        "accepted": bool(result.get("accepted")),
+        "via": result.get("via"),
+        "intent": result.get("intent"),
+        "confidence": result.get("confidence"),
+        "slots": dict(result.get("slots") or {}) if isinstance(result.get("slots"), Mapping) else {},
+        "request_id": result.get("request_id"),
+        "reason": result.get("reason"),
+    }
+
+
+async def _mark_candidate_verification(
+    *,
+    webspace_id: str,
+    candidate_id: str | None,
+    verification: Mapping[str, Any],
+) -> None:
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        return
+    async with _nlu_regex_rules_write_meta():
+        async with async_get_ydoc(webspace_id) as ydoc:
+            data_map = ydoc.get_map("data")
+            teacher = _teacher_obj(data_map)
+            next_candidates: list[dict[str, Any]] = []
+            for item in iter_mappings(teacher.get("candidates")):
+                d = dict(item)
+                if d.get("id") == candidate_id:
+                    d["verification"] = dict(verification)
+                    d["verified_at"] = time.time()
+                    if verification.get("status") == "intent_matched":
+                        d["status"] = "intent_matched"
+                    else:
+                        d["status"] = "verification_failed"
+                next_candidates.append(d)
+            teacher["candidates"] = next_candidates
+            with ydoc.begin_transaction() as txn:
+                data_map.set(txn, "nlu_teacher", teacher)
+
+
 @subscribe("nlp.teacher.regex_rule.apply")
 async def _on_regex_rule_apply(evt: Any) -> None:
     """
@@ -322,6 +363,116 @@ async def _on_regex_rule_apply(evt: Any) -> None:
         invalidate_dynamic_regex_cache(webspace_id=webspace_id)
     except Exception:
         pass
+
+    verification: dict[str, Any] | None = None
+    if request_text:
+        try:
+            from adaos.services.nlu.probe import probe_phrase  # local import to avoid cycles
+
+            probe = await probe_phrase(
+                request_text,
+                webspace_id=webspace_id,
+                use_rasa=False,
+                emit_trace=True,
+            )
+            matched = bool(probe.get("accepted")) and probe.get("intent") == intent.strip()
+            verification = {
+                "status": "intent_matched" if matched else "intent_mismatch",
+                "expected_intent": intent.strip(),
+                "probe": _compact_probe_result(probe),
+            }
+            await _mark_candidate_verification(
+                webspace_id=webspace_id,
+                candidate_id=candidate_id if isinstance(candidate_id, str) else None,
+                verification=verification,
+            )
+            bus_emit(
+                ctx.bus,
+                "nlp.teacher.candidate.verified",
+                {
+                    "webspace_id": webspace_id,
+                    "candidate_id": candidate_id,
+                    "rule_id": rule_id,
+                    "target": dict(applied_to or {}),
+                    "verification": verification,
+                    "_meta": dict(meta),
+                },
+                source="nlu.regex_rules",
+            )
+            try:
+                await append_event(
+                    webspace_id,
+                    make_event(
+                        webspace_id=webspace_id,
+                        request_id=request_id,
+                        request_text=request_text,
+                        kind="candidate.verified",
+                        title="Candidate verified" if matched else "Candidate verification failed",
+                        subtitle=f"{intent}".strip(),
+                        raw={"candidate_id": candidate_id, "rule_id": rule_id, "verification": verification},
+                        meta=meta,
+                    ),
+                )
+            except Exception:
+                _log.debug("failed to append teacher event (candidate.verified) webspace=%s", webspace_id, exc_info=True)
+            if matched:
+                understanding_payload = {
+                    "webspace_id": webspace_id,
+                    "request_id": request_id,
+                    "candidate_id": candidate_id,
+                    "rule_id": rule_id,
+                    "intent": intent.strip(),
+                    "text": request_text,
+                    "target": dict(applied_to or {}),
+                    "verification": verification,
+                    "_meta": dict(meta),
+                }
+                bus_emit(
+                    ctx.bus,
+                    "nlp.teacher.understanding.acquired",
+                    understanding_payload,
+                    source="nlu.regex_rules",
+                )
+                try:
+                    await append_event(
+                        webspace_id,
+                        make_event(
+                            webspace_id=webspace_id,
+                            request_id=request_id,
+                            request_text=request_text,
+                            kind="understanding.acquired",
+                            title="Understanding acquired",
+                            subtitle=f"{intent}".strip(),
+                            raw=understanding_payload,
+                            meta=meta,
+                        ),
+                    )
+                except Exception:
+                    _log.debug(
+                        "failed to append teacher event (understanding.acquired) webspace=%s",
+                        webspace_id,
+                        exc_info=True,
+                    )
+                try:
+                    bus_emit(
+                        ctx.bus,
+                        "ui.notify",
+                        {
+                            "text": f"NLU Teacher acquired a new understanding for intent '{intent.strip()}'.",
+                            "webspace_id": webspace_id,
+                            "_meta": dict(meta),
+                        },
+                        source="nlu.regex_rules",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            _log.warning(
+                "failed to verify applied regex rule webspace=%s candidate_id=%s",
+                webspace_id,
+                candidate_id,
+                exc_info=True,
+            )
 
     try:
         await append_event(

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+import threading
 from typing import Any, Callable
 
 from adaos.build_info import BUILD_INFO
@@ -79,6 +81,28 @@ def _text_list(value: Any) -> list[str]:
         if token and token not in items:
             items.append(token)
     return items
+
+
+def _run_async_from_sync(coro: Any) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    box: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            box["result"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
+            box["error"] = exc
+
+    thread = threading.Thread(target=_runner, name="root-mcp-async-handler", daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
 
 
 def _locale_order(*, request_locale: str | None, preferred_locales: list[str]) -> list[str]:
@@ -405,6 +429,27 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",
             metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_get_context"},
+        ),
+        RootMcpToolContract(
+            id="nlu_authoring.check_phrase",
+            title="Check NLU phrase",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Run a side-effect-free NLU phrase probe for Teacher/LLM authoring evidence.",
+            input_schema=schema_object(
+                properties={
+                    "text": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "use_rasa": {"type": "boolean"},
+                    "emit_trace": {"type": "boolean"},
+                    "request_locale": {"type": "string"},
+                    "preferred_locales": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["text"],
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            side_effects="trace_optional",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_check_phrase"},
         ),
         RootMcpToolContract(
             id="nlu_authoring.add_device_alias",
@@ -1269,6 +1314,38 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
     }
 
 
+def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.probe import probe_phrase
+
+    text = _text_or_none(arguments.get("text"))
+    if not text:
+        return {"ok": False, "status": "invalid", "error": "text_required"}
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    use_rasa = bool(arguments.get("use_rasa", True))
+    emit_trace = False if dry_run else bool(arguments.get("emit_trace", False))
+    request_locale = _text_or_none(arguments.get("request_locale"))
+    preferred_locales = _text_list(arguments.get("preferred_locales"))
+    result = _run_async_from_sync(
+        probe_phrase(
+            text,
+            webspace_id=webspace_id,
+            use_rasa=use_rasa,
+            emit_trace=emit_trace,
+            request_locale=request_locale,
+            preferred_locales=preferred_locales,
+        )
+    )
+    return {
+        "check": dict(result) if isinstance(result, dict) else result,
+        "authoring_boundaries": {
+            "dispatch": False,
+            "training_mutation": False,
+            "side_effects": "trace_only" if emit_trace else "none",
+            "dry_run": bool(dry_run),
+        },
+    }
+
+
 def _append_named_entity_alias_audit(
     arguments: dict[str, Any],
     result: dict[str, Any],
@@ -2130,6 +2207,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
     "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
+    "nlu_authoring.check_phrase": lambda arguments, dry_run=False: _handle_nlu_authoring_check_phrase(arguments, dry_run=dry_run),
     "nlu_authoring.add_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.remove_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_remove_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.deprecate_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_deprecate_device_alias(arguments, dry_run=dry_run),

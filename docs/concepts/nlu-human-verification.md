@@ -11,6 +11,10 @@ Verifiable today:
 - Intent ranking, entities, slots, confidence, and stage trace in API responses.
 - Dynamic desktop lookup tables from manifests plus live read-only desktop registry overlay.
 - Current NLU Teacher modal smoke behavior: missed requests, candidates, raw event payloads, and Apply.
+- Candidate Apply through API/event bus, including regex persistence, immediate
+  probe verification, `intent_matched`, and `nlp.teacher.understanding.acquired`.
+- Root MCP read-only phrase check through `nlu_authoring.check_phrase` / Codex
+  bridge `check_nlu_phrase`.
 
 Not yet verifiable through UI:
 
@@ -33,6 +37,21 @@ Expected result:
 - Probe API tests pass.
 - Rasa baseline export/tests pass.
 - Lookup table export/API tests pass.
+
+The current Teacher candidate-apply and Root MCP phrase-check slice is covered by:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_nlu_teacher_regex_rules.py tests/test_nlu_teacher_candidate_apply.py tests/test_nlu_probe.py tests/test_root_mcp_named_entities.py tests/test_root_mcp_client.py tests/test_codex_root_mcp_bridge.py
+```
+
+Expected result:
+
+- Candidate Apply persists a regex rule into the scenario/skill owner.
+- The original phrase is probed again and the candidate becomes `intent_matched`
+  only when the planned intent matches the probe result.
+- `nlp.teacher.understanding.acquired` is emitted.
+- Root MCP exposes `nlu_authoring.check_phrase` without dispatching actions or
+  mutating training data.
 
 Neural provider readiness can be checked without dispatching an action:
 
@@ -112,6 +131,45 @@ Expected result:
 - `intent`, `confidence`, `slots`, `entities`, and `intent_ranking` are visible when a stage accepts the phrase.
 - `stages[]` explains whether regex missed, Rasa accepted, or the phrase fell through to fallback.
 - The call does not dispatch desktop actions.
+
+Candidate Apply endpoint:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $env:ADAOS_TOKEN" } `
+  -ContentType "application/json" `
+  -Body '{"candidate_id":"cand.123","target":{"type":"scenario","id":"web_desktop"}}' `
+  -Uri "http://127.0.0.1:8000/api/nlu/teacher/desktop/candidate/apply"
+```
+
+Expected result:
+
+- The API response is `ok=true`.
+- AdaOS emits `nlp.teacher.candidate.apply`.
+- For an existing `regex_rule` candidate, the apply handler persists the rule,
+  re-probes the original phrase, and emits `nlp.teacher.understanding.acquired`
+  when the planned intent matches.
+
+Root MCP phrase check:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $env:ADAOS_TOKEN" } `
+  -ContentType "application/json" `
+  -Body '{"tool_id":"nlu_authoring.check_phrase","arguments":{"text":"open apps catalog","webspace_id":"desktop","use_rasa":true,"emit_trace":false}}' `
+  -Uri "http://127.0.0.1:8000/v1/root/mcp/call"
+```
+
+Expected result:
+
+- Response contains `response.result.check.intent`,
+  `response.result.check.confidence`, `response.result.check.slots`,
+  `response.result.check.entities`, and `response.result.check.stages` when
+  available.
+- `response.result.authoring_boundaries.dispatch=false`.
+- `response.result.authoring_boundaries.training_mutation=false`.
 
 ## 3. Trace Verification
 

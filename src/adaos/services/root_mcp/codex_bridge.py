@@ -321,6 +321,27 @@ class CodexRootMcpBridge:
                 },
             },
             {
+                "name": "check_nlu_phrase",
+                "description": "Run a side-effect-free NLU Teacher phrase probe through NLUAuthoringPlane.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Phrase to check."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "use_rasa": {"type": "boolean", "default": True, "description": "Allow Rasa fallback during the probe."},
+                        "emit_trace": {"type": "boolean", "default": False, "description": "Persist NLU trace stages while probing."},
+                        "request_locale": {"type": "string", "description": "Optional active request locale, such as ru or en-US."},
+                        "preferred_locales": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional ordered locale preferences for label selection.",
+                        },
+                    },
+                    "required": ["text"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "add_device_alias",
                 "description": "Add a governed alias for a browser/member device through NLUAuthoringPlane. Requires a write-capable Root MCP session.",
                 "inputSchema": {
@@ -757,6 +778,19 @@ class CodexRootMcpBridge:
                 client.get_nlu_authoring_context(
                     webspace_id=_normalize_text(args.get("webspace_id")),
                     kind=_normalize_text(args.get("kind")),
+                    request_locale=_normalize_text(args.get("request_locale")),
+                    preferred_locales=preferred_locales,
+                )
+            )
+        if tool == "check_nlu_phrase":
+            raw_locales = args.get("preferred_locales")
+            preferred_locales = _normalize_unique(raw_locales if isinstance(raw_locales, list) else None)
+            return _tool_text(
+                client.check_nlu_authoring_phrase(
+                    str(args.get("text") or ""),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    use_rasa=bool(args.get("use_rasa", True)),
+                    emit_trace=bool(args.get("emit_trace", False)),
                     request_locale=_normalize_text(args.get("request_locale")),
                     preferred_locales=preferred_locales,
                 )

@@ -272,6 +272,8 @@ Phase is complete when:
 
 - [x] publish `nlu_authoring.get_context` as a read-only context that includes
   canonical named entities, locale hints, and no-write authoring boundaries
+- [x] publish `nlu_authoring.check_phrase` as a read-only probe wrapper for
+  NLU Teacher evidence
 - [ ] publish `nlu.describe_pipeline`
 - [ ] publish `nlu.list_templates` and `nlu.get_template` so LLMs can inspect current template ids before proposing corrections
 - [ ] publish `desktop.registry.lookup`
@@ -285,8 +287,8 @@ Phase is complete when:
 
 ### `NLUAuthoring-3`. Phrase check and trace
 
-- [ ] publish `nlu.check_phrase`
-- [ ] return stage trace, confidence, ranking, entities, lookup hits, and action preview
+- [x] publish `nlu_authoring.check_phrase` backed by the current probe service
+- [ ] return complete stage trace, confidence, ranking, entities, lookup hits, and action preview
 - [ ] show the same data in NLU Teacher UI
 - [ ] preserve low-confidence fallback to `nlp.intent.not_obtained`
 

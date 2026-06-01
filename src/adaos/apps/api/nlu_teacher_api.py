@@ -50,6 +50,11 @@ class SaveExampleRequest(BaseModel):
     note: Optional[str] = None
 
 
+class ApplyCandidateRequest(BaseModel):
+    candidate_id: str = Field(..., min_length=1)
+    target: Optional[SaveExampleTarget] = None
+
+
 class ProbePhraseRequest(BaseModel):
     text: str = Field(..., min_length=1)
     use_rasa: bool = True
@@ -120,6 +125,26 @@ async def save_example(webspace_id: str, body: SaveExampleRequest):
         raise HTTPException(status_code=500, detail=f"failed to emit save example event: {exc}")
 
     return {"ok": True, "webspace_id": ws, "intent": payload["intent"], "target": payload["target"]}
+
+
+@router.post("/nlu/teacher/{webspace_id}/candidate/apply", dependencies=[Depends(require_token)])
+async def apply_candidate(webspace_id: str, body: ApplyCandidateRequest):
+    ws = _resolve_webspace_id(webspace_id)
+    ctx = get_ctx()
+    payload = {
+        "webspace_id": ws,
+        "candidate_id": body.candidate_id.strip(),
+        "_meta": {"webspace_id": ws, "source": "api.nlu.teacher"},
+    }
+    if body.target is not None:
+        payload["target"] = body.target.model_dump(exclude_none=True)
+
+    try:
+        bus_emit(ctx.bus, "nlp.teacher.candidate.apply", payload, source="api.nlu.teacher")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to emit candidate apply event: {exc}")
+
+    return {"ok": True, "webspace_id": ws, "candidate_id": payload["candidate_id"]}
 
 
 @router.post("/nlu/teacher/{webspace_id}/probe", dependencies=[Depends(require_token)])

@@ -109,6 +109,38 @@ Response shape:
 
 When `emit_trace=true`, each stage is also persisted through `nlu.trace.stage` into `data.nlu_trace.items[]`.
 
+## Current candidate Apply API
+
+The current backend can apply a stored Teacher candidate without requiring the
+UI to publish directly to the event bus:
+
+- `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
+- request:
+
+```json
+{
+  "candidate_id": "cand.123",
+  "target": {"type": "scenario", "id": "web_desktop"}
+}
+```
+
+The endpoint emits `nlp.teacher.candidate.apply`. For `kind="regex_rule"`
+candidates, AdaOS persists the rule into the selected scenario/skill owner,
+mirrors it into runtime regex state, then immediately re-runs the original
+phrase through the probe path.
+
+If the probe result matches the planned candidate intent, AdaOS:
+
+- marks the candidate as `intent_matched`
+- stores compact verification evidence on the candidate
+- emits `nlp.teacher.candidate.verified`
+- appends Teacher events `candidate.verified` and `understanding.acquired`
+- emits `nlp.teacher.understanding.acquired`
+
+If the probe returns another intent or still misses, the candidate is marked
+`verification_failed`. Dispatch is still a separate future gate; the LLM does
+not execute actions directly.
+
 ## Current lookup API
 
 Teacher/LLM can inspect the desktop ids that should be treated as entity candidates:
@@ -204,6 +236,16 @@ Required Root MCP surfaces for NLU Teacher:
 
 This keeps the existing regex model intact: Root MCP supplies descriptors and governed operations, while the current runtime pipeline remains
 `regex-first` and data-owned rules stay in scenario/skill artifacts.
+
+Current Root MCP implementation status:
+
+- implemented: `nlu_authoring.get_context`
+- implemented: `nlu_authoring.check_phrase`, backed by the same probe service
+  as the Teacher API and returning `authoring_boundaries` with
+  `dispatch=false` and `training_mutation=false`
+- implemented in the Codex bridge: `check_nlu_phrase`
+- not yet implemented: trace/dialog/recent-failure/template inventory and
+  desktop action preview surfaces
 
 ## NLU action classes
 
@@ -359,6 +401,7 @@ Apply can be triggered from UI or programmatically:
   - `nlp.teacher.revision.apply { revision_id, intent, examples[], slots }`
 - apply a teacher candidate:
   - `nlp.teacher.candidate.apply { candidate_id, target? }`
+  - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
   - for `regex_rule` candidates the runtime delegates to `nlp.teacher.regex_rule.apply { intent, pattern, target? }`
 - save an operator-approved positive example:
   - `nlp.teacher.example.save { text, intent, target, slots?, request_id? }`
@@ -419,6 +462,9 @@ Expected teacher decision:
 After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 
 - the rule is persisted into the chosen owner (skill/scenario) and mirrored into `data.nlu.regex_rules`
+- the original phrase is probed again; if the result intent matches the
+  candidate intent, the candidate becomes `intent_matched` and AdaOS emits
+  `nlp.teacher.understanding.acquired`
 - the next time the same utterance is sent, `nlu.pipeline` should resolve it as `via="regex.dynamic"` without calling the LLM
 
 ## Roadmap

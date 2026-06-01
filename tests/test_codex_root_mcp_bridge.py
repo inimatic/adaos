@@ -89,6 +89,31 @@ class _FakeRootMcpClient:
             }
         }
 
+    def check_nlu_authoring_phrase(
+        self,
+        text: str,
+        *,
+        webspace_id: str | None = None,
+        use_rasa: bool = True,
+        emit_trace: bool = False,
+        request_locale: str | None = None,
+        preferred_locales: list[str] | None = None,
+    ) -> dict:
+        self.calls.append(
+            (
+                "check_nlu_authoring_phrase",
+                webspace_id or "",
+                {
+                    "text": text,
+                    "use_rasa": use_rasa,
+                    "emit_trace": emit_trace,
+                    "request_locale": request_locale,
+                    "preferred_locales": preferred_locales or [],
+                },
+            )
+        )
+        return {"check": {"ok": True, "intent": "desktop.open_weather", "text": text}}
+
     def add_nlu_authoring_device_alias(
         self,
         *,
@@ -456,6 +481,17 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             },
         }
     )
+    nlu_check = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 421,
+            "method": "tools/call",
+            "params": {
+                "name": "check_nlu_phrase",
+                "arguments": {"text": "weather in Berlin", "webspace_id": "desktop", "use_rasa": False},
+            },
+        }
+    )
     add_alias = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -564,6 +600,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert "get_architecture_catalog" in tool_names
     assert "get_named_entity_registry" in tool_names
     assert "get_nlu_authoring_context" in tool_names
+    assert "check_nlu_phrase" in tool_names
     assert "add_device_alias" in tool_names
     assert "remove_device_alias" in tool_names
     assert "deprecate_device_alias" in tool_names
@@ -585,6 +622,8 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert named_entities["result"]["structuredContent"]["descriptor"]["payload"]["items"][0]["canonical_ref"] == "device:browser:browser-1"
     assert nlu_context is not None
     assert nlu_context["result"]["structuredContent"]["context"]["plane_id"] == "nlu_authoring"
+    assert nlu_check is not None
+    assert nlu_check["result"]["structuredContent"]["check"]["intent"] == "desktop.open_weather"
     assert add_alias is not None
     assert add_alias["result"]["structuredContent"]["status"] == "proposed"
     assert remove_alias is not None
@@ -608,6 +647,11 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
         "get_nlu_authoring_context",
         "desktop",
         {"kind": "device.browser", "request_locale": "ru", "preferred_locales": ["en"]},
+    ) in fake_client.calls
+    assert (
+        "check_nlu_authoring_phrase",
+        "desktop",
+        {"text": "weather in Berlin", "use_rasa": False, "emit_trace": False, "request_locale": None, "preferred_locales": []},
     ) in fake_client.calls
     assert (
         "add_nlu_authoring_device_alias",
