@@ -326,6 +326,44 @@ class RootMcpClient:
             arguments["target_id"] = str(target_id)
         return self.call("sdk.describe_surface", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
 
+    def list_nlu_authoring_templates(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
+        include_system_actions: bool = True,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"include_system_actions": bool(include_system_actions)}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if owner_type:
+            arguments["owner_type"] = str(owner_type)
+        if owner_id:
+            arguments["owner_id"] = str(owner_id)
+        return self.call("nlu_authoring.list_templates", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
+    def list_nlu_authoring_training_targets(
+        self,
+        *,
+        target_id: str | None = None,
+        webspace_id: str | None = None,
+        include_system_actions: bool = True,
+        trace_id: str | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"include_system_actions": bool(include_system_actions)}
+        if target_id:
+            arguments["target_id"] = str(target_id)
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        return self.call("nlu_authoring.list_training_targets", arguments=arguments, trace_id=trace_id, dry_run=dry_run)
+
     def add_nlu_authoring_device_alias(
         self,
         *,

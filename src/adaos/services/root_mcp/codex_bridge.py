@@ -438,6 +438,34 @@ class CodexRootMcpBridge:
                 },
             },
             {
+                "name": "list_nlu_templates",
+                "description": "Read NLU examples, regex rules, and route templates with stable fingerprints.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "owner_type": {"type": "string", "enum": ["skill", "scenario", "system_action"]},
+                        "owner_id": {"type": "string", "description": "Optional owner id/folder/action id filter."},
+                        "include_system_actions": {"type": "boolean", "default": True},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "list_nlu_training_targets",
+                "description": "Read skill, scenario, and system-action surfaces available for NLU Teacher placement decisions.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "include_system_actions": {"type": "boolean", "default": True},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "add_device_alias",
                 "description": "Add a governed alias for a browser/member device through NLUAuthoringPlane. Requires a write-capable Root MCP session.",
                 "inputSchema": {
@@ -948,6 +976,24 @@ class CodexRootMcpBridge:
                 client.describe_sdk_surface(
                     target_id=_normalize_text(args.get("target_id")),
                     level=str(args.get("level") or "std"),
+                )
+            )
+        if tool == "list_nlu_templates":
+            return _tool_text(
+                client.list_nlu_authoring_templates(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    owner_type=_normalize_text(args.get("owner_type")),
+                    owner_id=_normalize_text(args.get("owner_id")),
+                    include_system_actions=bool(args.get("include_system_actions", True)),
+                )
+            )
+        if tool == "list_nlu_training_targets":
+            return _tool_text(
+                client.list_nlu_authoring_training_targets(
+                    target_id=_normalize_text(args.get("target_id")),
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    include_system_actions=bool(args.get("include_system_actions", True)),
                 )
             )
         if tool == "add_device_alias":

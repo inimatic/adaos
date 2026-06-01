@@ -80,6 +80,8 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
         "skill.describe_nlu",
         "scenario.describe_nlu",
         "sdk.describe_surface",
+        "nlu_authoring.list_templates",
+        "nlu_authoring.list_training_targets",
         "nlu_authoring.add_device_alias",
         "nlu_authoring.remove_device_alias",
         "nlu_authoring.deprecate_device_alias",
@@ -125,6 +127,14 @@ def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
         calls.append(("sdk", {"level": level}))
         return {"ok": True, "surface_id": "test.sdk", "authoring_boundaries": {"llm_direct_sdk_calls": False}}
 
+    def _fake_templates(**kwargs):
+        calls.append(("templates", dict(kwargs)))
+        return {"ok": True, "templates": [{"id": "tpl.test"}], "authoring_boundaries": {}}
+
+    def _fake_targets(**kwargs):
+        calls.append(("targets", dict(kwargs)))
+        return {"ok": True, "targets": [{"id": "weather_skill"}], "authoring_boundaries": {}}
+
     monkeypatch.setattr(teacher_read_model, "get_nlu_trace", _fake_trace)
     monkeypatch.setattr(teacher_read_model, "get_nlu_dialog_context", _fake_dialog)
     monkeypatch.setattr(teacher_read_model, "get_nlu_recent_failures", _fake_failures)
@@ -132,6 +142,8 @@ def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
     monkeypatch.setattr(teacher_read_model, "describe_skill_nlu", _fake_skill)
     monkeypatch.setattr(teacher_read_model, "describe_scenario_nlu", _fake_scenario)
     monkeypatch.setattr(teacher_read_model, "describe_sdk_surface", _fake_sdk)
+    monkeypatch.setattr(teacher_read_model, "list_nlu_templates", _fake_templates)
+    monkeypatch.setattr(teacher_read_model, "list_training_targets", _fake_targets)
 
     scope_context = {
         "_mcp_context": {
@@ -168,13 +180,31 @@ def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
         {"level": "mini", **scope_context},
         dry_run=True,
     )
+    templates = root_mcp_service._handle_nlu_authoring_list_templates(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", "owner_type": "skill", "owner_id": "weather_skill", **scope_context},
+        dry_run=True,
+    )
+    targets = root_mcp_service._handle_nlu_authoring_list_training_targets(  # type: ignore[attr-defined]
+        {"webspace_id": "desktop", **scope_context},
+        dry_run=True,
+    )
 
-    for result in (trace, dialog, failures, lookup, skill, scenario, sdk):
+    for result in (trace, dialog, failures, lookup, skill, scenario, sdk, templates, targets):
         assert result["ok"] is True
         assert result["target_id"] == "hub:teacher"
         assert result["root_scope"]["subnet_id"] == "subnet:teacher"
 
-    assert [name for name, _args in calls] == ["trace", "dialog", "failures", "lookup", "skill", "scenario", "sdk"]
+    assert [name for name, _args in calls] == [
+        "trace",
+        "dialog",
+        "failures",
+        "lookup",
+        "skill",
+        "scenario",
+        "sdk",
+        "templates",
+        "targets",
+    ]
 
 
 def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:

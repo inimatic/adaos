@@ -591,6 +591,40 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:nlu_authoring", "handler": "sdk_describe_surface"},
         ),
         RootMcpToolContract(
+            id="nlu_authoring.list_templates",
+            title="List NLU templates",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return read-only example, regex, and route templates with stable fingerprints.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "owner_type": {"type": "string", "enum": ["skill", "scenario", "system_action"]},
+                    "owner_id": {"type": "string"},
+                    "include_system_actions": {"type": "boolean"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_list_templates"},
+        ),
+        RootMcpToolContract(
+            id="nlu_authoring.list_training_targets",
+            title="List NLU training targets",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return writable/read-only NLU target surfaces for Teacher candidate placement.",
+            input_schema=schema_object(
+                properties={
+                    "target_id": {"type": "string"},
+                    "webspace_id": {"type": "string"},
+                    "include_system_actions": {"type": "boolean"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:nlu_authoring", "handler": "nlu_authoring_list_training_targets"},
+        ),
+        RootMcpToolContract(
             id="nlu_authoring.add_device_alias",
             title="Add device alias",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1584,6 +1618,36 @@ def _handle_sdk_describe_surface(arguments: dict[str, Any], *, dry_run: bool) ->
     return result
 
 
+def _handle_nlu_authoring_list_templates(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import list_nlu_templates
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    result = list_nlu_templates(
+        webspace_id=webspace_id,
+        owner_type=_text_or_none(arguments.get("owner_type")),
+        owner_id=_text_or_none(arguments.get("owner_id")),
+        include_system_actions=bool(arguments.get("include_system_actions", True)),
+    )
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
+def _handle_nlu_authoring_list_training_targets(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    from adaos.services.nlu.teacher_read_model import list_training_targets
+
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    root_scope = _mcp_root_scope(arguments)
+    result = list_training_targets(
+        webspace_id=webspace_id,
+        include_system_actions=bool(arguments.get("include_system_actions", True)),
+    )
+    result["target_id"] = root_scope.get("target_id")
+    result["root_scope"] = root_scope
+    return result
+
+
 def _append_named_entity_alias_audit(
     arguments: dict[str, Any],
     result: dict[str, Any],
@@ -2453,6 +2517,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "skill.describe_nlu": lambda arguments, dry_run=False: _handle_skill_describe_nlu(arguments, dry_run=dry_run),
     "scenario.describe_nlu": lambda arguments, dry_run=False: _handle_scenario_describe_nlu(arguments, dry_run=dry_run),
     "sdk.describe_surface": lambda arguments, dry_run=False: _handle_sdk_describe_surface(arguments, dry_run=dry_run),
+    "nlu_authoring.list_templates": lambda arguments, dry_run=False: _handle_nlu_authoring_list_templates(arguments, dry_run=dry_run),
+    "nlu_authoring.list_training_targets": lambda arguments, dry_run=False: _handle_nlu_authoring_list_training_targets(arguments, dry_run=dry_run),
     "nlu_authoring.add_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_add_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.remove_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_remove_device_alias(arguments, dry_run=dry_run),
     "nlu_authoring.deprecate_device_alias": lambda arguments, dry_run=False: _handle_nlu_authoring_deprecate_device_alias(arguments, dry_run=dry_run),
