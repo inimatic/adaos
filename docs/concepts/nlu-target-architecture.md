@@ -203,6 +203,10 @@ Tune per locale/domain after offline evaluation.
 
 ## Implementation roadmap
 
+Status labels follow [nlu-roadmap.md](./nlu-roadmap.md): `[deferred]` means
+the item is intentionally postponed, and `[polish]` means hardening after the
+first functional slice.
+
 ## Phase 0 — Preparation (1 sprint)
 
 - Define event and HTTP contracts for neural stage.
@@ -243,24 +247,24 @@ flows, and no-op safe when disabled.
   - regex fixes,
   - dataset revisions,
   - new intent/skill candidates.
-- Add "accepted by teacher later" feedback channel for retraining.
+- `[deferred]` Add "accepted by teacher later" feedback channel for retraining.
 
 **Exit criteria:** closed feedback loop from runtime misses to curated improvements.
 
 ## Phase 4 — ModelOps and rollout safety (1 sprint)
 
 - Versioned model registry and node-level rollback pointer.
-- Canary rollout by webspace/tenant after node-level statistics justify it.
-- Automatic quality gates before promoting model.
+- `[deferred]` Canary rollout by webspace/tenant after node-level statistics justify it.
+- `[polish]` Automatic quality gates before promoting model.
 
 **Exit criteria:** controlled rollout with fast rollback and auditable model provenance.
 
 ## Phase 5 — Production hardening (ongoing)
 
-- Multi-locale packs.
-- Quantization/perf optimization.
-- Drift detection and periodic reindex/retrain.
-- Security review for model/data supply chain.
+- `[deferred]` Multi-locale packs.
+- `[polish]` Quantization/perf optimization.
+- `[polish]` Drift detection and periodic reindex/retrain.
+- `[polish]` Security review for model/data supply chain.
 
 ## Compatibility with current AdaOS NLU
 
