@@ -129,6 +129,13 @@ candidates, AdaOS persists the rule into the selected scenario/skill owner,
 mirrors it into runtime regex state, then immediately re-runs the original
 phrase through the probe path.
 
+Before a regex candidate can be applied, LLM Teacher performs a local preview:
+the pattern must compile as Python regex and match the original phrase. Valid
+proposals stay `pending` and carry `preview.status="regex_matched"` plus
+captured slots. Invalid or non-matching proposals are stored as
+`quarantined`; Apply rejects them and emits
+`nlp.teacher.candidate.apply.rejected`.
+
 If the probe result matches the planned candidate intent, AdaOS:
 
 - marks the candidate as `intent_matched`
@@ -521,6 +528,8 @@ functional slice.
   - `POST /api/nlu/teacher/{webspace_id}/example/save`
 - Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
 - Record planned intent, owner hint, proposed template, verification status, dispatch status, and correction-thread link.
+- Parse both plain JSON and fenced JSON LLM responses; quarantine regex
+  proposals that fail compile/source-phrase preview.
 - After previewing or trusted-applying a regex/template candidate, immediately run the probe; mark the candidate verified only if the returned
   intent matches the planned intent.
 - Include Root MCP `nlu_authoring.get_context` and `nlu_authoring.check_phrase`

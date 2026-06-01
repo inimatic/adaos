@@ -213,6 +213,9 @@ for the current NLU Teacher implementation gate.
 - [ ] Record dispatch status and correction-thread link.
 - [x] LLM Teacher prompt includes governed Root MCP evidence from
   `nlu_authoring.get_context` and `nlu_authoring.check_phrase`.
+- [x] LLM Teacher parses plain JSON and fenced JSON responses, previews regex
+  candidates against the source phrase, and quarantines candidates that do not
+  compile or do not match the phrase.
 - [x] Add repeatable LLM-training smoke examples for:
   - `skill_action`: LLM proposes a regex for an existing skill-routed intent,
     Apply stores it in `skill.yaml`, replay matches, rollback restores miss.
@@ -229,8 +232,8 @@ for the current NLU Teacher implementation gate.
 - [ ] Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
 - [ ] Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
 - [x] Add smoke tests for candidate apply -> regex persist -> probe match -> `understanding.acquired`.
-- [ ] Add smoke tests for miss -> LLM candidate proposal, false candidate quarantine, duplicate candidate suppression, and correction-thread
-  continuation.
+- [x] Add smoke tests for miss -> LLM candidate proposal and false candidate quarantine.
+- [ ] Add smoke tests for duplicate candidate suppression and correction-thread continuation.
 
 ### 5b: Minimal Read-Only MCP Plane
 
@@ -431,8 +434,8 @@ for the current NLU Teacher implementation gate.
 
 ## Immediate Next Steps
 
-1. Run a live Root/OpenAI smoke with real credentials and capture the exact
-   prompt/context hash, LLM response, candidate, apply, and verification trace.
+1. Persist prompt/context hashes for live Root/OpenAI Teacher runs so later
+   audits can reproduce exactly which context produced a candidate.
 2. Add correction-thread state for user feedback such as "no, that is not it"
    and feed that state into the next Teacher analysis cycle.
 3. Add safe dispatch preview/dispatch gates for verified candidates that are
@@ -460,10 +463,16 @@ for the current NLU Teacher implementation gate.
 - LLM Teacher now includes read-only Root MCP authoring evidence
   (`nlu_authoring.get_context` and `nlu_authoring.check_phrase`) in the prompt
   before asking Root/OpenAI for a candidate.
+- LLM Teacher now accepts both plain JSON and fenced JSON model responses,
+  previews proposed regex rules against the original phrase, and marks bad
+  proposals as `quarantined` so Apply rejects them.
 - A closed-loop test now covers: regex miss -> LLM regex candidate -> Apply ->
   `understanding.acquired` -> repeated phrase resolves through `regex.dynamic`.
 - Added repeatable test examples for `skill_action` and `interface_action`
   training with rollback to the original miss state.
+- Live Root/OpenAI smokes covered `skill_action` and `interface_action`: both
+  produced regex candidates that previewed, applied, replayed through
+  `regex.dynamic`, and rolled back to the original miss state.
 - Rasa is packaged as an optional default-on service-skill and installed into skill runtime slots.
 - NLU Teacher has a dry-run phrase probe API with regex-first and optional Rasa fallback.
 - NLU Teacher exposes baseline desktop lookup tables for `modal_id`, `node_ref`, `app_id`, `scenario_id`, and `webspace_id`.
