@@ -318,6 +318,53 @@ Surface event back from the endpoint:
 }
 ```
 
+## Endpoint Binding
+
+Assignments answer which endpoint plays a role. Bindings answer which
+skill/scenario instance owns the two-way interaction for a surface or stream.
+
+Skill ownership must be node-qualified. The same skill id can exist on several
+members, and different members may manage different ReDevice agents.
+
+```text
+binding owner = node_id:skill_id
+```
+
+Example:
+
+```json
+{
+  "binding_id": "bind:slideshow:tf201",
+  "role": "slideshow_frame",
+  "endpoint_id": "endpoint:redevice:tf201-01",
+  "service": "display_endpoint",
+  "surface_id": "surface:album:summer",
+  "owner": {
+    "node_id": "member:living-room",
+    "skill_id": "slideshow_skill"
+  },
+  "events": {
+    "next": {
+      "target": "member:living-room:slideshow_skill",
+      "handler": "slideshow.next"
+    },
+    "favorite_toggle": {
+      "target": "member:living-room:slideshow_skill",
+      "handler": "slideshow.favorite_toggle"
+    },
+    "hide_item": {
+      "target": "member:living-room:slideshow_skill",
+      "handler": "slideshow.hide_item"
+    }
+  }
+}
+```
+
+The endpoint does not know the skill target. It emits normalized events with
+`surface_id`, `action`, and optional `item_ref`. The hub-owned router resolves
+the binding to `node_id:skill_id`, checks policy, records audit, and then
+routes the event to the owning skill instance.
+
 ## Endpoint Commands
 
 Commands are bounded, policy-checked requests with explicit delivery state.
