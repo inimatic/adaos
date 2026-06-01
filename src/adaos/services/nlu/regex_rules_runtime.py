@@ -96,6 +96,127 @@ def _append_or_update_rule(existing: list[dict[str, Any]], rule: dict[str, Any])
     return cleaned
 
 
+def _rule_matches_rollback(
+    item: Mapping[str, Any],
+    *,
+    rule_id: str | None,
+    candidate_id: str | None,
+    intent: str | None,
+    pattern: str | None,
+) -> bool:
+    if rule_id and item.get("id") == rule_id:
+        return True
+    if candidate_id and item.get("candidate_id") == candidate_id:
+        return True
+    if not rule_id and not candidate_id and intent and pattern:
+        return item.get("intent") == intent and item.get("pattern") == pattern and item.get("source") == "teacher"
+    return False
+
+
+def _remove_rules(
+    rules: list[dict[str, Any]],
+    *,
+    rule_id: str | None,
+    candidate_id: str | None,
+    intent: str | None,
+    pattern: str | None,
+) -> tuple[list[dict[str, Any]], int]:
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for item in rules:
+        if not isinstance(item, dict):
+            continue
+        if _rule_matches_rollback(item, rule_id=rule_id, candidate_id=candidate_id, intent=intent, pattern=pattern):
+            removed += 1
+            continue
+        kept.append(dict(item))
+    return kept, removed
+
+
+def _remove_scenario_regex_rule(
+    *,
+    scenario_id: str,
+    rule_id: str | None,
+    candidate_id: str | None,
+    intent: str | None,
+    pattern: str | None,
+) -> int:
+    root = scenarios_loader.scenario_root(scenario_id)
+    path = root / "scenario.json"
+    if not path.exists():
+        return 0
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+        payload = json.loads(raw)
+    except Exception:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    nlu = payload.get("nlu")
+    if not isinstance(nlu, dict):
+        return 0
+    rules = nlu.get("regex_rules")
+    if not isinstance(rules, list):
+        return 0
+    kept, removed = _remove_rules(
+        [dict(x) for x in rules if isinstance(x, dict)],
+        rule_id=rule_id,
+        candidate_id=candidate_id,
+        intent=intent,
+        pattern=pattern,
+    )
+    if not removed:
+        return 0
+    nlu["regex_rules"] = kept
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        return 0
+    scenarios_loader.invalidate_cache(scenario_id=scenario_id, space="workspace")
+    return removed
+
+
+def _remove_skill_regex_rule(
+    *,
+    skill_name: str,
+    rule_id: str | None,
+    candidate_id: str | None,
+    intent: str | None,
+    pattern: str | None,
+) -> int:
+    ctx = get_ctx()
+    path = Path(ctx.paths.skills_dir()) / skill_name / "skill.yaml"
+    if not path.exists():
+        return 0
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    nlu = payload.get("nlu")
+    if not isinstance(nlu, dict):
+        return 0
+    rules = nlu.get("regex_rules")
+    if not isinstance(rules, list):
+        return 0
+    kept, removed = _remove_rules(
+        [dict(x) for x in rules if isinstance(x, dict)],
+        rule_id=rule_id,
+        candidate_id=candidate_id,
+        intent=intent,
+        pattern=pattern,
+    )
+    if not removed:
+        return 0
+    nlu["regex_rules"] = kept
+    try:
+        path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    except Exception:
+        return 0
+    return removed
+
+
 def _write_scenario_regex_rule(*, scenario_id: str, rule: dict[str, Any]) -> bool:
     root = scenarios_loader.scenario_root(scenario_id)
     path = root / "scenario.json"
@@ -217,6 +338,134 @@ async def _mark_candidate_verification(
             teacher["candidates"] = next_candidates
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
+
+
+@subscribe("nlp.teacher.regex_rule.rollback")
+async def _on_regex_rule_rollback(evt: Any) -> None:
+    ctx = get_ctx()
+    payload = _payload(evt)
+    webspace_id = _resolve_webspace_id(payload)
+    meta = coerce_dict(payload.get("_meta"))
+    candidate_id = payload.get("candidate_id") if isinstance(payload.get("candidate_id"), str) else None
+    rule_id = payload.get("rule_id") if isinstance(payload.get("rule_id"), str) else None
+    target = payload.get("target") if isinstance(payload.get("target"), Mapping) else None
+    intent = payload.get("intent") if isinstance(payload.get("intent"), str) else None
+    pattern = payload.get("pattern") if isinstance(payload.get("pattern"), str) else None
+    request_id: str | None = None
+    request_text = ""
+    removed_owner = 0
+    removed_runtime = 0
+    resolved_target: dict[str, Any] | None = dict(target) if isinstance(target, Mapping) else None
+
+    try:
+        async with _nlu_regex_rules_write_meta():
+            async with async_get_ydoc(webspace_id) as ydoc:
+                data_map = ydoc.get_map("data")
+                teacher = _teacher_obj(data_map)
+                next_candidates: list[dict[str, Any]] = []
+                for item in iter_mappings(teacher.get("candidates")):
+                    d = dict(item)
+                    if candidate_id and d.get("id") == candidate_id:
+                        request_id = d.get("request_id") if isinstance(d.get("request_id"), str) else None
+                        request_text = d.get("text") if isinstance(d.get("text"), str) else ""
+                        rr = d.get("regex_rule") if isinstance(d.get("regex_rule"), Mapping) else {}
+                        intent = intent or (rr.get("intent") if isinstance(rr.get("intent"), str) else None)
+                        pattern = pattern or (rr.get("pattern") if isinstance(rr.get("pattern"), str) else None)
+                        applied = d.get("applied") if isinstance(d.get("applied"), Mapping) else {}
+                        rule_id = rule_id or (applied.get("rule_id") if isinstance(applied.get("rule_id"), str) else None)
+                        applied_target = applied.get("target") if isinstance(applied.get("target"), Mapping) else None
+                        if resolved_target is None and isinstance(applied_target, Mapping):
+                            resolved_target = dict(applied_target)
+                        d["status"] = "rolled_back"
+                        d["rolled_back_at"] = time.time()
+                    next_candidates.append(d)
+
+                if resolved_target:
+                    t_type = resolved_target.get("type")
+                    t_id = resolved_target.get("id")
+                    if t_type == "scenario" and isinstance(t_id, str) and t_id.strip():
+                        removed_owner = _remove_scenario_regex_rule(
+                            scenario_id=t_id.strip(),
+                            rule_id=rule_id,
+                            candidate_id=candidate_id,
+                            intent=intent,
+                            pattern=pattern,
+                        )
+                    elif t_type == "skill" and isinstance(t_id, str) and t_id.strip():
+                        removed_owner = _remove_skill_regex_rule(
+                            skill_name=t_id.strip(),
+                            rule_id=rule_id,
+                            candidate_id=candidate_id,
+                            intent=intent,
+                            pattern=pattern,
+                        )
+
+                nlu_obj = _read_nlu_obj(data_map)
+                rules = [dict(x) for x in iter_mappings(nlu_obj.get("regex_rules"))]
+                kept, removed_runtime = _remove_rules(
+                    rules,
+                    rule_id=rule_id,
+                    candidate_id=candidate_id,
+                    intent=intent,
+                    pattern=pattern,
+                )
+                nlu_obj["regex_rules"] = kept[-200:]
+
+                rollback_info = {
+                    "type": "regex_rule",
+                    "rule_id": rule_id,
+                    "candidate_id": candidate_id,
+                    "target": dict(resolved_target or {}),
+                    "removed_owner": removed_owner,
+                    "removed_runtime": removed_runtime,
+                }
+                marked: list[dict[str, Any]] = []
+                for d in next_candidates:
+                    if candidate_id and d.get("id") == candidate_id:
+                        d["rollback"] = rollback_info
+                    marked.append(d)
+                teacher["candidates"] = marked
+                with ydoc.begin_transaction() as txn:
+                    data_map.set(txn, "nlu", nlu_obj)
+                    data_map.set(txn, "nlu_teacher", teacher)
+    except Exception:
+        _log.warning("failed to rollback regex rule webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+        return
+
+    try:
+        from adaos.services.nlu.pipeline import invalidate_dynamic_regex_cache
+
+        invalidate_dynamic_regex_cache(webspace_id=webspace_id)
+    except Exception:
+        pass
+
+    payload_out = {
+        "webspace_id": webspace_id,
+        "candidate_id": candidate_id,
+        "rule_id": rule_id,
+        "target": dict(resolved_target or {}),
+        "removed_owner": removed_owner,
+        "removed_runtime": removed_runtime,
+        "_meta": dict(meta),
+    }
+    try:
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=request_text,
+                kind="regex_rule.rolled_back",
+                title="Regex rule rolled back",
+                subtitle=str(rule_id or candidate_id or ""),
+                raw=payload_out,
+                meta=meta,
+            ),
+        )
+    except Exception:
+        _log.debug("failed to append teacher event (regex_rule.rolled_back) webspace=%s", webspace_id, exc_info=True)
+
+    bus_emit(ctx.bus, "nlp.teacher.regex_rule.rolled_back", payload_out, source="nlu.regex_rules")
 
 
 @subscribe("nlp.teacher.regex_rule.apply")

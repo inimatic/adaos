@@ -274,6 +274,8 @@ Phase is complete when:
   canonical named entities, locale hints, and no-write authoring boundaries
 - [x] publish `nlu_authoring.check_phrase` as a read-only probe wrapper for
   NLU Teacher evidence
+- [x] pass bearer/session subnet scope into NLU authoring handlers and include
+  `root_scope` / `target_id` in results
 - [ ] publish `nlu.describe_pipeline`
 - [ ] publish `nlu.list_templates` and `nlu.get_template` so LLMs can inspect current template ids before proposing corrections
 - [ ] publish `desktop.registry.lookup`

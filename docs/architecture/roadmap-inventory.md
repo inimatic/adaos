@@ -186,6 +186,8 @@ Current status:
 - [x] `ProfileOps` read/control/audit paths exist.
 - [x] `NLUAuthoringPlane` exposes read-only context, read-only phrase check,
   and governed device alias add/remove/deprecate writes.
+- [x] NLU authoring handlers receive Root MCP bearer/session scope and return
+  target/subnet evidence in results.
 - [ ] `NLUTeacherRead`, `NLUTeacherDryRun`, and `NLUTeacherAuthor` capability
   profile names still need final freezing.
 - [ ] Redaction policy for NLU authoring prompts/traces is not fully frozen.
@@ -266,7 +268,7 @@ Current status:
   curated rebuild, and diagnostics exist.
 - [x] `neuro_nlu_lite_skill` exists as an experimental weak-device provider
   with a separate `neuro_lite` stage and runtime flag/policy.
-- [x] Teacher probe, lookup, example save, candidate apply, and dataset update
+- [x] Teacher probe, lookup, example save, candidate apply/rollback, and dataset update
   backend APIs exist.
 - [ ] Teacher request/thread and candidate lifecycle contracts still need to be
   frozen as the governing product contract.
@@ -274,6 +276,8 @@ Current status:
   not complete.
 - [ ] Stable template ids and stale-write fingerprints are not complete.
 - [x] Root MCP read-only phrase check exists as `nlu_authoring.check_phrase`.
+- [x] Teacher regex candidate tests cover repeatable `skill_action` and
+  `interface_action` training loops with rollback.
 - [ ] Root MCP safe template apply tools remain open.
 - [ ] Full neural promotion gates using macro-F1, abstain rate, latency, and
   false-positive checks remain open.

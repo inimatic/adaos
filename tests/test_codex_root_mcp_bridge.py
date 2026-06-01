@@ -69,6 +69,7 @@ class _FakeRootMcpClient:
     def get_nlu_authoring_context(
         self,
         *,
+        target_id: str | None = None,
         webspace_id: str | None = None,
         kind: str | None = None,
         request_locale: str | None = None,
@@ -78,7 +79,7 @@ class _FakeRootMcpClient:
             (
                 "get_nlu_authoring_context",
                 webspace_id or "",
-                {"kind": kind, "request_locale": request_locale, "preferred_locales": preferred_locales or []},
+                {"target_id": target_id, "kind": kind, "request_locale": request_locale, "preferred_locales": preferred_locales or []},
             )
         )
         return {
@@ -93,6 +94,7 @@ class _FakeRootMcpClient:
         self,
         text: str,
         *,
+        target_id: str | None = None,
         webspace_id: str | None = None,
         use_rasa: bool = True,
         emit_trace: bool = False,
@@ -105,6 +107,7 @@ class _FakeRootMcpClient:
                 webspace_id or "",
                 {
                     "text": text,
+                    "target_id": target_id,
                     "use_rasa": use_rasa,
                     "emit_trace": emit_trace,
                     "request_locale": request_locale,
@@ -646,12 +649,19 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert (
         "get_nlu_authoring_context",
         "desktop",
-        {"kind": "device.browser", "request_locale": "ru", "preferred_locales": ["en"]},
+        {"target_id": None, "kind": "device.browser", "request_locale": "ru", "preferred_locales": ["en"]},
     ) in fake_client.calls
     assert (
         "check_nlu_authoring_phrase",
         "desktop",
-        {"text": "weather in Berlin", "use_rasa": False, "emit_trace": False, "request_locale": None, "preferred_locales": []},
+        {
+            "text": "weather in Berlin",
+            "target_id": None,
+            "use_rasa": False,
+            "emit_trace": False,
+            "request_locale": None,
+            "preferred_locales": [],
+        },
     ) in fake_client.calls
     assert (
         "add_nlu_authoring_device_alias",

@@ -13,6 +13,8 @@ Verifiable today:
 - Current NLU Teacher modal smoke behavior: missed requests, candidates, raw event payloads, and Apply.
 - Candidate Apply through API/event bus, including regex persistence, immediate
   probe verification, `intent_matched`, and `nlp.teacher.understanding.acquired`.
+- Candidate rollback through API/event bus, including owner-artifact cleanup
+  and runtime regex cache invalidation.
 - Root MCP read-only phrase check through `nlu_authoring.check_phrase` / Codex
   bridge `check_nlu_phrase`.
 
@@ -55,6 +57,8 @@ Expected result:
 - LLM Teacher includes Root MCP `nlu_authoring.get_context` and
   `nlu_authoring.check_phrase` evidence in the prompt before proposing a regex
   candidate.
+- Repeatable LLM-training examples cover both `skill_action` and
+  `interface_action`, including rollback back to the original miss state.
 
 Neural provider readiness can be checked without dispatching an action:
 
@@ -154,6 +158,25 @@ Expected result:
   re-probes the original phrase, and emits `nlp.teacher.understanding.acquired`
   when the planned intent matches.
 
+Candidate rollback endpoint:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Headers @{ Authorization = "Bearer $env:ADAOS_TOKEN" } `
+  -ContentType "application/json" `
+  -Body '{"candidate_id":"cand.123"}' `
+  -Uri "http://127.0.0.1:8000/api/nlu/teacher/desktop/candidate/rollback"
+```
+
+Expected result:
+
+- The API response is `ok=true`.
+- AdaOS emits `nlp.teacher.regex_rule.rollback`.
+- The applied regex is removed from the owning skill/scenario artifact and
+  from `data.nlu.regex_rules`.
+- Re-running the phrase returns to the pre-training miss state.
+
 Root MCP phrase check:
 
 ```powershell
@@ -171,6 +194,8 @@ Expected result:
   `response.result.check.confidence`, `response.result.check.slots`,
   `response.result.check.entities`, and `response.result.check.stages` when
   available.
+- `response.result.root_scope` and `response.result.target_id` identify the
+  subnet/target resolved from the Root MCP bearer/session scope when present.
 - `response.result.authoring_boundaries.dispatch=false`.
 - `response.result.authoring_boundaries.training_mutation=false`.
 

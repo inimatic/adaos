@@ -141,6 +141,23 @@ If the probe returns another intent or still misses, the candidate is marked
 `verification_failed`. Dispatch is still a separate future gate; the LLM does
 not execute actions directly.
 
+Current rollback surface:
+
+- `POST /api/nlu/teacher/{webspace_id}/candidate/rollback`
+- request:
+
+```json
+{
+  "candidate_id": "cand.123"
+}
+```
+
+For applied regex candidates, rollback removes the rule from the owning
+scenario/skill artifact and from the runtime regex cache mirror, marks the
+candidate `rolled_back`, and emits `nlp.teacher.regex_rule.rolled_back`. This
+keeps smoke examples repeatable: after rollback, the same phrase should miss
+again until the candidate is applied once more.
+
 ## Current lookup API
 
 Teacher/LLM can inspect the desktop ids that should be treated as entity candidates:
@@ -247,6 +264,9 @@ Current Root MCP implementation status:
 - implemented in LLM Teacher: the prompt context includes read-only Root MCP
   evidence from `nlu_authoring.get_context` and `nlu_authoring.check_phrase`
   before Root/OpenAI is asked to propose a candidate
+- implemented: NLU authoring MCP results include bearer/session-derived
+  `root_scope` and `target_id`, so the LLM can see which subnet target the
+  context belongs to
 - not yet implemented: trace/dialog/recent-failure/template inventory and
   desktop action preview surfaces
 
@@ -406,6 +426,9 @@ Apply can be triggered from UI or programmatically:
   - `nlp.teacher.candidate.apply { candidate_id, target? }`
   - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
   - for `regex_rule` candidates the runtime delegates to `nlp.teacher.regex_rule.apply { intent, pattern, target? }`
+- rollback an applied regex candidate:
+  - `nlp.teacher.regex_rule.rollback { candidate_id, rule_id?, target? }`
+  - `POST /api/nlu/teacher/{webspace_id}/candidate/rollback`
 - save an operator-approved positive example:
   - `nlp.teacher.example.save { text, intent, target, slots?, request_id? }`
   - `POST /api/nlu/teacher/{webspace_id}/example/save`

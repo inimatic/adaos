@@ -122,6 +122,10 @@ def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:
             "emit_trace": False,
             "request_locale": "en",
             "preferred_locales": ["ru"],
+            "_mcp_context": {
+                "scope": {"subnet_id": "subnet:test-nlu", "zone": "lab"},
+                "auth_context": {"allowed_target_ids": ["hub:test-nlu"], "subnet_id": "subnet:test-nlu"},
+            },
         },
         dry_run=False,
     )
@@ -132,6 +136,8 @@ def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:
     assert contract.metadata["published_by"] == "plane:nlu_authoring"
     assert result["check"]["ok"] is True
     assert result["check"]["intent"] == "desktop.open_weather"
+    assert result["target_id"] == "hub:test-nlu"
+    assert result["root_scope"]["subnet_id"] == "subnet:test-nlu"
     assert result["check"]["use_rasa"] is False
     assert result["check"]["request_locale"] == "en"
     assert result["authoring_boundaries"]["dispatch"] is False
@@ -143,6 +149,29 @@ def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:
     )
     assert dry_result["check"]["emit_trace"] is False
     assert dry_result["authoring_boundaries"]["side_effects"] == "none"
+
+
+def test_root_mcp_nlu_authoring_context_uses_bearer_scope() -> None:
+    response = root_mcp_service.invoke_tool(
+        "nlu_authoring.get_context",
+        arguments={"kind": "skill"},
+        actor="mcp_access_token:tok-test",
+        auth_method="mcp_access_token",
+        scope={"subnet_id": "subnet:scoped", "zone": "lab-a"},
+        auth_context={
+            "capabilities": ["development.read.descriptors"],
+            "allowed_target_ids": ["hub:scoped"],
+            "subnet_id": "subnet:scoped",
+            "zone": "lab-a",
+        },
+    )
+
+    assert response.ok is True
+    context = response.result["context"]
+    assert context["root_scope"]["subnet_id"] == "subnet:scoped"
+    assert context["root_scope"]["zone"] == "lab-a"
+    assert context["target_id"] == "hub:scoped"
+    assert response.meta["policy_decision"] == "allow"
 
 
 def test_root_mcp_exposes_governed_device_alias_write(monkeypatch) -> None:

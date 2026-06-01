@@ -142,6 +142,7 @@ class RootMcpClient:
     def get_nlu_authoring_context(
         self,
         *,
+        target_id: str | None = None,
         webspace_id: str | None = None,
         kind: str | None = None,
         request_locale: str | None = None,
@@ -151,6 +152,8 @@ class RootMcpClient:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {}
+        if target_id:
+            arguments["target_id"] = str(target_id)
         if webspace_id:
             arguments["webspace_id"] = str(webspace_id)
         if kind:
@@ -171,6 +174,7 @@ class RootMcpClient:
         self,
         text: str,
         *,
+        target_id: str | None = None,
         webspace_id: str | None = None,
         use_rasa: bool = True,
         emit_trace: bool = False,
@@ -185,6 +189,8 @@ class RootMcpClient:
             "use_rasa": bool(use_rasa),
             "emit_trace": bool(emit_trace),
         }
+        if target_id:
+            arguments["target_id"] = str(target_id)
         if webspace_id:
             arguments["webspace_id"] = str(webspace_id)
         if request_locale:

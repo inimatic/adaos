@@ -296,6 +296,7 @@ class CodexRootMcpBridge:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
                         "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
                         "kind": {"type": "string", "description": "Optional entity kind filter, such as device.browser or skill."},
                     },
@@ -327,6 +328,7 @@ class CodexRootMcpBridge:
                     "type": "object",
                     "properties": {
                         "text": {"type": "string", "description": "Phrase to check."},
+                        "target_id": {"type": "string", "description": "Optional managed target id. Defaults from the Root MCP bearer scope."},
                         "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
                         "use_rasa": {"type": "boolean", "default": True, "description": "Allow Rasa fallback during the probe."},
                         "emit_trace": {"type": "boolean", "default": False, "description": "Persist NLU trace stages while probing."},
@@ -776,6 +778,7 @@ class CodexRootMcpBridge:
             preferred_locales = _normalize_unique(raw_locales if isinstance(raw_locales, list) else None)
             return _tool_text(
                 client.get_nlu_authoring_context(
+                    target_id=_normalize_text(args.get("target_id")),
                     webspace_id=_normalize_text(args.get("webspace_id")),
                     kind=_normalize_text(args.get("kind")),
                     request_locale=_normalize_text(args.get("request_locale")),
@@ -788,6 +791,7 @@ class CodexRootMcpBridge:
             return _tool_text(
                 client.check_nlu_authoring_phrase(
                     str(args.get("text") or ""),
+                    target_id=_normalize_text(args.get("target_id")),
                     webspace_id=_normalize_text(args.get("webspace_id")),
                     use_rasa=bool(args.get("use_rasa", True)),
                     emit_trace=bool(args.get("emit_trace", False)),

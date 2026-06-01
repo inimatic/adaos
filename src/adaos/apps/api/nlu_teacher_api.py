@@ -55,6 +55,12 @@ class ApplyCandidateRequest(BaseModel):
     target: Optional[SaveExampleTarget] = None
 
 
+class RollbackCandidateRequest(BaseModel):
+    candidate_id: str = Field(..., min_length=1)
+    rule_id: Optional[str] = None
+    target: Optional[SaveExampleTarget] = None
+
+
 class ProbePhraseRequest(BaseModel):
     text: str = Field(..., min_length=1)
     use_rasa: bool = True
@@ -143,6 +149,28 @@ async def apply_candidate(webspace_id: str, body: ApplyCandidateRequest):
         bus_emit(ctx.bus, "nlp.teacher.candidate.apply", payload, source="api.nlu.teacher")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"failed to emit candidate apply event: {exc}")
+
+    return {"ok": True, "webspace_id": ws, "candidate_id": payload["candidate_id"]}
+
+
+@router.post("/nlu/teacher/{webspace_id}/candidate/rollback", dependencies=[Depends(require_token)])
+async def rollback_candidate(webspace_id: str, body: RollbackCandidateRequest):
+    ws = _resolve_webspace_id(webspace_id)
+    ctx = get_ctx()
+    payload = {
+        "webspace_id": ws,
+        "candidate_id": body.candidate_id.strip(),
+        "_meta": {"webspace_id": ws, "source": "api.nlu.teacher"},
+    }
+    if body.rule_id:
+        payload["rule_id"] = body.rule_id.strip()
+    if body.target is not None:
+        payload["target"] = body.target.model_dump(exclude_none=True)
+
+    try:
+        bus_emit(ctx.bus, "nlp.teacher.regex_rule.rollback", payload, source="api.nlu.teacher")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to emit candidate rollback event: {exc}")
 
     return {"ok": True, "webspace_id": ws, "candidate_id": payload["candidate_id"]}
 
