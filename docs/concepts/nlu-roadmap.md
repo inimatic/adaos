@@ -26,13 +26,12 @@ provider stage. It is intentionally separate from `neural_nlu_service_skill`
 and should not be counted as a replacement for the production Neural NLU
 provider or the Teacher governance loop.
 
-Current M2 status: **complete for the main functional slice**. LLM misses can
-produce structured action/template envelopes or clarification sessions; short
-Voice answers resolve the active confirmation/clarification session before
-normal NLU; and Root MCP now exposes a contextual action surface with current
-runtime/process state, governed actions, named entities, developer hints, and a
-short-lived descriptor cache. The remaining target-roadmap items belong to
-M3-M5 multi-engine strategy, validation, promotion, and UI/operator surfaces.
+Current M3 status: **complete for the main functional slice**. LLM misses can
+produce structured action/template envelopes or clarification sessions; Root
+MCP exposes a contextual action surface; and Teacher now enforces
+multi-engine authoring strategies instead of treating regex as the universal
+answer. The remaining target-roadmap items belong to M4-M5 validation,
+promotion, and UI/operator surfaces.
 
 ## Status Labels
 
@@ -147,7 +146,7 @@ Minimal milestone gates:
 - **M2: Contextual action surface.** `[complete]` Root/API context exposes current state,
   named entities, available actions, process state, and developer-authored
   hints with enough data to preview a candidate.
-- **M3: Multi-engine authoring decision.** Teacher output includes
+- **M3: Multi-engine authoring decision.** `[complete]` Teacher output includes
   `training_strategy` and can intentionally reject regex in favor of another
   strategy.
 - **M4: Validation and safety gates.** Action preview, side-effect policy,
@@ -258,6 +257,10 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Implement uncertainty policy: direct action, confirmation,
   clarification, development task, or ignore based on confidence, ambiguity,
   side-effect class, and context.
+- [x] M3 implementation slice: `training_strategy=clarification` opens the
+  structured clarification path when a question is present, and low-confidence
+  non-read-only regex proposals are demoted to a non-regex strategy candidate
+  instead of becoming an applyable regex rule.
 - [x] `[must]` Route short answers such as `yes/no/first/second/да/нет` through
   active clarification/confirmation sessions before normal NLU.
 - [x] First implementation slice: generic `clarification.answered` events now
@@ -281,22 +284,44 @@ below remain useful for tracking existing implementation work.
 - [x] First implementation slice: regex candidates and LLM clarification
   sessions preserve the selected `training_strategy` in persisted Teacher
   state.
+- [x] M3 implementation slice: Teacher normalizes strategy aliases, stores the
+  selected strategy on every candidate, and routes non-regex strategies into
+  first-class `training_example`, `entity_alias`, `descriptor_fix`,
+  `development_task`, or `clarification` records.
 - [ ] `[must]` Require LLM to reject regex for broad semantic, highly
   contextual, or ambiguous phrases and choose Rasa/Neural/clarification or a
   descriptor fix instead.
+- [x] M3 implementation slice: if the LLM selects a non-regex strategy,
+  provides `why_not_regex`, or proposes an overbroad/too-short regex, AdaOS
+  rejects the regex path and stores a non-regex strategy candidate with
+  `regex_rejection` evidence.
 - [ ] `[must]` Keep regex for deterministic command phrases and lookup-backed
   slots; add blast-radius preview before durable apply.
+- [x] M3 implementation slice: regex candidates are only applyable when
+  `training_strategy.primary=regex`, the source phrase preview matches, and
+  the simple policy guard does not reject the pattern. Full blast-radius
+  preview remains an M4 validation gate.
 - [ ] `[must]` Save Rasa/Neural examples through owner artifacts or curated
   feedback overlays, not through direct model mutation.
+- [x] M3 implementation slice: `training_example` candidate Apply emits the
+  governed `nlp.teacher.example.save` flow into skill/scenario/system-action
+  artifacts or feedback overlays; it does not mutate Rasa/Neural models
+  directly.
 - [ ] `[should]` Capture STT/raw text, normalized text, locale guess,
   transliteration/typo evidence, and entity canonicalization evidence for
   each teachable request.
 - [ ] `[must]` Treat entity-alias learning as a first-class strategy distinct
   from intent/template learning, including voice aliases and negative alias
   evidence.
+- [x] M3 implementation slice: `entity_alias` candidates are persisted as
+  first-class strategy candidates and can be accepted into the Teacher plan
+  for later owner-specific alias APIs.
 - [ ] `[must]` Treat `descriptor_fix` and `development_task` as first-class
   strategies when the system action or skill capability exists but is not
   sufficiently described for NLU/MCP.
+- [x] M3 implementation slice: `descriptor_fix` and `development_task`
+  candidates are persisted separately from regex/template candidates and can
+  be accepted into the Teacher plan for developer handoff.
 - [ ] `[should]` Collect per-engine statistics before adding calibration
   logic: accept/abstain/reject, confidence bands, fallback chain, STT
   confidence, clarification rate, correction rate, and false-accept samples.
@@ -914,9 +939,9 @@ below remain useful for tracking existing implementation work.
 
 1. Add safe dispatch preview/dispatch gates for verified candidates that are
    allowed to run through the normal AdaOS intent/action path.
-2. Implement M3 multi-engine decision policy: when to choose regex, Rasa
-   example, Neural example, entity alias, descriptor fix, clarification,
-   development task, or ignore.
+2. Add M4 validation policy: side-effect approval, action preview,
+   conflict/abuse checks, and false-positive gates before durable apply or
+   dispatch.
 3. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
 4. Add descriptor cache invalidation/metrics beyond TTL-only reuse, tied to
@@ -926,6 +951,19 @@ below remain useful for tracking existing implementation work.
 
 ## Last Completed Slice
 
+- M3 multi-engine authoring strategy is now enforced: Teacher normalizes
+  `training_strategy`, treats non-regex strategies as first-class candidates,
+  and rejects regex proposals when the selected strategy, `why_not_regex`, or
+  a simple overbroad-pattern guard says regex is unsafe.
+- `training_example` candidates represent Rasa/Neural feedback and Apply routes
+  through governed `nlp.teacher.example.save`; no Rasa/Neural model is mutated
+  directly by the LLM.
+- `entity_alias`, `descriptor_fix`, and `development_task` candidates are
+  persisted separately from regex/template candidates and can be accepted into
+  the Teacher plan for owner-specific alias APIs or developer handoff.
+- Teacher LLM event projections are compacted: request events keep audit
+  hashes without embedding prompt messages, thread details use compact raw
+  summaries, and normal `llm.response` logs are no longer counted as errors.
 - M2 contextual action surface is now exposed through Root MCP
   `nlu_authoring.get_context`: the LLM receives `runtime_state`,
   `action_surface.available_actions`, `process_state`, `developer_hints`,
