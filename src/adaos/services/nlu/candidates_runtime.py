@@ -260,7 +260,96 @@ async def _on_candidate_apply(evt: Any) -> None:
                         )
                     return
 
-                if kind not in {"skill", "scenario"}:
+                if kind == "training_example":
+                    strategy_candidate = (
+                        candidate.get("strategy_candidate") if isinstance(candidate.get("strategy_candidate"), Mapping) else {}
+                    )
+                    intent = candidate.get("intent") or strategy_candidate.get("intent")
+                    if not isinstance(intent, str) or not intent.strip():
+                        bus_emit(
+                            ctx.bus,
+                            "nlp.teacher.candidate.apply.rejected",
+                            {
+                                "webspace_id": webspace_id,
+                                "candidate_id": candidate_id,
+                                "reason": "missing_intent",
+                                "_meta": dict(meta),
+                            },
+                            source="nlu.teacher.candidates",
+                        )
+                        return
+                    target = None
+                    if isinstance(payload_target, Mapping):
+                        t_type = payload_target.get("type")
+                        t_id = payload_target.get("id")
+                        if isinstance(t_type, str) and isinstance(t_id, str) and t_type.strip() and t_id.strip():
+                            target = {"type": t_type.strip(), "id": t_id.strip()}
+                    if target is None and isinstance(candidate.get("target"), Mapping):
+                        cand_target = candidate.get("target")
+                        t_type = cand_target.get("type")
+                        t_id = cand_target.get("id")
+                        if isinstance(t_type, str) and isinstance(t_id, str) and t_type.strip() and t_id.strip():
+                            target = {"type": t_type.strip(), "id": t_id.strip()}
+
+                    raw_examples = candidate.get("examples")
+                    if not isinstance(raw_examples, list):
+                        raw_examples = strategy_candidate.get("examples") if isinstance(strategy_candidate.get("examples"), list) else []
+                    examples = [str(item).strip() for item in raw_examples if str(item).strip()]
+                    if not examples and request_text:
+                        examples = [request_text]
+                    if not examples:
+                        bus_emit(
+                            ctx.bus,
+                            "nlp.teacher.candidate.apply.rejected",
+                            {
+                                "webspace_id": webspace_id,
+                                "candidate_id": candidate_id,
+                                "reason": "missing_examples",
+                                "_meta": dict(meta),
+                            },
+                            source="nlu.teacher.candidates",
+                        )
+                        return
+                    slots = candidate.get("slots") if isinstance(candidate.get("slots"), Mapping) else {}
+                    next_candidates: list[dict[str, Any]] = []
+                    applied_candidate: dict[str, Any] | None = None
+                    for item in iter_mappings(teacher.get("candidates")):
+                        d = dict(item)
+                        if d.get("id") == candidate_id:
+                            d["status"] = "apply_requested"
+                            d["applied_at"] = time.time()
+                            d["applied"] = {
+                                "type": "example_save_request",
+                                "examples_count": len(examples),
+                                "target": dict(target or {}),
+                            }
+                            applied_candidate = d
+                        next_candidates.append(d)
+                    teacher["candidates"] = next_candidates
+                    with ydoc.begin_transaction() as txn:
+                        data_map.set(txn, "nlu_teacher", teacher)
+                    if applied_candidate is not None:
+                        candidate = applied_candidate
+                    for example in examples:
+                        bus_emit(
+                            ctx.bus,
+                            "nlp.teacher.example.save",
+                            {
+                                "webspace_id": webspace_id,
+                                "text": example,
+                                "intent": intent.strip(),
+                                **({"target": dict(target)} if isinstance(target, Mapping) else {}),
+                                "slots": dict(slots),
+                                "request_id": request_id,
+                                "source": "nlu_teacher_m3_training_example",
+                                "note": candidate.get("notes") if isinstance(candidate.get("notes"), str) else None,
+                                "_meta": dict(meta),
+                            },
+                            source="nlu.teacher.candidates",
+                        )
+                    return
+
+                if kind not in {"skill", "scenario", "entity_alias", "descriptor_fix", "development_task", "nlu_strategy"}:
                     return
 
                 # mark applied
@@ -286,6 +375,8 @@ async def _on_candidate_apply(evt: Any) -> None:
                     "request_id": request_id,
                     "text": request_text,
                     "candidate": coerce_dict(candidate.get("candidate")),
+                    "strategy_candidate": coerce_dict(candidate.get("strategy_candidate")),
+                    "training_strategy": coerce_dict(candidate.get("training_strategy")),
                     "notes": candidate.get("notes"),
                 }
                 plan.append(plan_item)

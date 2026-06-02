@@ -90,6 +90,47 @@ _READ_ONLY_INTENTS = {
     "desktop.open_weather",
     "weather.current",
 }
+_ALLOWED_TRAINING_STRATEGIES = {
+    "regex",
+    "rasa_example",
+    "neural_example",
+    "entity_alias",
+    "descriptor_fix",
+    "development_task",
+    "clarification",
+    "ignore",
+}
+_TRAINING_STRATEGY_ALIASES = {
+    "regex_rule": "regex",
+    "regex_template": "regex",
+    "rasa": "rasa_example",
+    "rasa_examples": "rasa_example",
+    "rasa_training_example": "rasa_example",
+    "neural": "neural_example",
+    "neural_examples": "neural_example",
+    "neural_training_example": "neural_example",
+    "alias": "entity_alias",
+    "entity": "entity_alias",
+    "named_entity_alias": "entity_alias",
+    "descriptor": "descriptor_fix",
+    "llm_hints": "descriptor_fix",
+    "nlu_hints": "descriptor_fix",
+    "task": "development_task",
+    "skill_task": "development_task",
+    "scenario_task": "development_task",
+    "clarify": "clarification",
+    "ask_user": "clarification",
+}
+_EXAMPLE_TRAINING_STRATEGIES = {"rasa_example", "neural_example"}
+_NON_REGEX_TRAINING_STRATEGIES = {
+    "rasa_example",
+    "neural_example",
+    "entity_alias",
+    "descriptor_fix",
+    "development_task",
+    "clarification",
+    "ignore",
+}
 _MCP_DESCRIPTOR_TOOL_IDS = {
     "nlu_authoring.get_context",
     "desktop.registry.lookup",
@@ -963,9 +1004,18 @@ def _normalized_training_strategy(
         primary = ""
         source = "adaos.default"
 
+    primary_before_alias = primary
+    primary = _TRAINING_STRATEGY_ALIASES.get(primary.lower(), primary.lower()) if primary else ""
+
+    why_not_regex = suggestion.get("why_not_regex")
+    if not isinstance(why_not_regex, str):
+        why_not_regex = ""
+
     if not primary:
-        if decision == "propose_regex_rule" and regex_rule:
+        if decision == "propose_regex_rule" and regex_rule and not why_not_regex.strip():
             primary = "regex"
+        elif decision == "propose_regex_rule" and regex_rule and why_not_regex.strip():
+            primary = "rasa_example"
         elif decision == "revise_nlu":
             primary = "rasa_example"
         elif decision in {"create_skill_candidate", "create_scenario_candidate"}:
@@ -973,19 +1023,28 @@ def _normalized_training_strategy(
         else:
             primary = "ignore"
 
-    why_not_regex = suggestion.get("why_not_regex")
-    if not isinstance(why_not_regex, str):
-        why_not_regex = ""
+    normalized_from: str | None = None
+    if primary and primary not in _ALLOWED_TRAINING_STRATEGIES:
+        normalized_from = primary
+        primary = "ignore"
 
     result = {
         "primary": primary,
         "source": source,
         "why_not_regex": why_not_regex.strip() or None,
     }
+    if primary_before_alias and primary_before_alias.lower() != primary:
+        result["alias_of"] = primary_before_alias
+    if normalized_from:
+        result["unknown_strategy"] = normalized_from
     if isinstance(raw, Mapping):
         alternatives = raw.get("allowed") or raw.get("alternatives")
         if isinstance(alternatives, list):
-            result["alternatives"] = [str(x).strip() for x in alternatives if str(x).strip()][:10]
+            result["alternatives"] = [
+                _TRAINING_STRATEGY_ALIASES.get(str(x).strip().lower(), str(x).strip().lower())
+                for x in alternatives
+                if str(x).strip()
+            ][:10]
         rationale = raw.get("rationale") or raw.get("reason")
         if isinstance(rationale, str) and rationale.strip():
             result["rationale"] = rationale.strip()
@@ -1104,6 +1163,162 @@ def _build_regex_candidate_envelopes(
         "status": "phrase_previewed" if bool(preview.get("ok")) else "quarantined",
     }
     return action_candidate, template_candidate
+
+
+def _coerce_target(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    t_type = value.get("type")
+    t_id = value.get("id")
+    if isinstance(t_type, str) and isinstance(t_id, str) and t_type.strip() and t_id.strip():
+        return {"type": t_type.strip(), "id": t_id.strip()}
+    return None
+
+
+def _regex_policy_rejection(
+    *,
+    pattern: str,
+    intent: str,
+    training_strategy: Mapping[str, Any],
+    confidence: float,
+) -> dict[str, Any] | None:
+    primary = str(training_strategy.get("primary") or "").strip()
+    why_not_regex = training_strategy.get("why_not_regex")
+    if primary in _NON_REGEX_TRAINING_STRATEGIES:
+        return {
+            "reason": "strategy_not_regex",
+            "strategy": primary,
+            "why_not_regex": why_not_regex,
+        }
+    if isinstance(why_not_regex, str) and why_not_regex.strip():
+        return {
+            "reason": "llm_rejected_regex",
+            "strategy": primary or "regex",
+            "why_not_regex": why_not_regex.strip(),
+        }
+    compact = re.sub(r"\s+", "", str(pattern or "")).strip().lower()
+    if compact in {".*", "^.*$", ".+", "^.+$", "(.*)", "(.+)"}:
+        return {"reason": "overbroad_regex", "strategy": "rasa_example", "pattern": pattern}
+    if len(compact) < 4:
+        return {"reason": "too_short_regex", "strategy": "rasa_example", "pattern": pattern}
+    if confidence < 0.45 and intent not in _READ_ONLY_INTENTS:
+        return {
+            "reason": "low_confidence_non_read_only_regex",
+            "strategy": "clarification",
+            "confidence": confidence,
+        }
+    return None
+
+
+def _strategy_candidate_kind(primary: str) -> tuple[str, str, str]:
+    if primary in _EXAMPLE_TRAINING_STRATEGIES:
+        engine = "rasa" if primary == "rasa_example" else "neural"
+        return ("training_example", "template_candidate", engine)
+    if primary == "entity_alias":
+        return ("entity_alias", "entity_correction", "entity_alias")
+    if primary == "descriptor_fix":
+        return ("descriptor_fix", "descriptor_fix", "descriptor_fix")
+    if primary == "development_task":
+        return ("development_task", "development_task", "development_task")
+    if primary == "clarification":
+        return ("clarification", "clarification", "clarification")
+    return ("nlu_strategy", "nlu_strategy", primary or "ignore")
+
+
+def _build_strategy_candidate_entry(
+    *,
+    candidate_id: str,
+    request_id: str,
+    text: str,
+    decision: str,
+    suggestion: Mapping[str, Any],
+    intent: str | None,
+    target: Mapping[str, Any] | None,
+    examples: list[str],
+    slots: Mapping[str, Any],
+    context: Mapping[str, Any],
+    training_strategy: Mapping[str, Any],
+    llm_meta: Mapping[str, Any],
+    notes: str,
+    status: str = "pending",
+    regex_rejection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    primary = str(training_strategy.get("primary") or "ignore").strip()
+    kind, candidate_class, engine = _strategy_candidate_kind(primary)
+    candidate_payload = suggestion.get("candidate") if isinstance(suggestion.get("candidate"), Mapping) else {}
+    action_candidate = suggestion.get("action_candidate") if isinstance(suggestion.get("action_candidate"), Mapping) else None
+    template_candidate_in = (
+        suggestion.get("template_candidate") if isinstance(suggestion.get("template_candidate"), Mapping) else None
+    )
+    owner = _coerce_target(target)
+    example_rows = examples[:] if examples else ([text] if text else [])
+    strategy_candidate: dict[str, Any] = {
+        "id": f"strat.{candidate_id.removeprefix('cand.')}",
+        "candidate_id": candidate_id,
+        "request_id": request_id,
+        "class": candidate_class,
+        "strategy": primary,
+        "engine": engine,
+        "decision": decision,
+        "intent": intent,
+        "owner": owner,
+        "examples": example_rows[:20],
+        "slots": dict(slots or {}),
+        "status": status,
+        "apply_policy": "operator_approval_required",
+        "scope": {
+            "scenario_id": context.get("current_scenario") if isinstance(context.get("current_scenario"), str) else None,
+        },
+    }
+    if primary in _EXAMPLE_TRAINING_STRATEGIES:
+        strategy_candidate["template_candidate"] = {
+            "id": f"tplcand.{candidate_id.removeprefix('cand.')}",
+            "candidate_id": candidate_id,
+            "request_id": request_id,
+            "class": "template_candidate",
+            "engine": engine,
+            "training_strategy": dict(training_strategy),
+            "intent": intent,
+            "owner": owner,
+            "operation": "save_example",
+            "patch": {"intent": intent, "examples": example_rows[:20], "slots": dict(slots or {})},
+            "status": status,
+        }
+    if action_candidate:
+        strategy_candidate["action_candidate"] = dict(action_candidate)
+    if template_candidate_in:
+        strategy_candidate["template_candidate"] = dict(template_candidate_in)
+    if candidate_payload:
+        strategy_candidate["proposal"] = dict(candidate_payload)
+    if regex_rejection:
+        strategy_candidate["regex_rejection"] = dict(regex_rejection)
+
+    entry = {
+        "id": candidate_id,
+        "ts": time.time(),
+        "kind": kind,
+        "text": text,
+        "request_id": request_id,
+        "origin_scenario_id": context.get("current_scenario") if isinstance(context.get("current_scenario"), str) else None,
+        "intent": intent,
+        **({"target": owner} if owner else {}),
+        **({"examples": example_rows[:20]} if example_rows else {}),
+        **({"slots": dict(slots)} if slots else {}),
+        "candidate": dict(candidate_payload)
+        if candidate_payload
+        else {
+            "name": f"{primary} for {intent or 'unknown intent'}",
+            "description": "Proposed non-regex NLU Teacher strategy.",
+        },
+        "training_strategy": dict(training_strategy),
+        "strategy_candidate": strategy_candidate,
+        "llm": dict(llm_meta),
+        "notes": notes,
+        "status": status,
+    }
+    if regex_rejection:
+        entry["rejected_regex_rule"] = dict(regex_rejection)
+    return entry
 
 
 def _truncate(text: Any, limit: int) -> Any:
@@ -1655,6 +1870,43 @@ async def _append_candidate(webspace_id: str, candidate: dict[str, Any]) -> None
                 data_map.set(txn, "nlu_teacher", teacher)
 
 
+async def _propose_strategy_candidate(
+    ctx: Any,
+    *,
+    webspace_id: str,
+    request_id: str,
+    request_text: str,
+    entry: dict[str, Any],
+    meta: Mapping[str, Any],
+) -> None:
+    try:
+        await _append_candidate(webspace_id, entry)
+    except Exception:
+        _log.debug("failed to append strategy candidate webspace=%s", webspace_id, exc_info=True)
+    bus_emit(
+        ctx.bus,
+        "nlp.teacher.candidate.proposed",
+        {"webspace_id": webspace_id, "candidate": entry, "_meta": dict(meta)},
+        source="nlu.teacher.llm",
+    )
+    try:
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=request_text,
+                kind="candidate.proposed",
+                title="Candidate proposed",
+                subtitle=f"{entry.get('kind')}: {((entry.get('training_strategy') or {}).get('primary') or '')}".strip(),
+                raw=entry,
+                meta=meta,
+            ),
+        )
+    except Exception:
+        _log.debug("failed to append teacher event (candidate.proposed strategy) webspace=%s", webspace_id, exc_info=True)
+
+
 async def _find_duplicate_regex_candidate(
     webspace_id: str,
     *,
@@ -1950,6 +2202,7 @@ async def _handle_teacher_request(evt: Any) -> None:
             decision=decision,
             regex_rule=regex_rule,
         )
+        strategy_primary = str(training_strategy.get("primary") or "").strip()
 
         llm_meta = {
             "model": _MODEL,
@@ -1977,7 +2230,7 @@ async def _handle_teacher_request(evt: Any) -> None:
         except Exception:
             _log.debug("failed to append teacher event (llm.response) webspace=%s", webspace_id, exc_info=True)
 
-        need_clarification = bool(suggestion.get("need_clarification"))
+        need_clarification = bool(suggestion.get("need_clarification")) or strategy_primary == "clarification"
         clarification_question = (
             suggestion.get("clarification_question") if isinstance(suggestion.get("clarification_question"), str) else ""
         )
@@ -2020,11 +2273,62 @@ async def _handle_teacher_request(evt: Any) -> None:
                 )
             return
 
+        resolved_strategy_target = _coerce_target(target)
+        if intent and resolved_strategy_target is None:
+            resolved_strategy_target = _resolve_regex_target(
+                intent=intent,
+                proposed_target=target,
+                routes=routes,
+                current_scenario=context.get("current_scenario"),
+            )
+
+        if strategy_primary in {"entity_alias", "descriptor_fix", "development_task", "clarification"} or (
+            strategy_primary in _EXAMPLE_TRAINING_STRATEGIES and decision != "propose_regex_rule"
+        ):
+            candidate_id = f"cand.{int(time.time()*1000)}"
+            entry = _build_strategy_candidate_entry(
+                candidate_id=candidate_id,
+                request_id=request_id,
+                text=text,
+                decision=decision,
+                suggestion=suggestion,
+                intent=intent,
+                target=resolved_strategy_target,
+                examples=examples,
+                slots=slots,
+                context=context,
+                training_strategy=training_strategy,
+                llm_meta=llm_meta,
+                notes=notes,
+            )
+            if isinstance(correction_context, Mapping):
+                previous_candidate = correction_context.get("previous_candidate")
+                entry["thread_id"] = correction_context.get("thread_id")
+                entry["correction_of"] = {
+                    "candidate_id": previous_candidate.get("candidate_id")
+                    if isinstance(previous_candidate, Mapping)
+                    else None,
+                    "request_id": previous_candidate.get("request_id")
+                    if isinstance(previous_candidate, Mapping)
+                    else None,
+                    "status": previous_candidate.get("status") if isinstance(previous_candidate, Mapping) else None,
+                }
+            await _propose_strategy_candidate(
+                ctx,
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=text,
+                entry=entry,
+                meta=req_meta,
+            )
+            return
+
         if decision == "revise_nlu" and intent:
             patch = {
                 "status": "proposed",
                 "proposal": {"intent": intent, "examples": examples, "slots": dict(slots)},
                 "llm": llm_meta,
+                "training_strategy": dict(training_strategy),
                 "note": notes or "LLM proposed NLU revision.",
                 "proposed_at": time.time(),
             }
@@ -2075,6 +2379,66 @@ async def _handle_teacher_request(evt: Any) -> None:
             if isinstance(rr_intent, str) and rr_intent.strip() and isinstance(rr_pattern, str) and rr_pattern.strip():
                 rr_pattern, slots, slot_aliases = _normalize_regex_rule_slots(pattern=rr_pattern, slots=slots)
                 rr_intent = rr_intent.strip()
+                regex_policy_rejection = _regex_policy_rejection(
+                    pattern=rr_pattern,
+                    intent=rr_intent,
+                    training_strategy=training_strategy,
+                    confidence=confidence_f,
+                )
+                if regex_policy_rejection:
+                    rejected_strategy = dict(training_strategy)
+                    fallback_primary = str(regex_policy_rejection.get("strategy") or "").strip()
+                    if fallback_primary not in _ALLOWED_TRAINING_STRATEGIES or fallback_primary == "regex":
+                        fallback_primary = "rasa_example"
+                    rejected_strategy["primary"] = fallback_primary
+                    rejected_strategy["source"] = (
+                        "adaos.policy"
+                        if str(training_strategy.get("primary") or "").strip() == "regex"
+                        else training_strategy.get("source") or "llm"
+                    )
+                    rejected_strategy["why_not_regex"] = (
+                        str(regex_policy_rejection.get("why_not_regex") or "").strip()
+                        or str(regex_policy_rejection.get("reason") or "").strip()
+                        or "regex rejected by NLU Teacher strategy policy"
+                    )
+                    target_out = _resolve_regex_target(
+                        intent=rr_intent,
+                        proposed_target=target,
+                        routes=routes,
+                        current_scenario=context.get("current_scenario"),
+                    )
+                    candidate_id = f"cand.{int(time.time()*1000)}"
+                    entry = _build_strategy_candidate_entry(
+                        candidate_id=candidate_id,
+                        request_id=request_id,
+                        text=text,
+                        decision=decision,
+                        suggestion=suggestion,
+                        intent=rr_intent,
+                        target=target_out,
+                        examples=examples,
+                        slots=slots,
+                        context=context,
+                        training_strategy=rejected_strategy,
+                        llm_meta={**dict(llm_meta), "training_strategy": dict(rejected_strategy)},
+                        notes=(
+                            (notes + "\n") if notes else ""
+                        )
+                        + f"AdaOS rejected regex strategy: {regex_policy_rejection.get('reason')}.",
+                        regex_rejection={
+                            **dict(regex_policy_rejection),
+                            "regex_rule": {"intent": rr_intent, "pattern": rr_pattern},
+                        },
+                    )
+                    await _propose_strategy_candidate(
+                        ctx,
+                        webspace_id=webspace_id,
+                        request_id=request_id,
+                        request_text=text,
+                        entry=entry,
+                        meta=req_meta,
+                    )
+                    return
                 initial_preview = _preview_regex_candidate(pattern=rr_pattern, text=text)
                 open_modal_repair = _infer_open_modal_repair(text=text, context=context)
                 repair_meta: dict[str, Any] | None = None
