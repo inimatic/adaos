@@ -211,6 +211,15 @@ def _build_event_payload(
         meta.setdefault("webspace_id", ctx_vars["webspace_id"])
     if ctx_vars.get("scenario_id"):
         meta.setdefault("scenario_id", ctx_vars["scenario_id"])
+    target_node_id = (
+        raw.get("target_node_id")
+        or raw.get("node_id")
+        or (raw_meta or {}).get("target_node_id")
+        or (raw_meta or {}).get("node_id")
+    )
+    if isinstance(target_node_id, str) and target_node_id.strip():
+        resolved.setdefault("target_node_id", target_node_id.strip())
+        meta.setdefault("target_node_id", target_node_id.strip())
     if meta:
         resolved["_meta"] = meta
 
