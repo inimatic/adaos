@@ -690,6 +690,19 @@ class ServiceSkillSupervisor:
         env["ADAOS_SERVICE_PORT"] = str(spec.port)
         env["ADAOS_SERVICE_ROOT"] = str(spec.skill_root)
         env["ADAOS_SERVICE_WORKDIR"] = str(spec.workdir)
+        bucket_root = _infer_runtime_bucket_root(spec.skill_root, name)
+        if bucket_root is not None:
+            skill_env_path = bucket_root / "data" / "db" / "skill_env.json"
+            internal_data = bucket_root / "data" / "internal"
+            env.setdefault("ADAOS_SKILL_ENV_PATH", str(skill_env_path))
+            env.setdefault("ADAOS_SKILL_MEMORY_PATH", str(skill_env_path))
+            env.setdefault("ADAOS_SKILL_INTERNAL_DATA_ROOT", str(internal_data))
+            env.setdefault("ADAOS_SKILL_INTERNAL_ACTIVE_PATH", str(internal_data))
+            env.setdefault("ADAOS_SKILL_INTERNAL_TARGET_PATH", str(internal_data))
+        env.setdefault("ADAOS_SKILL_NAME", name)
+        env.setdefault("ADAOS_SKILL_PACKAGE", f"skills.{name}")
+        env.setdefault("ADAOS_SKILL_ROOT", str(spec.skill_root))
+        env.setdefault("ADAOS_SKILL_MODE", "runtime")
         env.setdefault("ADAOS_BASE_DIR", str(_path_value(self._ctx.paths.base_dir())))
         for env_name, path_value in (
             ("ADAOS_PACKAGE_DIR", _optional_path_value(self._ctx.paths, "package_path", "package_dir")),
