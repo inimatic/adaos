@@ -500,6 +500,9 @@ def touch_redevice_link(
     endpoint_policy: Mapping[str, Any] | None = None,
     diagnostic_report: Mapping[str, Any] | None = None,
     endpoint_health: Mapping[str, Any] | None = None,
+    service_state: Mapping[str, Any] | None = None,
+    active_app: Mapping[str, Any] | None = None,
+    active_surface: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     token = str(endpoint_id or "").strip()
     if not token:
@@ -524,6 +527,12 @@ def touch_redevice_link(
         entry["diagnostic_report"] = dict(diagnostic_report)
     if endpoint_health is not None:
         entry["endpoint_health"] = dict(endpoint_health)
+    if service_state is not None:
+        entry["service_state"] = dict(service_state)
+    if active_app is not None:
+        entry["active_app"] = dict(active_app)
+    if active_surface is not None:
+        entry["active_surface"] = dict(active_surface)
     entry["last_seen_at"] = _now_ts()
     entry = _updated(entry)
     saved = _put_entry(registry, "redevice", entry)

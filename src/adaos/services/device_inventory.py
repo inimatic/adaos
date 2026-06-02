@@ -10,7 +10,7 @@ from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
 )
 
-DeviceKind = Literal["browser", "member"]
+DeviceKind = Literal["browser", "member", "redevice"]
 
 
 def _now_ts() -> float:
@@ -130,7 +130,7 @@ def parse_device_ref(device_ref: str) -> tuple[DeviceKind, str] | None:
     if ":" not in token:
         return None
     kind_token, _, link_id = token.partition(":")
-    if kind_token not in {"browser", "member"}:
+    if kind_token not in {"browser", "member", "redevice"}:
         return None
     link_token = _text(link_id)
     if not link_token:
@@ -277,14 +277,86 @@ class DeviceInventoryService:
             items.extend(self._list_browser_devices(now=now))
         if kind in {None, "member"}:
             items.extend(self._list_member_devices(now=now))
+        if kind in {None, "redevice"}:
+            items.extend(self._list_redevice_devices(now=now))
         items.sort(
             key=lambda item: (
-                0 if item.get("kind") == "browser" else 1,
+                0 if item.get("kind") == "browser" else 1 if item.get("kind") == "member" else 2,
                 0 if _text(item.get("policy", {}).get("access_class")) == "device" else 1,
                 _text(item.get("policy", {}).get("effective_name")).casefold(),
                 _text(item.get("ref")).casefold(),
             )
         )
+        return items
+
+    def _list_redevice_devices(self, *, now: float) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        try:
+            policy_entries = list(_access_links.list_links("redevice") or [])
+        except Exception:
+            policy_entries = []
+        for raw in policy_entries:
+            entry = _mapping(raw)
+            endpoint_id = _text(entry.get("id") or entry.get("endpoint_id"))
+            if not endpoint_id:
+                continue
+            policy = _mapping(entry.get("endpoint_policy"))
+            manifest = _mapping(entry.get("endpoint_manifest"))
+            effective_name = _effective_name(
+                policy_entry=entry,
+                fallback_id=endpoint_id,
+            )
+            last_seen = _float_or_none(entry.get("last_seen_at"))
+            state = _text(entry.get("connection_state")) or ("online" if bool(entry.get("online")) else "offline")
+            items.append(
+                {
+                    "ref": make_device_ref("redevice", endpoint_id),
+                    "kind": "redevice",
+                    "identity": {
+                        "link_id": endpoint_id,
+                        "browser_device_id": None,
+                        "node_id": endpoint_id,
+                        "hostname": None,
+                        "node_names": [],
+                        "base_url": None,
+                        "endpoint_id": endpoint_id,
+                        "pair_code": _text_or_none(entry.get("pair_code") or entry.get("code")),
+                    },
+                    "policy": _build_policy_block(
+                        kind="redevice",
+                        entry_id=endpoint_id,
+                        policy_entry=entry,
+                        effective_name=effective_name,
+                        now=now,
+                    ),
+                    "observation": {
+                        "online": bool(entry.get("online")),
+                        "connection_state": state,
+                        "last_seen_at": last_seen,
+                        "source": "redevice_link",
+                        "last_webspace_id": None,
+                    },
+                    "runtime": {
+                        "snapshot_ready": None,
+                        "snapshot_state": _text_or_none(state),
+                        "route_mode": "root_command_poll",
+                        "connected_to_subnet": bool(entry.get("online")),
+                        "runtime_version": None,
+                        "active_app": _mapping(entry.get("active_app")) or None,
+                        "active_surface": _mapping(entry.get("active_surface")) or None,
+                    },
+                    "diagnostics": {
+                        "policy_source": "access_links",
+                        "runtime_sources": ["redevice_link"],
+                        "aggregated_at": now,
+                        "endpoint_policy": policy or None,
+                        "endpoint_manifest": manifest or None,
+                        "diagnostic_report": _mapping(entry.get("diagnostic_report")) or None,
+                        "endpoint_health": _mapping(entry.get("endpoint_health")) or None,
+                        "service_state": _mapping(entry.get("service_state")) or None,
+                    },
+                }
+            )
         return items
 
     def get_device(self, device_ref: str) -> dict[str, Any] | None:
