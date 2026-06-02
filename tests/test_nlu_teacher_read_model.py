@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import uuid4
 
+import pytest
 import yaml
 
 
@@ -155,6 +157,121 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
     assert action_preview["would_dispatch"]["params"]["webspace_id"] == "desktop"
     assert missing_action_slot["ok"] is False
     assert any(item["name"] == "required_slots" and item["missing"] == ["modal_id"] for item in missing_action_slot["checks"])
+
+
+@pytest.mark.anyio
+async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.teacher_read_model import get_contextual_action_surface_async
+    from adaos.services.yjs.doc import async_get_ydoc
+    from adaos.services.yjs.store import reset_ystore_for_webspace
+
+    ctx = get_ctx()
+    webspace_id = f"ws-test-m2-surface-{uuid4().hex}"
+    skill_id = "test_teacher_surface_skill"
+    skill_root = Path(ctx.paths.skills_dir()) / skill_id
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": skill_id,
+                "version": "0.0.1",
+                "events": {"subscribe": ["surface.demo.run"]},
+                "nlu": {
+                    "intents": {
+                        "surface.demo": {
+                            "examples": ["run surface demo"],
+                            "actions": [{"type": "callSkill", "target": "surface.demo.run"}],
+                        }
+                    },
+                    "llm_hints": {
+                        "primary_actions": [
+                            {
+                                "utterances": ["run surface demo"],
+                                "intent": "surface.demo",
+                                "confirmation": "Run surface demo?",
+                            }
+                        ]
+                    },
+                },
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        async with async_get_ydoc(webspace_id) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("ui").set(txn, "current_scenario", "surface_scenario")
+                ydoc.get_map("ui").set(
+                    txn,
+                    "application",
+                    {"modals": {"surface_modal": {"title": "Surface Modal"}}},
+                )
+                ydoc.get_map("data").set(
+                    txn,
+                    "catalog",
+                    {"apps": [{"id": "surface_app", "title": "Surface App", "launchModal": "surface_modal"}]},
+                )
+                ydoc.get_map("data").set(txn, "installed", {"apps": ["surface_app"], "widgets": []})
+                ydoc.get_map("data").set(txn, "nodes", {"node-a": {"label": "Node A", "status": "online"}})
+                ydoc.get_map("data").set(
+                    txn,
+                    "jobs",
+                    {"job-1": {"title": "Index media", "status": "running", "owner": "media_indexer_skill"}},
+                )
+                ydoc.get_map("data").set(
+                    txn,
+                    "nlu_teacher",
+                    {
+                        "pending_confirmations": [
+                            {"id": "confirm-1", "status": "awaiting_user", "question": "Open Surface?", "ts": 10.0}
+                        ],
+                        "clarification_sessions": [
+                            {
+                                "id": "clarify-1",
+                                "status": "awaiting_user",
+                                "kind": "llm_clarification",
+                                "question": "Which surface?",
+                                "allowed_answers": [{"id": "first", "label": "Surface"}],
+                                "ts": 11.0,
+                            }
+                        ],
+                        "candidates": [{"id": "cand-1", "status": "pending"}],
+                        "events": [
+                            {
+                                "ts": 12.0,
+                                "kind": "candidate.quarantined",
+                                "request_id": "req-1",
+                                "title": "Quarantined",
+                            }
+                        ],
+                        "workbench_signals": [{"id": "teacher.queue", "status": "pending"}],
+                    },
+                )
+
+        surface = await get_contextual_action_surface_async(webspace_id=webspace_id, include_live=True)
+
+        assert surface["ok"] is True
+        assert surface["surface_id"] == "adaos.nlu.contextual_action_surface.v1"
+        assert surface["runtime_state"]["current_scenario"] == "surface_scenario"
+        assert "surface_modal" in surface["runtime_state"]["available_modal_ids"]
+        assert surface["runtime_state"]["installed"]["apps"] == ["surface_app"]
+        assert surface["runtime_state"]["active_teacher_sessions"]["pending_confirmations"][0]["id"] == "confirm-1"
+        assert surface["runtime_state"]["active_teacher_sessions"]["clarification_sessions"][0]["id"] == "clarify-1"
+        assert surface["runtime_state"]["recent_errors"][0]["kind"] == "candidate.quarantined"
+        assert surface["process_state"]["teacher_queue"]["pending_candidates"] == 1
+        assert surface["process_state"]["process_rows"][0]["id"] == "job-1"
+        assert any(item.get("id") == "host.desktop.modal.open" for item in surface["available_actions"])
+        assert any(item.get("owner") == {"type": "skill", "id": skill_id} for item in surface["available_actions"])
+        hint_rows = [item for item in surface["developer_hints"] if item.get("owner") == {"type": "skill", "id": skill_id}]
+        assert hint_rows
+        assert hint_rows[0]["hints"]["primary_actions"][0]["intent"] == "surface.demo"
+        assert surface["authoring_boundaries"]["dispatch"] is False
+    finally:
+        reset_ystore_for_webspace(webspace_id)
 
 
 def test_nlu_teacher_events_build_workbench_signals():

@@ -305,7 +305,7 @@ class CodexRootMcpBridge:
             },
             {
                 "name": "get_nlu_authoring_context",
-                "description": "Read NLUAuthoringPlane context with canonical named entities, locale hints, and read-only authoring boundaries.",
+                "description": "Read NLUAuthoringPlane context with named entities, contextual action surface, runtime/process state, developer hints, locale hints, and read-only authoring boundaries.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -317,6 +317,8 @@ class CodexRootMcpBridge:
                             "items": {"type": "string"},
                             "description": "Optional ordered locale preferences for label selection.",
                         },
+                        "include_live": {"type": "boolean", "default": True, "description": "Include live runtime state when available."},
+                        "include_hints": {"type": "boolean", "default": True, "description": "Include developer-authored skill/scenario hints."},
                     },
                     "additionalProperties": False,
                 },
@@ -945,6 +947,8 @@ class CodexRootMcpBridge:
                     kind=_normalize_text(args.get("kind")),
                     request_locale=_normalize_text(args.get("request_locale")),
                     preferred_locales=preferred_locales,
+                    include_live=bool(args.get("include_live", True)),
+                    include_hints=bool(args.get("include_hints", True)),
                 )
             )
         if tool == "check_nlu_phrase":
