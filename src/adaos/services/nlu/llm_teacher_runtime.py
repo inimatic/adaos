@@ -979,6 +979,54 @@ def _normalized_training_strategy(
     return result
 
 
+def _clarification_allowed_answers(suggestion: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw_options = suggestion.get("options")
+    options = raw_options if isinstance(raw_options, list) else []
+    answers: list[dict[str, Any]] = []
+    for idx, option in enumerate(options[:6]):
+        if isinstance(option, Mapping):
+            option_id = str(option.get("id") or option.get("value") or f"option_{idx + 1}").strip()
+            label = str(option.get("label") or option.get("title") or option_id).strip()
+            if not option_id and not label:
+                continue
+            answer = {"id": option_id or f"option_{idx + 1}", "label": label or option_id}
+            for key in (
+                "effect",
+                "candidate_id",
+                "target",
+                "intent",
+                "slots",
+                "action_candidate",
+                "template_candidate",
+                "risk_notes",
+            ):
+                value = option.get(key)
+                if value is not None:
+                    answer[key] = value
+            answers.append(answer)
+            continue
+        if isinstance(option, str) and option.strip():
+            answers.append({"id": f"option_{idx + 1}", "label": option.strip(), "effect": "answer"})
+
+    if answers:
+        return answers
+
+    action_candidate = (
+        suggestion.get("action_candidate") if isinstance(suggestion.get("action_candidate"), Mapping) else None
+    )
+    if action_candidate:
+        return [
+            {
+                "id": "yes",
+                "label": "yes",
+                "effect": "accept_hypothesis",
+                "action_candidate": dict(action_candidate),
+            },
+            {"id": "no", "label": "no", "effect": "reject_hypothesis"},
+        ]
+    return []
+
+
 def _build_regex_candidate_envelopes(
     *,
     candidate_id: str,
@@ -1307,11 +1355,13 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         '  \"target\": {\"type\": \"skill\"|\"scenario\", \"id\": string} | null,\n'
         '  \"examples\": string[],\n'
         '  \"slots\": object,  // e.g. {\"city\": {\"type\": \"string\"}}\n'
-        '  \"training_strategy\": \"regex\" | \"rasa_example\" | \"neural_example\" | \"entity_alias\" | \"descriptor_fix\" | \"development_task\" | \"ignore\" | object | null,\n'
+        '  \"training_strategy\": \"regex\" | \"rasa_example\" | \"neural_example\" | \"entity_alias\" | \"descriptor_fix\" | \"development_task\" | \"clarification\" | \"ignore\" | object | null,\n'
         '  \"action_candidate\": object|null,\n'
         '  \"need_clarification\": boolean|null,\n'
         '  \"clarification_question\": string|null,\n'
+        '  \"options\": object[]|string[]|null,\n'
         '  \"why_not_regex\": string|null,\n'
+        '  \"risk_notes\": string|null,\n'
         '  \"confidence\": number, // 0..1\n'
         '  \"notes\": string,\n'
         '  \"candidate\": object|null\n'
@@ -1334,6 +1384,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Use revise_nlu only when a compact safe regex is not enough or the best next step is curated dataset examples for neural/Rasa.\n"
         "- Choose training_strategy deliberately. Use regex only for stable command phrases and lookup-backed slots. For broad semantic wording, repeated corrections, or ambiguity, prefer rasa_example, neural_example, entity_alias, descriptor_fix, development_task, or clarification.\n"
         "- If regex is not the right strategy, set why_not_regex with a concise reason.\n"
+        "- If the likely action exists but the phrase is ambiguous, set need_clarification=true, ask one short clarification_question, and provide 2-4 options with ids, labels, and action_candidate details when possible.\n"
         "- action_candidate is descriptive only: describe the intended AdaOS action/intent/slots, but do not call any action.\n"
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
         "- Avoid proposing duplicate regex rules if builtin_regex or regex_rules already cover the utterance.\n"
@@ -1832,6 +1883,49 @@ async def _handle_teacher_request(evt: Any) -> None:
             )
         except Exception:
             _log.debug("failed to append teacher event (llm.response) webspace=%s", webspace_id, exc_info=True)
+
+        need_clarification = bool(suggestion.get("need_clarification"))
+        clarification_question = (
+            suggestion.get("clarification_question") if isinstance(suggestion.get("clarification_question"), str) else ""
+        )
+        if need_clarification and clarification_question.strip():
+            action_candidate = (
+                dict(suggestion.get("action_candidate"))
+                if isinstance(suggestion.get("action_candidate"), Mapping)
+                else None
+            )
+            session = {
+                "id": f"clarify.{int(time.time() * 1000)}",
+                "ts": time.time(),
+                "kind": "llm_clarification",
+                "uncertainty_kind": "llm_ambiguity",
+                "request_id": request_id,
+                "request_text": text,
+                "question": clarification_question.strip(),
+                "allowed_answers": _clarification_allowed_answers(suggestion),
+                "attempt": int(req_meta.get("nlu_teacher_confirmation_attempt") or 0)
+                if str(req_meta.get("nlu_teacher_confirmation_attempt") or "").isdigit()
+                else 0,
+                "llm": llm_meta,
+                "action_candidate": action_candidate,
+                "training_strategy": dict(training_strategy),
+                "_meta": dict(req_meta),
+            }
+            risk_notes = suggestion.get("risk_notes")
+            if isinstance(risk_notes, str) and risk_notes.strip():
+                session["risk_notes"] = risk_notes.strip()
+            try:
+                from adaos.services.nlu.teacher_confirmation_runtime import request_clarification
+
+                await request_clarification(webspace_id, session, meta=req_meta)
+            except Exception:
+                _log.warning(
+                    "failed to request NLU Teacher clarification webspace=%s request_id=%s",
+                    webspace_id,
+                    request_id,
+                    exc_info=True,
+                )
+            return
 
         if decision == "revise_nlu" and intent:
             patch = {

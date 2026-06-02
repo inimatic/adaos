@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 
@@ -192,3 +194,81 @@ async def test_voice_confirmation_no_retries_once_with_rejected_candidate_contex
     assert retry["text"] == "нет, нужно открыть Infra State"
     assert retry["_meta"]["nlu_teacher_confirmation_attempt"] == 1
     assert retry["_meta"]["rejected_candidate_id"] == candidate["id"]
+
+
+@pytest.mark.anyio
+async def test_voice_clarification_short_answer_resolves_session():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-clarification-answer"
+    session = {
+        "id": "clarify.short.answer",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "kind": "llm_clarification",
+        "uncertainty_kind": "llm_ambiguity",
+        "request_id": "req.clarify.short",
+        "request_text": "show media",
+        "question": "Open Media Indexer or Media Server?",
+        "allowed_answers": [
+            {
+                "id": "media_indexer",
+                "label": "Media Indexer",
+                "effect": "answer",
+                "action_candidate": {
+                    "intent": "desktop.open_modal",
+                    "slots": {"modal_id": "media_indexer_modal"},
+                },
+            },
+            {
+                "id": "media_server",
+                "label": "Media Server",
+                "effect": "answer",
+                "action_candidate": {
+                    "intent": "desktop.open_modal",
+                    "slots": {"modal_id": "mediaserver_modal"},
+                },
+            },
+        ],
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"clarification_sessions": [session], "events": []})
+
+    answered: list[dict] = []
+
+    def _capture_answered(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            answered.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.clarification.answered", _capture_answered)
+
+    assert conf.is_confirmation_answer("first")
+    assert await conf.has_recent_voice_confirmation(webspace_id, within_s=3600)
+
+    await conf._on_voice_chat_user(
+        {
+            "webspace_id": webspace_id,
+            "text": "first",
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        clarifications = list(teacher.get("clarification_sessions") or [])
+        events = list(teacher.get("events") or [])
+
+    assert clarifications[-1]["status"] == "answered"
+    assert clarifications[-1]["answer"] == "first"
+    assert clarifications[-1]["answer_kind"] == "first"
+    assert clarifications[-1]["selected_answer"]["id"] == "media_indexer"
+    assert any(item.get("kind") == "clarification.answered" for item in events)
+    assert answered
+    assert answered[-1]["selected_answer"]["id"] == "media_indexer"

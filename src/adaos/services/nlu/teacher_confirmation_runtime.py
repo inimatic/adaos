@@ -21,6 +21,28 @@ _MAX_CONFIRMATIONS = 50
 _CONFIRMATION_TTL_S = 15 * 60
 _YES_RE = re.compile(r"^\s*(да|ага|угу|ок|okay|yes|y|верно|подтверждаю|применяй|открой)\b", re.I | re.U)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|n|не\s+то|неверно|ошибка)\b", re.I | re.U)
+_FIRST_ANSWERS = {
+    "1",
+    "one",
+    "first",
+    "option 1",
+    "первый",
+    "первая",
+    "первое",
+    "вариант 1",
+    "вариант один",
+}
+_SECOND_ANSWERS = {
+    "2",
+    "two",
+    "second",
+    "option 2",
+    "второй",
+    "вторая",
+    "второе",
+    "вариант 2",
+    "вариант два",
+}
 
 
 def _nlu_confirmation_write_meta():
@@ -191,6 +213,20 @@ def _latest_active_confirmation(teacher: Mapping[str, Any]) -> dict[str, Any] | 
     return items[0]
 
 
+def _latest_active_clarification(teacher: Mapping[str, Any]) -> dict[str, Any] | None:
+    items = [
+        item
+        for item in _as_list(teacher.get("clarification_sessions"))
+        if item.get("status") == "awaiting_user"
+        and item.get("kind") != "voice_confirmation"
+        and not _is_expired(item)
+    ]
+    if not items:
+        return None
+    items.sort(key=lambda x: float(x.get("ts") or 0.0), reverse=True)
+    return items[0]
+
+
 async def _read_teacher(webspace_id: str) -> dict[str, Any]:
     async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
         return _teacher_obj(ydoc.get_map("data"))
@@ -258,6 +294,74 @@ async def _patch_confirmation(
     await _write_teacher(webspace_id, _mutate)
 
 
+async def _append_clarification_session(webspace_id: str, session: Mapping[str, Any]) -> dict[str, Any]:
+    now = time.time()
+    session_id = str(session.get("id") or "").strip() or f"clarify.{int(now * 1000)}"
+    normalized = {
+        "id": session_id,
+        "ts": session.get("ts") or now,
+        "status": str(session.get("status") or "awaiting_user").strip() or "awaiting_user",
+        "kind": str(session.get("kind") or "llm_clarification").strip() or "llm_clarification",
+        "uncertainty_kind": str(session.get("uncertainty_kind") or "llm_uncertainty").strip() or "llm_uncertainty",
+        "request_id": session.get("request_id"),
+        "request_text": session.get("request_text"),
+        "question": session.get("question"),
+        "allowed_answers": _as_list(session.get("allowed_answers")),
+        "attempt": session.get("attempt") or 0,
+        "llm": dict(session.get("llm") or {}) if isinstance(session.get("llm"), Mapping) else None,
+        "action_candidate": dict(session.get("action_candidate") or {})
+        if isinstance(session.get("action_candidate"), Mapping)
+        else None,
+        "training_strategy": dict(session.get("training_strategy") or {})
+        if isinstance(session.get("training_strategy"), Mapping)
+        else None,
+        "risk_notes": session.get("risk_notes") if isinstance(session.get("risk_notes"), str) else None,
+        "_meta": dict(session.get("_meta") or {}) if isinstance(session.get("_meta"), Mapping) else {},
+    }
+
+    def _mutate(teacher: dict[str, Any]) -> None:
+        items = _as_list(teacher.get("clarification_sessions"))
+        request_id = str(normalized.get("request_id") or "").strip()
+        next_items: list[dict[str, Any]] = []
+        for item in items:
+            same_session = item.get("id") == session_id
+            same_active_request = (
+                bool(request_id)
+                and item.get("request_id") == request_id
+                and item.get("status") == "awaiting_user"
+            )
+            if same_session or same_active_request:
+                continue
+            next_items.append(item)
+        items.append(normalized)
+        teacher["clarification_sessions"] = next_items[-(_MAX_CONFIRMATIONS - 1) :] + [normalized]
+
+    await _write_teacher(webspace_id, _mutate)
+    return normalized
+
+
+async def _patch_clarification_session(
+    webspace_id: str,
+    session_id: str,
+    patch: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    updated: dict[str, Any] | None = None
+
+    def _mutate(teacher: dict[str, Any]) -> None:
+        nonlocal updated
+        items: list[dict[str, Any]] = []
+        for item in _as_list(teacher.get("clarification_sessions")):
+            next_item = dict(item)
+            if next_item.get("id") == session_id:
+                next_item.update(dict(patch))
+                updated = dict(next_item)
+            items.append(next_item)
+        teacher["clarification_sessions"] = items[-_MAX_CONFIRMATIONS:]
+
+    await _write_teacher(webspace_id, _mutate)
+    return updated
+
+
 async def _emit_chat(webspace_id: str, text: str, meta: Mapping[str, Any]) -> None:
     ctx = get_ctx()
     bus_emit(
@@ -274,6 +378,74 @@ async def _emit_chat(webspace_id: str, text: str, meta: Mapping[str, Any]) -> No
     )
 
 
+def _clarification_instruction(question: str, allowed_answers: Iterable[Mapping[str, Any]]) -> str:
+    labels = [
+        str(item.get("label") or item.get("title") or item.get("id") or "").strip()
+        for item in allowed_answers
+        if isinstance(item, Mapping)
+    ]
+    labels = [label for label in labels if label]
+    if len(labels) < 2:
+        return question
+    lines = [question]
+    for idx, label in enumerate(labels[:4], start=1):
+        lines.append(f"{idx}. {label}")
+    return "\n".join(lines)
+
+
+async def request_clarification(
+    webspace_id: str,
+    session: Mapping[str, Any],
+    *,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    merged_meta = {
+        **coerce_dict(session.get("_meta")),
+        **dict(meta or {}),
+        "webspace_id": webspace_id,
+    }
+    normalized = dict(session)
+    normalized["_meta"] = merged_meta
+    normalized["status"] = "awaiting_user"
+    normalized.setdefault("kind", "llm_clarification")
+    normalized.setdefault("uncertainty_kind", "llm_uncertainty")
+    requested = await _append_clarification_session(webspace_id, normalized)
+    request_id = str(requested.get("request_id") or "").strip()
+    request_text = str(requested.get("request_text") or "").strip()
+    question = str(requested.get("question") or "").strip()
+    await append_event(
+        webspace_id,
+        make_event(
+            webspace_id=webspace_id,
+            request_id=request_id,
+            request_text=request_text,
+            kind="clarification.requested",
+            title="Clarification requested",
+            subtitle=question,
+            raw=requested,
+            meta=merged_meta,
+        ),
+    )
+    bus_emit(
+        get_ctx().bus,
+        "nlp.teacher.clarification.requested",
+        {"webspace_id": webspace_id, "session": requested, "_meta": merged_meta},
+        source="nlu.teacher.confirmation",
+    )
+    if question and _route_id(merged_meta) == "voice_chat":
+        await _emit_chat(
+            webspace_id,
+            _clarification_instruction(question, _as_list(requested.get("allowed_answers"))),
+            merged_meta,
+        )
+    return requested
+
+
+def _normalize_answer_text(text: str) -> str:
+    value = re.sub(r"\s+", " ", str(text or "").strip().casefold())
+    return value.strip(" \t\r\n.,!?;:()[]{}\"'")
+
+
 def _classify_answer(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -282,6 +454,11 @@ def _classify_answer(text: str) -> str:
         return "no"
     if _YES_RE.search(raw):
         return "yes"
+    normalized = _normalize_answer_text(raw)
+    if normalized in _FIRST_ANSWERS:
+        return "first"
+    if normalized in _SECOND_ANSWERS:
+        return "second"
     return ""
 
 
@@ -301,15 +478,116 @@ def _retry_text_from_rejection(answer_text: str, original_text: str) -> str:
     return original
 
 
+def _select_clarification_answer(session: Mapping[str, Any], answer: str, text: str) -> dict[str, Any]:
+    allowed = _as_list(session.get("allowed_answers"))
+    if answer == "first" and allowed:
+        return dict(allowed[0])
+    if answer == "second" and len(allowed) > 1:
+        return dict(allowed[1])
+
+    normalized_text = _normalize_answer_text(text)
+    for item in allowed:
+        item_id = _normalize_answer_text(str(item.get("id") or ""))
+        label = _normalize_answer_text(str(item.get("label") or item.get("title") or ""))
+        if answer and item_id == answer:
+            return dict(item)
+        if normalized_text and normalized_text in {item_id, label}:
+            return dict(item)
+
+    if answer in {"yes", "no"}:
+        return {
+            "id": answer,
+            "label": answer,
+            "effect": "accept_hypothesis" if answer == "yes" else "reject_hypothesis",
+        }
+    return {"id": answer or normalized_text, "label": str(text or "").strip(), "effect": "answer"}
+
+
+async def _answer_clarification(
+    webspace_id: str,
+    session: Mapping[str, Any],
+    *,
+    answer: str,
+    answer_text: str,
+    meta: Mapping[str, Any],
+) -> None:
+    session_id = str(session.get("id") or "").strip()
+    if not session_id:
+        return
+    selected = _select_clarification_answer(session, answer, answer_text)
+    effect = str(selected.get("effect") or "").strip()
+    status = "rejected" if answer == "no" or effect.startswith("reject") else "answered"
+    request_id = str(session.get("request_id") or "").strip()
+    request_text = str(session.get("request_text") or "").strip()
+    session_meta = coerce_dict(session.get("_meta"))
+    merged_meta = {**session_meta, **dict(meta), "route_id": "voice_chat"}
+    updated = await _patch_clarification_session(
+        webspace_id,
+        session_id,
+        {
+            "status": status,
+            "answer": str(answer_text or "").strip(),
+            "answer_kind": answer,
+            "selected_answer": selected,
+            "answered_at": time.time(),
+        },
+    )
+    raw = {
+        "session": updated if isinstance(updated, Mapping) else dict(session),
+        "answer": str(answer_text or "").strip(),
+        "answer_kind": answer,
+        "selected_answer": selected,
+    }
+    await append_event(
+        webspace_id,
+        make_event(
+            webspace_id=webspace_id,
+            request_id=request_id,
+            request_text=request_text,
+            kind="clarification.answered",
+            title="Clarification answered",
+            subtitle=str(selected.get("label") or selected.get("id") or answer),
+            raw=raw,
+            meta=merged_meta,
+        ),
+    )
+    bus_emit(
+        get_ctx().bus,
+        "nlp.teacher.clarification.answered",
+        {
+            "webspace_id": webspace_id,
+            "session": updated if isinstance(updated, Mapping) else dict(session),
+            "answer": str(answer_text or "").strip(),
+            "answer_kind": answer,
+            "selected_answer": selected,
+            "_meta": merged_meta,
+        },
+        source="nlu.teacher.confirmation",
+    )
+    if effect == "apply_candidate" and selected.get("candidate_id"):
+        bus_emit(
+            get_ctx().bus,
+            "nlp.teacher.candidate.apply",
+            {
+                "webspace_id": webspace_id,
+                "candidate_id": str(selected.get("candidate_id")),
+                "target": selected.get("target") if isinstance(selected.get("target"), Mapping) else None,
+                "_meta": {**merged_meta, "nlu_teacher_clarification_id": session_id},
+            },
+            source="nlu.teacher.confirmation",
+        )
+
+
 async def has_recent_voice_confirmation(webspace_id: str, *, within_s: float = 15.0) -> bool:
     try:
         teacher = await _read_teacher(webspace_id)
     except Exception:
         return False
     now = time.time()
-    for item in reversed(_as_list(teacher.get("pending_confirmations"))):
+    items = _as_list(teacher.get("pending_confirmations")) + _as_list(teacher.get("clarification_sessions"))
+    for item in reversed(items):
         status = str(item.get("status") or "").strip()
-        if status not in {"awaiting_user", "accepted", "rejected", "needs_clarification"}:
+        if status not in {"awaiting_user", "accepted", "answered", "rejected", "needs_clarification"}:
             continue
         try:
             marker = float(item.get("answered_at") or item.get("ts") or 0.0)
@@ -386,10 +664,22 @@ async def _on_voice_chat_user(evt: Any) -> None:
     try:
         teacher = await _read_teacher(webspace_id)
         confirmation = _latest_active_confirmation(teacher)
+        clarification = _latest_active_clarification(teacher)
     except Exception:
         _log.debug("failed to read teacher confirmation state webspace=%s", webspace_id, exc_info=True)
         return
     if not confirmation:
+        if clarification:
+            try:
+                await _answer_clarification(
+                    webspace_id,
+                    clarification,
+                    answer=answer,
+                    answer_text=text,
+                    meta=meta,
+                )
+            except Exception:
+                _log.warning("failed to answer NLU Teacher clarification webspace=%s", webspace_id, exc_info=True)
         return
 
     confirmation_id = str(confirmation.get("id") or "").strip()
