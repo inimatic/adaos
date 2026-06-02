@@ -26,12 +26,13 @@ provider stage. It is intentionally separate from `neural_nlu_service_skill`
 and should not be counted as a replacement for the production Neural NLU
 provider or the Teacher governance loop.
 
-Current M3 status: **complete for the main functional slice**. LLM misses can
-produce structured action/template envelopes or clarification sessions; Root
-MCP exposes a contextual action surface; and Teacher now enforces
-multi-engine authoring strategies instead of treating regex as the universal
-answer. The remaining target-roadmap items belong to M4-M5 validation,
-promotion, and UI/operator surfaces.
+Current M4 status: **complete for the candidate Apply validation slice**. LLM
+misses can produce structured action/template envelopes or clarification
+sessions; Root MCP exposes a contextual action surface; Teacher enforces
+multi-engine authoring strategies; and candidate Apply now runs a dry-run
+validation gate before durable regex/example changes. Remaining target-roadmap
+items belong mainly to dispatch outcome verification, promotion, and
+UI/operator surfaces.
 
 ## Status Labels
 
@@ -149,9 +150,10 @@ Minimal milestone gates:
 - **M3: Multi-engine authoring decision.** `[complete]` Teacher output includes
   `training_strategy` and can intentionally reject regex in favor of another
   strategy.
-- **M4: Validation and safety gates.** Action preview, side-effect policy,
-  conflict checks, cost controls, and privacy gates run before durable apply,
-  dispatch, or promotion.
+- **M4: Validation and safety gates.** `[complete for candidate Apply]`
+  Action/template preview, side-effect policy, conflict checks, and basic abuse
+  checks run before durable candidate Apply. Dispatch outcome verification,
+  endpoint command preview, and full cost/privacy controls remain later gates.
 - **M5: Promotion and developer handoff.** Local learning can be promoted or
   rejected with provenance, while missing descriptors/capabilities create
   structured work for skill/scenario development.
@@ -332,19 +334,36 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[must]` Make action preview a required gate for interface, skill, and
   endpoint action candidates before apply or dispatch.
+- [x] M4 implementation slice: `nlp.teacher.candidate.apply` now runs a
+  validation gate before durable mutation. Built-in system/interface actions
+  use `desktop.preview_action`; custom route candidates carry a warning until
+  a route-specific preview surface exists.
 - [ ] `[must]` Define side-effect classes and approval policy:
   `read_only`, `ui_navigation`, `local_state_change`,
   `durable_configuration_change`, `external_io`, `device_control`,
   `destructive`, and `unsupported`.
+- [x] M4 implementation slice: candidate Apply records a side-effect policy
+  decision and blocks high-risk classes (`destructive`, `external_io`,
+  `device_control`, `unsupported`) before mutation.
 - [ ] `[must]` Add conflict checks: duplicate templates, overbroad regex,
   owner conflicts, entity-alias ambiguity, and action mismatch.
+- [x] M4 implementation slice: Apply validation checks duplicate regex/example
+  templates through `preview_template_patch`, blocks overbroad non-read-only
+  regex rules, and rejects action-intent or owner-target mismatches.
 - [ ] `[must]` Add lightweight security abuse checks that reduce high-risk
   failures early: prompt-injection markers in user utterances and descriptors,
   overbroad templates for non-read-only actions, alias collisions with system
   commands, unexpected MCP target scope, and untrusted skill-authored hints.
+- [x] M4 implementation slice: Apply validation checks prompt-injection
+  markers, overbroad templates for non-read-only actions, and system-command
+  alias collisions. MCP target-scope and untrusted-hint validation remain a
+  deeper policy pass.
 - [ ] `[must]` Verify both replayed understanding and action outcome when an
   action is dispatched: modal opened, scenario switched, skill result emitted,
   endpoint command acknowledged, or failure recorded.
+- [x] Current regex Apply verifies replayed understanding by re-probing the
+  source phrase and requiring the resulting intent to match the planned
+  candidate intent before emitting `understanding.acquired`.
 - [ ] `[must]` Add rate limits, duplicate suppression, and queue/backpressure
   policy for Root/OpenAI Teacher calls by webspace, route, request class, and
   repeated phrase hash.
@@ -808,9 +827,15 @@ below remain useful for tracking existing implementation work.
 - [x] LLM receives current template inventory before proposing changes.
 - [x] Template preview uses stable template ids/fingerprints and `base_fingerprint` stale-write checks.
 - [x] Template patches can be previewed before durable apply; operator approval still uses existing candidate/example APIs.
+- [x] M4 implementation slice: existing candidate/example Apply now calls the
+  template preview gate before durable mutation and stores validation evidence
+  on the candidate.
 - [ ] `[deferred]` Durable apply writes only through owner services/APIs: skill, scenario, system-action feedback, or named-entity alias source.
 - [ ] `[deferred]` Add rollback pointers and audit records for every applied patch.
-- [ ] `[deferred]` Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
+- [x] M4 implementation slice: duplicate-template detection and simple
+  overbroad-regex blast-radius guard run before durable candidate Apply.
+- [ ] `[deferred]` Add golden-phrase impact preview before durable apply and
+  expand blast-radius checks beyond simple overbroad-pattern guards.
 - [ ] `[deferred]` Decide migration policy for legacy `data.nlu.regex_rules[]` mirrors versus owner-authored scenario/skill artifacts.
 
 ### 5e: Development Task Candidates
@@ -823,6 +848,9 @@ below remain useful for tracking existing implementation work.
 ### 5f: Teacher Acceptance Gates
 
 - [ ] `[could]` Every phase has at least one test or smoke command that can be run without the UI.
+- [x] M4 implementation slice has non-UI tests for safe Apply, duplicate
+  rejection, missing-slot action preview rejection, overbroad regex rejection,
+  and action-intent mismatch.
 - [ ] Every accepted candidate stores trace, prompt/context hash, verification result, owner, and operator/trust policy evidence.
 - [ ] `[deferred]` False positives can be rejected, quarantined, or rolled back without deleting unrelated user-authored training data.
 - [ ] `[could]` RU and EN phrases pass through the same correction-thread and template-preview paths without mojibake or lossy normalization.
@@ -939,9 +967,9 @@ below remain useful for tracking existing implementation work.
 
 1. Add safe dispatch preview/dispatch gates for verified candidates that are
    allowed to run through the normal AdaOS intent/action path.
-2. Add M4 validation policy: side-effect approval, action preview,
-   conflict/abuse checks, and false-positive gates before durable apply or
-   dispatch.
+2. Extend the M4 validation policy from candidate Apply to dispatch: outcome
+   checks for modal open, scenario switch, skill result, endpoint ack, and
+   recorded failure paths.
 3. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
 4. Add descriptor cache invalidation/metrics beyond TTL-only reuse, tied to
@@ -951,6 +979,15 @@ below remain useful for tracking existing implementation work.
 
 ## Last Completed Slice
 
+- M4 candidate Apply validation is now enforced by a dedicated
+  `teacher_validation` gate. It runs template preview, built-in action preview,
+  side-effect policy, duplicate checks, overbroad-regex checks, prompt-injection
+  marker checks, alias collision checks, and action/owner mismatch checks before
+  durable mutation.
+- Rejected candidates are marked `validation_failed` with stored validation
+  evidence and emit `nlp.teacher.candidate.apply.rejected` with
+  `reason=m4_validation_failed`; valid candidates store the passed validation
+  evidence before continuing through regex/example Apply.
 - M3 multi-engine authoring strategy is now enforced: Teacher normalizes
   `training_strategy`, treats non-regex strategies as first-class candidates,
   and rejects regex proposals when the selected strategy, `why_not_regex`, or

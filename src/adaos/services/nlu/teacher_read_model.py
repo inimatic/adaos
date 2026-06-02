@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -1608,6 +1609,7 @@ def preview_interface_action(
     intent: str | None = None,
     host_action: str | None = None,
     params: Mapping[str, Any] | None = None,
+    lookup_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ws = _webspace_id(webspace_id)
     action = _find_action_for_preview(action_id=action_id, intent=intent, host_action=host_action)
@@ -1635,7 +1637,18 @@ def preview_interface_action(
             missing_slots.append(slot_name)
     checks.append({"name": "required_slots", "ok": not missing_slots, "status": "complete" if not missing_slots else "missing", "missing": missing_slots})
 
-    lookup_payload = get_desktop_registry_lookup(webspace_id=ws, include_live=True)
+    if lookup_payload is None:
+        include_live = True
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            include_live = True
+        else:
+            # This sync preview API can be called from async request handlers or
+            # tests. Avoid sync YDoc reads inside an active event loop; async
+            # Apply uses preview_interface_action_async for the live path.
+            include_live = False
+        lookup_payload = get_desktop_registry_lookup(webspace_id=ws, include_live=include_live)
     for lookup in ("modal_id", "scenario_id", "app_id", "node_ref", "skill_id", "webspace_id"):
         if lookup not in params_obj:
             continue
@@ -1667,3 +1680,23 @@ def preview_interface_action(
             "dry_run": True,
         },
     }
+
+
+async def preview_interface_action_async(
+    *,
+    webspace_id: str | None = None,
+    action_id: str | None = None,
+    intent: str | None = None,
+    host_action: str | None = None,
+    params: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id)
+    lookup_payload = await get_desktop_registry_lookup_async(webspace_id=ws, include_live=True)
+    return preview_interface_action(
+        webspace_id=ws,
+        action_id=action_id,
+        intent=intent,
+        host_action=host_action,
+        params=params,
+        lookup_payload=lookup_payload,
+    )

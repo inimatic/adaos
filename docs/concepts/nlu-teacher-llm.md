@@ -267,6 +267,22 @@ candidates, AdaOS persists the rule into the selected scenario/skill owner,
 mirrors it into runtime regex state, then immediately re-runs the original
 phrase through the probe path.
 
+Before durable mutation, candidate Apply now runs the M4 validation gate:
+
+- template preview through `preview_template_patch`
+- built-in interface/system action preview through `desktop.preview_action`
+- side-effect policy (`read_only`, `ui_navigation`, `local_state_change`,
+  `durable_configuration_change`, high-risk classes blocked)
+- duplicate template detection
+- overbroad regex rejection for non-read-only actions
+- prompt-injection marker and system-command alias checks
+- action-intent and owner-target mismatch checks
+
+If validation fails, the candidate is marked `validation_failed`, the full
+validation payload is stored on `candidate.validation`, and AdaOS emits
+`nlp.teacher.candidate.apply.rejected` with
+`reason="m4_validation_failed"`. No regex/example mutation is performed.
+
 Before a regex candidate can be applied, LLM Teacher performs a local preview:
 the pattern must compile as Python regex and match the original phrase. Valid
 proposals stay `pending` and carry `preview.status="regex_matched"` plus
@@ -660,6 +676,8 @@ Apply can be triggered from UI or programmatically:
 - apply a teacher candidate:
   - `nlp.teacher.candidate.apply { candidate_id, target? }`
   - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
+  - candidate Apply first stores M4 validation evidence and rejects blocked
+    candidates before writing owner artifacts or runtime mirrors
   - for `regex_rule` candidates the runtime delegates to `nlp.teacher.regex_rule.apply { intent, pattern, target? }`
   - for `training_example` candidates the runtime emits
     `nlp.teacher.example.save` for the curated examples
@@ -857,9 +875,14 @@ treated as `[could]` unless explicitly promoted.
   - `nlu.apply_template_patch`
 - `[deferred]` Add first-class `nlu.get_template` and `nlu.apply_template_patch`; current durable apply still uses candidate/example APIs.
 - Accept correction previews against existing fingerprints with `base_fingerprint` stale-write protection.
+- Current implementation: candidate/example Apply calls the preview/validation
+  gate before durable mutation and stores the result on the candidate.
 - `[deferred]` Apply only through owning scenario/skill/system-action/named-entity services, never by LLM raw file writes.
 - `[deferred]` Add rollback pointers and audit events for every applied patch.
-- `[deferred]` Add duplicate-template detection, regex blast-radius checks, and golden-phrase impact preview before durable apply.
+- Duplicate-template detection and a simple overbroad-regex blast-radius guard
+  now run before durable candidate Apply.
+- `[deferred]` Add golden-phrase impact preview and broaden blast-radius
+  checks beyond simple pattern guards before promotion.
 
 ### Phase 5 - Useful Teacher UI
 
