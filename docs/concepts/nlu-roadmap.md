@@ -83,6 +83,72 @@ clarification loop over a deterministic AdaOS runtime:
 Core invariant: AdaOS acts deterministically when understanding is sufficient,
 and uses LLM dialog only to reduce uncertainty or improve the domain model.
 
+## Architectural Detail Anchors
+
+The target design should preserve these anchors while individual components are
+implemented in smaller slices:
+
+- **Understanding and execution are different gates.** A candidate is not
+  "good" merely because a template matches the source phrase. AdaOS must also
+  preview the action, check side-effect policy, and, when dispatched, verify
+  the runtime outcome.
+- **Dialog is a structured uncertainty reducer.** Clarification questions are
+  not free-form chat state. Each question must be backed by a
+  `clarification_session`, explicit options or missing slots, rejected
+  alternatives, and a resolution path.
+- **Named entities are voice-control objects.** Devices, nodes, endpoints,
+  browsers, apps, modals, scenarios, skills, and processes need canonical ids,
+  voice aliases, locale, scope, ownership, and ambiguity evidence. Entity
+  learning must not be folded into intent learning by default.
+- **NLU strategy is selected, not assumed.** Regex is preferred only for stable
+  command phrases and lookup-backed slots. Broad semantic phrasing, repeated
+  corrections, or high ambiguity should push the Teacher toward Rasa/Neural
+  examples, entity aliases, descriptor fixes, clarification, or development
+  tasks.
+- **Local learning and public reuse are separate products.** A locally useful
+  alias or phrase may be private, user-specific, or workspace-specific. Public
+  promotion requires portability, privacy, provenance, rollback, and regression
+  evidence.
+- **Missing descriptors are not NLU failures.** If a skill/scenario can perform
+  an action but has not published a conversational skeleton, the correct
+  outcome is `descriptor_fix`, not a guessed template.
+
+Reference flows that must stay representable:
+
+- **Known entity command**: `Покажи медиасервер` -> entity lookup ->
+  `desktop.open_modal` action candidate -> action preview -> dispatch ->
+  outcome verified.
+- **Ambiguous entity command**: `Покажи индекс` -> Media Indexer vs Media
+  Server ambiguity -> clarification session -> selected option -> action
+  candidate -> optional entity alias/example learning.
+- **Correction after wrong hypothesis**: user rejects a candidate -> rejected
+  alternative is stored -> retry uses the rejected evidence -> second rejection
+  asks for clarification or creates a development/descriptor task.
+- **Descriptor gap**: phrase refers to a real skill capability that has no
+  action descriptor or examples -> create `descriptor_fix` candidate for the
+  skill/scenario owner instead of creating an overfitted regex.
+- **Capability gap**: phrase asks for behavior no installed skill/scenario can
+  provide -> create `development_task` with the original phrase, context,
+  missing surface, and replay check.
+
+Minimal milestone gates:
+
+- **M1: Action candidate and clarification core.** Misses can become structured
+  action candidates or clarification sessions, and short answers resolve the
+  active session before normal NLU.
+- **M2: Contextual action surface.** Root/API context exposes current state,
+  named entities, available actions, process state, and developer-authored
+  hints with enough data to preview a candidate.
+- **M3: Multi-engine authoring decision.** Teacher output includes
+  `training_strategy` and can intentionally reject regex in favor of another
+  strategy.
+- **M4: Validation and safety gates.** Action preview, side-effect policy,
+  conflict checks, cost controls, and privacy gates run before durable apply,
+  dispatch, or promotion.
+- **M5: Promotion and developer handoff.** Local learning can be promoted or
+  rejected with provenance, while missing descriptors/capabilities create
+  structured work for skill/scenario development.
+
 ## Balanced Target Roadmap
 
 This checklist is the canonical target-roadmap slice built from the current
