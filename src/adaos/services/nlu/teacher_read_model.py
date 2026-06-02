@@ -11,7 +11,7 @@ import yaml
 
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
-from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables
+from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables, collect_desktop_lookup_tables_async
 from adaos.services.yjs.webspace import default_webspace_id
 
 
@@ -33,6 +33,26 @@ def _as_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, (str, bytes, bytearray)) or isinstance(value, Mapping) or not isinstance(value, Iterable):
         return []
     return [dict(item) for item in iter_mappings(value)]
+
+
+def _as_text_list(value: Any, *, limit: int = 100) -> list[str]:
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping)):
+        items = list(value)
+    else:
+        items = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        token = str(item or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
 
 
 def _hash_payload(payload: Any) -> str:
@@ -183,6 +203,56 @@ def _read_yjs_teacher_snapshot(webspace_id: str) -> dict[str, Any]:
         }
 
 
+def _read_yjs_context_snapshot(webspace_id: str) -> dict[str, Any]:
+    from adaos.services.yjs.doc import get_ydoc
+
+    ws = _webspace_id(webspace_id)
+    try:
+        with get_ydoc(ws, read_only=True, load_mark_roots=["ui", "data", "registry"]) as ydoc:
+            ui_map = ydoc.get_map("ui")
+            data_map = ydoc.get_map("data")
+            registry_map = ydoc.get_map("registry")
+            return {
+                "webspace_id": ws,
+                "ui": coerce_dict(ui_map),
+                "data": coerce_dict(data_map),
+                "registry": coerce_dict(registry_map),
+            }
+    except Exception as exc:
+        return {
+            "webspace_id": ws,
+            "ui": {},
+            "data": {},
+            "registry": {},
+            "read_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+async def _read_yjs_context_snapshot_async(webspace_id: str) -> dict[str, Any]:
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ws = _webspace_id(webspace_id)
+    try:
+        async with async_get_ydoc(ws, read_only=True, load_mark_roots=["ui", "data", "registry"]) as ydoc:
+            ui_map = ydoc.get_map("ui")
+            data_map = ydoc.get_map("data")
+            registry_map = ydoc.get_map("registry")
+            return {
+                "webspace_id": ws,
+                "ui": coerce_dict(ui_map),
+                "data": coerce_dict(data_map),
+                "registry": coerce_dict(registry_map),
+            }
+    except Exception as exc:
+        return {
+            "webspace_id": ws,
+            "ui": {},
+            "data": {},
+            "registry": {},
+            "read_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _event_ts(item: Mapping[str, Any]) -> float:
     try:
         return float(item.get("ts") or 0.0)
@@ -227,6 +297,108 @@ def _compact_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "applied": dict(candidate.get("applied") or {}) if isinstance(candidate.get("applied"), Mapping) else None,
         "rolled_back_at": candidate.get("rolled_back_at"),
     }
+
+
+def _mapping_collection_rows(value: Any, *, id_fields: tuple[str, ...] = ("id",)) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if isinstance(value, Mapping):
+        iterator = value.items()
+    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+        iterator = ((None, item) for item in value)
+    else:
+        return rows
+
+    for key, item in iterator:
+        item_map = coerce_dict(item)
+        if not item_map and item is not None and not isinstance(item, Mapping):
+            item_map = {"id": item}
+        row_id = str(key or "").strip()
+        if not row_id:
+            for field in id_fields:
+                candidate = item_map.get(field)
+                if isinstance(candidate, str) and candidate.strip():
+                    row_id = candidate.strip()
+                    break
+        row = dict(item_map)
+        if row_id:
+            row.setdefault("id", row_id)
+        if row:
+            rows.append(row)
+    return rows
+
+
+def _compact_registry_item(item: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
+    out = {
+        "id": item.get("id") or item.get(f"{kind}_id") or item.get("value"),
+        "title": item.get("title") or item.get("name") or item.get("label") or item.get("display_name"),
+        "origin": item.get("origin"),
+        "type": item.get("type"),
+        "launchModal": item.get("launchModal") or item.get("launch_modal") or item.get("modalId"),
+        "scenario_id": item.get("scenario_id") or item.get("scenarioId"),
+    }
+    return {key: value for key, value in out.items() if value not in (None, "", [], {})}
+
+
+def _active_teacher_sessions(teacher: Mapping[str, Any]) -> dict[str, Any]:
+    confirmations = [
+        item
+        for item in _as_list(teacher.get("pending_confirmations"))
+        if str(item.get("status") or "").strip() == "awaiting_user"
+    ]
+    clarifications = [
+        item
+        for item in _as_list(teacher.get("clarification_sessions"))
+        if str(item.get("status") or "").strip() == "awaiting_user"
+    ]
+    return {
+        "pending_confirmations": [
+            {
+                "id": item.get("id"),
+                "request_id": item.get("request_id"),
+                "candidate_id": item.get("candidate_id"),
+                "question": item.get("question"),
+                "attempt": item.get("attempt"),
+                "ts": item.get("ts"),
+            }
+            for item in sorted(confirmations, key=_event_ts, reverse=True)[:10]
+        ],
+        "clarification_sessions": [
+            {
+                "id": item.get("id"),
+                "kind": item.get("kind"),
+                "uncertainty_kind": item.get("uncertainty_kind"),
+                "request_id": item.get("request_id"),
+                "question": item.get("question"),
+                "allowed_answers": list(item.get("allowed_answers") or [])[:6]
+                if isinstance(item.get("allowed_answers"), list)
+                else [],
+                "attempt": item.get("attempt"),
+                "ts": item.get("ts"),
+            }
+            for item in sorted(clarifications, key=_event_ts, reverse=True)[:10]
+        ],
+    }
+
+
+def _recent_teacher_errors(teacher: Mapping[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in _as_list(teacher.get("events")):
+        kind = str(item.get("kind") or "").strip()
+        if not kind:
+            continue
+        lowered = kind.casefold()
+        if not any(marker in lowered for marker in ("error", "failed", "quarantine", "timeout", "rejected")):
+            continue
+        rows.append(
+            {
+                "ts": item.get("ts"),
+                "kind": kind,
+                "request_id": item.get("request_id"),
+                "title": item.get("title"),
+                "subtitle": item.get("subtitle"),
+            }
+        )
+    return sorted(rows, key=_event_ts, reverse=True)[: max(1, int(limit))]
 
 
 def get_nlu_trace(
@@ -415,6 +587,16 @@ def get_nlu_recent_failures(*, webspace_id: str | None = None, limit: int = 50) 
 def get_desktop_registry_lookup(*, webspace_id: str | None = None, include_live: bool = True) -> dict[str, Any]:
     ws = _webspace_id(webspace_id)
     payload = collect_desktop_lookup_tables(get_ctx(), webspace_id=ws, include_live=include_live)
+    return {
+        **payload,
+        "registry_kind": "desktop.lookup_tables",
+        "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
+    }
+
+
+async def get_desktop_registry_lookup_async(*, webspace_id: str | None = None, include_live: bool = True) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id)
+    payload = await collect_desktop_lookup_tables_async(get_ctx(), webspace_id=ws, include_live=include_live)
     return {
         **payload,
         "registry_kind": "desktop.lookup_tables",
@@ -810,6 +992,411 @@ def list_training_targets(*, webspace_id: str | None = None, include_system_acti
         },
         "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
     }
+
+
+def _side_effect_class_for_host_action(host_action: str) -> str:
+    token = str(host_action or "").strip()
+    if token in {"desktop.modal.open", "desktop.scenario.set"}:
+        return "ui_navigation"
+    if token in {"desktop.webspace.reload", "desktop.webspace.reset", "desktop.toggleInstall"}:
+        return "local_state_change"
+    if token.startswith("nlp.teacher."):
+        return "durable_configuration_change"
+    if token.startswith("scenario.workflow."):
+        return "local_state_change"
+    return "unknown"
+
+
+def _action_class_for_route(owner: Mapping[str, Any], actions: list[Mapping[str, Any]]) -> str:
+    owner_type = str(owner.get("type") or "").strip()
+    if owner_type == "system_action":
+        return "interface_action"
+    for action in actions:
+        if str(action.get("type") or "").strip() == "callHost":
+            return "interface_action"
+        if str(action.get("type") or "").strip() == "callSkill":
+            return "skill_action"
+    if owner_type == "scenario":
+        return "scenario_flow"
+    if owner_type == "skill":
+        return "skill_action"
+    return "unknown"
+
+
+def _route_side_effect_class(actions: list[Mapping[str, Any]]) -> str:
+    classes: list[str] = []
+    for action in actions:
+        if str(action.get("type") or "").strip() == "callHost":
+            classes.append(_side_effect_class_for_host_action(str(action.get("target") or "")))
+        elif str(action.get("type") or "").strip() == "callSkill":
+            classes.append("skill_action")
+    if not classes:
+        return "unknown"
+    priority = [
+        "destructive",
+        "external_io",
+        "durable_configuration_change",
+        "local_state_change",
+        "skill_action",
+        "ui_navigation",
+        "read_only",
+        "unknown",
+    ]
+    for item in priority:
+        if item in classes:
+            return item
+    return classes[0]
+
+
+def _system_action_surface_rows() -> list[dict[str, Any]]:
+    from adaos.services.nlu.system_actions_catalog import describe_system_actions
+
+    rows: list[dict[str, Any]] = []
+    for action in describe_system_actions():
+        host_action = str(action.get("action") or "").strip()
+        slots = action.get("slots") if isinstance(action.get("slots"), Mapping) else {}
+        rows.append(
+            {
+                "id": action.get("id"),
+                "class": "interface_action",
+                "owner": {"type": "system_action", "id": action.get("id")},
+                "host_action": host_action,
+                "intents": list(action.get("intents") or []) if isinstance(action.get("intents"), list) else [],
+                "required_slots": [
+                    str(name)
+                    for name, spec in slots.items()
+                    if isinstance(name, str) and isinstance(spec, Mapping) and bool(spec.get("required"))
+                ],
+                "optional_slots": [
+                    str(name)
+                    for name, spec in slots.items()
+                    if isinstance(name, str) and isinstance(spec, Mapping) and not bool(spec.get("required"))
+                ],
+                "examples": _as_text_list(action.get("examples"), limit=12),
+                "side_effect_class": _side_effect_class_for_host_action(host_action),
+                "preview_method": "desktop.preview_action",
+                "description": action.get("description"),
+            }
+        )
+    return rows
+
+
+def _template_action_surface_rows(*, webspace_id: str | None = None, limit: int = 120) -> list[dict[str, Any]]:
+    templates = list_nlu_templates(webspace_id=webspace_id, include_system_actions=False)
+    rows: list[dict[str, Any]] = []
+    template_rows = templates.get("templates") if isinstance(templates.get("templates"), list) else []
+    for item in template_rows:
+        if not isinstance(item, Mapping) or str(item.get("kind") or "") != "intent_route":
+            continue
+        owner = item.get("owner") if isinstance(item.get("owner"), Mapping) else {}
+        payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+        actions = [dict(action) for action in iter_mappings(payload.get("actions"))]
+        intent = str(item.get("intent") or "").strip()
+        if not intent or not actions:
+            continue
+        owner_type = str(owner.get("type") or "").strip()
+        owner_id = str(owner.get("id") or "").strip()
+        rows.append(
+            {
+                "id": f"{owner_type}.{owner_id}.{intent}",
+                "class": _action_class_for_route(owner, actions),
+                "owner": {"type": owner_type, "id": owner_id},
+                "intent": intent,
+                "actions": actions[:5],
+                "required_slots": _as_text_list(payload.get("slots"), limit=20),
+                "side_effect_class": _route_side_effect_class(actions),
+                "preview_method": "desktop.preview_action"
+                if any(str(action.get("type") or "") == "callHost" for action in actions)
+                else "nlu_authoring.check_phrase",
+                "source_path": item.get("source_path"),
+                "fingerprint": item.get("fingerprint"),
+            }
+        )
+        if len(rows) >= max(1, int(limit)):
+            break
+    return rows
+
+
+def _hint_containers(payload: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+    nlu = payload.get("nlu") if isinstance(payload.get("nlu"), Mapping) else {}
+    containers: list[tuple[str, Mapping[str, Any]]] = []
+    for key, value in (
+        ("llm_hints", payload.get("llm_hints")),
+        ("nlu_hints", payload.get("nlu_hints")),
+        ("nlu.llm_hints", nlu.get("llm_hints")),
+        ("nlu.nlu_hints", nlu.get("nlu_hints")),
+    ):
+        if isinstance(value, Mapping) and value:
+            containers.append((key, value))
+    return containers
+
+
+def _compact_hints(container: Mapping[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in (
+        "aliases",
+        "entities",
+        "primary_actions",
+        "actions",
+        "examples",
+        "slot_schemas",
+        "slots",
+        "side_effect_class",
+        "owner_hints",
+    ):
+        value = container.get(key)
+        if value not in (None, "", [], {}):
+            out[key] = value
+    return out
+
+
+def _developer_hint_rows(*, limit: int = 120) -> list[dict[str, Any]]:
+    ctx = get_ctx()
+    rows: list[dict[str, Any]] = []
+
+    def _append(owner_type: str, owner_id: str, payload: Mapping[str, Any], path: Path | None) -> None:
+        for container_key, container in _hint_containers(payload):
+            hints = _compact_hints(container)
+            if not hints:
+                continue
+            rows.append(
+                {
+                    "owner": {"type": owner_type, "id": owner_id},
+                    "source": container_key,
+                    "source_path": str(path) if path else None,
+                    "hints": hints,
+                    "fingerprint": _hash_payload({"owner": [owner_type, owner_id], "source": container_key, "hints": hints}),
+                }
+            )
+
+    for root in _skill_roots(ctx):
+        if not root.exists():
+            continue
+        for skill_dir in sorted(child for child in root.iterdir() if child.is_dir() and not child.name.startswith(".")):
+            payload, path = _read_skill_manifest(skill_dir.name, ctx=ctx)
+            if payload:
+                _append("skill", skill_dir.name, payload, path)
+            webui_path = skill_dir / "webui.json"
+            webui = _read_json(webui_path) if webui_path.exists() else None
+            if webui:
+                _append("skill", skill_dir.name, webui, webui_path)
+            if len(rows) >= limit:
+                return rows[:limit]
+
+    for root in _scenario_roots(ctx):
+        if not root.exists():
+            continue
+        for scenario_dir in sorted(child for child in root.iterdir() if child.is_dir() and not child.name.startswith(".")):
+            payload, path = _read_scenario_manifest(scenario_dir.name, ctx=ctx)
+            if payload:
+                _append("scenario", scenario_dir.name, payload, path)
+            if len(rows) >= limit:
+                return rows[:limit]
+    return rows[:limit]
+
+
+def _runtime_state_from_snapshot(snapshot: Mapping[str, Any], *, lookup_payload: Mapping[str, Any]) -> dict[str, Any]:
+    ui = coerce_dict(snapshot.get("ui"))
+    data = coerce_dict(snapshot.get("data"))
+    registry = coerce_dict(snapshot.get("registry"))
+    application = coerce_dict(ui.get("application"))
+    catalog = coerce_dict(data.get("catalog"))
+    installed = coerce_dict(data.get("installed"))
+    teacher = coerce_dict(data.get("nlu_teacher"))
+    merged = coerce_dict(registry.get("merged"))
+
+    modal_rows = _mapping_collection_rows(application.get("modals")) + _mapping_collection_rows(merged.get("modals"))
+    app_rows = _mapping_collection_rows(catalog.get("apps"), id_fields=("id", "app_id"))
+    widget_rows = _mapping_collection_rows(catalog.get("widgets"), id_fields=("id", "widget_id"))
+    node_rows = _mapping_collection_rows(data.get("nodes"), id_fields=("node_id", "id", "ref"))
+
+    def _lookup_count(name: str) -> int:
+        lookups = lookup_payload.get("lookups") if isinstance(lookup_payload.get("lookups"), Mapping) else {}
+        rows = lookups.get(name)
+        return len(rows) if isinstance(rows, list) else 0
+
+    current_scenario = ui.get("current_scenario")
+    catalog_apps: list[dict[str, Any]] = []
+    for row in app_rows:
+        item = _compact_registry_item(row, kind="app")
+        if item.get("id"):
+            catalog_apps.append(item)
+
+    catalog_widgets: list[dict[str, Any]] = []
+    for row in widget_rows:
+        item = _compact_registry_item(row, kind="widget")
+        if item.get("id"):
+            catalog_widgets.append(item)
+
+    return {
+        "webspace_id": snapshot.get("webspace_id"),
+        "current_scenario": current_scenario if isinstance(current_scenario, str) and current_scenario.strip() else None,
+        "available_modal_ids": [
+            str(item.get("id") or "").strip()
+            for item in (_compact_registry_item(row, kind="modal") for row in modal_rows)
+            if str(item.get("id") or "").strip()
+        ][:150],
+        "catalog_apps": catalog_apps[:150],
+        "catalog_widgets": catalog_widgets[:150],
+        "installed": {
+            "apps": _as_text_list(installed.get("apps"), limit=150),
+            "widgets": _as_text_list(installed.get("widgets"), limit=150),
+            "removed_apps": _as_text_list(installed.get("removedApps") or installed.get("removed_apps"), limit=150),
+            "removed_widgets": _as_text_list(installed.get("removedWidgets") or installed.get("removed_widgets"), limit=150),
+        },
+        "nodes": [
+            {
+                key: value
+                for key, value in {
+                    "id": row.get("id") or row.get("node_id") or row.get("ref"),
+                    "label": row.get("label") or row.get("name") or row.get("display_name"),
+                    "status": row.get("status") or row.get("state"),
+                }.items()
+                if value not in (None, "", [], {})
+            }
+            for row in node_rows[:80]
+        ],
+        "active_teacher_sessions": _active_teacher_sessions(teacher),
+        "recent_errors": _recent_teacher_errors(teacher),
+        "lookup_counts": {
+            "modal_id": _lookup_count("modal_id"),
+            "app_id": _lookup_count("app_id"),
+            "scenario_id": _lookup_count("scenario_id"),
+            "node_ref": _lookup_count("node_ref"),
+            "skill_id": _lookup_count("skill_id"),
+        },
+        "read_error": snapshot.get("read_error"),
+    }
+
+
+def _process_state_from_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    data = coerce_dict(snapshot.get("data"))
+    teacher = coerce_dict(data.get("nlu_teacher"))
+    events = sorted(_as_list(teacher.get("events")), key=_event_ts, reverse=True)
+    workbench = _as_list(teacher.get("workbench_signals"))
+
+    process_rows: list[dict[str, Any]] = []
+    for source_key in ("jobs", "operations", "processes", "tasks"):
+        source = data.get(source_key)
+        for row in _mapping_collection_rows(source, id_fields=("id", "job_id", "operation_id", "task_id"))[:50]:
+            process_rows.append(
+                {
+                    "source": f"data.{source_key}",
+                    "id": row.get("id") or row.get("job_id") or row.get("operation_id") or row.get("task_id"),
+                    "title": row.get("title") or row.get("name"),
+                    "status": row.get("status") or row.get("state"),
+                    "owner": row.get("owner") or row.get("skill") or row.get("scenario"),
+                    "updated_at": row.get("updated_at") or row.get("ts"),
+                }
+            )
+
+    return {
+        "teacher_queue": {
+            "pending_candidates": sum(1 for item in _as_list(teacher.get("candidates")) if item.get("status") == "pending"),
+            "quarantined_candidates": sum(
+                1 for item in _as_list(teacher.get("candidates")) if item.get("status") == "quarantined"
+            ),
+            "active_confirmations": len(_active_teacher_sessions(teacher).get("pending_confirmations") or []),
+            "active_clarifications": len(_active_teacher_sessions(teacher).get("clarification_sessions") or []),
+        },
+        "workbench_signals": workbench[:20],
+        "recent_teacher_events": [
+            {
+                "ts": item.get("ts"),
+                "kind": item.get("kind"),
+                "request_id": item.get("request_id"),
+                "title": item.get("title"),
+                "subtitle": item.get("subtitle"),
+            }
+            for item in events[:20]
+        ],
+        "process_rows": process_rows[:100],
+        "read_error": snapshot.get("read_error"),
+    }
+
+
+def _build_contextual_action_surface(
+    *,
+    webspace_id: str,
+    lookup_payload: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    include_hints: bool,
+    max_actions: int,
+) -> dict[str, Any]:
+    action_limit = max(1, int(max_actions))
+    system_actions = _system_action_surface_rows()
+    route_actions = _template_action_surface_rows(webspace_id=webspace_id, limit=action_limit)
+    available_actions = (system_actions + route_actions)[:action_limit]
+    developer_hints = _developer_hint_rows(limit=120) if include_hints else []
+    runtime_state = _runtime_state_from_snapshot(snapshot, lookup_payload=lookup_payload)
+    process_state = _process_state_from_snapshot(snapshot)
+    return {
+        "ok": True,
+        "surface_id": "adaos.nlu.contextual_action_surface.v1",
+        "webspace_id": webspace_id,
+        "runtime_state": runtime_state,
+        "available_actions": available_actions,
+        "process_state": process_state,
+        "developer_hints": developer_hints,
+        "lookup_summary": list(lookup_payload.get("summary") or []) if isinstance(lookup_payload.get("summary"), list) else [],
+        "fingerprint": _hash_payload(
+            {
+                "lookup": lookup_payload.get("fingerprint"),
+                "runtime": runtime_state,
+                "actions": available_actions,
+                "hints": developer_hints,
+            }
+        ),
+        "authoring_boundaries": {
+            "mode": "read_only_context",
+            "side_effects": "none",
+            "dispatch": False,
+            "training_mutation": False,
+            "llm_direct_sdk_calls": False,
+        },
+    }
+
+
+def get_contextual_action_surface(
+    *,
+    webspace_id: str | None = None,
+    include_live: bool = True,
+    include_hints: bool = True,
+    max_actions: int = 200,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id)
+    lookup_payload = get_desktop_registry_lookup(webspace_id=ws, include_live=include_live)
+    snapshot = _read_yjs_context_snapshot(ws) if include_live else {"webspace_id": ws, "ui": {}, "data": {}, "registry": {}}
+    return _build_contextual_action_surface(
+        webspace_id=ws,
+        lookup_payload=lookup_payload,
+        snapshot=snapshot,
+        include_hints=include_hints,
+        max_actions=max_actions,
+    )
+
+
+async def get_contextual_action_surface_async(
+    *,
+    webspace_id: str | None = None,
+    include_live: bool = True,
+    include_hints: bool = True,
+    max_actions: int = 200,
+) -> dict[str, Any]:
+    ws = _webspace_id(webspace_id)
+    lookup_payload = await get_desktop_registry_lookup_async(webspace_id=ws, include_live=include_live)
+    snapshot = (
+        await _read_yjs_context_snapshot_async(ws)
+        if include_live
+        else {"webspace_id": ws, "ui": {}, "data": {}, "registry": {}}
+    )
+    return _build_contextual_action_surface(
+        webspace_id=ws,
+        lookup_payload=lookup_payload,
+        snapshot=snapshot,
+        include_hints=include_hints,
+        max_actions=max_actions,
+    )
 
 
 def _compile_regex(pattern: str, *, text: str | None = None) -> dict[str, Any]:

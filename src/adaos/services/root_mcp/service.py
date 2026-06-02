@@ -456,13 +456,15 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             id="nlu_authoring.get_context",
             title="Get NLU authoring context",
             surface=RootMcpSurface.DEVELOPMENT,
-            summary="Return read-only NLU authoring context with canonical named entities, locale hints, and authoring boundaries.",
+            summary="Return read-only NLU authoring context with named entities, action surface, runtime/process state, hints, locale data, and boundaries.",
             input_schema=schema_object(
                 properties={
                     "webspace_id": {"type": "string"},
                     "kind": {"type": "string"},
                     "request_locale": {"type": "string"},
                     "preferred_locales": {"type": "array", "items": {"type": "string"}},
+                    "include_live": {"type": "boolean"},
+                    "include_hints": {"type": "boolean"},
                 },
             ),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
@@ -1502,13 +1504,21 @@ def _handle_adaos_dev_named_entity_registry(arguments: dict[str, Any], *, dry_ru
 
 def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     from adaos.services import named_entities
+    from adaos.services.nlu.teacher_read_model import get_contextual_action_surface
 
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
     root_scope = _mcp_root_scope(arguments)
     kind = _text_or_none(arguments.get("kind"))
     request_locale = _text_or_none(arguments.get("request_locale"))
     preferred_locales = _text_list(arguments.get("preferred_locales"))
+    include_live = bool(arguments.get("include_live", True))
+    include_hints = bool(arguments.get("include_hints", True))
     registry = named_entities.compact_registry_payload(kind=kind, webspace_id=webspace_id)
+    action_surface = get_contextual_action_surface(
+        webspace_id=webspace_id,
+        include_live=include_live,
+        include_hints=include_hints,
+    )
     return {
         "context": {
             "context_id": "nlu_authoring_context.v1",
@@ -1524,6 +1534,21 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
                 "effective_locale_order": _locale_order(request_locale=request_locale, preferred_locales=preferred_locales),
             },
             "named_entities": registry,
+            "runtime_state": action_surface.get("runtime_state") if isinstance(action_surface, Mapping) else {},
+            "action_surface": {
+                "surface_id": action_surface.get("surface_id") if isinstance(action_surface, Mapping) else None,
+                "available_actions": list(action_surface.get("available_actions") or [])[:200]
+                if isinstance(action_surface.get("available_actions"), list)
+                else [],
+                "lookup_summary": list(action_surface.get("lookup_summary") or [])
+                if isinstance(action_surface.get("lookup_summary"), list)
+                else [],
+                "fingerprint": action_surface.get("fingerprint") if isinstance(action_surface, Mapping) else None,
+            },
+            "process_state": action_surface.get("process_state") if isinstance(action_surface, Mapping) else {},
+            "developer_hints": list(action_surface.get("developer_hints") or [])[:120]
+            if isinstance(action_surface.get("developer_hints"), list)
+            else [],
             "canonicalization": {
                 "canonical_ref_required": True,
                 "dispatch_contract": "Resolve labels and aliases to canonical_ref before action selection; labels are never routing keys.",
@@ -1533,6 +1558,7 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
             "authoring_boundaries": {
                 "mode": "read_only_context",
                 "side_effects": "none",
+                "dispatch": "not_available",
                 "alias_writes": "not_available",
                 "training_mutation": "not_available",
                 "rasa_training_mutation": False,

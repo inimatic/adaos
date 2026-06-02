@@ -147,11 +147,13 @@ class RootMcpClient:
         kind: str | None = None,
         request_locale: str | None = None,
         preferred_locales: list[str] | tuple[str, ...] | None = None,
+        include_live: bool = True,
+        include_hints: bool = True,
         request_id: str | None = None,
         trace_id: str | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        arguments: dict[str, Any] = {}
+        arguments: dict[str, Any] = {"include_live": bool(include_live), "include_hints": bool(include_hints)}
         if target_id:
             arguments["target_id"] = str(target_id)
         if webspace_id:

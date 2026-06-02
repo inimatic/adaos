@@ -94,6 +94,11 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert context["canonicalization"]["canonical_ref_required"] is True
     assert context["authoring_boundaries"]["mode"] == "read_only_context"
     assert context["named_entities"]["items"][0]["canonical_ref"] == "skill:weather_skill"
+    assert context["action_surface"]["surface_id"] == "adaos.nlu.contextual_action_surface.v1"
+    assert any(item.get("id") == "host.desktop.modal.open" for item in context["action_surface"]["available_actions"])
+    assert isinstance(context["runtime_state"], dict)
+    assert isinstance(context["process_state"], dict)
+    assert isinstance(context["developer_hints"], list)
 
 
 def test_root_mcp_exposes_nlu_teacher_read_plane(monkeypatch) -> None:
@@ -327,6 +332,8 @@ def test_root_mcp_nlu_authoring_context_uses_bearer_scope() -> None:
     assert context["root_scope"]["subnet_id"] == "subnet:scoped"
     assert context["root_scope"]["zone"] == "lab-a"
     assert context["target_id"] == "hub:scoped"
+    assert context["action_surface"]["surface_id"] == "adaos.nlu.contextual_action_surface.v1"
+    assert context["authoring_boundaries"]["dispatch"] == "not_available"
     assert response.meta["policy_decision"] == "allow"
 
 
