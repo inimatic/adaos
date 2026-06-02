@@ -165,6 +165,48 @@ async def test_default_desktop_nlu_dispatches_marketplace_open(monkeypatch) -> N
 
 
 @pytest.mark.anyio
+async def test_default_desktop_nlu_dispatches_modal_open_with_target_node_meta(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    emitted: list[dict] = []
+    ctx.bus.subscribe("desktop.modal.open", lambda ev: emitted.append(dict(ev.payload or {})))
+
+    async def _scenario_id(_ctx, _webspace_id: str) -> str:
+        return "web_desktop"
+
+    monkeypatch.setattr(dispatcher_module, "_resolve_scenario_id", _scenario_id)
+
+    await dispatcher_module._on_nlp_intent_detected(
+        {
+            "intent": "desktop.open_modal",
+            "confidence": 1.0,
+            "slots": {"modal_id": "browsers_modal"},
+            "text": "\u043f\u043e\u043a\u0430\u0436\u0438 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u044b",
+            "webspace_id": "desktop",
+            "_meta": {"route_id": "voice_chat", "target_node_id": "member-1"},
+        }
+    )
+
+    assert emitted == [
+        {
+            "modal_id": "browsers_modal",
+            "webspace_id": "desktop",
+            "slots": {"modal_id": "browsers_modal"},
+            "text": "\u043f\u043e\u043a\u0430\u0436\u0438 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u044b",
+            "target_node_id": "member-1",
+            "_meta": {
+                "route_id": "voice_chat",
+                "target_node_id": "member-1",
+                "webspace_id": "desktop",
+                "scenario_id": "web_desktop",
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_default_desktop_nlu_dispatches_named_node_modal_open() -> None:
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.dispatcher import _on_nlp_intent_detected
