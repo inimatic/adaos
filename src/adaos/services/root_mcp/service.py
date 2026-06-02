@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
+import os
 import threading
+import time
 from typing import Any, Callable, Mapping
 
 from adaos.build_info import BUILD_INFO
@@ -57,6 +60,19 @@ from .targets import get_managed_target as get_target_descriptor
 from .targets import list_managed_targets as list_target_descriptors
 from .targets import managed_target_registry_summary
 from .tokens import access_token_registry_summary, get_access_token_record, issue_access_token, list_access_tokens, revoke_access_token
+
+
+_DESCRIPTIVE_TOOL_CACHE_TTL_S = max(0.0, float(os.getenv("ADAOS_ROOT_MCP_DESCRIPTIVE_CACHE_TTL_S", "30") or "30"))
+_DESCRIPTIVE_TOOL_CACHE_MAX = max(16, int(os.getenv("ADAOS_ROOT_MCP_DESCRIPTIVE_CACHE_MAX", "128") or "128"))
+_DESCRIPTIVE_TOOL_CACHE_LOCK = threading.RLock()
+_DESCRIPTIVE_TOOL_CACHE: dict[str, tuple[float, Any]] = {}
+_DESCRIPTIVE_TOOL_IDS = {
+    "nlu_authoring.get_context",
+    "desktop.registry.lookup",
+    "nlu_authoring.list_training_targets",
+    "nlu_authoring.list_templates",
+    "sdk.describe_surface",
+}
 
 
 def _iso_now() -> str:
@@ -2656,6 +2672,55 @@ def _result_summary(result: Any) -> dict[str, Any]:
     return {"kind": type(result).__name__}
 
 
+def _descriptive_cache_key(tool_id: str, arguments: dict[str, Any], scope: dict[str, Any], auth_context: dict[str, Any] | None) -> str:
+    auth_scope = auth_context.get("scope") if isinstance(auth_context, dict) else None
+    auth_subnet = auth_context.get("subnet_id") if isinstance(auth_context, dict) else None
+    payload = {
+        "tool_id": str(tool_id or "").strip(),
+        "arguments": arguments,
+        "scope": scope,
+        "auth_scope": auth_scope,
+        "auth_subnet": auth_subnet,
+    }
+    try:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        return str(payload)
+
+
+def _read_descriptive_cache(key: str) -> Any | None:
+    if _DESCRIPTIVE_TOOL_CACHE_TTL_S <= 0:
+        return None
+    now = time.monotonic()
+    with _DESCRIPTIVE_TOOL_CACHE_LOCK:
+        item = _DESCRIPTIVE_TOOL_CACHE.get(key)
+        if not item:
+            return None
+        stored_at, result = item
+        if now - stored_at > _DESCRIPTIVE_TOOL_CACHE_TTL_S:
+            _DESCRIPTIVE_TOOL_CACHE.pop(key, None)
+            return None
+        return deepcopy(result)
+
+
+def _write_descriptive_cache(key: str, result: Any) -> None:
+    if _DESCRIPTIVE_TOOL_CACHE_TTL_S <= 0:
+        return
+    now = time.monotonic()
+    with _DESCRIPTIVE_TOOL_CACHE_LOCK:
+        _DESCRIPTIVE_TOOL_CACHE[key] = (now, deepcopy(result))
+        if len(_DESCRIPTIVE_TOOL_CACHE) > _DESCRIPTIVE_TOOL_CACHE_MAX:
+            cutoff = now - max(_DESCRIPTIVE_TOOL_CACHE_TTL_S, 1.0)
+            stale = [item_key for item_key, (stored_at, _) in _DESCRIPTIVE_TOOL_CACHE.items() if stored_at < cutoff]
+            for item_key in stale:
+                _DESCRIPTIVE_TOOL_CACHE.pop(item_key, None)
+            while len(_DESCRIPTIVE_TOOL_CACHE) > _DESCRIPTIVE_TOOL_CACHE_MAX:
+                try:
+                    _DESCRIPTIVE_TOOL_CACHE.pop(next(iter(_DESCRIPTIVE_TOOL_CACHE)))
+                except StopIteration:
+                    break
+
+
 def _nested_mapping(value: Any, *keys: str) -> dict[str, Any]:
     current: Any = value
     for key in keys:
@@ -2950,16 +3015,37 @@ def invoke_tool(
                 )
             else:
                 try:
-                    handler_arguments = dict(payload_arguments)
-                    handler_arguments["_mcp_context"] = {
-                        "request_id": effective_request_id,
-                        "trace_id": effective_trace_id,
-                        "actor": actor,
-                        "auth_method": auth_method,
-                        "scope": scope_meta,
-                        "auth_context": dict(auth_context or {}),
-                    }
-                    result = handler(handler_arguments, dry_run=bool(dry_run))
+                    cache_key = ""
+                    cache_hit = False
+                    if bool(dry_run) and contract.id in _DESCRIPTIVE_TOOL_IDS:
+                        cache_key = _descriptive_cache_key(contract.id, payload_arguments, scope_meta, auth_context)
+                        cached_result = _read_descriptive_cache(cache_key)
+                        if cached_result is not None:
+                            result = cached_result
+                            cache_hit = True
+                        else:
+                            handler_arguments = dict(payload_arguments)
+                            handler_arguments["_mcp_context"] = {
+                                "request_id": effective_request_id,
+                                "trace_id": effective_trace_id,
+                                "actor": actor,
+                                "auth_method": auth_method,
+                                "scope": scope_meta,
+                                "auth_context": dict(auth_context or {}),
+                            }
+                            result = handler(handler_arguments, dry_run=bool(dry_run))
+                            _write_descriptive_cache(cache_key, result)
+                    else:
+                        handler_arguments = dict(payload_arguments)
+                        handler_arguments["_mcp_context"] = {
+                            "request_id": effective_request_id,
+                            "trace_id": effective_trace_id,
+                            "actor": actor,
+                            "auth_method": auth_method,
+                            "scope": scope_meta,
+                            "auth_context": dict(auth_context or {}),
+                        }
+                        result = handler(handler_arguments, dry_run=bool(dry_run))
                     summary = _result_summary(result)
                     trace = _trace_meta(
                         tool_id=contract.id,
@@ -2987,6 +3073,7 @@ def invoke_tool(
                             "routing_mode": routing_mode,
                             **scope_meta,
                             **policy_decision.to_meta(),
+                            "cache": {"descriptive_tool": True, "hit": True} if cache_hit else {"descriptive_tool": True, "hit": False} if cache_key else {},
                             "trace": trace,
                             "redactions": _redactions_for_tool(contract.id),
                         },
