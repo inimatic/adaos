@@ -24,35 +24,35 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         loaded: set[str] = set()
         loaded_projection_manifests: set[Path] = set()
         for handler, skill_name in self._discover_runtime_handlers(root):
-            self._load_skill_data_projections(handler, loaded_projection_manifests)
-            self._load_handler(handler)
-            if skill_name:
-                loaded.add(skill_name)
-                _LOG.info("imported skill handler skill=%s path=%s", skill_name, handler)
-            else:
-                _LOG.info("imported skill handler path=%s", handler)
+            if self._try_load_handler(handler, skill_name=skill_name, source="runtime"):
+                self._load_skill_data_projections(handler, loaded_projection_manifests)
+                if skill_name:
+                    loaded.add(skill_name)
+                    _LOG.info("imported skill handler skill=%s path=%s", skill_name, handler)
+                else:
+                    _LOG.info("imported skill handler path=%s", handler)
 
         # Dev/fast-path: load handlers straight from the workspace tree when a
         # skill does not have an installed runtime bundle under .runtime.
         for handler, skill_name in self._discover_workspace_handlers(root, loaded):
-            self._load_skill_data_projections(handler, loaded_projection_manifests)
-            self._load_handler(handler)
-            if skill_name:
-                loaded.add(skill_name)
-                _LOG.info("imported workspace skill handler skill=%s path=%s", skill_name, handler)
-            else:
-                _LOG.info("imported workspace skill handler path=%s", handler)
+            if self._try_load_handler(handler, skill_name=skill_name, source="workspace"):
+                self._load_skill_data_projections(handler, loaded_projection_manifests)
+                if skill_name:
+                    loaded.add(skill_name)
+                    _LOG.info("imported workspace skill handler skill=%s path=%s", skill_name, handler)
+                else:
+                    _LOG.info("imported workspace skill handler path=%s", handler)
 
         # Repo-bundled workspace skills are a final fallback for builtin skills
         # when the node-local workspace tree does not contain the sources.
         for handler, skill_name in self._discover_repo_workspace_handlers(root, loaded):
-            self._load_skill_data_projections(handler, loaded_projection_manifests)
-            self._load_handler(handler)
-            if skill_name:
-                loaded.add(skill_name)
-                _LOG.info("imported repo workspace skill handler skill=%s path=%s", skill_name, handler)
-            else:
-                _LOG.info("imported repo workspace skill handler path=%s", handler)
+            if self._try_load_handler(handler, skill_name=skill_name, source="repo_workspace"):
+                self._load_skill_data_projections(handler, loaded_projection_manifests)
+                if skill_name:
+                    loaded.add(skill_name)
+                    _LOG.info("imported repo workspace skill handler skill=%s path=%s", skill_name, handler)
+                else:
+                    _LOG.info("imported repo workspace skill handler path=%s", handler)
 
     async def reload_skill_handlers(self, skills_root: Any, skill_name: str) -> dict[str, Any]:
         root = Path(skills_root() if callable(skills_root) else skills_root)
@@ -96,6 +96,22 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             sys.modules.pop(mod_name, None)
             raise
         _LOG.info("imported skill handler module=%s path=%s", mod_name, handler)
+
+    def _try_load_handler(self, handler: Path, *, skill_name: str | None, source: str) -> bool:
+        try:
+            self._load_handler(handler)
+            return True
+        except Exception as exc:
+            _LOG.warning(
+                "skill handler import failed; skipping skill=%s source=%s path=%s error=%s: %s",
+                skill_name or "",
+                source,
+                handler,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            return False
 
     def _load_skill_data_projections(self, handler: Path, loaded: set[Path]) -> None:
         manifest_path = self._find_skill_manifest(handler)
