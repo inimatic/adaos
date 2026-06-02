@@ -119,6 +119,7 @@ Useful optional env vars on hub:
 - `ADAOS_NLU_LLM_MODEL=gpt-4o-mini`
 - `ADAOS_NLU_LLM_TIMEOUT_S=20`
 - `ADAOS_NLU_MCP_EVIDENCE_TIMEOUT_S=8`
+- `ADAOS_NLU_MCP_EVIDENCE_CACHE_TTL_S=15`
 
 If capture is enabled but the LLM runtime is disabled, the Teacher event stream
 records `llm.skipped` with `reason=llm_teacher_disabled` instead of silently
@@ -146,6 +147,17 @@ LLM teacher receives a compact context snapshot (per webspace), including:
 - skill/scenario `nlu_hints` / `llm_hints` conversational skeletons prepared
   during development, so Teacher can reason over capabilities without code
   access
+- Root MCP `nlu_authoring.get_context` evidence:
+  - `runtime_state`: current scenario, available modal ids, app/widget
+    catalogs, installed ids, nodes, active Teacher sessions, recent Teacher
+    errors, and lookup counts
+  - `action_surface.available_actions`: governed system/interface actions and
+    skill/scenario intent routes with owner, slots, examples, side-effect
+    class, preview method, and fingerprint
+  - `process_state`: Teacher queue counters, workbench signals, recent Teacher
+    events, and compact job/operation/process/task rows
+  - `developer_hints`: compact `llm_hints` / `nlu_hints` from skill/scenario
+    manifests and skill `webui.json`
 
 Goal: prefer improving existing intents (regex rule / dataset revision) over creating a new capability, when possible.
 
@@ -340,6 +352,14 @@ Teacher/LLM can inspect the desktop ids that should be treated as entity candida
 The backend reads workspace desktop/scenario manifests and falls back to packaged desktop manifests when the test/install workspace is still
 empty. For this API, the manifest snapshot is then overlaid with live read-only YJS values from `ui.application.modals`,
 `registry.merged.modals`, `data.catalog.apps`, `data.installed.apps`, `data.nodes`, and `ui.current_scenario`.
+
+LLM Teacher caches the heavy descriptor side of Root MCP evidence for a short
+TTL (`ADAOS_NLU_MCP_EVIDENCE_CACHE_TTL_S`, default `15`). The cached surfaces
+are `nlu_authoring.get_context`, `desktop.registry.lookup`,
+`nlu_authoring.list_training_targets`, `nlu_authoring.list_templates`, and
+`sdk.describe_surface`. Per-phrase `nlu_authoring.check_phrase` and
+`nlu_authoring.get_dialog_context` stay uncached so each utterance and
+correction thread is evaluated fresh.
 
 Rasa export intentionally consumes the stable manifest snapshot as native lookup-table entries and writes the full snapshot to
 `state/interpreter/rasa_project/data/lookup_tables.json`. That keeps training reproducible while the Teacher API can still show the current
