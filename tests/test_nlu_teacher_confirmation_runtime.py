@@ -46,12 +46,19 @@ async def test_voice_candidate_proposal_requests_confirmation():
     async with async_get_ydoc(webspace_id) as ydoc:
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}
         confirmations = list(teacher.get("pending_confirmations") or [])
+        clarifications = list(teacher.get("clarification_sessions") or [])
         events = list(teacher.get("events") or [])
 
     assert confirmations
     assert confirmations[-1]["status"] == "awaiting_user"
     assert confirmations[-1]["candidate_id"] == candidate["id"]
     assert confirmations[-1]["question"] == "Открыть Infrascope?"
+    assert clarifications
+    assert clarifications[-1]["status"] == "awaiting_user"
+    assert clarifications[-1]["kind"] == "voice_confirmation"
+    assert clarifications[-1]["uncertainty_kind"] == "candidate_confirmation"
+    assert clarifications[-1]["candidate_id"] == candidate["id"]
+    assert clarifications[-1]["allowed_answers"][0]["effect"] == "apply_candidate"
     assert events[-1]["kind"] == "confirmation.requested"
     assert messages
     assert "Открыть Infrascope?" in messages[-1]["text"]
@@ -108,9 +115,12 @@ async def test_voice_confirmation_yes_applies_candidate():
     async with async_get_ydoc(webspace_id) as ydoc:
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}
         confirmations = list(teacher.get("pending_confirmations") or [])
+        clarifications = list(teacher.get("clarification_sessions") or [])
         events = list(teacher.get("events") or [])
 
     assert confirmations[-1]["status"] == "accepted"
+    assert clarifications[-1]["status"] == "accepted"
+    assert clarifications[-1]["answer"] == "да"
     assert any(item.get("kind") == "confirmation.accepted" for item in events)
     assert applied
     assert applied[-1]["candidate_id"] == candidate["id"]
@@ -168,10 +178,13 @@ async def test_voice_confirmation_no_retries_once_with_rejected_candidate_contex
     async with async_get_ydoc(webspace_id) as ydoc:
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}
         confirmations = list(teacher.get("pending_confirmations") or [])
+        clarifications = list(teacher.get("clarification_sessions") or [])
         candidates = list(teacher.get("candidates") or [])
         events = list(teacher.get("events") or [])
 
     assert confirmations[-1]["status"] == "rejected"
+    assert clarifications[-1]["status"] == "rejected"
+    assert clarifications[-1]["rejected_candidates"] == [candidate["id"]]
     assert candidates[-1]["status"] == "rejected"
     assert any(item.get("kind") == "confirmation.rejected" for item in events)
     assert retries
