@@ -90,6 +90,14 @@ async def test_default_desktop_regex_covers_voice_commands(monkeypatch) -> None:
         "\u043f\u043e\u043a\u0430\u0436\u0438 \u0438\u043d\u0434\u0435\u043a\u0441\u0430",
         webspace_id="desktop",
     )
+    mediaserver_intent, mediaserver_slots, mediaserver_via, _ = await pipeline_module._try_regex_intent(
+        "\u043f\u043e\u043a\u0430\u0436\u0438 \u043c\u0435\u0434\u0438\u0430 \u0441\u0435\u0440\u0432\u0435\u0440",
+        webspace_id="desktop",
+    )
+    mediaserver_compact_intent, mediaserver_compact_slots, mediaserver_compact_via, _ = await pipeline_module._try_regex_intent(
+        "\u043f\u043e\u043a\u0430\u0436\u0438 \u043c\u0435\u0434\u0438\u0430\u0441\u0435\u0440\u0432\u0435\u0440",
+        webspace_id="desktop",
+    )
 
     assert (marketplace_intent, marketplace_slots, marketplace_via) == (
         "desktop.open_marketplace",
@@ -109,6 +117,16 @@ async def test_default_desktop_regex_covers_voice_commands(monkeypatch) -> None:
     assert (indexer_intent, indexer_slots, indexer_via) == (
         "desktop.open_modal",
         {"modal_id": "media_indexer_modal"},
+        "regex.lookup",
+    )
+    assert (mediaserver_intent, mediaserver_slots, mediaserver_via) == (
+        "desktop.open_modal",
+        {"modal_id": "mediaserver_modal"},
+        "regex.lookup",
+    )
+    assert (mediaserver_compact_intent, mediaserver_compact_slots, mediaserver_compact_via) == (
+        "desktop.open_modal",
+        {"modal_id": "mediaserver_modal"},
         "regex.lookup",
     )
 
