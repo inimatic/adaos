@@ -504,11 +504,21 @@ for the current NLU Teacher implementation gate.
 - LLM Teacher now includes read-only Root MCP authoring evidence
   (`nlu_authoring.get_context` and `nlu_authoring.check_phrase`) in the prompt
   before asking Root/OpenAI for a candidate.
+- Skill manifests can publish `webui.json:nlu.llm_hints` with aliases,
+  entities, and primary interface actions. Teacher lookup context consumes
+  those hints together with inferred app/modal/action metadata so OpenAI can
+  choose canonical `modal_id`, `app_id`, and `scenario_id` values.
 - LLM Teacher MCP evidence collection now runs off the API/event loop with a
   bounded timeout, and Teacher events are persisted immediately when appended.
+- Regex slot normalization now bounds live YJS lookup collection and falls back
+  to baseline manifest lookup data, so an applied Teacher rule cannot block the
+  Voice path while resolving a `modal_id` or similar lookup slot.
 - LLM Teacher now repairs common model output mistakes for interface actions:
   lookup slot aliases are canonicalized and scenario-switch rules are stored in
   the current scenario owner rather than the scenario being opened.
+- LLM Teacher now prefers `desktop.open_modal` for generic show/open requests
+  that target known apps with `launchModal`; `desktop.switch_scenario` remains
+  reserved for explicit scenario-switch wording.
 - LLM Teacher now accepts both plain JSON and fenced JSON model responses,
   previews proposed regex rules against the original phrase, and marks bad
   proposals as `quarantined` so Apply rejects them.

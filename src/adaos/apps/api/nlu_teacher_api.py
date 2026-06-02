@@ -78,7 +78,16 @@ def _prune_teacher_requests(
             return True
         return any(rid.startswith(prefix) for prefix in request_id_prefixes)
 
-    for key in ("items", "events", "revisions", "candidates", "dataset", "plan", "llm_logs"):
+    for key in (
+        "items",
+        "events",
+        "revisions",
+        "candidates",
+        "dataset",
+        "plan",
+        "llm_logs",
+        "pending_confirmations",
+    ):
         raw = next_teacher.get(key)
         if not isinstance(raw, list):
             continue

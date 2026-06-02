@@ -98,6 +98,11 @@ def _confirmation_question(candidate: Mapping[str, Any]) -> str:
         if label:
             return f"Открыть {label}?"
         return "Открыть этот сценарий?"
+    if intent == "desktop.open_modal":
+        label = _slot_value(candidate, "modal_id", "modal", "app_id", "app")
+        if label:
+            return f"Открыть {label}?"
+        return "Открыть это окно?"
     if intent in {"desktop.open_weather", "weather.current"} or "weather" in intent:
         city = _slot_value(candidate, "city", "location")
         if city:

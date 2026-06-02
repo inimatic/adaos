@@ -657,15 +657,27 @@ functional slice.
   `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
   `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
   `nlu_authoring.list_templates`, and `sdk.describe_surface`.
+- Include skill-authored `nlu.llm_hints` and inferred desktop registry lookup
+  evidence, especially app/modal aliases and primary interface actions. Skill
+  authors prepare these hints during skill development; AdaOS still validates
+  every candidate through preview/probe/apply instead of letting the LLM call
+  SDK functions directly.
 - Collect MCP evidence off the API/event loop with a bounded timeout. If the
   descriptive plane is slow, the Teacher proceeds with partial context instead
   of blocking voice/UI traffic.
+- Bound live lookup normalization in the runtime regex path and fall back to
+  manifest-derived lookups, so an applied Teacher rule cannot stall Voice while
+  canonicalizing slots such as `modal_id`.
 - Persist every Teacher event immediately to the Teacher store, not only to the
   live YDoc, so `llm.request`, `llm.response`, and error/skip events survive a
   backend restart before a candidate is produced.
 - Repair common regex-candidate mistakes before preview/apply: canonical slot
   aliases such as `scenario -> scenario_id`, `modal -> modal_id`, and
   host-action targets that should be stored in the current scenario owner.
+- Repair common interface-action mistakes before preview/apply: generic
+  show/open requests for a known app with `launchModal` should become
+  `desktop.open_modal`; scenario switching is reserved for explicit scenario
+  wording.
 - When a regex candidate is applied, enable the webspace regex runtime stage if
   it was disabled; otherwise the verified rule would pass probe but be skipped
   by the next normal pipeline request.
