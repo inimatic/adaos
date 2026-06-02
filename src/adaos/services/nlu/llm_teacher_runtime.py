@@ -80,6 +80,12 @@ _BACKGROUND_INFLIGHT: set[str] = set()
 _BACKGROUND_SEMAPHORE: asyncio.Semaphore | None = None
 _BACKGROUND_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
 _BACKGROUND_MAX_CONCURRENCY = max(1, int(os.getenv("ADAOS_NLU_LLM_TEACHER_CONCURRENCY", "1") or "1"))
+_RATE_LIMIT_WINDOW_S = max(1.0, float(os.getenv("ADAOS_NLU_LLM_RATE_WINDOW_S", "30") or "30"))
+_RATE_LIMIT_MAX_PER_WINDOW = max(1, int(os.getenv("ADAOS_NLU_LLM_RATE_MAX_PER_WINDOW", "6") or "6"))
+_REPEATED_PHRASE_TTL_S = max(0.0, float(os.getenv("ADAOS_NLU_LLM_REPEAT_SUPPRESS_TTL_S", "20") or "20"))
+_RATE_LIMIT_LOCK = threading.RLock()
+_RATE_LIMIT_BUCKETS: dict[str, list[float]] = {}
+_RECENT_PHRASE_HASHES: dict[str, float] = {}
 _UI_NAVIGATION_INTENTS = {
     "desktop.open_modal",
     "desktop.open_node_modal",
@@ -203,6 +209,94 @@ def _stable_json(value: Any) -> str:
 
 def _sha256_payload(value: Any) -> str:
     return "sha256:" + hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
+
+
+def _phrase_hash(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    return hashlib.sha256(normalized.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _teacher_request_class(req: Mapping[str, Any], meta: Mapping[str, Any]) -> str:
+    reason = str(req.get("reason") or meta.get("reason") or "").strip()
+    via = str(req.get("via") or meta.get("via") or "").strip()
+    if reason:
+        return reason[:80]
+    if via:
+        return f"via:{via[:60]}"
+    return "unknown"
+
+
+def _rate_limit_exempt(meta: Mapping[str, Any]) -> bool:
+    return any(
+        str(meta.get(key) or "").strip()
+        for key in (
+            "rejected_candidate_id",
+            "previous_request_id",
+            "nlu_teacher_confirmation_attempt",
+            "correction_thread_id",
+        )
+    )
+
+
+def _teacher_llm_rate_gate(
+    *,
+    webspace_id: str,
+    text: str,
+    req: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    now: float | None = None,
+) -> dict[str, Any]:
+    ts = time.time() if now is None else float(now)
+    route_id = str(meta.get("route_id") or meta.get("route") or req.get("route_id") or req.get("route") or "unknown").strip()
+    has_route_context = bool(route_id and route_id != "unknown")
+    request_class = _teacher_request_class(req, meta)
+    phrase_hash = _phrase_hash(text)
+    bucket_key = f"{webspace_id}:{route_id}:{request_class}"
+    phrase_key = f"{webspace_id}:{route_id}:{phrase_hash}"
+    exempt = _rate_limit_exempt(meta)
+    with _RATE_LIMIT_LOCK:
+        cutoff = ts - _RATE_LIMIT_WINDOW_S
+        bucket = [item for item in _RATE_LIMIT_BUCKETS.get(bucket_key, []) if item >= cutoff]
+        _RATE_LIMIT_BUCKETS[bucket_key] = bucket
+        phrase_cutoff = ts - _REPEATED_PHRASE_TTL_S
+        for key, seen_ts in list(_RECENT_PHRASE_HASHES.items()):
+            if seen_ts < phrase_cutoff:
+                _RECENT_PHRASE_HASHES.pop(key, None)
+
+        if not exempt and has_route_context and _REPEATED_PHRASE_TTL_S > 0 and phrase_key in _RECENT_PHRASE_HASHES:
+            return {
+                "allowed": False,
+                "reason": "repeated_phrase_suppressed",
+                "bucket_key": bucket_key,
+                "phrase_hash": "sha256:" + phrase_hash,
+                "window_s": _REPEATED_PHRASE_TTL_S,
+                "count": len(bucket),
+                "limit": _RATE_LIMIT_MAX_PER_WINDOW,
+            }
+        if not exempt and len(bucket) >= _RATE_LIMIT_MAX_PER_WINDOW:
+            return {
+                "allowed": False,
+                "reason": "rate_limit_exceeded",
+                "bucket_key": bucket_key,
+                "phrase_hash": "sha256:" + phrase_hash,
+                "window_s": _RATE_LIMIT_WINDOW_S,
+                "count": len(bucket),
+                "limit": _RATE_LIMIT_MAX_PER_WINDOW,
+            }
+
+        bucket.append(ts)
+        _RATE_LIMIT_BUCKETS[bucket_key] = bucket
+        _RECENT_PHRASE_HASHES[phrase_key] = ts
+    return {
+        "allowed": True,
+        "reason": "allowed",
+        "bucket_key": bucket_key,
+        "phrase_hash": "sha256:" + phrase_hash,
+        "window_s": _RATE_LIMIT_WINDOW_S,
+        "count": len(bucket),
+        "limit": _RATE_LIMIT_MAX_PER_WINDOW,
+        "exempt": exempt,
+    }
 
 
 def _target_key(target: Any) -> tuple[str, str]:
@@ -1993,6 +2087,55 @@ async def _handle_teacher_request(evt: Any) -> None:
                     "webspace_id": webspace_id,
                     "request_id": request_id,
                     "reason": "llm_teacher_disabled",
+                    "_meta": dict(req_meta),
+                },
+                source="nlu.teacher.llm",
+            )
+            return
+
+        rate_gate = _teacher_llm_rate_gate(webspace_id=webspace_id, text=text, req=req, meta=req_meta)
+        if not bool(rate_gate.get("allowed")):
+            log_id = f"llm.skip.{int(time.time() * 1000)}"
+            try:
+                await _append_llm_log(
+                    webspace_id,
+                    {
+                        "id": log_id,
+                        "ts": time.time(),
+                        "request_id": request_id,
+                        "webspace_id": webspace_id,
+                        "model": _MODEL,
+                        "status": "skipped",
+                        "skip_reason": rate_gate.get("reason"),
+                        "rate_gate": dict(rate_gate),
+                    },
+                )
+            except Exception:
+                _log.debug("failed to append rate-limited llm log webspace=%s", webspace_id, exc_info=True)
+            try:
+                await append_event(
+                    webspace_id,
+                    make_event(
+                        webspace_id=webspace_id,
+                        request_id=request_id,
+                        request_text=text,
+                        kind="llm.skipped",
+                        title="LLM Teacher skipped",
+                        subtitle=str(rate_gate.get("reason") or "rate_gate"),
+                        raw={"log_id": log_id, "rate_gate": dict(rate_gate)},
+                        meta=req_meta,
+                    ),
+                )
+            except Exception:
+                _log.debug("failed to append teacher event (llm.skipped rate gate) webspace=%s", webspace_id, exc_info=True)
+            bus_emit(
+                ctx.bus,
+                "nlp.teacher.llm.skipped",
+                {
+                    "webspace_id": webspace_id,
+                    "request_id": request_id,
+                    "reason": rate_gate.get("reason") or "rate_gate",
+                    "rate_gate": dict(rate_gate),
                     "_meta": dict(req_meta),
                 },
                 source="nlu.teacher.llm",

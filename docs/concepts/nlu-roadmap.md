@@ -367,6 +367,11 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Add rate limits, duplicate suppression, and queue/backpressure
   policy for Root/OpenAI Teacher calls by webspace, route, request class, and
   repeated phrase hash.
+- [x] M4 implementation slice: LLM Teacher now has an in-process rate/repeated
+  phrase gate before MCP evidence and Root/OpenAI calls. It records
+  `llm.skipped` / `nlp.teacher.llm.skipped` with rate evidence, keeps the
+  existing background concurrency semaphore and in-flight request de-dup, and
+  exempts correction/confirmation retry metadata.
 - [ ] `[should]` Add golden positive/negative phrase suites, ambiguity
   fixtures, STT-noise fixtures, and per-skill regression reports.
 - [ ] `[should]` Add cost accounting metrics for Teacher: LLM calls, retries,
@@ -988,6 +993,10 @@ below remain useful for tracking existing implementation work.
   evidence and emit `nlp.teacher.candidate.apply.rejected` with
   `reason=m4_validation_failed`; valid candidates store the passed validation
   evidence before continuing through regex/example Apply.
+- Root/OpenAI Teacher calls now pass through a lightweight M4 rate gate before
+  MCP evidence collection and LLM inference. The gate suppresses repeated
+  routed phrases and over-limit webspace/route/request-class bursts while
+  preserving correction/confirmation retries.
 - M3 multi-engine authoring strategy is now enforced: Teacher normalizes
   `training_strategy`, treats non-regex strategies as first-class candidates,
   and rejects regex proposals when the selected strategy, `why_not_regex`, or

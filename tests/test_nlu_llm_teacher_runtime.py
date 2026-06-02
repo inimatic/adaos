@@ -251,6 +251,120 @@ async def test_llm_teacher_records_disabled_llm_skip(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_suppresses_repeated_phrase_before_llm(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-rate-repeat"
+    request_text = "show repeated media"
+    calls: list[str] = []
+    skipped: list[dict] = []
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        calls.append(str(request_id or ""))
+        return {"output": [{"content": [{"type": "output_text", "text": json.dumps({"decision": "ignore", "confidence": 0.0})}]}]}
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_REPEATED_PHRASE_TTL_S", 60.0)
+    monkeypatch.setattr(llm, "_RATE_LIMIT_MAX_PER_WINDOW", 10)
+    llm._RATE_LIMIT_BUCKETS.clear()
+    llm._RECENT_PHRASE_HASHES.clear()
+
+    ctx.bus.subscribe("nlp.teacher.llm.skipped", lambda ev: skipped.append(dict(ev.payload or {})))
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    for idx in range(2):
+        await llm._on_teacher_request(
+            {
+                "webspace_id": webspace_id,
+                "request": {
+                    "id": f"teach.repeat.{idx}",
+                    "request_id": f"req.repeat.{idx}",
+                    "text": request_text,
+                    "reason": "below_margin_threshold",
+                    "via": "rasa",
+                    "_meta": {"route_id": "voice_chat"},
+                },
+            }
+        )
+
+    assert len(calls) == 1
+    assert skipped
+    assert skipped[-1]["reason"] == "repeated_phrase_suppressed"
+    async with async_get_ydoc(webspace_id) as ydoc:
+        logs = list(((ydoc.get_map("data").get("nlu_teacher") or {}).get("llm_logs") or []))
+    assert any(item.get("status") == "skipped" and item.get("skip_reason") == "repeated_phrase_suppressed" for item in logs)
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_rate_gate_exempts_correction_retry(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-llm-rate-correction"
+    request_text = "show correction media"
+    calls: list[str] = []
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        calls.append(str(request_id or ""))
+        return {"output": [{"content": [{"type": "output_text", "text": json.dumps({"decision": "ignore", "confidence": 0.0})}]}]}
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_REPEATED_PHRASE_TTL_S", 60.0)
+    monkeypatch.setattr(llm, "_RATE_LIMIT_MAX_PER_WINDOW", 1)
+    llm._RATE_LIMIT_BUCKETS.clear()
+    llm._RECENT_PHRASE_HASHES.clear()
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.correction.1",
+                "request_id": "req.correction.1",
+                "text": request_text,
+                "reason": "below_margin_threshold",
+                "via": "rasa",
+                "_meta": {"route_id": "voice_chat"},
+            },
+        }
+    )
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.correction.2",
+                "request_id": "req.correction.2",
+                "text": request_text,
+                "reason": "below_margin_threshold",
+                "via": "rasa",
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "rejected_candidate_id": "cand.previous",
+                    "previous_request_id": "req.correction.1",
+                },
+            },
+        }
+    )
+
+    assert calls == ["req.correction.1", "req.correction.2"]
+
+
+@pytest.mark.anyio
 async def test_teacher_append_event_persists_to_store():
     from adaos.services.nlu.teacher_events import append_event, make_event
     from adaos.services.nlu.teacher_store import load_teacher_state
