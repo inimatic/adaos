@@ -120,10 +120,20 @@ Useful optional env vars on hub:
 - `ADAOS_NLU_LLM_TIMEOUT_S=20`
 - `ADAOS_NLU_MCP_EVIDENCE_TIMEOUT_S=8`
 - `ADAOS_NLU_MCP_EVIDENCE_CACHE_TTL_S=15`
+- `ADAOS_NLU_LLM_RATE_WINDOW_S=30`
+- `ADAOS_NLU_LLM_RATE_MAX_PER_WINDOW=6`
+- `ADAOS_NLU_LLM_REPEAT_SUPPRESS_TTL_S=20`
 
 If capture is enabled but the LLM runtime is disabled, the Teacher event stream
 records `llm.skipped` with `reason=llm_teacher_disabled` instead of silently
 dropping the request.
+
+LLM Teacher also applies a local M4 rate gate before collecting MCP evidence
+or calling Root/OpenAI. The gate is scoped by webspace, route, and request
+class; it suppresses repeated routed phrases for a short TTL and records
+`llm.skipped` / `nlp.teacher.llm.skipped` with rate evidence. Correction and
+confirmation retries are exempt so user feedback can still drive the next
+analysis cycle.
 
 ## Teacher context (inputs)
 
