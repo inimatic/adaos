@@ -36,12 +36,26 @@ tokens or unbounded dialog history.
 
 ## Enable
 
-Set env vars on hub:
+NLU Teacher enablement follows root policy first:
 
-- `ADAOS_NLU_TEACHER=1`
-- `ADAOS_NLU_LLM_TEACHER=1`
-- optional: `ADAOS_NLU_LLM_MODEL=gpt-4o-mini`
-- optional: `ADAOS_NLU_LLM_TIMEOUT_S=20`
+- primary policy: `root.llm.allow_nlu_teacher`
+- `ADAOS_NLU_TEACHER` is an optional capture/runtime override
+- `ADAOS_NLU_LLM_TEACHER` is an optional LLM-runtime override
+
+When either env var is unset, the corresponding runtime inherits
+`root.llm.allow_nlu_teacher`. Set an env var to `0`, `false`, `no`, or `off`
+to force-disable that layer; set it to `1`, `true`, `yes`, or `on` to
+force-enable it for local development.
+
+Useful optional env vars on hub:
+
+- `ADAOS_NLU_LLM_MODEL=gpt-4o-mini`
+- `ADAOS_NLU_LLM_TIMEOUT_S=20`
+- `ADAOS_NLU_MCP_EVIDENCE_TIMEOUT_S=8`
+
+If capture is enabled but the LLM runtime is disabled, the Teacher event stream
+records `llm.skipped` with `reason=llm_teacher_disabled` instead of silently
+dropping the request.
 
 ## Teacher context (inputs)
 
@@ -58,6 +72,12 @@ LLM teacher receives a compact context snapshot (per webspace), including:
 - skill manifests (`skills_manifest`: tools/events/llm_policy summary for installed skills)
 
 Goal: prefer improving existing intents (regex rule / dataset revision) over creating a new capability, when possible.
+
+For lookup-backed slots (`scenario_id`, `modal_id`, `app_id`, `node_ref`,
+`webspace_id`, `skill_id`), dynamic regex can capture the user-facing text.
+Before dispatch, AdaOS canonicalizes known lookup values/labels to stable ids.
+For example, a learned rule for `Покажи Infrascope` can return
+`scenario_id=infrascope` even when the matched text is `Infrascope`.
 
 Teacher bridge classifies `nlp.intent.not_obtained.reason` before the LLM
 runtime receives a request. Low-confidence/no-intent outcomes are teachable NLU
@@ -596,10 +616,27 @@ functional slice.
   `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
   `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
   `nlu_authoring.list_templates`, and `sdk.describe_surface`.
+- Collect MCP evidence off the API/event loop with a bounded timeout. If the
+  descriptive plane is slow, the Teacher proceeds with partial context instead
+  of blocking voice/UI traffic.
+- Persist every Teacher event immediately to the Teacher store, not only to the
+  live YDoc, so `llm.request`, `llm.response`, and error/skip events survive a
+  backend restart before a candidate is produced.
+- Repair common regex-candidate mistakes before preview/apply: canonical slot
+  aliases such as `scenario -> scenario_id`, `modal -> modal_id`, and
+  host-action targets that should be stored in the current scenario owner.
+- When a regex candidate is applied, enable the webspace regex runtime stage if
+  it was disabled; otherwise the verified rule would pass probe but be skipped
+  by the next normal pipeline request.
+- Run Teacher read-model HTTP endpoints that depend on synchronous YDoc helpers
+  in a worker thread, not directly in FastAPI's async event loop.
 - Dispatch only through the normal AdaOS intent/action path and only when the candidate's action side-effect class allows auto-dispatch.
 - Link "no, that is not it" corrections to the previous request/candidate so the next teacher pass has the failure context.
 - Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
 - Surface stage decisions, confidence, ranking, entities, fallback reasons, and action preview in trace data before expanding the MCP plane.
+- Add a durable `nlu_trace` fallback store. The live `data.nlu_trace` timeline is
+  useful for UI debugging, but a scenario switch can rebuild runtime state after
+  a successful interface action and clear the short-lived trace.
 
 ### Phase 2 - Minimal MCP descriptive plane
 

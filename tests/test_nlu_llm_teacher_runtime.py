@@ -69,6 +69,128 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_uses_root_policy_when_env_unset(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-root-policy"
+    fake_ctx = SimpleNamespace(
+        bus=ctx.bus,
+        paths=ctx.paths,
+        settings=getattr(ctx, "settings", None),
+        config=SimpleNamespace(root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True))),
+    )
+    monkeypatch.setattr(llm, "get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", None)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", None)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    calls: list[dict] = []
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        calls.append({"messages": messages, "request_id": request_id})
+        return {"output": [{"content": [{"type": "output_text", "text": json.dumps({"decision": "ignore", "confidence": 0.1, "notes": "test"})}]}]}
+
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {"id": "teach.policy", "request_id": "req.policy", "text": "show test panel", "reason": "fallback", "via": "rasa"},
+        }
+    )
+
+    assert calls
+    assert calls[-1]["request_id"] == "req.policy"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        events = list(teacher.get("events") or [])
+        logs = list(teacher.get("llm_logs") or [])
+
+    assert any(item.get("kind") == "llm.request" for item in events)
+    assert any(item.get("kind") == "llm.response" for item in events)
+    assert logs[-1]["status"] == "response"
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_records_disabled_llm_skip(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-disabled-skip"
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", False)
+
+    calls: list[dict] = []
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        calls.append({"messages": messages, "request_id": request_id})
+        return {}
+
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {"id": "teach.skip", "request_id": "req.skip", "text": "show test panel", "reason": "fallback", "via": "rasa"},
+        }
+    )
+
+    assert not calls
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        events = list(teacher.get("events") or [])
+
+    assert events[-1]["kind"] == "llm.skipped"
+    assert events[-1]["raw"]["reason"] == "llm_teacher_disabled"
+
+
+@pytest.mark.anyio
+async def test_teacher_append_event_persists_to_store():
+    from adaos.services.nlu.teacher_events import append_event, make_event
+    from adaos.services.nlu.teacher_store import load_teacher_state
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-teacher-event-persistence"
+    request_id = "req.persist.event"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"events": []})
+
+    await append_event(
+        webspace_id,
+        make_event(
+            webspace_id=webspace_id,
+            request_id=request_id,
+            request_text="show persisted event",
+            kind="llm.request",
+            title="LLM request",
+        ),
+    )
+
+    saved = load_teacher_state(webspace_id=webspace_id)
+    events = list(saved.get("events") or [])
+    assert events
+    assert events[-1]["request_id"] == request_id
+    assert events[-1]["kind"] == "llm.request"
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_prompt_includes_mcp_evidence_and_stores_regex_candidate(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
@@ -882,3 +1004,123 @@ async def test_llm_teacher_trains_interface_action_regex_and_rolls_back(monkeypa
     assert slots == {}
     saved_scenario = json.loads(scenario_json.read_text(encoding="utf-8"))
     assert not ((saved_scenario.get("nlu") or {}).get("regex_rules") or [])
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_repairs_scenario_switch_target_and_slot_alias(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-scenario-switch-alias"
+    owner_scenario_id = "test_scenario_switch_alias_owner"
+    opened_scenario_id = "infrascope"
+    request_text = "show Infrascope"
+    intent_name = "desktop.open_scenario"
+    pattern = r"\b(?:show|open)\s+(?P<scenario>infrascope)\b"
+
+    owner_root = Path(ctx.paths.scenarios_dir()) / owner_scenario_id
+    owner_root.mkdir(parents=True, exist_ok=True)
+    (owner_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": owner_scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        intent_name: {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.scenario.set",
+                                    "params": {"scenario_id": "$slot.scenario_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", owner_scenario_id)
+            data_map.set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+            data_map.set(
+                txn,
+                "catalog",
+                {
+                    "apps": [
+                        {
+                            "id": f"scenario:{opened_scenario_id}",
+                            "title": "Infrascope",
+                            "scenario_id": opened_scenario_id,
+                        }
+                    ]
+                },
+            )
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": intent_name,
+                                    "regex_rule": {"intent": intent_name, "pattern": pattern},
+                                    "target": {"type": "scenario", "id": opened_scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {"scenario": {"type": "string"}},
+                                    "confidence": 0.82,
+                                    "notes": "Scenario switch target/slot alias repair.",
+                                    "candidate": None,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.alias",
+                "request_id": "req.alias",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["target"] == {"type": "scenario", "id": owner_scenario_id}
+    assert "(?P<scenario_id>" in candidate["regex_rule"]["pattern"]
+    assert candidate["slots"] == {"scenario_id": {"type": "string"}}
+    assert candidate["normalization"]["slot_aliases"] == {"scenario": "scenario_id"}
+    assert candidate["preview"]["ok"] is True
+    assert candidate["preview"]["slots"] == {"scenario_id": "Infrascope"}

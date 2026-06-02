@@ -169,7 +169,7 @@ def _remove_scenario_regex_rule(
         return 0
     nlu["regex_rules"] = kept
     try:
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     except Exception:
         return 0
     scenarios_loader.invalidate_cache(scenario_id=scenario_id, space="workspace")
@@ -242,7 +242,7 @@ def _write_scenario_regex_rule(*, scenario_id: str, rule: dict[str, Any]) -> boo
     nlu["regex_rules"] = _append_or_update_rule([dict(x) for x in rules if isinstance(x, dict)], rule)[-200:]
 
     try:
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     except Exception:
         return False
 
@@ -512,6 +512,7 @@ async def _on_regex_rule_apply(evt: Any) -> None:
     request_id: str | None = None
     request_text: str = ""
     applied_to: dict[str, Any] | None = None
+    runtime_flags_update: dict[str, Any] | None = None
 
     try:
         async with _nlu_regex_rules_write_meta():
@@ -605,6 +606,38 @@ async def _on_regex_rule_apply(evt: Any) -> None:
     except Exception:
         _log.warning("failed to apply regex rule webspace=%s intent=%s", webspace_id, intent, exc_info=True)
         return
+
+    try:
+        from adaos.services.nlu.runtime_flags import get_runtime_flags, set_runtime_flags
+
+        flags = await get_runtime_flags(webspace_id)
+        if not bool(flags.get("regex_enabled", True)):
+            runtime_flags_update = await set_runtime_flags(
+                webspace_id,
+                {"regex_enabled": True},
+                source="nlu.regex_rules.apply",
+            )
+            try:
+                bus_emit(
+                    ctx.bus,
+                    "nlu.runtime.flags.changed",
+                    {
+                        "webspace_id": webspace_id,
+                        "flags": dict(runtime_flags_update.get("flags") or {}),
+                        "updated_at": runtime_flags_update.get("updated_at"),
+                        "_meta": dict(meta),
+                    },
+                    source="nlu.regex_rules",
+                )
+            except Exception:
+                pass
+    except Exception:
+        _log.warning(
+            "failed to enable regex runtime after teacher rule apply webspace=%s candidate_id=%s",
+            webspace_id,
+            candidate_id,
+            exc_info=True,
+        )
 
     try:
         from adaos.services.nlu.pipeline import invalidate_dynamic_regex_cache  # local import to avoid cycles
@@ -733,7 +766,11 @@ async def _on_regex_rule_apply(evt: Any) -> None:
                 kind="regex_rule.applied",
                 title="Regex rule applied",
                 subtitle=f"{intent}".strip(),
-                raw={**rule, "target": dict(applied_to or {})},
+                raw={
+                    **rule,
+                    "target": dict(applied_to or {}),
+                    **({"runtime_flags": dict(runtime_flags_update.get("flags") or {})} if runtime_flags_update else {}),
+                },
                 meta=meta,
             ),
         )

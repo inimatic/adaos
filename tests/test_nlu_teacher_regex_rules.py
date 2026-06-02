@@ -177,3 +177,82 @@ async def test_teacher_regex_rule_verifies_candidate_after_apply():
     assert candidate["verification"]["probe"]["intent"] == "desktop.open_weather"
     assert acquired
     assert acquired[-1]["intent"] == "desktop.open_weather"
+
+
+@pytest.mark.anyio
+async def test_dynamic_regex_canonicalizes_lookup_slots_for_scenario_switch():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.pipeline import _try_regex_intent
+    from adaos.services.nlu.regex_rules_runtime import _on_regex_rule_apply
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    owner_scenario_id = "test_infrascope_switch_teacher"
+    target_scenario_id = "infrascope"
+    webspace_id = "ws-test-infrascope-slot-normalization"
+    request_text = "\u041f\u043e\u043a\u0430\u0436\u0438 Infrascope"
+    pattern = r"\b(?:\u043f\u043e\u043a\u0430\u0436\u0438|\u043e\u0442\u043a\u0440\u043e\u0439|show|open)\s+(?P<scenario_id>infrascope)\b"
+
+    target_root = Path(ctx.paths.scenarios_dir()) / target_scenario_id
+    target_root.mkdir(parents=True, exist_ok=True)
+    target_json = target_root / "scenario.json"
+    if not target_json.exists():
+        target_json.write_text(
+            json.dumps({"id": target_scenario_id, "version": "0.0.1"}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    owner_root = Path(ctx.paths.scenarios_dir()) / owner_scenario_id
+    owner_root.mkdir(parents=True, exist_ok=True)
+    owner_json = owner_root / "scenario.json"
+    owner_json.write_text(
+        json.dumps(
+            {
+                "id": owner_scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_scenario": {
+                            "scope": "scenario",
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.scenario.set",
+                                    "params": {"scenario_id": "$slot.scenario_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ],
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", owner_scenario_id)
+
+    intent, slots, via, _raw = await _try_regex_intent(request_text, webspace_id=webspace_id)
+    assert intent is None
+    assert slots == {}
+    assert via == "regex"
+
+    await _on_regex_rule_apply(
+        {
+            "webspace_id": webspace_id,
+            "intent": "desktop.open_scenario",
+            "pattern": pattern,
+            "target": {"type": "scenario", "id": owner_scenario_id},
+        }
+    )
+
+    intent, slots, via, raw = await _try_regex_intent(request_text, webspace_id=webspace_id)
+    assert intent == "desktop.open_scenario"
+    assert via == "regex.dynamic"
+    assert slots == {"scenario_id": target_scenario_id}
+    assert raw["slot_normalization"]["scenario_id"]["from"] == "Infrascope"
+    assert raw["slot_normalization"]["scenario_id"]["to"] == target_scenario_id
