@@ -69,6 +69,13 @@ _SLOT_GROUP_ALIASES = {
     "skill": "skill_id",
     "webspace": "webspace_id",
 }
+_BACKGROUND_TRUE_VALUES = {"1", "true", "yes", "on"}
+_BACKGROUND_FALSE_VALUES = {"0", "false", "no", "off"}
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+_BACKGROUND_INFLIGHT: set[str] = set()
+_BACKGROUND_SEMAPHORE: asyncio.Semaphore | None = None
+_BACKGROUND_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
+_BACKGROUND_MAX_CONCURRENCY = max(1, int(os.getenv("ADAOS_NLU_LLM_TEACHER_CONCURRENCY", "1") or "1"))
 
 
 def _nlu_llm_write_meta():
@@ -1367,8 +1374,7 @@ async def _find_duplicate_regex_candidate(
     return None
 
 
-@subscribe("nlp.teacher.request")
-async def _on_teacher_request(evt: Any) -> None:
+async def _handle_teacher_request(evt: Any) -> None:
     ctx = None
     webspace_id = None
     try:
@@ -1977,3 +1983,53 @@ async def _on_teacher_request(evt: Any) -> None:
         # Never crash the eventbus handler; log and exit.
         _log.warning("llm teacher handler crashed webspace=%s", webspace_id, exc_info=True)
         return
+
+
+def _background_teacher_enabled() -> bool:
+    raw = str(os.getenv("ADAOS_NLU_LLM_TEACHER_BACKGROUND", "1") or "1").strip().lower()
+    if raw in _BACKGROUND_FALSE_VALUES:
+        return False
+    if raw in _BACKGROUND_TRUE_VALUES:
+        return "PYTEST_CURRENT_TEST" not in os.environ
+    return True
+
+
+def _background_semaphore() -> asyncio.Semaphore:
+    global _BACKGROUND_SEMAPHORE, _BACKGROUND_SEMAPHORE_LOOP
+    loop = asyncio.get_running_loop()
+    if _BACKGROUND_SEMAPHORE is None or _BACKGROUND_SEMAPHORE_LOOP is not loop:
+        _BACKGROUND_SEMAPHORE = asyncio.Semaphore(_BACKGROUND_MAX_CONCURRENCY)
+        _BACKGROUND_SEMAPHORE_LOOP = loop
+    return _BACKGROUND_SEMAPHORE
+
+
+def _teacher_request_key(evt: Any) -> str:
+    payload = _payload(evt)
+    req = payload.get("request") if isinstance(payload.get("request"), Mapping) else {}
+    webspace_id = _resolve_webspace_id(payload)
+    request_id = str(req.get("request_id") or req.get("id") or "").strip()
+    text = str(req.get("text") or "").strip()
+    return request_id or f"{webspace_id}:{hashlib.sha1(text.encode('utf-8', errors='ignore')).hexdigest()[:12]}"
+
+
+async def _run_teacher_request_background(evt: Any, key: str) -> None:
+    try:
+        async with _background_semaphore():
+            await _handle_teacher_request(evt)
+    finally:
+        _BACKGROUND_INFLIGHT.discard(key)
+
+
+@subscribe("nlp.teacher.request")
+async def _on_teacher_request(evt: Any) -> None:
+    if not _background_teacher_enabled():
+        await _handle_teacher_request(evt)
+        return
+    key = _teacher_request_key(evt)
+    if key in _BACKGROUND_INFLIGHT:
+        _log.debug("nlu teacher request already in flight key=%s", key)
+        return
+    _BACKGROUND_INFLIGHT.add(key)
+    task = asyncio.create_task(_run_teacher_request_background(evt, key))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
