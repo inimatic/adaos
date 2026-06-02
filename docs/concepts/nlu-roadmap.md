@@ -26,11 +26,13 @@ provider stage. It is intentionally separate from `neural_nlu_service_skill`
 and should not be counted as a replacement for the production Neural NLU
 provider or the Teacher governance loop.
 
-Current M1 status: **complete for the main functional slice**. LLM misses can
-produce structured action/template envelopes or clarification sessions, and
-short Voice answers now resolve the active confirmation/clarification session
-before normal NLU. The remaining target-roadmap items belong to M2-M5
-hardening, validation, promotion, and UI/operator surfaces.
+Current M2 status: **complete for the main functional slice**. LLM misses can
+produce structured action/template envelopes or clarification sessions; short
+Voice answers resolve the active confirmation/clarification session before
+normal NLU; and Root MCP now exposes a contextual action surface with current
+runtime/process state, governed actions, named entities, developer hints, and a
+short-lived descriptor cache. The remaining target-roadmap items belong to
+M3-M5 multi-engine strategy, validation, promotion, and UI/operator surfaces.
 
 ## Status Labels
 
@@ -142,7 +144,7 @@ Minimal milestone gates:
 - **M1: Action candidate and clarification core.** `[complete]` Misses can
   become structured action candidates or clarification sessions, and short
   answers resolve the active session before normal NLU.
-- **M2: Contextual action surface.** Root/API context exposes current state,
+- **M2: Contextual action surface.** `[complete]` Root/API context exposes current state,
   named entities, available actions, process state, and developer-authored
   hints with enough data to preview a candidate.
 - **M3: Multi-engine authoring decision.** Teacher output includes
@@ -204,19 +206,35 @@ below remain useful for tracking existing implementation work.
   scenario, available apps/modals/scenarios, runtime-backed UI actions,
   skill-routed actions, endpoint commands, required slots, examples,
   side-effect class, owner, and preview method.
+- [x] M2 implementation slice: `nlu_authoring.get_context` now embeds
+  `action_surface.available_actions` with system/interface actions,
+  skill/scenario intent routes, required slots, examples, side-effect class,
+  owner, preview method, and fingerprint.
 - [ ] `[must]` Expose current state through API/MCP: open modals, home/current
   scenario, focused route/node/browser, selected device, active/pending
   confirmations, recent errors, and user route context.
+- [x] M2 implementation slice: `runtime_state` now exposes webspace, current
+  scenario, available modal ids, app/widget catalogs, installed ids, nodes,
+  active Teacher confirmations/clarifications, recent Teacher errors, lookup
+  counts, and read errors.
 - [ ] `[must]` Expose process state relevant to language: active jobs, failed
   jobs, long-running operations, last user command, last assistant action,
   current warnings, and owning skill/process.
+- [x] M2 implementation slice: `process_state` now exposes Teacher queue
+  counts, workbench signals, recent Teacher events, and compact
+  `data.jobs`/`data.operations`/`data.processes`/`data.tasks` rows.
 - [ ] `[must]` Extend skill/scenario manifests with authored `llm_hints` /
   `nlu_hints`: aliases, user-facing action descriptions, examples, slot
   schemas, entity names, owner hints, and side-effect class.
+- [x] M2 implementation slice: skill/scenario manifests and skill `webui.json`
+  can publish `llm_hints` / `nlu_hints`, and Root MCP forwards compact
+  developer hints to the LLM prompt.
 - [ ] `[must]` Connect named entities to voice control: expose voice-safe
   aliases, canonical ids, ambiguity evidence, entity ownership, and allowed
   voice actions for devices, nodes, endpoints, browsers, apps, modals,
   scenarios, skills, and processes.
+- [x] Current named-entity slice: Root MCP `nlu_authoring.get_context` includes
+  canonical named-entity registry payload and bearer-derived target scope.
 - [ ] `[must]` Include entity scope and portability class in context:
   `session`, `user`, `workspace`, `scenario`, `skill`, `system`, or `public`.
 - [ ] `[should]` Publish process/action affordances as named entities when the
@@ -225,6 +243,10 @@ below remain useful for tracking existing implementation work.
 - [ ] `[should]` Cache Root MCP descriptive-plane snapshots per target/subnet
   with TTL and invalidation, so LLM context is usually complete without
   blocking the Voice path.
+- [x] M2 implementation slice: LLM Teacher caches descriptor evidence from
+  `nlu_authoring.get_context`, `desktop.registry.lookup`,
+  `nlu_authoring.list_training_targets`, `nlu_authoring.list_templates`, and
+  `sdk.describe_surface`; phrase checks and dialog context remain uncached.
 - [ ] `[deferred]` Publish deep SDK descriptors beyond read-only ownership and
   affordance discovery; LLM execution remains prohibited.
 
@@ -629,8 +651,15 @@ below remain useful for tracking existing implementation work.
   `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
   `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
   `nlu_authoring.list_templates`, and `sdk.describe_surface`.
+- [x] LLM Teacher prompt now treats
+  `context.root_mcp.nlu_authoring_context.action_surface.available_actions` as
+  the primary governed action inventory and uses `runtime_state`,
+  `process_state`, and `developer_hints` for contextual disambiguation.
 - [x] LLM Teacher collects MCP evidence off the API/event loop with a bounded
   timeout so slow Root MCP/tool probes do not block Teacher state/UI reads.
+- [x] LLM Teacher caches Root MCP descriptor evidence with a short TTL so
+  repeated misses in the same target/subnet can reuse heavy context while each
+  phrase still gets a fresh `check_phrase` and dialog context.
 - [x] Teacher events are durably persisted as they are appended, so partial LLM
   traces survive backend restart before a candidate is generated.
 - [x] LLM Teacher parses plain JSON and fenced JSON responses, previews regex
@@ -684,6 +713,9 @@ below remain useful for tracking existing implementation work.
 - [ ] MCP Server modal issues scoped NLU authoring token.
 - [ ] Root resolves token to subnet/zone/capabilities.
 - [x] Add Root MCP `nlu_authoring.get_context` for named-entity and authoring-boundary evidence.
+- [x] Extend Root MCP `nlu_authoring.get_context` with M2 contextual action
+  surface, runtime state, process state, developer hints, lookup summary, and
+  fingerprints.
 - [x] Add Root MCP `nlu_authoring.check_phrase` backed by the current probe service.
 - [x] Root MCP passes bearer/session subnet scope into NLU authoring handlers
   and returns `root_scope` / `target_id` so the LLM sees which subnet target the
@@ -697,6 +729,8 @@ below remain useful for tracking existing implementation work.
   - `skill.describe_nlu`
   - `scenario.describe_nlu`
   - `sdk.describe_surface` (descriptors only, no execution)
+- [x] Keep contextual action surface read-only: no dispatch, no direct SDK
+  call, and no training mutation can be performed through the descriptor.
 - [ ] `[deferred]` Add `nlu.describe_pipeline` and `skill.describe_tools`.
 - [x] Keep MCP read-only for context/inventory; preview APIs return dry-run gates without mutation or dispatch.
 - [ ] `[could]` Add stricter request timeouts, result-size limits, and audit event summaries for every context-reading call.
@@ -878,20 +912,31 @@ below remain useful for tracking existing implementation work.
 
 ## Immediate Next Steps
 
-1. Build M2 contextual action surface: expose current UI/process state,
-   named entities, and developer-authored hints through governed API/MCP
-   descriptors with cache/invalidation.
-2. Add safe dispatch preview/dispatch gates for verified candidates that are
+1. Add safe dispatch preview/dispatch gates for verified candidates that are
    allowed to run through the normal AdaOS intent/action path.
-3. Expand read-only MCP wrappers for trace, dialog context, recent failures,
-   lookups, skill/scenario NLU descriptors, and SDK descriptors.
-4. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
+2. Implement M3 multi-engine decision policy: when to choose regex, Rasa
+   example, Neural example, entity alias, descriptor fix, clarification,
+   development task, or ignore.
+3. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
+4. Add descriptor cache invalidation/metrics beyond TTL-only reuse, tied to
+   registry/template/hint fingerprints.
 5. Add full model promotion gates using macro-F1, abstain rate, latency,
    false-positive checks, and rollback evidence.
 
 ## Last Completed Slice
 
+- M2 contextual action surface is now exposed through Root MCP
+  `nlu_authoring.get_context`: the LLM receives `runtime_state`,
+  `action_surface.available_actions`, `process_state`, `developer_hints`,
+  named entities, lookup summary, fingerprints, and explicit read-only
+  authoring boundaries.
+- The contextual action surface includes system/interface actions and
+  skill/scenario intent routes with owner, slots, examples, side-effect class,
+  preview method, and source fingerprint.
+- LLM Teacher now caches heavy Root MCP descriptor evidence with
+  `ADAOS_NLU_MCP_EVIDENCE_CACHE_TTL_S` while keeping per-phrase
+  `nlu_authoring.check_phrase` and dialog context uncached.
 - LLM-generated regex candidates now include structured
   `action_candidate`, `template_candidate`, and `training_strategy` envelopes.
   This starts the M1 action-candidate contract without breaking the current
