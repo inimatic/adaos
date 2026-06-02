@@ -23,6 +23,7 @@ if "ypy_websocket" not in sys.modules:
     pkg.ystore = sys.modules["ypy_websocket.ystore"]
     sys.modules["ypy_websocket"] = pkg
 
+from adaos.services import skills_loader_importlib as skills_loader_module
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 
 
@@ -63,6 +64,55 @@ data_projections:
 
     assert loaded_entries
     assert loaded_entries[0][0]["slot"] == "infrastate.snapshot"
+
+
+def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path: Path, monkeypatch) -> None:
+    bad_skill = tmp_path / "bad_skill"
+    (bad_skill / "handlers").mkdir(parents=True)
+    (bad_skill / "handlers" / "main.py").write_text(
+        "import missing_adaos_test_dependency\n",
+        encoding="utf-8",
+    )
+
+    good_skill = tmp_path / "good_skill"
+    (good_skill / "handlers").mkdir(parents=True)
+    (good_skill / "handlers" / "main.py").write_text(
+        "\n".join(
+            [
+                "import builtins",
+                "builtins._adaos_good_skill_imported = True",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_sync_runtime_from_repo_workspace_if_missing", lambda root: None)
+    monkeypatch.setattr(loader, "_sync_runtime_from_workspace_if_debug", lambda root: None)
+    warnings: list[str] = []
+    projection_loads: list[Path] = []
+
+    def _warning(message: str, *args, **kwargs) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(skills_loader_module._LOG, "warning", _warning)
+    monkeypatch.setattr(loader, "_load_skill_data_projections", lambda handler, _loaded: projection_loads.append(handler))
+    if hasattr(builtins, "_adaos_good_skill_imported"):
+        delattr(builtins, "_adaos_good_skill_imported")
+
+    try:
+        asyncio.run(loader.import_all_handlers(tmp_path))
+
+        assert getattr(builtins, "_adaos_good_skill_imported", False) is True
+        assert any("skill handler import failed; skipping skill=bad_skill" in item for item in warnings)
+        assert any("ModuleNotFoundError" in item for item in warnings)
+        assert projection_loads == [good_skill / "handlers" / "main.py"]
+    finally:
+        for handler in (bad_skill / "handlers" / "main.py", good_skill / "handlers" / "main.py"):
+            sys.modules.pop("adaos_skill_" + handler.parent.as_posix().replace("/", "_"), None)
+        if hasattr(builtins, "_adaos_good_skill_imported"):
+            delattr(builtins, "_adaos_good_skill_imported")
 
 
 def test_importlib_loader_does_not_reexecute_same_handler_module(tmp_path: Path) -> None:
