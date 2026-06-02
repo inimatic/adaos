@@ -11,6 +11,7 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
     from adaos.services.nlu import llm_teacher_runtime as llm
     from adaos.services.root_mcp import service as root_mcp_service
 
+    llm._clear_root_mcp_descriptor_cache()
     calls: list[dict] = []
 
     def _fake_invoke_tool(tool_id, **kwargs):
@@ -85,6 +86,77 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
     assert calls[0]["auth_context"]["capabilities"] == ["development.read.descriptors"]
     assert calls[2]["arguments"]["emit_trace"] is False
     assert calls[2]["dry_run"] is True
+
+
+def test_llm_teacher_caches_root_mcp_descriptor_evidence(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.root_mcp import service as root_mcp_service
+
+    llm._clear_root_mcp_descriptor_cache()
+    monkeypatch.setattr(llm, "_MCP_EVIDENCE_CACHE_TTL_S", 60.0)
+    calls: list[dict] = []
+
+    def _fake_invoke_tool(tool_id, **kwargs):
+        calls.append({"tool_id": tool_id, **kwargs})
+        if tool_id == "nlu_authoring.get_context":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"context": {"plane_id": "nlu_authoring"}})
+        if tool_id == "desktop.registry.lookup":
+            return SimpleNamespace(
+                ok=True,
+                tool_id=tool_id,
+                status="ok",
+                result={
+                    "ok": True,
+                    "webspace_id": "desktop",
+                    "lookups": {"modal_id": [], "app_id": [], "scenario_id": []},
+                    "summary": [],
+                    "fingerprint": "fp.cached",
+                },
+            )
+        if tool_id == "nlu_authoring.check_phrase":
+            return SimpleNamespace(
+                ok=True,
+                tool_id=tool_id,
+                status="ok",
+                result={"check": {"ok": True, "accepted": False, "text": kwargs["arguments"]["text"]}},
+            )
+        if tool_id == "nlu_authoring.get_dialog_context":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"request_id": kwargs["arguments"]["request_id"], "events": []})
+        if tool_id == "nlu_authoring.list_training_targets":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"summary": {"count": 0}, "targets": []})
+        if tool_id == "nlu_authoring.list_templates":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"summary": {"count": 0}, "templates": []})
+        if tool_id == "sdk.describe_surface":
+            return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"surface_id": "adaos.sdk.describe_surface.v1"})
+        return SimpleNamespace(ok=False, tool_id=tool_id, status="error", error=SimpleNamespace(code="unexpected_tool"))
+
+    monkeypatch.setattr(root_mcp_service, "invoke_tool", _fake_invoke_tool)
+
+    first = llm._collect_root_mcp_authoring_evidence(
+        webspace_id="desktop",
+        text="show media server",
+        request_id="req.cached.1",
+        request_locale="ru",
+    )
+    second = llm._collect_root_mcp_authoring_evidence(
+        webspace_id="desktop",
+        text="show media indexer",
+        request_id="req.cached.2",
+        request_locale="ru",
+    )
+
+    tool_counts = {tool_id: [call["tool_id"] for call in calls].count(tool_id) for tool_id in {call["tool_id"] for call in calls}}
+    assert first["_meta"]["descriptor_cache"]["stores"] == 5
+    assert second["_meta"]["descriptor_cache"]["hits"] == 5
+    assert second["nlu_authoring_phrase_check"]["check"]["text"] == "show media indexer"
+    assert tool_counts["nlu_authoring.get_context"] == 1
+    assert tool_counts["desktop.registry.lookup"] == 1
+    assert tool_counts["nlu_authoring.list_training_targets"] == 1
+    assert tool_counts["nlu_authoring.list_templates"] == 1
+    assert tool_counts["sdk.describe_surface"] == 1
+    assert tool_counts["nlu_authoring.check_phrase"] == 2
+    assert tool_counts["nlu_authoring.get_dialog_context"] == 2
+    llm._clear_root_mcp_descriptor_cache()
 
 
 @pytest.mark.anyio
