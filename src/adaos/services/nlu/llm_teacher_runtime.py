@@ -1338,7 +1338,7 @@ def _redact_messages(messages: list[dict[str, str]]) -> list[dict[str, Any]]:
         out.append(
             {
                 "role": m.get("role"),
-                "content": _truncate(m.get("content"), 1200),
+                "content": _truncate(m.get("content"), 600),
             }
         )
     return out
@@ -1692,6 +1692,12 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Use revise_nlu only when a compact safe regex is not enough or the best next step is curated dataset examples for neural/Rasa.\n"
         "- Choose training_strategy deliberately. Use regex only for stable command phrases and lookup-backed slots. For broad semantic wording, repeated corrections, or ambiguity, prefer rasa_example, neural_example, entity_alias, descriptor_fix, development_task, or clarification.\n"
         "- If regex is not the right strategy, set why_not_regex with a concise reason.\n"
+        "- If training_strategy is not regex, do not rely on regex_rule for the proposed improvement. AdaOS will store a non-regex strategy candidate and will not apply the regex.\n"
+        "- Use rasa_example for curated examples that should improve intent classification without creating a brittle command regex.\n"
+        "- Use neural_example for broad semantic phrasing that belongs in embedding/model feedback rather than deterministic templates.\n"
+        "- Use entity_alias when the main issue is that a user-facing name, STT variant, or localized alias should resolve to a known canonical entity.\n"
+        "- Use descriptor_fix when the action appears possible but the owning skill/scenario lacks sufficient llm_hints/nlu_hints, slot schema, examples, or action description.\n"
+        "- Use development_task when no available action/capability can satisfy the request through the current AdaOS surfaces.\n"
         "- If the likely action exists but the phrase is ambiguous, set need_clarification=true, ask one short clarification_question, and provide 2-4 options with ids, labels, and action_candidate details when possible.\n"
         "- action_candidate is descriptive only: describe the intended AdaOS action/intent/slots, but do not call any action.\n"
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
@@ -2118,7 +2124,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                     raw={
                         "log_id": log_id,
                         "model": _MODEL,
-                        "messages": _redact_messages(messages),
+                        "message_count": len(messages),
                         "max_tokens": _MAX_TOKENS,
                         "timeout_s": _TIMEOUT_S,
                         "audit": dict(prompt_audit),
@@ -2175,7 +2181,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                 log_id=log_id,
                 patch={
                     "status": "response",
-                    "response": {"raw": _truncate(raw_text, 4000), "parsed": suggestion},
+                    "response": {"raw": _truncate(raw_text, 2000), "parsed": suggestion},
                     "duration_s": max(0.0, time.time() - started_at),
                 },
             )
