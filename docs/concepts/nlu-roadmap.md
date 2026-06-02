@@ -164,6 +164,10 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Define `template_candidate` records for regex/Rasa/Neural/entity
   alias/descriptor patches, each linked to an action candidate or explicit
   non-action decision.
+- [x] First implementation slice: LLM-generated regex candidates now carry
+  backward-compatible `action_candidate`, `template_candidate`, and
+  `training_strategy` envelopes while the existing Apply/rollback path keeps
+  using the legacy fields.
 - [ ] `[must]` Define `clarification_session`: source request, active
   uncertainty kind, question, allowed answers, rejected candidates, retry
   count, timeout, final resolution, and thread id.
@@ -866,6 +870,10 @@ below remain useful for tracking existing implementation work.
 
 ## Last Completed Slice
 
+- LLM-generated regex candidates now include structured
+  `action_candidate`, `template_candidate`, and `training_strategy` envelopes.
+  This starts the M1 action-candidate contract without breaking the current
+  legacy regex Apply/rollback behavior.
 - NLU Teacher candidate Apply is exposed through
   `POST /api/nlu/teacher/{webspace_id}/candidate/apply`.
 - Regex candidate Apply now re-probes the original phrase, records
