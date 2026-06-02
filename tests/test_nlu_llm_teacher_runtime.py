@@ -324,6 +324,18 @@ async def test_llm_teacher_prompt_includes_mcp_evidence_and_stores_regex_candida
     assert candidate["status"] == "pending"
     assert candidate["preview"]["status"] == "regex_matched"
     assert candidate["preview"]["slots"]["city"] == "Berlin"
+    assert candidate["training_strategy"] == {
+        "primary": "regex",
+        "source": "adaos.default",
+        "why_not_regex": None,
+    }
+    assert candidate["action_candidate"]["intent"] == "desktop.open_weather"
+    assert candidate["action_candidate"]["side_effect_class"] == "read_only"
+    assert candidate["action_candidate"]["phrase_preview"]["ok"] is True
+    assert candidate["action_candidate"]["action_preview"]["status"] == "not_run"
+    assert candidate["template_candidate"]["engine"] == "regex"
+    assert candidate["template_candidate"]["operation"] == "add_regex_rule"
+    assert candidate["template_candidate"]["training_strategy"]["primary"] == "regex"
 
 
 @pytest.mark.anyio
@@ -1150,6 +1162,12 @@ async def test_llm_teacher_repairs_app_open_to_modal_alias_candidate(monkeypatch
     assert candidate["preview"]["ok"] is True
     assert candidate["preview"]["slots"] == {"modal_id": "браузеры"}
     assert candidate["normalization"]["llm_proposal_repair"]["modal_id"] == "browsers_modal"
+    assert candidate["action_candidate"]["class"] == "interface_action"
+    assert candidate["action_candidate"]["intent"] == "desktop.open_modal"
+    assert candidate["action_candidate"]["side_effect_class"] == "ui_navigation"
+    assert candidate["action_candidate"]["owner"] == {"type": "scenario", "id": scenario_id}
+    assert candidate["template_candidate"]["patch"]["intent"] == "desktop.open_modal"
+    assert candidate["template_candidate"]["phrase_preview"]["ok"] is True
 
 
 @pytest.mark.anyio

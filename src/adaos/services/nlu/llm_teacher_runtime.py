@@ -76,6 +76,16 @@ _BACKGROUND_INFLIGHT: set[str] = set()
 _BACKGROUND_SEMAPHORE: asyncio.Semaphore | None = None
 _BACKGROUND_SEMAPHORE_LOOP: asyncio.AbstractEventLoop | None = None
 _BACKGROUND_MAX_CONCURRENCY = max(1, int(os.getenv("ADAOS_NLU_LLM_TEACHER_CONCURRENCY", "1") or "1"))
+_UI_NAVIGATION_INTENTS = {
+    "desktop.open_modal",
+    "desktop.open_node_modal",
+    "desktop.open_scenario",
+    "desktop.switch_scenario",
+}
+_READ_ONLY_INTENTS = {
+    "desktop.open_weather",
+    "weather.current",
+}
 
 
 def _nlu_llm_write_meta():
@@ -156,6 +166,8 @@ def _compact_candidate_for_context(candidate: Mapping[str, Any]) -> dict[str, An
     rr = candidate.get("regex_rule") if isinstance(candidate.get("regex_rule"), Mapping) else {}
     verification = candidate.get("verification") if isinstance(candidate.get("verification"), Mapping) else {}
     applied = candidate.get("applied") if isinstance(candidate.get("applied"), Mapping) else {}
+    action_candidate = candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+    training_strategy = candidate.get("training_strategy") if isinstance(candidate.get("training_strategy"), Mapping) else {}
     out = {
         "candidate_id": candidate.get("id"),
         "status": candidate.get("status"),
@@ -163,6 +175,16 @@ def _compact_candidate_for_context(candidate: Mapping[str, Any]) -> dict[str, An
         "text": candidate.get("text"),
         "request_id": candidate.get("request_id"),
         "target": dict(candidate.get("target") or {}) if isinstance(candidate.get("target"), Mapping) else None,
+        "training_strategy": dict(training_strategy) if training_strategy else None,
+        "action_candidate": {
+            "class": action_candidate.get("class"),
+            "intent": action_candidate.get("intent"),
+            "slots": dict(action_candidate.get("slots") or {}) if isinstance(action_candidate.get("slots"), Mapping) else None,
+            "side_effect_class": action_candidate.get("side_effect_class"),
+            "status": action_candidate.get("status"),
+        }
+        if action_candidate
+        else None,
         "regex_rule": {
             "intent": rr.get("intent") if isinstance(rr.get("intent"), str) else None,
             "pattern": rr.get("pattern") if isinstance(rr.get("pattern"), str) else None,
@@ -890,6 +912,139 @@ def _resolve_regex_target(
     return None
 
 
+def _candidate_class_for_intent(*, intent: str, target: Mapping[str, Any] | None) -> str:
+    if intent in _UI_NAVIGATION_INTENTS:
+        return "interface_action"
+    if target and str(target.get("type") or "").strip() == "skill":
+        return "skill_action"
+    if target and str(target.get("type") or "").strip() == "scenario":
+        return "scenario_flow" if "scenario" in intent else "interface_action"
+    return "nlu_correction"
+
+
+def _side_effect_class_for_intent(intent: str) -> str:
+    if intent in _READ_ONLY_INTENTS:
+        return "read_only"
+    if intent in _UI_NAVIGATION_INTENTS:
+        return "ui_navigation"
+    if intent.startswith("desktop."):
+        return "local_state_change"
+    return "unknown"
+
+
+def _normalized_training_strategy(
+    *,
+    suggestion: Mapping[str, Any],
+    decision: str,
+    regex_rule: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    raw = suggestion.get("training_strategy")
+    if isinstance(raw, str) and raw.strip():
+        primary = raw.strip()
+        source = "llm"
+    elif isinstance(raw, Mapping):
+        primary_token = raw.get("primary") or raw.get("strategy") or raw.get("type")
+        primary = str(primary_token or "").strip()
+        source = "llm"
+    else:
+        primary = ""
+        source = "adaos.default"
+
+    if not primary:
+        if decision == "propose_regex_rule" and regex_rule:
+            primary = "regex"
+        elif decision == "revise_nlu":
+            primary = "rasa_example"
+        elif decision in {"create_skill_candidate", "create_scenario_candidate"}:
+            primary = "development_task"
+        else:
+            primary = "ignore"
+
+    why_not_regex = suggestion.get("why_not_regex")
+    if not isinstance(why_not_regex, str):
+        why_not_regex = ""
+
+    result = {
+        "primary": primary,
+        "source": source,
+        "why_not_regex": why_not_regex.strip() or None,
+    }
+    if isinstance(raw, Mapping):
+        alternatives = raw.get("allowed") or raw.get("alternatives")
+        if isinstance(alternatives, list):
+            result["alternatives"] = [str(x).strip() for x in alternatives if str(x).strip()][:10]
+        rationale = raw.get("rationale") or raw.get("reason")
+        if isinstance(rationale, str) and rationale.strip():
+            result["rationale"] = rationale.strip()
+    return result
+
+
+def _build_regex_candidate_envelopes(
+    *,
+    candidate_id: str,
+    request_id: str,
+    text: str,
+    intent: str,
+    pattern: str,
+    target: Mapping[str, Any] | None,
+    preview: Mapping[str, Any],
+    slots: Mapping[str, Any],
+    context: Mapping[str, Any],
+    training_strategy: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    owner = dict(target or {})
+    preview_slots = preview.get("slots") if isinstance(preview.get("slots"), Mapping) else {}
+    action_status = "phrase_previewed" if bool(preview.get("ok")) else "quarantined"
+    action_candidate = {
+        "id": f"act.{candidate_id.removeprefix('cand.')}",
+        "candidate_id": candidate_id,
+        "request_id": request_id,
+        "class": _candidate_class_for_intent(intent=intent, target=target),
+        "intent": intent,
+        "text": text,
+        "slots": dict(preview_slots or {}),
+        "slot_schema": dict(slots or {}),
+        "owner": owner or None,
+        "side_effect_class": _side_effect_class_for_intent(intent),
+        "status": action_status,
+        "phrase_preview": {
+            "status": preview.get("status"),
+            "ok": bool(preview.get("ok")),
+            "slots": dict(preview_slots or {}),
+        },
+        "action_preview": {
+            "status": "not_run",
+            "reason": "m1_action_candidate_envelope",
+        },
+        "scope": {
+            "scenario_id": context.get("current_scenario") if isinstance(context.get("current_scenario"), str) else None,
+        },
+    }
+    template_candidate = {
+        "id": f"tplcand.{candidate_id.removeprefix('cand.')}",
+        "candidate_id": candidate_id,
+        "request_id": request_id,
+        "class": "template_candidate",
+        "engine": "regex",
+        "training_strategy": dict(training_strategy),
+        "intent": intent,
+        "owner": owner or None,
+        "operation": "add_regex_rule",
+        "patch": {
+            "intent": intent,
+            "pattern": pattern,
+            "slots": dict(slots or {}),
+        },
+        "phrase_preview": {
+            "status": preview.get("status"),
+            "ok": bool(preview.get("ok")),
+            "slots": dict(preview_slots or {}),
+        },
+        "status": "phrase_previewed" if bool(preview.get("ok")) else "quarantined",
+    }
+    return action_candidate, template_candidate
+
+
 def _truncate(text: Any, limit: int) -> Any:
     if not isinstance(text, str):
         return text
@@ -1152,6 +1307,11 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         '  \"target\": {\"type\": \"skill\"|\"scenario\", \"id\": string} | null,\n'
         '  \"examples\": string[],\n'
         '  \"slots\": object,  // e.g. {\"city\": {\"type\": \"string\"}}\n'
+        '  \"training_strategy\": \"regex\" | \"rasa_example\" | \"neural_example\" | \"entity_alias\" | \"descriptor_fix\" | \"development_task\" | \"ignore\" | object | null,\n'
+        '  \"action_candidate\": object|null,\n'
+        '  \"need_clarification\": boolean|null,\n'
+        '  \"clarification_question\": string|null,\n'
+        '  \"why_not_regex\": string|null,\n'
         '  \"confidence\": number, // 0..1\n'
         '  \"notes\": string,\n'
         '  \"candidate\": object|null\n'
@@ -1172,6 +1332,9 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Use desktop.switch_scenario/open_scenario only when the user explicitly asks to switch/open a scenario (e.g. says scenario/сценарий/переключи сценарий). Generic 'покажи X' for a desktop app/modal is modal opening, not scenario switching.\n"
         "- If this is a fallback after NLU missed and an existing intent/action is the right match, prefer propose_regex_rule so AdaOS can replay the phrase through regex.dynamic.\n"
         "- Use revise_nlu only when a compact safe regex is not enough or the best next step is curated dataset examples for neural/Rasa.\n"
+        "- Choose training_strategy deliberately. Use regex only for stable command phrases and lookup-backed slots. For broad semantic wording, repeated corrections, or ambiguity, prefer rasa_example, neural_example, entity_alias, descriptor_fix, development_task, or clarification.\n"
+        "- If regex is not the right strategy, set why_not_regex with a concise reason.\n"
+        "- action_candidate is descriptive only: describe the intended AdaOS action/intent/slots, but do not call any action.\n"
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
         "- Avoid proposing duplicate regex rules if builtin_regex or regex_rules already cover the utterance.\n"
         "- If user asks about weather/temperature but doesn't say the exact keyword, propose a regex rule for intent desktop.open_weather.\n"
@@ -1638,12 +1801,18 @@ async def _handle_teacher_request(evt: Any) -> None:
         except Exception:
             confidence_f = 0.0
         notes = suggestion.get("notes") if isinstance(suggestion.get("notes"), str) else ""
+        training_strategy = _normalized_training_strategy(
+            suggestion=suggestion,
+            decision=decision,
+            regex_rule=regex_rule,
+        )
 
         llm_meta = {
             "model": _MODEL,
             "ts": time.time(),
             "decision": decision,
             "confidence": confidence_f,
+            "training_strategy": dict(training_strategy),
             "audit": dict(prompt_audit),
         }
 
@@ -1752,8 +1921,21 @@ async def _handle_teacher_request(evt: Any) -> None:
                     normalization["slot_aliases"] = slot_aliases
                 if repair_meta:
                     normalization["llm_proposal_repair"] = repair_meta
+                candidate_id = f"cand.{int(time.time()*1000)}"
+                action_candidate, template_candidate = _build_regex_candidate_envelopes(
+                    candidate_id=candidate_id,
+                    request_id=request_id,
+                    text=text,
+                    intent=rr_intent,
+                    pattern=rr_pattern,
+                    target=target_out,
+                    preview=preview,
+                    slots=slots,
+                    context=context,
+                    training_strategy=training_strategy,
+                )
                 entry = {
-                    "id": f"cand.{int(time.time()*1000)}",
+                    "id": candidate_id,
                     "ts": time.time(),
                     "kind": "regex_rule",
                     "text": text,
@@ -1769,6 +1951,9 @@ async def _handle_teacher_request(evt: Any) -> None:
                     **({"target": target_out} if target_out else {}),
                     **({"slots": dict(slots)} if slots else {}),
                     **({"normalization": normalization} if normalization else {}),
+                    "training_strategy": dict(training_strategy),
+                    "action_candidate": action_candidate,
+                    "template_candidate": template_candidate,
                     "llm": llm_meta,
                     "notes": notes,
                     "preview": preview,
