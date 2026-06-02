@@ -985,16 +985,13 @@ class DiagnosticYRoom(YRoom):
                     force_initial_check = not previous_effective_ready and self._diag_update_total <= 1
                     checked_effective = False
                     if previous_effective_ready and not full_check_due:
-                        if _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS:
-                            effective_ready = _room_effective_top_level_ready(self.ydoc)
-                            effective_snapshot = {
-                                "ready": effective_ready,
-                                "mode": "top_level_hot",
-                            }
-                            checked_effective = True
-                        else:
-                            effective_ready = True
-                            effective_snapshot = {"ready": True, "mode": "cached"}
+                        # Keep the steady-state broadcast path free of live
+                        # YDoc inspection. Even top-level YMap reads can block
+                        # long enough to starve the websocket fanout under
+                        # load; periodic/initial checks still validate the
+                        # effective branch contract.
+                        effective_ready = True
+                        effective_snapshot = {"ready": True, "mode": "cached"}
                     elif full_check_due or force_initial_check:
                         self._diag_effective_last_full_check_mono = now_mono
                         checked_effective = True
@@ -4371,16 +4368,6 @@ def _room_effective_data_desktop_ready(desktop: Any) -> bool:
     return isinstance(desktop, dict)
 
 
-def _ymap_contains_key(y_map: Any, key: str) -> bool:
-    try:
-        return str(key or "") in y_map
-    except Exception:
-        try:
-            return y_map.get(key) is not None
-        except Exception:
-            return False
-
-
 def _room_effective_top_level_ready(ydoc: Any) -> bool:
     """
     Cheap hot-path invariant check for the shared desktop document.
@@ -4401,11 +4388,7 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
         installed = data_map.get("installed")
         desktop = data_map.get("desktop")
         return (
-            _ymap_contains_key(ui_map, "application")
-            and _ymap_contains_key(data_map, "catalog")
-            and _ymap_contains_key(data_map, "installed")
-            and _ymap_contains_key(data_map, "desktop")
-            and _room_effective_application_ready(application)
+            _room_effective_application_ready(application)
             and _room_effective_catalog_ready(catalog)
             and _room_effective_installed_ready(installed)
             and _room_effective_data_desktop_ready(desktop)
