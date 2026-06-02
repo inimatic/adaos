@@ -29,6 +29,11 @@ SUPPORTED_VIDEO_EXTENSIONS = {
     ".mkv",
     ".avi",
     ".wmv",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
 }
 _MEDIA_TYPE_OVERRIDES = {
     ".mkv": "video/x-matroska",
@@ -36,6 +41,11 @@ _MEDIA_TYPE_OVERRIDES = {
     ".ogv": "video/ogg",
     ".wmv": "video/x-ms-wmv",
     ".avi": "video/x-msvideo",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
 }
 
 
