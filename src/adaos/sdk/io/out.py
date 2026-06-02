@@ -20,7 +20,7 @@ from adaos.services.eventbus import emit as _emit
 from adaos.services.node_config import load_config
 from adaos.services.webspace_id import coerce_webspace_id
 
-__all__ = ["chat_append", "say", "media_route", "stream_publish", "stream_variable_publish"]
+__all__ = ["chat_append", "say", "media_route", "telegram_photo", "stream_publish", "stream_variable_publish"]
 
 
 def _publish(topic: str, payload: dict, *, source: str) -> None:
@@ -224,6 +224,55 @@ def media_route(
 
     _publish("io.out.media.route", payload, source="sdk.io.out")
     return {"ok": True}
+
+
+@tool(
+    "io.out.telegram.photo",
+    summary="Send a local image to a configured Telegram chat through the hub/root Telegram outbox.",
+    stability="experimental",
+    examples=[
+        "io.out.telegram.photo('/tmp/photo.jpg', chat_id='123456')",
+    ],
+)
+def telegram_photo(
+    image_path: str | None,
+    *,
+    caption: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
+    hub_id: str | None = None,
+    _meta: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    path = str(image_path or "").strip()
+    target_chat = str(chat_id or "").strip()
+    if not target_chat:
+        import os
+
+        target_chat = str(os.getenv("SLIDESHOW_TG_CHAT_ID") or os.getenv("TG_CHAT_ID") or "").strip()
+    if not path:
+        return {"ok": False, "error": "missing_image_path"}
+    if not target_chat:
+        return {"ok": False, "error": "telegram_chat_id_not_configured"}
+    target_bot = str(bot_id or "").strip() or "main-bot"
+    try:
+        conf = load_config()
+        default_hub = str(getattr(conf, "subnet_id", "") or "").strip()
+    except Exception:
+        default_hub = ""
+    target_hub = str(hub_id or "").strip() or default_hub or "unknown_hub"
+    message: dict[str, Any] = {"type": "photo", "image_path": path}
+    if isinstance(caption, str) and caption.strip():
+        message["text"] = caption.strip()
+    payload = {
+        "target": {"bot_id": target_bot, "hub_id": target_hub, "chat_id": target_chat},
+        "messages": [message],
+        "options": None,
+    }
+    meta = _merged_meta(_meta)
+    if meta:
+        payload["_meta"] = meta
+    _publish(f"tg.output.{target_bot}.chat.{target_chat}", payload, source="sdk.io.out")
+    return {"ok": True, "bot_id": target_bot, "chat_id": target_chat}
 
 
 @tool(
