@@ -58,6 +58,10 @@ _MARKETPLACE_RE = re.compile(
     r"\b(?:\u043e\u0442\u043a\u0440\u043e\u0439|\u043f\u043e\u043a\u0430\u0436\u0438|\u0437\u0430\u043f\u0443\u0441\u0442\u0438|open|show)\s+(?:\u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0435\u0439\u0441|marketplace)\b",
     re.IGNORECASE | re.UNICODE,
 )
+_OPEN_MODAL_ENTITY_RE = re.compile(
+    r"^\s*(?:\u043e\u0442\u043a\u0440\u043e\u0439|\u043f\u043e\u043a\u0430\u0436\u0438|\u0437\u0430\u043f\u0443\u0441\u0442\u0438|open|show|launch)\s+(?P<entity>.+?)\s*[?.!,;:]*\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
 _TIME_NOW_RE = re.compile(
     r"\b(?:\u0441\u043a\u043e\u043b\u044c\u043a\u043e\s+\u0432\u0440\u0435\u043c\u0435\u043d\u0438|\u043a\u043e\u0442\u043e\u0440\u044b\u0439\s+\u0447\u0430\u0441|what\s+time\s+is\s+it)\b",
     re.IGNORECASE | re.UNICODE,
@@ -190,6 +194,12 @@ def describe_builtin_regex_rules() -> list[dict[str, Any]]:
             "notes": "RU/EN requests to open the desktop Marketplace.",
         },
         {
+            "id": "builtin.desktop.open_modal.lookup",
+            "intent": "desktop.open_modal",
+            "pattern": _OPEN_MODAL_ENTITY_RE.pattern,
+            "notes": "RU/EN show/open requests resolved against live desktop modal_id lookup labels.",
+        },
+        {
             "id": "builtin.voice.time_now",
             "intent": "voice.time.now",
             "pattern": _TIME_NOW_RE.pattern,
@@ -292,6 +302,10 @@ def _lookup_key(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
 
 
+def _compact_lookup_key(value: Any) -> str:
+    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+
+
 async def _normalize_lookup_slots(slots: Mapping[str, Any], *, webspace_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized = dict(slots)
     lookup_slots = [name for name in normalized if name in _LOOKUP_SLOT_NAMES and isinstance(normalized.get(name), str)]
@@ -360,6 +374,73 @@ async def _normalize_lookup_slots(slots: Mapping[str, Any], *, webspace_id: str)
                 }
             break
     return normalized, evidence
+
+
+async def _try_open_modal_lookup(text: str, *, webspace_id: str) -> tuple[str | None, dict, str, dict]:
+    match = _OPEN_MODAL_ENTITY_RE.match(text or "")
+    if not match:
+        return (None, {}, "regex", {})
+    entity = _clean_city(match.group("entity"))
+    if not entity:
+        return (None, {}, "regex", {})
+    entity = re.sub(
+        r"^(?:\u043c\u043e\u0434\u0430\u043b\u043a\u0443|\u043c\u043e\u0434\u0430\u043b\u044c\u043d\u043e\u0435\s+\u043e\u043a\u043d\u043e|modal)\s+",
+        "",
+        entity,
+        flags=re.IGNORECASE | re.UNICODE,
+    ).strip()
+    if not entity:
+        return (None, {}, "regex", {})
+    entity_key = _lookup_key(entity)
+    entity_compact = _compact_lookup_key(entity)
+    try:
+        from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
+
+        payload = await asyncio.wait_for(
+            collect_desktop_lookup_tables_async(get_ctx(), webspace_id=webspace_id, include_live=True),
+            timeout=_LOOKUP_NORMALIZE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        _log.warning(
+            "live open-modal lookup timed out webspace=%s timeout_s=%.3f; using baseline lookups",
+            webspace_id,
+            _LOOKUP_NORMALIZE_TIMEOUT_S,
+        )
+        try:
+            from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
+
+            payload = await collect_desktop_lookup_tables_async(get_ctx(), webspace_id=webspace_id, include_live=False)
+        except Exception:
+            _log.debug("failed to collect baseline open-modal lookups webspace=%s", webspace_id, exc_info=True)
+            return (None, {}, "regex", {})
+    except Exception:
+        _log.debug("failed to collect open-modal lookups webspace=%s", webspace_id, exc_info=True)
+        return (None, {}, "regex", {})
+
+    lookups = payload.get("lookups") if isinstance(payload, Mapping) else {}
+    rows = lookups.get("modal_id") if isinstance(lookups, Mapping) else None
+    if not isinstance(rows, list):
+        return (None, {}, "regex", {})
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        modal_id = str(row.get("value") or "").strip()
+        if not modal_id or modal_id.startswith("node:"):
+            continue
+        labels = [str(label).strip() for label in row.get("labels") or [] if str(label).strip()] if isinstance(row.get("labels"), list) else []
+        values = [modal_id, *labels]
+        keys = {_lookup_key(value) for value in values if value}
+        compact_keys = {_compact_lookup_key(value) for value in values if value}
+        if entity_key not in keys and entity_compact not in compact_keys:
+            continue
+        raw = {
+            "builtin": "desktop.open_modal.lookup",
+            "entity": entity,
+            "modal_id": modal_id,
+            "matched": "value_or_label",
+        }
+        return ("desktop.open_modal", {"modal_id": modal_id}, "regex.lookup", raw)
+    return (None, {}, "regex", {})
 
 
 def _emit_stage(
@@ -597,6 +678,10 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
 
     if _MARKETPLACE_RE.search(text):
         return ("desktop.open_marketplace", {}, "regex", {"builtin": "desktop.open_marketplace"})
+
+    modal_intent, modal_slots, modal_via, modal_raw = await _try_open_modal_lookup(text, webspace_id=webspace_id)
+    if modal_intent:
+        return (modal_intent, modal_slots, modal_via, modal_raw)
 
     # 2) Built-in fallback (desktop weather MVP)
     if not _WEATHER_KEYWORD_RE.search(text):

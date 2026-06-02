@@ -19,6 +19,10 @@ def test_desktop_lookup_tables_collect_workspace_ids() -> None:
     assert "web_desktop" in lookup_values(payload, "scenario_id")
     assert lookup_values(payload, "webspace_id") == ["desktop"]
     modal_rows = {row["value"]: row for row in payload["lookups"]["modal_id"]}
+    assert "media_indexer_modal" in modal_rows
+    assert "media indexer" in modal_rows["media_indexer_modal"]["labels"]
+    assert "\u043c\u0435\u0434\u0438\u0430 \u0438\u043d\u0434\u0435\u043a\u0441\u0435\u0440" in modal_rows["media_indexer_modal"]["labels"]
+    assert "\u0438\u043d\u0434\u0435\u043a\u0441\u0430" in modal_rows["media_indexer_modal"]["labels"]
     assert "браузеры" in modal_rows["browsers_modal"]["labels"]
     assert "Infra State" in modal_rows["infrastate_modal"]["labels"]
     assert "инфрастейт" in modal_rows["infrastate_modal"]["labels"]
