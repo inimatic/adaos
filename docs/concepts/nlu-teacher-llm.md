@@ -603,6 +603,25 @@ If `base_fingerprint` no longer matches, the patch must be rejected as stale and
 To avoid overfitting the first Teacher version to one NLU engine, the LLM should return a template bundle for all relevant pipeline stages.
 The runtime can apply only the supported/safe subset at first.
 
+Current M3 runtime behavior:
+
+- `training_strategy` is normalized to one of `regex`, `rasa_example`,
+  `neural_example`, `entity_alias`, `descriptor_fix`, `development_task`,
+  `clarification`, or `ignore`.
+- If the LLM selects a non-regex strategy, sets `why_not_regex`, or proposes a
+  trivially overbroad regex, AdaOS does not create an applyable regex
+  candidate. It stores a non-regex strategy candidate with `regex_rejection`
+  evidence.
+- `rasa_example` and `neural_example` become `training_example` candidates.
+  Applying them emits the governed `nlp.teacher.example.save` path into owner
+  artifacts or feedback overlays; Rasa/Neural models are not mutated directly.
+- `entity_alias`, `descriptor_fix`, and `development_task` become first-class
+  candidates and can be accepted into the Teacher plan for owner-specific alias
+  APIs or LLM programmer handoff.
+- `clarification` uses the structured clarification session when the LLM
+  provides a question/options; otherwise it remains a non-regex strategy
+  candidate rather than silently teaching a regex.
+
 Proposed bundle shape:
 
 ```json
@@ -642,6 +661,11 @@ Apply can be triggered from UI or programmatically:
   - `nlp.teacher.candidate.apply { candidate_id, target? }`
   - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
   - for `regex_rule` candidates the runtime delegates to `nlp.teacher.regex_rule.apply { intent, pattern, target? }`
+  - for `training_example` candidates the runtime emits
+    `nlp.teacher.example.save` for the curated examples
+  - for `entity_alias`, `descriptor_fix`, and `development_task` candidates
+    the runtime records a Teacher plan item; concrete owner APIs remain a later
+    M4/M5 surface
 - rollback an applied regex candidate:
   - `nlp.teacher.regex_rule.rollback { candidate_id, rule_id?, target? }`
   - `POST /api/nlu/teacher/{webspace_id}/candidate/rollback`
