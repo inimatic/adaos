@@ -92,6 +92,13 @@ Current UI status:
 
 - Implemented: User requests tab, Candidates tab, Signals tab, raw JSON event
   inspection, revision Apply, and candidate Apply.
+- Implemented: Signals tab expands details inline through the accordion instead
+  of opening an implicit detail modal.
+- Implemented: candidate Apply has a single UI action. It applies the candidate
+  to the LLM/backend-resolved owner target; the older duplicate
+  "Apply to scenario" shortcut was removed because host/interface actions are
+  already repaired to the owning scenario while skill actions should remain
+  skill-owned.
 - Implemented in backend/API: dry-run phrase probe, dynamic lookup inspection,
   and operator-approved example save with skill/scenario/system-action target
   selection.
@@ -196,6 +203,34 @@ If the probe result matches the planned candidate intent, AdaOS:
 If the probe returns another intent or still misses, the candidate is marked
 `verification_failed`. Dispatch is still a separate future gate; the LLM does
 not execute actions directly.
+
+## Current Voice confirmation flow
+
+For voice-originated regex candidates, AdaOS now requires user feedback before
+durable Apply:
+
+1. LLM proposes a pending regex candidate for a missed voice phrase.
+2. `teacher_confirmation_runtime` stores
+   `data.nlu_teacher.pending_confirmations[]` and writes
+   `confirmation.requested`.
+3. Voice asks a concrete question derived from the candidate, for example
+   `Открыть Infrascope?`
+4. If the user answers `да`, AdaOS emits
+   `nlp.teacher.candidate.apply` with confirmation metadata, then normal
+   candidate apply/regex verification records `understanding.acquired` when
+   the planned intent matches.
+5. If the user answers `нет`, AdaOS marks the candidate `rejected`, writes
+   `confirmation.rejected`, and starts one retry LLM pass with the rejected
+   candidate in prompt context. If the user included a correction such as
+   `нет, нужно открыть Infra State`, that text becomes the retry phrase.
+6. If the second hypothesis is rejected, AdaOS writes
+   `confirmation.needs_clarification` and asks the user to clarify.
+
+The Voice router skips normal `nlp.intent.detect.request` for a fresh
+confirmation answer, so short replies such as `да` and `нет` do not create
+extra Teacher misses. The Voice chat widget also treats messages loaded when
+the modal opens as already spoken, so opening Voice does not read the previous
+hub response aloud; new hub messages can still be spoken.
 
 Current rollback surface:
 
@@ -539,7 +574,11 @@ When the teacher proposes a regex rule, it should also propose a storage target:
 - Prefer the skill that actually handles the intent (derived from scenario intent `callSkill` actions + skill `events.subscribe`).
 - If the intent triggers host/system behavior (`callHost`), the target is usually the scenario.
 
-Apply supports a UI override ("Apply to Scenario"), in addition to an LLM-suggested target.
+Apply uses the candidate target selected by the LLM and repaired by AdaOS
+ownership logic. For the current UI, there is intentionally no separate
+"Apply to scenario" button: it could incorrectly move skill-owned NLU into a
+scenario. If a future override is needed, it should be an explicit advanced
+action with owner/impact evidence.
 
 ## Auto-apply policy (trusted skills)
 
@@ -548,6 +587,8 @@ Skills can opt into automatic application of teacher-proposed regex rules:
 - `skill.yaml: llm_policy.autoapply_nlu_teacher: true`
 
 If enabled and the candidate target is that skill, the hub auto-emits `nlp.teacher.candidate.apply` after a candidate is proposed.
+Voice-originated candidates do not auto-apply; they wait for the confirmation
+answer first.
 
 ## Observability: regex usage journal
 
@@ -630,6 +671,10 @@ functional slice.
   by the next normal pipeline request.
 - Run Teacher read-model HTTP endpoints that depend on synchronous YDoc helpers
   in a worker thread, not directly in FastAPI's async event loop.
+- For voice-originated regex candidates, ask the user to confirm the LLM
+  hypothesis before Apply; `да` applies, first `нет` triggers one retry with
+  the rejected candidate in context, and a second rejection asks for
+  clarification.
 - Dispatch only through the normal AdaOS intent/action path and only when the candidate's action side-effect class allows auto-dispatch.
 - Link "no, that is not it" corrections to the previous request/candidate so the next teacher pass has the failure context.
 - Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.

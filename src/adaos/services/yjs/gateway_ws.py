@@ -5969,7 +5969,15 @@ async def process_events_command(
         return None
 
     if kind == "nlp.teacher.candidate.apply":
-        _publish_bus("nlp.teacher.candidate.apply", {"candidate_id": payload.get("candidate_id"), "target": payload.get("target"), "webspace_id": payload.get("webspace_id")})
+        _publish_bus(
+            "nlp.teacher.candidate.apply",
+            {
+                "candidate_id": payload.get("candidate_id"),
+                "target": payload.get("target"),
+                "webspace_id": payload.get("webspace_id"),
+                "_meta": payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {},
+            },
+        )
         await _ack()
         return None
 
@@ -5982,6 +5990,7 @@ async def process_events_command(
                 "examples": payload.get("examples"),
                 "slots": payload.get("slots"),
                 "webspace_id": payload.get("webspace_id"),
+                "_meta": payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {},
             },
         )
         await _ack()
@@ -5996,6 +6005,7 @@ async def process_events_command(
                 "pattern": payload.get("pattern"),
                 "target": payload.get("target"),
                 "webspace_id": payload.get("webspace_id"),
+                "_meta": payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {},
             },
         )
         await _ack()

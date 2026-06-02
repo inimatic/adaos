@@ -385,14 +385,17 @@ under `.adaos/state/skills/nlu_teacher/<webspace_id>.json` so it survives YJS re
 
 In the default web desktop scenario the current NLU Teacher UI is a schema-driven modal:
 
-- Tabs: **User requests** / **Candidates**
+- Tabs: **User requests** / **Candidates** / **Signals**
 - Grouping:
   - User requests: grouped by `request_id`
   - Candidates: grouped by `candidate.name`, then by `request_id`
-- Logs: groups show event payloads inline (raw JSON)
+- Logs: groups show event payloads inline (raw JSON); Signals expand through
+  an accordion without opening an implicit detail modal
 - Apply actions:
   - `nlp.teacher.revision.apply`
   - `nlp.teacher.candidate.apply`:
+    - UI exposes one primary Apply action that uses the backend-resolved owner
+      target
     - for `regex_rule` candidates: persists the rule into a workspace owner (preferably a skill), then mirrors into
       `data.nlu.regex_rules` as a runtime cache so the next request matches immediately (`via="regex.dynamic"`)
     - for `skill`/`scenario` candidates: creates a development plan item
@@ -400,6 +403,10 @@ In the default web desktop scenario the current NLU Teacher UI is a schema-drive
     example into a selected skill, scenario, or system-action feedback target
     with audit metadata
   - a successful apply emits `ui.notify` with the owner (skill/scenario) where the rule was installed
+- Voice-originated regex candidates ask the user for confirmation before
+  Apply. `да` applies the candidate; the first `нет` rejects it and triggers
+  one retry with the rejected candidate in context; a second rejection asks for
+  clarification.
 
 Required UI expansion:
 
