@@ -82,6 +82,14 @@ async def test_default_desktop_regex_covers_voice_commands(monkeypatch) -> None:
         "\u043f\u043e\u0441\u0442\u0430\u0432\u044c \u0442\u0430\u0439\u043c\u0435\u0440 \u043d\u0430 10 \u043c\u0438\u043d\u0443\u0442",
         webspace_id="desktop",
     )
+    media_intent, media_slots, media_via, media_raw = await pipeline_module._try_regex_intent(
+        "\u043f\u043e\u043a\u0430\u0436\u0438 media indexer",
+        webspace_id="desktop",
+    )
+    indexer_intent, indexer_slots, indexer_via, _ = await pipeline_module._try_regex_intent(
+        "\u043f\u043e\u043a\u0430\u0436\u0438 \u0438\u043d\u0434\u0435\u043a\u0441\u0430",
+        webspace_id="desktop",
+    )
 
     assert (marketplace_intent, marketplace_slots, marketplace_via) == (
         "desktop.open_marketplace",
@@ -92,6 +100,17 @@ async def test_default_desktop_regex_covers_voice_commands(monkeypatch) -> None:
     assert timer_intent == "voice.timer.start"
     assert timer_slots == {"duration": "10 \u043c\u0438\u043d\u0443\u0442"}
     assert timer_via == "regex"
+    assert (media_intent, media_slots, media_via) == (
+        "desktop.open_modal",
+        {"modal_id": "media_indexer_modal"},
+        "regex.lookup",
+    )
+    assert media_raw["builtin"] == "desktop.open_modal.lookup"
+    assert (indexer_intent, indexer_slots, indexer_via) == (
+        "desktop.open_modal",
+        {"modal_id": "media_indexer_modal"},
+        "regex.lookup",
+    )
 
 
 @pytest.mark.anyio
