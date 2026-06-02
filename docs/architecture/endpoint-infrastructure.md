@@ -551,6 +551,63 @@ Not allowed as the endpoint interface:
 The EndpointRouter chooses a transport adapter after policy and assignment
 resolution.
 
+Transport is a runtime ladder, not a single endpoint type. The router should
+prefer direct, non-root media paths, but it must preserve a degraded path when
+connectivity, NAT, device age, codecs, or policy block the preferred transport.
+
+Recommended order:
+
+1. `webrtc_p2p`: preferred realtime media path for modern Android, iOS, and
+   browser endpoints. Root is used for signaling only.
+2. `local_ws`: direct outbound WebSocket from ReDevice to the hub/member for
+   commands, events, low-rate streams, and content references.
+3. `local_http`: direct HTTP fetch/upload against the hub/member for static
+   content and progressive media.
+4. `http_chunked`, `mjpeg`, or `segment_upload`: legacy-compatible streaming
+   modes for old Android and constrained devices.
+5. `redevice_poll`: legacy command/event polling through the root API.
+6. `root_relay` or `root_relay_inline`: bounded emergency fallback when direct
+   paths are unavailable. It must be policy-limited and observable.
+
+The endpoint transport profile should be part of capability/policy state. It
+describes what the agent supports and what the hub currently allows. Example:
+
+```json
+{
+  "schema_version": "transport-profile.v1",
+  "endpoint_id": "endpoint:redevice:tf201-01",
+  "preferred_order": ["webrtc_p2p", "local_ws", "local_http", "redevice_poll", "root_relay_inline"],
+  "routes": {
+    "webrtc_p2p": {
+      "available": false,
+      "state": "disabled",
+      "directions": ["control", "audio_in", "audio_out", "video_in", "video_out"],
+      "requires_signaling": true,
+      "reason": "legacy_android_not_supported"
+    },
+    "redevice_poll": {
+      "available": true,
+      "state": "ready",
+      "directions": ["control", "events"],
+      "legacy_safe": true
+    },
+    "root_relay_inline": {
+      "available": true,
+      "state": "degraded",
+      "directions": ["content_in"],
+      "legacy_safe": true,
+      "requires_root_relay": true
+    }
+  },
+  "limits": {
+    "max_inline_command_bytes": 80000,
+    "max_content_bytes": 524288,
+    "max_video_bitrate_bps": 0
+  },
+  "updated_at": "2026-06-02T10:00:00Z"
+}
+```
+
 Initial adapters can be simple:
 
 - `redevice_poll`: legacy-friendly Android agent polls the hub for pending
@@ -568,6 +625,12 @@ Future adapters:
 
 Transport choice is an implementation detail. Skills and NLU should see
 roles, services, commands, events, and streams.
+
+Skills should receive transport evidence in command results, but they should
+not branch on Android, iOS, or browser-specific transport code. For example,
+`slideshow_skill` can request `display.slideshow`; the router may send a
+single inline frame over `root_relay_inline`, a content URL over `local_http`,
+or a realtime stream over `webrtc_p2p` depending on policy and live health.
 
 ## Policy And Trust
 

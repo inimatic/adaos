@@ -9,6 +9,20 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+TRANSPORT_LADDER = (
+    "webrtc_p2p",
+    "local_ws",
+    "local_http",
+    "http_chunked",
+    "mjpeg",
+    "segment_upload",
+    "redevice_poll",
+    "root_relay_inline",
+    "root_relay",
+)
+
+DEFAULT_INLINE_COMMAND_BYTES = 80_000
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -16,6 +30,10 @@ def _text(value: Any) -> str:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _iso_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _root_base(value: str | None = None) -> str:
@@ -71,6 +89,181 @@ def pair_code(endpoint: Mapping[str, Any]) -> str:
     return _text(endpoint.get("code") or endpoint.get("pair_code"))
 
 
+def default_transport_profile(endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    endpoint = endpoint or {}
+    return {
+        "schema_version": "transport-profile.v1",
+        "endpoint_id": endpoint_id(endpoint) or pair_code(endpoint) or "unknown",
+        "preferred_order": list(TRANSPORT_LADDER),
+        "routes": {
+            "webrtc_p2p": {
+                "available": False,
+                "state": "disabled",
+                "directions": ["control", "events", "content_in", "audio_in", "audio_out", "video_in", "video_out", "sensor_out"],
+                "requires_signaling": True,
+                "reason": "not_negotiated",
+            },
+            "local_ws": {
+                "available": False,
+                "state": "disabled",
+                "directions": ["control", "events", "content_in", "sensor_out"],
+                "reason": "not_advertised",
+            },
+            "local_http": {
+                "available": False,
+                "state": "disabled",
+                "directions": ["content_in"],
+                "reason": "not_advertised",
+            },
+            "http_chunked": {
+                "available": False,
+                "state": "disabled",
+                "directions": ["content_in", "content_out", "audio_in", "audio_out"],
+                "reason": "not_advertised",
+            },
+            "mjpeg": {
+                "available": False,
+                "state": "disabled",
+                "directions": ["video_in", "video_out"],
+                "reason": "not_advertised",
+            },
+            "segment_upload": {
+                "available": False,
+                "state": "disabled",
+                "directions": ["content_in", "content_out", "audio_in", "audio_out", "video_in", "video_out"],
+                "reason": "not_advertised",
+            },
+            "redevice_poll": {
+                "available": True,
+                "state": "ready",
+                "directions": ["control", "events"],
+                "legacy_safe": True,
+            },
+            "root_relay_inline": {
+                "available": True,
+                "state": "degraded",
+                "directions": ["content_in"],
+                "legacy_safe": True,
+                "requires_root_relay": True,
+                "limits": {"max_inline_command_bytes": DEFAULT_INLINE_COMMAND_BYTES},
+            },
+            "root_relay": {
+                "available": False,
+                "state": "disabled",
+                "directions": ["control", "events", "content_in", "content_out", "audio_in", "audio_out", "video_in", "video_out"],
+                "requires_root_relay": True,
+                "reason": "not_configured",
+            },
+        },
+        "fallback_allowed": ["redevice_poll", "root_relay_inline"],
+        "limits": {"max_inline_command_bytes": DEFAULT_INLINE_COMMAND_BYTES},
+        "updated_at": _iso_now(),
+    }
+
+
+def transport_profile(endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    endpoint = endpoint or {}
+    policy = _mapping(endpoint.get("endpoint_policy"))
+    manifest = _mapping(endpoint.get("endpoint_manifest"))
+    candidates = (
+        policy.get("transport_profile"),
+        policy.get("transport_policy"),
+        manifest.get("transport_profile"),
+        endpoint.get("transport_profile"),
+    )
+    for candidate in candidates:
+        profile = _mapping(candidate)
+        if profile:
+            base = default_transport_profile(endpoint)
+            base.update(profile)
+            routes = _mapping(base.get("routes"))
+            default_routes = _mapping(default_transport_profile(endpoint).get("routes"))
+            for key, value in default_routes.items():
+                routes.setdefault(key, value)
+            base["routes"] = routes
+            order = [item for item in list(base.get("preferred_order") or []) if _text(item)]
+            if not order:
+                order = list(TRANSPORT_LADDER)
+            base["preferred_order"] = order
+            limits = _mapping(default_transport_profile(endpoint).get("limits"))
+            limits.update(_mapping(base.get("limits")))
+            base["limits"] = limits
+            return base
+    return default_transport_profile(endpoint)
+
+
+def _route_ready(route: Mapping[str, Any]) -> bool:
+    state = _text(route.get("state")) or "unknown"
+    return bool(route.get("available")) and state not in {"failed", "disabled"}
+
+
+def _route_supports(route: Mapping[str, Any], direction: str) -> bool:
+    return direction in set(_text(item) for item in list(route.get("directions") or []))
+
+
+def _select_direction(profile: Mapping[str, Any], direction: str, *, allow_root_relay: bool) -> tuple[str, dict[str, Any]]:
+    routes = _mapping(profile.get("routes"))
+    order = [_text(item) for item in list(profile.get("preferred_order") or TRANSPORT_LADDER)]
+    for transport in order:
+        if not transport:
+            continue
+        if not allow_root_relay and transport.startswith("root_relay"):
+            continue
+        route = _mapping(routes.get(transport))
+        if _route_ready(route) and _route_supports(route, direction):
+            return transport, route
+    return "", {}
+
+
+def select_transport(
+    endpoint: Mapping[str, Any] | None,
+    *,
+    intent: str = "display.command",
+    content_bytes: int = 0,
+    allow_root_relay: bool = True,
+) -> dict[str, Any]:
+    profile = transport_profile(endpoint or {})
+    control_transport, control_route = _select_direction(profile, "control", allow_root_relay=allow_root_relay)
+    event_transport, event_route = _select_direction(profile, "events", allow_root_relay=allow_root_relay)
+    content_transport = ""
+    content_route: dict[str, Any] = {}
+    if intent.startswith(("display.", "audio.", "content.")):
+        content_transport, content_route = _select_direction(profile, "content_in", allow_root_relay=allow_root_relay)
+    selected = content_transport or control_transport or event_transport or "unavailable"
+    limits = _mapping(profile.get("limits"))
+    route_limits = _mapping(content_route.get("limits"))
+    max_inline = int(route_limits.get("max_inline_command_bytes") or limits.get("max_inline_command_bytes") or DEFAULT_INLINE_COMMAND_BYTES)
+    inline_fits = not content_bytes or content_bytes <= max_inline
+    requires_root = bool(content_route.get("requires_root_relay") or control_route.get("requires_root_relay") or selected.startswith("root_relay"))
+    degraded = selected in {"redevice_poll", "root_relay_inline", "root_relay"} or bool(content_route.get("state") == "degraded")
+    return {
+        "schema_version": "transport-selection.v1",
+        "intent": intent,
+        "selected_transport": selected,
+        "control": {
+            "transport": control_transport or "unavailable",
+            "state": _text(control_route.get("state")) or "unavailable",
+        },
+        "events": {
+            "transport": event_transport or "unavailable",
+            "state": _text(event_route.get("state")) or "unavailable",
+        },
+        "content": {
+            "transport": content_transport or "unavailable",
+            "state": _text(content_route.get("state")) or "unavailable",
+            "inline_fits": inline_fits,
+            "content_bytes": int(content_bytes or 0),
+            "max_inline_command_bytes": max_inline,
+        },
+        "fallback_order": list(profile.get("preferred_order") or TRANSPORT_LADDER),
+        "requires_root_relay": requires_root,
+        "degraded": degraded,
+        "legacy_safe": bool(content_route.get("legacy_safe") or control_route.get("legacy_safe")),
+        "profile_schema": _text(profile.get("schema_version")) or "transport-profile.v1",
+        "updated_at": _iso_now(),
+    }
+
+
 def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | None = None) -> dict[str, Any]:
     policy = _mapping(endpoint.get("endpoint_policy"))
     manifest = _mapping(endpoint.get("endpoint_manifest"))
@@ -101,6 +294,7 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
         "active_app": active_app or None,
         "active_surface": active_surface or None,
         "service_state": _mapping(endpoint.get("service_state")) or None,
+        "transport_profile": transport_profile(endpoint),
         "aliases": list(endpoint.get("aliases") or []),
         "labels": list(endpoint.get("labels") or []),
         "selectable": bool(code and state in {"approved", "consumed"}),

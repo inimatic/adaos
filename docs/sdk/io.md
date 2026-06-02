@@ -107,3 +107,35 @@ Common options:
 - `pushToTalk: true` (press-and-hold)
 - `vad: true`, `vadThreshold`, `vadSilenceMs` (hub provider only)
 - `autoSend: true` (send without confirmation)
+
+## ReDevice Endpoint Transport
+
+ReDevice skills should address endpoint services, not Android, iOS, browser, or
+relay implementation details. The SDK exposes transport facts as a versioned
+profile and a per-command selection result:
+
+```python
+from adaos.sdk.redevice import list_endpoints, select_transport
+
+endpoint = list_endpoints()[0]
+transport = select_transport(endpoint, intent="display.slideshow", content_bytes=42000)
+```
+
+The runtime selection ladder is:
+
+```text
+webrtc_p2p
+  -> local_ws
+  -> local_http
+  -> http_chunked / mjpeg / segment_upload
+  -> redevice_poll
+  -> root_relay_inline
+  -> root_relay
+```
+
+`webrtc_p2p` is the preferred realtime route for audio/video/data once the
+endpoint has negotiated signaling and compatibility. Legacy Android agents may
+fall back to `redevice_poll` for commands/events and `root_relay_inline` for
+small degraded content. Skills may record the selected transport for diagnostics
+but should not branch on platform-specific transport names unless they are
+implementing an endpoint adapter.
