@@ -38,6 +38,12 @@ Target layers:
 - **Persistence and promotion plane**: local learned overlays can be promoted
   to workspace artifacts and then to skill/scenario repositories only after
   ownership, audit, rollback, regression, and privacy gates.
+- **Privacy, security, and cost plane**: utterances, named entities, prompt
+  context, MCP bearer scope, and LLM calls are governed by retention,
+  anonymization, rate-limit, abuse-case, and cost-control policies.
+- **Developer handoff plane**: when a capability or descriptor is missing,
+  Teacher creates structured development candidates for skill/scenario
+  authoring instead of inventing fake intents.
 
 The practical invariant is: LLM dialog handles uncertainty and domain-model
 growth; AdaOS keeps execution and durable authoring deterministic and traced.
@@ -126,6 +132,15 @@ LLM teacher receives a compact context snapshot (per webspace), including:
 - system actions visible in the current scenario (`system_actions`) and a published host action catalog (`host_actions`)
   with stable action ids, linked intents, slots, host event names, and training examples
 - skill manifests (`skills_manifest`: tools/events/llm_policy summary for installed skills)
+- named-entity voice-control context: canonical ids, voice-safe aliases,
+  ambiguity evidence, ownership, locale, scope, and portability class
+- process/action state: active jobs, failed jobs, long-running operations,
+  last user command, last assistant action, warnings, and owning skill/process
+- request metadata: channel, route, webspace, scenario, device,
+  user/session when available, locale, and privacy boundary
+- skill/scenario `nlu_hints` / `llm_hints` conversational skeletons prepared
+  during development, so Teacher can reason over capabilities without code
+  access
 
 Goal: prefer improving existing intents (regex rule / dataset revision) over creating a new capability, when possible.
 
