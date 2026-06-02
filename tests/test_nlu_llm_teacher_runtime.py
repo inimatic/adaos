@@ -647,6 +647,301 @@ async def test_llm_teacher_quarantines_regex_candidate_that_misses_source_text(m
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_rejects_regex_when_strategy_prefers_rasa_example(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.nlu.candidates_runtime import _on_candidate_apply
+    from adaos.services.nlu.teacher_runtime import _on_example_save
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-m3-rasa-strategy"
+    scenario_id = "test_llm_m3_rasa_strategy"
+    request_text = "show all recent indexing failures"
+    intent_name = "media_indexer.show_failures"
+    pattern = r".*failures.*"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {"id": scenario_id, "version": "0.0.1", "nlu": {"intents": {intent_name: {"actions": []}}}},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "events": [], "dataset": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": intent_name,
+                                    "regex_rule": {"intent": intent_name, "pattern": pattern},
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "training_strategy": {
+                                        "primary": "rasa_example",
+                                        "rationale": "The phrase is semantic and process-state dependent.",
+                                    },
+                                    "why_not_regex": "Regex would overfit a broad process query.",
+                                    "confidence": 0.74,
+                                    "notes": "Prefer curated Rasa example.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    ctx.bus.subscribe("nlp.teacher.example.save", _on_example_save)
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.m3.rasa",
+                "request_id": "req.m3.rasa",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["kind"] == "training_example"
+    assert "regex_rule" not in candidate
+    assert candidate["training_strategy"]["primary"] == "rasa_example"
+    assert candidate["strategy_candidate"]["template_candidate"]["operation"] == "save_example"
+    assert candidate["strategy_candidate"]["regex_rejection"]["reason"] == "strategy_not_regex"
+    assert candidate["rejected_regex_rule"]["regex_rule"] == {"intent": intent_name, "pattern": pattern}
+
+    await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate["id"]})
+    await ctx.bus.wait_for_idle(timeout=2.0)
+
+    saved = json.loads((scenario_root / "scenario.json").read_text(encoding="utf-8"))
+    assert request_text in saved["nlu"]["intents"][intent_name]["examples"]
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        dataset = list((teacher or {}).get("dataset") or [])
+    assert dataset
+    assert dataset[-1]["status"] == "positive_feedback"
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_quarantines_overbroad_regex_as_example_strategy(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-m3-overbroad"
+    scenario_id = "test_llm_m3_overbroad"
+    request_text = "open dangerous maintenance panel"
+    intent_name = "desktop.open_modal"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {"id": scenario_id, "version": "0.0.1", "nlu": {"intents": {intent_name: {"actions": []}}}},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": intent_name,
+                                    "regex_rule": {"intent": intent_name, "pattern": ".*"},
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "confidence": 0.91,
+                                    "notes": "Bad broad regex.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.m3.overbroad",
+                "request_id": "req.m3.overbroad",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["kind"] == "training_example"
+    assert candidate["training_strategy"]["source"] == "adaos.policy"
+    assert candidate["training_strategy"]["primary"] == "rasa_example"
+    assert candidate["strategy_candidate"]["regex_rejection"]["reason"] == "overbroad_regex"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("strategy", "expected_kind"),
+    [
+        ("entity_alias", "entity_alias"),
+        ("descriptor_fix", "descriptor_fix"),
+        ("development_task", "development_task"),
+    ],
+)
+async def test_llm_teacher_persists_first_class_non_regex_strategy_candidates(monkeypatch, strategy, expected_kind):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.nlu.candidates_runtime import _on_candidate_apply
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = f"ws-test-llm-m3-{strategy}"
+    scenario_id = f"test_llm_m3_{strategy}"
+    request_text = f"teach {strategy}"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps({"id": scenario_id, "version": "0.0.1", "nlu": {"intents": {}}}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "plan": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "revise_nlu",
+                                    "intent": "demo.intent" if strategy != "development_task" else None,
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "training_strategy": {"primary": strategy, "rationale": "M3 test"},
+                                    "candidate": {
+                                        "name": f"{strategy} candidate",
+                                        "description": "First-class M3 candidate.",
+                                        "alias": "медиа индекс" if strategy == "entity_alias" else None,
+                                        "missing_surface": "llm_hints" if strategy == "descriptor_fix" else None,
+                                        "requested_behavior": "new capability" if strategy == "development_task" else None,
+                                    },
+                                    "why_not_regex": "Not a deterministic command template.",
+                                    "confidence": 0.66,
+                                    "notes": f"Persist {strategy}.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": f"teach.m3.{strategy}",
+                "request_id": f"req.m3.{strategy}",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["kind"] == expected_kind
+    assert candidate["training_strategy"]["primary"] == strategy
+    assert candidate["strategy_candidate"]["class"] in {
+        "entity_correction",
+        "descriptor_fix",
+        "development_task",
+    }
+
+    await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate["id"]})
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        plan = list((teacher or {}).get("plan") or [])
+    assert plan
+    assert plan[-1]["kind"] == expected_kind
+    assert plan[-1]["training_strategy"]["primary"] == strategy
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_records_prompt_hashes_and_suppresses_duplicate_regex(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
