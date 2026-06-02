@@ -11,6 +11,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu.teacher_events import append_event, make_event
+from adaos.services.nlu.teacher_validation import validate_candidate_apply_async
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
@@ -195,6 +196,43 @@ async def _on_candidate_apply(evt: Any) -> None:
                             "preview": dict(candidate.get("preview") or {})
                             if isinstance(candidate.get("preview"), Mapping)
                             else {},
+                            "_meta": dict(meta),
+                        },
+                        source="nlu.teacher.candidates",
+                    )
+                    return
+
+                validation = await validate_candidate_apply_async(
+                    webspace_id=webspace_id,
+                    candidate=candidate,
+                    payload_target=payload_target,
+                )
+                next_candidates: list[dict[str, Any]] = []
+                validated_candidate: dict[str, Any] | None = None
+                for item in iter_mappings(teacher.get("candidates")):
+                    d = dict(item)
+                    if d.get("id") == candidate_id:
+                        d["validation"] = dict(validation)
+                        d["validated_at"] = time.time()
+                        if not validation.get("ok"):
+                            d["status"] = "validation_failed"
+                            d["validation_failed_at"] = time.time()
+                        validated_candidate = d
+                    next_candidates.append(d)
+                teacher["candidates"] = next_candidates
+                with ydoc.begin_transaction() as txn:
+                    data_map.set(txn, "nlu_teacher", teacher)
+                if validated_candidate is not None:
+                    candidate = validated_candidate
+                if not validation.get("ok"):
+                    bus_emit(
+                        ctx.bus,
+                        "nlp.teacher.candidate.apply.rejected",
+                        {
+                            "webspace_id": webspace_id,
+                            "candidate_id": candidate_id,
+                            "reason": "m4_validation_failed",
+                            "validation": dict(validation),
                             "_meta": dict(meta),
                         },
                         source="nlu.teacher.candidates",
