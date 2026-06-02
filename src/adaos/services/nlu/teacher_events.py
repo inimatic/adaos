@@ -45,6 +45,71 @@ def _json_text(value: Any) -> str:
             return ""
 
 
+def _compact_candidate_for_thread(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    rr = coerce_dict(candidate.get("regex_rule"))
+    target = candidate.get("target") if isinstance(candidate.get("target"), Mapping) else None
+    strategy = candidate.get("training_strategy") if isinstance(candidate.get("training_strategy"), Mapping) else None
+    return {
+        key: value
+        for key, value in {
+            "id": candidate.get("id"),
+            "kind": candidate.get("kind"),
+            "status": candidate.get("status"),
+            "request_id": candidate.get("request_id"),
+            "target": dict(target) if isinstance(target, Mapping) else None,
+            "training_strategy": dict(strategy) if isinstance(strategy, Mapping) else None,
+            "regex_rule": {
+                key: value
+                for key, value in {
+                    "intent": rr.get("intent"),
+                    "pattern": rr.get("pattern"),
+                }.items()
+                if value not in (None, "", [], {})
+            }
+            if rr
+            else None,
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _compact_event_raw_for_thread(event: Mapping[str, Any]) -> Any:
+    kind = event.get("kind") if isinstance(event.get("kind"), str) else ""
+    raw = event.get("raw")
+    if not isinstance(raw, Mapping):
+        return raw
+    if kind == "llm.request":
+        return {
+            key: value
+            for key, value in {
+                "log_id": raw.get("log_id"),
+                "model": raw.get("model"),
+                "max_tokens": raw.get("max_tokens"),
+                "timeout_s": raw.get("timeout_s"),
+                "audit": raw.get("audit") if isinstance(raw.get("audit"), Mapping) else None,
+            }.items()
+            if value not in (None, "", [], {})
+        }
+    if kind == "llm.response":
+        suggestion = raw.get("suggestion") if isinstance(raw.get("suggestion"), Mapping) else {}
+        return {
+            key: value
+            for key, value in {
+                "log_id": raw.get("log_id"),
+                "decision": raw.get("decision") or suggestion.get("decision"),
+                "intent": suggestion.get("intent"),
+                "training_strategy": suggestion.get("training_strategy"),
+                "why_not_regex": suggestion.get("why_not_regex"),
+                "need_clarification": suggestion.get("need_clarification"),
+                "confidence": suggestion.get("confidence"),
+            }.items()
+            if value not in (None, "", [], {})
+        }
+    if kind in {"candidate.proposed", "candidate.applied"}:
+        return _compact_candidate_for_thread(raw)
+    return raw
+
+
 def _thread_log_text(
     *,
     request_id: str,
@@ -119,14 +184,14 @@ def _thread_log_text(
             title = e.get("title") if isinstance(e.get("title"), str) else ""
             subtitle = e.get("subtitle") if isinstance(e.get("subtitle"), str) else ""
             lines.append(f"- ts={ts} kind={kind} title={title} subtitle={subtitle}".rstrip())
-            raw = e.get("raw")
+            raw = _compact_event_raw_for_thread(e)
             raw_txt = _json_text(raw).strip()
             if raw_txt:
-                # Keep the log readable; raw can be large.
+                # Keep the log readable; raw can be large and threads duplicate it.
                 raw_lines = raw_txt.splitlines()
-                for ln in raw_lines[:120]:
+                for ln in raw_lines[:40]:
                     lines.append(f"  {ln}")
-                if len(raw_lines) > 120:
+                if len(raw_lines) > 40:
                     lines.append("  ... (truncated)")
         lines.append("")
 
@@ -318,7 +383,12 @@ def rebuild_workbench_signals(teacher: dict[str, Any]) -> dict[str, Any]:
     quarantined_candidates = [item for item in candidates if item.get("status") == "quarantined"]
     acquired_events = [item for item in events if item.get("kind") == "understanding.acquired"]
     skipped_events = [item for item in events if item.get("kind") == "not_obtained.skipped"]
-    failed_logs = [item for item in llm_logs if str(item.get("status") or "").lower() not in {"", "ok", "success"}]
+    failed_logs = [
+        item
+        for item in llm_logs
+        if str(item.get("status") or "").lower() in {"error", "failed", "timeout"}
+        or item.get("error") not in (None, "", [], {})
+    ]
 
     signals: list[dict[str, Any]] = [
         {
