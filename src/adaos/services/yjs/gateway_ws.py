@@ -50,6 +50,10 @@ _TRANSPORT_LOCK = threading.RLock()
 _ACTIVE_YWS_LOCK = threading.RLock()
 _YWS_STORM_LOCK = threading.RLock()
 _YWS_ATTEMPT_LOCK = threading.RLock()
+_WEBIO_CONTROL_DEDUPE_LOCK = threading.RLock()
+_WEBIO_CONTROL_DEDUPE_TTL_S = max(0.0, float(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_TTL_S", "1.5") or "1.5"))
+_WEBIO_CONTROL_DEDUPE_MAX = max(32, int(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_MAX", "512") or "512"))
+_WEBIO_CONTROL_DEDUPE_RECENT: dict[str, float] = {}
 _TRANSPORT_STATE: dict[str, dict[str, Any]] = {
     "ws": {
         "active_connections": 0,
@@ -2128,6 +2132,63 @@ def _iter_initial_ws_event_messages(topics: set[str]) -> list[dict[str, Any]]:
     return messages
 
 
+def _stable_json_for_dedupe(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        return str(value)
+
+
+def _webio_control_dedupe_key(event_type: str, payload: dict[str, Any]) -> str:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    params = payload.get("params")
+    if params is None and isinstance(meta, dict):
+        params = meta.get("params")
+    node_id = (
+        str(payload.get("target_node_id") or "").strip()
+        or str(payload.get("node_id") or "").strip()
+        or str(meta.get("target_node_id") or "").strip()
+        or str(meta.get("node_id") or "").strip()
+    )
+    return _stable_json_for_dedupe(
+        {
+            "type": str(event_type or "").strip(),
+            "webspace_id": str(payload.get("webspace_id") or meta.get("webspace_id") or "").strip(),
+            "receiver": str(payload.get("receiver") or "").strip(),
+            "topic": str(payload.get("topic") or "").strip(),
+            "node_id": node_id,
+            "params": params if isinstance(params, (dict, list, str, int, float, bool)) or params is None else str(params),
+            "action": str(payload.get("action") or "").strip(),
+        }
+    )
+
+
+def _should_drop_duplicate_webio_control_event(event_type: str, payload: Any) -> bool:
+    if event_type not in {"webio.stream.snapshot.requested", "webio.stream.subscription.changed"}:
+        return False
+    if not isinstance(payload, dict) or _WEBIO_CONTROL_DEDUPE_TTL_S <= 0:
+        return False
+    now = time.monotonic()
+    key = _webio_control_dedupe_key(event_type, payload)
+    with _WEBIO_CONTROL_DEDUPE_LOCK:
+        last_at = float(_WEBIO_CONTROL_DEDUPE_RECENT.get(key) or 0.0)
+        if last_at > 0 and now - last_at < _WEBIO_CONTROL_DEDUPE_TTL_S:
+            _ylog.debug("deduped webio control event type=%s key=%s", event_type, key)
+            return True
+        _WEBIO_CONTROL_DEDUPE_RECENT[key] = now
+        if len(_WEBIO_CONTROL_DEDUPE_RECENT) > _WEBIO_CONTROL_DEDUPE_MAX:
+            cutoff = now - max(_WEBIO_CONTROL_DEDUPE_TTL_S, 1.0)
+            stale = [item_key for item_key, ts in _WEBIO_CONTROL_DEDUPE_RECENT.items() if ts < cutoff]
+            for item_key in stale:
+                _WEBIO_CONTROL_DEDUPE_RECENT.pop(item_key, None)
+            while len(_WEBIO_CONTROL_DEDUPE_RECENT) > _WEBIO_CONTROL_DEDUPE_MAX:
+                try:
+                    _WEBIO_CONTROL_DEDUPE_RECENT.pop(next(iter(_WEBIO_CONTROL_DEDUPE_RECENT)))
+                except StopIteration:
+                    break
+    return False
+
+
 def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None:
     for topic in topics:
         token = str(topic or "").strip()
@@ -2166,6 +2227,8 @@ def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None
                 payload["node_id"] = node_id
                 payload["target_node_id"] = node_id
                 payload["_meta"] = {"webspace_id": webspace_id, "target_node_id": node_id}
+            if _should_drop_duplicate_webio_control_event("webio.stream.snapshot.requested", payload):
+                continue
             ctx.bus.publish(
                 DomainEvent(
                     type="webio.stream.snapshot.requested",
@@ -2226,6 +2289,8 @@ def _publish_webio_stream_subscription_change(
                 payload["node_id"] = node_id
                 payload["target_node_id"] = node_id
                 payload["_meta"] = {"webspace_id": webspace_id, "target_node_id": node_id}
+            if _should_drop_duplicate_webio_control_event("webio.stream.subscription.changed", payload):
+                continue
             ctx.bus.publish(
                 DomainEvent(
                     type="webio.stream.subscription.changed",
@@ -6035,6 +6100,9 @@ async def process_events_command(
     # Default behaviour for declarative host actions: publish unknown command
     # kinds to the local bus so skills can subscribe to their own UI events.
     if isinstance(kind, str) and kind.strip():
+        if _should_drop_duplicate_webio_control_event(kind, payload):
+            await _ack()
+            return None
         _publish_bus(kind, payload)
     await _ack()
     return None
