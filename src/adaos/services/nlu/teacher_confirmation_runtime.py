@@ -71,6 +71,56 @@ def _request_id(candidate: Mapping[str, Any]) -> str:
     return str(candidate.get("request_id") or "").strip()
 
 
+def _clarification_from_confirmation(confirmation: Mapping[str, Any]) -> dict[str, Any]:
+    confirmation_id = str(confirmation.get("id") or "").strip()
+    status = str(confirmation.get("status") or "").strip() or "awaiting_user"
+    answer = confirmation.get("answer") if isinstance(confirmation.get("answer"), str) else None
+    rejected_candidates: list[str] = []
+    if status in {"rejected", "needs_clarification"}:
+        candidate_id = str(confirmation.get("candidate_id") or "").strip()
+        if candidate_id:
+            rejected_candidates.append(candidate_id)
+    return {
+        "id": confirmation_id.replace("confirm.", "clarify.", 1) if confirmation_id else f"clarify.{int(time.time() * 1000)}",
+        "confirmation_id": confirmation_id or None,
+        "ts": confirmation.get("ts") or time.time(),
+        "status": status,
+        "kind": "voice_confirmation",
+        "uncertainty_kind": "candidate_confirmation",
+        "candidate_id": confirmation.get("candidate_id"),
+        "request_id": confirmation.get("request_id"),
+        "request_text": confirmation.get("request_text"),
+        "question": confirmation.get("question"),
+        "allowed_answers": [
+            {"id": "yes", "label": "yes", "effect": "apply_candidate"},
+            {"id": "no", "label": "no", "effect": "reject_or_retry"},
+        ],
+        "answer": answer,
+        "answered_at": confirmation.get("answered_at"),
+        "attempt": confirmation.get("attempt") or 0,
+        "target": dict(confirmation.get("target") or {}) if isinstance(confirmation.get("target"), Mapping) else None,
+        "rejected_candidates": rejected_candidates,
+        "_meta": dict(confirmation.get("_meta") or {}) if isinstance(confirmation.get("_meta"), Mapping) else {},
+    }
+
+
+def _upsert_clarification_session(teacher: dict[str, Any], confirmation: Mapping[str, Any]) -> None:
+    session = _clarification_from_confirmation(confirmation)
+    session_id = str(session.get("id") or "").strip()
+    existing = _as_list(teacher.get("clarification_sessions"))
+    next_items: list[dict[str, Any]] = []
+    replaced = False
+    for item in existing:
+        if session_id and item.get("id") == session_id:
+            next_items.append(session)
+            replaced = True
+        else:
+            next_items.append(item)
+    if not replaced:
+        next_items.append(session)
+    teacher["clarification_sessions"] = next_items[-_MAX_CONFIRMATIONS:]
+
+
 def _is_voice_regex_candidate(candidate: Mapping[str, Any], meta: Mapping[str, Any]) -> bool:
     return (
         _route_id(meta) == "voice_chat"
@@ -170,6 +220,7 @@ async def _append_confirmation(webspace_id: str, confirmation: dict[str, Any]) -
             ]
         items.append(dict(confirmation))
         teacher["pending_confirmations"] = items[-_MAX_CONFIRMATIONS:]
+        _upsert_clarification_session(teacher, confirmation)
 
     await _write_teacher(webspace_id, _mutate)
 
@@ -189,6 +240,7 @@ async def _patch_confirmation(
             if next_item.get("id") == confirmation_id:
                 next_item.update(dict(patch))
                 candidate_id = str(next_item.get("candidate_id") or "").strip()
+                _upsert_clarification_session(teacher, next_item)
             items.append(next_item)
         teacher["pending_confirmations"] = items[-_MAX_CONFIRMATIONS:]
 

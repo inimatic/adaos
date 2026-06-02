@@ -171,6 +171,10 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Define `clarification_session`: source request, active
   uncertainty kind, question, allowed answers, rejected candidates, retry
   count, timeout, final resolution, and thread id.
+- [x] First implementation slice: current Voice confirmation state is mirrored
+  into `data.nlu_teacher.clarification_sessions[]` with question,
+  allowed answers, status, answer, attempt, target, and rejected candidate
+  evidence.
 - [ ] `[must]` Define candidate lifecycle states across understanding and
   execution: `proposed`, `phrase_previewed`, `action_previewed`,
   `clarification_requested`, `user_confirmed`, `applied`,
@@ -874,6 +878,10 @@ below remain useful for tracking existing implementation work.
   `action_candidate`, `template_candidate`, and `training_strategy` envelopes.
   This starts the M1 action-candidate contract without breaking the current
   legacy regex Apply/rollback behavior.
+- Voice-originated confirmation prompts now mirror into
+  `data.nlu_teacher.clarification_sessions[]`, giving the future dialog layer
+  a structured session record while preserving the existing
+  `pending_confirmations[]` flow.
 - NLU Teacher candidate Apply is exposed through
   `POST /api/nlu/teacher/{webspace_id}/candidate/apply`.
 - Regex candidate Apply now re-probes the original phrase, records
