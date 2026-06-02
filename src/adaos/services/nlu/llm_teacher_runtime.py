@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -53,6 +55,8 @@ _MODEL = os.getenv("ADAOS_NLU_LLM_MODEL") or os.getenv("OPENAI_RESPONSES_MODEL")
 _MAX_TOKENS = int(os.getenv("ADAOS_NLU_LLM_MAX_TOKENS", "500") or "500")
 _TIMEOUT_S = float(os.getenv("ADAOS_NLU_LLM_TIMEOUT_S", "20") or "20")
 _MCP_EVIDENCE_TIMEOUT_S = float(os.getenv("ADAOS_NLU_MCP_EVIDENCE_TIMEOUT_S", "8") or "8")
+_MCP_EVIDENCE_CACHE_TTL_S = float(os.getenv("ADAOS_NLU_MCP_EVIDENCE_CACHE_TTL_S", "15") or "15")
+_MCP_EVIDENCE_CACHE_MAX_ENTRIES = max(1, int(os.getenv("ADAOS_NLU_MCP_EVIDENCE_CACHE_MAX_ENTRIES", "64") or "64"))
 _DUPLICATE_ACTIVE_STATUSES = {
     "pending",
     "proposed",
@@ -86,6 +90,15 @@ _READ_ONLY_INTENTS = {
     "desktop.open_weather",
     "weather.current",
 }
+_MCP_DESCRIPTOR_TOOL_IDS = {
+    "nlu_authoring.get_context",
+    "desktop.registry.lookup",
+    "nlu_authoring.list_training_targets",
+    "nlu_authoring.list_templates",
+    "sdk.describe_surface",
+}
+_MCP_DESCRIPTOR_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_MCP_DESCRIPTOR_CACHE_LOCK = threading.RLock()
 
 
 def _nlu_llm_write_meta():
@@ -1154,6 +1167,70 @@ def _invoke_root_mcp_authoring_tool(
     return dict(result) if isinstance(result, Mapping) else {"ok": True, "result": result}
 
 
+def _clear_root_mcp_descriptor_cache() -> None:
+    with _MCP_DESCRIPTOR_CACHE_LOCK:
+        _MCP_DESCRIPTOR_CACHE.clear()
+
+
+def _root_mcp_descriptor_cache_key(tool_id: str, arguments: Mapping[str, Any]) -> str:
+    return _sha256_payload(
+        {
+            "tool_id": tool_id,
+            "arguments": dict(arguments),
+        }
+    )
+
+
+def _prune_root_mcp_descriptor_cache_locked() -> None:
+    if len(_MCP_DESCRIPTOR_CACHE) <= int(_MCP_EVIDENCE_CACHE_MAX_ENTRIES):
+        return
+    remove_count = len(_MCP_DESCRIPTOR_CACHE) - int(_MCP_EVIDENCE_CACHE_MAX_ENTRIES)
+    for key, _entry in sorted(_MCP_DESCRIPTOR_CACHE.items(), key=lambda item: item[1][0])[:remove_count]:
+        _MCP_DESCRIPTOR_CACHE.pop(key, None)
+
+
+def _invoke_root_mcp_authoring_tool_cached(
+    tool_id: str,
+    *,
+    arguments: dict[str, Any],
+    request_id: str | None,
+    trace_id: str | None,
+    dry_run: bool = True,
+    cache_stats: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    ttl_s = max(0.0, float(_MCP_EVIDENCE_CACHE_TTL_S))
+    cacheable = bool(dry_run and ttl_s > 0 and tool_id in _MCP_DESCRIPTOR_TOOL_IDS)
+    if cacheable:
+        key = _root_mcp_descriptor_cache_key(tool_id, arguments)
+        now = time.monotonic()
+        with _MCP_DESCRIPTOR_CACHE_LOCK:
+            entry = _MCP_DESCRIPTOR_CACHE.get(key)
+            if entry is not None:
+                stored_at, payload = entry
+                if now - stored_at <= ttl_s:
+                    if cache_stats is not None:
+                        cache_stats["hits"] = int(cache_stats.get("hits") or 0) + 1
+                    return copy.deepcopy(payload)
+                _MCP_DESCRIPTOR_CACHE.pop(key, None)
+        if cache_stats is not None:
+            cache_stats["misses"] = int(cache_stats.get("misses") or 0) + 1
+
+    result = _invoke_root_mcp_authoring_tool(
+        tool_id,
+        arguments=arguments,
+        request_id=request_id,
+        trace_id=trace_id,
+        dry_run=dry_run,
+    )
+    if cacheable and isinstance(result, Mapping) and result.get("ok") is not False:
+        with _MCP_DESCRIPTOR_CACHE_LOCK:
+            _MCP_DESCRIPTOR_CACHE[key] = (time.monotonic(), copy.deepcopy(dict(result)))
+            _prune_root_mcp_descriptor_cache_locked()
+        if cache_stats is not None:
+            cache_stats["stores"] = int(cache_stats.get("stores") or 0) + 1
+    return result
+
+
 def _compact_desktop_registry_lookup(payload: Mapping[str, Any]) -> dict[str, Any]:
     lookups = payload.get("lookups") if isinstance(payload.get("lookups"), Mapping) else {}
     compact_lookups: dict[str, list[dict[str, Any]]] = {}
@@ -1198,29 +1275,38 @@ def _collect_root_mcp_authoring_evidence(
     preferred_locales: list[str] | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
+    cache_stats: dict[str, Any] = {
+        "enabled": bool(float(_MCP_EVIDENCE_CACHE_TTL_S) > 0),
+        "ttl_s": float(_MCP_EVIDENCE_CACHE_TTL_S),
+        "hits": 0,
+        "misses": 0,
+        "stores": 0,
+    }
     base_args: dict[str, Any] = {"webspace_id": webspace_id}
     if request_locale:
         base_args["request_locale"] = request_locale
     if preferred_locales:
         base_args["preferred_locales"] = list(preferred_locales)
 
-    context_result = _invoke_root_mcp_authoring_tool(
+    context_result = _invoke_root_mcp_authoring_tool_cached(
         "nlu_authoring.get_context",
         arguments=dict(base_args),
         request_id=request_id,
         trace_id=f"{request_id}.mcp.context",
         dry_run=True,
+        cache_stats=cache_stats,
     )
     if isinstance(context_result, Mapping):
         context_payload = context_result.get("context")
         evidence["nlu_authoring_context"] = dict(context_payload) if isinstance(context_payload, Mapping) else dict(context_result)
 
-    registry_result = _invoke_root_mcp_authoring_tool(
+    registry_result = _invoke_root_mcp_authoring_tool_cached(
         "desktop.registry.lookup",
         arguments={**base_args, "include_live": True},
         request_id=request_id,
         trace_id=f"{request_id}.mcp.registry_lookup",
         dry_run=True,
+        cache_stats=cache_stats,
     )
     if isinstance(registry_result, Mapping):
         evidence["desktop_registry_lookup"] = _compact_desktop_registry_lookup(registry_result)
@@ -1258,12 +1344,13 @@ def _collect_root_mcp_authoring_evidence(
             "events": list(dialog_result.get("events") or [])[:10] if isinstance(dialog_result.get("events"), list) else [],
         }
 
-    targets_result = _invoke_root_mcp_authoring_tool(
+    targets_result = _invoke_root_mcp_authoring_tool_cached(
         "nlu_authoring.list_training_targets",
         arguments={**base_args, "include_system_actions": True},
         request_id=request_id,
         trace_id=f"{request_id}.mcp.targets",
         dry_run=True,
+        cache_stats=cache_stats,
     )
     if isinstance(targets_result, Mapping):
         targets = list(targets_result.get("targets") or []) if isinstance(targets_result.get("targets"), list) else []
@@ -1272,12 +1359,13 @@ def _collect_root_mcp_authoring_evidence(
             "targets": targets[:60],
         }
 
-    templates_result = _invoke_root_mcp_authoring_tool(
+    templates_result = _invoke_root_mcp_authoring_tool_cached(
         "nlu_authoring.list_templates",
         arguments={**base_args, "include_system_actions": True},
         request_id=request_id,
         trace_id=f"{request_id}.mcp.templates",
         dry_run=True,
+        cache_stats=cache_stats,
     )
     if isinstance(templates_result, Mapping):
         templates = list(templates_result.get("templates") or []) if isinstance(templates_result.get("templates"), list) else []
@@ -1286,15 +1374,18 @@ def _collect_root_mcp_authoring_evidence(
             "templates": templates[:80],
         }
 
-    sdk_result = _invoke_root_mcp_authoring_tool(
+    sdk_result = _invoke_root_mcp_authoring_tool_cached(
         "sdk.describe_surface",
         arguments={"level": "mini"},
         request_id=request_id,
         trace_id=f"{request_id}.mcp.sdk",
         dry_run=True,
+        cache_stats=cache_stats,
     )
     if isinstance(sdk_result, Mapping):
         evidence["sdk_surface"] = dict(sdk_result)
+    if cache_stats["hits"] or cache_stats["misses"] or cache_stats["stores"]:
+        evidence["_meta"] = {"descriptor_cache": cache_stats}
     return evidence
 
 
@@ -1371,6 +1462,8 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Prefer existing intents from context (scenario_nlu.intents keys) over inventing new ones.\n"
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
         "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
+        "- context.root_mcp.nlu_authoring_context.action_surface.available_actions is the primary governed action inventory. Prefer actions/intents from this surface and use runtime_state/process_state/developer_hints to resolve what is currently available.\n"
+        "- If developer_hints describe aliases, primary_actions, slot_schemas, entities, or owner_hints for a skill/scenario, treat them as curated authoring guidance and prefer them over guessing from names alone.\n"
         "- context.root_mcp.desktop_registry_lookup contains canonical modal_id/app_id/scenario_id values and labels/aliases. Use canonical slots for intended actions; display labels are only match evidence.\n"
         "- context.root_mcp.nlu_training_targets and nlu_templates are the governed placement/inventory surfaces; choose a target that exists there and avoid duplicate examples/regex patterns.\n"
         "- SDK surfaces in context.root_mcp are descriptive only. The LLM must propose AdaOS actions/templates, not direct SDK calls.\n"
