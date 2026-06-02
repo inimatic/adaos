@@ -992,6 +992,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- context.root_mcp.nlu_training_targets and nlu_templates are the governed placement/inventory surfaces; choose a target that exists there and avoid duplicate examples/regex patterns.\n"
         "- SDK surfaces in context.root_mcp are descriptive only. The LLM must propose AdaOS actions/templates, not direct SDK calls.\n"
         "- If context.correction_thread.active=true, the utterance is a correction of a previous candidate. Use the previous candidate only as failure context, and propose a corrected candidate rather than repeating the same rule.\n"
+        "- If context.confirmation_retry.active=true, the user rejected the previous voice confirmation. Do not repeat the same intent, target, and pattern; propose a supported alternate hypothesis or return decision=ignore if no safe alternate exists.\n"
         "- host_actions entries include stable system action ids, host event names, slots, examples, and linked intents.\n"
         "- If it matches a known app/widget/scenario through an existing executable intent, prefer teaching that intent with propose_regex_rule.\n"
         "- If this is a fallback after NLU missed and an existing intent/action is the right match, prefer propose_regex_rule so AdaOS can replay the phrase through regex.dynamic.\n"
@@ -1273,6 +1274,18 @@ async def _on_teacher_request(evt: Any) -> None:
         )
         if correction_context:
             context["correction_thread"] = correction_context
+        rejected_candidate_id = req_meta.get("rejected_candidate_id")
+        if isinstance(rejected_candidate_id, str) and rejected_candidate_id.strip():
+            for item in iter_mappings(teacher_snapshot.get("candidates")):
+                if item.get("id") != rejected_candidate_id.strip():
+                    continue
+                context["confirmation_retry"] = {
+                    "active": True,
+                    "attempt": req_meta.get("nlu_teacher_confirmation_attempt"),
+                    "previous_request_id": req_meta.get("previous_request_id"),
+                    "rejected_candidate": _compact_candidate_for_context(item),
+                }
+                break
         context["scenario_nlu"] = _extract_scenario_nlu(scenario_id=context.get("current_scenario"))
         try:
             routes, skill_policies, skill_manifests = _build_intent_routes_and_policies(
@@ -1634,7 +1647,13 @@ async def _on_teacher_request(evt: Any) -> None:
                 )
                 # Auto-apply if the owning skill explicitly trusts NLU Teacher output.
                 try:
-                    if entry.get("status") == "pending" and isinstance(target_out, dict) and target_out.get("type") == "skill":
+                    route_id = str(req_meta.get("route_id") or req_meta.get("route") or "").strip()
+                    if (
+                        route_id != "voice_chat"
+                        and entry.get("status") == "pending"
+                        and isinstance(target_out, dict)
+                        and target_out.get("type") == "skill"
+                    ):
                         skill_name = target_out.get("id")
                         policy = skill_policies.get(skill_name) if isinstance(skill_name, str) else None
                         if isinstance(policy, Mapping) and bool(policy.get("autoapply_nlu_teacher")):
@@ -1667,6 +1686,9 @@ async def _on_teacher_request(evt: Any) -> None:
                     )
                 except Exception:
                     _log.debug("failed to append teacher event (candidate.proposed regex_rule) webspace=%s", webspace_id, exc_info=True)
+
+                if str(req_meta.get("route_id") or req_meta.get("route") or "").strip() == "voice_chat":
+                    return
 
                 bus_emit(
                     ctx.bus,

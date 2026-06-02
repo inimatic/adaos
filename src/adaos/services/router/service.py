@@ -2206,6 +2206,16 @@ class RouterService:
                   )
             except Exception:
                 pass
+            try:
+                from adaos.services.nlu.teacher_confirmation_runtime import (
+                    has_recent_voice_confirmation,
+                    is_confirmation_answer,
+                )
+
+                if is_confirmation_answer(text) and await has_recent_voice_confirmation(ws):
+                    return
+            except Exception:
+                pass
             # Fire-and-forget NLU detection so that text commands can be
             # mapped to scenario/skill actions via an external interpreter.
             try:
@@ -2306,6 +2316,8 @@ class RouterService:
             cand = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
             req_text = cand.get("text") if isinstance(cand.get("text"), str) else ""
             kind = cand.get("kind") if isinstance(cand.get("kind"), str) else "skill"
+            if route_id.strip() == "voice_chat" and kind == "regex_rule" and cand.get("status") == "pending":
+                return
             cdef = cand.get("candidate") if isinstance(cand.get("candidate"), dict) else {}
             name = cdef.get("name") if isinstance(cdef.get("name"), str) else ""
             desc = cdef.get("description") if isinstance(cdef.get("description"), str) else ""

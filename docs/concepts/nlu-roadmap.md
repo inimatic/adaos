@@ -1,6 +1,6 @@
 # NLU Roadmap Checklist
 
-Current runtime implementation estimate: **89%** for the practical AdaOS NLU
+Current runtime implementation estimate: **92%** for the practical AdaOS NLU
 pipeline and provider boundary. The target NLU Teacher architecture is tracked
 separately below because it adds candidate state, correction threads, MCP
 descriptors, UI authoring, and safety gates that are not part of the runtime
@@ -147,6 +147,11 @@ for the current NLU Teacher implementation gate.
 - [x] Current implemented behavior has a manual checklist: [nlu-human-verification.md](./nlu-human-verification.md).
 - [x] Documentation marks which NLU Teacher behaviors are current UI, backend/API only, or target architecture.
 - [x] NLU Teacher UI has a Signals tab backed by `data.nlu_teacher.workbench_signals` for queue, quarantine, LLM error, skip, and acquired-understanding monitoring.
+- [x] NLU Teacher Signals accordion opens details inline without also opening
+  an implicit modal.
+- [x] NLU Teacher Candidate Apply has one primary action that uses the
+  backend-resolved owner target; the obsolete duplicate "Apply to scenario"
+  shortcut is removed from the current UI.
 - [ ] NLU Teacher UI can run a phrase probe without terminal access.
 - [ ] `[polish]` NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
 - [ ] `[deferred]` NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata for the currently safe existing-API flows.
@@ -238,6 +243,14 @@ for the current NLU Teacher implementation gate.
 - [x] Applying a Teacher regex rule enables `regex_enabled` for the webspace if
   the runtime regex stage was disabled, so a verified rule is actually used by
   the next normal `nlp.intent.detect.request`.
+- [x] Voice-originated regex candidates use a confirmation loop before Apply:
+  LLM asks a concrete hypothesis question in Voice, `да` applies, first `нет`
+  rejects the candidate and triggers one retry with rejected-candidate context,
+  and a second rejection asks for clarification.
+- [x] Voice confirmation answers are not routed into normal NLU detection, so
+  short replies such as `да` and `нет` do not create extra Teacher misses.
+- [x] Voice chat no longer reads the last loaded hub message when the modal is
+  opened; only newly arriving hub messages are eligible for auto-speak.
 - [x] Teacher read-model API methods that use synchronous YDoc/read-model
   helpers run off the API event loop, so trace/template/target reads do not
   fail inside async FastAPI handlers.
@@ -499,6 +512,15 @@ for the current NLU Teacher implementation gate.
 - LLM Teacher now accepts both plain JSON and fenced JSON model responses,
   previews proposed regex rules against the original phrase, and marks bad
   proposals as `quarantined` so Apply rejects them.
+- Voice-originated regex candidates now ask for explicit user confirmation
+  before Apply. Positive feedback applies and verifies the candidate; the
+  first rejection retries with the rejected candidate in context; the second
+  rejection asks for clarification.
+- Voice confirmation replies are consumed as feedback and do not create new
+  `да`/`нет` NLU misses. Opening the Voice modal no longer speaks the last
+  historical hub message.
+- NLU Teacher UI now has a single Candidate Apply action using the backend
+  owner target, and Signals accordion expansion no longer opens a second modal.
 - LLM Teacher now stores request/context/prompt hashes on LLM logs and
   candidates, suppresses duplicate active regex candidates, and passes
   correction-thread context into the next LLM prompt when the user says
