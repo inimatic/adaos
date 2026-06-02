@@ -48,6 +48,11 @@ Target layers:
 The practical invariant is: LLM dialog handles uncertainty and domain-model
 growth; AdaOS keeps execution and durable authoring deterministic and traced.
 
+The canonical architectural anchors, reference flows, and milestone gates live
+in [nlu-roadmap.md](./nlu-roadmap.md#architectural-detail-anchors). This
+document keeps the MVP/runtime contract details and should not duplicate that
+checklist.
+
 ## Priority Vocabulary
 
 The canonical checklist in [nlu-roadmap.md](./nlu-roadmap.md) uses four
