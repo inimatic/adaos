@@ -2,6 +2,62 @@
 
 This document describes the minimal teacher-in-the-loop implementation for AdaOS NLU.
 
+## Target Architecture Update
+
+The current implementation is a useful regex-first MVP, but the target NLU
+Teacher is broader than regex generation. It is a governed authoring and
+clarification loop over the deterministic AdaOS runtime.
+
+AdaOS should act directly only when understanding is sufficiently certain. When
+understanding is incomplete, the system should enter a structured dialog that
+reduces uncertainty before learning or dispatching anything. The LLM may help
+formulate hypotheses and clarification questions, but AdaOS owns the dialog
+state, action preview, validation, apply, dispatch, feedback, and promotion.
+
+Target layers:
+
+- **Deterministic runtime**: skills, scenarios, UI actions, endpoint commands,
+  process state, permissions, and dispatch. The LLM never executes this layer
+  directly.
+- **Context plane**: Root MCP/API exposes current scenario, UI state, process
+  state, available actions, entities, templates, traces, dialog context,
+  skill/scenario descriptors, and policy boundaries.
+- **Decision plane**: Teacher classifies the phrase as a known action,
+  correction, ambiguity, entity issue, descriptor gap, missing capability, or
+  non-actionable utterance.
+- **Clarification plane**: for ambiguous or underspecified phrases, AdaOS
+  creates a `clarification_session` with a question, allowed answers, rejected
+  candidates, retry policy, and final resolution.
+- **Validation plane**: AdaOS runs phrase probe, action preview, side-effect
+  gate, conflict checks, stale-write checks, and confirmation before durable
+  mutation or dispatch.
+- **Multi-engine authoring plane**: Teacher chooses `regex`, `rasa_example`,
+  `neural_example`, `entity_alias`, `descriptor_fix`, `development_task`, or
+  `ignore`. Regex is only for deterministic command phrases and lookup-backed
+  slots; LLM should explicitly reject regex for broad semantic cases.
+- **Persistence and promotion plane**: local learned overlays can be promoted
+  to workspace artifacts and then to skill/scenario repositories only after
+  ownership, audit, rollback, regression, and privacy gates.
+
+The practical invariant is: LLM dialog handles uncertainty and domain-model
+growth; AdaOS keeps execution and durable authoring deterministic and traced.
+
+## Priority Vocabulary
+
+The canonical checklist in [nlu-roadmap.md](./nlu-roadmap.md) uses four
+MoSCoW-style labels:
+
+- `[must]`: required for the target architecture to be functionally coherent.
+- `[should]`: useful improvement or hardening that can follow the main
+  vertical slice.
+- `[could]`: useful optional work that improves ergonomics, diagnostics, or
+  breadth, but should not compete with higher-priority delivery.
+- `[deferred]`: intentionally postponed until the owning surface, policy, data,
+  or evaluation gate is stable.
+
+Legacy `[polish]` items should be read as `[could]` unless the roadmap section
+promotes them to `[should]`.
+
 ## Pipeline (MVP)
 
 1. Router emits `nlp.intent.detect.request` (`text` + `webspace_id` + `request_id`).
@@ -623,9 +679,11 @@ After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 
 The canonical execution checklist lives in [nlu-roadmap.md](./nlu-roadmap.md).
 This section keeps the compact Teacher-specific sequence.
-Status labels mirror the canonical checklist: `[deferred]` means intentionally
-postponed, and `[polish]` means hardening/operator experience after the first
-functional slice.
+Status labels mirror the canonical checklist: `[must]` means required for the
+target architecture, `[should]` means material improvement/hardening after the
+main vertical slice, `[could]` means optional breadth or ergonomics, and
+`[deferred]` means intentionally postponed. Legacy `[polish]` items should be
+treated as `[could]` unless explicitly promoted.
 
 ### Phase 0 - Teacher contracts and baseline guardrails
 
@@ -744,12 +802,12 @@ functional slice.
 - Add Signals tab backed by `data.nlu_teacher.workbench_signals` for queue,
   quarantine, skip, LLM error, and acquired-understanding monitoring.
 - `[deferred]` Add Check phrase field.
-- `[polish]` Show intent ranking/entities/action preview.
+- `[could]` Show intent ranking/entities/action preview.
 - `[deferred]` Show existing templates relevant to the phrase/intent and allow selecting one for correction.
 - `[deferred]` Add Correct/Fix actions.
 - `[deferred]` Save curated examples into scenario/skill training content.
-- `[polish]` Show previous failure/correction thread when the current phrase looks like a correction.
-- `[polish]` Show candidate verification state: proposed, previewed, intent-matched, dispatched, accepted, corrected, applied.
+- `[could]` Show previous failure/correction thread when the current phrase looks like a correction.
+- `[could]` Show candidate verification state: proposed, previewed, intent-matched, dispatched, accepted, corrected, applied.
 
 ### Phase 6 - Multi-engine template application
 
@@ -762,8 +820,8 @@ functional slice.
 
 ### Phase 7 - Feedback, regression, and promotion
 
-- `[polish]` Collect statistics by phrase, intent, stage, confidence, and operator feedback.
-- `[polish]` Promote high-value examples into training sets.
-- `[polish]` Tune confidence thresholds from observed misses and false accepts.
+- `[could]` Collect statistics by phrase, intent, stage, confidence, and operator feedback.
+- `[could]` Promote high-value examples into training sets.
+- `[could]` Tune confidence thresholds from observed misses and false accepts.
 - `[deferred]` Add rollout/rollback controls for neural and Rasa model updates.
 - `[deferred]` Add regex blast-radius checks, duplicate-template detection, golden phrase regression, and false-positive review queues.
