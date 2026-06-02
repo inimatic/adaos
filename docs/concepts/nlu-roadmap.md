@@ -73,6 +73,12 @@ clarification loop over a deterministic AdaOS runtime:
 7. **Persistence and promotion plane**: local learned overlays can be promoted
    to workspace artifacts, then pushed/published to skill/scenario
    repositories only after ownership, audit, rollback, and regression gates.
+8. **Privacy, security, and cost plane**: utterances, named entities, prompt
+   context, MCP bearer scope, and LLM calls are governed by retention,
+   anonymization, rate-limit, abuse-case, and cost-control policies.
+9. **Developer handoff plane**: when a capability or descriptor is missing,
+   Teacher creates structured development candidates for skill/scenario
+   authoring instead of inventing fake intents.
 
 Core invariant: AdaOS acts deterministically when understanding is sufficient,
 and uses LLM dialog only to reduce uncertainty or improve the domain model.
@@ -103,6 +109,9 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Define idempotency keys for request capture, LLM proposal,
   clarification answer, preview, apply, dispatch, feedback, promotion, and
   rollback.
+- [ ] `[must]` Define scope fields for every request/thread/candidate:
+  channel, route, webspace, scenario, device, user/session when available,
+  locale, and privacy boundary.
 - [ ] `[should]` Add RU/EN/STT-noise fixtures for request threads,
   clarification sessions, correction threads, and template patch previews.
 
@@ -121,6 +130,15 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Extend skill/scenario manifests with authored `llm_hints` /
   `nlu_hints`: aliases, user-facing action descriptions, examples, slot
   schemas, entity names, owner hints, and side-effect class.
+- [ ] `[must]` Connect named entities to voice control: expose voice-safe
+  aliases, canonical ids, ambiguity evidence, entity ownership, and allowed
+  voice actions for devices, nodes, endpoints, browsers, apps, modals,
+  scenarios, skills, and processes.
+- [ ] `[must]` Include entity scope and portability class in context:
+  `session`, `user`, `workspace`, `scenario`, `skill`, `system`, or `public`.
+- [ ] `[should]` Publish process/action affordances as named entities when the
+  user can naturally refer to them by voice, for example "scan", "indexing",
+  "display", "current browser", or "last failed job".
 - [ ] `[should]` Cache Root MCP descriptive-plane snapshots per target/subnet
   with TTL and invalidation, so LLM context is usually complete without
   blocking the Voice path.
@@ -143,6 +161,9 @@ below remain useful for tracking existing implementation work.
   entities and actions, for example Media Indexer vs Media Server.
 - [ ] `[deferred]` Support long multi-turn task planning dialogs; the first
   Teacher dialog loop should stay short and resolution-oriented.
+- [ ] `[deferred]` Support multi-user/concurrent dialog ownership. The target
+  model must preserve route/session fields now, but full parallel-user policy
+  is intentionally postponed.
 
 ### D. Multi-Engine NLU Authoring
 
@@ -159,6 +180,15 @@ below remain useful for tracking existing implementation work.
 - [ ] `[should]` Capture STT/raw text, normalized text, locale guess,
   transliteration/typo evidence, and entity canonicalization evidence for
   each teachable request.
+- [ ] `[must]` Treat entity-alias learning as a first-class strategy distinct
+  from intent/template learning, including voice aliases and negative alias
+  evidence.
+- [ ] `[must]` Treat `descriptor_fix` and `development_task` as first-class
+  strategies when the system action or skill capability exists but is not
+  sufficiently described for NLU/MCP.
+- [ ] `[should]` Collect per-engine statistics before adding calibration
+  logic: accept/abstain/reject, confidence bands, fallback chain, STT
+  confidence, clarification rate, correction rate, and false-accept samples.
 - [ ] `[deferred]` Apply Neural/Rasa model promotion automatically; model
   rebuild/reindex remains behind explicit quality gates.
 
@@ -172,11 +202,24 @@ below remain useful for tracking existing implementation work.
   `destructive`, and `unsupported`.
 - [ ] `[must]` Add conflict checks: duplicate templates, overbroad regex,
   owner conflicts, entity-alias ambiguity, and action mismatch.
+- [ ] `[must]` Add lightweight security abuse checks that reduce high-risk
+  failures early: prompt-injection markers in user utterances and descriptors,
+  overbroad templates for non-read-only actions, alias collisions with system
+  commands, unexpected MCP target scope, and untrusted skill-authored hints.
 - [ ] `[must]` Verify both replayed understanding and action outcome when an
   action is dispatched: modal opened, scenario switched, skill result emitted,
   endpoint command acknowledged, or failure recorded.
+- [ ] `[must]` Add rate limits, duplicate suppression, and queue/backpressure
+  policy for Root/OpenAI Teacher calls by webspace, route, request class, and
+  repeated phrase hash.
 - [ ] `[should]` Add golden positive/negative phrase suites, ambiguity
   fixtures, STT-noise fixtures, and per-skill regression reports.
+- [ ] `[should]` Add cost accounting metrics for Teacher: LLM calls, retries,
+  timeouts, tokens/estimated cost when available, cache hit rate, and
+  resolved-miss cost.
+- [ ] `[should]` Keep QA metrics backed by logs first: miss rate,
+  clarification success, correction rate, rollback rate, promotion acceptance,
+  and time to resolution, each tied to concrete questions the operator can ask.
 - [ ] `[could]` Show explainability evidence: selected action, alternative
   candidates, rejected strategy, used MCP facts, confidence, and risk.
 
@@ -187,6 +230,9 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Add promotion states: `local_learned`,
   `promotion_candidate`, `promoted_to_workspace`, `pushed_to_repo`,
   `published`, and `rejected_for_publication`.
+- [ ] `[must]` Add template portability class: `session-local`,
+  `user-local`, `workspace-local`, `scenario-local`, `skill-global`,
+  `system-global`, or `public-reusable`.
 - [ ] `[must]` Attach provenance to every accepted artifact: request id,
   thread id, prompt/context hashes, model id/version, owner, operator/user
   feedback, verification result, rollback pointer, and commit/push id when
@@ -197,6 +243,9 @@ below remain useful for tracking existing implementation work.
   public artifacts unless explicitly approved.
 - [ ] `[deferred]` Publish a shared public NLU template registry across
   independent AdaOS installations.
+- [ ] `[deferred]` Implement anonymization/redaction of named entities before
+  public promotion. The target model must reserve the hook now; actual
+  anonymizer quality gates come later.
 
 ### G. Operator UI and Human Verification
 
@@ -213,6 +262,93 @@ below remain useful for tracking existing implementation work.
   scenario while preserving chat history and avoiding stale message playback.
 - [ ] `[deferred]` Build full operator analytics dashboards; start with focused
   trace and lifecycle evidence.
+
+### H. Privacy, Security, and Retention
+
+- [ ] `[must]` Define retention policy for raw utterances, STT text,
+  normalized text, LLM prompt context, traces, candidates, and feedback.
+- [ ] `[must]` Define promotion privacy gates: local entity names, device
+  names, user aliases, and personal examples stay private unless explicitly
+  approved.
+- [ ] `[must]` Ensure MCP bearer/session scope is recorded as audit evidence
+  but never embedded into prompts, templates, examples, or published artifacts.
+- [ ] `[must]` Add minimal threat-model checklist for NLU Teacher and skill
+  hints: prompt injection, malicious descriptors, alias hijacking, overbroad
+  destructive templates, and cross-subnet MCP scope confusion.
+- [ ] `[should]` Add delete/export hooks for Teacher traces and learned local
+  overlays by request/thread/webspace.
+- [ ] `[deferred]` Implement robust anonymization of named entities for public
+  template promotion.
+
+### I. Cost, Quota, and Offline Operation
+
+- [ ] `[must]` Add Teacher LLM budget controls: per-webspace rate limit,
+  repeated-miss dedupe, max retries, queue depth, and fallback behavior when
+  Root/OpenAI is unavailable.
+- [ ] `[must]` Keep NLU fast path fully operational when Root/OpenAI is down;
+  store misses for later batch enrichment instead of blocking Voice/chat.
+- [ ] `[should]` Add MCP descriptor cache metrics and invalidation triggers so
+  cost/performance tuning can be based on evidence.
+- [ ] `[could]` Add batch review mode for accumulated misses instead of
+  realtime LLM processing.
+
+### J. Skill and Scenario Developer Workflow
+
+- [ ] `[must]` Define `nlu_hints` / `llm_hints` schema for skills and
+  scenarios: user-facing actions, aliases, examples, slots, entities, owner,
+  side-effect class, preview method, and public/private scope.
+- [ ] `[must]` Generate a conversational-interface skeleton when creating a
+  skill or scenario, so NLU Teacher can reason over capabilities without code
+  access.
+- [ ] `[must]` Add validation/lint checks for hints during skill/scenario push:
+  malformed examples, missing side-effect class, ambiguous aliases, unknown
+  action ids, and unsafe public/private scope.
+- [ ] `[should]` Add generated NLU/MCP descriptor docs for each skill/scenario
+  so humans and LLMs see the same capability surface.
+- [ ] `[deferred]` Auto-generate rich phrase sets for new skills/scenarios;
+  start with a minimal skeleton and explicit developer-authored examples.
+
+### K. Channels, Locale, and Accessibility
+
+- [ ] `[must]` Treat Voice, typed chat, command palette, API-originated text,
+  browser/device-specific input, and remote Root-originated requests as
+  first-class channels with different confirmation UX and trace metadata.
+- [ ] `[must]` Add locale policy for RU/EN and mixed-language phrases:
+  locale-specific aliases, transliteration, STT-noise variants, and
+  locale-safe promotion rules.
+- [ ] `[must]` Ensure named-entity voice aliases are locale-aware and can be
+  kept local/private independently from public skill/scenario examples.
+- [ ] `[should]` Improve typed chat as a Teacher-visible channel, not only as a
+  Voice transcript viewer.
+- [ ] `[deferred]` Add full multi-locale model/profile management beyond
+  RU/EN until usage statistics justify it.
+
+### L. Development Handoff and Recovery
+
+- [ ] `[must]` Represent missing action descriptors as `descriptor_fix`
+  candidates when a skill/scenario capability exists but is invisible or
+  underspecified for NLU/MCP.
+- [ ] `[must]` Represent missing capabilities as `development_task`
+  candidates for the future LLM programmer workflow, with requested behavior,
+  likely owner, missing surface, evidence, and replay phrase.
+- [ ] `[should]` Link completed skill/scenario development tasks back to the
+  original NLU request and rerun the phrase through the normal pipeline.
+- [ ] `[deferred]` Plan wrong-dispatch recovery and undo: if AdaOS performed
+  the wrong UI/config/endpoint action, record the correction and restore state
+  when the side-effect class supports it.
+
+### M. Quality and Analytics Plane
+
+- [ ] `[must]` Define the first QA questions before adding dashboards:
+  "why did this phrase miss?", "why did it dispatch?", "what did it cost?",
+  "what changed after learning?", and "is this safe to publish?".
+- [ ] `[must]` Ensure logs contain enough structured fields to answer those
+  questions without a dedicated analytics UI.
+- [ ] `[should]` Build lightweight analytics over logs for miss rate,
+  false-accept samples, clarification success, correction rate, rollback
+  rate, promotion acceptance, latency, and cost.
+- [ ] `[could]` Add multidimensional QA dashboards after the logging model is
+  stable and real usage questions are known.
 
 ## Phase 0: Teacher Contracts and Guardrails
 
