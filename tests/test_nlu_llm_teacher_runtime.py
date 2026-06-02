@@ -339,6 +339,130 @@ async def test_llm_teacher_prompt_includes_mcp_evidence_and_stores_regex_candida
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_need_clarification_creates_session(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-clarification"
+    request_text = "show media"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"clarification_sessions": [], "events": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "ignore",
+                                    "need_clarification": True,
+                                    "clarification_question": "Open Media Indexer or Media Server?",
+                                    "options": [
+                                        {
+                                            "id": "media_indexer",
+                                            "label": "Media Indexer",
+                                            "effect": "answer",
+                                            "action_candidate": {
+                                                "intent": "desktop.open_modal",
+                                                "slots": {"modal_id": "media_indexer_modal"},
+                                            },
+                                        },
+                                        {
+                                            "id": "media_server",
+                                            "label": "Media Server",
+                                            "effect": "answer",
+                                            "action_candidate": {
+                                                "intent": "desktop.open_modal",
+                                                "slots": {"modal_id": "mediaserver_modal"},
+                                            },
+                                        },
+                                    ],
+                                    "confidence": 0.56,
+                                    "training_strategy": {
+                                        "primary": "clarification",
+                                        "rationale": "Two similarly named media actions are available.",
+                                    },
+                                    "why_not_regex": "The entity is ambiguous.",
+                                    "risk_notes": "Needs user disambiguation.",
+                                    "notes": "Ask before teaching a template.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    requested: list[dict] = []
+    messages: list[dict] = []
+
+    def _capture_requested(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            requested.append(dict(payload))
+
+    def _capture_chat(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            messages.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.clarification.requested", _capture_requested)
+    ctx.bus.subscribe("io.out.chat.append", _capture_chat)
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.clarify",
+                "request_id": "req.clarify",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+                "_meta": {"route_id": "voice_chat"},
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        clarifications = list(teacher.get("clarification_sessions") or [])
+        candidates = list(teacher.get("candidates") or [])
+        events = list(teacher.get("events") or [])
+
+    assert not candidates
+    assert clarifications
+    session = clarifications[-1]
+    assert session["status"] == "awaiting_user"
+    assert session["kind"] == "llm_clarification"
+    assert session["uncertainty_kind"] == "llm_ambiguity"
+    assert session["request_id"] == "req.clarify"
+    assert session["request_text"] == request_text
+    assert session["question"] == "Open Media Indexer or Media Server?"
+    assert session["allowed_answers"][0]["id"] == "media_indexer"
+    assert session["allowed_answers"][0]["action_candidate"]["slots"]["modal_id"] == "media_indexer_modal"
+    assert session["training_strategy"]["primary"] == "clarification"
+    assert session["risk_notes"] == "Needs user disambiguation."
+    assert any(item.get("kind") == "clarification.requested" for item in events)
+    assert requested
+    assert requested[-1]["session"]["id"] == session["id"]
+    assert messages
+    assert "1. Media Indexer" in messages[-1]["text"]
+    assert "2. Media Server" in messages[-1]["text"]
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_quarantines_regex_candidate_that_misses_source_text(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm

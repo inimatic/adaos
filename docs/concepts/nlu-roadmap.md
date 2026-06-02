@@ -1,6 +1,6 @@
 # NLU Roadmap Checklist
 
-Current runtime implementation estimate: **92%** for the practical AdaOS NLU
+Current runtime implementation estimate: **94%** for the practical AdaOS NLU
 pipeline and provider boundary. The target NLU Teacher architecture is tracked
 separately below because it adds candidate state, correction threads, MCP
 descriptors, UI authoring, and safety gates that are not part of the runtime
@@ -25,6 +25,12 @@ Current provider note: `neuro_nlu_lite_skill` is an experimental weak-device
 provider stage. It is intentionally separate from `neural_nlu_service_skill`
 and should not be counted as a replacement for the production Neural NLU
 provider or the Teacher governance loop.
+
+Current M1 status: **complete for the main functional slice**. LLM misses can
+produce structured action/template envelopes or clarification sessions, and
+short Voice answers now resolve the active confirmation/clarification session
+before normal NLU. The remaining target-roadmap items belong to M2-M5
+hardening, validation, promotion, and UI/operator surfaces.
 
 ## Status Labels
 
@@ -133,9 +139,9 @@ Reference flows that must stay representable:
 
 Minimal milestone gates:
 
-- **M1: Action candidate and clarification core.** Misses can become structured
-  action candidates or clarification sessions, and short answers resolve the
-  active session before normal NLU.
+- **M1: Action candidate and clarification core.** `[complete]` Misses can
+  become structured action candidates or clarification sessions, and short
+  answers resolve the active session before normal NLU.
 - **M2: Contextual action surface.** Root/API context exposes current state,
   named entities, available actions, process state, and developer-authored
   hints with enough data to preview a candidate.
@@ -175,6 +181,9 @@ below remain useful for tracking existing implementation work.
   into `data.nlu_teacher.clarification_sessions[]` with question,
   allowed answers, status, answer, attempt, target, and rejected candidate
   evidence.
+- [x] M1 implementation slice: LLM `need_clarification` responses now create
+  `llm_clarification` sessions with questions, options, risk notes,
+  training strategy, route metadata, and Teacher events.
 - [ ] `[must]` Define candidate lifecycle states across understanding and
   execution: `proposed`, `phrase_previewed`, `action_previewed`,
   `clarification_requested`, `user_confirmed`, `applied`,
@@ -221,14 +230,17 @@ below remain useful for tracking existing implementation work.
 
 ### C. Decision and Clarification
 
-- [ ] `[must]` Update LLM output contract to return `decision`,
+- [x] `[must]` Update LLM output contract to return `decision`,
   `action_candidate`, `training_strategy`, `need_clarification`,
   `clarification_question`, `options`, `why_not_regex`, and `risk_notes`.
 - [ ] `[must]` Implement uncertainty policy: direct action, confirmation,
   clarification, development task, or ignore based on confidence, ambiguity,
   side-effect class, and context.
-- [ ] `[must]` Route short answers such as `yes/no/first/second/да/нет` through
+- [x] `[must]` Route short answers such as `yes/no/first/second/да/нет` through
   active clarification/confirmation sessions before normal NLU.
+- [x] First implementation slice: generic `clarification.answered` events now
+  store the selected option, answer kind, raw answer text, route metadata, and
+  final session status.
 - [ ] `[must]` Record negative feedback and rejected alternatives as structured
   evidence, not only as a retry trigger.
 - [ ] `[could]` Let Voice/UI present disambiguation options for ambiguous
@@ -243,7 +255,10 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[must]` Add `training_strategy` selection:
   `regex`, `rasa_example`, `neural_example`, `entity_alias`,
-  `descriptor_fix`, `development_task`, or `ignore`.
+  `descriptor_fix`, `development_task`, `clarification`, or `ignore`.
+- [x] First implementation slice: regex candidates and LLM clarification
+  sessions preserve the selected `training_strategy` in persisted Teacher
+  state.
 - [ ] `[must]` Require LLM to reject regex for broad semantic, highly
   contextual, or ambiguous phrases and choose Rasa/Neural/clarification or a
   descriptor fix instead.
@@ -863,13 +878,16 @@ below remain useful for tracking existing implementation work.
 
 ## Immediate Next Steps
 
-1. Add safe dispatch preview/dispatch gates for verified candidates that are
+1. Build M2 contextual action surface: expose current UI/process state,
+   named entities, and developer-authored hints through governed API/MCP
+   descriptors with cache/invalidation.
+2. Add safe dispatch preview/dispatch gates for verified candidates that are
    allowed to run through the normal AdaOS intent/action path.
-2. Expand read-only MCP wrappers for trace, dialog context, recent failures,
+3. Expand read-only MCP wrappers for trace, dialog context, recent failures,
    lookups, skill/scenario NLU descriptors, and SDK descriptors.
-3. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
+4. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
-4. Add full model promotion gates using macro-F1, abstain rate, latency,
+5. Add full model promotion gates using macro-F1, abstain rate, latency,
    false-positive checks, and rollback evidence.
 
 ## Last Completed Slice
@@ -882,6 +900,10 @@ below remain useful for tracking existing implementation work.
   `data.nlu_teacher.clarification_sessions[]`, giving the future dialog layer
   a structured session record while preserving the existing
   `pending_confirmations[]` flow.
+- LLM `need_clarification` responses now create `llm_clarification`
+  sessions. Short Voice answers (`yes/no/first/second/да/нет`) resolve the
+  active session before normal NLU and record `clarification.answered`
+  evidence with the selected option.
 - NLU Teacher candidate Apply is exposed through
   `POST /api/nlu/teacher/{webspace_id}/candidate/apply`.
 - Regex candidate Apply now re-probes the original phrase, records
