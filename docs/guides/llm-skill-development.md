@@ -624,6 +624,62 @@ Localization rules for generated skills:
   session such as `ProfileOpsControl`; read-only sessions should use
   `get_nlu_authoring_context` and `get_named_entity_registry`
 
+## NLU and LLM hints
+
+Prepare NLU/LLM hints while developing the skill. They are part of the skill's
+human input contract, alongside `skill.yaml`, `webui.json`, and `redui.json`.
+The runtime can derive a baseline from app titles, modal ids, actions, and
+routes, but skill authors should add domain aliases and intent preferences that
+cannot be inferred safely.
+
+Recommended `webui.json` shape:
+
+```json
+{
+  "nlu": {
+    "llm_hints": {
+      "aliases": {
+        "app_id": {
+          "browsers": ["browser sessions", "browser list"]
+        },
+        "modal_id": {
+          "browsers_modal": ["browser sessions", "browser list"]
+        }
+      },
+      "entities": [
+        {
+          "type": "modal_id",
+          "value": "browsers_modal",
+          "aliases": ["browser sessions", "browser list"]
+        }
+      ],
+      "primary_actions": [
+        {
+          "intent": "desktop.open_modal",
+          "slot": "modal_id",
+          "value": "browsers_modal",
+          "notes": "Use this when the user asks to show or open the skill UI."
+        }
+      ]
+    }
+  }
+}
+```
+
+Rules:
+
+- prefer canonical ids in `value`; aliases are only input labels
+- include common localized names, product names, abbreviations, and operator
+  slang for apps, modals, scenarios, and node/device refs
+- describe the primary interface action when a skill exposes a modal; for
+  example, "show/open <skill name>" should usually map to
+  `desktop.open_modal`, not to scenario switching
+- avoid giving the LLM direct SDK execution instructions; hints are used to
+  build candidates that AdaOS previews, applies, traces, and rolls back through
+  the normal NLU Teacher path
+- keep hints compact and stable; runtime observations and user-confirmed
+  aliases belong in the governed entity registry, not in ad-hoc prompt text
+
 ## Guarding and quarantine
 
 The runtime may warn, throttle, block, or quarantine a skill owner when either

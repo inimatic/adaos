@@ -708,6 +708,126 @@ def _preview_regex_candidate(*, pattern: str, text: str) -> dict[str, Any]:
     }
 
 
+_OPEN_MODAL_TEXT_RE = re.compile(
+    r"^\s*(?:покажи|открой|показать|открыть|show|open|launch)\s+(?P<entity>.+?)\s*[.!?]?\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
+_SCENARIO_WORD_RE = re.compile(r"\b(?:scenario|сценар(?:ий|ия|ию|ием|ии))\b", re.IGNORECASE | re.UNICODE)
+_OPEN_MODAL_REPAIR_INTENTS = {
+    "desktop.open_app",
+    "desktop.toggle_app_install",
+    "desktop.open_scenario",
+    "desktop.switch_scenario",
+}
+
+
+def _lookup_key(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _compact_lookup_key(value: Any) -> str:
+    return re.sub(r"[\s_\-:]+", "", str(value or "").strip()).casefold()
+
+
+def _lookup_rows_from_context(context: Mapping[str, Any], lookup: str) -> list[dict[str, Any]]:
+    root_mcp = coerce_dict(context.get("root_mcp"))
+    registry = coerce_dict(root_mcp.get("desktop_registry_lookup"))
+    lookups = registry.get("lookups") if isinstance(registry.get("lookups"), Mapping) else {}
+    rows = lookups.get(lookup)
+    if not isinstance(rows, list):
+        return []
+    return [dict(item) for item in iter_mappings(rows)]
+
+
+def _row_aliases(row: Mapping[str, Any]) -> list[str]:
+    out: list[str] = []
+    value = row.get("value")
+    if isinstance(value, str) and value.strip():
+        out.append(value.strip())
+    labels = row.get("labels")
+    if isinstance(labels, list):
+        out.extend(str(item).strip() for item in labels if str(item).strip())
+    return out
+
+
+def _regex_alt(value: str) -> str:
+    escaped = re.escape(str(value or "").strip())
+    return re.sub(r"(?:\\\s|\s)+", r"\\s+", escaped)
+
+
+def _open_modal_pattern_for_entity(*, entity: str, modal_id: str, aliases: list[str]) -> str:
+    values: list[str] = []
+    seen: set[str] = set()
+    for raw in [entity, *aliases, modal_id]:
+        token = str(raw or "").strip()
+        if not token or token.startswith("node:"):
+            continue
+        key = _lookup_key(token)
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(token)
+    alts = [_regex_alt(item) for item in values[:10] if item.strip()]
+    if not alts:
+        alts = [_regex_alt(entity)]
+    return r"\b(?:покажи|открой|показать|открыть|show|open|launch)\s+(?P<modal_id>" + "|".join(alts) + r")\b"
+
+
+def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[str, Any] | None:
+    if _SCENARIO_WORD_RE.search(text or ""):
+        return None
+    match = _OPEN_MODAL_TEXT_RE.match(text or "")
+    if not match:
+        return None
+    entity = str(match.group("entity") or "").strip().strip(" \t\r\n\"'«»")
+    if not entity:
+        return None
+    entity_key = _lookup_key(entity)
+    entity_compact = _compact_lookup_key(entity)
+
+    modal_rows = _lookup_rows_from_context(context, "modal_id")
+    for row in modal_rows:
+        modal_id = str(row.get("value") or "").strip()
+        if not modal_id or modal_id.startswith("node:"):
+            continue
+        aliases = _row_aliases(row)
+        alias_keys = {_lookup_key(alias) for alias in aliases if alias}
+        alias_compact_keys = {_compact_lookup_key(alias) for alias in aliases if alias}
+        if entity_key not in alias_keys and entity_compact not in alias_compact_keys:
+            continue
+        return {
+            "intent": "desktop.open_modal",
+            "pattern": _open_modal_pattern_for_entity(entity=entity, modal_id=modal_id, aliases=aliases),
+            "modal_id": modal_id,
+            "entity": entity,
+            "matched": "modal_id",
+        }
+
+    catalog = coerce_dict(context.get("catalog"))
+    apps = list(iter_mappings(catalog.get("apps")))
+    for app in apps:
+        launch_modal = str(app.get("launchModal") or app.get("launch_modal") or "").strip()
+        if not launch_modal:
+            continue
+        aliases = [
+            str(app.get("id") or "").strip(),
+            str(app.get("title") or "").strip(),
+            str(app.get("name") or "").strip(),
+        ]
+        alias_keys = {_lookup_key(alias) for alias in aliases if alias}
+        alias_compact_keys = {_compact_lookup_key(alias) for alias in aliases if alias}
+        if entity_key not in alias_keys and entity_compact not in alias_compact_keys:
+            continue
+        return {
+            "intent": "desktop.open_modal",
+            "pattern": _open_modal_pattern_for_entity(entity=entity, modal_id=launch_modal, aliases=aliases),
+            "modal_id": launch_modal,
+            "entity": entity,
+            "matched": "catalog.app.launchModal",
+        }
+    return None
+
+
 def _normalize_regex_rule_slots(*, pattern: str, slots: Mapping[str, Any]) -> tuple[str, dict[str, Any], dict[str, str]]:
     normalized_pattern = str(pattern or "")
     normalized_slots = dict(slots) if isinstance(slots, Mapping) else {}
@@ -824,6 +944,41 @@ def _invoke_root_mcp_authoring_tool(
     return dict(result) if isinstance(result, Mapping) else {"ok": True, "result": result}
 
 
+def _compact_desktop_registry_lookup(payload: Mapping[str, Any]) -> dict[str, Any]:
+    lookups = payload.get("lookups") if isinstance(payload.get("lookups"), Mapping) else {}
+    compact_lookups: dict[str, list[dict[str, Any]]] = {}
+    for lookup in ("modal_id", "app_id", "scenario_id"):
+        rows = lookups.get(lookup)
+        if not isinstance(rows, list):
+            continue
+        compact_rows: list[dict[str, Any]] = []
+        for row in iter_mappings(rows):
+            value = str(row.get("value") or "").strip()
+            if not value or value.startswith("node:"):
+                continue
+            labels = [str(item).strip() for item in (row.get("labels") or []) if str(item).strip()] if isinstance(row.get("labels"), list) else []
+            compact_rows.append(
+                {
+                    "value": value,
+                    **({"labels": labels[:20]} if labels else {}),
+                    "sources": [str(item).strip() for item in (row.get("sources") or []) if str(item).strip()][:5]
+                    if isinstance(row.get("sources"), list)
+                    else [],
+                }
+            )
+            if len(compact_rows) >= 80:
+                break
+        compact_lookups[lookup] = compact_rows
+    return {
+        "ok": bool(payload.get("ok", True)),
+        "webspace_id": payload.get("webspace_id"),
+        "summary": list(payload.get("summary") or []) if isinstance(payload.get("summary"), list) else [],
+        "lookups": compact_lookups,
+        "fingerprint": payload.get("fingerprint"),
+        "root_scope": dict(payload.get("root_scope") or {}) if isinstance(payload.get("root_scope"), Mapping) else {},
+    }
+
+
 def _collect_root_mcp_authoring_evidence(
     *,
     webspace_id: str,
@@ -849,6 +1004,16 @@ def _collect_root_mcp_authoring_evidence(
     if isinstance(context_result, Mapping):
         context_payload = context_result.get("context")
         evidence["nlu_authoring_context"] = dict(context_payload) if isinstance(context_payload, Mapping) else dict(context_result)
+
+    registry_result = _invoke_root_mcp_authoring_tool(
+        "desktop.registry.lookup",
+        arguments={**base_args, "include_live": True},
+        request_id=request_id,
+        trace_id=f"{request_id}.mcp.registry_lookup",
+        dry_run=True,
+    )
+    if isinstance(registry_result, Mapping):
+        evidence["desktop_registry_lookup"] = _compact_desktop_registry_lookup(registry_result)
 
     check_args = {
         **base_args,
@@ -989,12 +1154,15 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Prefer existing intents from context (scenario_nlu.intents keys) over inventing new ones.\n"
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
         "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
+        "- context.root_mcp.desktop_registry_lookup contains canonical modal_id/app_id/scenario_id values and labels/aliases. Use canonical slots for intended actions; display labels are only match evidence.\n"
         "- context.root_mcp.nlu_training_targets and nlu_templates are the governed placement/inventory surfaces; choose a target that exists there and avoid duplicate examples/regex patterns.\n"
         "- SDK surfaces in context.root_mcp are descriptive only. The LLM must propose AdaOS actions/templates, not direct SDK calls.\n"
         "- If context.correction_thread.active=true, the utterance is a correction of a previous candidate. Use the previous candidate only as failure context, and propose a corrected candidate rather than repeating the same rule.\n"
         "- If context.confirmation_retry.active=true, the user rejected the previous voice confirmation. Do not repeat the same intent, target, and pattern; propose a supported alternate hypothesis or return decision=ignore if no safe alternate exists.\n"
         "- host_actions entries include stable system action ids, host event names, slots, examples, and linked intents.\n"
         "- If it matches a known app/widget/scenario through an existing executable intent, prefer teaching that intent with propose_regex_rule.\n"
+        "- If the user says show/open/launch/покажи/открой plus a known app or modal title and that app has launchModal, prefer intent desktop.open_modal with slot modal_id. Do not use desktop.toggle_app_install for showing/opening an already available app.\n"
+        "- Use desktop.switch_scenario/open_scenario only when the user explicitly asks to switch/open a scenario (e.g. says scenario/сценарий/переключи сценарий). Generic 'покажи X' for a desktop app/modal is modal opening, not scenario switching.\n"
         "- If this is a fallback after NLU missed and an existing intent/action is the right match, prefer propose_regex_rule so AdaOS can replay the phrase through regex.dynamic.\n"
         "- Use revise_nlu only when a compact safe regex is not enough or the best next step is curated dataset examples for neural/Rasa.\n"
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
@@ -1003,6 +1171,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- For lookup-backed slots such as scenario_id, modal_id, app_id, node_ref, webspace_id, and skill_id, capture the user text in a named group; AdaOS canonicalizes known values/labels before dispatch.\n"
         "- Use the exact slot names expected by the existing intent/action. For scenario switching use (?P<scenario_id>...), not (?P<scenario>...). For modal opening use (?P<modal_id>...), not (?P<modal>...).\n"
         "- The regex must match the exact user request text after normal case-insensitive Python regex matching.\n"
+        "- When the user used a localized label (e.g. Russian text), include that surface form in the regex alternative so preview matches the exact request; AdaOS will canonicalize the captured label through lookup aliases.\n"
         "- Regex rules should be reasonably general (avoid overfitting to a single verb like \"покажи\"); capture city via (?P<city>...).\n"
         "- When proposing a regex rule, also set target to where the rule should be stored:\n"
         "  - Prefer the skill that handles the intent (see context.intent_routes) over the scenario.\n"
@@ -1543,13 +1712,40 @@ async def _on_teacher_request(evt: Any) -> None:
             rr_pattern = regex_rule.get("pattern")
             if isinstance(rr_intent, str) and rr_intent.strip() and isinstance(rr_pattern, str) and rr_pattern.strip():
                 rr_pattern, slots, slot_aliases = _normalize_regex_rule_slots(pattern=rr_pattern, slots=slots)
+                rr_intent = rr_intent.strip()
+                initial_preview = _preview_regex_candidate(pattern=rr_pattern, text=text)
+                open_modal_repair = _infer_open_modal_repair(text=text, context=context)
+                repair_meta: dict[str, Any] | None = None
+                initial_preview_slots = initial_preview.get("slots") if isinstance(initial_preview.get("slots"), Mapping) else {}
+                if isinstance(open_modal_repair, Mapping) and (
+                    rr_intent in _OPEN_MODAL_REPAIR_INTENTS
+                    or (
+                        rr_intent == "desktop.open_modal"
+                        and (not initial_preview.get("ok") or not str(initial_preview_slots.get("modal_id") or "").strip())
+                    )
+                ):
+                    repair_meta = dict(open_modal_repair)
+                    repair_meta["from_intent"] = rr_intent
+                    repair_meta["from_pattern"] = rr_pattern
+                    repair_meta["from_preview"] = dict(initial_preview)
+                    rr_intent = "desktop.open_modal"
+                    rr_pattern = str(open_modal_repair.get("pattern") or "").strip() or rr_pattern
+                    initial_preview = _preview_regex_candidate(pattern=rr_pattern, text=text)
+                    notes = (
+                        (notes + "\n") if notes else ""
+                    ) + "AdaOS repaired the LLM proposal to desktop.open_modal using desktop registry lookup aliases."
                 target_out = _resolve_regex_target(
-                    intent=rr_intent.strip(),
+                    intent=rr_intent,
                     proposed_target=target,
                     routes=routes,
                     current_scenario=context.get("current_scenario"),
                 )
-                preview = _preview_regex_candidate(pattern=rr_pattern, text=text)
+                preview = initial_preview
+                normalization: dict[str, Any] = {}
+                if slot_aliases:
+                    normalization["slot_aliases"] = slot_aliases
+                if repair_meta:
+                    normalization["llm_proposal_repair"] = repair_meta
                 entry = {
                     "id": f"cand.{int(time.time()*1000)}",
                     "ts": time.time(),
@@ -1563,10 +1759,10 @@ async def _on_teacher_request(evt: Any) -> None:
                         "name": f"Regex rule for {rr_intent.strip()}",
                         "description": "Proposed regex rule to improve fast NLU stage.",
                     },
-                    "regex_rule": {"intent": rr_intent.strip(), "pattern": rr_pattern},
+                    "regex_rule": {"intent": rr_intent, "pattern": rr_pattern},
                     **({"target": target_out} if target_out else {}),
                     **({"slots": dict(slots)} if slots else {}),
-                    **({"normalization": {"slot_aliases": slot_aliases}} if slot_aliases else {}),
+                    **({"normalization": normalization} if normalization else {}),
                     "llm": llm_meta,
                     "notes": notes,
                     "preview": preview,
@@ -1587,7 +1783,7 @@ async def _on_teacher_request(evt: Any) -> None:
                 try:
                     duplicate = await _find_duplicate_regex_candidate(
                         webspace_id,
-                        intent=rr_intent.strip(),
+                        intent=rr_intent,
                         pattern=rr_pattern,
                         target=target_out,
                     )
@@ -1600,7 +1796,7 @@ async def _on_teacher_request(evt: Any) -> None:
                         "candidate_id": duplicate.get("id"),
                         "duplicate_of": duplicate.get("id"),
                         "suppressed": {
-                            "intent": rr_intent.strip(),
+                            "intent": rr_intent,
                             "pattern": rr_pattern,
                             "target": dict(target_out or {}),
                             "preview": preview,
@@ -1623,7 +1819,7 @@ async def _on_teacher_request(evt: Any) -> None:
                                 request_text=text,
                                 kind="candidate.duplicate_suppressed",
                                 title="Candidate duplicate suppressed",
-                                subtitle=f"regex_rule: {rr_intent.strip()}",
+                                subtitle=f"regex_rule: {rr_intent}",
                                 raw=duplicate_payload,
                                 meta=req_meta,
                             ),
@@ -1679,7 +1875,7 @@ async def _on_teacher_request(evt: Any) -> None:
                             request_text=text,
                             kind="candidate.proposed",
                             title="Candidate proposed",
-                            subtitle=f"regex_rule: {rr_intent.strip()}",
+                            subtitle=f"regex_rule: {rr_intent}",
                             raw=entry,
                             meta=req_meta,
                         ),

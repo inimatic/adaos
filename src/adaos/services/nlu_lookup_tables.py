@@ -114,6 +114,41 @@ def _token(value: Any) -> str | None:
     return text or None
 
 
+def _iter_alias_values(value: Any) -> Iterable[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        out: list[str] = []
+        for key in ("aliases", "display_aliases", "displayAliases", "nlu_aliases", "synonyms"):
+            out.extend(_iter_alias_values(value.get(key)))
+        return out
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _iter_item_aliases(item_map: Mapping[str, Any]) -> Iterable[str]:
+    fields = (
+        "aliases",
+        "display_aliases",
+        "displayAliases",
+        "nlu_aliases",
+        "synonyms",
+    )
+    for field in fields:
+        yield from _iter_alias_values(item_map.get(field))
+
+    nlu = _as_mapping(item_map.get("nlu"))
+    for field in fields:
+        yield from _iter_alias_values(nlu.get(field))
+
+    hints = _as_mapping(item_map.get("llm_hints")) or _as_mapping(nlu.get("llm_hints"))
+    for field in fields:
+        yield from _iter_alias_values(hints.get(field))
+
+
 def _add(buckets: dict[str, dict[str, dict[str, Any]]], lookup: str, value: Any, *, source: str, label: Any = None) -> None:
     token = _token(value)
     if not token:
@@ -132,16 +167,24 @@ def _add(buckets: dict[str, dict[str, dict[str, Any]]], lookup: str, value: Any,
 def _add_app_entry(buckets: dict[str, dict[str, dict[str, Any]]], key: str | None, item: Any, *, source: str) -> None:
     item_map = _as_mapping(item)
     app_id = key or item_map.get("id") or item_map.get("app_id")
-    _add(buckets, "app_id", app_id, source=source, label=item_map.get("title") or item_map.get("name"))
+    title = item_map.get("title") or item_map.get("name")
+    _add(buckets, "app_id", app_id, source=source, label=title)
+    for alias in _iter_item_aliases(item_map):
+        _add(buckets, "app_id", app_id, source=f"{source}.aliases", label=alias)
     for field in ("launchModal", "launch_modal", "modal_id", "modalId"):
         if item_map.get(field):
-            _add(buckets, "modal_id", item_map.get(field), source=f"{source}.{field}")
+            modal_id = item_map.get(field)
+            _add(buckets, "modal_id", modal_id, source=f"{source}.{field}", label=title)
+            for alias in _iter_item_aliases(item_map):
+                _add(buckets, "modal_id", modal_id, source=f"{source}.{field}.aliases", label=alias)
 
 
 def _add_modal_entry(buckets: dict[str, dict[str, dict[str, Any]]], key: str | None, item: Any, *, source: str) -> None:
     item_map = _as_mapping(item)
     modal_id = key or item_map.get("id") or item_map.get("modal_id")
     _add(buckets, "modal_id", modal_id, source=source, label=item_map.get("title") or item_map.get("name"))
+    for alias in _iter_item_aliases(item_map):
+        _add(buckets, "modal_id", modal_id, source=f"{source}.aliases", label=alias)
 
 
 def _add_skill_entry(buckets: dict[str, dict[str, dict[str, Any]]], key: str | None, item: Any, *, source: str) -> None:
@@ -149,6 +192,62 @@ def _add_skill_entry(buckets: dict[str, dict[str, dict[str, Any]]], key: str | N
     skill_id = key or item_map.get("id") or item_map.get("skill_id") or item_map.get("name")
     label = item_map.get("title") or item_map.get("display_name") or item_map.get("label") or item_map.get("name")
     _add(buckets, "skill_id", skill_id, source=source, label=label)
+    for alias in _iter_item_aliases(item_map):
+        _add(buckets, "skill_id", skill_id, source=f"{source}.aliases", label=alias)
+
+
+def _collect_nlu_hint_aliases(
+    buckets: dict[str, dict[str, dict[str, Any]]],
+    doc: Mapping[str, Any],
+    *,
+    source: str,
+) -> None:
+    """
+    Collect explicit LLM/NLU aliases published by skill/scenario manifests.
+
+    Supported compact forms:
+      nlu.llm_hints.aliases.modal_id.<canonical>: [aliases...]
+      nlu.llm_hints.entities: [{lookup, value, aliases}]
+    """
+    containers = [
+        _as_mapping(doc.get("llm_hints")),
+        _as_mapping(_as_mapping(doc.get("nlu")).get("llm_hints")),
+    ]
+    for container in containers:
+        aliases = _as_mapping(container.get("aliases"))
+        for lookup, by_value in aliases.items():
+            lookup_name = str(lookup or "").strip()
+            if lookup_name not in LOOKUP_NAMES:
+                continue
+            if isinstance(by_value, Mapping):
+                for canonical, raw_aliases in by_value.items():
+                    _add(buckets, lookup_name, canonical, source=f"{source}.nlu.llm_hints.aliases")
+                    for alias in _iter_alias_values(raw_aliases):
+                        _add(
+                            buckets,
+                            lookup_name,
+                            canonical,
+                            source=f"{source}.nlu.llm_hints.aliases",
+                            label=alias,
+                        )
+
+        entities = container.get("entities")
+        if isinstance(entities, Iterable) and not isinstance(entities, (str, bytes, bytearray, Mapping)):
+            for item in entities:
+                item_map = _as_mapping(item)
+                lookup_name = str(item_map.get("lookup") or item_map.get("type") or "").strip()
+                canonical = item_map.get("value") or item_map.get("id") or item_map.get("canonical")
+                if lookup_name not in LOOKUP_NAMES or canonical is None:
+                    continue
+                _add(buckets, lookup_name, canonical, source=f"{source}.nlu.llm_hints.entities")
+                for alias in _iter_alias_values(item_map.get("aliases")):
+                    _add(
+                        buckets,
+                        lookup_name,
+                        canonical,
+                        source=f"{source}.nlu.llm_hints.entities.aliases",
+                        label=alias,
+                    )
 
 
 def _collect_from_manifest(
@@ -184,6 +283,8 @@ def _collect_from_manifest(
     data_catalog = _as_mapping(data.get("catalog"))
     for key, app in _iter_mapping_values(data_catalog.get("apps")):
         _add_app_entry(buckets, key, app, source=f"{source}.data.catalog.apps")
+
+    _collect_nlu_hint_aliases(buckets, doc, source=source)
 
 
 def _collect_from_live_doc(buckets: dict[str, dict[str, dict[str, Any]]], ydoc: Any, *, source: str) -> None:

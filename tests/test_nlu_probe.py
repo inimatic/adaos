@@ -425,6 +425,10 @@ async def test_nlu_teacher_prune_requests_api_rebuilds_state(monkeypatch):
                             {"id": "e1", "request_id": "keep.1", "kind": "not_obtained"},
                             {"id": "e2", "request_id": "codex.debug.1", "kind": "not_obtained"},
                         ],
+                        "pending_confirmations": [
+                            {"id": "c1", "request_id": "keep.1", "candidate_id": "cand.keep"},
+                            {"id": "c2", "request_id": "codex.debug.1", "candidate_id": "cand.drop"},
+                        ],
                     }
                 }
             )
@@ -467,6 +471,8 @@ async def test_nlu_teacher_prune_requests_api_rebuilds_state(monkeypatch):
     assert result["ok"] is True
     assert result["removed"]["items"] == 1
     assert result["removed"]["events"] == 1
+    assert result["removed"]["pending_confirmations"] == 1
     assert teacher["items"] == [{"id": "a", "request_id": "keep.1", "text": "keep"}]
+    assert teacher["pending_confirmations"] == [{"id": "c1", "request_id": "keep.1", "candidate_id": "cand.keep"}]
     assert len(teacher["threads_by_request"]) == 1
     assert saved[-1]["webspace_id"] == "ws-api"

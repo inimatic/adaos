@@ -34,3 +34,10 @@ def test_system_actions_catalog_exposes_host_action_metadata() -> None:
         }
     ]
     assert "reload desktop" in reload_intent["examples"]
+
+    scenario_intent = intents["desktop.switch_scenario"]
+    assert "show [infrascope](scenario_id)" not in scenario_intent["examples"]
+    assert "покажи [infrascope](scenario_id)" not in scenario_intent["examples"]
+
+    modal_intent = intents["desktop.open_modal"]
+    assert "покажи [браузеры](modal_id)" in modal_intent["examples"]

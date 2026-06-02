@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import re
+import asyncio
 
 import pytest
 
@@ -256,3 +257,44 @@ async def test_dynamic_regex_canonicalizes_lookup_slots_for_scenario_switch():
     assert slots == {"scenario_id": target_scenario_id}
     assert raw["slot_normalization"]["scenario_id"]["from"] == "Infrascope"
     assert raw["slot_normalization"]["scenario_id"]["to"] == target_scenario_id
+
+
+@pytest.mark.anyio
+async def test_lookup_slot_normalization_falls_back_when_live_lookup_times_out(monkeypatch):
+    from adaos.services.nlu import pipeline
+    import adaos.services.nlu_lookup_tables as lookup_tables
+
+    calls: list[bool] = []
+
+    async def fake_collect(_ctx, *, webspace_id=None, include_live=True):
+        calls.append(include_live)
+        if include_live:
+            await asyncio.sleep(0.2)
+            return {}
+        return {
+            "lookups": {
+                "modal_id": [
+                    {
+                        "value": "browsers_modal",
+                        "labels": ["\u0431\u0440\u0430\u0443\u0437\u0435\u0440\u044b"],
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(lookup_tables, "collect_desktop_lookup_tables_async", fake_collect)
+    monkeypatch.setattr(pipeline, "_LOOKUP_NORMALIZE_TIMEOUT_S", 0.05)
+
+    normalized, evidence = await pipeline._normalize_lookup_slots(
+        {"modal_id": "\u0431\u0440\u0430\u0443\u0437\u0435\u0440\u044b"},
+        webspace_id="desktop",
+    )
+
+    assert calls == [True, False]
+    assert normalized["modal_id"] == "browsers_modal"
+    assert evidence["modal_id"] == {
+        "from": "\u0431\u0440\u0430\u0443\u0437\u0435\u0440\u044b",
+        "to": "browsers_modal",
+        "lookup": "modal_id",
+        "matched": "label",
+    }

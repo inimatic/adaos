@@ -24,9 +24,21 @@ from .runtime_flags import get_runtime_flags
 
 _log = logging.getLogger("adaos.nlu.pipeline")
 
+
+def _float_env(name: str, default: float, *, min_value: float | None = None) -> float:
+    try:
+        value = float(os.getenv(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    if min_value is not None:
+        value = max(min_value, value)
+    return value
+
+
 _RECENT_TTL_S = 60.0
 _recent: dict[str, float] = {}
 _LOOKUP_SLOT_NAMES = {"modal_id", "node_ref", "app_id", "scenario_id", "webspace_id", "skill_id"}
+_LOOKUP_NORMALIZE_TIMEOUT_S = _float_env("ADAOS_NLU_LOOKUP_NORMALIZE_TIMEOUT_S", 1.5, min_value=0.05)
 
 # NOTE: Keep patterns ASCII-safe by using explicit unicode escapes.
 # "погода" = \u043f\u043e\u0433\u043e\u0434\u0430
@@ -288,9 +300,32 @@ async def _normalize_lookup_slots(slots: Mapping[str, Any], *, webspace_id: str)
     try:
         from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
 
-        payload = await collect_desktop_lookup_tables_async(get_ctx(), webspace_id=webspace_id, include_live=True)
+        payload = await asyncio.wait_for(
+            collect_desktop_lookup_tables_async(get_ctx(), webspace_id=webspace_id, include_live=True),
+            timeout=_LOOKUP_NORMALIZE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        _log.warning(
+            "live NLU lookup normalization timed out webspace=%s timeout_s=%.3f; using baseline lookups",
+            webspace_id,
+            _LOOKUP_NORMALIZE_TIMEOUT_S,
+        )
+        try:
+            from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
+
+            payload = await collect_desktop_lookup_tables_async(get_ctx(), webspace_id=webspace_id, include_live=False)
+        except Exception:
+            _log.debug("failed to collect baseline NLU lookups after live timeout webspace=%s", webspace_id, exc_info=True)
+            return normalized, {}
     except Exception:
-        return normalized, {}
+        _log.debug("failed to collect live NLU lookups for slot normalization webspace=%s", webspace_id, exc_info=True)
+        try:
+            from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
+
+            payload = await collect_desktop_lookup_tables_async(get_ctx(), webspace_id=webspace_id, include_live=False)
+        except Exception:
+            _log.debug("failed to collect baseline NLU lookups for slot normalization webspace=%s", webspace_id, exc_info=True)
+            return normalized, {}
 
     lookups = payload.get("lookups") if isinstance(payload, Mapping) else None
     if not isinstance(lookups, Mapping):

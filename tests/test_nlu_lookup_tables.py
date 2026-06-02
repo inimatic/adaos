@@ -18,6 +18,10 @@ def test_desktop_lookup_tables_collect_workspace_ids() -> None:
     assert "nlu_teacher_app" in lookup_values(payload, "app_id")
     assert "web_desktop" in lookup_values(payload, "scenario_id")
     assert lookup_values(payload, "webspace_id") == ["desktop"]
+    modal_rows = {row["value"]: row for row in payload["lookups"]["modal_id"]}
+    assert "браузеры" in modal_rows["browsers_modal"]["labels"]
+    assert "Infra State" in modal_rows["infrastate_modal"]["labels"]
+    assert "инфрастейт" in modal_rows["infrastate_modal"]["labels"]
 
     rasa_entries = rasa_lookup_entries(payload)
     assert any(entry.get("lookup") == "modal_id" for entry in rasa_entries)
@@ -63,6 +67,8 @@ async def test_desktop_lookup_tables_overlay_live_yjs_registry() -> None:
         assert payload["live_overlay"] == {"attempted": True, "ok": True}
         assert "live_modal" in lookup_values(payload, "modal_id")
         assert "merged_modal" in lookup_values(payload, "modal_id")
+        live_modal = next(row for row in payload["lookups"]["modal_id"] if row["value"] == "live_modal")
+        assert "Live App" in live_modal["labels"]
         assert "live_app" in lookup_values(payload, "app_id")
         assert "installed_app" in lookup_values(payload, "app_id")
         assert "live_scenario" in lookup_values(payload, "scenario_id")

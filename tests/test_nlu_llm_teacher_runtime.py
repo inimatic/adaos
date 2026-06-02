@@ -17,6 +17,23 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
         calls.append({"tool_id": tool_id, **kwargs})
         if tool_id == "nlu_authoring.get_context":
             return SimpleNamespace(ok=True, tool_id=tool_id, status="ok", result={"context": {"plane_id": "nlu_authoring"}})
+        if tool_id == "desktop.registry.lookup":
+            return SimpleNamespace(
+                ok=True,
+                tool_id=tool_id,
+                status="ok",
+                result={
+                    "ok": True,
+                    "webspace_id": "desktop",
+                    "lookups": {
+                        "modal_id": [{"value": "weather_modal", "labels": ["Weather"], "sources": ["test"]}],
+                        "app_id": [],
+                        "scenario_id": [],
+                    },
+                    "summary": [],
+                    "fingerprint": "fp.test",
+                },
+            )
         if tool_id == "nlu_authoring.check_phrase":
             return SimpleNamespace(
                 ok=True,
@@ -50,6 +67,7 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
     )
 
     assert evidence["nlu_authoring_context"]["plane_id"] == "nlu_authoring"
+    assert evidence["desktop_registry_lookup"]["lookups"]["modal_id"][0]["value"] == "weather_modal"
     assert evidence["nlu_authoring_phrase_check"]["check"]["accepted"] is False
     assert evidence["nlu_dialog_context"]["request_id"] == "req.llm"
     assert evidence["nlu_training_targets"]["targets"][0]["id"] == "weather_skill"
@@ -57,6 +75,7 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
     assert evidence["sdk_surface"]["surface_id"] == "adaos.sdk.describe_surface.v1"
     assert [call["tool_id"] for call in calls] == [
         "nlu_authoring.get_context",
+        "desktop.registry.lookup",
         "nlu_authoring.check_phrase",
         "nlu_authoring.get_dialog_context",
         "nlu_authoring.list_training_targets",
@@ -64,8 +83,8 @@ def test_llm_teacher_collects_root_mcp_authoring_evidence(monkeypatch):
         "sdk.describe_surface",
     ]
     assert calls[0]["auth_context"]["capabilities"] == ["development.read.descriptors"]
-    assert calls[1]["arguments"]["emit_trace"] is False
-    assert calls[1]["dry_run"] is True
+    assert calls[2]["arguments"]["emit_trace"] is False
+    assert calls[2]["dry_run"] is True
 
 
 @pytest.mark.anyio
@@ -1004,6 +1023,256 @@ async def test_llm_teacher_trains_interface_action_regex_and_rolls_back(monkeypa
     assert slots == {}
     saved_scenario = json.loads(scenario_json.read_text(encoding="utf-8"))
     assert not ((saved_scenario.get("nlu") or {}).get("regex_rules") or [])
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_repairs_app_open_to_modal_alias_candidate(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-open-modal-alias-repair"
+    scenario_id = "test_open_modal_alias_repair"
+    request_text = "Покажи браузеры"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_modal": {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.modal.open",
+                                    "params": {"modal_id": "$slot.modal_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_app",
+                                    "regex_rule": {"intent": "desktop.open_app", "pattern": r"\bпокажи\s+(?P<app_id>browsers)\b"},
+                                    "target": {"type": "skill", "id": "browsers_skill"},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "confidence": 0.81,
+                                    "notes": "LLM picked app id, AdaOS should repair this to modal open.",
+                                    "candidate": None,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(
+        llm,
+        "_collect_root_mcp_authoring_evidence",
+        lambda **kwargs: {
+            "desktop_registry_lookup": {
+                "ok": True,
+                "webspace_id": webspace_id,
+                "lookups": {
+                    "modal_id": [
+                        {
+                            "value": "browsers_modal",
+                            "labels": ["Browsers", "браузеры", "браузер"],
+                            "sources": ["test"],
+                        }
+                    ],
+                    "app_id": [],
+                    "scenario_id": [],
+                },
+                "summary": [],
+                "fingerprint": "fp.test",
+            }
+        },
+    )
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.open-modal",
+                "request_id": "req.open-modal",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["status"] == "pending"
+    assert candidate["target"] == {"type": "scenario", "id": scenario_id}
+    assert candidate["regex_rule"]["intent"] == "desktop.open_modal"
+    assert candidate["preview"]["ok"] is True
+    assert candidate["preview"]["slots"] == {"modal_id": "браузеры"}
+    assert candidate["normalization"]["llm_proposal_repair"]["modal_id"] == "browsers_modal"
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_repairs_open_modal_without_required_slot(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-open-modal-missing-slot-repair"
+    scenario_id = "test_open_modal_missing_slot_repair"
+    request_text = "Покажи браузеры"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_modal": {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.modal.open",
+                                    "params": {"modal_id": "$slot.modal_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_modal",
+                                    "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\b(?:покажи|открой)\s+(?:браузеры)\b"},
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "confidence": 0.86,
+                                    "notes": "LLM omitted the required modal_id capture.",
+                                    "candidate": None,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(
+        llm,
+        "_collect_root_mcp_authoring_evidence",
+        lambda **kwargs: {
+            "desktop_registry_lookup": {
+                "ok": True,
+                "webspace_id": webspace_id,
+                "lookups": {
+                    "modal_id": [
+                        {
+                            "value": "browsers_modal",
+                            "labels": ["Browsers", "браузеры"],
+                            "sources": ["test"],
+                        }
+                    ],
+                    "app_id": [],
+                    "scenario_id": [],
+                },
+                "summary": [],
+                "fingerprint": "fp.test",
+            }
+        },
+    )
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.open-modal.missing-slot",
+                "request_id": "req.open-modal.missing-slot",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    candidate = candidates[-1]
+    assert candidate["status"] == "pending"
+    assert candidate["regex_rule"]["intent"] == "desktop.open_modal"
+    assert "(?P<modal_id>" in candidate["regex_rule"]["pattern"]
+    assert candidate["preview"]["slots"] == {"modal_id": "браузеры"}
+    assert candidate["normalization"]["llm_proposal_repair"]["from_preview"]["slots"] == {}
 
 
 @pytest.mark.anyio
