@@ -2219,7 +2219,10 @@ class BootstrapService:
         # Optional: hang watchdog (thread-based) to capture the main thread stack during prolonged
         # event loop stalls. This catches cases where asyncio tasks show "await" positions only.
         try:
-            hang_watchdog_default = "1" if os.getenv("ADAOS_LOOP_LAG_MONITOR", "0") == "1" else "0"
+            # Keep thread-based frame capture opt-in. On Windows, sampling the
+            # event-loop thread while it is inside y_py can trip PyO3
+            # thread-affinity checks for YDoc/YMap locals.
+            hang_watchdog_default = "0"
             if os.getenv("ADAOS_LOOP_HANG_WATCHDOG", hang_watchdog_default) == "1":
                 try:
                     import threading as _threading
