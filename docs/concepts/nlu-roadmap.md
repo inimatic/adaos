@@ -165,6 +165,10 @@ for the current NLU Teacher implementation gate.
 - [x] Expose lookup tables for Teacher/LLM inspection:
   - `GET /api/nlu/teacher/{webspace_id}/lookups`
 - [x] Overlay live YJS desktop registry values on top of manifest lookups for Teacher API.
+- [x] Canonicalize lookup-backed dynamic regex slots before dispatch for
+  `scenario_id`, `modal_id`, `app_id`, `node_ref`, `webspace_id`, and
+  `skill_id`, so learned templates can match user-facing labels while actions
+  receive stable ids.
 - [x] Expose stable template ids/fingerprints for current regex rules, examples, intent routes, and system-action examples through API and MCP inventory.
 - [x] Implement preview-time stale-write checks using target/template fingerprints.
 - [ ] `[deferred]` Extend the same inventory to Rasa/neural labels and lookup-set patching.
@@ -214,18 +218,40 @@ for the current NLU Teacher implementation gate.
 - [x] Record planned intent, owner hint, proposed regex template, and verification status.
 - [x] Record correction-thread link for follow-up correction phrases.
 - [ ] Record dispatch status.
+- [x] LLM Teacher enablement inherits `root.llm.allow_nlu_teacher` when env
+  overrides are unset; disabled LLM runtime records `llm.skipped` instead of
+  silently dropping captured requests.
 - [x] LLM Teacher prompt includes governed Root MCP evidence from
   `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
   `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
   `nlu_authoring.list_templates`, and `sdk.describe_surface`.
+- [x] LLM Teacher collects MCP evidence off the API/event loop with a bounded
+  timeout so slow Root MCP/tool probes do not block Teacher state/UI reads.
+- [x] Teacher events are durably persisted as they are appended, so partial LLM
+  traces survive backend restart before a candidate is generated.
 - [x] LLM Teacher parses plain JSON and fenced JSON responses, previews regex
   candidates against the source phrase, and quarantines candidates that do not
   compile or do not match the phrase.
+- [x] LLM regex candidates normalize common lookup slot aliases
+  (`scenario` -> `scenario_id`, `modal` -> `modal_id`, etc.) and repair
+  host-action storage targets to the current scenario owner.
+- [x] Applying a Teacher regex rule enables `regex_enabled` for the webspace if
+  the runtime regex stage was disabled, so a verified rule is actually used by
+  the next normal `nlp.intent.detect.request`.
+- [x] Teacher read-model API methods that use synchronous YDoc/read-model
+  helpers run off the API event loop, so trace/template/target reads do not
+  fail inside async FastAPI handlers.
+- [ ] Persist `nlu_trace` outside the live scenario document as well as in
+  `data.nlu_trace`, because scenario switches can rebuild runtime state and
+  clear the short-lived trace timeline after a successful UI action.
 - [x] Add repeatable LLM-training smoke examples for:
   - `skill_action`: LLM proposes a regex for an existing skill-routed intent,
     Apply stores it in `skill.yaml`, replay matches, rollback restores miss.
   - `interface_action`: LLM proposes a regex for a scenario-owned host action,
     Apply stores it in `scenario.json`, replay matches, rollback restores miss.
+  - `interface_action/scenario_switch`: LLM can learn phrases such as
+    `Покажи Infrascope`; replay returns the existing scenario-switch intent
+    with canonical `scenario_id=infrascope`.
   - `endpoint_command`: LLM proposes a regex for an existing endpoint-routed
     action such as showing text on an assigned display endpoint; Apply stores
     it in the owning skill/scenario artifact, replay matches, and dispatch
@@ -465,6 +491,11 @@ for the current NLU Teacher implementation gate.
 - LLM Teacher now includes read-only Root MCP authoring evidence
   (`nlu_authoring.get_context` and `nlu_authoring.check_phrase`) in the prompt
   before asking Root/OpenAI for a candidate.
+- LLM Teacher MCP evidence collection now runs off the API/event loop with a
+  bounded timeout, and Teacher events are persisted immediately when appended.
+- LLM Teacher now repairs common model output mistakes for interface actions:
+  lookup slot aliases are canonicalized and scenario-switch rules are stored in
+  the current scenario owner rather than the scenario being opened.
 - LLM Teacher now accepts both plain JSON and fenced JSON model responses,
   previews proposed regex rules against the original phrase, and marks bad
   proposals as `quarantined` so Apply rejects them.
@@ -489,7 +520,8 @@ for the current NLU Teacher implementation gate.
   `data.installed.apps`, `data.nodes`, and `ui.current_scenario`.
 - Rasa export writes native lookup tables and `data/lookup_tables.json`; lookup summary is included in the training fingerprint.
 - Runtime emits stage trace events for regex, pipeline delegation, Rasa, and dispatcher actions/rejects.
-- Trace items are persisted to `data.nlu_trace.items[]` for the future UI timeline.
+- Trace items are persisted to `data.nlu_trace.items[]` for the future UI timeline; a durable trace fallback is still planned
+  so successful scenario-switch actions remain inspectable after the webspace rebuilds.
 - Neural bridge records node-local aggregate usage stats in `state/nlu/neural_usage.json`, including latency,
   confidence bands, accept/abstain/reject counts, fallback ratio, canonicalization buckets, and review samples.
 - Neural service skill now declares service-owned venv execution and keeps Torch/Numpy dependencies outside the hub root venv.

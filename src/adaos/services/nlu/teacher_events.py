@@ -532,6 +532,7 @@ def make_event(
 
 
 async def append_event(webspace_id: str, event: Mapping[str, Any]) -> None:
+    next_teacher: dict[str, Any] | None = None
     async with _nlu_teacher_events_write_meta():
         async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
@@ -551,3 +552,12 @@ async def append_event(webspace_id: str, event: Mapping[str, Any]) -> None:
 
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
+            next_teacher = dict(teacher)
+
+    if next_teacher is not None:
+        try:
+            from adaos.services.nlu.teacher_store import save_teacher_state
+
+            save_teacher_state(webspace_id=webspace_id, teacher=next_teacher)
+        except Exception:
+            pass

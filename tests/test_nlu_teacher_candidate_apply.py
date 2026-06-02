@@ -11,6 +11,7 @@ async def test_candidate_apply_persists_rule_and_notifies():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.candidates_runtime import _on_candidate_apply
     from adaos.services.nlu.regex_rules_runtime import _on_regex_rule_apply
+    from adaos.services.nlu.runtime_flags import get_runtime_flags
     from adaos.services.yjs.doc import async_get_ydoc
 
     ctx = get_ctx()
@@ -64,6 +65,18 @@ async def test_candidate_apply_persists_rule_and_notifies():
             ui_map.set(txn, "current_scenario", scenario_id)
             data_map.set(
                 txn,
+                "nlu_runtime",
+                {
+                    "flags": {
+                        "regex_enabled": False,
+                        "neuro_lite_enabled": True,
+                        "neural_enabled": False,
+                        "rasa_enabled": False,
+                    }
+                },
+            )
+            data_map.set(
+                txn,
                 "nlu_teacher",
                 {
                     "candidates": [
@@ -94,3 +107,5 @@ async def test_candidate_apply_persists_rule_and_notifies():
     assert any("NLU Teacher acquired a new understanding" in t for t in notified)
     assert acquired
     assert acquired[-1]["intent"] == "desktop.open_weather"
+    flags = await get_runtime_flags(webspace_id)
+    assert flags["regex_enabled"] is True

@@ -32,11 +32,27 @@ from .ycoerce import coerce_dict, is_iterable_like, iter_mappings, iter_scalars
 
 _log = logging.getLogger("adaos.nlu.teacher.llm")
 
-_TEACHER_ENABLED = os.getenv("ADAOS_NLU_TEACHER") == "1"
-_LLM_TEACHER_ENABLED = os.getenv("ADAOS_NLU_LLM_TEACHER") == "1"
+_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
+_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled"}
+
+
+def _env_enabled(value: str | None) -> bool | None:
+    token = str(value or "").strip().lower()
+    if not token:
+        return None
+    if token in _TRUE_VALUES:
+        return True
+    if token in _FALSE_VALUES:
+        return False
+    return None
+
+
+_TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_TEACHER"))
+_LLM_TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_LLM_TEACHER"))
 _MODEL = os.getenv("ADAOS_NLU_LLM_MODEL") or os.getenv("OPENAI_RESPONSES_MODEL") or "gpt-4o-mini"
 _MAX_TOKENS = int(os.getenv("ADAOS_NLU_LLM_MAX_TOKENS", "500") or "500")
 _TIMEOUT_S = float(os.getenv("ADAOS_NLU_LLM_TIMEOUT_S", "20") or "20")
+_MCP_EVIDENCE_TIMEOUT_S = float(os.getenv("ADAOS_NLU_MCP_EVIDENCE_TIMEOUT_S", "8") or "8")
 _DUPLICATE_ACTIVE_STATUSES = {
     "pending",
     "proposed",
@@ -44,6 +60,14 @@ _DUPLICATE_ACTIVE_STATUSES = {
     "applied",
     "intent_matched",
     "verification_failed",
+}
+_SLOT_GROUP_ALIASES = {
+    "scenario": "scenario_id",
+    "modal": "modal_id",
+    "app": "app_id",
+    "node": "node_ref",
+    "skill": "skill_id",
+    "webspace": "webspace_id",
 }
 
 
@@ -54,6 +78,25 @@ def _nlu_llm_write_meta():
         owner="core:nlu.llm_teacher",
         channel="core.nlu.llm_teacher.async",
     )
+
+
+def _root_teacher_policy_enabled(ctx: Any) -> bool:
+    try:
+        return bool(getattr(getattr(ctx.config, "root_settings", None), "llm", None).allow_nlu_teacher)  # type: ignore[attr-defined]
+    except Exception:
+        return True
+
+
+def _teacher_enabled(ctx: Any) -> bool:
+    if _TEACHER_ENABLED is not None:
+        return bool(_TEACHER_ENABLED)
+    return _root_teacher_policy_enabled(ctx)
+
+
+def _llm_teacher_enabled(ctx: Any) -> bool:
+    if _LLM_TEACHER_ENABLED is not None:
+        return bool(_LLM_TEACHER_ENABLED)
+    return _root_teacher_policy_enabled(ctx)
 
 
 def _payload(evt: Any) -> Dict[str, Any]:
@@ -665,6 +708,61 @@ def _preview_regex_candidate(*, pattern: str, text: str) -> dict[str, Any]:
     }
 
 
+def _normalize_regex_rule_slots(*, pattern: str, slots: Mapping[str, Any]) -> tuple[str, dict[str, Any], dict[str, str]]:
+    normalized_pattern = str(pattern or "")
+    normalized_slots = dict(slots) if isinstance(slots, Mapping) else {}
+    aliases_used: dict[str, str] = {}
+
+    for alias, canonical in _SLOT_GROUP_ALIASES.items():
+        if f"(?P<{alias}>" not in normalized_pattern:
+            continue
+        if f"(?P<{canonical}>" in normalized_pattern:
+            continue
+        normalized_pattern = re.sub(
+            rf"\(\?P<{re.escape(alias)}>",
+            f"(?P<{canonical}>",
+            normalized_pattern,
+        )
+        aliases_used[alias] = canonical
+        if alias in normalized_slots and canonical not in normalized_slots:
+            normalized_slots[canonical] = normalized_slots.pop(alias)
+
+    return normalized_pattern, normalized_slots, aliases_used
+
+
+def _resolve_regex_target(
+    *,
+    intent: str,
+    proposed_target: Mapping[str, Any] | None,
+    routes: list[dict[str, Any]],
+    current_scenario: Any,
+) -> dict[str, Any] | None:
+    intent_token = str(intent or "").strip()
+    for route in routes:
+        if route.get("intent") != intent_token or route.get("action") != "callSkill":
+            continue
+        skill = route.get("skill")
+        if isinstance(skill, str) and skill.strip():
+            return {"type": "skill", "id": skill.strip()}
+
+    for route in routes:
+        if route.get("intent") != intent_token or route.get("action") != "callHost":
+            continue
+        if isinstance(current_scenario, str) and current_scenario.strip():
+            return {"type": "scenario", "id": current_scenario.strip()}
+
+    if isinstance(proposed_target, Mapping):
+        t_type = proposed_target.get("type")
+        t_id = proposed_target.get("id")
+        if isinstance(t_type, str) and isinstance(t_id, str) and t_type.strip() and t_id.strip():
+            if t_type.strip() in {"skill", "scenario"}:
+                return {"type": t_type.strip(), "id": t_id.strip()}
+
+    if isinstance(current_scenario, str) and current_scenario.strip():
+        return {"type": "scenario", "id": current_scenario.strip()}
+    return None
+
+
 def _truncate(text: Any, limit: int) -> Any:
     if not isinstance(text, str):
         return text
@@ -825,6 +923,51 @@ def _collect_root_mcp_authoring_evidence(
     return evidence
 
 
+async def _collect_root_mcp_authoring_evidence_async(
+    *,
+    webspace_id: str,
+    text: str,
+    request_id: str,
+    request_locale: str | None = None,
+    preferred_locales: list[str] | None = None,
+) -> dict[str, Any]:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _collect_root_mcp_authoring_evidence,
+                webspace_id=webspace_id,
+                text=text,
+                request_id=request_id,
+                request_locale=request_locale,
+                preferred_locales=preferred_locales,
+            ),
+            timeout=max(0.1, float(_MCP_EVIDENCE_TIMEOUT_S)),
+        )
+    except asyncio.TimeoutError:
+        _log.warning(
+            "nlu teacher MCP evidence timed out request_id=%s webspace=%s timeout_s=%.3f",
+            request_id,
+            webspace_id,
+            float(_MCP_EVIDENCE_TIMEOUT_S),
+        )
+        return {
+            "_meta": {
+                "status": "timeout",
+                "timeout_s": float(_MCP_EVIDENCE_TIMEOUT_S),
+                "reason": "mcp_evidence_timeout",
+            }
+        }
+    except Exception as exc:
+        _log.debug("nlu teacher MCP evidence failed request_id=%s webspace=%s", request_id, webspace_id, exc_info=True)
+        return {
+            "_meta": {
+                "status": "error",
+                "reason": "mcp_evidence_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        }
+
+
 def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[str, Any]) -> list[dict[str, str]]:
     system = (
         "You are AdaOS NLU teacher. Decide what to do with a user utterance.\n"
@@ -856,10 +999,13 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
         "- Avoid proposing duplicate regex rules if builtin_regex or regex_rules already cover the utterance.\n"
         "- If user asks about weather/temperature but doesn't say the exact keyword, propose a regex rule for intent desktop.open_weather.\n"
+        "- For lookup-backed slots such as scenario_id, modal_id, app_id, node_ref, webspace_id, and skill_id, capture the user text in a named group; AdaOS canonicalizes known values/labels before dispatch.\n"
+        "- Use the exact slot names expected by the existing intent/action. For scenario switching use (?P<scenario_id>...), not (?P<scenario>...). For modal opening use (?P<modal_id>...), not (?P<modal>...).\n"
+        "- The regex must match the exact user request text after normal case-insensitive Python regex matching.\n"
         "- Regex rules should be reasonably general (avoid overfitting to a single verb like \"покажи\"); capture city via (?P<city>...).\n"
         "- When proposing a regex rule, also set target to where the rule should be stored:\n"
         "  - Prefer the skill that handles the intent (see context.intent_routes) over the scenario.\n"
-        "  - For intents that trigger system actions (callHost targets from context.system_actions/host_actions), target should usually be the scenario.\n"
+        "  - For intents that trigger system actions (callHost targets from context.system_actions/host_actions), target should be the current scenario that owns the intent, not the scenario/app/modal being opened.\n"
         "- If it suggests a new capability, propose create_skill_candidate or create_scenario_candidate.\n"
         "- Keep intent names short and namespaced (e.g. desktop.open_weather, smalltalk.how_are_you).\n"
     )
@@ -1053,19 +1199,10 @@ async def _find_duplicate_regex_candidate(
 
 @subscribe("nlp.teacher.request")
 async def _on_teacher_request(evt: Any) -> None:
-    if not (_TEACHER_ENABLED and _LLM_TEACHER_ENABLED):
-        return
-
     ctx = None
     webspace_id = None
     try:
         ctx = get_ctx()
-        try:
-            allow = bool(getattr(getattr(ctx.config, "root_settings", None), "llm", None).allow_nlu_teacher)  # type: ignore[attr-defined]
-        except Exception:
-            allow = True
-        if not allow:
-            return
         payload = _payload(evt)
         webspace_id = _resolve_webspace_id(payload)
         req = payload.get("request") if isinstance(payload.get("request"), Mapping) else None
@@ -1081,6 +1218,45 @@ async def _on_teacher_request(evt: Any) -> None:
             return
         text = text.strip()
         request_id = request_id.strip()
+
+        if not _teacher_enabled(ctx):
+            return
+        if not _llm_teacher_enabled(ctx):
+            try:
+                await append_event(
+                    webspace_id,
+                    make_event(
+                        webspace_id=webspace_id,
+                        request_id=request_id,
+                        request_text=text,
+                        kind="llm.skipped",
+                        title="LLM Teacher skipped",
+                        subtitle="llm_teacher_disabled",
+                        raw={
+                            "reason": "llm_teacher_disabled",
+                            "env": {
+                                "ADAOS_NLU_TEACHER": _TEACHER_ENABLED,
+                                "ADAOS_NLU_LLM_TEACHER": _LLM_TEACHER_ENABLED,
+                            },
+                            "root_policy": _root_teacher_policy_enabled(ctx),
+                        },
+                        meta=req_meta,
+                    ),
+                )
+            except Exception:
+                _log.debug("failed to append teacher event (llm.skipped) webspace=%s", webspace_id, exc_info=True)
+            bus_emit(
+                ctx.bus,
+                "nlp.teacher.llm.skipped",
+                {
+                    "webspace_id": webspace_id,
+                    "request_id": request_id,
+                    "reason": "llm_teacher_disabled",
+                    "_meta": dict(req_meta),
+                },
+                source="nlu.teacher.llm",
+            )
+            return
 
         # Build lightweight context snapshot for LLM.
         try:
@@ -1132,7 +1308,7 @@ async def _on_teacher_request(evt: Any) -> None:
             request_locale = req_meta.get("request_locale") if isinstance(req_meta.get("request_locale"), str) else None
         preferred_locales_raw = req.get("preferred_locales") or req_meta.get("preferred_locales")
         preferred_locales = [str(x).strip() for x in iter_scalars(preferred_locales_raw) if str(x).strip()]
-        mcp_evidence = _collect_root_mcp_authoring_evidence(
+        mcp_evidence = await _collect_root_mcp_authoring_evidence_async(
             webspace_id=webspace_id,
             text=text,
             request_id=request_id,
@@ -1353,25 +1529,13 @@ async def _on_teacher_request(evt: Any) -> None:
             rr_intent = regex_rule.get("intent")
             rr_pattern = regex_rule.get("pattern")
             if isinstance(rr_intent, str) and rr_intent.strip() and isinstance(rr_pattern, str) and rr_pattern.strip():
-                target_out: dict[str, Any] | None = None
-                if isinstance(target, Mapping):
-                    t_type = target.get("type")
-                    t_id = target.get("id")
-                    if isinstance(t_type, str) and isinstance(t_id, str) and t_type.strip() and t_id.strip():
-                        if t_type.strip() in {"skill", "scenario"}:
-                            target_out = {"type": t_type.strip(), "id": t_id.strip()}
-                if target_out is None:
-                    for r in routes:
-                        if r.get("intent") != rr_intent.strip() or r.get("action") != "callSkill":
-                            continue
-                        skill = r.get("skill")
-                        if isinstance(skill, str) and skill.strip():
-                            target_out = {"type": "skill", "id": skill.strip()}
-                            break
-                    if target_out is None:
-                        scenario_id = context.get("current_scenario")
-                        if isinstance(scenario_id, str) and scenario_id.strip():
-                            target_out = {"type": "scenario", "id": scenario_id.strip()}
+                rr_pattern, slots, slot_aliases = _normalize_regex_rule_slots(pattern=rr_pattern, slots=slots)
+                target_out = _resolve_regex_target(
+                    intent=rr_intent.strip(),
+                    proposed_target=target,
+                    routes=routes,
+                    current_scenario=context.get("current_scenario"),
+                )
                 preview = _preview_regex_candidate(pattern=rr_pattern, text=text)
                 entry = {
                     "id": f"cand.{int(time.time()*1000)}",
@@ -1388,6 +1552,8 @@ async def _on_teacher_request(evt: Any) -> None:
                     },
                     "regex_rule": {"intent": rr_intent.strip(), "pattern": rr_pattern},
                     **({"target": target_out} if target_out else {}),
+                    **({"slots": dict(slots)} if slots else {}),
+                    **({"normalization": {"slot_aliases": slot_aliases}} if slot_aliases else {}),
                     "llm": llm_meta,
                     "notes": notes,
                     "preview": preview,

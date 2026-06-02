@@ -26,6 +26,7 @@ _log = logging.getLogger("adaos.nlu.pipeline")
 
 _RECENT_TTL_S = 60.0
 _recent: dict[str, float] = {}
+_LOOKUP_SLOT_NAMES = {"modal_id", "node_ref", "app_id", "scenario_id", "webspace_id", "skill_id"}
 
 # NOTE: Keep patterns ASCII-safe by using explicit unicode escapes.
 # "погода" = \u043f\u043e\u0433\u043e\u0434\u0430
@@ -275,6 +276,57 @@ def _clean_slots(values: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _lookup_key(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+async def _normalize_lookup_slots(slots: Mapping[str, Any], *, webspace_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = dict(slots)
+    lookup_slots = [name for name in normalized if name in _LOOKUP_SLOT_NAMES and isinstance(normalized.get(name), str)]
+    if not lookup_slots:
+        return normalized, {}
+    try:
+        from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
+
+        payload = await collect_desktop_lookup_tables_async(get_ctx(), webspace_id=webspace_id, include_live=True)
+    except Exception:
+        return normalized, {}
+
+    lookups = payload.get("lookups") if isinstance(payload, Mapping) else None
+    if not isinstance(lookups, Mapping):
+        return normalized, {}
+
+    evidence: dict[str, Any] = {}
+    for slot_name in lookup_slots:
+        raw_value = str(normalized.get(slot_name) or "").strip()
+        raw_key = _lookup_key(raw_value)
+        if not raw_key:
+            continue
+        rows = lookups.get(slot_name)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            canonical = str(row.get("value") or "").strip()
+            if not canonical:
+                continue
+            labels = [str(label).strip() for label in row.get("labels") or [] if str(label).strip()] if isinstance(row.get("labels"), list) else []
+            keys = {_lookup_key(canonical), *(_lookup_key(label) for label in labels)}
+            if raw_key not in keys:
+                continue
+            if raw_value != canonical:
+                normalized[slot_name] = canonical
+                evidence[slot_name] = {
+                    "from": raw_value,
+                    "to": canonical,
+                    "lookup": slot_name,
+                    "matched": "value" if raw_key == _lookup_key(canonical) else "label",
+                }
+            break
+    return normalized, evidence
+
+
 def _emit_stage(
     ctx: Any,
     *,
@@ -479,7 +531,10 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
         if not isinstance(intent, str) or not intent:
             continue
         slots = _clean_slots(m.groupdict())
+        slots, slot_normalization = await _normalize_lookup_slots(slots, webspace_id=webspace_id)
         raw = {"rule_id": rule.get("id"), "pattern": rule.get("pattern"), "slots": slots}
+        if slot_normalization:
+            raw["slot_normalization"] = slot_normalization
         try:
             record_regex_rule_hit(
                 webspace_id=webspace_id,

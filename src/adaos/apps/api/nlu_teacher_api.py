@@ -1,6 +1,7 @@
 # src/adaos/apps/api/nlu_teacher_api.py
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -179,7 +180,13 @@ async def get_lookup_tables(webspace_id: str):
 @router.get("/nlu/teacher/{webspace_id}/trace", dependencies=[Depends(require_token)])
 async def get_trace(webspace_id: str, request_id: Optional[str] = None, candidate_id: Optional[str] = None, limit: int = 80):
     ws = _resolve_webspace_id(webspace_id)
-    return get_nlu_trace(webspace_id=ws, request_id=request_id, candidate_id=candidate_id, limit=limit)
+    return await asyncio.to_thread(
+        get_nlu_trace,
+        webspace_id=ws,
+        request_id=request_id,
+        candidate_id=candidate_id,
+        limit=limit,
+    )
 
 
 @router.get("/nlu/teacher/{webspace_id}/dialog-context", dependencies=[Depends(require_token)])
@@ -190,13 +197,19 @@ async def get_dialog_context(
     limit: int = 25,
 ):
     ws = _resolve_webspace_id(webspace_id)
-    return get_nlu_dialog_context(webspace_id=ws, request_id=request_id, candidate_id=candidate_id, limit=limit)
+    return await asyncio.to_thread(
+        get_nlu_dialog_context,
+        webspace_id=ws,
+        request_id=request_id,
+        candidate_id=candidate_id,
+        limit=limit,
+    )
 
 
 @router.get("/nlu/teacher/{webspace_id}/failures", dependencies=[Depends(require_token)])
 async def get_recent_failures(webspace_id: str, limit: int = 50):
     ws = _resolve_webspace_id(webspace_id)
-    return get_nlu_recent_failures(webspace_id=ws, limit=limit)
+    return await asyncio.to_thread(get_nlu_recent_failures, webspace_id=ws, limit=limit)
 
 
 @router.get("/nlu/teacher/{webspace_id}/templates", dependencies=[Depends(require_token)])
@@ -207,7 +220,8 @@ async def get_templates(
     include_system_actions: bool = True,
 ):
     ws = _resolve_webspace_id(webspace_id)
-    return list_nlu_templates(
+    return await asyncio.to_thread(
+        list_nlu_templates,
         webspace_id=ws,
         owner_type=owner_type,
         owner_id=owner_id,
@@ -218,13 +232,18 @@ async def get_templates(
 @router.get("/nlu/teacher/{webspace_id}/training-targets", dependencies=[Depends(require_token)])
 async def get_training_targets(webspace_id: str, include_system_actions: bool = True):
     ws = _resolve_webspace_id(webspace_id)
-    return list_training_targets(webspace_id=ws, include_system_actions=include_system_actions)
+    return await asyncio.to_thread(
+        list_training_targets,
+        webspace_id=ws,
+        include_system_actions=include_system_actions,
+    )
 
 
 @router.post("/nlu/teacher/{webspace_id}/template-patch/preview", dependencies=[Depends(require_token)])
 async def preview_template_patch_api(webspace_id: str, body: PreviewTemplatePatchRequest):
     ws = _resolve_webspace_id(webspace_id)
-    return preview_template_patch(
+    return await asyncio.to_thread(
+        preview_template_patch,
         webspace_id=ws,
         operation=body.operation,
         target=body.target.model_dump(exclude_none=True),
@@ -239,7 +258,8 @@ async def preview_template_patch_api(webspace_id: str, body: PreviewTemplatePatc
 @router.post("/nlu/teacher/{webspace_id}/interface-action/preview", dependencies=[Depends(require_token)])
 async def preview_interface_action_api(webspace_id: str, body: PreviewInterfaceActionRequest):
     ws = _resolve_webspace_id(webspace_id)
-    return preview_interface_action(
+    return await asyncio.to_thread(
+        preview_interface_action,
         webspace_id=ws,
         action_id=body.action_id,
         intent=body.intent,
@@ -251,13 +271,13 @@ async def preview_interface_action_api(webspace_id: str, body: PreviewInterfaceA
 @router.get("/nlu/teacher/{webspace_id}/skills/{skill_id}/nlu", dependencies=[Depends(require_token)])
 async def get_skill_nlu(webspace_id: str, skill_id: str):
     _resolve_webspace_id(webspace_id)
-    return describe_skill_nlu(skill_id)
+    return await asyncio.to_thread(describe_skill_nlu, skill_id)
 
 
 @router.get("/nlu/teacher/{webspace_id}/scenarios/{scenario_id}/nlu", dependencies=[Depends(require_token)])
 async def get_scenario_nlu(webspace_id: str, scenario_id: str):
     _resolve_webspace_id(webspace_id)
-    return describe_scenario_nlu(scenario_id)
+    return await asyncio.to_thread(describe_scenario_nlu, scenario_id)
 
 
 @router.post("/nlu/teacher/{webspace_id}/revision/apply", dependencies=[Depends(require_token)])
