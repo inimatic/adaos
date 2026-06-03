@@ -591,6 +591,23 @@ class RootMcpClient:
     def get_session_lease(self, session_id: str) -> dict[str, Any]:
         return dict(self._request("GET", f"/v1/root/mcp/sessions/{session_id}"))
 
+    def get_session_openai_tool(
+        self,
+        session_id: str,
+        *,
+        server_label: str | None = None,
+        require_approval: str | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if server_label:
+            params["server_label"] = str(server_label)
+        if require_approval:
+            params["require_approval"] = str(require_approval)
+        if allowed_tools:
+            params["allowed_tools"] = ",".join(str(item) for item in allowed_tools if str(item).strip())
+        return dict(self._request("GET", f"/v1/root/mcp/sessions/{session_id}/openai-tool", params=params))
+
     def revoke_session_lease(self, session_id: str, *, reason: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         if reason:

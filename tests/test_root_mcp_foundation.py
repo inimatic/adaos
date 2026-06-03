@@ -920,6 +920,25 @@ def test_root_mcp_http_jsonrpc_endpoint_for_remote_mcp(monkeypatch, tmp_path) ->
     assert profile.session_id == issued.json()["session"]["session_id"]
     assert profile.capability_profile == "ProfileOpsRead"
 
+    tool_response = client.get(
+        f"/v1/root/mcp/sessions/{issued.json()['session']['session_id']}/openai-tool",
+        headers=bearer_headers,
+        params={"server_label": "adaos_nlu", "allowed_tools": "get_nlu_authoring_context,check_nlu_phrase"},
+    )
+    assert tool_response.status_code == 200
+    tool_payload = tool_response.json()
+    responses_tool = tool_payload["openai"]["responses_tool"]
+    assert responses_tool == {
+        "type": "mcp",
+        "server_label": "adaos_nlu",
+        "server_url": "http://testserver/v1/root/mcp",
+        "authorization": access_token,
+        "require_approval": "never",
+        "allowed_tools": ["get_nlu_authoring_context", "check_nlu_phrase"],
+    }
+    assert tool_payload["session"]["target_id"] == target_id
+    assert tool_payload["session"]["capability_profile"] == "ProfileOpsRead"
+
 
 def test_root_mcp_session_management_tools_project_through_infra_access_surface(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
