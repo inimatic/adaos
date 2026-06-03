@@ -16,7 +16,7 @@
     },
     "description": {
       "type": "string",
-      "description": "Human-readable summary of the skill purpose for developers and LLM programmers."
+      "description": "Human-readable summary of the skill purpose for developers and Builder workflows."
     },
 
     "author": {
@@ -257,7 +257,7 @@
     },
 
     "tools": {
-      "description": "Skill tools (callables) that are exposed to the platform and LLM programmers. Each entry usually corresponds to an @tool in handlers/main.py.",
+      "description": "Skill tools (callables) that are exposed to the platform and Builder workflows. Each entry usually corresponds to an @tool in handlers/main.py.",
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/tool" }
@@ -426,7 +426,7 @@
         "name": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-          "description": "Public tool name as seen by callers and LLM programmers (matches @tool public_name)."
+          "description": "Public tool name as seen by callers and Builder workflows (matches @tool public_name)."
         },
         "description": {
           "type": "string",

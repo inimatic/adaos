@@ -563,7 +563,7 @@ For settings:
 
 ## LLM and MCP behavior
 
-LLM-assisted development and operations should consume named entities as
+Builder workflows and LLM-assisted operations should consume named entities as
 canonical descriptors.
 
 The model should see compact facts such as:

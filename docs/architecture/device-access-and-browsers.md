@@ -75,7 +75,7 @@ This term is deliberately broader than `browser` or `client`:
 
 - a browser runtime opened by a person;
 - a member node runtime;
-- a future LLM agent process;
+- a future Builder or LLM-assisted agent process;
 - a future IoT bridge or appliance runtime.
 
 The endpoint owns a stable technical identity for routing and policy checks.

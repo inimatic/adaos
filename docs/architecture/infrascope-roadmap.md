@@ -66,7 +66,7 @@ The expected Root MCP Foundation sequencing is:
 
 1. `Architectural fixation`: terminology, root-first boundaries, development/operations split, managed target model, `infra_access_skill`, and operational event model
 2. `Foundation skeleton`: minimal root MCP entrypoint, typed envelopes, tool-contract registry, and audit primitives
-3. `MCP-to-SDK base`: machine-readable SDK and contract descriptors for LLM-assisted development
+3. `MCP-to-SDK base`: machine-readable SDK and contract descriptors for Builder workflows
 4. `Test-hub operational pilot`: first managed target, `infra_access_skill`, read-only diagnostics first, then controlled writes with observability
 5. `Convergence`: shared objects, actions, event history, and review flows across web and MCP surfaces
 

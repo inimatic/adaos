@@ -570,7 +570,7 @@ The teacher should classify every actionable phrase into one of these classes be
   It should produce a named-entity patch, not a new intent.
 - `nlu_correction`: the phrase corrects a previous NLU miss or false positive. It must be linked to the previous request/candidate and should
   prefer patching an existing template.
-- `development_task`: the user asks for behavior that does not exist yet. The teacher should create a task/candidate for the LLM programmer
+- `development_task`: the user asks for behavior that does not exist yet. The teacher should create a task/candidate for the [Builder](../architecture/builder.md)
   to modify an existing skill/scenario or create a new one. It should not pretend the capability exists.
 - `non_actionable`: the utterance is chat/noise/out of scope. The teacher should not mutate training data.
 
@@ -686,7 +686,7 @@ Current M3 runtime behavior:
   artifacts or feedback overlays; Rasa/Neural models are not mutated directly.
 - `entity_alias`, `descriptor_fix`, and `development_task` become first-class
   candidates and can be accepted into the Teacher plan for owner-specific alias
-  APIs or LLM programmer handoff.
+  APIs or Builder handoff.
 - `clarification` uses the structured clarification session when the LLM
   provides a question/options; otherwise it remains a non-regex strategy
   candidate rather than silently teaching a regex.

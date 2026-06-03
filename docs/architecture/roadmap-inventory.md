@@ -165,6 +165,8 @@ Developer-doc gap:
 
 Authoritative docs:
 
+- [AdaOS Builder](builder.md)
+- [Builder Roadmap](builder-roadmap.md)
 - [Root MCP Foundation](root-mcp-foundation.md)
 - [Root MCP Roadmap](root-mcp-roadmap.md)
 - [SDK Control Plane](../sdk_control_plane.md)
@@ -180,6 +182,8 @@ Code anchors:
 
 Current status:
 
+- [x] `Builder` is the canonical role name for human, AI-assisted, or hybrid
+  capability creation workflows.
 - [x] Root MCP foundation skeleton exists.
 - [x] Descriptor cache and `AdaOSDevPlane` exist.
 - [x] Session leases exist.
@@ -195,11 +199,16 @@ Current status:
 - [ ] Template list/get and safe template patch tools remain open.
 - [ ] Subnet historical reconstruction is still weaker than current snapshot
   inspection.
+- [ ] End-to-end Builder draft/preview/apply/repair workflow is not yet a
+  complete product surface.
 
 Developer-doc gap:
 
 - The current Root MCP maturity should be described as implemented planes plus
   incomplete historical observability, not as a generic "future MCP" idea.
+- Builder should be treated as the source of truth for capability creation
+  terminology. Domain docs should link back to [AdaOS Builder](builder.md)
+  instead of introducing separate names such as "LLM programmer".
 
 ### Named Entities, Device Identity, and NLU Canonicalization
 

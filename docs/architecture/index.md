@@ -35,6 +35,8 @@ Current target-state control-plane extensions are documented in:
 - [Infrascope](infrascope.md): human-facing control-plane architecture over the canonical system model
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions
 - [Named Entities and Canonical Naming](named-entities.md): target architecture and roadmap for display names, localized labels, observed names, aliases, canonical refs, and NLU entity canonicalization
+- [AdaOS Builder](builder.md): canonical role and end-to-end workflow for turning ideas into governed skills, scenarios, UI descriptors, NLU hints, tests, and runtime-ready changes
+- [Builder Roadmap](builder-roadmap.md): cross-cutting roadmap for the Builder vertical slice across Root MCP, NLU Teacher, skill/scenario runtime, validation, approval, activation, and repair
 - [Web UI Architecture](web-ui-architecture.md): target stable browser-client architecture over `webui.v1`, semantic views, typed actions, Taiga renderers, and Ionic shell concerns
 - [Operational Event Model](operational-event-model.md): target event, demand, lifecycle, and Yjs materialization contract for browser-facing projections
 - [Operational Event Model Reference Plan](operational-event-model-reference-plan.md): top-level coverage gates, required contract shapes, review checklist, and completion definition for implementing the event model correctly

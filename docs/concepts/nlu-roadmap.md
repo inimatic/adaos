@@ -515,7 +515,7 @@ below remain useful for tracking existing implementation work.
   candidates when a skill/scenario capability exists but is invisible or
   underspecified for NLU/MCP.
 - [ ] `[must]` Represent missing capabilities as `development_task`
-  candidates for the future LLM programmer workflow, with requested behavior,
+  candidates for the future [Builder](../architecture/builder.md) workflow, with requested behavior,
   likely owner, missing surface, evidence, and replay phrase.
 - [ ] `[should]` Link completed skill/scenario development tasks back to the
   original NLU request and rerun the phrase through the normal pipeline.
@@ -929,7 +929,7 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[deferred]` Represent missing capabilities as development tasks, not fake intents.
 - [ ] `[deferred]` Task candidate shape includes requested behavior, likely owner, missing action/tool surface, suggested skill/scenario change, and evidence.
-- [ ] `[deferred]` Route task candidates to the LLM programmer workflow for existing skill/scenario modification or new skill/scenario creation.
+- [ ] `[deferred]` Route task candidates to the Builder workflow for existing skill/scenario modification or new skill/scenario creation.
 - [ ] `[deferred]` After the skill/scenario is changed, re-run the original phrase and link the result back to the task candidate.
 
 ### 5f: Teacher Acceptance Gates

@@ -6,7 +6,8 @@ The old copy of this guide was outdated and contained legacy CLI advice. Use the
 
 - [Skills](../skills.md)
 - [Skill Runtime Lifecycle](../skill_runtime.md)
-- [LLM-Safe Skill Development Guide](llm-skill-development.md)
+- [Builder-Safe Skill Development Guide](llm-skill-development.md)
+- [AdaOS Builder](../architecture/builder.md)
 - the repository note `docs/interfaces/webio.md`
 - [Semantic State Plane](../architecture/semantic-state-plane.md)
 
