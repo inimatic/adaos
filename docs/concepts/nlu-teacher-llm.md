@@ -355,6 +355,13 @@ extra Teacher misses. The Voice chat widget also treats messages loaded when
 the modal opens as already spoken, so opening Voice does not read the previous
 hub response aloud; new hub messages can still be spoken.
 
+If the same voice phrase arrives again while a matching regex candidate is
+still `pending` or `validation_failed`, the router asks the confirmation
+question again before using the generic not-understood fallback. This keeps an
+unresolved hypothesis actionable when Root/OpenAI timed out, duplicate
+suppression skipped a new candidate, or descriptor aliases were fixed after an
+earlier Apply rejection.
+
 Voice confirmation now also suppresses short non-command STT tails while a
 confirmation is pending, so fragments such as "от сети" do not become a second
 Teacher request. Voice history is served as a compact router/YJS-owned stream

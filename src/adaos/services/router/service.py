@@ -2279,6 +2279,24 @@ class RouterService:
             if not isinstance(text, str) or not text.strip():
                 text = ""
             if route_id.strip() == "voice_chat" and text:
+                if allow_teacher:
+                    try:
+                        from adaos.services.nlu.teacher_confirmation_runtime import (
+                            request_existing_candidate_confirmation,
+                        )
+
+                        if await request_existing_candidate_confirmation(
+                            meta.get("webspace_id") or payload.get("webspace_id") or "desktop",
+                            text,
+                            request_id=str(payload.get("request_id") or ""),
+                            meta=meta,
+                        ):
+                            return
+                    except Exception:
+                        logging.getLogger("adaos.router.voice_chat").warning(
+                            "voice.chat existing teacher confirmation failed",
+                            exc_info=True,
+                        )
                 if _voice_intent_demo_enabled():
                     return
                 try:

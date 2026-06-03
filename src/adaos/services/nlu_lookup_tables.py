@@ -135,6 +135,8 @@ def _iter_item_aliases(item_map: Mapping[str, Any]) -> Iterable[str]:
         "display_aliases",
         "displayAliases",
         "nlu_aliases",
+        "nluAliases",
+        "labels",
         "synonyms",
     )
     for field in fields:

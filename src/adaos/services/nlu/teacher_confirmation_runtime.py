@@ -19,6 +19,7 @@ _log = logging.getLogger("adaos.nlu.teacher.confirmation")
 
 _MAX_CONFIRMATIONS = 50
 _CONFIRMATION_TTL_S = 15 * 60
+_RECONFIRMABLE_CANDIDATE_STATUSES = {"pending", "validation_failed"}
 _YES_RE = re.compile(r"^\s*(да|ага|угу|ок|okay|yes|y|верно|подтверждаю|применяй|открой)\b", re.I | re.U)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|n|не\s+то|неверно|ошибка)\b", re.I | re.U)
 _FIRST_ANSWERS = {
@@ -91,6 +92,38 @@ def _candidate_id(candidate: Mapping[str, Any]) -> str:
 
 def _request_id(candidate: Mapping[str, Any]) -> str:
     return str(candidate.get("request_id") or "").strip()
+
+
+def _match_text_key(text: Any) -> str:
+    value = re.sub(r"\s+", " ", str(text or "").strip().casefold())
+    return value.strip(" \t\r\n.,!?;:()[]{}\"'")
+
+
+def _candidate_matches_request_text(candidate: Mapping[str, Any], text: str) -> bool:
+    expected = _match_text_key(text)
+    if not expected:
+        return False
+    values = [
+        candidate.get("text"),
+        candidate.get("request_text"),
+    ]
+    for key in ("matched_text", "input_text"):
+        preview = candidate.get("preview") if isinstance(candidate.get("preview"), Mapping) else {}
+        values.append(preview.get(key))
+    for value in values:
+        if _match_text_key(value) == expected:
+            return True
+    return False
+
+
+def _is_reconfirmable_voice_regex_candidate(candidate: Mapping[str, Any], text: str) -> bool:
+    status = str(candidate.get("status") or "").strip()
+    return (
+        candidate.get("kind") == "regex_rule"
+        and status in _RECONFIRMABLE_CANDIDATE_STATUSES
+        and bool(_candidate_id(candidate))
+        and _candidate_matches_request_text(candidate, text)
+    )
 
 
 def _clarification_from_confirmation(confirmation: Mapping[str, Any]) -> dict[str, Any]:
@@ -649,6 +682,83 @@ async def has_recent_voice_confirmation(webspace_id: str, *, within_s: float = 1
         if marker > 0 and now - marker <= max(1.0, float(within_s)):
             return True
     return False
+
+
+async def request_existing_candidate_confirmation(
+    webspace_id: str,
+    text: str,
+    *,
+    request_id: str = "",
+    meta: Mapping[str, Any] | None = None,
+) -> bool:
+    """Re-open voice confirmation for a previously proposed regex candidate."""
+
+    request_text = str(text or "").strip()
+    if not request_text:
+        return False
+    merged_meta = {**dict(meta or {}), "route_id": "voice_chat", "webspace_id": webspace_id}
+    try:
+        teacher = await _read_teacher(webspace_id)
+    except Exception:
+        _log.debug("failed to read teacher state for existing confirmation webspace=%s", webspace_id, exc_info=True)
+        return False
+
+    candidates = [
+        candidate
+        for candidate in _as_list(teacher.get("candidates"))
+        if _is_reconfirmable_voice_regex_candidate(candidate, request_text)
+    ]
+    if not candidates:
+        return False
+    candidates.sort(key=lambda item: float(item.get("updated_at") or item.get("ts") or 0.0), reverse=True)
+    candidate = candidates[0]
+    try:
+        attempt = int(merged_meta.get("nlu_teacher_confirmation_attempt") or 0)
+    except Exception:
+        attempt = 0
+    candidate_request_id = _request_id(candidate)
+    effective_request_id = str(request_id or candidate_request_id or "").strip()
+    confirmation = {
+        "id": f"confirm.{int(time.time() * 1000)}",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "attempt": max(0, attempt),
+        "candidate_id": _candidate_id(candidate),
+        "request_id": effective_request_id,
+        "candidate_request_id": candidate_request_id,
+        "request_text": request_text,
+        "question": _confirmation_question(candidate),
+        "target": dict(candidate.get("target") or {}) if isinstance(candidate.get("target"), Mapping) else None,
+        "reused_candidate": True,
+        "_meta": dict(merged_meta),
+    }
+    try:
+        await _append_confirmation(webspace_id, confirmation)
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=effective_request_id,
+                request_text=request_text,
+                kind="confirmation.requested",
+                title="Voice confirmation requested",
+                subtitle=confirmation["question"],
+                raw=confirmation,
+                meta=merged_meta,
+            ),
+        )
+        await _emit_chat(
+            webspace_id,
+            (
+                "Для такого обращения уже есть ожидающий шаблон NLU.\n"
+                + _confirmation_instruction(str(confirmation["question"]), attempt=attempt)
+            ),
+            merged_meta,
+        )
+        return True
+    except Exception:
+        _log.warning("failed to request existing NLU Teacher confirmation webspace=%s", webspace_id, exc_info=True)
+        return False
 
 
 @subscribe("nlp.teacher.candidate.proposed")

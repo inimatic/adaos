@@ -67,6 +67,64 @@ async def test_voice_candidate_proposal_requests_confirmation():
 
 
 @pytest.mark.anyio
+async def test_voice_existing_candidate_reasks_confirmation():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-existing-confirmation"
+    candidate = {
+        "id": "cand.confirm.existing",
+        "ts": 10.0,
+        "updated_at": 11.0,
+        "kind": "regex_rule",
+        "status": "validation_failed",
+        "text": "show subnet env",
+        "request_id": "req.confirm.original",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow\s+(?P<modal_id>subnet\s+env)\b"},
+        "target": {"type": "skill", "id": "subnet_env"},
+        "preview": {"ok": True, "slots": {"modal_id": "subnet env"}},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [candidate], "events": []})
+
+    messages: list[dict] = []
+
+    def _capture_chat(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            messages.append(dict(payload))
+
+    ctx.bus.subscribe("io.out.chat.append", _capture_chat)
+
+    handled = await conf.request_existing_candidate_confirmation(
+        webspace_id,
+        "show subnet env",
+        request_id="req.confirm.repeat",
+        meta={"route_id": "voice_chat", "webspace_id": webspace_id},
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        confirmations = list(teacher.get("pending_confirmations") or [])
+        clarifications = list(teacher.get("clarification_sessions") or [])
+        events = list(teacher.get("events") or [])
+
+    assert handled is True
+    assert confirmations[-1]["status"] == "awaiting_user"
+    assert confirmations[-1]["candidate_id"] == candidate["id"]
+    assert confirmations[-1]["request_id"] == "req.confirm.repeat"
+    assert confirmations[-1]["candidate_request_id"] == "req.confirm.original"
+    assert confirmations[-1]["reused_candidate"] is True
+    assert clarifications[-1]["kind"] == "voice_confirmation"
+    assert events[-1]["kind"] == "confirmation.requested"
+    assert messages
+
+
+@pytest.mark.anyio
 async def test_voice_confirmation_yes_applies_candidate():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf
