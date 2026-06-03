@@ -208,7 +208,9 @@ async def test_default_desktop_nlu_dispatches_modal_open_with_target_node_meta(m
 
     ctx = get_ctx()
     emitted: list[dict] = []
+    outcomes: list[dict] = []
     ctx.bus.subscribe("desktop.modal.open", lambda ev: emitted.append(dict(ev.payload or {})))
+    ctx.bus.subscribe("nlu.action.dispatched", lambda ev: outcomes.append(dict(ev.payload or {})))
 
     async def _scenario_id(_ctx, _webspace_id: str) -> str:
         return "web_desktop"
@@ -241,6 +243,12 @@ async def test_default_desktop_nlu_dispatches_modal_open_with_target_node_meta(m
             },
         }
     ]
+    assert outcomes
+    assert outcomes[-1]["status"] == "emitted"
+    assert outcomes[-1]["intent"] == "desktop.open_modal"
+    assert outcomes[-1]["target"] == "desktop.modal.open"
+    assert outcomes[-1]["action_payload"]["modal_id"] == "browsers_modal"
+    assert outcomes[-1]["_meta"]["target_node_id"] == "member-1"
 
 
 @pytest.mark.anyio

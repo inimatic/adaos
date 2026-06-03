@@ -17,7 +17,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 _log = logging.getLogger("adaos.nlu.teacher.dispatch")
 
 _AUTO_DISPATCH_SIDE_EFFECTS = {"read_only", "ui_navigation"}
-_DISPATCH_TERMINAL_STATUSES = {"requested", "emitted", "succeeded", "blocked"}
+_DISPATCH_TERMINAL_STATUSES = {"requested", "emitted", "succeeded", "failed", "blocked"}
 
 
 def _nlu_teacher_dispatch_write_meta():
@@ -142,6 +142,74 @@ async def _read_candidate(webspace_id: str, candidate_id: str) -> dict[str, Any]
     return None
 
 
+def _meta_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return coerce_dict(payload.get("_meta"))
+
+
+def _teacher_dispatch_identity(payload: Mapping[str, Any]) -> tuple[str, str]:
+    meta = _meta_from_payload(payload)
+    candidate_id = str(meta.get("nlu_teacher_candidate_id") or payload.get("candidate_id") or "").strip()
+    dispatch_id = str(meta.get("nlu_teacher_dispatch_id") or payload.get("dispatch_id") or "").strip()
+    if not bool(meta.get("nlu_teacher_dispatch")) and not (candidate_id and dispatch_id):
+        return "", ""
+    return candidate_id, dispatch_id
+
+
+async def _record_dispatch_outcome(
+    *,
+    payload: Mapping[str, Any],
+    status: str,
+    event_kind: str,
+    title: str,
+) -> None:
+    candidate_id, dispatch_id = _teacher_dispatch_identity(payload)
+    if not candidate_id:
+        return
+    webspace_id = _resolve_webspace_id(payload)
+    try:
+        candidate = await _read_candidate(webspace_id, candidate_id)
+    except Exception:
+        _log.debug("failed to read teacher candidate for dispatch outcome webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
+        return
+    if not candidate:
+        return
+    existing = candidate.get("dispatch") if isinstance(candidate.get("dispatch"), Mapping) else {}
+    if dispatch_id and existing.get("id") and existing.get("id") != dispatch_id:
+        return
+    now = time.time()
+    outcome = {
+        "status": status,
+        "recorded_at": now,
+        "target": payload.get("target"),
+        "action_type": payload.get("action_type"),
+        "reason": payload.get("reason"),
+        "action_payload": dict(payload.get("action_payload") or {}) if isinstance(payload.get("action_payload"), Mapping) else {},
+    }
+    dispatch = {**dict(existing), "status": status, "outcome": outcome, "completed_at": now}
+    patch = {
+        "dispatch_status": status,
+        "dispatch": dispatch,
+        "updated_at": now,
+    }
+    try:
+        await _patch_candidate_dispatch(webspace_id=webspace_id, candidate_id=candidate_id, patch=patch)
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=payload.get("request_id") if isinstance(payload.get("request_id"), str) else None,
+                request_text=payload.get("text") if isinstance(payload.get("text"), str) else "",
+                kind=event_kind,
+                title=title,
+                subtitle=str(payload.get("target") or payload.get("reason") or status),
+                raw={"candidate_id": candidate_id, "dispatch_id": dispatch_id or existing.get("id"), "outcome": outcome},
+                meta=_meta_from_payload(payload),
+            ),
+        )
+    except Exception:
+        _log.debug("failed to record teacher dispatch outcome webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
+
+
 @subscribe("nlp.teacher.understanding.acquired")
 async def _on_understanding_acquired(evt: Any) -> None:
     payload = _payload(evt)
@@ -257,3 +325,23 @@ async def _on_understanding_acquired(evt: Any) -> None:
         bus_emit(get_ctx().bus, "nlp.intent.detected", detected_payload, source="nlu.teacher.dispatch")
     except Exception:
         _log.warning("failed to dispatch acquired teacher understanding webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
+
+
+@subscribe("nlu.action.dispatched")
+async def _on_action_dispatched(evt: Any) -> None:
+    await _record_dispatch_outcome(
+        payload=_payload(evt),
+        status="emitted",
+        event_kind="dispatch.emitted",
+        title="Teacher dispatch emitted",
+    )
+
+
+@subscribe("nlu.action.dispatch_failed")
+async def _on_action_dispatch_failed(evt: Any) -> None:
+    await _record_dispatch_outcome(
+        payload=_payload(evt),
+        status="failed",
+        event_kind="dispatch.failed",
+        title="Teacher dispatch failed",
+    )

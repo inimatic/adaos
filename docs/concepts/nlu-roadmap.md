@@ -391,6 +391,12 @@ below remain useful for tracking existing implementation work.
   side-effect policy now dispatch only by emitting the normal
   `nlp.intent.detected` event, and blocked candidates record
   `dispatch_status=blocked` instead of mutating UI/host state directly.
+- [x] M4 implementation slice: dispatcher now emits `nlu.action.dispatched`
+  / `nlu.action.dispatch_failed`; Teacher records `dispatch_status=emitted`
+  or `failed` with action target, action payload, reason, and a Teacher event.
+- [ ] Add client/host-level outcome acknowledgements beyond dispatcher event
+  emission: modal opened/not found, scenario switched, skill result emitted,
+  endpoint command acknowledged.
 - [ ] `[must]` Add rate limits, duplicate suppression, and queue/backpressure
   policy for Root/OpenAI Teacher calls by webspace, route, request class, and
   repeated phrase hash.
@@ -724,7 +730,8 @@ below remain useful for tracking existing implementation work.
 - [x] Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
 - [x] Record planned intent, owner hint, proposed regex template, and verification status.
 - [x] Record correction-thread link for follow-up correction phrases.
-- [x] Record first dispatch status for the voice-confirmed safe candidate path.
+- [x] Record first dispatch status and dispatcher outcome for the
+  voice-confirmed safe candidate path.
 - [ ] Generalize dispatch status to all candidate/action classes and attach
   factual host/skill/endpoint outcome evidence.
 - [x] LLM Teacher enablement inherits `root.llm.allow_nlu_teacher` when env
@@ -1092,6 +1099,10 @@ below remain useful for tracking existing implementation work.
   path. The candidate records `dispatch_status=requested` and a
   `dispatch.requested` Teacher event; unsafe candidates are recorded as
   `dispatch_status=blocked`.
+- The regular NLU dispatcher now emits factual action-dispatch outcomes.
+  Teacher links `nlu.action.dispatched` / `nlu.action.dispatch_failed` back to
+  the candidate and records `dispatch_status=emitted` or `failed` with target,
+  payload, and reason.
 - M3 multi-engine authoring strategy is now enforced: Teacher normalizes
   `training_strategy`, treats non-regex strategies as first-class candidates,
   and rejects regex proposals when the selected strategy, `why_not_regex`, or
