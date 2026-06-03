@@ -761,6 +761,11 @@ below remain useful for tracking existing implementation work.
 
 - [ ] MCP Server modal issues scoped NLU authoring token.
 - [ ] Root resolves token to subnet/zone/capabilities.
+- [x] Expose Root MCP HTTP JSON-RPC endpoint at `/v1/root/mcp` for
+  remote-MCP clients: `initialize`, `tools/list`, `tools/call`, and
+  notification handling. This is the transport required for the target mode
+  where Root/OpenAI can let the LLM choose which MCP tools to call instead of
+  only receiving pre-collected MCP evidence in the prompt.
 - [x] Add Root MCP `nlu_authoring.get_context` for named-entity and authoring-boundary evidence.
 - [x] Extend Root MCP `nlu_authoring.get_context` with M2 contextual action
   surface, runtime state, process state, developer hints, lookup summary, and
