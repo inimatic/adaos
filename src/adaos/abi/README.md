@@ -10,7 +10,9 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
 - `skill.schema.json` - skill manifest (`skill.yaml`), including browser
   `data_routes` for explicit Yjs/stream/details route planning
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
-  staged readiness hints and stream receiver budget/guard metadata
+  staged readiness hints, stream receiver budget/guard metadata, runtime
+  data sources, and browser media surface contracts such as
+  `visual.frameViewer`
 - `webui.semantic.v0.schema.json` - draft semantic browser UI ABI for future semantic views, typed bindings, view state, and typed actions layered above `webui.v1`
 
 ## Current Manifest Runtime Extensions
@@ -58,3 +60,8 @@ not carry live rows, inventory tables, logs, or diagnostic payloads.
 `webui.webio.receivers[*]` can declare stream budgets, freshness fields,
 snapshot policy, and guard visibility so stream pressure is attributable during
 review and later runtime diagnostics.
+
+`visual.frameViewer` is the first typed browser media surface in `webui.v1`.
+It renders stream-provided media through browser-routed descriptors such as
+`hub_browser_media`, keeps large media payloads out of Yjs, and declares
+fullscreen, keyboard, swipe, and action-button behavior as UI-as-data.

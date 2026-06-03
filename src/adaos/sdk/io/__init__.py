@@ -15,12 +15,16 @@ __all__ = [
     "telegram_photo",
     "stream_publish",
     "stream_variable_publish",
+    "browser_media_descriptor",
+    "cached_image_variant",
+    "publish_media_file",
     "stt_listen",
     "tts_speak",
 ]
 
 if TYPE_CHECKING:
     from .out import chat_append, say, media_route, telegram_photo, stream_publish, stream_variable_publish
+    from .media import browser_media_descriptor, cached_image_variant, publish_media_file
     from .voice import stt_listen, tts_speak
 
 
@@ -35,6 +39,14 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
             "telegram_photo": telegram_photo,
             "stream_publish": stream_publish,
             "stream_variable_publish": stream_variable_publish,
+        }[name]
+    if name in ("browser_media_descriptor", "cached_image_variant", "publish_media_file"):
+        from .media import browser_media_descriptor, cached_image_variant, publish_media_file
+
+        return {
+            "browser_media_descriptor": browser_media_descriptor,
+            "cached_image_variant": cached_image_variant,
+            "publish_media_file": publish_media_file,
         }[name]
     if name in ("stt_listen", "tts_speak"):
         from .voice import stt_listen, tts_speak
