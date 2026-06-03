@@ -39,6 +39,10 @@ collects a bounded Root MCP snapshot for compatibility, but it can also attach
 a scoped Root MCP `responses_tool` descriptor to `/v1/llm/response` so OpenAI
 can call Root MCP directly. If descriptor/session preparation fails or times
 out, Teacher logs the reason and continues with the snapshot path.
+Root now also has a first root-public cached `NLUTeacherRead` slice: hub
+lifecycle reports publish a bounded `nlu_authoring_snapshot`, and the public
+Root MCP endpoint serves read-only NLU context/template/registry tools from
+the root subnet-info cache.
 
 ## Status Labels
 
@@ -254,6 +258,17 @@ below remain useful for tracking existing implementation work.
   `nlu_authoring.get_context`, `desktop.registry.lookup`,
   `nlu_authoring.list_training_targets`, `nlu_authoring.list_templates`, and
   `sdk.describe_surface`; phrase checks and dialog context remain uncached.
+- [x] Root-public cached slice: hub control lifecycle reports publish a
+  bounded `nlu_authoring_snapshot`, and TS Root MCP serves
+  `nlu_authoring.get_context`, `desktop.registry.lookup`,
+  `nlu_authoring.get_dialog_context`,
+  `nlu_authoring.get_recent_failures`,
+  `nlu_authoring.list_templates`,
+  `nlu_authoring.list_training_targets`, and `sdk.describe_surface` from the
+  root-side subnet-info cache.
+- [ ] `[should]` Add freshness/invalidation metrics for the root-cached
+  `nlu_authoring_snapshot`, including report age, cache hit/miss, partial
+  section errors, and descriptor fingerprint changes.
 - [ ] `[deferred]` Publish deep SDK descriptors beyond read-only ownership and
   affordance discovery; LLM execution remains prohibited.
 
@@ -780,15 +795,23 @@ below remain useful for tracking existing implementation work.
   root LLM proxy in hybrid mode. The descriptor bearer is redacted from
   Teacher logs; cache keys include target, zone, server label, and allowed
   tools.
-- [ ] `[must]` Define a root-public `NLUTeacherRead` capability profile that
+- [x] `[must]` Define a root-public `NLUTeacherRead` capability profile that
   exposes only read-only NLU authoring/descriptive tools:
   `nlu_authoring.get_context`, `desktop.registry.lookup`,
   `nlu_authoring.check_phrase`, `nlu_authoring.get_dialog_context`,
   `nlu_authoring.list_training_targets`, `nlu_authoring.list_templates`,
   `sdk.describe_surface`, and `desktop.preview_action`.
-- [ ] `[must]` Cache subnet-scoped NLU descriptive snapshots on root so
+- [x] `[must]` Cache subnet-scoped NLU descriptive snapshots on root so
   OpenAI MCP calls can read action/entity/template context without repeatedly
   waiting on a live hub roundtrip.
+- [x] First root-public slice: `NLUTeacherRead` is available as a capability
+  profile, public Root MCP exposes OpenAI-compatible read tool names, and the
+  cached NLU tools return target/subnet scope, report freshness, and cache
+  metadata.
+- [ ] `[must]` Add a live hub/proxy path for deterministic
+  `nlu_authoring.check_phrase` and `desktop.preview_action`. The current
+  root-public cached implementation returns `requires_live_hub` for those two
+  tools and only includes cached context/action hints.
 - [x] Expose Root MCP HTTP JSON-RPC endpoint at `/v1/root/mcp` for
   remote-MCP clients: `initialize`, `tools/list`, `tools/call`, and
   notification handling. This is the transport required for the target mode

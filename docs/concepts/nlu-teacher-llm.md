@@ -123,6 +123,12 @@ Useful optional env vars on hub:
 - `ADAOS_NLU_LLM_RATE_WINDOW_S=30`
 - `ADAOS_NLU_LLM_RATE_MAX_PER_WINDOW=6`
 - `ADAOS_NLU_LLM_REPEAT_SUPPRESS_TTL_S=20`
+- `ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT=1`
+- `ADAOS_ROOT_NLU_AUTHORING_INCLUDE_LIVE=1`
+- `ADAOS_ROOT_NLU_AUTHORING_INCLUDE_HINTS=1`
+- `ADAOS_ROOT_NLU_AUTHORING_MAX_ACTIONS=120`
+- `ADAOS_ROOT_NLU_AUTHORING_MAX_TEMPLATES=160`
+- `ADAOS_ROOT_NLU_AUTHORING_MAX_TARGETS=120`
 
 If capture is enabled but the LLM runtime is disabled, the Teacher event stream
 records `llm.skipped` with `reason=llm_teacher_disabled` instead of silently
@@ -507,6 +513,18 @@ Current Root MCP implementation status:
   `sdk.describe_surface`
 - implemented in the Codex bridge: `check_nlu_phrase` plus the read-plane,
   inventory, and preview tools listed above
+- implemented in public Root MCP: first cached `NLUTeacherRead` slice. Hub
+  lifecycle reports publish a bounded `nlu_authoring_snapshot`; root serves
+  `nlu_authoring.get_context`, `desktop.registry.lookup`,
+  `nlu_authoring.get_dialog_context`,
+  `nlu_authoring.get_recent_failures`,
+  `nlu_authoring.list_templates`,
+  `nlu_authoring.list_training_targets`, and `sdk.describe_surface` from the
+  root subnet-info cache.
+- partially implemented in public Root MCP:
+  `nlu_authoring.check_phrase` and `desktop.preview_action` are exposed as
+  read-only contracts, but the cached root implementation returns
+  `requires_live_hub` until a deterministic live hub/proxy path is added.
 - implemented in LLM Teacher: the prompt context includes read-only Root MCP
   evidence from context, phrase check, dialog context, training targets,
   templates, and SDK surface descriptors before Root/OpenAI is asked to
@@ -866,17 +884,23 @@ treated as `[could]` unless explicitly promoted.
 
 - Add **Issue token** to the MCP Server modal or another operator-controlled surface.
 - Issue target-scoped Root MCP session leases with an initial `NLUTeacherAuthor`/read-mostly capability profile.
-- Expose a root-public `NLUTeacherRead` profile for MCP-aware LLM calls. The
+- Done: expose a root-public `NLUTeacherRead` profile for MCP-aware LLM calls. The
   first profile should be read-only and include context, registry lookup,
   phrase check, dialog context, training targets, template inventory, SDK
   surface descriptors, and action preview. It must not expose apply, dispatch,
   SDK execution, or UI mutation tools.
-- Cache subnet-scoped descriptive snapshots on root. The LLM should be able to
+- Done: cache subnet-scoped descriptive snapshots on root. The LLM should be able to
   call MCP without causing repeated live hub timeouts; cache entries still need
   target/subnet scope, freshness metadata, and invalidation hooks.
+- Current public-root boundary: cached tools can answer context, registry,
+  dialog, failures, templates, training targets, and SDK descriptors. Phrase
+  probe and action preview are exposed but return `requires_live_hub` until
+  root can proxy deterministic live checks to the scoped hub.
 - Publish read-only MCP contracts for:
   - `nlu_authoring.get_context`
-  - `nlu_authoring.check_phrase` backed by the current probe service
+  - `nlu_authoring.check_phrase`; local MCP is backed by the current probe
+    service, while public root returns `requires_live_hub` until the scoped
+    proxy path is added
   - `nlu_authoring.get_trace`
   - `nlu_authoring.get_dialog_context`
   - `nlu_authoring.get_recent_failures`

@@ -50,6 +50,11 @@ def test_control_lifecycle_report_surfaces_runtime_identity(monkeypatch) -> None
         "active_slot_manifest",
         lambda: {"slot": "A", "git_commit": "abcdef1234567890", "target_rev": "rev2026"},
     )
+    monkeypatch.setattr(
+        control_lifecycle_sync,
+        "_compact_nlu_authoring_snapshot",
+        lambda: {"ok": True, "snapshot_id": "test.nlu.snapshot", "context": {"plane_id": "nlu_authoring"}},
+    )
 
     conf = SimpleNamespace(subnet_id="sn-test", node_id="node-1", role="hub")
 
@@ -61,9 +66,21 @@ def test_control_lifecycle_report_surfaces_runtime_identity(monkeypatch) -> None
     assert report["transition_role"] == "candidate"
     assert report["runtime"]["runtime_instance_id"] == "rt-a-a-12345678"
     assert report["runtime"]["transition_role"] == "candidate"
+    assert report["nlu_authoring_snapshot"]["snapshot_id"] == "test.nlu.snapshot"
+    assert report["nlu_authoring_snapshot"]["context"]["plane_id"] == "nlu_authoring"
     assert stream_id == "hub-control:lifecycle:sn-test:rt-a-a-12345678"
     assert "role:candidate" in authority_epoch
     assert "instance:rt-a-a-12345678" in authority_epoch
+
+
+def test_nlu_authoring_snapshot_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", "0")
+
+    snapshot = control_lifecycle_sync._compact_nlu_authoring_snapshot()
+
+    assert snapshot["ok"] is False
+    assert snapshot["status"] == "disabled"
+    assert snapshot["snapshot_id"] == "adaos.root.nlu_authoring_snapshot.v1"
 
 
 def test_core_update_report_surfaces_runtime_identity(monkeypatch) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from adaos.services.agent_context import get_ctx
@@ -105,6 +106,235 @@ def _zone(conf) -> str | None:
 
 def _infra_access_operational_surface() -> dict[str, Any]:
     return build_operational_surface()
+
+
+def _env_bool(name: str, *, default: bool = False) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, *, default: int, min_value: int = 1, max_value: int = 1000) -> int:
+    try:
+        parsed = int(str(os.getenv(name) or "").strip() or default)
+    except Exception:
+        parsed = default
+    return max(min_value, min(parsed, max_value))
+
+
+def _compact_value(
+    value: Any,
+    *,
+    depth: int = 5,
+    list_limit: int = 80,
+    dict_limit: int = 80,
+    string_limit: int = 800,
+) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        token = value.strip()
+        return token if len(token) <= string_limit else f"{token[:string_limit]}..."
+    if depth <= 0:
+        return _compact_value(str(value), string_limit=string_limit)
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= dict_limit:
+                out["_truncated_keys"] = max(0, len(value) - dict_limit)
+                break
+            out[str(key)] = _compact_value(
+                item,
+                depth=depth - 1,
+                list_limit=list_limit,
+                dict_limit=dict_limit,
+                string_limit=string_limit,
+            )
+        return out
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        rows = list(value)
+        out = [
+            _compact_value(
+                item,
+                depth=depth - 1,
+                list_limit=list_limit,
+                dict_limit=dict_limit,
+                string_limit=string_limit,
+            )
+            for item in rows[:list_limit]
+        ]
+        if len(rows) > list_limit:
+            out.append({"_truncated_items": len(rows) - list_limit})
+        return out
+    return _compact_value(str(value), string_limit=string_limit)
+
+
+def _snapshot_part(name: str, errors: list[dict[str, Any]], factory) -> Any:
+    started = time.perf_counter()
+    try:
+        payload = factory()
+    except Exception as exc:
+        errors.append({"part": name, "error": type(exc).__name__, "message": str(exc)[:240]})
+        return {"ok": False, "status": "unavailable", "part": name, "error": type(exc).__name__}
+    if isinstance(payload, dict):
+        payload.setdefault("_meta", {})
+        if isinstance(payload.get("_meta"), dict):
+            payload["_meta"]["build_ms"] = round((time.perf_counter() - started) * 1000, 1)
+    return payload
+
+
+def _compact_nlu_authoring_snapshot() -> dict[str, Any]:
+    if not _env_bool("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", default=True):
+        return {
+            "ok": False,
+            "status": "disabled",
+            "snapshot_id": "adaos.root.nlu_authoring_snapshot.v1",
+            "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
+        }
+
+    try:
+        from adaos.services import named_entities
+        from adaos.services.nlu import teacher_read_model
+        from adaos.services.yjs.webspace import default_webspace_id
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "snapshot_id": "adaos.root.nlu_authoring_snapshot.v1",
+            "error": type(exc).__name__,
+            "message": str(exc)[:240],
+            "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
+        }
+
+    webspace_id = str(os.getenv("ADAOS_ROOT_NLU_AUTHORING_WEBSPACE") or "").strip() or default_webspace_id()
+    include_live = _env_bool("ADAOS_ROOT_NLU_AUTHORING_INCLUDE_LIVE", default=True)
+    include_hints = _env_bool("ADAOS_ROOT_NLU_AUTHORING_INCLUDE_HINTS", default=True)
+    max_actions = _env_int("ADAOS_ROOT_NLU_AUTHORING_MAX_ACTIONS", default=120, min_value=10, max_value=300)
+    max_templates = _env_int("ADAOS_ROOT_NLU_AUTHORING_MAX_TEMPLATES", default=160, min_value=20, max_value=500)
+    max_targets = _env_int("ADAOS_ROOT_NLU_AUTHORING_MAX_TARGETS", default=120, min_value=20, max_value=500)
+    errors: list[dict[str, Any]] = []
+
+    context_surface = _snapshot_part(
+        "nlu_authoring.get_context",
+        errors,
+        lambda: teacher_read_model.get_contextual_action_surface(
+            webspace_id=webspace_id,
+            include_live=include_live,
+            include_hints=include_hints,
+            max_actions=max_actions,
+        ),
+    )
+    named_entity_registry = _snapshot_part(
+        "adaos_dev.get_named_entity_registry",
+        errors,
+        lambda: named_entities.compact_registry_payload(webspace_id=webspace_id),
+    )
+    desktop_registry = _snapshot_part(
+        "desktop.registry.lookup",
+        errors,
+        lambda: teacher_read_model.get_desktop_registry_lookup(webspace_id=webspace_id, include_live=include_live),
+    )
+    dialog_context = _snapshot_part(
+        "nlu_authoring.get_dialog_context",
+        errors,
+        lambda: teacher_read_model.get_nlu_dialog_context(webspace_id=webspace_id, limit=25),
+    )
+    recent_failures = _snapshot_part(
+        "nlu_authoring.get_recent_failures",
+        errors,
+        lambda: teacher_read_model.get_nlu_recent_failures(webspace_id=webspace_id, limit=50),
+    )
+    templates = _snapshot_part(
+        "nlu_authoring.list_templates",
+        errors,
+        lambda: teacher_read_model.list_nlu_templates(webspace_id=webspace_id, include_system_actions=True),
+    )
+    training_targets = _snapshot_part(
+        "nlu_authoring.list_training_targets",
+        errors,
+        lambda: teacher_read_model.list_training_targets(webspace_id=webspace_id, include_system_actions=True),
+    )
+    sdk_surface = _snapshot_part(
+        "sdk.describe_surface",
+        errors,
+        lambda: teacher_read_model.describe_sdk_surface(level="std"),
+    )
+
+    if isinstance(templates, dict) and isinstance(templates.get("templates"), list):
+        templates = {**templates, "templates": templates["templates"][:max_templates]}
+    if isinstance(training_targets, dict) and isinstance(training_targets.get("targets"), list):
+        training_targets = {**training_targets, "targets": training_targets["targets"][:max_targets]}
+
+    return {
+        "ok": True,
+        "snapshot_id": "adaos.root.nlu_authoring_snapshot.v1",
+        "generated_at": time.time(),
+        "webspace_id": webspace_id,
+        "source": "hub_control_lifecycle_report",
+        "context": {
+            "context_id": "nlu_authoring_context.v1",
+            "plane_id": "nlu_authoring",
+            "version": 1,
+            "webspace_id": webspace_id,
+            "named_entities": _compact_value(named_entity_registry, list_limit=120),
+            "runtime_state": _compact_value(
+                context_surface.get("runtime_state") if isinstance(context_surface, Mapping) else {},
+                list_limit=150,
+            ),
+            "action_surface": {
+                "surface_id": context_surface.get("surface_id") if isinstance(context_surface, Mapping) else None,
+                "available_actions": _compact_value(
+                    (context_surface.get("available_actions") if isinstance(context_surface, Mapping) else []) or [],
+                    list_limit=max_actions,
+                ),
+                "lookup_summary": _compact_value(
+                    (context_surface.get("lookup_summary") if isinstance(context_surface, Mapping) else []) or [],
+                    list_limit=120,
+                ),
+                "fingerprint": context_surface.get("fingerprint") if isinstance(context_surface, Mapping) else None,
+            },
+            "process_state": _compact_value(
+                context_surface.get("process_state") if isinstance(context_surface, Mapping) else {},
+                list_limit=100,
+            ),
+            "developer_hints": _compact_value(
+                (context_surface.get("developer_hints") if isinstance(context_surface, Mapping) else []) or [],
+                list_limit=120,
+            ),
+            "canonicalization": {
+                "canonical_ref_required": True,
+                "dispatch_contract": "Resolve labels and aliases to canonical_ref before action selection; labels are never routing keys.",
+                "localized_labels_are_metadata": True,
+                "fallback_labels_allowed_for_debug_only": True,
+            },
+            "authoring_boundaries": {
+                "mode": "read_only_context",
+                "side_effects": "none",
+                "dispatch": "not_available",
+                "alias_writes": "not_available",
+                "training_mutation": "not_available",
+                "rasa_training_mutation": False,
+            },
+        },
+        "desktop_registry": _compact_value(desktop_registry, list_limit=160),
+        "dialog_context": _compact_value(dialog_context, list_limit=60),
+        "recent_failures": _compact_value(recent_failures, list_limit=80),
+        "templates": _compact_value(templates, list_limit=max_templates),
+        "training_targets": _compact_value(training_targets, list_limit=max_targets),
+        "sdk_surface": _compact_value(sdk_surface, list_limit=40),
+        "_meta": {
+            "include_live": include_live,
+            "include_hints": include_hints,
+            "limits": {
+                "max_actions": max_actions,
+                "max_templates": max_templates,
+                "max_targets": max_targets,
+            },
+            "errors": errors,
+        },
+        "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
+    }
 
 
 def _compact_protocol_runtime() -> dict[str, Any]:
@@ -333,6 +563,7 @@ def build_control_lifecycle_report(conf) -> dict[str, Any]:
         "protocol_runtime": _compact_protocol_runtime(),
         "yjs_runtime": _compact_yjs_runtime(conf),
         "operational_surface": _infra_access_operational_surface(),
+        "nlu_authoring_snapshot": _compact_nlu_authoring_snapshot(),
     }
 
 
