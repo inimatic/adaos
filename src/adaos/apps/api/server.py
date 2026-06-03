@@ -218,6 +218,7 @@ from adaos.services.runtime_lifecycle import (
 )
 from adaos.services.runtime_memory_profile import finish_active_runtime_memory_profile
 from adaos.services.root_mcp.logs import aggregate_subnet_logs, list_local_logs, normalize_log_category
+from adaos.services.root_mcp.service import invoke_tool as invoke_root_mcp_tool
 from adaos.services.supervisor_memory import supervisor_memory_session_artifacts_dir
 from adaos.services.subnet_alias import display_subnet_alias, load_subnet_alias, save_subnet_alias
 from adaos.domain import Event as DomainEvent
@@ -1152,6 +1153,15 @@ class DrainResponse(BaseModel):
     drain_timeout_sec: float
 
 
+class AdminRootMcpCallRequest(BaseModel):
+    tool_id: str = Field(..., min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    request_id: str | None = None
+    trace_id: str | None = None
+    dry_run: bool = True
+    scope: dict[str, Any] = Field(default_factory=dict)
+
+
 class CoreUpdateStartRequest(BaseModel):
     target_rev: str = Field(default="", max_length=128)
     target_version: str = Field(default="", max_length=128)
@@ -1373,6 +1383,37 @@ async def admin_root_mcp_logs(
             source_mode="node_local_logs_dir",
         ),
     }
+
+
+@app.post("/api/admin/root_mcp/call", dependencies=[Depends(require_token)])
+async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
+    allowed_tools = {"nlu_authoring.check_phrase", "desktop.preview_action"}
+    tool_id = str(body.tool_id or "").strip()
+    if tool_id not in allowed_tools:
+        raise HTTPException(status_code=403, detail={"code": "tool_not_allowed", "tool_id": tool_id})
+
+    conf = get_ctx().config
+    scope = dict(body.scope or {})
+    scope.setdefault("subnet_id", str(getattr(conf, "subnet_id", "") or "").strip() or None)
+    scope.setdefault("target_id", f"hub:{scope.get('subnet_id')}" if scope.get("subnet_id") else None)
+    response = invoke_root_mcp_tool(
+        tool_id,
+        arguments=dict(body.arguments or {}),
+        request_id=body.request_id,
+        trace_id=body.trace_id,
+        actor="root:route_proxy",
+        auth_method="root_token",
+        dry_run=body.dry_run,
+        scope=scope,
+        auth_context={
+            "method": "root_token",
+            "actor": "root:route_proxy",
+            "capabilities": list(allowed_tools),
+            "allowed_target_ids": [scope.get("target_id")] if scope.get("target_id") else [],
+            "subnet_id": scope.get("subnet_id"),
+        },
+    )
+    return {"ok": response.ok, "scope": scope, "response": response.to_dict()}
 
 
 @app.post("/api/admin/update/start", dependencies=[Depends(require_token)])

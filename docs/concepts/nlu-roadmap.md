@@ -808,10 +808,11 @@ below remain useful for tracking existing implementation work.
   profile, public Root MCP exposes OpenAI-compatible read tool names, and the
   cached NLU tools return target/subnet scope, report freshness, and cache
   metadata.
-- [ ] `[must]` Add a live hub/proxy path for deterministic
-  `nlu_authoring.check_phrase` and `desktop.preview_action`. The current
-  root-public cached implementation returns `requires_live_hub` for those two
-  tools and only includes cached context/action hints.
+- [x] `[must]` Add a live hub/proxy path for deterministic
+  `nlu_authoring.check_phrase` and `desktop.preview_action`. Public Root MCP
+  now calls `/api/admin/root_mcp/call` on the active scoped hub through the
+  root route proxy; if the hub is disconnected or not updated, it falls back to
+  cached `requires_live_hub` evidence.
 - [x] Expose Root MCP HTTP JSON-RPC endpoint at `/v1/root/mcp` for
   remote-MCP clients: `initialize`, `tools/list`, `tools/call`, and
   notification handling. This is the transport required for the target mode
