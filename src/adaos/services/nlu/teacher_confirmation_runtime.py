@@ -466,6 +466,59 @@ def is_confirmation_answer(text: str) -> bool:
     return bool(_classify_answer(text))
 
 
+def _looks_like_correction_text(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    lower = raw.casefold()
+    markers = (
+        "покажи",
+        "открой",
+        "показать",
+        "открыть",
+        "запусти",
+        "нужно",
+        "надо",
+        "имел",
+        "имела",
+        "open",
+        "show",
+        "launch",
+        "instead",
+        "i meant",
+    )
+    return any(marker in lower for marker in markers)
+
+
+async def should_suppress_voice_text_for_confirmation(
+    webspace_id: str,
+    text: str,
+    *,
+    within_s: float = 20.0,
+) -> bool:
+    if is_confirmation_answer(text):
+        return False
+    try:
+        teacher = await _read_teacher(webspace_id)
+    except Exception:
+        return False
+    active = _latest_active_confirmation(teacher) or _latest_active_clarification(teacher)
+    if not active:
+        return False
+    try:
+        ts = float(active.get("ts") or 0.0)
+    except Exception:
+        ts = 0.0
+    if ts <= 0 or time.time() - ts > max(1.0, float(within_s)):
+        return False
+    raw = str(text or "").strip()
+    if _looks_like_correction_text(raw):
+        return False
+    # Browser STT can emit a short tail of the original utterance after the
+    # confirmation prompt. Ignore that fragment instead of teaching on it.
+    return len(raw) <= 24
+
+
 def _retry_text_from_rejection(answer_text: str, original_text: str) -> str:
     raw = str(answer_text or "").strip()
     original = str(original_text or "").strip()
@@ -702,6 +755,7 @@ async def _on_voice_chat_user(evt: Any) -> None:
                 "answer": text.strip(),
                 "answered_at": time.time(),
             },
+            candidate_status="apply_requested",
         )
         await append_event(
             webspace_id,
@@ -716,7 +770,11 @@ async def _on_voice_chat_user(evt: Any) -> None:
                 meta=merged_meta,
             ),
         )
-        await _emit_chat(webspace_id, "Применяю новое правило NLU. После этого повторите запрос для проверки.", merged_meta)
+        await _emit_chat(
+            webspace_id,
+            "Принял. Применяю новое правило NLU; после этого повторите запрос для проверки.",
+            merged_meta,
+        )
         bus_emit(
             get_ctx().bus,
             "nlp.teacher.candidate.apply",

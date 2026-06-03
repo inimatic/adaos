@@ -298,7 +298,9 @@ Before durable mutation, candidate Apply now runs the M4 validation gate:
 If validation fails, the candidate is marked `validation_failed`, the full
 validation payload is stored on `candidate.validation`, and AdaOS emits
 `nlp.teacher.candidate.apply.rejected` with
-`reason="m4_validation_failed"`. No regex/example mutation is performed.
+`reason="m4_validation_failed"`. It also writes a
+`candidate.apply_rejected` Teacher event and visible UI/chat feedback so Apply
+does not fail silently. No regex/example mutation is performed.
 
 Before a regex candidate can be applied, LLM Teacher performs a local preview:
 the pattern must compile as Python regex and match the original phrase. Valid
@@ -352,6 +354,11 @@ confirmation answer, so short replies such as `да` and `нет` do not create
 extra Teacher misses. The Voice chat widget also treats messages loaded when
 the modal opens as already spoken, so opening Voice does not read the previous
 hub response aloud; new hub messages can still be spoken.
+
+Voice confirmation now also suppresses short non-command STT tails while a
+confirmation is pending, so fragments such as "от сети" do not become a second
+Teacher request. Voice history is served as a compact router/YJS-owned stream
+shared by the modal and the header Listen button.
 
 Current rollback surface:
 
@@ -861,6 +868,9 @@ treated as `[could]` unless explicitly promoted.
 - Repair common regex-candidate mistakes before preview/apply: canonical slot
   aliases such as `scenario -> scenario_id`, `modal -> modal_id`, and
   host-action targets that should be stored in the current scenario owner.
+- Repair `desktop.open_modal` candidates that capture a display label or alias
+  as `modal_id` by preserving canonical modal evidence for validation and
+  runtime canonicalization.
 - Repair common interface-action mistakes before preview/apply: generic
   show/open requests for a known app with `launchModal` should become
   `desktop.open_modal`; scenario switching is reserved for explicit scenario

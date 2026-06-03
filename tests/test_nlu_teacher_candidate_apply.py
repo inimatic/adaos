@@ -214,6 +214,48 @@ def test_m4_validation_blocks_builtin_ui_action_without_required_slot():
     assert validation["action_preview"]["status"] == "blocked"
 
 
+def test_m4_validation_accepts_lookup_label_for_open_modal(monkeypatch):
+    from adaos.services.nlu import teacher_read_model
+    from adaos.services.nlu.teacher_validation import validate_candidate_apply
+
+    monkeypatch.setattr(
+        teacher_read_model,
+        "get_desktop_registry_lookup",
+        lambda **kwargs: {
+            "fingerprint": "fp.test.subnet-env",
+            "lookups": {
+                "modal_id": [
+                    {
+                        "value": "subnet_env_modal",
+                        "labels": ["Subnet Env", "переменные окружения подсети"],
+                    }
+                ]
+            },
+        },
+    )
+    candidate = {
+        "id": "cand.m4.modal-label",
+        "kind": "regex_rule",
+        "text": "Покажи переменные окружения подсети",
+        "request_id": "nlu.m4.modal-label",
+        "regex_rule": {
+            "intent": "desktop.open_modal",
+            "pattern": r"\b(?:покажи|открой)\s+(?P<modal_id>переменные\s+окружения\s+подсети)\b",
+        },
+        "status": "pending",
+        "preview": {"ok": True, "status": "regex_matched", "slots": {"modal_id": "переменные окружения подсети"}},
+    }
+
+    validation = validate_candidate_apply(webspace_id="ws-test-m4-modal-label", candidate=candidate)
+
+    assert validation["status"] == "passed"
+    assert validation["action_preview"]["status"] == "ready"
+    assert any(
+        item["name"] == "lookup.modal_id" and item["status"] == "found"
+        for item in validation["action_preview"]["checks"]
+    )
+
+
 def test_m4_validation_blocks_overbroad_non_read_only_regex():
     from adaos.services.nlu.teacher_validation import validate_candidate_apply
 

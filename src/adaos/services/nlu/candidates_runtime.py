@@ -10,7 +10,7 @@ import yaml
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
-from adaos.services.nlu.teacher_events import append_event, make_event
+from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_events_by_candidate
 from adaos.services.nlu.teacher_validation import validate_candidate_apply_async
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 from adaos.services.yjs.doc import async_get_ydoc
@@ -129,6 +129,106 @@ def _find_skill_subscribing_to(topic: str) -> str | None:
     return None
 
 
+async def _emit_apply_rejected(
+    *,
+    ctx: Any,
+    webspace_id: str,
+    candidate_id: str,
+    reason: str,
+    meta: Mapping[str, Any],
+    request_id: str | None = None,
+    request_text: str = "",
+    validation: Mapping[str, Any] | None = None,
+    preview: Mapping[str, Any] | None = None,
+    candidate_patch: Mapping[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "webspace_id": webspace_id,
+        "candidate_id": candidate_id,
+        "reason": reason,
+        "_meta": dict(meta),
+    }
+    if validation:
+        payload["validation"] = dict(validation)
+    if preview:
+        payload["preview"] = dict(preview)
+    bus_emit(ctx.bus, "nlp.teacher.candidate.apply.rejected", payload, source="nlu.teacher.candidates")
+    try:
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=request_text,
+                kind="candidate.apply_rejected",
+                title="Candidate apply rejected",
+                subtitle=reason,
+                raw=payload,
+                meta=meta,
+            ),
+        )
+    except Exception:
+        _log.debug("failed to append teacher event (candidate.apply_rejected) webspace=%s", webspace_id, exc_info=True)
+    if candidate_patch:
+        next_teacher: dict[str, Any] | None = None
+        try:
+            async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+                data_map = ydoc.get_map("data")
+                teacher = coerce_dict(data_map.get("nlu_teacher"))
+                next_candidates: list[dict[str, Any]] = []
+                changed = False
+                for item in iter_mappings(teacher.get("candidates")):
+                    d = dict(item)
+                    if d.get("id") == candidate_id:
+                        d.update(dict(candidate_patch))
+                        changed = True
+                    next_candidates.append(d)
+                if changed:
+                    teacher["candidates"] = next_candidates
+                    rebuild_events_by_candidate(teacher)
+                    with ydoc.begin_transaction() as txn:
+                        data_map.set(txn, "nlu_teacher", teacher)
+                    next_teacher = dict(teacher)
+        except Exception:
+            _log.debug("failed to patch candidate after apply rejection webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
+        if next_teacher is not None:
+            try:
+                from adaos.services.nlu.teacher_store import save_teacher_state
+
+                save_teacher_state(webspace_id=webspace_id, teacher=next_teacher)
+            except Exception:
+                pass
+    try:
+        bus_emit(
+            ctx.bus,
+            "ui.notify",
+            {
+                "text": f"NLU Teacher: candidate was not applied ({reason}).",
+                "webspace_id": webspace_id,
+                "_meta": dict(meta),
+            },
+            source="nlu.teacher.candidates",
+        )
+    except Exception:
+        pass
+    try:
+        if str(meta.get("route_id") or meta.get("route") or "").strip() == "voice_chat":
+            bus_emit(
+                ctx.bus,
+                "io.out.chat.append",
+                {
+                    "id": "",
+                    "from": "hub",
+                    "text": f"Не смог применить правило NLU: {reason}. Детали записаны в NLU Teacher.",
+                    "ts": time.time(),
+                    "_meta": {"webspace_id": webspace_id, **dict(meta), "route_id": "voice_chat"},
+                },
+                source="nlu.teacher.candidates",
+            )
+    except Exception:
+        pass
+
+
 @subscribe("nlp.teacher.candidate.apply")
 async def _on_candidate_apply(evt: Any) -> None:
     """
@@ -186,19 +286,17 @@ async def _on_candidate_apply(evt: Any) -> None:
                 request_id = candidate.get("request_id") if isinstance(candidate.get("request_id"), str) else None
                 request_text = candidate.get("text") if isinstance(candidate.get("text"), str) else ""
                 if candidate.get("status") == "quarantined":
-                    bus_emit(
-                        ctx.bus,
-                        "nlp.teacher.candidate.apply.rejected",
-                        {
-                            "webspace_id": webspace_id,
-                            "candidate_id": candidate_id,
-                            "reason": "candidate_quarantined",
-                            "preview": dict(candidate.get("preview") or {})
-                            if isinstance(candidate.get("preview"), Mapping)
-                            else {},
-                            "_meta": dict(meta),
-                        },
-                        source="nlu.teacher.candidates",
+                    await _emit_apply_rejected(
+                        ctx=ctx,
+                        webspace_id=webspace_id,
+                        candidate_id=candidate_id,
+                        reason="candidate_quarantined",
+                        preview=dict(candidate.get("preview") or {})
+                        if isinstance(candidate.get("preview"), Mapping)
+                        else {},
+                        meta=meta,
+                        request_id=request_id,
+                        request_text=request_text,
                     )
                     return
 
@@ -225,17 +323,21 @@ async def _on_candidate_apply(evt: Any) -> None:
                 if validated_candidate is not None:
                     candidate = validated_candidate
                 if not validation.get("ok"):
-                    bus_emit(
-                        ctx.bus,
-                        "nlp.teacher.candidate.apply.rejected",
-                        {
-                            "webspace_id": webspace_id,
-                            "candidate_id": candidate_id,
-                            "reason": "m4_validation_failed",
+                    await _emit_apply_rejected(
+                        ctx=ctx,
+                        webspace_id=webspace_id,
+                        candidate_id=candidate_id,
+                        reason="m4_validation_failed",
+                        validation=validation,
+                        meta=meta,
+                        request_id=request_id,
+                        request_text=request_text,
+                        candidate_patch={
                             "validation": dict(validation),
-                            "_meta": dict(meta),
+                            "validated_at": candidate.get("validated_at") or time.time(),
+                            "status": "validation_failed",
+                            "validation_failed_at": candidate.get("validation_failed_at") or time.time(),
                         },
-                        source="nlu.teacher.candidates",
                     )
                     return
 
