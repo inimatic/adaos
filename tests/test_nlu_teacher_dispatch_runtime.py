@@ -179,6 +179,83 @@ async def test_action_dispatch_failed_marks_teacher_dispatch_failed() -> None:
 
 
 @pytest.mark.anyio
+async def test_modal_opened_ack_marks_teacher_dispatch_succeeded() -> None:
+    from adaos.services.nlu import teacher_dispatch_runtime as dispatch
+
+    webspace_id = "ws-test-teacher-dispatch-modal-opened"
+    candidate = _safe_modal_candidate("cand.teacher.dispatch.modal.opened")
+    candidate["dispatch_status"] = "emitted"
+    candidate["dispatch"] = {
+        "id": "tdispatch.test.modal.opened",
+        "status": "emitted",
+        "path": "nlp.intent.detected",
+        "intent": "desktop.open_modal",
+    }
+    await _seed_teacher(webspace_id, candidate)
+
+    await dispatch._on_modal_opened(
+        {
+            "webspace_id": webspace_id,
+            "modal_id": "browsers_modal",
+            "_meta": {
+                "webspace_id": webspace_id,
+                "route_id": "voice_chat",
+                "nlu_teacher_dispatch": True,
+                "nlu_teacher_candidate_id": candidate["id"],
+                "nlu_teacher_dispatch_id": "tdispatch.test.modal.opened",
+            },
+        }
+    )
+
+    teacher = await _read_teacher(webspace_id)
+    saved = list(teacher.get("candidates") or [])[0]
+    assert saved["dispatch_status"] == "succeeded"
+    assert saved["dispatch"]["status"] == "succeeded"
+    assert saved["dispatch"]["outcome"]["target"] == "desktop.modal.open"
+    assert saved["dispatch"]["outcome"]["action_payload"]["modal_id"] == "browsers_modal"
+    assert any(item.get("kind") == "dispatch.succeeded" for item in teacher.get("events") or [])
+
+
+@pytest.mark.anyio
+async def test_modal_open_failed_ack_marks_teacher_dispatch_failed() -> None:
+    from adaos.services.nlu import teacher_dispatch_runtime as dispatch
+
+    webspace_id = "ws-test-teacher-dispatch-modal-failed"
+    candidate = _safe_modal_candidate("cand.teacher.dispatch.modal.failed")
+    candidate["dispatch_status"] = "emitted"
+    candidate["dispatch"] = {
+        "id": "tdispatch.test.modal.failed",
+        "status": "emitted",
+        "path": "nlp.intent.detected",
+        "intent": "desktop.open_modal",
+    }
+    await _seed_teacher(webspace_id, candidate)
+
+    await dispatch._on_modal_open_failed(
+        {
+            "webspace_id": webspace_id,
+            "modal_id": "missing_modal",
+            "reason": "modal_not_opened",
+            "_meta": {
+                "webspace_id": webspace_id,
+                "route_id": "voice_chat",
+                "nlu_teacher_dispatch": True,
+                "nlu_teacher_candidate_id": candidate["id"],
+                "nlu_teacher_dispatch_id": "tdispatch.test.modal.failed",
+            },
+        }
+    )
+
+    teacher = await _read_teacher(webspace_id)
+    saved = list(teacher.get("candidates") or [])[0]
+    assert saved["dispatch_status"] == "failed"
+    assert saved["dispatch"]["status"] == "failed"
+    assert saved["dispatch"]["outcome"]["reason"] == "modal_not_opened"
+    assert saved["dispatch"]["outcome"]["action_payload"]["modal_id"] == "missing_modal"
+    assert any(item.get("kind") == "dispatch.failed" for item in teacher.get("events") or [])
+
+
+@pytest.mark.anyio
 async def test_operator_apply_understanding_does_not_auto_dispatch() -> None:
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_dispatch_runtime as dispatch

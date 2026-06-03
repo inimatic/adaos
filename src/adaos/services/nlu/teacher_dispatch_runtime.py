@@ -345,3 +345,43 @@ async def _on_action_dispatch_failed(evt: Any) -> None:
         event_kind="dispatch.failed",
         title="Teacher dispatch failed",
     )
+
+
+@subscribe("desktop.modal.opened")
+async def _on_modal_opened(evt: Any) -> None:
+    payload = _payload(evt)
+    enriched = {
+        **payload,
+        "target": payload.get("target") or "desktop.modal.open",
+        "action_type": payload.get("action_type") or "callHost",
+        "action_payload": {
+            "modal_id": payload.get("modal_id") or payload.get("modalId"),
+            "webspace_id": payload.get("webspace_id"),
+        },
+    }
+    await _record_dispatch_outcome(
+        payload=enriched,
+        status="succeeded",
+        event_kind="dispatch.succeeded",
+        title="Teacher dispatch succeeded",
+    )
+
+
+@subscribe("desktop.modal.open_failed")
+async def _on_modal_open_failed(evt: Any) -> None:
+    payload = _payload(evt)
+    enriched = {
+        **payload,
+        "target": payload.get("target") or "desktop.modal.open",
+        "action_type": payload.get("action_type") or "callHost",
+        "action_payload": {
+            "modal_id": payload.get("modal_id") or payload.get("modalId"),
+            "webspace_id": payload.get("webspace_id"),
+        },
+    }
+    await _record_dispatch_outcome(
+        payload=enriched,
+        status="failed",
+        event_kind="dispatch.failed",
+        title="Teacher dispatch failed",
+    )
