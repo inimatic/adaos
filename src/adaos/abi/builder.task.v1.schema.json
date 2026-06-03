@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.task.v1",
+  "title": "AdaOS Builder Task",
+  "description": "Structured handoff packet for Builder workflows. It links an idea, NLU Teacher candidate, guard report, or human request to governed skill/scenario artifact work.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["task_id", "kind", "status", "source", "requested_behavior"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable Builder task id, usually btask.<candidate suffix> for NLU Teacher handoffs."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["development_task", "descriptor_fix", "repair_task", "draft_task"],
+      "description": "Builder work class."
+    },
+    "status": { "$ref": "#/$defs/lifecycleStatus" },
+    "source": { "$ref": "#/$defs/sourceRef" },
+    "requested_behavior": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the person or runtime evidence wants AdaOS to be able to do."
+    },
+    "target": { "$ref": "#/$defs/targetRef" },
+    "context_snapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Bounded context facts used when the task was proposed. This is not a prompt transcript and must follow Builder redaction policy."
+    },
+    "artifact_hints": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "preferred_kind": { "type": "string", "enum": ["skill", "scenario", "webui", "nlu_overlay", "unknown"] },
+        "preferred_id": { "type": "string" },
+        "create_new": { "type": "boolean" },
+        "template_id": { "type": "string" },
+        "missing_surface": { "type": "string" }
+      }
+    },
+    "side_effect_class": {
+      "type": "string",
+      "enum": ["none", "read_only", "local_write", "runtime_write", "external_io", "destructive", "unknown"]
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "utterance_retention": { "type": "string", "enum": ["none", "fingerprint_only", "bounded_text", "operator_approved"] },
+        "contains_personal_data": { "type": "boolean" },
+        "redaction_notes": { "type": "string" }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "replay_phrase": { "type": "string" },
+        "expected_result": { "type": "string" }
+      }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "candidate_id": { "type": "string" },
+        "request_id": { "type": "string" },
+        "thread_id": { "type": "string" },
+        "origin_scenario_id": { "type": "string" },
+        "completed_by": { "type": "string" }
+      }
+    },
+    "context_fingerprint": { "type": "string" },
+    "notes": { "type": "string" }
+  },
+  "$defs": {
+    "lifecycleStatus": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "accepted",
+        "drafting",
+        "previewed",
+        "approved",
+        "applied",
+        "rejected",
+        "rolled_back",
+        "superseded"
+      ]
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["human_idea", "nlu_teacher", "runtime_guard", "test_failure", "operator"]
+        },
+        "text": { "type": "string" },
+        "request_id": { "type": "string" },
+        "candidate_id": { "type": "string" },
+        "event_id": { "type": "string" }
+      }
+    },
+    "targetRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string", "enum": ["skill", "scenario", "webui", "nlu_overlay", "unknown"] },
+        "id": { "type": "string" }
+      }
+    }
+  }
+}

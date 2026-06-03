@@ -66,6 +66,33 @@ class _FakeRootMcpClient:
             }
         }
 
+    def get_builder_context(
+        self,
+        *,
+        webspace_id: str | None = None,
+        level: str = "mini",
+        request_locale: str | None = None,
+        preferred_locales: list[str] | None = None,
+        include_live: bool = True,
+        include_hints: bool = True,
+        include_payloads: bool = False,
+    ) -> dict:
+        self.calls.append(
+            (
+                "get_builder_context",
+                webspace_id or "",
+                {
+                    "level": level,
+                    "request_locale": request_locale,
+                    "preferred_locales": preferred_locales or [],
+                    "include_live": include_live,
+                    "include_hints": include_hints,
+                    "include_payloads": include_payloads,
+                },
+            )
+        )
+        return {"builder_context": {"context_id": "builder_context.v1", "webspace_id": webspace_id or "desktop"}}
+
     def get_nlu_authoring_context(
         self,
         *,
@@ -631,6 +658,23 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
             "params": {"name": "get_architecture_catalog", "arguments": {}},
         }
     )
+    builder_context = bridge.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": {
+                "name": "get_builder_context",
+                "arguments": {
+                    "webspace_id": "desktop",
+                    "level": "mini",
+                    "request_locale": "ru",
+                    "preferred_locales": ["en"],
+                    "include_payloads": True,
+                },
+            },
+        }
+    )
     named_entities = bridge.handle_request(
         {
             "jsonrpc": "2.0",
@@ -876,6 +920,7 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert tools_list is not None
     tool_names = {item["name"] for item in tools_list["result"]["tools"]}
     assert "get_status" in tool_names
+    assert "get_builder_context" in tool_names
     assert "get_architecture_catalog" in tool_names
     assert "get_named_entity_registry" in tool_names
     assert "get_nlu_authoring_context" in tool_names
@@ -908,6 +953,8 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert status["result"]["structuredContent"]["target_id"] == "hub:test-subnet"
     assert architecture is not None
     assert architecture["result"]["structuredContent"]["descriptor"]["payload"]["page_count"] == 3
+    assert builder_context is not None
+    assert builder_context["result"]["structuredContent"]["builder_context"]["context_id"] == "builder_context.v1"
     assert named_entities is not None
     assert named_entities["result"]["structuredContent"]["descriptor"]["payload"]["items"][0]["canonical_ref"] == "device:browser:browser-1"
     assert nlu_context is not None
@@ -954,6 +1001,18 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert subnet_info["result"]["structuredContent"]["subnet"]["subnet_id"] == "test-subnet"
     assert ("get_target_status", "hub:test-subnet", {}) in fake_client.calls
     assert ("get_adaos_dev_architecture_catalog", "", {}) in fake_client.calls
+    assert (
+        "get_builder_context",
+        "desktop",
+        {
+            "level": "mini",
+            "request_locale": "ru",
+            "preferred_locales": ["en"],
+            "include_live": True,
+            "include_hints": True,
+            "include_payloads": True,
+        },
+    ) in fake_client.calls
     assert ("get_adaos_dev_named_entity_registry", "desktop", {"kind": "device.browser"}) in fake_client.calls
     assert (
         "get_nlu_authoring_context",

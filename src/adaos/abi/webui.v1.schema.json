@@ -13,6 +13,15 @@
     "widgets": { "$ref": "#/$defs/catalogWidgets" },
 
     "registry": { "$ref": "#/$defs/registry" },
+    "nlu": { "$ref": "#/$defs/nluDescriptor" },
+    "llm_hints": {
+      "$ref": "#/$defs/authoringHints",
+      "description": "Builder-readable UI contribution hints for AI-assisted and human authoring workflows."
+    },
+    "nlu_hints": {
+      "$ref": "#/$defs/authoringHints",
+      "description": "Builder-readable NLU hints for UI aliases, examples, slot schemas, entities, and owner routing."
+    },
     "webio": { "$ref": "#/$defs/webio" },
     "ydoc_defaults": {
       "description": "Default Yjs values applied once per webspace. Keys are 'root/key' paths (e.g. 'data/voice_chat').",
@@ -30,6 +39,107 @@
       "type": "string",
       "minLength": 1,
       "description": "Identifier; may include ':' for synthetic ids (e.g. 'scenario:<id>')."
+    },
+    "nluDescriptor": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "llm_hints": { "$ref": "#/$defs/authoringHints" },
+        "nlu_hints": { "$ref": "#/$defs/authoringHints" }
+      }
+    },
+    "authoringHints": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "description": { "type": "string" },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "primary_actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/authoringActionHint" }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/authoringActionHint" }
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "$ref": "#/$defs/authoringExample" }
+            ]
+          }
+        },
+        "slot_schemas": { "type": "object", "additionalProperties": true },
+        "entities": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "$ref": "#/$defs/authoringEntityHint" }
+            ]
+          }
+        },
+        "owner_hints": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "side_effect_class": {
+          "type": "string",
+          "enum": ["none", "read_only", "local_write", "runtime_write", "external_io", "destructive"]
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "authoringActionHint": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "intent": { "type": "string", "minLength": 1 },
+        "tool": { "type": "string", "minLength": 1 },
+        "event": { "type": "string", "minLength": 1 },
+        "slots": { "type": "object", "additionalProperties": true },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "side_effect_class": {
+          "type": "string",
+          "enum": ["none", "read_only", "local_write", "runtime_write", "external_io", "destructive"]
+        }
+      }
+    },
+    "authoringExample": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "locale": { "type": "string", "minLength": 1 },
+        "intent": { "type": "string", "minLength": 1 },
+        "slots": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["text"]
+    },
+    "authoringEntityHint": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "canonical_ref": { "type": "string", "minLength": 1 },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
     },
     "loadPhase": {
       "type": "string",

@@ -157,6 +157,11 @@ The handoff boundary is:
 Root MCP is the Builder's governed machine-readable context and tool surface.
 It is not the Builder itself.
 
+The current read-only Builder context is exposed as `builder.get_context`.
+It bundles descriptor provenance, architecture/SDK/template/registry summaries,
+NLU authoring context, named entities, redaction policy, and no-write authoring
+boundaries.
+
 Builder reads from:
 
 - `AdaOSDevPlane`: architecture, SDK metadata, schemas, template catalog,
@@ -172,6 +177,23 @@ Relevant documents:
 Root MCP should expose enough context for Builder to reason without scraping
 the repository blindly. Writes through Root MCP must remain governed,
 capability-scoped, audited, and previewable.
+
+## Builder Contracts
+
+Builder work should move through explicit contracts before runtime mutation:
+
+- `src/adaos/abi/builder.task.v1.schema.json`: handoff packet for human ideas,
+  NLU Teacher gaps, runtime guard reports, and repair requests.
+- `src/adaos/abi/builder.draft.v1.schema.json`: draft workspace metadata that
+  links a task to an artifact, selected template, assumptions, risks, expected
+  tests, and quality gates.
+- `src/adaos/abi/skill.schema.json`, `src/adaos/abi/scenario.schema.json`, and
+  `src/adaos/abi/webui.v1.schema.json`: artifact contracts that now carry
+  Builder-oriented `llm_hints` and `nlu_hints`.
+
+The default skill and scenario templates include `builder.draft.json` metadata
+so generated work starts as a reviewable draft rather than an active runtime
+change.
 
 ## Relationship To Web UI
 

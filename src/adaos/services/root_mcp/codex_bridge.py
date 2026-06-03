@@ -242,9 +242,9 @@ class CodexRootMcpBridge:
         return (
             "This MCP server is a local stdio bridge from Codex to AdaOS Root MCP. "
             f"It is currently bound to {target} using {bootstrap}. "
-            "For descriptive AdaOS programming context, prefer get_architecture_catalog, get_sdk_metadata, "
-            "get_template_catalog, NLU authoring context, named entity registry, and public registry summaries "
-            "from AdaOSDevPlane/NLUAuthoringPlane. "
+            "For descriptive AdaOS programming context, prefer get_builder_context first, then drill into "
+            "get_architecture_catalog, get_sdk_metadata, get_template_catalog, NLU authoring context, named "
+            "entity registry, and public registry summaries from AdaOSDevPlane/NLUAuthoringPlane. "
             "For operational context, prefer get_status, get_runtime_summary, and get_operational_surface "
             "before requesting logs or healthchecks."
         )
@@ -258,6 +258,31 @@ class CodexRootMcpBridge:
                 "name": "foundation",
                 "description": "Read the AdaOS Root MCP foundation snapshot used by this bridge.",
                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+            {
+                "name": "get_builder_context",
+                "description": "Read the compact Builder context bundle with descriptor provenance, NLU context, named entities, and read-only authoring boundaries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "webspace_id": {"type": "string", "description": "Webspace id. Defaults to desktop."},
+                        "level": {"type": "string", "enum": ["mini", "std", "rich"], "default": "mini"},
+                        "request_locale": {"type": "string", "description": "Optional active request locale, such as ru or en-US."},
+                        "preferred_locales": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional ordered locale preferences for label selection.",
+                        },
+                        "include_live": {"type": "boolean", "default": True, "description": "Include live runtime state when available."},
+                        "include_hints": {"type": "boolean", "default": True, "description": "Include developer-authored skill/scenario hints."},
+                        "include_payloads": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Include descriptor payloads for trusted local debugging. Defaults to compact metadata only.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
             },
             {
                 "name": "get_architecture_catalog",
@@ -920,6 +945,20 @@ class CodexRootMcpBridge:
         tool = str(name or "").strip()
         if tool == "foundation":
             return _tool_text(client.foundation())
+        if tool == "get_builder_context":
+            raw_locales = args.get("preferred_locales")
+            preferred_locales = _normalize_unique(raw_locales if isinstance(raw_locales, list) else None)
+            return _tool_text(
+                client.get_builder_context(
+                    webspace_id=_normalize_text(args.get("webspace_id")),
+                    level=str(args.get("level") or "mini"),
+                    request_locale=_normalize_text(args.get("request_locale")),
+                    preferred_locales=preferred_locales,
+                    include_live=bool(args.get("include_live", True)),
+                    include_hints=bool(args.get("include_hints", True)),
+                    include_payloads=bool(args.get("include_payloads", False)),
+                )
+            )
         if tool == "get_architecture_catalog":
             return _tool_text(client.get_adaos_dev_architecture_catalog())
         if tool == "get_sdk_metadata":

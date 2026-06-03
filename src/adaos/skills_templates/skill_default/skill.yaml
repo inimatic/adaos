@@ -13,3 +13,16 @@ events: {}
 tools: []
 exports: {}
 data_routes: []
+
+llm_hints:
+  description: ""
+  aliases: []
+  primary_actions: []
+  examples: []
+  owner_hints: []
+
+nlu_hints:
+  aliases: []
+  examples: []
+  slot_schemas: {}
+  entities: []

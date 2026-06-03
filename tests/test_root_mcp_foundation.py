@@ -65,6 +65,7 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "adaos_dev.get_architecture_catalog" in contract_ids
     assert "adaos_dev.get_sdk_metadata" in contract_ids
     assert "adaos_dev.get_public_skill_registry" in contract_ids
+    assert "builder.get_context" in contract_ids
     assert "hub.memory.get_status" in contract_ids
     assert "hub.memory.list_sessions" in contract_ids
     assert "hub.memory.get_artifact" in contract_ids
@@ -174,6 +175,22 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     plane_result = plane_call.json()["response"]["result"]["descriptor"]["payload"]
     assert plane_result["available"] is True
     assert plane_result["page_count"] >= 1
+
+    builder_context_call = client.post(
+        "/v1/root/mcp/call",
+        headers=scoped_headers,
+        json={"tool_id": "builder.get_context", "arguments": {"webspace_id": "desktop", "level": "mini"}},
+    )
+    assert builder_context_call.status_code == 200
+    builder_context = builder_context_call.json()["response"]["result"]["builder_context"]
+    assert builder_context["context_id"] == "builder_context.v1"
+    assert builder_context["authoring_boundaries"]["side_effects"] == "none"
+    assert builder_context["redaction_policy"]["secrets"] == "never_include_values"
+    assert builder_context["runtime_status"]["available"] is False
+    assert "architecture_catalog" in builder_context["descriptors"]
+    assert "builder_task_schema" in builder_context["descriptors"]
+    assert "builder_draft_schema" in builder_context["descriptors"]
+    assert builder_context["descriptors"]["architecture_catalog"]["metadata"]["provenance"]["content_hash"]
 
     plane_list_call = client.post(
         "/v1/root/mcp/call",

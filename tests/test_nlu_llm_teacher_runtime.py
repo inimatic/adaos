@@ -1274,6 +1274,16 @@ async def test_llm_teacher_persists_first_class_non_regex_strategy_candidates(mo
         "descriptor_fix",
         "development_task",
     }
+    if strategy in {"descriptor_fix", "development_task"}:
+        builder_task = candidate["builder_task"]
+        assert builder_task["kind"] == strategy
+        assert builder_task["status"] == "proposed"
+        assert builder_task["source"]["type"] == "nlu_teacher"
+        assert builder_task["source"]["candidate_id"] == candidate["id"]
+        assert isinstance(builder_task["context_snapshot"], dict)
+        assert candidate["strategy_candidate"]["builder_task"]["task_id"] == builder_task["task_id"]
+    else:
+        assert "builder_task" not in candidate
 
     await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate["id"]})
     async with async_get_ydoc(webspace_id) as ydoc:

@@ -139,6 +139,40 @@ class RootMcpClient:
             dry_run=dry_run,
         )
 
+    def get_builder_context(
+        self,
+        *,
+        webspace_id: str | None = None,
+        level: str = "mini",
+        request_locale: str | None = None,
+        preferred_locales: list[str] | tuple[str, ...] | None = None,
+        include_live: bool = True,
+        include_hints: bool = True,
+        include_payloads: bool = False,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "level": str(level or "mini"),
+            "include_live": bool(include_live),
+            "include_hints": bool(include_hints),
+            "include_payloads": bool(include_payloads),
+        }
+        if webspace_id:
+            arguments["webspace_id"] = str(webspace_id)
+        if request_locale:
+            arguments["request_locale"] = str(request_locale)
+        if preferred_locales:
+            arguments["preferred_locales"] = [str(item) for item in preferred_locales]
+        return self.call(
+            "builder.get_context",
+            arguments=arguments,
+            request_id=request_id,
+            trace_id=trace_id,
+            dry_run=dry_run,
+        )
+
     def get_nlu_authoring_context(
         self,
         *,

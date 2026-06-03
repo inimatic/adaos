@@ -453,6 +453,26 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             metadata={"published_by": "plane:adaos_dev", "handler": "adaos_dev_get_named_entity_registry"},
         ),
         RootMcpToolContract(
+            id="builder.get_context",
+            title="Get Builder context",
+            surface=RootMcpSurface.DEVELOPMENT,
+            summary="Return a compact read-only Builder context bundle with descriptors, provenance, NLU context, and redaction boundaries.",
+            input_schema=schema_object(
+                properties={
+                    "webspace_id": {"type": "string"},
+                    "level": {"type": "string", "enum": ["mini", "std", "rich"]},
+                    "request_locale": {"type": "string"},
+                    "preferred_locales": {"type": "array", "items": {"type": "string"}},
+                    "include_live": {"type": "boolean"},
+                    "include_hints": {"type": "boolean"},
+                    "include_payloads": {"type": "boolean"},
+                },
+            ),
+            output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
+            required_capability="development.read.descriptors",
+            metadata={"published_by": "plane:adaos_dev", "handler": "builder_get_context"},
+        ),
+        RootMcpToolContract(
             id="nlu_authoring.get_context",
             title="Get NLU authoring context",
             surface=RootMcpSurface.DEVELOPMENT,
@@ -1500,6 +1520,132 @@ def _handle_adaos_dev_named_entity_registry(arguments: dict[str, Any], *, dry_ru
     )
     descriptor["payload"] = payload
     return {"descriptor": descriptor}
+
+
+def _builder_descriptor_summary(descriptor: Mapping[str, Any], *, include_payload: bool = False) -> dict[str, Any]:
+    metadata = descriptor.get("metadata") if isinstance(descriptor.get("metadata"), Mapping) else {}
+    payload = descriptor.get("payload") if isinstance(descriptor.get("payload"), Mapping) else {}
+    summary: dict[str, Any] = {
+        "descriptor_id": descriptor.get("descriptor_id"),
+        "title": descriptor.get("title"),
+        "kind": descriptor.get("kind"),
+        "payload_keys": sorted(str(key) for key in payload.keys()) if isinstance(payload, Mapping) else [],
+        "metadata": {
+            "ttl_seconds": metadata.get("ttl_seconds"),
+            "fresh_until": descriptor.get("fresh_until") or metadata.get("fresh_until"),
+            "freshness": metadata.get("freshness"),
+            "provenance": metadata.get("provenance"),
+            "stability": metadata.get("stability"),
+        },
+    }
+    for key in ("available", "kind", "item_count", "page_count", "descriptor_count", "template_count"):
+        if key in payload:
+            summary[key] = payload.get(key)
+    if include_payload:
+        summary["payload"] = payload
+    return summary
+
+
+def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
+    level = (_text_or_none(arguments.get("level")) or "mini").lower()
+    if level not in {"mini", "std", "rich"}:
+        level = "mini"
+    include_live = bool(arguments.get("include_live", True))
+    include_hints = bool(arguments.get("include_hints", True))
+    include_payloads = bool(arguments.get("include_payloads", False))
+    request_locale = _text_or_none(arguments.get("request_locale"))
+    preferred_locales = _text_list(arguments.get("preferred_locales"))
+    root_scope = _mcp_root_scope(arguments)
+
+    descriptor_ids = [
+        "architecture_catalog",
+        "sdk_metadata",
+        "template_catalog",
+        "public_skill_registry_summary",
+        "public_scenario_registry_summary",
+        "skill_manifest_schema",
+        "scenario_manifest_schema",
+        "builder_task_schema",
+        "builder_draft_schema",
+        "descriptor_build_profile",
+    ]
+    descriptors: dict[str, Any] = {}
+    for descriptor_id in descriptor_ids:
+        descriptors[descriptor_id] = _builder_descriptor_summary(
+            get_descriptor(descriptor_id, level=level),
+            include_payload=include_payloads,
+        )
+
+    named_entities = _handle_adaos_dev_named_entity_registry(
+        {"webspace_id": webspace_id},
+        dry_run=True,
+    ).get("descriptor")
+    nlu_context = _handle_nlu_authoring_context(
+        {
+            "webspace_id": webspace_id,
+            "request_locale": request_locale,
+            "preferred_locales": preferred_locales,
+            "include_live": include_live,
+            "include_hints": include_hints,
+            "_root_scope": root_scope,
+        },
+        dry_run=True,
+    ).get("context")
+    target_id = _text_or_none(root_scope.get("target_id"))
+    runtime_status: dict[str, Any] = {
+        "available": False,
+        "target_id": target_id,
+        "status": "not_requested" if not target_id else "unavailable",
+    }
+    if target_id:
+        try:
+            runtime_status = {
+                "available": True,
+                "status": "available",
+                "summary": _handle_hub_get_runtime_summary({"target_id": target_id}, dry_run=True),
+            }
+        except Exception as exc:  # pragma: no cover - defensive best-effort context enrichment.
+            runtime_status["error"] = type(exc).__name__
+
+    return {
+        "builder_context": {
+            "context_id": "builder_context.v1",
+            "version": 1,
+            "mode": "read_only_context",
+            "webspace_id": webspace_id,
+            "target_id": root_scope.get("target_id"),
+            "root_scope": root_scope,
+            "descriptor_level": level,
+            "descriptors": descriptors,
+            "named_entities": _builder_descriptor_summary(
+                named_entities if isinstance(named_entities, Mapping) else {},
+                include_payload=include_payloads,
+            ),
+            "nlu_authoring": nlu_context if isinstance(nlu_context, Mapping) else {},
+            "runtime_status": runtime_status,
+            "redaction_policy": {
+                "secrets": "never_include_values",
+                "tokens": "never_include_bearer_or_session_tokens",
+                "user_text": "include_current_task_text_only_when_explicitly_provided",
+                "logs": "include_references_or_bounded_excerpts_only",
+                "descriptor_payloads": "omitted_by_default; set include_payloads for trusted local debugging",
+            },
+            "authoring_boundaries": {
+                "side_effects": "none",
+                "dispatch": False,
+                "training_mutation": False,
+                "runtime_mutation": False,
+                "dry_run": bool(dry_run),
+            },
+            "next_tools": [
+                "adaos_dev.get_template_catalog",
+                "nlu_authoring.check_phrase",
+                "nlu_authoring.preview_template_patch",
+                "desktop.preview_action",
+            ],
+        }
+    }
 
 
 def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -2636,6 +2782,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     "adaos_dev.get_public_skill_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_skill_registry_summary"),
     "adaos_dev.get_public_scenario_registry": lambda arguments, dry_run=False: _handle_adaos_dev_descriptor(arguments, descriptor_id="public_scenario_registry_summary"),
     "adaos_dev.get_named_entity_registry": lambda arguments, dry_run=False: _handle_adaos_dev_named_entity_registry(arguments, dry_run=dry_run),
+    "builder.get_context": lambda arguments, dry_run=False: _handle_builder_context(arguments, dry_run=dry_run),
     "nlu_authoring.get_context": lambda arguments, dry_run=False: _handle_nlu_authoring_context(arguments, dry_run=dry_run),
     "nlu_authoring.check_phrase": lambda arguments, dry_run=False: _handle_nlu_authoring_check_phrase(arguments, dry_run=dry_run),
     "nlu_authoring.get_trace": lambda arguments, dry_run=False: _handle_nlu_authoring_trace(arguments, dry_run=dry_run),
