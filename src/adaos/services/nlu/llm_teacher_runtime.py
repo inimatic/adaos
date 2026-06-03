@@ -49,6 +49,17 @@ def _env_enabled(value: str | None) -> bool | None:
     return None
 
 
+def _env_csv(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    items: list[str] = []
+    for raw in str(value).replace(";", ",").split(","):
+        item = raw.strip()
+        if item:
+            items.append(item)
+    return tuple(dict.fromkeys(items))
+
+
 _TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_TEACHER"))
 _LLM_TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_LLM_TEACHER"))
 _MODEL = os.getenv("ADAOS_NLU_LLM_MODEL") or os.getenv("OPENAI_RESPONSES_MODEL") or "gpt-4o-mini"
@@ -146,6 +157,28 @@ _MCP_DESCRIPTOR_TOOL_IDS = {
 }
 _MCP_DESCRIPTOR_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _MCP_DESCRIPTOR_CACHE_LOCK = threading.RLock()
+_DEFAULT_LLM_MCP_ALLOWED_TOOLS = (
+    "hub.get_subnet_info",
+    "nlu_authoring.get_context",
+    "desktop.registry.lookup",
+    "nlu_authoring.check_phrase",
+    "nlu_authoring.get_dialog_context",
+    "nlu_authoring.list_training_targets",
+    "nlu_authoring.list_templates",
+    "sdk.describe_surface",
+    "desktop.preview_action",
+)
+_LLM_MCP_MODE = (os.getenv("ADAOS_NLU_LLM_MCP_MODE") or "hybrid").strip().lower()
+_LLM_MCP_ALLOWED_TOOLS = _env_csv(os.getenv("ADAOS_NLU_LLM_MCP_ALLOWED_TOOLS")) or _DEFAULT_LLM_MCP_ALLOWED_TOOLS
+_LLM_MCP_SESSION_TTL_S = max(60, int(os.getenv("ADAOS_NLU_LLM_MCP_SESSION_TTL_S", "900") or "900"))
+_LLM_MCP_PREPARE_TIMEOUT_S = max(0.5, float(os.getenv("ADAOS_NLU_LLM_MCP_PREPARE_TIMEOUT_S", "4") or "4"))
+_LLM_MCP_FAILURE_CACHE_TTL_S = max(0.0, float(os.getenv("ADAOS_NLU_LLM_MCP_FAILURE_CACHE_TTL_S", "45") or "45"))
+_LLM_MCP_REQUIRE_APPROVAL = (os.getenv("ADAOS_NLU_LLM_MCP_REQUIRE_APPROVAL") or "never").strip() or "never"
+_LLM_MCP_SERVER_LABEL = (os.getenv("ADAOS_NLU_LLM_MCP_SERVER_LABEL") or "adaos_nlu").strip() or "adaos_nlu"
+_LLM_MCP_AUDIENCE = (os.getenv("ADAOS_NLU_LLM_MCP_AUDIENCE") or "openai-nlu-teacher").strip() or "openai-nlu-teacher"
+_LLM_MCP_MAX_TOOL_CALLS = max(0, int(os.getenv("ADAOS_NLU_LLM_MCP_MAX_TOOL_CALLS", "8") or "8"))
+_LLM_MCP_DESCRIPTOR_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_LLM_MCP_DESCRIPTOR_CACHE_LOCK = threading.RLock()
 
 
 def _nlu_llm_write_meta():
@@ -1481,6 +1514,11 @@ def _clear_root_mcp_descriptor_cache() -> None:
         _MCP_DESCRIPTOR_CACHE.clear()
 
 
+def _clear_llm_mcp_descriptor_cache() -> None:
+    with _LLM_MCP_DESCRIPTOR_CACHE_LOCK:
+        _LLM_MCP_DESCRIPTOR_CACHE.clear()
+
+
 def _root_mcp_descriptor_cache_key(tool_id: str, arguments: Mapping[str, Any]) -> str:
     return _sha256_payload(
         {
@@ -1743,6 +1781,360 @@ async def _collect_root_mcp_authoring_evidence_async(
         }
 
 
+def _llm_mcp_mode_enabled() -> bool:
+    if (
+        os.getenv("ADAOS_TESTING") == "1"
+        and "ADAOS_NLU_LLM_MCP_MODE" not in os.environ
+        and not os.getenv("ADAOS_NLU_LLM_MCP_BEARER")
+        and not os.getenv("ADAOS_NLU_LLM_MCP_BEARER_FILE")
+    ):
+        return False
+    return _LLM_MCP_MODE not in {"0", "off", "false", "disabled", "disable", "snapshot", "prompt_snapshot"}
+
+
+def _openai_mcp_tool_name(tool_id: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_]+", "_", str(tool_id or "").strip()).strip("_")
+    return token or "tool"
+
+
+def _llm_mcp_allowed_tools_openai_names(allowed_tools: tuple[str, ...]) -> list[str]:
+    return [_openai_mcp_tool_name(item) for item in allowed_tools if str(item).strip()]
+
+
+def _root_base_url_for_ctx(ctx: Any, cfg: Any | None = None) -> str:
+    root_settings = getattr(cfg, "root_settings", None) if cfg is not None else None
+    base = str(
+        os.getenv("ADAOS_NLU_LLM_MCP_ROOT_URL")
+        or getattr(root_settings, "base_url", None)
+        or getattr(ctx.settings, "api_base", None)
+        or ""
+    ).strip()
+    return base.rstrip("/") or "https://api.inimatic.com"
+
+
+def _current_node_config(ctx: Any) -> Any | None:
+    cfg = getattr(ctx, "config", None)
+    if cfg is not None:
+        return cfg
+    try:
+        from adaos.services.node_config import load_config
+
+        return load_config(ctx=ctx)
+    except Exception:
+        return None
+
+
+def _root_http_client_for_llm_mcp(ctx: Any) -> tuple[RootHttpClient, Any | None]:
+    cfg = _current_node_config(ctx)
+    base_url = _root_base_url_for_ctx(ctx, cfg)
+    verify: str | bool = True
+    cert_tuple: tuple[str, str] | None = None
+    try:
+        ca_path = cfg.ca_cert_path() if cfg is not None and hasattr(cfg, "ca_cert_path") else None
+        if os.getenv("ADAOS_ROOT_VERIFY_CA", "0") == "1" and ca_path is not None and Path(ca_path).exists():
+            verify = str(ca_path)
+    except Exception:
+        verify = True
+    try:
+        cert_path = cfg.hub_cert_path() if cfg is not None and hasattr(cfg, "hub_cert_path") else None
+        key_path = cfg.hub_key_path() if cfg is not None and hasattr(cfg, "hub_key_path") else None
+        if cert_path is not None and key_path is not None and Path(cert_path).exists() and Path(key_path).exists():
+            cert_tuple = (str(cert_path), str(key_path))
+    except Exception:
+        cert_tuple = None
+    return RootHttpClient(base_url=base_url, verify=verify, cert=cert_tuple), cfg
+
+
+def _llm_mcp_target_id(ctx: Any, cfg: Any | None = None) -> str:
+    explicit = str(os.getenv("ADAOS_NLU_LLM_MCP_TARGET_ID") or "").strip()
+    if explicit:
+        return explicit
+    subnet_id = str(
+        os.getenv("ADAOS_NLU_LLM_MCP_SUBNET_ID")
+        or getattr(getattr(ctx, "config", None), "subnet_id", None)
+        or getattr(getattr(ctx, "config", None), "subnet_id_value", None)
+        or getattr(cfg, "subnet_id", None)
+        or getattr(cfg, "subnet_id_value", None)
+        or getattr(ctx.settings, "subnet_id", None)
+        or ""
+    ).strip()
+    if subnet_id.startswith("hub:"):
+        return subnet_id
+    return f"hub:{subnet_id}" if subnet_id else ""
+
+
+def _llm_mcp_zone(ctx: Any, cfg: Any | None = None) -> str | None:
+    zone = str(
+        os.getenv("ADAOS_NLU_LLM_MCP_ZONE")
+        or getattr(getattr(ctx, "config", None), "zone_id", None)
+        or getattr(cfg, "zone_id", None)
+        or os.getenv("ADAOS_ZONE_ID")
+        or ""
+    ).strip()
+    return zone or None
+
+
+def _derive_root_mcp_server_url(root_base_url: str) -> str:
+    explicit = str(os.getenv("ADAOS_NLU_LLM_MCP_SERVER_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    public_base = str(
+        os.getenv("ROOT_MCP_PUBLIC_BASE_URL")
+        or os.getenv("ADAOS_ROOT_MCP_PUBLIC_BASE_URL")
+        or os.getenv("ADAOS_NLU_LLM_MCP_PUBLIC_BASE_URL")
+        or ""
+    ).strip()
+    if public_base:
+        return public_base.rstrip("/") + "/v1/root/mcp"
+    base = str(root_base_url or "").strip().rstrip("/")
+    if base.startswith("https://api."):
+        base = "https://mcp." + base[len("https://api.") :]
+    elif base.startswith("https://ru.api."):
+        base = "https://mcp.ru.api." + base[len("https://ru.api.") :]
+    return base + "/v1/root/mcp"
+
+
+def _read_llm_mcp_bearer_from_env() -> str:
+    token = str(os.getenv("ADAOS_NLU_LLM_MCP_BEARER") or "").strip()
+    if token:
+        return token
+    token_file = str(os.getenv("ADAOS_NLU_LLM_MCP_BEARER_FILE") or "").strip()
+    if not token_file:
+        return ""
+    try:
+        return Path(token_file).expanduser().read_text(encoding="utf-8").strip()
+    except Exception:
+        _log.debug("failed to read ADAOS_NLU_LLM_MCP_BEARER_FILE=%s", token_file, exc_info=True)
+        return ""
+
+
+def _redact_llm_mcp_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
+    redacted = dict(tool)
+    if "authorization" in redacted:
+        redacted["authorization"] = "<redacted>"
+    return redacted
+
+
+def _redact_llm_mcp_plan(plan: Mapping[str, Any] | None) -> dict[str, Any]:
+    payload = dict(plan or {})
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        payload["tools"] = [_redact_llm_mcp_tool(item) for item in iter_mappings(tools)]
+    return payload
+
+
+def _llm_mcp_cache_key(ctx: Any, *, allowed_tools: tuple[str, ...]) -> str:
+    cfg = _current_node_config(ctx)
+    return _sha256_payload(
+        {
+            "mode": _LLM_MCP_MODE,
+            "root_base_url": _root_base_url_for_ctx(ctx, cfg),
+            "target_id": _llm_mcp_target_id(ctx, cfg),
+            "zone": _llm_mcp_zone(ctx, cfg),
+            "server_label": _LLM_MCP_SERVER_LABEL,
+            "allowed_tools": list(allowed_tools),
+            "require_approval": _LLM_MCP_REQUIRE_APPROVAL,
+        }
+    )
+
+
+def _cached_llm_mcp_plan(cache_key: str) -> dict[str, Any] | None:
+    now = time.monotonic()
+    with _LLM_MCP_DESCRIPTOR_CACHE_LOCK:
+        entry = _LLM_MCP_DESCRIPTOR_CACHE.get(cache_key)
+        if entry is None:
+            return None
+        expires_at, payload = entry
+        if expires_at > now:
+            cached = copy.deepcopy(payload)
+            cached["cache"] = "hit"
+            return cached
+        _LLM_MCP_DESCRIPTOR_CACHE.pop(cache_key, None)
+    return None
+
+
+def _store_llm_mcp_plan(cache_key: str, payload: Mapping[str, Any], *, ttl_s: float) -> None:
+    if ttl_s <= 0:
+        return
+    with _LLM_MCP_DESCRIPTOR_CACHE_LOCK:
+        _LLM_MCP_DESCRIPTOR_CACHE[cache_key] = (time.monotonic() + float(ttl_s), copy.deepcopy(dict(payload)))
+        if len(_LLM_MCP_DESCRIPTOR_CACHE) > 32:
+            remove_count = len(_LLM_MCP_DESCRIPTOR_CACHE) - 32
+            for key, _entry in sorted(_LLM_MCP_DESCRIPTOR_CACHE.items(), key=lambda item: item[1][0])[:remove_count]:
+                _LLM_MCP_DESCRIPTOR_CACHE.pop(key, None)
+
+
+def _manual_llm_mcp_plan(ctx: Any, *, allowed_tools: tuple[str, ...]) -> dict[str, Any] | None:
+    bearer = _read_llm_mcp_bearer_from_env()
+    if not bearer:
+        return None
+    cfg = _current_node_config(ctx)
+    root_base_url = _root_base_url_for_ctx(ctx, cfg)
+    tool = {
+        "type": "mcp",
+        "server_label": _LLM_MCP_SERVER_LABEL,
+        "server_url": _derive_root_mcp_server_url(root_base_url),
+        "authorization": bearer,
+        "require_approval": _LLM_MCP_REQUIRE_APPROVAL,
+    }
+    openai_allowed = _llm_mcp_allowed_tools_openai_names(allowed_tools)
+    if openai_allowed:
+        tool["allowed_tools"] = openai_allowed
+    return {
+        "enabled": True,
+        "mode": _LLM_MCP_MODE,
+        "status": "ready",
+        "source": "env_bearer",
+        "cache": "miss",
+        "tools": [tool],
+        "allowed_tools": list(allowed_tools),
+        "openai_allowed_tools": openai_allowed,
+        "target_id": _llm_mcp_target_id(ctx, cfg) or None,
+        "zone": _llm_mcp_zone(ctx, cfg),
+    }
+
+
+def _extract_root_mcp_call_result(payload: Mapping[str, Any]) -> dict[str, Any]:
+    response = payload.get("response")
+    if isinstance(response, Mapping):
+        result = response.get("result")
+        if isinstance(result, Mapping):
+            return dict(result)
+    result = payload.get("result")
+    if isinstance(result, Mapping):
+        return dict(result)
+    session = payload.get("session")
+    if isinstance(session, Mapping):
+        return dict(session)
+    return dict(payload)
+
+
+def _issue_llm_mcp_plan(ctx: Any, *, request_id: str | None, allowed_tools: tuple[str, ...]) -> dict[str, Any]:
+    http, cfg = _root_http_client_for_llm_mcp(ctx)
+    target_id = _llm_mcp_target_id(ctx, cfg)
+    if not target_id:
+        raise RuntimeError("root MCP target_id is not available")
+    zone = _llm_mcp_zone(ctx, cfg)
+    capabilities = _env_csv(os.getenv("ADAOS_NLU_LLM_MCP_CAPABILITIES"))
+    if not capabilities:
+        capabilities = tuple(
+            dict.fromkeys(
+                [
+                    "operations.read.targets",
+                    "development.read.descriptors",
+                    *allowed_tools,
+                ]
+            )
+        )
+    arguments: dict[str, Any] = {
+        "target_id": target_id,
+        "audience": _LLM_MCP_AUDIENCE,
+        "ttl_seconds": _LLM_MCP_SESSION_TTL_S,
+        "capabilities": list(capabilities),
+        "note": f"nlu_teacher:{request_id or 'adhoc'}",
+    }
+    if zone:
+        arguments["zone"] = zone
+    issue_payload = {
+        "tool_id": "hub.issue_mcp_session",
+        "arguments": arguments,
+        "request_id": request_id or f"nlu-llm-mcp-{int(time.time() * 1000)}",
+        "trace_id": f"{request_id or 'nlu.llm'}.mcp.issue",
+    }
+    issued_raw = http.request("POST", "/v1/root/mcp/call", json=issue_payload, timeout=min(_TIMEOUT_S, 15.0))
+    issued = _extract_root_mcp_call_result(issued_raw if isinstance(issued_raw, Mapping) else {})
+    session_id = str(issued.get("session_id") or "").strip()
+    access_token = str(issued.get("access_token") or "").strip()
+    if not session_id or not access_token:
+        raise RuntimeError("root MCP session response did not include session_id/access_token")
+    descriptor_http = RootHttpClient(
+        base_url=http.base_url,
+        verify=http.verify,
+        cert=http.cert,
+        default_headers={"Authorization": f"Bearer {access_token}"},
+    )
+    descriptor = descriptor_http.request(
+        "GET",
+        f"/v1/root/mcp/sessions/{session_id}/openai-tool",
+        params={
+            "server_label": _LLM_MCP_SERVER_LABEL,
+            "require_approval": _LLM_MCP_REQUIRE_APPROVAL,
+            "allowed_tools": ",".join(allowed_tools),
+        },
+        timeout=min(_TIMEOUT_S, 15.0),
+    )
+    openai = descriptor.get("openai") if isinstance(descriptor, Mapping) else {}
+    tool = openai.get("responses_tool") if isinstance(openai, Mapping) else None
+    if not isinstance(tool, Mapping):
+        raise RuntimeError("root MCP openai-tool descriptor is missing responses_tool")
+    return {
+        "enabled": True,
+        "mode": _LLM_MCP_MODE,
+        "status": "ready",
+        "source": "root_session",
+        "cache": "miss",
+        "tools": [dict(tool)],
+        "allowed_tools": list(allowed_tools),
+        "openai_allowed_tools": list(tool.get("allowed_tools") or []) if isinstance(tool.get("allowed_tools"), list) else [],
+        "target_id": target_id,
+        "zone": zone,
+        "session": {
+            "session_id": session_id,
+            "target_id": issued.get("target_id") or target_id,
+            "subnet_id": issued.get("subnet_id"),
+            "capability_profile": issued.get("capability_profile"),
+            "expires_at": issued.get("expires_at"),
+        },
+    }
+
+
+def _prepare_llm_mcp_plan(*, request_id: str | None) -> dict[str, Any]:
+    if not _llm_mcp_mode_enabled():
+        return {"enabled": False, "mode": _LLM_MCP_MODE, "status": "disabled", "tools": []}
+    ctx = get_ctx()
+    allowed_tools = tuple(_LLM_MCP_ALLOWED_TOOLS)
+    cache_key = _llm_mcp_cache_key(ctx, allowed_tools=allowed_tools)
+    cached = _cached_llm_mcp_plan(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        plan = _manual_llm_mcp_plan(ctx, allowed_tools=allowed_tools)
+        if plan is None:
+            plan = _issue_llm_mcp_plan(ctx, request_id=request_id, allowed_tools=allowed_tools)
+        _store_llm_mcp_plan(cache_key, plan, ttl_s=max(1.0, float(_LLM_MCP_SESSION_TTL_S) - 60.0))
+        return plan
+    except Exception as exc:
+        plan = {
+            "enabled": True,
+            "mode": _LLM_MCP_MODE,
+            "status": "unavailable",
+            "source": "root_session",
+            "cache": "miss",
+            "tools": [],
+            "allowed_tools": list(allowed_tools),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        _store_llm_mcp_plan(cache_key, plan, ttl_s=_LLM_MCP_FAILURE_CACHE_TTL_S)
+        _log.debug("failed to prepare LLM Root MCP plan request_id=%s", request_id, exc_info=True)
+        return plan
+
+
+async def _prepare_llm_mcp_plan_async(*, request_id: str | None) -> dict[str, Any]:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_prepare_llm_mcp_plan, request_id=request_id),
+            timeout=max(0.1, float(_LLM_MCP_PREPARE_TIMEOUT_S)),
+        )
+    except asyncio.TimeoutError:
+        return {
+            "enabled": True,
+            "mode": _LLM_MCP_MODE,
+            "status": "timeout",
+            "tools": [],
+            "timeout_s": float(_LLM_MCP_PREPARE_TIMEOUT_S),
+        }
+
+
 def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[str, Any]) -> list[dict[str, str]]:
     system = (
         "You are AdaOS NLU teacher. Decide what to do with a user utterance.\n"
@@ -1771,6 +2163,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Prefer existing intents from context (scenario_nlu.intents keys) over inventing new ones.\n"
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
         "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
+        "- If MCP tools are available to you, use them as read-only governed AdaOS context sources when you need fresher root/subnet facts than the prompt snapshot. Never use MCP to mutate state, dispatch UI actions, call SDK functions, or apply training.\n"
         "- context.root_mcp.nlu_authoring_context.action_surface.available_actions is the primary governed action inventory. Prefer actions/intents from this surface and use runtime_state/process_state/developer_hints to resolve what is currently available.\n"
         "- If developer_hints describe aliases, primary_actions, slot_schemas, entities, or owner_hints for a skill/scenario, treat them as curated authoring guidance and prefer them over guessing from names alone.\n"
         "- context.root_mcp.desktop_registry_lookup contains canonical modal_id/app_id/scenario_id values and labels/aliases. Use canonical slots for intended actions; display labels are only match evidence.\n"
@@ -1823,10 +2216,22 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
     return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
 
 
-async def _llm_call(messages: list[dict[str, str]], *, request_id: str | None = None) -> dict[str, Any]:
+async def _llm_call(
+    messages: list[dict[str, str]],
+    *,
+    request_id: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    max_tool_calls: int | None = None,
+) -> dict[str, Any]:
     ctx = get_ctx()
     http = RootHttpClient.from_settings(ctx.settings)
     body = {"model": _MODEL, "messages": messages, "max_tokens": _MAX_TOKENS, "temperature": 0.2}
+    if tools:
+        body["tools"] = list(tools)
+        body["tool_choice"] = tool_choice or "auto"
+        if max_tool_calls is not None and int(max_tool_calls) > 0:
+            body["max_tool_calls"] = int(max_tool_calls)
     headers: dict[str, str] = {}
     subnet_id = str(getattr(getattr(ctx, "config", None), "subnet_id", "") or "").strip()
     node_id = str(getattr(getattr(ctx, "config", None), "node_id", "") or "").strip()
@@ -1890,6 +2295,12 @@ async def _llm_call(messages: list[dict[str, str]], *, request_id: str | None = 
             details["request_id"] = req_id
         if cache_state:
             details["cache"] = cache_state
+        mcp_protocol = protocol.get("mcp") if isinstance(protocol.get("mcp"), Mapping) else None
+        if isinstance(mcp_protocol, Mapping):
+            details["mcp"] = {
+                "used_mcp": bool(mcp_protocol.get("used_mcp")),
+                "item_count": mcp_protocol.get("item_count"),
+            }
         set_integration_readiness(
             "llm",
             status=ReadinessStatus.READY,
@@ -2215,10 +2626,24 @@ async def _handle_teacher_request(evt: Any) -> None:
             context["root_mcp"] = mcp_evidence
 
         messages = _build_prompt(request=dict(req), webspace_id=webspace_id, context=context)
+        llm_mcp_plan = await _prepare_llm_mcp_plan_async(request_id=request_id)
+        llm_mcp_tools = [dict(item) for item in iter_mappings(llm_mcp_plan.get("tools"))]
         prompt_audit = {
             "request_hash": _sha256_payload({"webspace_id": webspace_id, "request": dict(req)}),
             "context_hash": _sha256_payload(context),
             "prompt_hash": _sha256_payload(messages),
+            "mcp": {
+                "enabled": bool(llm_mcp_plan.get("enabled")),
+                "mode": llm_mcp_plan.get("mode"),
+                "status": llm_mcp_plan.get("status"),
+                "source": llm_mcp_plan.get("source"),
+                "cache": llm_mcp_plan.get("cache"),
+                "tool_count": len(llm_mcp_tools),
+                "allowed_tools": list(llm_mcp_plan.get("allowed_tools") or [])[:30]
+                if isinstance(llm_mcp_plan.get("allowed_tools"), list)
+                else [],
+                "tools_hash": _sha256_payload(llm_mcp_tools) if llm_mcp_tools else None,
+            },
             "correction_thread": {
                 "active": True,
                 "thread_id": correction_context.get("thread_id"),
@@ -2247,6 +2672,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                         "messages": _redact_messages(messages),
                         "max_tokens": _MAX_TOKENS,
                         "timeout_s": _TIMEOUT_S,
+                        "mcp": _redact_llm_mcp_plan(llm_mcp_plan),
                     },
                     "status": "request",
                 },
@@ -2271,6 +2697,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                         "max_tokens": _MAX_TOKENS,
                         "timeout_s": _TIMEOUT_S,
                         "audit": dict(prompt_audit),
+                        "mcp": _redact_llm_mcp_plan(llm_mcp_plan),
                     },
                     meta=req_meta,
                 ),
@@ -2279,7 +2706,16 @@ async def _handle_teacher_request(evt: Any) -> None:
             _log.debug("failed to append teacher event (llm.request) webspace=%s", webspace_id, exc_info=True)
 
         try:
-            res = await _llm_call(messages, request_id=request_id or log_id)
+            llm_kwargs: dict[str, Any] = {"request_id": request_id or log_id}
+            if llm_mcp_tools:
+                llm_kwargs.update(
+                    {
+                        "tools": llm_mcp_tools,
+                        "tool_choice": "auto",
+                        "max_tool_calls": _LLM_MCP_MAX_TOOL_CALLS,
+                    }
+                )
+            res = await _llm_call(messages, **llm_kwargs)
         except Exception as exc:
             _log.warning("llm teacher call failed: %s", exc)
             try:
@@ -2319,12 +2755,14 @@ async def _handle_teacher_request(evt: Any) -> None:
             suggestion = {"decision": "ignore", "notes": raw_text, "confidence": 0.0}
 
         try:
+            protocol = res.get("_protocol") if isinstance(res, dict) and isinstance(res.get("_protocol"), dict) else {}
             await _patch_llm_log(
                 webspace_id,
                 log_id=log_id,
                 patch={
                     "status": "response",
                     "response": {"raw": _truncate(raw_text, 2000), "parsed": suggestion},
+                    "protocol": protocol,
                     "duration_s": max(0.0, time.time() - started_at),
                 },
             )
