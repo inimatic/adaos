@@ -295,7 +295,7 @@ _YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_S
 _YROOM_EFFECTIVE_GUARD_STRICT_FULL_CHECKS = _env_flag("ADAOS_YJS_EFFECTIVE_GUARD_STRICT_FULL_CHECKS", False)
 _YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES = _env_int(
     "ADAOS_YJS_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES",
-    8,
+    0,
     minimum=0,
 )
 _YROOM_EFFECTIVE_GUARD_REPAIR_COOLDOWN_SEC = _env_float(
@@ -4167,6 +4167,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             _finalize_room_bootstrap_rebuild_status(
                                 webspace_id,
                                 seed_result=seed_result,
+                                room=room,
                             ),
                         )
                         self.rooms[name] = room
@@ -4723,6 +4724,7 @@ async def _finalize_room_bootstrap_rebuild_status(
     webspace_id: str,
     *,
     seed_result: dict[str, Any] | None = None,
+    room: Any | None = None,
 ) -> None:
     """
     Publish a semantic rebuild status for rooms restored from a disk snapshot.
@@ -4730,22 +4732,16 @@ async def _finalize_room_bootstrap_rebuild_status(
     A cold YRoom can already contain all effective branches because the durable
     snapshot is healthy. In that path no semantic rebuild event is emitted, so
     in-memory diagnostics may still report ``materialization_not_ready`` after a
-    process restart. Run the public rebuild primitive once before the room is
-    exposed so readiness reflects the actual YDoc state.
+    process restart. The room has already gone through effective branch
+    materialization, so this finalizer only records the lightweight readiness
+    result and avoids a second full semantic rebuild on the event loop.
     """
     try:
-        from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources  # pylint: disable=import-outside-toplevel
-
-        result = await rebuild_webspace_from_sources(
-            webspace_id,
-            action="room_bootstrap",
-            source_of_truth="room_bootstrap",
-        )
+        ydoc = getattr(room, "ydoc", None)
+        ready = _room_effective_top_level_ready(ydoc)
         if seed_result is not None:
-            seed_result["room_bootstrap_rebuild_status"] = (
-                "ready" if bool(result.get("ok")) and bool(result.get("accepted")) else "not_accepted"
-            )
-            seed_result["room_bootstrap_rebuild_error"] = str(result.get("error") or "") or None
+            seed_result["room_bootstrap_rebuild_status"] = "ready" if ready else "not_ready"
+            seed_result["room_bootstrap_rebuild_error"] = None if ready else "effective_branches_not_ready"
     except Exception as exc:
         if seed_result is not None:
             seed_result["room_bootstrap_rebuild_status"] = "failed"
