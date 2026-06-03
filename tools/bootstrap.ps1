@@ -724,7 +724,7 @@ elseif ($ownerAuth -and $ownerAuth.verification_uri) {
 }
 else {
     Write-Host "     .\\.venv\\Scripts\\python.exe -m adaos dev root login"
-    Write-Host "     Then open https://app.inimatic.com/?mode=registration and enter the code."
+    Write-Host "     Then open https://inimatic.com/?mode=registration and enter the code."
 }
 Write-Host "  3) Start/stop/restart AdaOS API:"
 Write-Host ("     Start (foreground): .\\.venv\\Scripts\\python.exe -m adaos api serve --host {0} --port {1}" -f $ServeHost, $ServePort)
