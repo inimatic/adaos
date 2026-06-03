@@ -17,6 +17,19 @@ DEFAULT_SESSION_TTL_SECONDS = 4 * 60 * 60
 MAX_SESSION_TTL_SECONDS = 24 * 60 * 60
 
 DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
+    "NLUTeacherRead": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "development.read.descriptors",
+    ],
+    "NLUTeacherDryRun": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "development.read.descriptors",
+    ],
+    "NLUTeacherAuthor": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "development.read.descriptors",
+        "development.write.named_entities",
+    ],
     "ProfileOpsRead": [
         *DEFAULT_BEARER_CAPABILITIES,
         "operations.read.targets",

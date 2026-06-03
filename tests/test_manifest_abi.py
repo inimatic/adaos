@@ -414,3 +414,87 @@ def test_builder_draft_schema_accepts_default_template_metadata() -> None:
     for path in template_paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
         Draft202012Validator(schema).validate(payload)
+
+
+def test_nlu_teacher_schema_accepts_contract_bundle() -> None:
+    schema = _load_schema("nlu.teacher.v1.schema.json")
+    payload = {
+        "request_thread": {
+            "request_id": "req.1",
+            "thread_id": "thread.1",
+            "previous_request_id": "req.0",
+            "correction_target_id": "cand.0",
+            "text": "open weather",
+            "source_channel": "voice",
+            "scope": {
+                "channel": "voice",
+                "route_id": "voice_chat",
+                "webspace_id": "desktop",
+                "scenario_id": "web_desktop",
+                "locale": "en",
+                "privacy_boundary": "workspace",
+            },
+            "idempotency": {
+                "request_capture": "idem.request.1",
+                "llm_proposal": "idem.llm.1",
+                "preview": "idem.preview.1",
+            },
+        },
+        "action_candidate": {
+            "id": "act.1",
+            "candidate_id": "cand.1",
+            "request_id": "req.1",
+            "class": "interface_action",
+            "intent": "desktop.open_modal",
+            "slots": {"modal_id": "weather_modal"},
+            "owner": {"type": "scenario", "id": "web_desktop"},
+            "side_effect_class": "ui_navigation",
+            "status": "action_previewed",
+            "phrase_preview": {"ok": True},
+            "action_preview": {"ok": True, "action_id": "desktop.modal.open"},
+        },
+        "template_candidate": {
+            "id": "tplcand.1",
+            "candidate_id": "cand.1",
+            "request_id": "req.1",
+            "class": "template_candidate",
+            "engine": "regex",
+            "intent": "desktop.open_modal",
+            "owner": {"type": "scenario", "id": "web_desktop"},
+            "operation": "add_regex_rule",
+            "patch": {"pattern": "open weather"},
+            "linked_action_candidate_id": "act.1",
+            "status": "phrase_previewed",
+        },
+        "clarification_session": {
+            "id": "clarify.1",
+            "request_id": "req.1",
+            "thread_id": "thread.1",
+            "status": "rejected",
+            "uncertainty_kind": "candidate_confirmation",
+            "question": "Open Weather?",
+            "allowed_answers": [{"id": "yes"}, {"id": "no"}],
+            "rejected_candidates": ["cand.1"],
+            "negative_feedback": {
+                "reason": "voice_confirmation_rejected",
+                "answer": "no",
+            },
+            "attempt": 1,
+        },
+        "response_policy": {
+            "decision": "confirm",
+            "requires_confirmation": True,
+            "allowed_side_effects": ["read_only", "ui_navigation"],
+            "reason": "voice confirmation required",
+        },
+        "mcp_capability_profile": {
+            "profile_id": "NLUTeacherDryRun",
+            "mode": "dry_run_preview",
+            "tools": ["nlu_authoring.get_context", "nlu_authoring.check_phrase", "desktop.preview_action"],
+            "dispatch_allowed": False,
+            "training_mutation_allowed": False,
+            "requires_operator_approval": True,
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)

@@ -88,9 +88,9 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "mode": "typed_authoring_context",
                 "published_by": "root",
                 "preferred_for": ["nlu_teacher", "entity_canonicalization", "llm_authoring"],
-                "descriptor_ids": ["named_entity_registry"],
+                "descriptor_ids": ["named_entity_registry", "nlu_teacher_schema"],
                 "tool_prefixes": ["nlu_authoring."],
-                "capability_profiles": ["ProfileOpsControl"],
+                "capability_profiles": ["NLUTeacherRead", "NLUTeacherDryRun", "NLUTeacherAuthor"],
                 "backing_store": "root_descriptor_cache + named_entity_read_model + governed_access_links",
             },
         ],
@@ -194,6 +194,10 @@ def _builder_task_schema() -> dict[str, Any]:
 
 def _builder_draft_schema() -> dict[str, Any]:
     return _load_json(_package_root() / "abi" / "builder.draft.v1.schema.json")
+
+
+def _nlu_teacher_schema() -> dict[str, Any]:
+    return _load_json(_package_root() / "abi" / "nlu.teacher.v1.schema.json")
 
 
 def _status_vocab() -> dict[str, list[str]]:
@@ -313,6 +317,7 @@ def _descriptor_build_profile() -> dict[str, Any]:
             "scenario_manifest_schema",
             "builder_task_schema",
             "builder_draft_schema",
+            "nlu_teacher_schema",
             "template_catalog",
             "architecture_catalog",
             "public_skill_registry_summary",
@@ -443,6 +448,8 @@ def _descriptor_payload(descriptor_id: str, *, level: str = "std") -> Any:
         return _builder_task_schema()
     if token == "builder_draft_schema":
         return _builder_draft_schema()
+    if token == "nlu_teacher_schema":
+        return _nlu_teacher_schema()
     if token == "template_catalog":
         return _template_catalog()
     if token == "capability_registry":
@@ -550,6 +557,14 @@ def list_descriptor_sets() -> list[dict[str, Any]]:
             source_kind="builder_draft_schema",
             descriptor_class="schema",
             tags=["development", "builder", "draft", "schema"],
+        ),
+        _descriptor_entry(
+            "nlu_teacher_schema",
+            title="NLU Teacher schema",
+            summary="Current JSON schema for NLU Teacher request, candidate, clarification, feedback, and MCP profile contracts.",
+            source_kind="nlu_teacher_schema",
+            descriptor_class="schema",
+            tags=["development", "nlu", "teacher", "schema"],
         ),
         _descriptor_entry(
             "template_catalog",
