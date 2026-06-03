@@ -1,6 +1,6 @@
 # NLU Roadmap Checklist
 
-Current runtime implementation estimate: **94%** for the practical AdaOS NLU
+Current runtime implementation estimate: **95%** for the practical AdaOS NLU
 pipeline and provider boundary. The target NLU Teacher architecture is tracked
 separately below because it adds candidate state, correction threads, MCP
 descriptors, UI authoring, and safety gates that are not part of the runtime
@@ -26,13 +26,15 @@ provider stage. It is intentionally separate from `neural_nlu_service_skill`
 and should not be counted as a replacement for the production Neural NLU
 provider or the Teacher governance loop.
 
-Current M4 status: **complete for the candidate Apply validation slice**. LLM
+Current M4 status: **complete for candidate Apply validation and first
+voice-confirmed dispatch slice**. LLM
 misses can produce structured action/template envelopes or clarification
 sessions; Root MCP exposes a contextual action surface; Teacher enforces
 multi-engine authoring strategies; and candidate Apply now runs a dry-run
-validation gate before durable regex/example changes. Remaining target-roadmap
-items belong mainly to dispatch outcome verification, promotion, and
-UI/operator surfaces.
+validation gate before durable regex/example changes. Voice-confirmed safe
+candidates can now emit the normal AdaOS `nlp.intent.detected` path after
+`understanding.acquired`. Remaining target-roadmap items belong mainly to
+dispatch outcome verification, promotion, and UI/operator surfaces.
 
 Current MCP-aware LLM status: **hybrid bridge implemented**. NLU Teacher still
 collects a bounded Root MCP snapshot for compatibility, but it can also attach
@@ -385,6 +387,10 @@ below remain useful for tracking existing implementation work.
 - [x] Current regex Apply verifies replayed understanding by re-probing the
   source phrase and requiring the resulting intent to match the planned
   candidate intent before emitting `understanding.acquired`.
+- [x] M4 implementation slice: voice-confirmed candidates with safe
+  side-effect policy now dispatch only by emitting the normal
+  `nlp.intent.detected` event, and blocked candidates record
+  `dispatch_status=blocked` instead of mutating UI/host state directly.
 - [ ] `[must]` Add rate limits, duplicate suppression, and queue/backpressure
   policy for Root/OpenAI Teacher calls by webspace, route, request class, and
   repeated phrase hash.
@@ -718,7 +724,9 @@ below remain useful for tracking existing implementation work.
 - [x] Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
 - [x] Record planned intent, owner hint, proposed regex template, and verification status.
 - [x] Record correction-thread link for follow-up correction phrases.
-- [ ] Record dispatch status.
+- [x] Record first dispatch status for the voice-confirmed safe candidate path.
+- [ ] Generalize dispatch status to all candidate/action classes and attach
+  factual host/skill/endpoint outcome evidence.
 - [x] LLM Teacher enablement inherits `root.llm.allow_nlu_teacher` when env
   overrides are unset; disabled LLM runtime records `llm.skipped` instead of
   silently dropping captured requests.
@@ -803,8 +811,10 @@ below remain useful for tracking existing implementation work.
     preview resolves the endpoint role before any command is sent.
 - [x] After a regex/template candidate is trusted-applied, re-run phrase check and mark it verified only if the returned intent
   matches the LLM-planned intent.
-- [ ] Dispatch verified candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
+- [x] Dispatch verified voice-confirmed candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
   allowed for auto-dispatch.
+- [ ] Extend verified-candidate dispatch to non-modal action classes after
+  outcome ack/error contracts are available.
 - [x] Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
 - [x] Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
 - [x] Add smoke tests for candidate apply -> regex persist -> probe match -> `understanding.acquired`.
@@ -1052,16 +1062,14 @@ below remain useful for tracking existing implementation work.
 
 ## Immediate Next Steps
 
-1. Add safe dispatch preview/dispatch gates for verified candidates that are
-   allowed to run through the normal AdaOS intent/action path.
-2. Extend the M4 validation policy from candidate Apply to dispatch: outcome
+1. Extend the M4 validation policy from candidate Apply to dispatch: outcome
    checks for modal open, scenario switch, skill result, endpoint ack, and
    recorded failure paths.
-3. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
+2. Wire the Teacher UI Check phrase flow to show canonicalization, neural,
    Rasa, provider health, and action-preview evidence.
-4. Add descriptor cache invalidation/metrics beyond TTL-only reuse, tied to
+3. Add descriptor cache invalidation/metrics beyond TTL-only reuse, tied to
    registry/template/hint fingerprints.
-5. Add full model promotion gates using macro-F1, abstain rate, latency,
+4. Add full model promotion gates using macro-F1, abstain rate, latency,
    false-positive checks, and rollback evidence.
 
 ## Last Completed Slice
@@ -1079,6 +1087,11 @@ below remain useful for tracking existing implementation work.
   MCP evidence collection and LLM inference. The gate suppresses repeated
   routed phrases and over-limit webspace/route/request-class bursts while
   preserving correction/confirmation retries.
+- Voice-confirmed safe candidates now continue from
+  `understanding.acquired` into the regular `nlp.intent.detected` dispatcher
+  path. The candidate records `dispatch_status=requested` and a
+  `dispatch.requested` Teacher event; unsafe candidates are recorded as
+  `dispatch_status=blocked`.
 - M3 multi-engine authoring strategy is now enforced: Teacher normalizes
   `training_strategy`, treats non-regex strategies as first-class candidates,
   and rejects regex proposals when the selected strategy, `why_not_regex`, or
