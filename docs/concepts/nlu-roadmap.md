@@ -1,6 +1,6 @@
 # NLU Roadmap Checklist
 
-Current runtime implementation estimate: **95%** for the practical AdaOS NLU
+Current runtime implementation estimate: **96%** for the practical AdaOS NLU
 pipeline and provider boundary. The target NLU Teacher architecture is tracked
 separately below because it adds candidate state, correction threads, MCP
 descriptors, UI authoring, and safety gates that are not part of the runtime
@@ -178,36 +178,40 @@ below remain useful for tracking existing implementation work.
 
 ### A. Contracts and State Model
 
-- [ ] `[must]` Define first-class `action_candidate` records separate from
+- [x] `[must]` Define first-class `action_candidate` records separate from
   `template_candidate` records: candidate id, class, planned action/intent,
   slots, owner, side-effect class, action-preview status, dispatch status,
   feedback status, audit ids, and rollback pointer.
-- [ ] `[must]` Define `template_candidate` records for regex/Rasa/Neural/entity
+- [x] `[must]` Define `template_candidate` records for regex/Rasa/Neural/entity
   alias/descriptor patches, each linked to an action candidate or explicit
   non-action decision.
-- [x] First implementation slice: LLM-generated regex candidates now carry
+- [x] `[must]` Contract slice: `src/adaos/abi/nlu.teacher.v1.schema.json`
+  defines request/thread, action candidate, template candidate,
+  clarification, lifecycle, idempotency, scope, response policy, feedback, and
+  MCP capability profile records.
+- [x] `[must]` First implementation slice: LLM-generated regex candidates now carry
   backward-compatible `action_candidate`, `template_candidate`, and
   `training_strategy` envelopes while the existing Apply/rollback path keeps
   using the legacy fields.
-- [ ] `[must]` Define `clarification_session`: source request, active
+- [x] `[must]` Define `clarification_session`: source request, active
   uncertainty kind, question, allowed answers, rejected candidates, retry
   count, timeout, final resolution, and thread id.
-- [x] First implementation slice: current Voice confirmation state is mirrored
+- [x] `[must]` First implementation slice: current Voice confirmation state is mirrored
   into `data.nlu_teacher.clarification_sessions[]` with question,
   allowed answers, status, answer, attempt, target, and rejected candidate
   evidence.
-- [x] M1 implementation slice: LLM `need_clarification` responses now create
+- [x] `[must]` M1 implementation slice: LLM `need_clarification` responses now create
   `llm_clarification` sessions with questions, options, risk notes,
   training strategy, route metadata, and Teacher events.
-- [ ] `[must]` Define candidate lifecycle states across understanding and
+- [x] `[must]` Define candidate lifecycle states across understanding and
   execution: `proposed`, `phrase_previewed`, `action_previewed`,
   `clarification_requested`, `user_confirmed`, `applied`,
   `replay_intent_matched`, `dispatch_attempted`, `dispatch_succeeded`,
   `accepted`, `corrected`, `rejected`, `quarantined`, and `rolled_back`.
-- [ ] `[must]` Define idempotency keys for request capture, LLM proposal,
+- [x] `[must]` Define idempotency keys for request capture, LLM proposal,
   clarification answer, preview, apply, dispatch, feedback, promotion, and
   rollback.
-- [ ] `[must]` Define scope fields for every request/thread/candidate:
+- [x] `[must]` Define scope fields for every request/thread/candidate:
   channel, route, webspace, scenario, device, user/session when available,
   locale, and privacy boundary.
 - [ ] `[should]` Add RU/EN/STT-noise fixtures for request threads,
@@ -215,40 +219,40 @@ below remain useful for tracking existing implementation work.
 
 ### B. Context and Action Surface
 
-- [ ] `[must]` Expose contextual action surface through API/MCP: current
+- [x] `[must]` Expose contextual action surface through API/MCP: current
   scenario, available apps/modals/scenarios, runtime-backed UI actions,
   skill-routed actions, endpoint commands, required slots, examples,
   side-effect class, owner, and preview method.
-- [x] M2 implementation slice: `nlu_authoring.get_context` now embeds
+- [x] `[must]` M2 implementation slice: `nlu_authoring.get_context` now embeds
   `action_surface.available_actions` with system/interface actions,
   skill/scenario intent routes, required slots, examples, side-effect class,
   owner, preview method, and fingerprint.
-- [ ] `[must]` Expose current state through API/MCP: open modals, home/current
+- [x] `[must]` Expose current state through API/MCP: open modals, home/current
   scenario, focused route/node/browser, selected device, active/pending
   confirmations, recent errors, and user route context.
-- [x] M2 implementation slice: `runtime_state` now exposes webspace, current
+- [x] `[must]` M2 implementation slice: `runtime_state` now exposes webspace, current
   scenario, available modal ids, app/widget catalogs, installed ids, nodes,
   active Teacher confirmations/clarifications, recent Teacher errors, lookup
   counts, and read errors.
-- [ ] `[must]` Expose process state relevant to language: active jobs, failed
+- [x] `[must]` Expose process state relevant to language: active jobs, failed
   jobs, long-running operations, last user command, last assistant action,
   current warnings, and owning skill/process.
-- [x] M2 implementation slice: `process_state` now exposes Teacher queue
+- [x] `[must]` M2 implementation slice: `process_state` now exposes Teacher queue
   counts, workbench signals, recent Teacher events, and compact
   `data.jobs`/`data.operations`/`data.processes`/`data.tasks` rows.
-- [ ] `[must]` Extend skill/scenario manifests with authored `llm_hints` /
+- [x] `[must]` Extend skill/scenario manifests with authored `llm_hints` /
   `nlu_hints`: aliases, user-facing action descriptions, examples, slot
   schemas, entity names, owner hints, and side-effect class.
-- [x] M2 implementation slice: skill/scenario manifests and skill `webui.json`
+- [x] `[must]` M2 implementation slice: skill/scenario manifests and skill `webui.json`
   can publish `llm_hints` / `nlu_hints`, and Root MCP forwards compact
   developer hints to the LLM prompt.
-- [ ] `[must]` Connect named entities to voice control: expose voice-safe
+- [x] `[must]` Connect named entities to voice control: expose voice-safe
   aliases, canonical ids, ambiguity evidence, entity ownership, and allowed
   voice actions for devices, nodes, endpoints, browsers, apps, modals,
   scenarios, skills, and processes.
-- [x] Current named-entity slice: Root MCP `nlu_authoring.get_context` includes
+- [x] `[must]` Current named-entity slice: Root MCP `nlu_authoring.get_context` includes
   canonical named-entity registry payload and bearer-derived target scope.
-- [ ] `[must]` Include entity scope and portability class in context:
+- [x] `[must]` Include entity scope and portability class in context:
   `session`, `user`, `workspace`, `scenario`, `skill`, `system`, or `public`.
 - [ ] `[should]` Publish process/action affordances as named entities when the
   user can naturally refer to them by voice, for example "scan", "indexing",
@@ -256,11 +260,11 @@ below remain useful for tracking existing implementation work.
 - [ ] `[should]` Cache Root MCP descriptive-plane snapshots per target/subnet
   with TTL and invalidation, so LLM context is usually complete without
   blocking the Voice path.
-- [x] M2 implementation slice: LLM Teacher caches descriptor evidence from
+- [x] `[must]` M2 implementation slice: LLM Teacher caches descriptor evidence from
   `nlu_authoring.get_context`, `desktop.registry.lookup`,
   `nlu_authoring.list_training_targets`, `nlu_authoring.list_templates`, and
   `sdk.describe_surface`; phrase checks and dialog context remain uncached.
-- [x] Root-public cached slice: hub control lifecycle reports publish a
+- [x] `[must]` Root-public cached slice: hub control lifecycle reports publish a
   bounded `nlu_authoring_snapshot`, and TS Root MCP serves
   `nlu_authoring.get_context`, `desktop.registry.lookup`,
   `nlu_authoring.get_dialog_context`,
@@ -279,19 +283,19 @@ below remain useful for tracking existing implementation work.
 - [x] `[must]` Update LLM output contract to return `decision`,
   `action_candidate`, `training_strategy`, `need_clarification`,
   `clarification_question`, `options`, `why_not_regex`, and `risk_notes`.
-- [ ] `[must]` Implement uncertainty policy: direct action, confirmation,
+- [x] `[must]` Implement uncertainty policy: direct action, confirmation,
   clarification, development task, or ignore based on confidence, ambiguity,
   side-effect class, and context.
-- [x] M3 implementation slice: `training_strategy=clarification` opens the
+- [x] `[must]` M3 implementation slice: `training_strategy=clarification` opens the
   structured clarification path when a question is present, and low-confidence
   non-read-only regex proposals are demoted to a non-regex strategy candidate
   instead of becoming an applyable regex rule.
 - [x] `[must]` Route short answers such as `yes/no/first/second/да/нет` through
   active clarification/confirmation sessions before normal NLU.
-- [x] First implementation slice: generic `clarification.answered` events now
+- [x] `[must]` First implementation slice: generic `clarification.answered` events now
   store the selected option, answer kind, raw answer text, route metadata, and
   final session status.
-- [ ] `[must]` Record negative feedback and rejected alternatives as structured
+- [x] `[must]` Record negative feedback and rejected alternatives as structured
   evidence, not only as a retry trigger.
 - [ ] `[could]` Let Voice/UI present disambiguation options for ambiguous
   entities and actions, for example Media Indexer vs Media Server.
@@ -303,48 +307,48 @@ below remain useful for tracking existing implementation work.
 
 ### D. Multi-Engine NLU Authoring
 
-- [ ] `[must]` Add `training_strategy` selection:
+- [x] `[must]` Add `training_strategy` selection:
   `regex`, `rasa_example`, `neural_example`, `entity_alias`,
   `descriptor_fix`, `development_task`, `clarification`, or `ignore`.
-- [x] First implementation slice: regex candidates and LLM clarification
+- [x] `[must]` First implementation slice: regex candidates and LLM clarification
   sessions preserve the selected `training_strategy` in persisted Teacher
   state.
-- [x] M3 implementation slice: Teacher normalizes strategy aliases, stores the
+- [x] `[must]` M3 implementation slice: Teacher normalizes strategy aliases, stores the
   selected strategy on every candidate, and routes non-regex strategies into
   first-class `training_example`, `entity_alias`, `descriptor_fix`,
   `development_task`, or `clarification` records.
-- [ ] `[must]` Require LLM to reject regex for broad semantic, highly
+- [x] `[must]` Require LLM to reject regex for broad semantic, highly
   contextual, or ambiguous phrases and choose Rasa/Neural/clarification or a
   descriptor fix instead.
-- [x] M3 implementation slice: if the LLM selects a non-regex strategy,
+- [x] `[must]` M3 implementation slice: if the LLM selects a non-regex strategy,
   provides `why_not_regex`, or proposes an overbroad/too-short regex, AdaOS
   rejects the regex path and stores a non-regex strategy candidate with
   `regex_rejection` evidence.
-- [ ] `[must]` Keep regex for deterministic command phrases and lookup-backed
+- [x] `[must]` Keep regex for deterministic command phrases and lookup-backed
   slots; add blast-radius preview before durable apply.
-- [x] M3 implementation slice: regex candidates are only applyable when
+- [x] `[must]` M3 implementation slice: regex candidates are only applyable when
   `training_strategy.primary=regex`, the source phrase preview matches, and
   the simple policy guard does not reject the pattern. Full blast-radius
   preview remains an M4 validation gate.
-- [ ] `[must]` Save Rasa/Neural examples through owner artifacts or curated
+- [x] `[must]` Save Rasa/Neural examples through owner artifacts or curated
   feedback overlays, not through direct model mutation.
-- [x] M3 implementation slice: `training_example` candidate Apply emits the
+- [x] `[must]` M3 implementation slice: `training_example` candidate Apply emits the
   governed `nlp.teacher.example.save` flow into skill/scenario/system-action
   artifacts or feedback overlays; it does not mutate Rasa/Neural models
   directly.
 - [ ] `[should]` Capture STT/raw text, normalized text, locale guess,
   transliteration/typo evidence, and entity canonicalization evidence for
   each teachable request.
-- [ ] `[must]` Treat entity-alias learning as a first-class strategy distinct
+- [x] `[must]` Treat entity-alias learning as a first-class strategy distinct
   from intent/template learning, including voice aliases and negative alias
   evidence.
-- [x] M3 implementation slice: `entity_alias` candidates are persisted as
+- [x] `[must]` M3 implementation slice: `entity_alias` candidates are persisted as
   first-class strategy candidates and can be accepted into the Teacher plan
   for later owner-specific alias APIs.
-- [ ] `[must]` Treat `descriptor_fix` and `development_task` as first-class
+- [x] `[must]` Treat `descriptor_fix` and `development_task` as first-class
   strategies when the system action or skill capability exists but is not
   sufficiently described for NLU/MCP.
-- [x] M3 implementation slice: `descriptor_fix` and `development_task`
+- [x] `[must]` M3 implementation slice: `descriptor_fix` and `development_task`
   candidates are persisted separately from regex/template candidates and can
   be accepted into the Teacher plan for developer handoff.
 - [ ] `[should]` Collect per-engine statistics before adding calibration
@@ -357,7 +361,7 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[must]` Make action preview a required gate for interface, skill, and
   endpoint action candidates before apply or dispatch.
-- [x] M4 implementation slice: `nlp.teacher.candidate.apply` now runs a
+- [x] `[must]` M4 implementation slice: `nlp.teacher.candidate.apply` now runs a
   validation gate before durable mutation. Built-in system/interface actions
   use `desktop.preview_action`; custom route candidates carry a warning until
   a route-specific preview surface exists.
@@ -365,47 +369,50 @@ below remain useful for tracking existing implementation work.
   `read_only`, `ui_navigation`, `local_state_change`,
   `durable_configuration_change`, `external_io`, `device_control`,
   `destructive`, and `unsupported`.
-- [x] M4 implementation slice: candidate Apply records a side-effect policy
+- [x] `[must]` M4 implementation slice: candidate Apply records a side-effect policy
   decision and blocks high-risk classes (`destructive`, `external_io`,
   `device_control`, `unsupported`) before mutation.
 - [ ] `[must]` Add conflict checks: duplicate templates, overbroad regex,
   owner conflicts, entity-alias ambiguity, and action mismatch.
-- [x] M4 implementation slice: Apply validation checks duplicate regex/example
+- [x] `[must]` M4 implementation slice: Apply validation checks duplicate regex/example
   templates through `preview_template_patch`, blocks overbroad non-read-only
   regex rules, and rejects action-intent or owner-target mismatches.
 - [ ] `[must]` Add lightweight security abuse checks that reduce high-risk
   failures early: prompt-injection markers in user utterances and descriptors,
   overbroad templates for non-read-only actions, alias collisions with system
   commands, unexpected MCP target scope, and untrusted skill-authored hints.
-- [x] M4 implementation slice: Apply validation checks prompt-injection
+- [x] `[must]` M4 implementation slice: Apply validation checks prompt-injection
   markers, overbroad templates for non-read-only actions, and system-command
   alias collisions. MCP target-scope and untrusted-hint validation remain a
   deeper policy pass.
 - [ ] `[must]` Verify both replayed understanding and action outcome when an
   action is dispatched: modal opened, scenario switched, skill result emitted,
   endpoint command acknowledged, or failure recorded.
-- [x] Current regex Apply verifies replayed understanding by re-probing the
+- [x] `[must]` Current regex Apply verifies replayed understanding by re-probing the
   source phrase and requiring the resulting intent to match the planned
   candidate intent before emitting `understanding.acquired`.
-- [x] M4 implementation slice: voice-confirmed candidates with safe
+- [x] `[must]` M4 implementation slice: voice-confirmed candidates with safe
   side-effect policy now dispatch only by emitting the normal
   `nlp.intent.detected` event, and blocked candidates record
   `dispatch_status=blocked` instead of mutating UI/host state directly.
-- [x] M4 implementation slice: dispatcher now emits `nlu.action.dispatched`
+- [x] `[must]` M4 implementation slice: dispatcher now emits `nlu.action.dispatched`
   / `nlu.action.dispatch_failed`; Teacher records `dispatch_status=emitted`
   or `failed` with action target, action payload, reason, and a Teacher event.
-- [ ] Add client/host-level outcome acknowledgements beyond dispatcher event
-  emission: modal opened/not found, scenario switched, skill result emitted,
-  endpoint command acknowledged.
+- [x] `[must]` Add client-level `desktop.modal.opened` / `desktop.modal.open_failed`
+  acknowledgements; Teacher links them to `dispatch_status=succeeded` or
+  `failed`.
+- [ ] `[should]` Add host/skill/endpoint acknowledgements beyond dispatcher event
+  emission: scenario switched, skill result emitted, endpoint command
+  acknowledged.
 - [ ] `[must]` Add rate limits, duplicate suppression, and queue/backpressure
   policy for Root/OpenAI Teacher calls by webspace, route, request class, and
   repeated phrase hash.
-- [x] M4 implementation slice: LLM Teacher now has an in-process rate/repeated
+- [x] `[must]` M4 implementation slice: LLM Teacher now has an in-process rate/repeated
   phrase gate before MCP evidence and Root/OpenAI calls. It records
   `llm.skipped` / `nlp.teacher.llm.skipped` with rate evidence, keeps the
   existing background concurrency semaphore and in-flight request de-dup, and
   exempts correction/confirmation retry metadata.
-- [x] M4 implementation slice: repeated voice misses re-open confirmation for
+- [x] `[must]` M4 implementation slice: repeated voice misses re-open confirmation for
   an existing `pending` / `validation_failed` regex candidate before falling
   back to the generic "not understood" message, so unresolved hypotheses stay
   actionable even when Root/OpenAI times out or duplicate suppression skips a
@@ -550,14 +557,14 @@ below remain useful for tracking existing implementation work.
 
 ## Phase 0: Teacher Contracts and Guardrails
 
-- [ ] Define the teacher request/thread model:
+- [x] `[must]` Define the teacher request/thread model:
   `request_id`, `thread_id`, previous request link, current correction target,
   user phrase, route context, and source channel.
-- [ ] Define candidate records:
+- [x] `[must]` Define candidate records:
   `candidate_id`, class, planned intent/action, target owner, proposed
   template/patch, verification status, dispatch status, feedback status, audit
   ids, and rollback pointer.
-- [ ] Define supported candidate classes:
+- [x] `[must]` Define supported candidate classes:
   - `skill_action`
   - `interface_action`
   - `endpoint_command`
@@ -566,62 +573,62 @@ below remain useful for tracking existing implementation work.
   - `nlu_correction`
   - `development_task`
   - `non_actionable`
-- [ ] Define candidate lifecycle states:
+- [x] `[must]` Define candidate lifecycle states:
   `proposed`, `previewed`, `intent_matched`, `dispatch_previewed`,
   `dispatched`, `accepted`, `corrected`, `rejected`, `quarantined`,
   `applied`, and `rolled_back`.
-- [ ] Define event names and idempotency keys for proposal, preview, apply,
+- [x] `[must]` Define event names and idempotency keys for proposal, preview, apply,
   dispatch, feedback, rollback, and duplicate suppression.
-- [ ] Define response policy for voice/chat/UI:
+- [x] `[must]` Define response policy for voice/chat/UI:
   when to dispatch, ask a clarification, save feedback, create a development
   task, or avoid mutation.
-- [ ] Define MCP capability profiles:
+- [x] `[must]` Define MCP capability profiles:
   read-only context, probe/preview, authoring proposal, durable apply,
   dispatch preview, and operator-approved dispatch.
-- [x] Define and implement the first LLM prompt data policy: redact stored
+- [x] `[must]` Define and implement the first LLM prompt data policy: redact stored
   prompt logs, avoid embedding bearer tokens, bound context snapshots, and
   record request/context/prompt hashes for audit.
-- [ ] Add RU/EN Unicode fixtures for Teacher probes, correction threads, and
+- [ ] `[should]` Add RU/EN Unicode fixtures for Teacher probes, correction threads, and
   template patch previews.
 
 ## Phase 1: Baseline Runtime
 
-- [x] Regex-first pipeline with dynamic scenario/skill regex rules.
-- [x] Optional neural delegation event (`nlp.intent.detect.neural`) behind
+- [x] `[must]` Regex-first pipeline with dynamic scenario/skill regex rules.
+- [x] `[must]` Optional neural delegation event (`nlp.intent.detect.neural`) behind
   `ADAOS_NLU_NEURAL` or installed `neural_nlu_service_skill` auto-detection.
-- [x] Rasa NLU service-skill isolated from the hub Python environment.
-- [x] Rasa service-skill prepared in A/B skill runtime slots.
-- [x] Confidence/fallback path to `nlp.intent.not_obtained`.
-- [x] Baseline desktop intents for opening modals and node-scoped modals.
-- [x] Remove Neural NLU runtime-provider delivery through `src/adaos/interpreter_data`.
-- [x] Ensure Neural NLU parse bridge only discovers/starts installed service skills and does
+- [x] `[must]` Rasa NLU service-skill isolated from the hub Python environment.
+- [x] `[must]` Rasa service-skill prepared in A/B skill runtime slots.
+- [x] `[must]` Confidence/fallback path to `nlp.intent.not_obtained`.
+- [x] `[must]` Baseline desktop intents for opening modals and node-scoped modals.
+- [x] `[must]` Remove Neural NLU runtime-provider delivery through `src/adaos/interpreter_data`.
+- [x] `[must]` Ensure Neural NLU parse bridge only discovers/starts installed service skills and does
   not mutate workspace skills or A/B slots on demand.
 
 ## Phase 2: Operator Feedback Loop
 
-- [x] NLU Teacher stores not-obtained requests per webspace.
-- [x] Teacher can apply regex candidates into scenario/skill-owned artifacts.
-- [x] Teacher candidate Apply is available through API:
+- [x] `[must]` NLU Teacher stores not-obtained requests per webspace.
+- [x] `[must]` Teacher can apply regex candidates into scenario/skill-owned artifacts.
+- [x] `[must]` Teacher candidate Apply is available through API:
   `POST /api/nlu/teacher/{webspace_id}/candidate/apply`.
-- [x] Applied regex candidates are immediately checked against the original
+- [x] `[must]` Applied regex candidates are immediately checked against the original
   phrase and marked `intent_matched` only when the runtime probe returns the
   LLM-planned intent.
-- [x] Successful candidate verification emits
+- [x] `[must]` Successful candidate verification emits
   `nlp.teacher.understanding.acquired` and records Teacher audit events.
-- [x] Regex candidate rollback is available through
+- [x] `[must]` Regex candidate rollback is available through
   `POST /api/nlu/teacher/{webspace_id}/candidate/rollback` and removes the
   applied rule from owner artifact plus runtime cache.
-- [x] Teacher can apply dataset revisions into scenario training content.
-- [x] Dry-run phrase probe API for Teacher UI:
+- [x] `[must]` Teacher can apply dataset revisions into scenario training content.
+- [x] `[must]` Dry-run phrase probe API for Teacher UI:
   - `POST /api/nlu/teacher/{webspace_id}/probe`
   - regex-first, optional Rasa fallback
   - returns `intent_ranking`, `entities`, `slots`, `stages`
   - does not dispatch actions
-- [x] Human verification checklist separates current API/CLI checks from target UI behavior.
-- [ ] UI field for "check phrase" wired to the probe endpoint.
+- [x] `[must]` Human verification checklist separates current API/CLI checks from target UI behavior.
+- [ ] `[should]` UI field for "check phrase" wired to the probe endpoint.
 - [ ] `[deferred]` UI buttons: "correct", "fix", "save example".
-- [x] Operator-approved positive feedback stored with audit metadata.
-- [x] Route accepted feedback to the owning NLU training artifact:
+- [x] `[must]` Operator-approved positive feedback stored with audit metadata.
+- [x] `[must]` Route accepted feedback to the owning NLU training artifact:
   skill, scenario, or system action feedback overlay.
 - [ ] `[deferred]` Route named-entity corrections to the governed named-entity source.
 - [ ] `[deferred]` Add explicit correction targets for core/client actions that are not
@@ -629,85 +636,85 @@ below remain useful for tracking existing implementation work.
 
 ## Phase 3: Observability
 
-- [x] `data.nlu_trace.items[]` stores request/detected/not-obtained events.
-- [x] Stage trace event `nlu.trace.stage` records:
+- [x] `[must]` `data.nlu_trace.items[]` stores request/detected/not-obtained events.
+- [x] `[must]` Stage trace event `nlu.trace.stage` records:
   - `request`
   - `regex`
   - `pipeline delegate`
   - `rasa`
   - `dispatcher action/reject`
 - [ ] `[could]` Trace UI should show `voice text -> regex/neural/rasa -> intent -> action`.
-- [x] Add machine-readable Neural NLU readiness check for artifacts, service
+- [x] `[must]` Add machine-readable Neural NLU readiness check for artifacts, service
   discovery, live health, model load, and index backend.
 - [ ] `[could]` Add latency per stage and service timing.
 - [ ] `[deferred]` Add golden phrase regression reports.
-- [x] Add neural usage statistics: request count, latency, confidence
+- [x] `[must]` Add neural usage statistics: request count, latency, confidence
   histogram, accept/abstain/reject counts, fallback ratio, and per-intent
   status evidence.
-- [x] Add named-entity canonicalization statistics: hit/miss/ambiguity counts
+- [x] `[must]` Add named-entity canonicalization statistics: hit/miss/ambiguity counts
   and unresolved spans.
-- [x] Voice chat desktop widget can show a non-dispatching Neural NLU probe
+- [x] `[must]` Voice chat desktop widget can show a non-dispatching Neural NLU probe
   result (`intent`, `via`, confidence, and slots) in node-scoped chat history
   when `ADAOS_VOICE_CHAT_INTENT_DEMO=1`.
 
 ## Cross-Lane Human Verification Gates
 
-- [x] Current implemented behavior has a manual checklist: [nlu-human-verification.md](./nlu-human-verification.md).
-- [x] Documentation marks which NLU Teacher behaviors are current UI, backend/API only, or target architecture.
-- [x] NLU Teacher UI has a Signals tab backed by `data.nlu_teacher.workbench_signals` for queue, quarantine, LLM error, skip, and acquired-understanding monitoring.
-- [x] NLU Teacher Signals accordion opens details inline without also opening
+- [x] `[must]` Current implemented behavior has a manual checklist: [nlu-human-verification.md](./nlu-human-verification.md).
+- [x] `[must]` Documentation marks which NLU Teacher behaviors are current UI, backend/API only, or target architecture.
+- [x] `[must]` NLU Teacher UI has a Signals tab backed by `data.nlu_teacher.workbench_signals` for queue, quarantine, LLM error, skip, and acquired-understanding monitoring.
+- [x] `[must]` NLU Teacher Signals accordion opens details inline without also opening
   an implicit modal.
-- [x] NLU Teacher Candidate Apply has one primary action that uses the
+- [x] `[must]` NLU Teacher Candidate Apply has one primary action that uses the
   backend-resolved owner target; the obsolete duplicate "Apply to scenario"
   shortcut is removed from the current UI.
-- [ ] NLU Teacher UI can run a phrase probe without terminal access.
+- [ ] `[should]` NLU Teacher UI can run a phrase probe without terminal access.
 - [ ] `[could]` NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
 - [ ] `[deferred]` NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata for the currently safe existing-API flows.
-- [x] Backend/API/MCP preview flow exposes stable template fingerprints and stale-write checks for template corrections.
+- [x] `[must]` Backend/API/MCP preview flow exposes stable template fingerprints and stale-write checks for template corrections.
 - [ ] `[could]` Operator-facing evidence distinguishes NLU gap, service/provider outage, low confidence, unsupported action, and missing capability.
 
 ## Phase 4a: Dynamic Lookups and Template Inventory
 
-- [x] Export baseline desktop lookup tables from workspace/packaged desktop manifests:
+- [x] `[must]` Export baseline desktop lookup tables from workspace/packaged desktop manifests:
   - `modal_id`
   - `node_ref`
   - `app_id`
   - `scenario_id`
   - `webspace_id`
-- [x] Feed lookup tables into Rasa training data.
-- [x] Expose lookup tables for Teacher/LLM inspection:
+- [x] `[must]` Feed lookup tables into Rasa training data.
+- [x] `[must]` Expose lookup tables for Teacher/LLM inspection:
   - `GET /api/nlu/teacher/{webspace_id}/lookups`
-- [x] Overlay live YJS desktop registry values on top of manifest lookups for Teacher API.
-- [x] Canonicalize lookup-backed dynamic regex slots before dispatch for
+- [x] `[must]` Overlay live YJS desktop registry values on top of manifest lookups for Teacher API.
+- [x] `[must]` Canonicalize lookup-backed dynamic regex slots before dispatch for
   `scenario_id`, `modal_id`, `app_id`, `node_ref`, `webspace_id`, and
   `skill_id`, so learned templates can match user-facing labels while actions
   receive stable ids.
-- [x] Expose stable template ids/fingerprints for current regex rules, examples, intent routes, and system-action examples through API and MCP inventory.
-- [x] Implement preview-time stale-write checks using target/template fingerprints.
+- [x] `[must]` Expose stable template ids/fingerprints for current regex rules, examples, intent routes, and system-action examples through API and MCP inventory.
+- [x] `[must]` Implement preview-time stale-write checks using target/template fingerprints.
 - [ ] `[deferred]` Extend the same inventory to Rasa/neural labels and lookup-set patching.
-- [x] Define the system action catalog for currently runtime-backed core/client
+- [x] `[must]` Define the system action catalog for currently runtime-backed core/client
   commands such as open, switch, reload, reset, and install toggle. Move,
   hide, and pin remain blocked on runtime host actions.
-- [x] Include system action examples in NLU authoring context without treating
+- [x] `[must]` Include system action examples in NLU authoring context without treating
   those actions as user skills.
 
 ## Phase 4b: Runtime Named Entities and Canonicalization
 
-- [x] Add a named-entity read model over devices, nodes, browsers, webspaces,
+- [x] `[must]` Add a named-entity read model over devices, nodes, browsers, webspaces,
   scenarios, skills, apps, and modals.
-- [x] Add a deterministic resolver that maps display names, observed names, and
+- [x] `[must]` Add a deterministic resolver that maps display names, observed names, and
   aliases to canonical refs before model dispatch.
-- [x] Add entity masking so model-facing text can use placeholders such as
+- [x] `[must]` Add entity masking so model-facing text can use placeholders such as
   `{device}`, `{webspace}`, and `{scenario}`.
-- [x] Add ambiguity handling instead of silently choosing between conflicting
+- [x] `[must]` Add ambiguity handling instead of silently choosing between conflicting
   aliases.
-- [x] Add Teacher/probe output for resolved entities, unresolved spans,
+- [x] `[must]` Add Teacher/probe output for resolved entities, unresolved spans,
   canonical refs, and ambiguity evidence.
-- [x] Add regression tests proving alias and device-name changes do not require
+- [x] `[must]` Add regression tests proving alias and device-name changes do not require
   Rasa/neural retraining.
-- [x] Track the full target design in
+- [x] `[must]` Track the full target design in
   [Named Entities and Canonical Naming](../architecture/named-entities.md).
-- [x] Feed canonicalized text and entity evidence into the neural provider
+- [x] `[must]` Feed canonicalized text and entity evidence into the neural provider
   contract.
 - [ ] `[could]` Ensure Rasa and neural training fingerprints exclude runtime aliases by
   default.
@@ -716,32 +723,32 @@ below remain useful for tracking existing implementation work.
 
 ### Ground Rule
 
-- [x] LLM cannot call SDK functions, publish events, invoke skill tools, or mutate UI state directly in the current Teacher loop.
-- [x] LLM can only propose AdaOS-owned candidates and patches; AdaOS validates, traces, previews, applies, and dispatches them.
-- [x] Every implemented teacher step has a trace/audit surface: `nlu.trace`, `data.nlu_teacher.*`, Root MCP audit, or event bus evidence.
+- [x] `[must]` LLM cannot call SDK functions, publish events, invoke skill tools, or mutate UI state directly in the current Teacher loop.
+- [x] `[must]` LLM can only propose AdaOS-owned candidates and patches; AdaOS validates, traces, previews, applies, and dispatches them.
+- [x] `[must]` Every implemented teacher step has a trace/audit surface: `nlu.trace`, `data.nlu_teacher.*`, Root MCP audit, or event bus evidence.
 
 ### 5a: Existing-API Working Loop
 
-- [x] Use the current Teacher API as the first operational loop before adding new MCP write surfaces:
+- [x] `[must]` Use the current Teacher API as the first operational loop before adding new MCP write surfaces:
   - `POST /api/nlu/teacher/{webspace_id}/probe`
   - `GET /api/nlu/teacher/{webspace_id}/lookups`
   - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
   - `POST /api/nlu/teacher/{webspace_id}/example/save`
-- [x] Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
-- [x] Record planned intent, owner hint, proposed regex template, and verification status.
-- [x] Record correction-thread link for follow-up correction phrases.
-- [x] Record first dispatch status and dispatcher outcome for the
+- [x] `[must]` Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
+- [x] `[must]` Record planned intent, owner hint, proposed regex template, and verification status.
+- [x] `[must]` Record correction-thread link for follow-up correction phrases.
+- [x] `[must]` Record first dispatch status and dispatcher outcome for the
   voice-confirmed safe candidate path.
-- [ ] Generalize dispatch status to all candidate/action classes and attach
+- [ ] `[should]` Generalize dispatch status to all candidate/action classes and attach
   factual host/skill/endpoint outcome evidence.
-- [x] LLM Teacher enablement inherits `root.llm.allow_nlu_teacher` when env
+- [x] `[must]` LLM Teacher enablement inherits `root.llm.allow_nlu_teacher` when env
   overrides are unset; disabled LLM runtime records `llm.skipped` instead of
   silently dropping captured requests.
-- [x] LLM Teacher prompt includes governed Root MCP evidence from
+- [x] `[must]` LLM Teacher prompt includes governed Root MCP evidence from
   `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
   `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
   `nlu_authoring.list_templates`, and `sdk.describe_surface`.
-- [x] LLM Teacher can run in MCP-aware hybrid mode: it prepares an OpenAI
+- [x] `[must]` LLM Teacher can run in MCP-aware hybrid mode: it prepares an OpenAI
   `responses_tool` descriptor from either an explicit debug bearer or a
   short-lived root-issued MCP session, passes it through `/v1/llm/response`,
   records redacted descriptor/audit fields, and falls back to prompt snapshot
@@ -750,61 +757,61 @@ below remain useful for tracking existing implementation work.
   snapshots toward LLM-selected MCP calls after public Root MCP exposes the
   same scoped `nlu_authoring.*`, `desktop.registry.*`, template, and preview
   tools that the local Root MCP service already provides.
-- [x] LLM Teacher prompt now treats
+- [x] `[must]` LLM Teacher prompt now treats
   `context.root_mcp.nlu_authoring_context.action_surface.available_actions` as
   the primary governed action inventory and uses `runtime_state`,
   `process_state`, and `developer_hints` for contextual disambiguation.
-- [x] LLM Teacher collects MCP evidence off the API/event loop with a bounded
+- [x] `[must]` LLM Teacher collects MCP evidence off the API/event loop with a bounded
   timeout so slow Root MCP/tool probes do not block Teacher state/UI reads.
-- [x] LLM Teacher caches Root MCP descriptor evidence with a short TTL so
+- [x] `[must]` LLM Teacher caches Root MCP descriptor evidence with a short TTL so
   repeated misses in the same target/subnet can reuse heavy context while each
   phrase still gets a fresh `check_phrase` and dialog context.
-- [x] Teacher events are durably persisted as they are appended, so partial LLM
+- [x] `[must]` Teacher events are durably persisted as they are appended, so partial LLM
   traces survive backend restart before a candidate is generated.
-- [x] LLM Teacher parses plain JSON and fenced JSON responses, previews regex
+- [x] `[must]` LLM Teacher parses plain JSON and fenced JSON responses, previews regex
   candidates against the source phrase, and quarantines candidates that do not
   compile or do not match the phrase.
-- [x] LLM regex candidates normalize common lookup slot aliases
+- [x] `[must]` LLM regex candidates normalize common lookup slot aliases
   (`scenario` -> `scenario_id`, `modal` -> `modal_id`, etc.) and repair
   host-action storage targets to the current scenario owner.
-- [x] LLM regex candidates for `desktop.open_modal` repair captured
+- [x] `[must]` LLM regex candidates for `desktop.open_modal` repair captured
   display labels/aliases to canonical modal evidence before preview/apply, so
   commands like "show subnet environment variables" can validate against
   `subnet_env_modal`.
-- [x] Skill/webui descriptor aliases are consumed by lookup normalization and
+- [x] `[must]` Skill/webui descriptor aliases are consumed by lookup normalization and
   Apply validation; `subnet_env` now publishes RU/EN aliases for the Subnet
   Environment modal so voice phrases for subnet environment variables resolve
   to `subnet_env_modal`.
-- [x] Applying a Teacher regex rule enables `regex_enabled` for the webspace if
+- [x] `[must]` Applying a Teacher regex rule enables `regex_enabled` for the webspace if
   the runtime regex stage was disabled, so a verified rule is actually used by
   the next normal `nlp.intent.detect.request`.
-- [x] Voice-originated regex candidates use a confirmation loop before Apply:
+- [x] `[must]` Voice-originated regex candidates use a confirmation loop before Apply:
   LLM asks a concrete hypothesis question in Voice, `да` applies, first `нет`
   rejects the candidate and triggers one retry with rejected-candidate context,
   and a second rejection asks for clarification.
-- [x] Voice confirmation answers are not routed into normal NLU detection, so
+- [x] `[must]` Voice confirmation answers are not routed into normal NLU detection, so
   short replies such as `да` and `нет` do not create extra Teacher misses.
-- [x] Repeated voice phrases reuse a matching unresolved candidate and repeat
+- [x] `[must]` Repeated voice phrases reuse a matching unresolved candidate and repeat
   the confirmation prompt before the generic miss/fallback response. This
   covers `pending` and `validation_failed` candidates whose Apply can pass
   after descriptor/lookup aliases are fixed.
-- [x] Voice chat no longer reads the last loaded hub message when the modal is
+- [x] `[must]` Voice chat no longer reads the last loaded hub message when the modal is
   opened; only newly arriving hub messages are eligible for auto-speak.
-- [x] Voice router suppresses short non-command STT tails while an active
+- [x] `[must]` Voice router suppresses short non-command STT tails while an active
   Teacher confirmation is awaiting an answer, so fragments like "от сети" do
   not become a second Teacher request.
-- [x] Voice chat stream is router/YJS-owned and compact: the browser receives
+- [x] `[must]` Voice chat stream is router/YJS-owned and compact: the browser receives
   only the last few turns, and assistant/system responses from modal Voice and
   the header Listen button share the same history.
-- [x] Candidate Apply rejection writes a Teacher event and visible UI/chat
+- [x] `[must]` Candidate Apply rejection writes a Teacher event and visible UI/chat
   feedback instead of failing silently when validation blocks a candidate.
-- [x] Teacher read-model API methods that use synchronous YDoc/read-model
+- [x] `[must]` Teacher read-model API methods that use synchronous YDoc/read-model
   helpers run off the API event loop, so trace/template/target reads do not
   fail inside async FastAPI handlers.
-- [ ] Persist `nlu_trace` outside the live scenario document as well as in
+- [ ] `[should]` Persist `nlu_trace` outside the live scenario document as well as in
   `data.nlu_trace`, because scenario switches can rebuild runtime state and
   clear the short-lived trace timeline after a successful UI action.
-- [x] Add repeatable LLM-training smoke examples for:
+- [x] `[must]` Add repeatable LLM-training smoke examples for:
   - `skill_action`: LLM proposes a regex for an existing skill-routed intent,
     Apply stores it in `skill.yaml`, replay matches, rollback restores miss.
   - `interface_action`: LLM proposes a regex for a scenario-owned host action,
@@ -816,24 +823,24 @@ below remain useful for tracking existing implementation work.
     action such as showing text on an assigned display endpoint; Apply stores
     it in the owning skill/scenario artifact, replay matches, and dispatch
     preview resolves the endpoint role before any command is sent.
-- [x] After a regex/template candidate is trusted-applied, re-run phrase check and mark it verified only if the returned intent
+- [x] `[must]` After a regex/template candidate is trusted-applied, re-run phrase check and mark it verified only if the returned intent
   matches the LLM-planned intent.
-- [x] Dispatch verified voice-confirmed candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
+- [x] `[must]` Dispatch verified voice-confirmed candidates only through the normal AdaOS intent/action path and only when the candidate's action side-effect class is
   allowed for auto-dispatch.
-- [ ] Extend verified-candidate dispatch to non-modal action classes after
+- [ ] `[should]` Extend verified-candidate dispatch to non-modal action classes after
   outcome ack/error contracts are available.
-- [x] Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
-- [x] Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
-- [x] Add smoke tests for candidate apply -> regex persist -> probe match -> `understanding.acquired`.
-- [x] Add smoke tests for miss -> LLM candidate proposal, false candidate
+- [x] `[must]` Link user corrections such as "no, that is not it" to the previous request/candidate for the next teacher cycle.
+- [x] `[must]` Distinguish true NLU gaps from service-down or provider-disabled states before asking the LLM to create templates.
+- [x] `[must]` Add smoke tests for candidate apply -> regex persist -> probe match -> `understanding.acquired`.
+- [x] `[must]` Add smoke tests for miss -> LLM candidate proposal, false candidate
   quarantine, duplicate candidate suppression, and correction-thread
   continuation.
 
 ### 5b: Minimal Read-Only MCP Plane
 
-- [ ] MCP Server modal issues scoped NLU authoring token.
-- [ ] Root resolves token to subnet/zone/capabilities.
-- [x] LLM Teacher can attach a scoped Root MCP OpenAI tool descriptor to the
+- [ ] `[should]` MCP Server modal issues scoped NLU authoring token.
+- [x] `[must]` Root resolves token to subnet/zone/capabilities.
+- [x] `[must]` LLM Teacher can attach a scoped Root MCP OpenAI tool descriptor to the
   root LLM proxy in hybrid mode. The descriptor bearer is redacted from
   Teacher logs; cache keys include target, zone, server label, and allowed
   tools.
@@ -846,7 +853,7 @@ below remain useful for tracking existing implementation work.
 - [x] `[must]` Cache subnet-scoped NLU descriptive snapshots on root so
   OpenAI MCP calls can read action/entity/template context without repeatedly
   waiting on a live hub roundtrip.
-- [x] First root-public slice: `NLUTeacherRead` is available as a capability
+- [x] `[must]` First root-public slice: `NLUTeacherRead` is available as a capability
   profile, public Root MCP exposes OpenAI-compatible read tool names, and the
   cached NLU tools return target/subnet scope, report freshness, and cache
   metadata.
@@ -855,21 +862,21 @@ below remain useful for tracking existing implementation work.
   now calls `/api/admin/root_mcp/call` on the active scoped hub through the
   root route proxy; if the hub is disconnected or not updated, it falls back to
   cached `requires_live_hub` evidence.
-- [x] Expose Root MCP HTTP JSON-RPC endpoint at `/v1/root/mcp` for
+- [x] `[must]` Expose Root MCP HTTP JSON-RPC endpoint at `/v1/root/mcp` for
   remote-MCP clients: `initialize`, `tools/list`, `tools/call`, and
   notification handling. This is the transport required for the target mode
   where Root/OpenAI can let the LLM choose which MCP tools to call instead of
   only receiving pre-collected MCP evidence in the prompt.
-- [x] Add Root MCP `nlu_authoring.get_context` for named-entity and authoring-boundary evidence.
-- [x] Extend Root MCP `nlu_authoring.get_context` with M2 contextual action
+- [x] `[must]` Add Root MCP `nlu_authoring.get_context` for named-entity and authoring-boundary evidence.
+- [x] `[must]` Extend Root MCP `nlu_authoring.get_context` with M2 contextual action
   surface, runtime state, process state, developer hints, lookup summary, and
   fingerprints.
-- [x] Add Root MCP `nlu_authoring.check_phrase` backed by the current probe service.
-- [x] Root MCP passes bearer/session subnet scope into NLU authoring handlers
+- [x] `[must]` Add Root MCP `nlu_authoring.check_phrase` backed by the current probe service.
+- [x] `[must]` Root MCP passes bearer/session subnet scope into NLU authoring handlers
   and returns `root_scope` / `target_id` so the LLM sees which subnet target the
   context belongs to.
-- [x] Add Codex bridge tool `check_nlu_phrase`.
-- [x] Add/read current MCP surfaces:
+- [x] `[must]` Add Codex bridge tool `check_nlu_phrase`.
+- [x] `[must]` Add/read current MCP surfaces:
   - `nlu_authoring.get_trace`
   - `nlu_authoring.get_dialog_context`
   - `nlu_authoring.get_recent_failures`
@@ -877,15 +884,15 @@ below remain useful for tracking existing implementation work.
   - `skill.describe_nlu`
   - `scenario.describe_nlu`
   - `sdk.describe_surface` (descriptors only, no execution)
-- [x] Keep contextual action surface read-only: no dispatch, no direct SDK
+- [x] `[must]` Keep contextual action surface read-only: no dispatch, no direct SDK
   call, and no training mutation can be performed through the descriptor.
 - [ ] `[deferred]` Add `nlu.describe_pipeline` and `skill.describe_tools`.
-- [x] Keep MCP read-only for context/inventory; preview APIs return dry-run gates without mutation or dispatch.
+- [x] `[must]` Keep MCP read-only for context/inventory; preview APIs return dry-run gates without mutation or dispatch.
 - [ ] `[could]` Add stricter request timeouts, result-size limits, and audit event summaries for every context-reading call.
 
 ### 5c: Action and Ownership Plane
 
-- [ ] Classify teacher decisions as:
+- [x] `[must]` Classify teacher decisions as:
   - `skill_action`
   - `interface_action`
   - `endpoint_command`
@@ -909,7 +916,7 @@ below remain useful for tracking existing implementation work.
   - subscribe to endpoint streams when policy allows
   - revoke, retire, or disable endpoint services through governed owner APIs
 - [ ] `[deferred]` Add `desktop.get_state` for current scenario, home scenario, open modals, installed apps, focused route/node/browser.
-- [x] Add `desktop.preview_action` to show the host event/action without dispatch for the current system-action catalog.
+- [x] `[must]` Add `desktop.preview_action` to show the host event/action without dispatch for the current system-action catalog.
 - [ ] `[deferred]` Add `endpoint.preview_command` to show the resolved endpoint
   role, concrete endpoint id, service, policy gate, expected transport, and
   side-effect class without dispatch.
@@ -921,22 +928,22 @@ below remain useful for tracking existing implementation work.
 
 ### 5d: Template Inventory and Safe Apply
 
-- [x] Root MCP/API surfaces:
+- [x] `[must]` Root MCP/API surfaces:
   - `nlu_authoring.list_templates`
   - `nlu.get_template`
   - `nlu_authoring.list_training_targets`
   - `nlu_authoring.preview_template_patch`
   - `nlu.apply_template_patch`
 - [ ] `[deferred]` Add `nlu.get_template` and `nlu.apply_template_patch` as first-class MCP calls; current durable apply still uses candidate/example APIs.
-- [x] LLM receives current template inventory before proposing changes.
-- [x] Template preview uses stable template ids/fingerprints and `base_fingerprint` stale-write checks.
-- [x] Template patches can be previewed before durable apply; operator approval still uses existing candidate/example APIs.
-- [x] M4 implementation slice: existing candidate/example Apply now calls the
+- [x] `[must]` LLM receives current template inventory before proposing changes.
+- [x] `[must]` Template preview uses stable template ids/fingerprints and `base_fingerprint` stale-write checks.
+- [x] `[must]` Template patches can be previewed before durable apply; operator approval still uses existing candidate/example APIs.
+- [x] `[must]` M4 implementation slice: existing candidate/example Apply now calls the
   template preview gate before durable mutation and stores validation evidence
   on the candidate.
 - [ ] `[deferred]` Durable apply writes only through owner services/APIs: skill, scenario, system-action feedback, or named-entity alias source.
 - [ ] `[deferred]` Add rollback pointers and audit records for every applied patch.
-- [x] M4 implementation slice: duplicate-template detection and simple
+- [x] `[must]` M4 implementation slice: duplicate-template detection and simple
   overbroad-regex blast-radius guard run before durable candidate Apply.
 - [ ] `[deferred]` Add golden-phrase impact preview before durable apply and
   expand blast-radius checks beyond simple overbroad-pattern guards.
@@ -952,10 +959,10 @@ below remain useful for tracking existing implementation work.
 ### 5f: Teacher Acceptance Gates
 
 - [ ] `[could]` Every phase has at least one test or smoke command that can be run without the UI.
-- [x] M4 implementation slice has non-UI tests for safe Apply, duplicate
+- [x] `[must]` M4 implementation slice has non-UI tests for safe Apply, duplicate
   rejection, missing-slot action preview rejection, overbroad regex rejection,
   and action-intent mismatch.
-- [ ] Every accepted candidate stores trace, prompt/context hash, verification result, owner, and operator/trust policy evidence.
+- [ ] `[should]` Every accepted candidate stores trace, prompt/context hash, verification result, owner, and operator/trust policy evidence.
 - [ ] `[deferred]` False positives can be rejected, quarantined, or rolled back without deleting unrelated user-authored training data.
 - [ ] `[could]` RU and EN phrases pass through the same correction-thread and template-preview paths without mojibake or lossy normalization.
 - [ ] `[could]` The UI can explain whether the result came from regex, Rasa, neural, lookup canonicalization, Teacher candidate, or provider fallback.
@@ -964,28 +971,28 @@ below remain useful for tracking existing implementation work.
 
 ### Provider Boundary
 
-- [x] Move `neural_nlu_service_skill` out of `src/adaos/interpreter_data` into
+- [x] `[must]` Move `neural_nlu_service_skill` out of `src/adaos/interpreter_data` into
   normal registry/workspace skill delivery.
-- [x] Add separate experimental `neuro_nlu_lite_skill` delivery for weak-device
+- [x] `[must]` Add separate experimental `neuro_nlu_lite_skill` delivery for weak-device
   validation without changing the production Neural NLU provider.
-- [x] Add opt-in `adaos install --neural-nlu` preparation for Neural NLU.
-- [x] Keep plain `adaos install` free of Neural NLU heavy dependencies.
-- [x] Make the neural bridge discover/start only installed service skills.
-- [x] Remove hot-path workspace mutation/bootstrap from neural parse handling.
-- [x] Keep provider dependencies (`torch`, `faiss-cpu`, etc.) out of the hub
+- [x] `[must]` Add opt-in `adaos install --neural-nlu` preparation for Neural NLU.
+- [x] `[must]` Keep plain `adaos install` free of Neural NLU heavy dependencies.
+- [x] `[must]` Make the neural bridge discover/start only installed service skills.
+- [x] `[must]` Remove hot-path workspace mutation/bootstrap from neural parse handling.
+- [x] `[must]` Keep provider dependencies (`torch`, `faiss-cpu`, etc.) out of the hub
   root venv.
-- [x] Keep Neuro Lite free of Torch/FAISS/Rasa dependencies for the first
+- [x] `[must]` Keep Neuro Lite free of Torch/FAISS/Rasa dependencies for the first
   prototype baseline.
 
 ### Neuro Lite Experimental Stage
 
-- [x] Add `nlp.intent.detect.neuro_lite` bridge and stage trace events.
-- [x] Add runtime policy/flag support for `neuro_lite_enabled` and
+- [x] `[must]` Add `nlp.intent.detect.neuro_lite` bridge and stage trace events.
+- [x] `[must]` Add runtime policy/flag support for `neuro_lite_enabled` and
   `ADAOS_NLU_NEURO_LITE`.
-- [x] Add `neuro_nlu_lite_skill` with `/health`, `/parse`, and `/rebuild`.
-- [x] Implement the first hash n-gram prototype baseline with accept/abstain
+- [x] `[must]` Add `neuro_nlu_lite_skill` with `/health`, `/parse`, and `/rebuild`.
+- [x] `[must]` Implement the first hash n-gram prototype baseline with accept/abstain
   behavior.
-- [x] Fall through to Neural/Rasa when Neuro Lite abstains or is disabled.
+- [x] `[must]` Fall through to Neural/Rasa when Neuro Lite abstains or is disabled.
 - [ ] `[deferred]` Add real hard-negative evaluation before considering attention or a tiny
   encoder.
 - [ ] `[deferred]` Decide whether Neuro Lite should remain a separate provider, become a
@@ -993,78 +1000,78 @@ below remain useful for tracking existing implementation work.
 
 ### Inference Contract
 
-- [x] Freeze `/parse` request/response schema with `top_intent`,
+- [x] `[must]` Freeze `/parse` request/response schema with `top_intent`,
   `confidence`, `alternatives`, `slots`, `model_id`, and `evidence`.
-- [x] Pass named-entity canonicalization evidence into `/parse`.
-- [x] Return matched examples, score components, and canonicalized text in
+- [x] `[must]` Pass named-entity canonicalization evidence into `/parse`.
+- [x] `[must]` Return matched examples, score components, and canonicalized text in
   `evidence`.
-- [x] Add confidence gates for accept/abstain/reject.
-- [x] Add neural abstain/error fallback to Rasa.
-- [ ] Route Rasa miss/low confidence to NLU Teacher.
+- [x] `[must]` Add confidence gates for accept/abstain/reject.
+- [x] `[must]` Add neural abstain/error fallback to Rasa.
+- [ ] `[should]` Route Rasa miss/low confidence to NLU Teacher.
 
 ### Notebook Approach Port
 
-- [x] Port masking logic into provider-owned runtime code.
-- [x] Port Char-CNN + BiLSTM model loader.
-- [x] Fix and test special-token compatibility between training and runtime.
-- [x] Port supervised-contrastive embedding projection usage.
-- [x] Persist a lazy Torch tensor positive-example k-NN cache as an
+- [x] `[must]` Port masking logic into provider-owned runtime code.
+- [x] `[must]` Port Char-CNN + BiLSTM model loader.
+- [x] `[must]` Fix and test special-token compatibility between training and runtime.
+- [x] `[must]` Port supervised-contrastive embedding projection usage.
+- [x] `[must]` Persist a lazy Torch tensor positive-example k-NN cache as an
   intermediate step before FAISS indexes.
-- [x] Add optional lazy FAISS positive example index with Torch tensor fallback.
-- [x] Add FAISS negative example indexes.
-- [x] Add weighted ranker over softmax, k-NN similarity, and action/skill
+- [x] `[must]` Add optional lazy FAISS positive example index with Torch tensor fallback.
+- [x] `[must]` Add FAISS negative example indexes.
+- [x] `[must]` Add weighted ranker over softmax, k-NN similarity, and action/skill
   priors.
-- [x] Add intent/action id mapping from research labels to AdaOS canonical
+- [x] `[must]` Add intent/action id mapping from research labels to AdaOS canonical
   intents and system actions.
 
 ### Artifacts and ModelOps
 
-- [x] Define node-level active model layout owned by the service skill runtime.
-- [x] Add a notebook-output preparation script that writes `model.pt`,
+- [x] `[must]` Define node-level active model layout owned by the service skill runtime.
+- [x] `[must]` Add a notebook-output preparation script that writes `model.pt`,
   `labels.json`, `vocab.json`, example/intent manifests, ranker config, and
   provenance metrics into the active node-level layout.
-- [x] Store `model.pt`, `labels.json`/`intents_manifest.json`, `vocab.json`,
+- [x] `[must]` Store `model.pt`, `labels.json`/`intents_manifest.json`, `vocab.json`,
   optional `faiss.index`/`faiss.index.json`,
   `negative_faiss.index`/`negative_faiss.index.json`,
   `examples_manifest.jsonl`, `intent_map.json`, `ranker_config.json`, and
   `metrics.json` in the service-owned active layout.
-- [x] Add immutable `model_id` and model provenance metadata for prepared
+- [x] `[must]` Add immutable `model_id` and model provenance metadata for prepared
   notebook artifacts.
-- [x] Add rollback pointer for the node-level active model.
-- [x] Add golden phrase regression report before model promotion.
+- [x] `[must]` Add rollback pointer for the node-level active model.
+- [x] `[must]` Add golden phrase regression report before model promotion.
 - [ ] `[could]` Add full quality gates using macro-F1, abstain rate, and latency.
 - [ ] `[deferred]` Per-locale/webspace/profile models until usage statistics justify
   the added operational complexity.
 
 ### Usage Statistics
 
-- [x] Record neural request count and latency per stage.
-- [x] Record confidence distributions and threshold bands.
-- [x] Record accept/abstain/reject counts per intent.
-- [x] Record fallback ratio `neural -> Rasa`.
-- [x] Record canonicalization hit/miss/ambiguity/unresolved counts for neural
+- [x] `[must]` Record neural request count and latency per stage.
+- [x] `[must]` Record confidence distributions and threshold bands.
+- [x] `[must]` Record accept/abstain/reject counts per intent.
+- [x] `[must]` Record fallback ratio `neural -> Rasa`.
+- [x] `[must]` Record canonicalization hit/miss/ambiguity/unresolved counts for neural
   requests.
-- [x] Record abstained/rejected samples for Teacher review and retraining.
-- [x] Add bridge-level `neural-probe` check using the runtime confidence gates
+- [x] `[must]` Record abstained/rejected samples for Teacher review and retraining.
+- [x] `[must]` Add bridge-level `neural-probe` check using the runtime confidence gates
   and usage-stat path.
-- [x] Link final Rasa accept/miss outcomes back to the neural fallback sample
+- [x] `[must]` Link final Rasa accept/miss outcomes back to the neural fallback sample
   so `neural -> Rasa -> Teacher` can be measured end to end.
-- [x] Add operator diagnostics that combine Neural readiness and usage
+- [x] `[must]` Add operator diagnostics that combine Neural readiness and usage
   aggregates.
-- [x] Add experimental Neuro Lite runtime stage and weak-device service-skill
+- [x] `[must]` Add experimental Neuro Lite runtime stage and weak-device service-skill
   baseline, separate from the production Neural NLU service.
 
 ### Training Data Feedback
 
-- [x] Export skill-owned examples from skills.
-- [x] Export scenario-owned examples from scenarios.
-- [x] Export core/client command examples from the system action catalog.
+- [x] `[must]` Export skill-owned examples from skills.
+- [x] `[must]` Export scenario-owned examples from scenarios.
+- [x] `[must]` Export core/client command examples from the system action catalog.
 - [ ] `[could]` Export named-entity classes as masks, not as local alias training data.
-- [x] Let Teacher-approved corrections update regex, Neural, and Rasa datasets
+- [x] `[must]` Let Teacher-approved corrections update regex, Neural, and Rasa datasets
   through the owning artifact.
-- [x] Add governed Neural reindex planning/apply flow for curated examples
+- [x] `[must]` Add governed Neural reindex planning/apply flow for curated examples
   that are compatible with the active model labels.
-- [x] Rebuild/retrain the neural provider for curated examples that introduce
+- [x] `[must]` Rebuild/retrain the neural provider for curated examples that introduce
   new model labels.
 
 ## Immediate Next Steps
@@ -1103,6 +1110,9 @@ below remain useful for tracking existing implementation work.
   Teacher links `nlu.action.dispatched` / `nlu.action.dispatch_failed` back to
   the candidate and records `dispatch_status=emitted` or `failed` with target,
   payload, and reason.
+- The web client now acknowledges `desktop.modal.open` with
+  `desktop.modal.opened` or `desktop.modal.open_failed`; Teacher links this
+  client ack back to the candidate as `dispatch_status=succeeded` or `failed`.
 - M3 multi-engine authoring strategy is now enforced: Teacher normalizes
   `training_strategy`, treats non-regex strategies as first-class candidates,
   and rejects regex proposals when the selected strategy, `why_not_regex`, or

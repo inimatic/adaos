@@ -329,9 +329,11 @@ the normal `nlp.intent.detected` dispatcher event and records
 `dispatch_status=requested`; unsafe candidates are recorded as
 `dispatch_status=blocked`. The dispatcher emits `nlu.action.dispatched` or
 `nlu.action.dispatch_failed`; Teacher links those events back to the candidate
-as `dispatch_status=emitted` or `failed`. Full client/host/skill/endpoint ack
-verification remains a separate M4 gate. The LLM does not execute actions
-directly.
+as `dispatch_status=emitted` or `failed`. For `desktop.modal.open`, the web
+client also emits `desktop.modal.opened` or `desktop.modal.open_failed`, which
+Teacher records as `dispatch_status=succeeded` or `failed`. Scenario, skill,
+and endpoint ack verification remain separate M4 gates. The LLM does not
+execute actions directly.
 
 ## Current Voice confirmation flow
 
@@ -849,8 +851,8 @@ treated as `[could]` unless explicitly promoted.
 - Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
 - Record planned intent, owner hint, proposed template, verification status,
   first dispatch status/outcome for voice-confirmed safe candidates, and
-  correction-thread link. Client/host ack evidence remains the next dispatch
-  gate.
+  correction-thread link. Scenario, skill, and endpoint ack evidence remains
+  the next dispatch gate.
 - Parse both plain JSON and fenced JSON LLM responses; quarantine regex
   proposals that fail compile/source-phrase preview.
 - Store request/context/prompt hashes and suppress duplicate active regex candidates.
