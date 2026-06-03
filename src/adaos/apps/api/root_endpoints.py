@@ -2508,6 +2508,71 @@ async def root_mcp_get_session_lease(
     }
 
 
+@root_router.get("/mcp/sessions/{session_id}/openai-tool")
+async def root_mcp_session_openai_tool(
+    session_id: str,
+    request: Request,
+    server_label: str = "adaos_root",
+    require_approval: str = "never",
+    allowed_tools: str | None = None,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+) -> dict[str, Any]:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    same_session = str(auth.get("mcp_session_id") or "") == str(session_id)
+    if not same_session:
+        _enforce_mcp_capability("operations.read.tokens", auth=auth)
+
+    record = get_mcp_session_lease_record(session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"code": "session_not_found", "message": "MCP session lease was not found."})
+    if same_session and str(record.get("status") or "").strip().lower() != "active":
+        raise HTTPException(status_code=401, detail={"code": "session_inactive", "message": "MCP session lease is not active."})
+    access_token = _authorization_bearer(authorization) if same_session else str(record.get("access_token") or "")
+    if not access_token:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "session_token_not_recoverable",
+                "message": "OpenAI tool descriptor with authorization must be requested using the active MCP session bearer.",
+            },
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    tool: dict[str, Any] = {
+        "type": "mcp",
+        "server_label": str(server_label or "adaos_root").strip() or "adaos_root",
+        "server_url": f"{base_url}/v1/root/mcp",
+        "authorization": access_token,
+        "require_approval": str(require_approval or "never").strip() or "never",
+    }
+    parsed_allowed_tools = [item.strip() for item in str(allowed_tools or "").split(",") if item.strip()]
+    if parsed_allowed_tools:
+        tool["allowed_tools"] = parsed_allowed_tools
+
+    return {
+        "ok": True,
+        "auth": {"method": auth.get("method")},
+        "session": {
+            "session_id": record.get("session_id"),
+            "audience": record.get("audience"),
+            "target_id": record.get("target_id"),
+            "subnet_id": record.get("subnet_id"),
+            "zone": record.get("zone"),
+            "capability_profile": record.get("capability_profile"),
+            "status": record.get("status"),
+            "expires_at": record.get("expires_at"),
+        },
+        "openai": {
+            "responses_tool": tool,
+            "notes": [
+                "Pass this object as one item in the OpenAI Responses API tools array.",
+                "The LLM gateway must preserve MCP output items such as mcp_list_tools and mcp_call in traces.",
+            ],
+        },
+    }
+
+
 @root_router.post("/mcp/sessions/{session_id}/revoke")
 async def root_mcp_revoke_session_lease(
     session_id: str,
