@@ -43,3 +43,22 @@ def test_sdk_io_media_creates_cached_variant_and_publish_descriptor(monkeypatch,
     assert descriptor["browser_path"].startswith("/media/files/content/")
     assert descriptor["node_url"].startswith("/api/node/media/files/content/")
     assert Path(descriptor["path"]).exists()
+
+
+def test_sdk_io_media_can_check_cached_variant_without_creating(tmp_path):
+    from adaos.sdk.io import media as sdk_media
+
+    source = tmp_path / "source.jpg"
+    Image.new("RGB", (2400, 1200), color=(64, 128, 192)).save(source, "JPEG", quality=92)
+
+    variant, cached = sdk_media.cached_image_variant(
+        source,
+        max_size=(3840, 2160),
+        label="fullscreen-test",
+        quality=88,
+        create=False,
+    )
+
+    assert cached is False
+    assert variant.parent == source.parent / ".adaos-thumbs"
+    assert not variant.exists()
