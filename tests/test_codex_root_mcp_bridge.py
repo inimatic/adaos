@@ -74,12 +74,21 @@ class _FakeRootMcpClient:
         kind: str | None = None,
         request_locale: str | None = None,
         preferred_locales: list[str] | None = None,
+        include_live: bool = True,
+        include_hints: bool = True,
     ) -> dict:
         self.calls.append(
             (
                 "get_nlu_authoring_context",
                 webspace_id or "",
-                {"target_id": target_id, "kind": kind, "request_locale": request_locale, "preferred_locales": preferred_locales or []},
+                {
+                    "target_id": target_id,
+                    "kind": kind,
+                    "request_locale": request_locale,
+                    "preferred_locales": preferred_locales or [],
+                    "include_live": include_live,
+                    "include_hints": include_hints,
+                },
             )
         )
         return {
@@ -949,7 +958,14 @@ def test_codex_bridge_handles_initialize_and_tool_calls(monkeypatch) -> None:
     assert (
         "get_nlu_authoring_context",
         "desktop",
-        {"target_id": None, "kind": "device.browser", "request_locale": "ru", "preferred_locales": ["en"]},
+        {
+            "target_id": None,
+            "kind": "device.browser",
+            "request_locale": "ru",
+            "preferred_locales": ["en"],
+            "include_live": True,
+            "include_hints": True,
+        },
     ) in fake_client.calls
     assert (
         "check_nlu_authoring_phrase",

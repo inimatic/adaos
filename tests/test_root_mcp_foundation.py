@@ -795,6 +795,132 @@ def test_root_mcp_session_lease_lifecycle_and_bearer_scope(monkeypatch, tmp_path
     assert denied.status_code == 401
 
 
+def test_root_mcp_http_jsonrpc_endpoint_for_remote_mcp(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
+    from adaos.apps.api import root_endpoints
+    from adaos.services.root_mcp import audit as audit_registry
+    from adaos.services.root_mcp import registry as descriptor_registry
+    from adaos.services.root_mcp import sessions as session_registry
+    from adaos.services.root_mcp import targets as target_registry
+    from adaos.services.root_mcp import tokens as token_registry
+
+    monkeypatch.setattr(audit_registry, "_audit_path", lambda: tmp_path / "audit.jsonl")
+    monkeypatch.setattr(descriptor_registry, "_descriptor_cache_state_path", lambda: tmp_path / "descriptor_cache.json")
+    monkeypatch.setattr(target_registry, "_registry_path", lambda: tmp_path / "managed_targets.json")
+    monkeypatch.setattr(session_registry, "_sessions_path", lambda: tmp_path / "mcp_sessions.json")
+    monkeypatch.setattr(token_registry, "_tokens_path", lambda: tmp_path / "access_tokens.json")
+
+    client = _make_client()
+    owner_headers = {"X-Owner-Token": "owner-secret"}
+    target_id = "hub:test-remote-mcp"
+
+    register = client.post(
+        "/v1/root/mcp/targets",
+        headers=owner_headers,
+        json={
+            "target_id": target_id,
+            "title": "Remote MCP Test Hub",
+            "kind": "hub",
+            "environment": "test",
+            "status": "online",
+            "zone": "lab-remote",
+            "subnet_id": "subnet:remote",
+            "operational_surface": {"published_by": "skill:infra_access_skill", "enabled": True},
+        },
+    )
+    assert register.status_code == 200
+
+    issued = client.post(
+        "/v1/root/mcp/sessions",
+        headers=owner_headers,
+        json={
+            "audience": "openai-remote-mcp",
+            "target_id": target_id,
+            "capability_profile": "ProfileOpsRead",
+            "ttl_seconds": 900,
+        },
+    )
+    assert issued.status_code == 200
+    access_token = issued.json()["session"]["access_token"]
+    bearer_headers = {"Authorization": f"Bearer {access_token}"}
+
+    initialize = client.post(
+        "/v1/root/mcp",
+        headers=bearer_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "initialize",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "openai-remote-mcp-smoke", "version": "1.0"},
+            },
+        },
+    )
+    assert initialize.status_code == 200
+    init_payload = initialize.json()
+    assert init_payload["result"]["protocolVersion"] == "2025-03-26"
+    assert init_payload["result"]["serverInfo"]["name"] == "adaos-root"
+
+    initialized = client.post(
+        "/v1/root/mcp",
+        headers=bearer_headers,
+        json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+    )
+    assert initialized.status_code == 202
+
+    tools = client.post(
+        "/v1/root/mcp",
+        headers=bearer_headers,
+        json={"jsonrpc": "2.0", "id": "tools-list", "method": "tools/list", "params": {}},
+    )
+    assert tools.status_code == 200
+    tool_names = {item["name"] for item in tools.json()["result"]["tools"]}
+    assert "get_nlu_authoring_context" in tool_names
+    assert "check_nlu_phrase" in tool_names
+
+    captured = {}
+
+    class _FakeBridge:
+        def __init__(self, profile):
+            captured["profile"] = profile
+
+        def handle_request(self, request):
+            return {
+                "jsonrpc": "2.0",
+                "id": request.get("id"),
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "remote mcp call reached AdaOS",
+                        }
+                    ]
+                },
+            }
+
+    monkeypatch.setattr(root_endpoints, "CodexRootMcpBridge", _FakeBridge)
+    called = client.post(
+        "/v1/root/mcp",
+        headers=bearer_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "tools-call",
+            "method": "tools/call",
+            "params": {"name": "get_nlu_authoring_context", "arguments": {"webspace_id": "desktop"}},
+        },
+    )
+    assert called.status_code == 200
+    assert called.json()["result"]["content"][0]["text"] == "remote mcp call reached AdaOS"
+    profile = captured["profile"]
+    assert profile.root_url == "http://testserver"
+    assert profile.target_id == target_id
+    assert profile.access_token == access_token
+    assert profile.session_id == issued.json()["session"]["session_id"]
+    assert profile.capability_profile == "ProfileOpsRead"
+
+
 def test_root_mcp_session_management_tools_project_through_infra_access_surface(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
     from adaos.services.root_mcp import sessions as session_registry

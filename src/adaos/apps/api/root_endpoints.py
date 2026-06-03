@@ -33,6 +33,7 @@ from adaos.services.root_mcp.service import (
     recent_audit_events,
 )
 from adaos.services.root_mcp.audit import append_audit_event
+from adaos.services.root_mcp.codex_bridge import CodexBridgeProfile, CodexRootMcpBridge
 from adaos.services.root_mcp.model import RootMcpAuditEvent, RootMcpSurface
 from adaos.services.root_mcp.policy import evaluate_direct_access
 from adaos.services.root_mcp.reports import ingest_control_report, list_control_reports
@@ -302,6 +303,53 @@ def _effective_mcp_scope(*, auth: dict[str, Any], subnet_id: str | None, zone: s
             raise HTTPException(status_code=403, detail={"code": "zone_mismatch", "message": "Requested zone scope does not match access token scope."})
         scope["zone"] = auth_zone
     return scope
+
+
+def _authorization_bearer(authorization: str | None) -> str | None:
+    token = str(authorization or "").strip()
+    if not token.lower().startswith("bearer "):
+        return None
+    bearer = token[7:].strip()
+    return bearer or None
+
+
+def _request_root_base_url(request: Request) -> str:
+    forwarded_host = str(request.headers.get("x-forwarded-host") or "").strip()
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").strip()
+    host = forwarded_host or str(request.headers.get("host") or "").strip()
+    if host:
+        proto = forwarded_proto or str(request.url.scheme or "https").strip() or "https"
+        return f"{proto}://{host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _root_mcp_http_bridge(
+    *,
+    request: Request,
+    auth: dict[str, Any],
+    authorization: str | None,
+    scope: dict[str, Any],
+) -> CodexRootMcpBridge:
+    bearer = _authorization_bearer(authorization)
+    target_ids = _allowed_target_ids(auth)
+    target_id = target_ids[0] if target_ids else None
+    subnet_id = str(scope.get("subnet_id") or auth.get("subnet_id") or "").strip() or None
+    if target_id is None and subnet_id:
+        target_id = f"hub:{subnet_id}"
+    profile = CodexBridgeProfile(
+        root_url=_request_root_base_url(request),
+        target_id=target_id,
+        subnet_id=None,
+        zone=None,
+        bootstrap_mode=str(auth.get("method") or "remote_mcp"),
+        session_id=str(auth.get("mcp_session_id") or "").strip() or None,
+        capability_profile=str(auth.get("capability_profile") or "").strip() or None,
+        access_token=bearer,
+        server_name="adaos-root",
+        audience=str(auth.get("audience") or "openai-remote-mcp"),
+        capabilities=list(auth.get("capabilities") or []),
+    )
+    return CodexRootMcpBridge(profile)
 
 
 def _allowed_target_ids(auth: dict[str, Any]) -> list[str]:
@@ -2524,6 +2572,47 @@ async def root_mcp_call(
         auth_context=auth,
     )
     return {"ok": response.ok, "scope": scope, "response": response.to_dict()}
+
+
+@root_router.post("/mcp")
+async def root_mcp_jsonrpc(
+    payload: dict[str, Any] | list[Any],
+    request: Request,
+    response: Response,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    subnet_id: str | None = Header(default=None, alias="X-AdaOS-Subnet-Id"),
+    zone: str | None = Header(default=None, alias="X-AdaOS-Zone"),
+) -> Any:
+    auth = _require_root_access_auth(authorization=authorization, owner_token=owner_token)
+    scope = _effective_mcp_scope(auth=auth, subnet_id=subnet_id, zone=zone)
+    bridge = _root_mcp_http_bridge(request=request, auth=auth, authorization=authorization, scope=scope)
+
+    async def _handle_one(item: Any) -> dict[str, Any] | None:
+        if not isinstance(item, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Invalid JSON-RPC request."},
+            }
+        return await asyncio.to_thread(bridge.handle_request, item)
+
+    if isinstance(payload, list):
+        results = []
+        for item in payload:
+            result = await _handle_one(item)
+            if result is not None:
+                results.append(result)
+        if not results:
+            response.status_code = 202
+            return {}
+        return results
+
+    result = await _handle_one(payload)
+    if result is None:
+        response.status_code = 202
+        return {}
+    return result
 
 
 router.include_router(root_router)
