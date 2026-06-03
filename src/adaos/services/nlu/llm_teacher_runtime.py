@@ -3030,12 +3030,27 @@ async def _handle_teacher_request(evt: Any) -> None:
                 open_modal_repair = _infer_open_modal_repair(text=text, context=context)
                 repair_meta: dict[str, Any] | None = None
                 initial_preview_slots = initial_preview.get("slots") if isinstance(initial_preview.get("slots"), Mapping) else {}
+                captured_modal_id = str(initial_preview_slots.get("modal_id") or "").strip()
+                repair_modal_id = (
+                    str(open_modal_repair.get("modal_id") or "").strip()
+                    if isinstance(open_modal_repair, Mapping)
+                    else ""
+                )
+                needs_open_modal_repair = False
+                if isinstance(open_modal_repair, Mapping):
+                    if rr_intent in _OPEN_MODAL_REPAIR_INTENTS:
+                        needs_open_modal_repair = True
+                    elif rr_intent == "desktop.open_modal":
+                        needs_open_modal_repair = (
+                            not initial_preview.get("ok")
+                            or not captured_modal_id
+                            or (
+                                bool(repair_modal_id)
+                                and _lookup_key(repair_modal_id) != _lookup_key(captured_modal_id)
+                            )
+                        )
                 if isinstance(open_modal_repair, Mapping) and (
-                    rr_intent in _OPEN_MODAL_REPAIR_INTENTS
-                    or (
-                        rr_intent == "desktop.open_modal"
-                        and (not initial_preview.get("ok") or not str(initial_preview_slots.get("modal_id") or "").strip())
-                    )
+                    needs_open_modal_repair
                 ):
                     repair_meta = dict(open_modal_repair)
                     repair_meta["from_intent"] = rr_intent

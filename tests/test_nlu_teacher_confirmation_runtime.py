@@ -130,6 +130,32 @@ async def test_voice_confirmation_yes_applies_candidate():
 
 
 @pytest.mark.anyio
+async def test_voice_confirmation_suppresses_short_stt_tail():
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-teacher-confirmation-stt-tail"
+    confirmation = {
+        "id": "confirm.stt.tail",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "candidate_id": "cand.stt.tail",
+        "request_id": "req.stt.tail",
+        "request_text": "Покажи переменные окружения подсети",
+        "question": "Открыть переменные окружения подсети?",
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"pending_confirmations": [confirmation]})
+
+    assert await conf.should_suppress_voice_text_for_confirmation(webspace_id, "от сети")
+    assert not await conf.should_suppress_voice_text_for_confirmation(webspace_id, "да")
+    assert not await conf.should_suppress_voice_text_for_confirmation(webspace_id, "покажи браузеры")
+
+
+@pytest.mark.anyio
 async def test_voice_confirmation_no_retries_once_with_rejected_candidate_context():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf

@@ -747,6 +747,10 @@ below remain useful for tracking existing implementation work.
 - [x] LLM regex candidates normalize common lookup slot aliases
   (`scenario` -> `scenario_id`, `modal` -> `modal_id`, etc.) and repair
   host-action storage targets to the current scenario owner.
+- [x] LLM regex candidates for `desktop.open_modal` repair captured
+  display labels/aliases to canonical modal evidence before preview/apply, so
+  commands like "show subnet environment variables" can validate against
+  `subnet_env_modal`.
 - [x] Applying a Teacher regex rule enables `regex_enabled` for the webspace if
   the runtime regex stage was disabled, so a verified rule is actually used by
   the next normal `nlp.intent.detect.request`.
@@ -758,6 +762,14 @@ below remain useful for tracking existing implementation work.
   short replies such as `да` and `нет` do not create extra Teacher misses.
 - [x] Voice chat no longer reads the last loaded hub message when the modal is
   opened; only newly arriving hub messages are eligible for auto-speak.
+- [x] Voice router suppresses short non-command STT tails while an active
+  Teacher confirmation is awaiting an answer, so fragments like "от сети" do
+  not become a second Teacher request.
+- [x] Voice chat stream is router/YJS-owned and compact: the browser receives
+  only the last few turns, and assistant/system responses from modal Voice and
+  the header Listen button share the same history.
+- [x] Candidate Apply rejection writes a Teacher event and visible UI/chat
+  feedback instead of failing silently when validation blocks a candidate.
 - [x] Teacher read-model API methods that use synchronous YDoc/read-model
   helpers run off the API event loop, so trace/template/target reads do not
   fail inside async FastAPI handlers.
@@ -1116,6 +1128,9 @@ below remain useful for tracking existing implementation work.
 - LLM Teacher now repairs common model output mistakes for interface actions:
   lookup slot aliases are canonicalized and scenario-switch rules are stored in
   the current scenario owner rather than the scenario being opened.
+- LLM Teacher now repairs `desktop.open_modal` candidates whose captured
+  `modal_id` is a user-facing label/alias by preserving canonical modal
+  evidence for validation and dispatch.
 - LLM Teacher now prefers `desktop.open_modal` for generic show/open requests
   that target known apps with `launchModal`; `desktop.switch_scenario` remains
   reserved for explicit scenario-switch wording.
@@ -1129,6 +1144,9 @@ below remain useful for tracking existing implementation work.
 - Voice confirmation replies are consumed as feedback and do not create new
   `да`/`нет` NLU misses. Opening the Voice modal no longer speaks the last
   historical hub message.
+- Voice confirmation now suppresses short STT tails during the pending
+  confirmation window, and Voice chat history is served as a compact
+  router/YJS-owned stream shared by the modal and header Listen button.
 - NLU Teacher UI now has a single Candidate Apply action using the backend
   owner target, and Signals accordion expansion no longer opens a second modal.
 - LLM Teacher now stores request/context/prompt hashes on LLM logs and

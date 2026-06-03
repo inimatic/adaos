@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, Mapping
 
 from adaos.sdk.core.decorators import subscribe
@@ -226,6 +227,51 @@ def _build_event_payload(
     return resolved
 
 
+def _route_id(raw: Mapping[str, Any]) -> str:
+    meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    return str(meta.get("route_id") or meta.get("route") or "").strip()
+
+
+def _humanize_action_label(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    token = token.removesuffix("_modal")
+    token = token.replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", token).strip()
+
+
+def _emit_voice_action_ack(
+    ctx: AgentContext,
+    *,
+    target: str,
+    payload: Mapping[str, Any],
+    webspace_id: str,
+    raw: Mapping[str, Any],
+) -> None:
+    if _route_id(raw) != "voice_chat":
+        return
+    text = ""
+    if target == "desktop.modal.open":
+        label = _humanize_action_label(payload.get("modal_id") or payload.get("modalId"))
+        text = f"Открываю {label}." if label else "Открываю окно."
+    if not text:
+        return
+    meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    bus_emit(
+        ctx.bus,
+        "io.out.chat.append",
+        {
+            "id": "",
+            "from": "hub",
+            "text": text,
+            "ts": None,
+            "_meta": {"webspace_id": webspace_id, **dict(meta), "route_id": "voice_chat"},
+        },
+        source="nlu.dispatcher",
+    )
+
+
 def _execute_action(
     ctx: AgentContext,
     *,
@@ -259,6 +305,7 @@ def _execute_action(
     # For now callSkill/callHost are both modelled as bus events.
     try:
         bus_emit(ctx.bus, target, payload, source="nlu.dispatcher")
+        _emit_voice_action_ack(ctx, target=target, payload=payload, webspace_id=webspace_id, raw=raw)
         _log.debug(
             "nlu.intent %s dispatched action type=%s target=%s webspace=%s scenario=%s",
             intent,

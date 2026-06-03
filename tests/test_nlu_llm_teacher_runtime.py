@@ -2128,6 +2128,131 @@ async def test_llm_teacher_repairs_open_modal_without_required_slot(monkeypatch)
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_repairs_open_modal_label_slot_to_canonical_modal(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-open-modal-canonical-slot-repair"
+    scenario_id = "test_open_modal_canonical_slot_repair"
+    request_text = "show subnet environment variables"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_modal": {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.modal.open",
+                                    "params": {"modal_id": "$slot.modal_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_modal",
+                                    "regex_rule": {
+                                        "intent": "desktop.open_modal",
+                                        "pattern": r"\b(?:show|open)\s+(?P<modal_id>subnet\s+environment\s+variables)\b",
+                                    },
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "confidence": 0.7,
+                                    "notes": "LLM captured a display label; AdaOS should preserve the canonical modal evidence.",
+                                    "candidate": None,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(
+        llm,
+        "_collect_root_mcp_authoring_evidence",
+        lambda **kwargs: {
+            "desktop_registry_lookup": {
+                "ok": True,
+                "webspace_id": webspace_id,
+                "lookups": {
+                    "modal_id": [
+                        {
+                            "value": "subnet_env_modal",
+                            "labels": ["Subnet Env", "subnet environment variables"],
+                            "sources": ["test"],
+                        }
+                    ],
+                    "app_id": [],
+                    "scenario_id": [],
+                },
+                "summary": [],
+                "fingerprint": "fp.subnet-env",
+            }
+        },
+    )
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.subnet-env",
+                "request_id": "req.subnet-env",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    candidate = candidates[-1]
+    assert candidate["status"] == "pending"
+    assert candidate["regex_rule"]["intent"] == "desktop.open_modal"
+    assert candidate["preview"]["slots"] == {"modal_id": "subnet environment variables"}
+    assert candidate["normalization"]["llm_proposal_repair"]["modal_id"] == "subnet_env_modal"
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_repairs_scenario_switch_target_and_slot_alias(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm

@@ -1120,7 +1120,9 @@ class RouterService:
             messages: list[dict[str, Any]],
             last_refresh_ts: float,
         ) -> None:
-            cached_messages = [dict(item) for item in messages[-80:] if isinstance(item, dict)]
+            # Keep the browser stream as a compact tail. Full history stays in
+            # YJS/memory; the modal only needs the last few turns for debugging.
+            cached_messages = [dict(item) for item in messages[-8:] if isinstance(item, dict)]
             _voice_chat_stream_cache[(str(webspace_id or "").strip(), str(target_node_id or "").strip())] = {
                 "messages": cached_messages,
                 "last_refresh_ts": last_refresh_ts,
@@ -2210,9 +2212,20 @@ class RouterService:
                 from adaos.services.nlu.teacher_confirmation_runtime import (
                     has_recent_voice_confirmation,
                     is_confirmation_answer,
+                    should_suppress_voice_text_for_confirmation,
                 )
 
                 if is_confirmation_answer(text) and await has_recent_voice_confirmation(ws):
+                    return
+                if await should_suppress_voice_text_for_confirmation(ws, text):
+                    try:
+                        logging.getLogger("adaos.router.voice_chat").debug(
+                            "voice.chat.user suppressed during active NLU Teacher confirmation webspace=%s text=%r",
+                            ws,
+                            text,
+                        )
+                    except Exception:
+                        pass
                     return
             except Exception:
                 pass

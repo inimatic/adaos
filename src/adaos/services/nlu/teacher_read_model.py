@@ -1597,9 +1597,18 @@ def _lookup_contains(lookup_payload: Mapping[str, Any], lookup: str, value: Any)
     token = str(value or "").strip()
     if not token or token.startswith("$"):
         return None
+    token_key = re.sub(r"\s+", " ", token.casefold()).strip()
     lookups = lookup_payload.get("lookups") if isinstance(lookup_payload.get("lookups"), Mapping) else {}
     rows = lookups.get(lookup) if isinstance(lookups.get(lookup), list) else []
-    return any(isinstance(item, Mapping) and str(item.get("value") or "").strip() == token for item in rows)
+    for item in rows:
+        if not isinstance(item, Mapping):
+            continue
+        canonical = str(item.get("value") or "").strip()
+        labels = item.get("labels") if isinstance(item.get("labels"), list) else []
+        values = [canonical, *(str(label or "").strip() for label in labels)]
+        if any(re.sub(r"\s+", " ", candidate.casefold()).strip() == token_key for candidate in values if candidate):
+            return True
+    return False
 
 
 def preview_interface_action(
