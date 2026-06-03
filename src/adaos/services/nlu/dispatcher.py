@@ -272,6 +272,46 @@ def _emit_voice_action_ack(
     )
 
 
+def _emit_action_outcome(
+    ctx: AgentContext,
+    *,
+    event_type: str,
+    intent: str,
+    action_type: str,
+    target: str,
+    webspace_id: str,
+    scenario_id: str,
+    payload: Mapping[str, Any] | None,
+    raw: Mapping[str, Any],
+    reason: str | None = None,
+) -> None:
+    meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    out: Dict[str, Any] = {
+        "intent": intent,
+        "action_type": action_type,
+        "target": target,
+        "webspace_id": webspace_id,
+        "scenario_id": scenario_id,
+        "status": "failed" if event_type.endswith("failed") else "emitted",
+        "_meta": dict(meta),
+    }
+    if payload is not None:
+        out["action_payload"] = dict(payload)
+    for key in ("text", "request_id", "via", "confidence"):
+        value = raw.get(key)
+        if value not in (None, ""):
+            out[key] = value
+    slots = raw.get("slots")
+    if isinstance(slots, Mapping):
+        out["slots"] = dict(slots)
+    if reason:
+        out["reason"] = reason
+    try:
+        bus_emit(ctx.bus, event_type, out, source="nlu.dispatcher")
+    except Exception:
+        _log.debug("failed to emit %s", event_type, exc_info=True)
+
+
 def _execute_action(
     ctx: AgentContext,
     *,
@@ -293,6 +333,18 @@ def _execute_action(
     target = str(action.get("target") or "").strip()
     if not target:
         _log.debug("nlu.intent %s: action missing target", intent)
+        _emit_action_outcome(
+            ctx,
+            event_type="nlu.action.dispatch_failed",
+            intent=intent,
+            action_type=action_type,
+            target="",
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=None,
+            raw=raw,
+            reason="missing_target",
+        )
         return
 
     base_params = action.get("params") or {}
@@ -306,6 +358,17 @@ def _execute_action(
     try:
         bus_emit(ctx.bus, target, payload, source="nlu.dispatcher")
         _emit_voice_action_ack(ctx, target=target, payload=payload, webspace_id=webspace_id, raw=raw)
+        _emit_action_outcome(
+            ctx,
+            event_type="nlu.action.dispatched",
+            intent=intent,
+            action_type=action_type,
+            target=target,
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=payload,
+            raw=raw,
+        )
         _log.debug(
             "nlu.intent %s dispatched action type=%s target=%s webspace=%s scenario=%s",
             intent,
@@ -315,6 +378,18 @@ def _execute_action(
             scenario_id,
         )
     except Exception:
+        _emit_action_outcome(
+            ctx,
+            event_type="nlu.action.dispatch_failed",
+            intent=intent,
+            action_type=action_type,
+            target=target,
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=payload,
+            raw=raw,
+            reason="bus_emit_failed",
+        )
         _log.warning(
             "failed to dispatch NLU action intent=%s type=%s target=%s webspace=%s scenario=%s",
             intent,
