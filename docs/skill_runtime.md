@@ -71,7 +71,7 @@ Major releases are manual. They also land in a new bucket, but the decision to p
 6. Optionally run `src/skills/<name>/tests/` (`--test`) from the prepared slot. Commands execute inside the staged environment (interpreter, `PYTHONPATH`, `.skill_env.json`), and logs are streamed to `slots/<slot>/logs/tests.log`.
 7. Persist slot metadata (tests, timestamps, default tool, data migration result) for status and rollback operations.
 
-`adaos skill activate <name>` switches the active version/slot markers atomically and records the previous version/slot for `adaos skill rollback`. Activation does not run data migration; migration belongs to prepare. Setup flows must run **after activation** so that secrets and runtime paths are stable.
+`adaos skill activate <name>` switches the active version/slot markers atomically and records the previous version/slot for `adaos skill rollback`. Without a name, `adaos skill activate` activates every workspace skill currently marked `runtime-behind`. Activation does not run data migration; migration belongs to prepare. Setup flows must run **after activation** so that secrets and runtime paths are stable.
 
 After a successful activation, AdaOS keeps only the current runtime bucket and the previous rollback bucket. Older runtime buckets are pruned automatically because the runtime supports only one rollback step.
 

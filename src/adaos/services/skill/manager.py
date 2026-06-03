@@ -2038,6 +2038,7 @@ class SkillManager:
         webspace_id: str | None = None,
         version: str | None = None,
         slot: str | None = None,
+        defer_webspace_rebuild: bool = False,
     ) -> str:
         """
         Convenience helper that routes activation to the appropriate runtime
@@ -2049,7 +2050,12 @@ class SkillManager:
             target = self.activate_runtime(name, version=version, slot=slot)
         bus_webspace = webspace_id or _default_webspace_id()
         if self.bus:
-            payload: Dict[str, Any] = {"skill_name": name, "space": space, "webspace_id": bus_webspace}
+            payload: Dict[str, Any] = {
+                "skill_name": name,
+                "space": space,
+                "webspace_id": bus_webspace,
+                "defer_webspace_rebuild": bool(defer_webspace_rebuild),
+            }
             emit(self.bus, "skills.activated", payload, "skill.mgr")
         return target
 

@@ -897,6 +897,65 @@ def _list_migratable_workspace_skills(*, ctx, mgr: SkillManager) -> list[str]:
     return sorted(candidates)
 
 
+def _list_runtime_behind_workspace_skills(*, ctx, mgr: SkillManager) -> list[str]:
+    workspace_root = Path(ctx.paths.workspace_dir())
+    workspace_skills_root = Path(ctx.paths.skills_workspace_dir())
+
+    workspace_registry_by_name: dict[str, dict[str, object]] = {}
+    try:
+        registry_items = list_workspace_registry_entries(workspace_root, kind="skills", fallback_to_scan=True)
+    except Exception:
+        registry_items = []
+    for item in registry_items:
+        if not isinstance(item, dict):
+            continue
+        item_name = str(item.get("name") or item.get("id") or "").strip()
+        if item_name:
+            workspace_registry_by_name[item_name] = item
+
+    installed_names: set[str] = set()
+    try:
+        rows = SqliteSkillRegistry(ctx.sql).list()
+    except Exception:
+        rows = []
+    for row in rows:
+        if not bool(getattr(row, "installed", True)):
+            continue
+        row_name = getattr(row, "name", None) or getattr(row, "id", None)
+        if row_name:
+            installed_names.add(str(row_name))
+
+    names = sorted(
+        installed_names
+        | set(_collect_runtime_skill_names(workspace_skills_root))
+        | set(_collect_workspace_skill_names(ctx, workspace_skills_root))
+        | set(workspace_registry_by_name)
+    )
+    candidates: list[str] = []
+    for skill_name in names:
+        _source_workdir, source_path, _source_kind = _resolve_workspace_skill_source(
+            ctx,
+            skill_name,
+            workspace_root,
+            workspace_skills_root,
+        )
+        if not source_path.exists() and skill_name not in workspace_registry_by_name:
+            continue
+        try:
+            runtime_state = mgr.runtime_status(skill_name)
+        except Exception:
+            continue
+        workspace_version, runtime_version, version_drift = _resolve_workspace_skill_versions(
+            runtime_state=runtime_state,
+            registry_meta=workspace_registry_by_name.get(skill_name),
+            source_path=source_path,
+        )
+        if "runtime-behind" in _runtime_version_flags(workspace_version, runtime_version, version_drift):
+            candidates.append(skill_name)
+
+    return candidates
+
+
 def _echo_runtime_install(result: RuntimeInstallResult) -> None:
     typer.secho(
         f"installed {result.name} v{result.version} into slot {result.slot}",
@@ -1541,8 +1600,63 @@ def cmd_setup(
 
 @_run_safe
 @app.command("activate")
-def activate(name: str, slot: Optional[str] = typer.Option(None, "--slot"), version: Optional[str] = typer.Option(None, "--version")):
+def activate(
+    name: Optional[str] = typer.Argument(None, help="skill name; omit to activate every runtime-behind workspace skill"),
+    slot: Optional[str] = typer.Option(None, "--slot"),
+    version: Optional[str] = typer.Option(None, "--version"),
+):
     mgr = _mgr()
+    if not name:
+        if slot or version:
+            typer.secho("--slot/--version require a skill name", fg=typer.colors.RED)
+            raise typer.Exit(2)
+        try:
+            candidates = _list_runtime_behind_workspace_skills(ctx=get_ctx(), mgr=mgr)
+        except Exception as exc:
+            typer.secho(f"activate failed: {exc}", fg=typer.colors.RED)
+            raise typer.Exit(1) from exc
+        if not candidates:
+            typer.echo("No runtime-behind skills to activate.")
+            return
+
+        hub_ready = _hub_api_ready(timeout_s=2.0)
+        failed: list[tuple[str, str]] = []
+        for skill_name in candidates:
+            try:
+                target = mgr.activate_for_space(
+                    skill_name,
+                    version=None,
+                    slot=None,
+                    space="default",
+                    webspace_id=default_webspace_id(),
+                    defer_webspace_rebuild=True,
+                )
+                _notify_hub_skill_activated(
+                    skill_name,
+                    webspace_id=default_webspace_id(),
+                    defer_webspace_rebuild=True,
+                )
+            except Exception as exc:
+                failed.append((skill_name, str(exc)))
+                typer.secho(f"activate failed for {skill_name}: {exc}", fg=typer.colors.RED)
+                continue
+            typer.secho(f"skill {skill_name} now active on slot {target}", fg=typer.colors.GREEN)
+        if not failed:
+            try:
+                if hub_ready:
+                    _rebuild_hub_webspace(webspace_id=default_webspace_id())
+                else:
+                    _rebuild_local_webspace(webspace_id=default_webspace_id())
+            except Exception as exc:
+                failed.append(("webspace", str(exc)))
+                typer.secho(f"webspace rebuild failed: {exc}", fg=typer.colors.RED)
+        if failed:
+            skill_failures = len([item for item in failed if item[0] != "webspace"])
+            typer.echo(f"activated {len(candidates) - skill_failures} of {len(candidates)} runtime-behind skills")
+            raise typer.Exit(1)
+        typer.echo(f"activated {len(candidates)} runtime-behind skill(s)")
+        return
+
     try:
         target = mgr.activate_for_space(
             name,

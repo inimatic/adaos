@@ -294,6 +294,89 @@ def test_skill_status_prefers_workspace_version_over_runtime_version(tmp_base_di
     assert "runtime-behind" in result.stdout
 
 
+def test_skill_activate_without_name_activates_runtime_behind_skills(tmp_base_dir, monkeypatch):
+    current = tmp_base_dir / "workspace" / "skills" / "current_skill"
+    stale = tmp_base_dir / "workspace" / "skills" / "stale_skill"
+    current.mkdir(parents=True, exist_ok=True)
+    stale.mkdir(parents=True, exist_ok=True)
+    (current / "skill.yaml").write_text("id: current_skill\nversion: '1.0.0'\n", encoding="utf-8")
+    (stale / "skill.yaml").write_text("id: stale_skill\nversion: '1.2.0'\n", encoding="utf-8")
+
+    class _Row:
+        def __init__(self, name: str):
+            self.name = name
+            self.installed = True
+
+    class _Registry:
+        def __init__(self, _sql):
+            pass
+
+        def list(self):
+            return [_Row("current_skill"), _Row("stale_skill")]
+
+    class _Paths:
+        def workspace_dir(self):
+            return tmp_base_dir / "workspace"
+
+        def skills_workspace_dir(self):
+            return tmp_base_dir / "workspace" / "skills"
+
+        def dev_skills_dir(self):
+            return tmp_base_dir / "skills-dev"
+
+    class _Ctx:
+        paths = _Paths()
+        sql = object()
+
+    calls: list[tuple[str, str | None, str | None, bool]] = []
+    rebuilds: list[str] = []
+    notifications: list[tuple[str, bool]] = []
+
+    class _Mgr:
+        @staticmethod
+        def runtime_status(name: str):
+            versions = {"current_skill": "1.0.0", "stale_skill": "1.1.0"}
+            return {"version": versions[name], "active_slot": "A", "ready": True}
+
+        @staticmethod
+        def activate_for_space(
+            name: str,
+            *,
+            version=None,
+            slot=None,
+            space="default",
+            webspace_id="default",
+            defer_webspace_rebuild=False,
+        ):
+            calls.append((name, version, slot, bool(defer_webspace_rebuild)))
+            return "B"
+
+    monkeypatch.setattr(skill_cmd, "SqliteSkillRegistry", _Registry)
+    monkeypatch.setattr(skill_cmd, "get_ctx", lambda: _Ctx())
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(skill_cmd, "default_webspace_id", lambda: "default")
+    monkeypatch.setattr(skill_cmd, "_hub_api_ready", lambda timeout_s=2.0: False)
+    monkeypatch.setattr(skill_cmd, "_notify_hub_skill_activated", lambda name, **kwargs: notifications.append((name, bool(kwargs.get("defer_webspace_rebuild")))))
+    monkeypatch.setattr(skill_cmd, "_rebuild_local_webspace", lambda **kwargs: rebuilds.append(str(kwargs.get("webspace_id"))))
+    monkeypatch.setattr(
+        skill_cmd,
+        "list_workspace_registry_entries",
+        lambda *args, **kwargs: [
+            {"name": "current_skill", "version": "1.0.0"},
+            {"name": "stale_skill", "version": "1.2.0"},
+        ],
+    )
+
+    result = CliRunner().invoke(skill_cmd.app, ["activate"])
+
+    assert result.exit_code == 0
+    assert calls == [("stale_skill", None, None, True)]
+    assert notifications == [("stale_skill", True)]
+    assert rebuilds == ["default"]
+    assert "skill stale_skill now active on slot B" in result.stdout
+    assert "activated 1 runtime-behind skill(s)" in result.stdout
+
+
 def test_skill_list_prefers_workspace_version_over_runtime_version(tmp_base_dir, monkeypatch):
     skill_root = tmp_base_dir / "workspace" / "skills" / "demo_skill"
     skill_root.mkdir(parents=True, exist_ok=True)
