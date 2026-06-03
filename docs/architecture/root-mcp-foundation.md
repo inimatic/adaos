@@ -4,18 +4,19 @@
 
 It is not a private shell bridge for Codex and not a one-off endpoint for a single test environment. It is the first vertical slice of a shared machine-readable and agent-operable foundation that should later support both:
 
-- `LLM-assisted development` of skills and scenarios through SDK-oriented surfaces
+- [Builder](builder.md) workflows that create or repair skills and scenarios through SDK-oriented surfaces
 - `LLM-assisted operations` through managed targets and governed operational capabilities
 
 This document defines the target-state architecture and key boundaries.
 Detailed sequencing is tracked in [Root MCP Roadmap](root-mcp-roadmap.md).
+The Builder role and end-to-end capability creation boundary are defined in [AdaOS Builder](builder.md).
 The human-facing control-plane counterpart is described in [Infrascope](infrascope.md).
 
 ## Executive Summary
 
 AdaOS already has the beginnings of a canonical system model, SDK metadata export, runtime/status APIs, reliability snapshots, and root-hub communication paths. What it does not yet have is a single root-hosted agent-facing layer that can expose those capabilities in a typed, governed, auditable way.
 
-`Root MCP Foundation` should be introduced now because later LLM-assisted development and LLM-assisted operations both depend on the same missing pieces:
+`Root MCP Foundation` should be introduced now because later Builder workflows and LLM-assisted operations both depend on the same missing pieces:
 
 - stable self-description and contract exposure
 - typed tool and action envelopes
@@ -165,6 +166,10 @@ Candidate planes include:
 - `InfraOpsPlane`
 - `ProfileOpsPlane`
 - `NLUAuthoringPlane`
+
+For Builder, `AdaOSDevPlane` and `NLUAuthoringPlane` are context and preview
+surfaces. They are not the Builder itself; the canonical Builder workflow is
+defined in [AdaOS Builder](builder.md).
 
 The key rule is:
 
@@ -819,7 +824,7 @@ The eventual goal is to align this model with AdaOS's broader permission and cap
 
 - `health/status/control APIs`: there are useful node and subnet APIs, but they are still mostly HTTP-centric and not normalized as root-routed typed operational tools
 - `SDK metadata exposure`: exporter support exists and is now exposed through a root-curated descriptor registry, but the descriptor set is still narrow and not yet a full authoring surface
-- `scenario/skill descriptors`: manifests, registries, and projection services now have a root-level descriptor path, but the catalog is still limited and incomplete for authoring workflows
+- `scenario/skill descriptors`: manifests, registries, and projection services now have a root-level descriptor path, but the catalog is still limited and incomplete for Builder authoring workflows
 - `capability model`: `src/adaos/services/policy/capabilities.py` and SDK capability errors now have an initial Root MCP capability registry and policy gate, but the vocabulary is not yet unified across all AdaOS permission layers
 - `external client access`: Root MCP now has bounded access-token primitives and a scoped client model, but issuance/rotation/revocation are still minimal and root-local
 - `web UI declarative assets`: Yjs and workspace surfaces exist, but no dedicated operational-skill web UI or audit-first operator view exists yet

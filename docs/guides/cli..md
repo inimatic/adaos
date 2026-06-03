@@ -6,7 +6,8 @@ The old CLI cheat sheet was outdated and contained legacy commands. Use the curr
 
 - [Skills](../skills.md)
 - [Scenarios](../scenarios.md)
-- [LLM-Safe Skill Development Guide](llm-skill-development.md)
+- [Builder-Safe Skill Development Guide](llm-skill-development.md)
+- [AdaOS Builder](../architecture/builder.md)
 
 Current notes:
 

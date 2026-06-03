@@ -793,7 +793,7 @@ operators:
 AdaOS includes a JSON Schema for `webui.json` so that:
 
 * `adaos ... skill validate` can catch structural mistakes early
-* IDEs and LLM programmers can follow a stable contract when generating UI
+* IDEs and Builder workflows can follow a stable contract when generating UI
   declaratives
 
 Schema file: `src/adaos/abi/webui.v1.schema.json`

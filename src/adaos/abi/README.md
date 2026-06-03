@@ -1,6 +1,6 @@
 # Agent Behavior Interface (ABI)
 
-This folder contains JSON Schemas used by AdaOS for validation and by editors or LLM programmers for structure hints.
+This folder contains JSON Schemas used by AdaOS for validation and by editors or Builder workflows for structure hints.
 
 - `dcd.v1.schema.json` - device capability descriptor
 - `latent.v1.schema.json` - latent state payload

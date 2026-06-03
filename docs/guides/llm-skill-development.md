@@ -1,14 +1,16 @@
-# LLM-Safe Skill Development Guide
+# Builder-Safe Skill Development Guide
 
 Status: current guidance and target contract.
 
-This guide is written for humans and LLM agents that create or update AdaOS
-skills. Its goal is simple: a generated skill should be useful without being
-able to overload the shared desktop, hide failures, or bypass runtime
-governance.
+This guide is written for Builder workflows that create or update AdaOS skills.
+The Builder may be a human, an AI-assisted agent, or a human-in-the-loop
+combination. Its goal is simple: a generated or assisted skill should be useful
+without being able to overload the shared desktop, hide failures, or bypass
+runtime governance.
 
 Read this together with:
 
+- [AdaOS Builder](../architecture/builder.md)
 - the repository note `docs/interfaces/webio.md`
 - [UI Addressing](../architecture/ui-addressing.md)
 - [Named Entities and Canonical Naming](../architecture/named-entities.md)
@@ -41,9 +43,9 @@ The skill author chooses the data route. The runtime does not silently move a
 skill's data between Yjs and streams.
 
 That choice is part of the skill design and must be visible in `skill.yaml`,
-`webui.json`, handler code, and tests. For LLM-authored work, the route choice
-must be treated as a reviewable implementation decision, not an accidental
-side effect of the helper API used.
+`webui.json`, handler code, and tests. For Builder-authored work, the route
+choice must be treated as a reviewable implementation decision, not an
+accidental side effect of the helper API used.
 
 Runtime guardrails still enforce shared safety:
 
@@ -51,8 +53,8 @@ Runtime guardrails still enforce shared safety:
   the skill owner, and may warn, throttle, block, or quarantine unsafe owners.
 - Stream guards bound payload size, publish rate, snapshot request bursts, and
   receiver fanout, and must log suppressions or degraded delivery.
-- Guards emit diagnostics and quarantine records so the UI and future LLM repair
-  loops can explain the failure.
+- Guards emit diagnostics and quarantine records so the UI and future Builder
+  repair loops can explain the failure.
 - Guards are emergency control, not a replacement for a well-designed data
   route.
 

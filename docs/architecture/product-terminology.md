@@ -30,6 +30,21 @@ Assistant
   -> Catalog
 ```
 
+## Builder
+
+`Builder` is the user-facing creation role for turning an idea into governed
+AdaOS artifacts: skills, scenarios, manifests, UI descriptors, NLU hints, tests,
+and runtime-ready changes.
+
+Builder is executor-neutral. It may be a human, an AI-assisted agent, or a
+human-in-the-loop workflow. Product UI can use phrases such as "Let's build it"
+for capability creation, while advanced/developer docs should link to
+[AdaOS Builder](builder.md) for the precise architecture boundary.
+
+Do not introduce separate role names such as `LLM programmer` for this
+capability creation path. If an implementation detail needs to mention LLM
+assistance, describe it as a Builder mode.
+
 ## Term Mapping
 
 | Internal term | Product term | Notes |

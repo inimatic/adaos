@@ -50,8 +50,9 @@ markers for workspace skills:
 Use `adaos skill status <name> --fetch --diff` before publishing when you need
 the exact comparison against the registry base.
 
-For browser-facing or LLM-authored skills, follow
-[LLM-Safe Skill Development Guide](guides/llm-skill-development.md). That guide
+For browser-facing or Builder-authored skills, follow
+[Builder-Safe Skill Development Guide](guides/llm-skill-development.md) and
+[AdaOS Builder](architecture/builder.md). The skill guide
 defines the current Yjs, stream, projection, details, and guard/quarantine
 contracts for skills.
 

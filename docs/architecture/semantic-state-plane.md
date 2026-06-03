@@ -17,7 +17,7 @@ Read this together with:
 - [Operational Event Model](operational-event-model.md)
 - [Realtime Reliability Roadmap](realtime-reliability-roadmap.md)
 - [AdaOS Realtime Sidecar](adaos-realtime-sidecar.md)
-- [LLM-Safe Skill Development Guide](../guides/llm-skill-development.md)
+- [Builder-Safe Skill Development Guide](../guides/llm-skill-development.md)
 
 ## Why this exists
 

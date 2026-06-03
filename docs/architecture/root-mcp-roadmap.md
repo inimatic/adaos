@@ -24,7 +24,7 @@ This roadmap tracks how that foundation should evolve into descriptive and opera
 The roadmap has two explicit companion slices:
 
 - `AdaOSDevPlane`
-  - descriptive and authoring-oriented MCP surface for SDK, manifests, templates, and architecture
+  - descriptive and authoring-oriented MCP surface for Builder context: SDK, manifests, templates, registries, and architecture
 - `ProfileOps`
   - operational MCP surface for supervisor-owned profiling and profiling evidence
 - `NLUAuthoringPlane`
@@ -101,7 +101,7 @@ Phase is complete when:
 
 - [x] define the first explicit descriptive plane over the foundation
 - [x] expose architecture, SDK, manifest, schema, template, and public registry descriptors through typed plane contracts
-- [x] make `AdaOSDevPlane` the preferred LLM-programmer descriptive surface
+- [x] make `AdaOSDevPlane` the preferred Builder descriptive surface
 - [x] keep descriptive responses root-curated and cache-backed by default
 
 Phase is complete when:
@@ -221,7 +221,7 @@ It does not by itself guarantee full subnet observability, even though ordinary 
 ### Milestone C. Descriptive Codex Trial
 
 - [x] root descriptor cache serves architecture and SDK descriptors without contacting a hub
-- [x] `AdaOSDevPlane` exposes stable descriptive contracts for LLM-programmer workflows
+- [x] `AdaOSDevPlane` exposes stable descriptive contracts for Builder workflows
 - [x] public skill/scenario publication refreshes the descriptive registry path
 
 This milestone is the first point where live Codex trials should cover AdaOS architecture/programming assistance rather than only operational inspection.

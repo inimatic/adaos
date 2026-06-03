@@ -390,7 +390,7 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
             id="adaos_dev.get_architecture_catalog",
             title="Get AdaOS architecture catalog",
             surface=RootMcpSurface.DEVELOPMENT,
-            summary="Return the root-curated AdaOS architecture catalog for LLM-programmer and authoring workflows.",
+            summary="Return the root-curated AdaOS architecture catalog for Builder and authoring workflows.",
             input_schema=schema_object(),
             output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA),
             required_capability="development.read.descriptors",

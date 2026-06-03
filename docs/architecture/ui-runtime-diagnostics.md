@@ -64,6 +64,6 @@ diagnostic records, never as primary desktop state.
   `*.ui_runtime.log`.
 - Add richer widget-level ownership metadata, not only modal ownership.
 - Surface skill-log links from `[Node 0] Notifications` when running in dev.
-- Feed `get_skill_logs(skill=...)` into the future LLM skill debugging MCP
+- Feed `get_skill_logs(skill=...)` into the future Builder skill debugging MCP
   workflow automatically.
 - Add rate-limit counters and duplicate suppression for noisy renderer failures.

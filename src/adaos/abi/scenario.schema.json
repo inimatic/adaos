@@ -15,7 +15,7 @@
     },
     "title": {
       "type": "string",
-      "description": "Human-readable scenario title for UIs and LLM programmers."
+      "description": "Human-readable scenario title for UIs and Builder workflows."
     },
     "type": {
       "type": "string",

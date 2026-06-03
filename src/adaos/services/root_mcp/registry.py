@@ -54,7 +54,7 @@ def _plane_registry_payload() -> dict[str, Any]:
                 "surface": "development",
                 "mode": "typed_descriptive_plane",
                 "published_by": "root",
-                "preferred_for": ["llm_programmer", "authoring", "architecture_assistance"],
+                "preferred_for": ["builder", "authoring", "architecture_assistance"],
                 "descriptor_ids": [
                     "architecture_catalog",
                     "sdk_metadata",
