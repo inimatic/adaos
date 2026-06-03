@@ -324,8 +324,11 @@ If the probe result matches the planned candidate intent, AdaOS:
 - emits `nlp.teacher.understanding.acquired`
 
 If the probe returns another intent or still misses, the candidate is marked
-`verification_failed`. Dispatch is still a separate future gate; the LLM does
-not execute actions directly.
+`verification_failed`. For voice-confirmed safe candidates, AdaOS then emits
+the normal `nlp.intent.detected` dispatcher event and records
+`dispatch_status=requested`; unsafe candidates are recorded as
+`dispatch_status=blocked`. Full host/skill/endpoint outcome verification is
+still a separate M4 gate. The LLM does not execute actions directly.
 
 ## Current Voice confirmation flow
 
@@ -341,7 +344,9 @@ durable Apply:
 4. If the user answers `да`, AdaOS emits
    `nlp.teacher.candidate.apply` with confirmation metadata, then normal
    candidate apply/regex verification records `understanding.acquired` when
-   the planned intent matches.
+   the planned intent matches. If the candidate side-effect policy allows
+   auto-dispatch, AdaOS continues through the regular `nlp.intent.detected`
+   path so the user sees the requested UI/action behavior.
 5. If the user answers `нет`, AdaOS marks the candidate `rejected`, writes
    `confirmation.rejected`, and starts one retry LLM pass with the rejected
    candidate in prompt context. If the user included a correction such as
@@ -839,7 +844,10 @@ treated as `[could]` unless explicitly promoted.
   - `GET /api/nlu/teacher/{webspace_id}/lookups`
   - `POST /api/nlu/teacher/{webspace_id}/example/save`
 - Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
-- Record planned intent, owner hint, proposed template, verification status, dispatch status, and correction-thread link.
+- Record planned intent, owner hint, proposed template, verification status,
+  first dispatch status for voice-confirmed safe candidates, and
+  correction-thread link. Factual action outcome evidence remains the next
+  dispatch gate.
 - Parse both plain JSON and fenced JSON LLM responses; quarantine regex
   proposals that fail compile/source-phrase preview.
 - Store request/context/prompt hashes and suppress duplicate active regex candidates.
