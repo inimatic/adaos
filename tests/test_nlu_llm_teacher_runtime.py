@@ -159,6 +159,72 @@ def test_llm_teacher_caches_root_mcp_descriptor_evidence(monkeypatch):
     llm._clear_root_mcp_descriptor_cache()
 
 
+def test_llm_teacher_prepares_openai_mcp_tool_from_env_bearer(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    llm._clear_llm_mcp_descriptor_cache()
+    monkeypatch.setenv("ADAOS_NLU_LLM_MCP_BEARER", "secret-mcp-token")
+    monkeypatch.setenv("ADAOS_NLU_LLM_MCP_SERVER_URL", "https://mcp.example.test/v1/root/mcp")
+    monkeypatch.setattr(llm, "_LLM_MCP_MODE", "hybrid")
+    monkeypatch.setattr(llm, "_LLM_MCP_ALLOWED_TOOLS", ("hub.get_subnet_info", "nlu_authoring.get_context"))
+
+    plan = llm._prepare_llm_mcp_plan(request_id="req.mcp.env")
+
+    assert plan["status"] == "ready"
+    assert plan["source"] == "env_bearer"
+    assert plan["tools"][0]["type"] == "mcp"
+    assert plan["tools"][0]["server_url"] == "https://mcp.example.test/v1/root/mcp"
+    assert plan["tools"][0]["authorization"] == "secret-mcp-token"
+    assert plan["tools"][0]["allowed_tools"] == ["hub_get_subnet_info", "nlu_authoring_get_context"]
+    assert llm._redact_llm_mcp_plan(plan)["tools"][0]["authorization"] == "<redacted>"
+    llm._clear_llm_mcp_descriptor_cache()
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_forwards_mcp_tools_to_root_llm_proxy(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    captured: dict[str, object] = {}
+
+    class _FakeRootHttp:
+        def request(self, method, path, **kwargs):
+            captured["method"] = method
+            captured["path"] = path
+            captured["kwargs"] = kwargs
+            return {
+                "output": [{"content": [{"type": "output_text", "text": "{\"decision\":\"ignore\"}"}]}],
+                "_protocol": {"mcp": {"used_mcp": True, "item_count": 2}},
+            }
+
+    fake_http = _FakeRootHttp()
+    monkeypatch.setattr(llm.RootHttpClient, "from_settings", classmethod(lambda cls, settings: fake_http))
+
+    tool = {
+        "type": "mcp",
+        "server_label": "adaos_nlu",
+        "server_url": "https://mcp.example.test/v1/root/mcp",
+        "authorization": "secret-mcp-token",
+        "require_approval": "never",
+        "allowed_tools": ["hub_get_subnet_info"],
+    }
+    result = await llm._llm_call(
+        [{"role": "user", "content": "Return JSON."}],
+        request_id="req.mcp.forward",
+        tools=[tool],
+        tool_choice="auto",
+        max_tool_calls=3,
+    )
+
+    assert result["_protocol"]["mcp"]["used_mcp"] is True
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/v1/llm/response"
+    body = captured["kwargs"]["json"]  # type: ignore[index]
+    assert body["request_id"] == "req.mcp.forward"
+    assert body["tools"] == [tool]
+    assert body["tool_choice"] == "auto"
+    assert body["max_tool_calls"] == 3
+
+
 @pytest.mark.anyio
 async def test_llm_teacher_uses_root_policy_when_env_unset(monkeypatch):
     from adaos.services.agent_context import get_ctx

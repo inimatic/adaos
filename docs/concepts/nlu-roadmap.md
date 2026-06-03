@@ -34,6 +34,12 @@ validation gate before durable regex/example changes. Remaining target-roadmap
 items belong mainly to dispatch outcome verification, promotion, and
 UI/operator surfaces.
 
+Current MCP-aware LLM status: **hybrid bridge implemented**. NLU Teacher still
+collects a bounded Root MCP snapshot for compatibility, but it can also attach
+a scoped Root MCP `responses_tool` descriptor to `/v1/llm/response` so OpenAI
+can call Root MCP directly. If descriptor/session preparation fails or times
+out, Teacher logs the reason and continues with the snapshot path.
+
 ## Status Labels
 
 Markdown checkboxes only distinguish done from not done. This roadmap uses a
@@ -700,6 +706,15 @@ below remain useful for tracking existing implementation work.
   `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
   `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
   `nlu_authoring.list_templates`, and `sdk.describe_surface`.
+- [x] LLM Teacher can run in MCP-aware hybrid mode: it prepares an OpenAI
+  `responses_tool` descriptor from either an explicit debug bearer or a
+  short-lived root-issued MCP session, passes it through `/v1/llm/response`,
+  records redacted descriptor/audit fields, and falls back to prompt snapshot
+  evidence when MCP tool preparation is unavailable.
+- [ ] `[must]` Move NLU authoring context retrieval from pre-collected prompt
+  snapshots toward LLM-selected MCP calls after public Root MCP exposes the
+  same scoped `nlu_authoring.*`, `desktop.registry.*`, template, and preview
+  tools that the local Root MCP service already provides.
 - [x] LLM Teacher prompt now treats
   `context.root_mcp.nlu_authoring_context.action_surface.available_actions` as
   the primary governed action inventory and uses `runtime_state`,
@@ -761,6 +776,19 @@ below remain useful for tracking existing implementation work.
 
 - [ ] MCP Server modal issues scoped NLU authoring token.
 - [ ] Root resolves token to subnet/zone/capabilities.
+- [x] LLM Teacher can attach a scoped Root MCP OpenAI tool descriptor to the
+  root LLM proxy in hybrid mode. The descriptor bearer is redacted from
+  Teacher logs; cache keys include target, zone, server label, and allowed
+  tools.
+- [ ] `[must]` Define a root-public `NLUTeacherRead` capability profile that
+  exposes only read-only NLU authoring/descriptive tools:
+  `nlu_authoring.get_context`, `desktop.registry.lookup`,
+  `nlu_authoring.check_phrase`, `nlu_authoring.get_dialog_context`,
+  `nlu_authoring.list_training_targets`, `nlu_authoring.list_templates`,
+  `sdk.describe_surface`, and `desktop.preview_action`.
+- [ ] `[must]` Cache subnet-scoped NLU descriptive snapshots on root so
+  OpenAI MCP calls can read action/entity/template context without repeatedly
+  waiting on a live hub roundtrip.
 - [x] Expose Root MCP HTTP JSON-RPC endpoint at `/v1/root/mcp` for
   remote-MCP clients: `initialize`, `tools/list`, `tools/call`, and
   notification handling. This is the transport required for the target mode

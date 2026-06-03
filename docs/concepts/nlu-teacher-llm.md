@@ -816,6 +816,14 @@ treated as `[could]` unless explicitly promoted.
   `nlu_authoring.get_context`, `nlu_authoring.check_phrase`,
   `nlu_authoring.get_dialog_context`, `nlu_authoring.list_training_targets`,
   `nlu_authoring.list_templates`, and `sdk.describe_surface`.
+- Run in MCP-aware hybrid mode when Root MCP is available: Teacher may attach
+  an OpenAI `responses_tool` descriptor to the root `/v1/llm/response` call so
+  the model can fetch fresh root/subnet facts itself. Snapshot prompt evidence
+  remains the fallback path until public Root MCP exposes the full read-only
+  NLU authoring plane for the scoped subnet.
+- Redact MCP bearer material from Teacher logs; store only mode, status,
+  target/zone metadata, allowed tool ids, descriptor hash, and OpenAI protocol
+  evidence such as MCP item counts.
 - Include skill-authored `nlu.llm_hints` and inferred desktop registry lookup
   evidence, especially app/modal aliases and primary interface actions. Skill
   authors prepare these hints during skill development; AdaOS still validates
@@ -858,6 +866,14 @@ treated as `[could]` unless explicitly promoted.
 
 - Add **Issue token** to the MCP Server modal or another operator-controlled surface.
 - Issue target-scoped Root MCP session leases with an initial `NLUTeacherAuthor`/read-mostly capability profile.
+- Expose a root-public `NLUTeacherRead` profile for MCP-aware LLM calls. The
+  first profile should be read-only and include context, registry lookup,
+  phrase check, dialog context, training targets, template inventory, SDK
+  surface descriptors, and action preview. It must not expose apply, dispatch,
+  SDK execution, or UI mutation tools.
+- Cache subnet-scoped descriptive snapshots on root. The LLM should be able to
+  call MCP without causing repeated live hub timeouts; cache entries still need
+  target/subnet scope, freshness metadata, and invalidation hooks.
 - Publish read-only MCP contracts for:
   - `nlu_authoring.get_context`
   - `nlu_authoring.check_phrase` backed by the current probe service
