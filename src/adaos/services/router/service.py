@@ -50,6 +50,13 @@ def _webio_receiver_metadata_timeout_s() -> float:
         return 0.75
 
 
+def _voice_chat_yjs_timeout_s() -> float:
+    try:
+        return max(0.05, min(float(str(os.getenv("ADAOS_VOICE_CHAT_YJS_TIMEOUT_S") or "0.75").strip()), 5.0))
+    except Exception:
+        return 0.75
+
+
 def _webio_stream_guard_enabled() -> bool:
     return str(os.getenv("ADAOS_WEBIO_STREAM_GUARD_ENABLE") or "1").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -452,6 +459,7 @@ class RouterService:
         self._tg_reply_via_root_http = str(os.getenv("HUB_TG_REPLY_VIA_ROOT_HTTP") or "").strip() == "1"
         self._media_route_webspaces: set[str] = set()
         self._notify_tasks: set[asyncio.Task[None]] = set()
+        self._voice_chat_persist_tasks: set[asyncio.Task[None]] = set()
         self._webio_receiver_metadata_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
     def _router_yjs_write_meta(self):
@@ -1107,12 +1115,22 @@ class RouterService:
                     },
                 )
 
-            await _mutate_data_map(
-                webspace_id,
-                _mutator,
-                channel="core.router.voice_chat.live_room",
-                prefer_live_room=False,
-            )
+            try:
+                await asyncio.wait_for(
+                    _mutate_data_map(
+                        webspace_id,
+                        _mutator,
+                        channel="core.router.voice_chat.live_room",
+                        prefer_live_room=False,
+                    ),
+                    timeout=_voice_chat_yjs_timeout_s(),
+                )
+            except asyncio.TimeoutError:
+                self._vlog.warning(
+                    "voice_chat.ensure yjs write timed out webspace=%s node_id=%s",
+                    webspace_id,
+                    str(target_node_id or "").strip() or None,
+                )
 
         def _publish_voice_chat_stream(
             webspace_id: str,
@@ -1120,8 +1138,8 @@ class RouterService:
             messages: list[dict[str, Any]],
             last_refresh_ts: float,
         ) -> None:
-            # Keep the browser stream as a compact tail. Full history stays in
-            # YJS/memory; the modal only needs the last few turns for debugging.
+            # Keep the browser stream as a compact tail. Voice must never wait
+            # on heavier YJS history writes before dispatching NLU.
             cached_messages = [dict(item) for item in messages[-8:] if isinstance(item, dict)]
             _voice_chat_stream_cache[(str(webspace_id or "").strip(), str(target_node_id or "").strip())] = {
                 "messages": cached_messages,
@@ -1160,6 +1178,82 @@ class RouterService:
             except Exception:
                 pass
 
+        def _schedule_voice_chat_persist(
+            webspace_id: str,
+            target_node_id: str | None,
+            messages: list[dict[str, Any]],
+            last_refresh_ts: float,
+        ) -> None:
+            snapshot = [dict(item) for item in messages[-8:] if isinstance(item, dict)]
+            if not snapshot:
+                return
+
+            async def _persist() -> None:
+                def _mutator(data_map: Any, txn: Any) -> None:
+                    current = _read_voice_chat_state(data_map, target_node_id)
+                    try:
+                        current_ts = float(current.get("last_refresh_ts") or 0.0) if isinstance(current, dict) else 0.0
+                    except Exception:
+                        current_ts = 0.0
+                    if current_ts > float(last_refresh_ts or 0.0):
+                        return
+                    _write_voice_chat_state(
+                        data_map,
+                        txn,
+                        target_node_id,
+                        {
+                            "messages": [dict(item) for item in snapshot],
+                            "last_refresh_ts": float(last_refresh_ts or time.time()),
+                        },
+                    )
+
+                try:
+                    await asyncio.wait_for(
+                        _mutate_data_map(
+                            webspace_id,
+                            _mutator,
+                            channel="core.router.voice_chat.live_room",
+                            prefer_live_room=False,
+                        ),
+                        timeout=_voice_chat_yjs_timeout_s(),
+                    )
+                except asyncio.TimeoutError:
+                    self._vlog.warning(
+                        "voice_chat.persist yjs write timed out webspace=%s node_id=%s count=%d",
+                        webspace_id,
+                        str(target_node_id or "").strip() or None,
+                        len(snapshot),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._vlog.warning(
+                        "voice_chat.persist yjs write failed webspace=%s node_id=%s",
+                        webspace_id,
+                        str(target_node_id or "").strip() or None,
+                        exc_info=True,
+                    )
+
+            try:
+                task = asyncio.create_task(
+                    _persist(),
+                    name=f"voice-chat-persist:{str(webspace_id or 'default')}:{str(target_node_id or 'shared')}",
+                )
+            except RuntimeError:
+                return
+            self._voice_chat_persist_tasks.add(task)
+
+            def _forget(done: asyncio.Task[None]) -> None:
+                self._voice_chat_persist_tasks.discard(done)
+                try:
+                    done.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    self._vlog.warning("voice_chat.persist background task failed", exc_info=True)
+
+            task.add_done_callback(_forget)
+
         async def _publish_voice_chat_snapshot(
             webspace_id: str,
             target_node_id: str | None,
@@ -1177,40 +1271,18 @@ class RouterService:
             msg: dict,
             target_node_id: str | None = None,
         ) -> None:
-            count = 0
-            messages_snapshot: list[dict[str, Any]] = []
+            cache_key = (str(webspace_id or "").strip(), str(target_node_id or "").strip())
+            cached = _voice_chat_stream_cache.get(cache_key) or {}
+            cached_raw = cached.get("messages") if isinstance(cached, dict) else None
+            cached_messages = [dict(item) for item in cached_raw if isinstance(item, dict)] if isinstance(cached_raw, list) else []
             last_refresh_ts = time.time()
+            stream_snapshot = [*cached_messages, dict(msg)]
+            if len(stream_snapshot) > 8:
+                stream_snapshot = stream_snapshot[-8:]
+            _publish_voice_chat_stream(webspace_id, target_node_id, stream_snapshot, last_refresh_ts)
+            _schedule_voice_chat_persist(webspace_id, target_node_id, stream_snapshot, last_refresh_ts)
 
-            def _mutator(data_map: Any, txn: Any) -> None:
-                nonlocal count, messages_snapshot, last_refresh_ts
-                current = _read_voice_chat_state(data_map, target_node_id)
-                messages = []
-                if isinstance(current, dict) and isinstance(current.get("messages"), list):
-                    messages = list(current.get("messages") or [])
-                messages.append(msg)
-                if len(messages) > 60:
-                    messages = messages[-60:]
-                count = len(messages)
-                messages_snapshot = [dict(item) for item in messages if isinstance(item, dict)]
-                last_refresh_ts = time.time()
-                _write_voice_chat_state(
-                    data_map,
-                    txn,
-                    target_node_id,
-                    {
-                        "messages": messages,
-                        "last_refresh_ts": last_refresh_ts,
-                    },
-                )
-
-            await _mutate_data_map(
-                webspace_id,
-                _mutator,
-                channel="core.router.voice_chat.live_room",
-                prefer_live_room=False,
-            )
-            if messages_snapshot:
-                _publish_voice_chat_stream(webspace_id, target_node_id, messages_snapshot, last_refresh_ts)
+            count = len(stream_snapshot)
             try:
                 self._vlog.debug(
                     "voice_chat.append webspace=%s node_id=%s count=%d last_from=%s last_text=%r",
@@ -1935,7 +2007,6 @@ class RouterService:
             except Exception:
                 pass
             for ws in targets:
-                await _ensure_voice_chat_state(ws, target_node_id)
                 await _append_voice_chat_message(ws, msg, target_node_id)
 
         async def _on_io_out_say(ev: Event) -> None:
@@ -2156,24 +2227,16 @@ class RouterService:
             text = text.strip()
 
             try:
-                self._vlog.debug("voice.chat.user received webspace=%s text=%r", ws, text)
+                self._vlog.info("voice.chat.user received webspace=%s text=%r", ws, text)
             except Exception:
                 pass
             try:
-                logging.getLogger("adaos.router.voice_chat").debug("voice.chat.user -> append+nlp webspace=%s", ws)
+                logging.getLogger("adaos.router.voice_chat").info("voice.chat.user -> append+nlp webspace=%s", ws)
             except Exception:
                 pass
 
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
             target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=True)
-            try:
-                await _ensure_voice_chat_state(ws, target_node_id)
-            except Exception:
-                try:
-                    logging.getLogger("adaos.router").warning("voice.chat.user: failed to ensure voice_chat state", exc_info=True)
-                except Exception:
-                    pass
-                return
 
             meta = {**meta, "webspace_id": ws}
             if len(target_webspaces) > 1:
@@ -2436,5 +2499,20 @@ class RouterService:
             except Exception:
                 pass
             self._notify_tasks.clear()
+        if self._voice_chat_persist_tasks:
+            try:
+                timeout_s = max(0.0, float(os.getenv("ADAOS_VOICE_CHAT_PERSIST_DRAIN_TIMEOUT_S") or "1.0"))
+            except Exception:
+                timeout_s = 1.0
+            pending = list(self._voice_chat_persist_tasks)
+            try:
+                await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+            except Exception:
+                pass
+            self._voice_chat_persist_tasks.clear()
         self._media_route_webspaces.clear()
         self._started = False

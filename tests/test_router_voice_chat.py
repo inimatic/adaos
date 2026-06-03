@@ -12,9 +12,13 @@ from adaos.domain import Event
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.scenario.node_data_scope import node_scope_data_path
 
-if "y_py" not in sys.modules:
+try:
+    import y_py  # noqa: F401
+except ImportError:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
-if "ypy_websocket" not in sys.modules:
+try:
+    import ypy_websocket  # noqa: F401
+except ImportError:
     ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
     sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
     sys.modules["ypy_websocket.ystore"] = ystore_mod
@@ -24,6 +28,12 @@ from adaos.services.router.service import RouterService
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def _drain_voice_chat_persist(router: RouterService) -> None:
+    pending = list(getattr(router, "_voice_chat_persist_tasks", set()))
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def test_voice_chat_user_ignores_other_target_node(monkeypatch) -> None:
@@ -212,6 +222,7 @@ async def test_voice_chat_user_defaults_history_to_local_node_when_target_missin
         )
     )
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
 
     messages = doc.get_map("data")["nodes"]["hub-node"]["voice_chat"]["messages"]
     assert len(messages) == 1
@@ -289,6 +300,7 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
         )
     )
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
 
     data = doc.get_map("data")
     messages = data["voice_chat"]["messages"]
@@ -348,6 +360,60 @@ async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_histo
     await bus.wait_for_idle(timeout=1.0)
 
     assert seen_stream == []
+
+
+async def test_voice_chat_user_continues_when_yjs_history_write_times_out(monkeypatch) -> None:
+    class _SlowAsyncDoc:
+        async def __aenter__(self):
+            await asyncio.sleep(10)
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _MetaCtx:
+        async def __aenter__(self):
+            return {}
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    bus = LocalEventBus()
+    seen_nlu: list[Event] = []
+    seen_stream: list[Event] = []
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_YJS_TIMEOUT_S", "0.05")
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "mutate_live_room", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _SlowAsyncDoc())
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+    bus.subscribe("io.out.stream.publish", lambda ev: seen_stream.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "Покажи браузеры",
+                "webspace_id": "desktop",
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+
+    assert seen_nlu
+    assert seen_nlu[0].payload["text"] == "Покажи браузеры"
+    assert seen_stream
+    assert seen_stream[0].payload["receiver"] == "voice_chat.messages"
+    assert seen_stream[0].payload["data"]["messages"][0]["text"] == "Покажи браузеры"
 
 
 async def test_voice_chat_user_appends_neural_intent_demo(monkeypatch) -> None:
@@ -429,6 +495,7 @@ async def test_voice_chat_user_appends_neural_intent_demo(monkeypatch) -> None:
         )
     )
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
 
     messages = doc.get_map("data")["nodes"]["hub-node"]["voice_chat"]["messages"]
     assert messages[0]["from"] == "user"
@@ -507,6 +574,7 @@ async def test_io_out_chat_append_writes_node_scoped_history_without_crashing(mo
         )
     )
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
 
     assert doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["messages"][0]["text"] == "hello"
     assert float(doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["last_refresh_ts"]) > 0
