@@ -41,12 +41,15 @@ def cached_image_variant(
     quality: int = 80,
     background: str = "black",
     fallback_dir: str | Path | None = None,
+    create: bool = True,
 ) -> tuple[Path, bool]:
     source = Path(path)
     safe_label = "".join(ch for ch in str(label or "").lower() if ch.isalnum() or ch in {"-", "_"}) or "image"
     cache_path = source_image_cache_dir(source, fallback_dir=fallback_dir) / f"{image_fingerprint(source)}-{safe_label}.jpg"
     if cache_path.exists():
         return cache_path, True
+    if not create:
+        return cache_path, False
 
     from PIL import Image, ImageOps  # type: ignore
 
