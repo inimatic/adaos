@@ -129,6 +129,7 @@ Useful optional env vars on hub:
 - `ADAOS_ROOT_NLU_AUTHORING_MAX_ACTIONS=120`
 - `ADAOS_ROOT_NLU_AUTHORING_MAX_TEMPLATES=160`
 - `ADAOS_ROOT_NLU_AUTHORING_MAX_TARGETS=120`
+- `ROOT_MCP_LIVE_HUB_TOOL_TIMEOUT_MS=6000`
 
 If capture is enabled but the LLM runtime is disabled, the Teacher event stream
 records `llm.skipped` with `reason=llm_teacher_disabled` instead of silently
@@ -521,10 +522,11 @@ Current Root MCP implementation status:
   `nlu_authoring.list_templates`,
   `nlu_authoring.list_training_targets`, and `sdk.describe_surface` from the
   root subnet-info cache.
-- partially implemented in public Root MCP:
-  `nlu_authoring.check_phrase` and `desktop.preview_action` are exposed as
-  read-only contracts, but the cached root implementation returns
-  `requires_live_hub` until a deterministic live hub/proxy path is added.
+- implemented in public Root MCP: `nlu_authoring.check_phrase` and
+  `desktop.preview_action` first call the active scoped hub through the root
+  route proxy and remain side-effect-free. If the hub is disconnected or has
+  not received the admin call endpoint yet, root returns cached
+  `requires_live_hub` evidence instead of blocking or inventing a result.
 - implemented in LLM Teacher: the prompt context includes read-only Root MCP
   evidence from context, phrase check, dialog context, training targets,
   templates, and SDK surface descriptors before Root/OpenAI is asked to
@@ -894,13 +896,12 @@ treated as `[could]` unless explicitly promoted.
   target/subnet scope, freshness metadata, and invalidation hooks.
 - Current public-root boundary: cached tools can answer context, registry,
   dialog, failures, templates, training targets, and SDK descriptors. Phrase
-  probe and action preview are exposed but return `requires_live_hub` until
-  root can proxy deterministic live checks to the scoped hub.
+  probe and action preview use the active scoped hub when connected, otherwise
+  they return `requires_live_hub` with cached context/action hints.
 - Publish read-only MCP contracts for:
   - `nlu_authoring.get_context`
   - `nlu_authoring.check_phrase`; local MCP is backed by the current probe
-    service, while public root returns `requires_live_hub` until the scoped
-    proxy path is added
+    service, and public root proxies to the active scoped hub when available
   - `nlu_authoring.get_trace`
   - `nlu_authoring.get_dialog_context`
   - `nlu_authoring.get_recent_failures`

@@ -142,6 +142,63 @@ def test_runtime_cors_preflight_allows_private_network_tool_call() -> None:
     assert "x-adaos-trace-id" in response.headers.get("Access-Control-Allow-Headers", "").lower()
 
 
+def test_admin_root_mcp_call_allows_live_nlu_probe(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _Resp:
+        ok = True
+
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "ok": True,
+                "status": "ok",
+                "result": {"check": {"intent": "desktop.open_modal"}},
+            }
+
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=types.SimpleNamespace(subnet_id="sn-test")),
+    )
+
+    def _invoke(tool_id, **kwargs):
+        calls.append({"tool_id": tool_id, **kwargs})
+        return _Resp()
+
+    monkeypatch.setattr(api_server, "invoke_root_mcp_tool", _invoke)
+
+    payload = asyncio.run(
+        api_server.admin_root_mcp_call(
+            api_server.AdminRootMcpCallRequest(
+                tool_id="nlu_authoring.check_phrase",
+                arguments={"text": "Покажи медиа сервер"},
+                request_id="req-1",
+                trace_id="trace-1",
+            )
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["scope"]["subnet_id"] == "sn-test"
+    assert payload["scope"]["target_id"] == "hub:sn-test"
+    assert calls[0]["tool_id"] == "nlu_authoring.check_phrase"
+    assert calls[0]["actor"] == "root:route_proxy"
+    assert calls[0]["auth_method"] == "root_token"
+    assert calls[0]["scope"]["target_id"] == "hub:sn-test"
+
+
+def test_admin_root_mcp_call_blocks_non_allowlisted_tool() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_server.admin_root_mcp_call(
+                api_server.AdminRootMcpCallRequest(tool_id="nlu_authoring.apply_template_patch")
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["code"] == "tool_not_allowed"
+
+
 @pytest.mark.parametrize(
     ("callable_name", "body"),
     [
