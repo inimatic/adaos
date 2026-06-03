@@ -393,6 +393,11 @@ below remain useful for tracking existing implementation work.
   `llm.skipped` / `nlp.teacher.llm.skipped` with rate evidence, keeps the
   existing background concurrency semaphore and in-flight request de-dup, and
   exempts correction/confirmation retry metadata.
+- [x] M4 implementation slice: repeated voice misses re-open confirmation for
+  an existing `pending` / `validation_failed` regex candidate before falling
+  back to the generic "not understood" message, so unresolved hypotheses stay
+  actionable even when Root/OpenAI times out or duplicate suppression skips a
+  new LLM candidate.
 - [ ] `[should]` Add golden positive/negative phrase suites, ambiguity
   fixtures, STT-noise fixtures, and per-skill regression reports.
 - [ ] `[should]` Add cost accounting metrics for Teacher: LLM calls, retries,
@@ -751,6 +756,10 @@ below remain useful for tracking existing implementation work.
   display labels/aliases to canonical modal evidence before preview/apply, so
   commands like "show subnet environment variables" can validate against
   `subnet_env_modal`.
+- [x] Skill/webui descriptor aliases are consumed by lookup normalization and
+  Apply validation; `subnet_env` now publishes RU/EN aliases for the Subnet
+  Environment modal so voice phrases for subnet environment variables resolve
+  to `subnet_env_modal`.
 - [x] Applying a Teacher regex rule enables `regex_enabled` for the webspace if
   the runtime regex stage was disabled, so a verified rule is actually used by
   the next normal `nlp.intent.detect.request`.
@@ -760,6 +769,10 @@ below remain useful for tracking existing implementation work.
   and a second rejection asks for clarification.
 - [x] Voice confirmation answers are not routed into normal NLU detection, so
   short replies such as `да` and `нет` do not create extra Teacher misses.
+- [x] Repeated voice phrases reuse a matching unresolved candidate and repeat
+  the confirmation prompt before the generic miss/fallback response. This
+  covers `pending` and `validation_failed` candidates whose Apply can pass
+  after descriptor/lookup aliases are fixed.
 - [x] Voice chat no longer reads the last loaded hub message when the modal is
   opened; only newly arriving hub messages are eligible for auto-speak.
 - [x] Voice router suppresses short non-command STT tails while an active

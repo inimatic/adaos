@@ -20,9 +20,12 @@ def test_desktop_lookup_tables_collect_workspace_ids() -> None:
     assert lookup_values(payload, "webspace_id") == ["desktop"]
     modal_rows = {row["value"]: row for row in payload["lookups"]["modal_id"]}
     assert "media_indexer_modal" in modal_rows
+    assert "subnet_env_modal" in modal_rows
     assert "media indexer" in modal_rows["media_indexer_modal"]["labels"]
     assert "\u043c\u0435\u0434\u0438\u0430 \u0438\u043d\u0434\u0435\u043a\u0441\u0435\u0440" in modal_rows["media_indexer_modal"]["labels"]
     assert "\u0438\u043d\u0434\u0435\u043a\u0441\u0430" in modal_rows["media_indexer_modal"]["labels"]
+    assert "\u043f\u0435\u0440\u0435\u043c\u0435\u043d\u043d\u044b\u0435 \u043e\u043a\u0440\u0443\u0436\u0435\u043d\u0438\u044f \u043f\u043e\u0434\u0441\u0435\u0442\u0438" in modal_rows["subnet_env_modal"]["labels"]
+    assert "subnet environment variables" in modal_rows["subnet_env_modal"]["labels"]
     assert "браузеры" in modal_rows["browsers_modal"]["labels"]
     assert "Infra State" in modal_rows["infrastate_modal"]["labels"]
     assert "инфрастейт" in modal_rows["infrastate_modal"]["labels"]
@@ -46,7 +49,7 @@ async def test_desktop_lookup_tables_overlay_live_yjs_registry() -> None:
                 ydoc.get_map("ui").set(
                     txn,
                     "application",
-                    {"modals": {"live_modal": {"title": "Live Modal"}}},
+                    {"modals": {"live_modal": {"title": "Live Modal", "nluAliases": ["spoken live modal"]}}},
                 )
                 ydoc.get_map("ui").set(txn, "current_scenario", "live_scenario")
                 ydoc.get_map("registry").set(
@@ -73,6 +76,7 @@ async def test_desktop_lookup_tables_overlay_live_yjs_registry() -> None:
         assert "merged_modal" in lookup_values(payload, "modal_id")
         live_modal = next(row for row in payload["lookups"]["modal_id"] if row["value"] == "live_modal")
         assert "Live App" in live_modal["labels"]
+        assert "spoken live modal" in live_modal["labels"]
         assert "live_app" in lookup_values(payload, "app_id")
         assert "installed_app" in lookup_values(payload, "app_id")
         assert "live_scenario" in lookup_values(payload, "scenario_id")
