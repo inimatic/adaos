@@ -525,6 +525,169 @@ async def test_llm_teacher_prompt_includes_mcp_evidence_and_stores_regex_candida
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_can_base_candidate_on_mcp_only_fact(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-mcp-only-fact"
+    scenario_id = "test_llm_mcp_only_fact"
+    request_text = "show mcp only violet panel 77"
+    modal_id = "mcp_only_modal_77"
+    modal_label = "MCP Only Violet Panel 77"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_modal": {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.modal.open",
+                                    "params": {"modal_id": "$slot.modal_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    captured: dict[str, bool] = {"saw_mcp_only_fact": False}
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        user_payload = json.loads(messages[-1]["content"])
+        context = dict(user_payload["context"])
+        root_mcp = context.pop("root_mcp")
+        root_blob = json.dumps(root_mcp, ensure_ascii=False)
+        non_mcp_blob = json.dumps(context, ensure_ascii=False)
+
+        assert modal_id in root_blob
+        assert modal_label in root_blob
+        assert modal_id not in non_mcp_blob
+        captured["saw_mcp_only_fact"] = True
+
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_app",
+                                    "regex_rule": {
+                                        "intent": "desktop.open_app",
+                                        "pattern": r"\bshow\s+(?P<app_id>mcp only violet panel 77)\b",
+                                    },
+                                    "target": {"type": "skill", "id": "mcp_only_skill"},
+                                    "examples": [request_text],
+                                    "slots": {"app_id": {"type": "string"}},
+                                    "confidence": 0.88,
+                                    "notes": f"Resolved {modal_id} from MCP desktop registry lookup.",
+                                    "candidate": None,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(
+        llm,
+        "_collect_root_mcp_authoring_evidence",
+        lambda **kwargs: {
+            "nlu_authoring_context": {
+                "plane_id": "nlu_authoring",
+                "action_surface": {
+                    "available_actions": [
+                        {
+                            "class": "interface_action",
+                            "intent": "desktop.open_modal",
+                            "owner": {"type": "scenario", "id": scenario_id},
+                            "required_slots": ["modal_id"],
+                            "side_effect_class": "ui_navigation",
+                        }
+                    ]
+                },
+            },
+            "desktop_registry_lookup": {
+                "ok": True,
+                "webspace_id": webspace_id,
+                "lookups": {
+                    "modal_id": [
+                        {
+                            "value": modal_id,
+                            "labels": [modal_label],
+                            "sources": ["test.mcp.sentinel"],
+                        }
+                    ],
+                    "app_id": [],
+                    "scenario_id": [],
+                },
+                "summary": [],
+                "fingerprint": "fp.mcp-only-sentinel",
+            },
+            "nlu_authoring_phrase_check": {"check": {"ok": True, "accepted": False, "text": kwargs["text"]}},
+        },
+    )
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.mcp-only-fact",
+                "request_id": "req.mcp-only-fact",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+                "_meta": {"request_locale": "en"},
+            },
+        }
+    )
+
+    assert captured["saw_mcp_only_fact"] is True
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["status"] == "pending"
+    assert candidate["regex_rule"]["intent"] == "desktop.open_modal"
+    assert candidate["normalization"]["llm_proposal_repair"]["modal_id"] == modal_id
+    assert candidate["target"] == {"type": "scenario", "id": scenario_id}
+    assert candidate["action_candidate"]["intent"] == "desktop.open_modal"
+    assert candidate["action_candidate"]["slots"]["modal_id"] == "mcp only violet panel 77"
+    assert candidate["template_candidate"]["patch"]["intent"] == "desktop.open_modal"
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_need_clarification_creates_session(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
