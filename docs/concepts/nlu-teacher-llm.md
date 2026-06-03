@@ -435,7 +435,10 @@ authoring surfaces. This keeps every step observable in `nlu.trace`, `data.nlu_t
 The target loop is:
 
 1. NLU misses or returns a low-confidence result.
-2. AdaOS builds an authoring context through MCP/API surfaces.
+2. AdaOS gives the LLM a governed Root MCP connection for the target subnet so
+   the LLM can call the read/preview tools it needs. The current
+   pre-collected `context.root_mcp` prompt block remains a transition/fallback
+   path, not the final interaction model.
 3. LLM proposes one or more candidates: intent/action, regex/Rasa/neural template, entity correction, or development task.
 4. AdaOS validates the candidate with `nlu.check_phrase` / preview APIs and records trace.
 5. If the proposed template produces the LLM-planned intent, AdaOS may dispatch the normal runtime intent to the user-facing system.
@@ -485,6 +488,10 @@ This keeps the existing regex model intact: Root MCP supplies descriptors and go
 
 Current Root MCP implementation status:
 
+- implemented: Root MCP HTTP JSON-RPC endpoint `/v1/root/mcp` for
+  remote-MCP clients. It supports `initialize`, `tools/list`, `tools/call`,
+  and MCP notifications, and resolves bearer/session scope into the bridge
+  profile before calling governed Root MCP tools.
 - implemented: `nlu_authoring.get_context`
 - implemented: `nlu_authoring.check_phrase`, backed by the same probe service
   as the Teacher API and returning `authoring_boundaries` with
@@ -503,7 +510,9 @@ Current Root MCP implementation status:
 - implemented in LLM Teacher: the prompt context includes read-only Root MCP
   evidence from context, phrase check, dialog context, training targets,
   templates, and SDK surface descriptors before Root/OpenAI is asked to
-  propose a candidate
+  propose a candidate. This remains a compatibility/fallback path while
+  Root/OpenAI remote-MCP tool selection is wired into the Teacher inference
+  call.
 - implemented: NLU authoring MCP results include bearer/session-derived
   `root_scope` and `target_id`, so the LLM can see which subnet target the
   context belongs to
