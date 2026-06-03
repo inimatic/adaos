@@ -5,7 +5,7 @@
 # 1) роли и каналы
 
 * **owner CLI**: `adaos dev root init`, `adaos dev root login`
-* **owner browser**: `app.inimatic.com` (SPA), WebAuthn + Socket.IO
+* **owner browser**: `inimatic.com` (SPA), WebAuthn + Socket.IO
 * **root api**: http + socket.io, proxy fallback
 * **hub**: `adaos api serve` (socket.io клиент к root, e2e шины к браузеру через root-прокси при необходимости)
 
@@ -36,7 +36,7 @@ route:{sid}                  -> { hub_id, e2e=on|off, last_seen }
 
 ```
 POST  /v1/owner/login/device-code
--> { device_code: "123-456", verify_uri: "https://app.inimatic.com/owner-auth", expires_in }
+-> { device_code: "123-456", verify_uri: "https://inimatic.com/owner-auth", expires_in }
 
 POST  /v1/owner/login/verify
 body: { device_code, sid }  // sid = web session id
@@ -91,7 +91,7 @@ body: { sid, hub_id, hub_e2e_pubkey? }
 1. **owner CLI**: `adaos dev root login`
    → root: `device_code` (TTL ~10 мин)
 
-2. **browser**: открывает `app.inimatic.com`
+2. **browser**: открывает `inimatic.com`
    SPA получает `sid`, показывает QR сессии + поле ввода кода (если не авторизован).
 
 3. **owner вводит device_code** → `POST /v1/owner/login/verify {code,sid}`
@@ -142,7 +142,7 @@ body: { sid, hub_id, hub_e2e_pubkey? }
 # 7) безопасность / защита
 
 * **device_code**: 6 цифр, TTL 10 мин, одноразовый, rate-limit по IP/сид.
-* **WebAuthn**: platform authenticator (отпечаток/face), RPID: `app.inimatic.com`. Сохраняем `sign_count` и проверяем.
+* **WebAuthn**: platform authenticator (отпечаток/face), RPID: `inimatic.com`. Сохраняем `sign_count` и проверяем.
 * **E2E**: JOSE (ECDH-ES + A256GCM) или Noise NK/IK. Минимум — ECDH поверх X25519 + HKDF, nonce-счётчик.
 * **replay-защита**: все кадры `frame` — с монотонным `ctr`, root отбрасывает дубликаты даже в relay-режиме.
 * **binding к owner/subnet**: `sid` после `verify` привязывается к `owner_id` и `subnet_id`; любые pairing-операции валидируются.
@@ -188,7 +188,7 @@ NEW -> PREAUTH (device_code verified)
 # 11) CLI контур (ожидаемые ответы)
 
 * `adaos dev root init` → печатает `subnet_id`, `hub_id`, путь к ключам, время жизни.
-* `adaos dev root login` → `Open app.inimatic.com/owner-auth and enter code 123-456 (valid 10m)`; при успешном verify — подсветка «owner browser paired».
+* `adaos dev root login` → `Open inimatic.com/owner-auth and enter code 123-456 (valid 10m)`; при успешном verify — подсветка «owner browser paired».
 * `adaos api serve` → лог `connected to root as hub:{hub_id}`; после первого `pairing.accept` — «paired with sid:…».
 
 # 12) обработка сбоев
