@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import hashlib
 import json
 import logging
@@ -384,6 +386,9 @@ class ServiceSkillSupervisor:
         self._external_ready_specs: dict[str, tuple[Any, ...]] = {}
         self._external_ready_at: dict[str, float] = {}
         self._discover_lock = threading.Lock()
+        self._discover_async_lock: asyncio.Lock | None = None
+        self._discover_async_lock_loop: asyncio.AbstractEventLoop | None = None
+        self._discover_executor: ThreadPoolExecutor | None = None
         self._discover_last_at = 0.0
         self._manifest_state: dict[str, tuple[Any, ...]] = {}
 
@@ -439,12 +444,20 @@ class ServiceSkillSupervisor:
             self._discover_last_at = now
 
     async def refresh_discovered(self, *, force: bool = False) -> None:
-        # This path is called by watchdog/health loops every 1-2 seconds.
-        # On Windows, submitting to the default executor can synchronously start
-        # a thread from the event loop and stall in Thread.start(). Discovery is
-        # already cached and internally guarded, so the inline fast path is safer
-        # for realtime startup than a recurring to_thread hop.
-        self.ensure_discovered(force=force)
+        now = time.monotonic()
+        if not force and (now - self._discover_last_at) < 5.0:
+            return
+        loop = asyncio.get_running_loop()
+        if self._discover_async_lock is None or self._discover_async_lock_loop is not loop:
+            self._discover_async_lock = asyncio.Lock()
+            self._discover_async_lock_loop = loop
+        async with self._discover_async_lock:
+            now = time.monotonic()
+            if not force and (now - self._discover_last_at) < 5.0:
+                return
+            if self._discover_executor is None:
+                self._discover_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adaos-skill-discovery")
+            await loop.run_in_executor(self._discover_executor, partial(self.ensure_discovered, force=force))
 
     def resolve_base_url(self, skill_name: str) -> str | None:
         spec = self._specs.get(skill_name)
@@ -772,6 +785,11 @@ class ServiceSkillSupervisor:
             except Exception:
                 pass
             self._health_task = None
+        if self._discover_executor:
+            self._discover_executor.shutdown(wait=False, cancel_futures=True)
+            self._discover_executor = None
+        self._discover_async_lock = None
+        self._discover_async_lock_loop = None
 
     # ------------------------------------------------------------------ internals
     def _ensure_background_tasks(self) -> None:
