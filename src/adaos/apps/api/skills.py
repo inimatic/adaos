@@ -376,7 +376,7 @@ async def installed_status(mgr: SkillManager = Depends(_get_manager), ctx: Agent
 @router.post("/sync")
 async def sync(body: SyncReq | None = None, mgr: SkillManager = Depends(_get_manager)):
     try:
-        mgr.sync(force=(body.force if body is not None else None))
+        await asyncio.to_thread(mgr.sync, force=(body.force if body is not None else None))
     except Exception as exc:
         # Surface the failure as a structured client error instead of a 500.
         # Common causes: dirty workspace, git remote/upstream misconfiguration, or merge conflicts.
@@ -384,21 +384,7 @@ async def sync(body: SyncReq | None = None, mgr: SkillManager = Depends(_get_man
     return {"ok": True}
 
 
-@router.post("/install")
-async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
-    webspace_id = body.webspace_id or default_webspace_id()
-    if body.async_operation:
-        operation = submit_install_operation(
-            target_kind="skill",
-            target_id=body.name,
-            webspace_id=webspace_id,
-        )
-        return {
-            "ok": True,
-            "accepted": True,
-            "operation_id": operation["operation_id"],
-            "operation": operation,
-        }
+def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -> Dict[str, Any]:
     # Best-effort sync to ensure monorepo workspace exists
     sync_error: Exception | None = None
     try:
@@ -478,6 +464,30 @@ async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
         action="skill_install_sync",
         source_of_truth="skill_runtime",
     )
+    if report is not None:
+        if hasattr(report, "to_dict"):
+            payload["report"] = report.to_dict()  # type: ignore[call-arg]
+        else:
+            payload["report"] = repr(report)
+    return payload
+
+
+@router.post("/install")
+async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
+    webspace_id = body.webspace_id or default_webspace_id()
+    if body.async_operation:
+        operation = submit_install_operation(
+            target_kind="skill",
+            target_id=body.name,
+            webspace_id=webspace_id,
+        )
+        return {
+            "ok": True,
+            "accepted": True,
+            "operation_id": operation["operation_id"],
+            "operation": operation,
+        }
+    payload = await asyncio.to_thread(_install_skill_sync, body, mgr, webspace_id)
     try:
         await rebuild_webspace_projection(
             webspace_id=webspace_id,
@@ -486,11 +496,6 @@ async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
         )
     except Exception:
         log.exception("webspace rebuild failed after skill install: %s", body.name)
-    if report is not None:
-        if hasattr(report, "to_dict"):
-            payload["report"] = report.to_dict()  # type: ignore[call-arg]
-        else:
-            payload["report"] = repr(report)
     return payload
 
 

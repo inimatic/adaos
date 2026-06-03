@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -184,8 +185,24 @@ async def list_scenarios(fs: bool = False, mgr: ScenarioManager = Depends(_get_m
 
 @router.post("/sync")
 async def sync(mgr: ScenarioManager = Depends(_get_manager)):
-    mgr.sync()
+    await asyncio.to_thread(mgr.sync)
     return {"ok": True}
+
+
+def _install_scenario_sync(body: InstallReq, mgr: ScenarioManager, webspace_id: str) -> Dict[str, Any]:
+    try:
+        meta = mgr.install_with_deps(body.name, pin=body.pin, webspace_id=webspace_id)
+    except ScenarioDependencyLifecycleError as exc:
+        raise _dependency_failure_http_exception(exc.result) from exc
+    return {
+        "ok": True,
+        "scenario": {
+            "id": _meta_id(meta),
+            "version": getattr(meta, "version", None),
+            "path": str(getattr(meta, "path", "")),
+        },
+        "dependency_bootstrap": getattr(mgr, "last_dependency_bootstrap_result", None),
+    }
 
 
 @router.post("/install")
@@ -203,10 +220,7 @@ async def install(body: InstallReq, mgr: ScenarioManager = Depends(_get_manager)
             "operation": operation,
         }
     webspace_id = body.webspace_id or default_webspace_id()
-    try:
-        meta = mgr.install_with_deps(body.name, pin=body.pin, webspace_id=webspace_id)
-    except ScenarioDependencyLifecycleError as exc:
-        raise _dependency_failure_http_exception(exc.result) from exc
+    payload = await asyncio.to_thread(_install_scenario_sync, body, mgr, webspace_id)
     try:
         await rebuild_webspace_from_sources(
             webspace_id,
@@ -216,16 +230,7 @@ async def install(body: InstallReq, mgr: ScenarioManager = Depends(_get_manager)
         )
     except Exception:
         pass
-    # приведём к компактному виду как в CLI-эхо
-    return {
-        "ok": True,
-        "scenario": {
-            "id": _meta_id(meta),
-            "version": getattr(meta, "version", None),
-            "path": str(getattr(meta, "path", "")),
-        },
-        "dependency_bootstrap": getattr(mgr, "last_dependency_bootstrap_result", None),
-    }
+    return payload
 
 
 @router.post("/update")
