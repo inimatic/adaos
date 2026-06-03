@@ -1088,6 +1088,18 @@ below remain useful for tracking existing implementation work.
 
 ## Last Completed Slice
 
+- NLU Teacher Phase 0 contracts are now captured in
+  `src/adaos/abi/nlu.teacher.v1.schema.json`: request/thread, action
+  candidate, template candidate, clarification session, lifecycle,
+  idempotency, scope, response policy, negative feedback, and MCP capability
+  profile records.
+- Root MCP publishes `nlu_teacher_schema` as a descriptor set, includes it in
+  the NLU authoring plane, and exposes explicit `NLUTeacherRead`,
+  `NLUTeacherDryRun`, and `NLUTeacherAuthor` capability profiles.
+- Voice/clarification rejection now records structured `negative_feedback`
+  evidence with rejected candidate ids and selected answer data, so rejected
+  alternatives are visible through Teacher events/dialog context instead of
+  existing only as retry metadata.
 - M4 candidate Apply validation is now enforced by a dedicated
   `teacher_validation` gate. It runs template preview, built-in action preview,
   side-effect policy, duplicate checks, overbroad-regex checks, prompt-injection

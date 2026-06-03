@@ -1568,6 +1568,7 @@ def _handle_builder_context(arguments: dict[str, Any], *, dry_run: bool) -> dict
         "scenario_manifest_schema",
         "builder_task_schema",
         "builder_draft_schema",
+        "nlu_teacher_schema",
         "descriptor_build_profile",
     ]
     descriptors: dict[str, Any] = {}

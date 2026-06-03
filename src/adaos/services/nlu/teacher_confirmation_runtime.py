@@ -226,6 +226,30 @@ def _confirmation_instruction(question: str, *, attempt: int) -> str:
     return f"{question}\n{suffix}"
 
 
+def _negative_feedback_evidence(
+    *,
+    answer_text: str,
+    answer_kind: str,
+    reason: str,
+    candidate_ids: Iterable[str] = (),
+    selected_answer: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    rejected_candidates: list[str] = []
+    for candidate_id in candidate_ids:
+        token = str(candidate_id or "").strip()
+        if token and token not in rejected_candidates:
+            rejected_candidates.append(token)
+    return {
+        "kind": "negative_feedback",
+        "reason": str(reason or "").strip() or "rejected",
+        "answer": str(answer_text or "").strip(),
+        "answer_kind": str(answer_kind or "").strip(),
+        "selected_answer": dict(selected_answer or {}) if isinstance(selected_answer, Mapping) else None,
+        "rejected_candidates": rejected_candidates,
+        "recorded_at": time.time(),
+    }
+
+
 def _is_expired(item: Mapping[str, Any]) -> bool:
     try:
         ts = float(item.get("ts") or 0.0)
@@ -315,11 +339,32 @@ async def _patch_confirmation(
 
         if candidate_status and candidate_id:
             candidates: list[dict[str, Any]] = []
+            feedback = next(
+                (
+                    item.get("negative_feedback")
+                    for item in items
+                    if item.get("id") == confirmation_id and isinstance(item.get("negative_feedback"), Mapping)
+                ),
+                None,
+            )
             for item in _as_list(teacher.get("candidates")):
                 next_item = dict(item)
                 if next_item.get("id") == candidate_id:
                     next_item["status"] = candidate_status
                     next_item["status_reason"] = "voice_confirmation"
+                    if isinstance(feedback, Mapping):
+                        next_item["feedback_status"] = "rejected"
+                        next_item["feedback_evidence"] = dict(feedback)
+                        rejected = _as_list(next_item.get("rejected_alternatives"))
+                        rejected.append(
+                            {
+                                "candidate_id": candidate_id,
+                                "reason": feedback.get("reason"),
+                                "answer": feedback.get("answer"),
+                                "recorded_at": feedback.get("recorded_at"),
+                            }
+                        )
+                        next_item["rejected_alternatives"] = rejected[-10:]
                     next_item["updated_at"] = time.time()
                 candidates.append(next_item)
             teacher["candidates"] = candidates
@@ -607,6 +652,25 @@ async def _answer_clarification(
     request_text = str(session.get("request_text") or "").strip()
     session_meta = coerce_dict(session.get("_meta"))
     merged_meta = {**session_meta, **dict(meta), "route_id": "voice_chat"}
+    rejected_candidate_ids: list[str] = []
+    for source in (selected, session):
+        candidate_id = str(source.get("candidate_id") or "").strip()
+        if candidate_id and candidate_id not in rejected_candidate_ids:
+            rejected_candidate_ids.append(candidate_id)
+        action_candidate = source.get("action_candidate") if isinstance(source.get("action_candidate"), Mapping) else {}
+        for key in ("candidate_id", "id"):
+            candidate_id = str(action_candidate.get(key) or "").strip()
+            if candidate_id and candidate_id not in rejected_candidate_ids:
+                rejected_candidate_ids.append(candidate_id)
+    negative_feedback = None
+    if status == "rejected":
+        negative_feedback = _negative_feedback_evidence(
+            answer_text=answer_text,
+            answer_kind=answer,
+            reason=effect or "clarification_rejected",
+            candidate_ids=rejected_candidate_ids,
+            selected_answer=selected,
+        )
     updated = await _patch_clarification_session(
         webspace_id,
         session_id,
@@ -616,6 +680,7 @@ async def _answer_clarification(
             "answer_kind": answer,
             "selected_answer": selected,
             "answered_at": time.time(),
+            **({"negative_feedback": negative_feedback, "rejected_candidates": rejected_candidate_ids} if negative_feedback else {}),
         },
     )
     raw = {
@@ -623,6 +688,7 @@ async def _answer_clarification(
         "answer": str(answer_text or "").strip(),
         "answer_kind": answer,
         "selected_answer": selected,
+        **({"negative_feedback": negative_feedback} if negative_feedback else {}),
     }
     await append_event(
         webspace_id,
@@ -903,6 +969,12 @@ async def _on_voice_chat_user(evt: Any) -> None:
         return
 
     if attempt < 1:
+        negative_feedback = _negative_feedback_evidence(
+            answer_text=text,
+            answer_kind=answer,
+            reason="voice_confirmation_rejected",
+            candidate_ids=[candidate_id],
+        )
         await _patch_confirmation(
             webspace_id,
             confirmation_id,
@@ -911,6 +983,8 @@ async def _on_voice_chat_user(evt: Any) -> None:
                 "answer": text.strip(),
                 "answered_at": time.time(),
                 "retry_requested_at": time.time(),
+                "negative_feedback": negative_feedback,
+                "rejected_candidates": [candidate_id] if candidate_id else [],
             },
             candidate_status="rejected",
         )
@@ -923,7 +997,7 @@ async def _on_voice_chat_user(evt: Any) -> None:
                 kind="confirmation.rejected",
                 title="Voice confirmation rejected",
                 subtitle="retrying",
-                raw={"confirmation": confirmation, "answer": text.strip(), "retry": True},
+                raw={"confirmation": confirmation, "answer": text.strip(), "retry": True, "negative_feedback": negative_feedback},
                 meta=merged_meta,
             ),
         )
@@ -962,6 +1036,12 @@ async def _on_voice_chat_user(evt: Any) -> None:
         )
         return
 
+    negative_feedback = _negative_feedback_evidence(
+        answer_text=text,
+        answer_kind=answer,
+        reason="voice_confirmation_needs_clarification",
+        candidate_ids=[candidate_id],
+    )
     await _patch_confirmation(
         webspace_id,
         confirmation_id,
@@ -969,6 +1049,8 @@ async def _on_voice_chat_user(evt: Any) -> None:
             "status": "needs_clarification",
             "answer": text.strip(),
             "answered_at": time.time(),
+            "negative_feedback": negative_feedback,
+            "rejected_candidates": [candidate_id] if candidate_id else [],
         },
         candidate_status="rejected",
     )
@@ -981,7 +1063,7 @@ async def _on_voice_chat_user(evt: Any) -> None:
             kind="confirmation.needs_clarification",
             title="Voice confirmation needs clarification",
             subtitle=candidate_id,
-            raw={"confirmation": confirmation, "answer": text.strip()},
+            raw={"confirmation": confirmation, "answer": text.strip(), "negative_feedback": negative_feedback},
             meta=merged_meta,
         ),
     )

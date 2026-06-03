@@ -13,6 +13,9 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   AI-assisted, and human-in-the-loop capability creation workflows
 - `builder.draft.v1.schema.json` - Builder draft workspace metadata before
   validation, preview, approval, and runtime apply
+- `nlu.teacher.v1.schema.json` - NLU Teacher request/thread, candidate,
+  clarification, feedback, idempotency, scope, response policy, and MCP
+  capability profile contracts
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
   staged readiness hints, stream receiver budget/guard metadata, runtime
   data sources, and browser media surface contracts such as

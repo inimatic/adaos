@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.nlu.teacher.v1",
+  "title": "AdaOS NLU Teacher Contract",
+  "description": "Shared contract vocabulary for NLU Teacher request threads, candidates, clarification sessions, idempotency, scope, response policy, and MCP capability profiles.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "request_thread": { "$ref": "#/$defs/requestThread" },
+    "action_candidate": { "$ref": "#/$defs/actionCandidate" },
+    "template_candidate": { "$ref": "#/$defs/templateCandidate" },
+    "clarification_session": { "$ref": "#/$defs/clarificationSession" },
+    "teacher_event": { "$ref": "#/$defs/teacherEvent" },
+    "response_policy": { "$ref": "#/$defs/responsePolicy" },
+    "mcp_capability_profile": { "$ref": "#/$defs/mcpCapabilityProfile" }
+  },
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "channel": { "type": "string" },
+        "route": { "type": "string" },
+        "route_id": { "type": "string" },
+        "webspace_id": { "type": "string" },
+        "scenario_id": { "type": "string" },
+        "device_ref": { "type": "string" },
+        "user_session": { "type": "string" },
+        "locale": { "type": "string" },
+        "privacy_boundary": {
+          "type": "string",
+          "enum": ["session", "user", "workspace", "scenario", "skill", "system", "public", "unknown"]
+        }
+      }
+    },
+    "idempotency": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "request_capture": { "type": "string" },
+        "llm_proposal": { "type": "string" },
+        "clarification_answer": { "type": "string" },
+        "preview": { "type": "string" },
+        "apply": { "type": "string" },
+        "dispatch": { "type": "string" },
+        "feedback": { "type": "string" },
+        "promotion": { "type": "string" },
+        "rollback": { "type": "string" }
+      }
+    },
+    "candidateLifecycleStatus": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "phrase_previewed",
+        "previewed",
+        "action_previewed",
+        "clarification_requested",
+        "user_confirmed",
+        "apply_requested",
+        "applied",
+        "replay_intent_matched",
+        "intent_matched",
+        "dispatch_attempted",
+        "dispatch_requested",
+        "dispatch_succeeded",
+        "dispatched",
+        "accepted",
+        "corrected",
+        "rejected",
+        "validation_failed",
+        "quarantined",
+        "rolled_back",
+        "superseded"
+      ]
+    },
+    "candidateClass": {
+      "type": "string",
+      "enum": [
+        "skill_action",
+        "interface_action",
+        "endpoint_command",
+        "scenario_flow",
+        "entity_correction",
+        "nlu_correction",
+        "development_task",
+        "descriptor_fix",
+        "non_actionable",
+        "template_candidate",
+        "clarification"
+      ]
+    },
+    "sideEffectClass": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read_only",
+        "ui_navigation",
+        "local_state_change",
+        "durable_configuration_change",
+        "skill_action",
+        "device_control",
+        "external_io",
+        "destructive",
+        "unsupported",
+        "unknown"
+      ]
+    },
+    "owner": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string", "enum": ["skill", "scenario", "system_action", "entity", "builder", "unknown"] },
+        "id": { "type": "string" }
+      }
+    },
+    "requestThread": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["request_id", "text", "scope"],
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "thread_id": { "type": "string" },
+        "previous_request_id": { "type": "string" },
+        "correction_target_id": { "type": "string" },
+        "text": { "type": "string" },
+        "normalized_text": { "type": "string" },
+        "source_channel": { "type": "string" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "idempotency": { "$ref": "#/$defs/idempotency" },
+        "privacy": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "utterance_retention": {
+              "type": "string",
+              "enum": ["none", "fingerprint_only", "bounded_text", "operator_approved"]
+            },
+            "contains_personal_data": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "actionCandidate": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "candidate_id", "class", "intent", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "candidate_id": { "type": "string", "minLength": 1 },
+        "request_id": { "type": "string" },
+        "class": { "$ref": "#/$defs/candidateClass" },
+        "intent": { "type": "string" },
+        "action_id": { "type": "string" },
+        "slots": { "type": "object", "additionalProperties": true },
+        "owner": { "$ref": "#/$defs/owner" },
+        "side_effect_class": { "$ref": "#/$defs/sideEffectClass" },
+        "status": { "$ref": "#/$defs/candidateLifecycleStatus" },
+        "phrase_preview": { "type": "object", "additionalProperties": true },
+        "action_preview": { "type": "object", "additionalProperties": true },
+        "dispatch_status": { "type": "string" },
+        "feedback_status": { "type": "string" },
+        "audit_ids": { "type": "array", "items": { "type": "string" } },
+        "rollback_pointer": { "type": "string" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "idempotency": { "$ref": "#/$defs/idempotency" }
+      }
+    },
+    "templateCandidate": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "candidate_id", "class", "engine", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "candidate_id": { "type": "string", "minLength": 1 },
+        "request_id": { "type": "string" },
+        "class": { "type": "string", "enum": ["template_candidate", "entity_correction", "descriptor_fix"] },
+        "engine": {
+          "type": "string",
+          "enum": ["regex", "rasa", "neural", "entity_alias", "descriptor_fix", "development_task", "clarification", "ignore"]
+        },
+        "intent": { "type": "string" },
+        "owner": { "$ref": "#/$defs/owner" },
+        "operation": { "type": "string" },
+        "patch": { "type": "object", "additionalProperties": true },
+        "linked_action_candidate_id": { "type": "string" },
+        "status": { "$ref": "#/$defs/candidateLifecycleStatus" },
+        "scope": { "$ref": "#/$defs/scope" }
+      }
+    },
+    "clarificationSession": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "status", "uncertainty_kind", "question"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "request_id": { "type": "string" },
+        "thread_id": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["awaiting_user", "answered", "accepted", "rejected", "needs_clarification", "expired", "cancelled"]
+        },
+        "uncertainty_kind": { "type": "string" },
+        "question": { "type": "string" },
+        "allowed_answers": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "rejected_candidates": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "negative_feedback": { "type": "object", "additionalProperties": true },
+        "retry_count": { "type": "integer", "minimum": 0 },
+        "attempt": { "type": "integer", "minimum": 0 },
+        "timeout_s": { "type": "number", "minimum": 0 },
+        "final_resolution": { "type": "object", "additionalProperties": true },
+        "scope": { "$ref": "#/$defs/scope" },
+        "idempotency": { "$ref": "#/$defs/idempotency" }
+      }
+    },
+    "teacherEvent": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "request_id": { "type": "string" },
+        "candidate_id": { "type": "string" },
+        "idempotency": { "$ref": "#/$defs/idempotency" },
+        "raw": { "type": "object", "additionalProperties": true },
+        "scope": { "$ref": "#/$defs/scope" }
+      }
+    },
+    "responsePolicy": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["decision"],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["dispatch", "confirm", "clarify", "save_feedback", "create_development_task", "ignore"]
+        },
+        "requires_confirmation": { "type": "boolean" },
+        "allowed_side_effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sideEffectClass" }
+        },
+        "reason": { "type": "string" }
+      }
+    },
+    "mcpCapabilityProfile": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["profile_id", "mode", "tools"],
+      "properties": {
+        "profile_id": { "type": "string", "enum": ["NLUTeacherRead", "NLUTeacherDryRun", "NLUTeacherAuthor"] },
+        "mode": { "type": "string", "enum": ["read_only_context", "dry_run_preview", "governed_authoring"] },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "dispatch_allowed": { "type": "boolean" },
+        "training_mutation_allowed": { "type": "boolean" },
+        "requires_operator_approval": { "type": "boolean" }
+      }
+    }
+  }
+}

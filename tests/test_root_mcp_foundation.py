@@ -38,6 +38,7 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert foundation_payload["foundation"]["registries"]["access_token_registry"]["available"] is True
     assert foundation_payload["foundation"]["registries"]["mcp_session_registry"]["available"] is True
     assert "ProfileOpsRead" in foundation_payload["foundation"]["capability_profiles"]["profiles"]
+    assert "NLUTeacherRead" in foundation_payload["foundation"]["capability_profiles"]["profiles"]
     assert foundation_payload["foundation"]["descriptor_cache"]["enabled"] is True
     assert foundation_payload["foundation"]["surfaces"]["development"]["mode"] == "root_descriptor_cache"
     assert foundation_payload["foundation"]["planes"]["adaos_dev"]["enabled"] is True
@@ -115,6 +116,7 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "descriptor_build_profile" in descriptor_ids
     assert "descriptor_bundle" in descriptor_ids
     assert "mcp_plane_registry" in descriptor_ids
+    assert "nlu_teacher_schema" in descriptor_ids
 
     capability_registry = client.get("/v1/root/mcp/descriptors/capability_registry", headers=scoped_headers)
     assert capability_registry.status_code == 200
@@ -137,7 +139,10 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     plane_registry_payload = plane_registry.json()["descriptor"]["payload"]
     assert plane_registry_payload["available"] is True
     plane_ids = {item["plane_id"] for item in plane_registry_payload["planes"]}
-    assert {"adaos_dev", "profile_ops"} <= plane_ids
+    assert {"adaos_dev", "profile_ops", "nlu_authoring"} <= plane_ids
+    nlu_plane = next(item for item in plane_registry_payload["planes"] if item["plane_id"] == "nlu_authoring")
+    assert "nlu_teacher_schema" in nlu_plane["descriptor_ids"]
+    assert "NLUTeacherRead" in nlu_plane["capability_profiles"]
 
     architecture = client.get("/v1/root/mcp/descriptors/architecture_catalog", headers=scoped_headers)
     assert architecture.status_code == 200
@@ -190,7 +195,13 @@ def test_root_mcp_foundation_and_contracts(monkeypatch) -> None:
     assert "architecture_catalog" in builder_context["descriptors"]
     assert "builder_task_schema" in builder_context["descriptors"]
     assert "builder_draft_schema" in builder_context["descriptors"]
+    assert "nlu_teacher_schema" in builder_context["descriptors"]
     assert builder_context["descriptors"]["architecture_catalog"]["metadata"]["provenance"]["content_hash"]
+
+    nlu_schema = client.get("/v1/root/mcp/descriptors/nlu_teacher_schema", headers=scoped_headers)
+    assert nlu_schema.status_code == 200
+    nlu_schema_payload = nlu_schema.json()["descriptor"]["payload"]
+    assert nlu_schema_payload["$id"] == "adaos.nlu.teacher.v1"
 
     plane_list_call = client.post(
         "/v1/root/mcp/call",
