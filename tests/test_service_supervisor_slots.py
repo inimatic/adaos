@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+import time
 
 
 def _write_service_skill(root: Path, *, port: int) -> None:
@@ -66,6 +67,34 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
     assert status is not None
     assert status["port"] == 1113
     assert status["venv_dir"].endswith(str(Path("v0.1") / "venv"))
+
+
+def test_service_supervisor_refresh_discovery_does_not_block_event_loop():
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+
+    def _slow_discovery(*, force: bool = False) -> None:  # noqa: ARG001
+        time.sleep(0.15)
+
+    async def _run() -> int:
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            deadline = time.monotonic() + 0.12
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        supervisor.ensure_discovered = _slow_discovery  # type: ignore[method-assign]
+        ticker = asyncio.create_task(_ticker())
+        await supervisor.refresh_discovered(force=True)
+        await ticker
+        await supervisor.shutdown()
+        return ticks
+
+    assert asyncio.run(_run()) >= 3
 
 
 def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
