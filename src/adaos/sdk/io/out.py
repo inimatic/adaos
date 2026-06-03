@@ -8,8 +8,13 @@ outputs (chat history, TTS queues, etc.) based on `_meta`.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
+import mimetypes
+import os
 import time
+from io import BytesIO
+from pathlib import Path
 from typing import Any, Mapping
 
 from adaos.sdk.core.decorators import tool
@@ -76,6 +81,104 @@ def _local_node_id() -> str:
     except Exception:
         pass
     return ""
+
+
+def _local_subnet_id() -> str:
+    try:
+        conf = load_config()
+        subnet_id = str(getattr(conf, "subnet_id", "") or "").strip()
+        if subnet_id:
+            return subnet_id
+    except Exception:
+        pass
+    try:
+        subnet_id = str(getattr(get_ctx().settings, "subnet_id", "") or "").strip()
+        if subnet_id:
+            return subnet_id
+    except Exception:
+        pass
+    return ""
+
+
+def _root_base_url(explicit: str | None = None) -> str:
+    candidates: list[str] = []
+    if explicit:
+        candidates.append(explicit)
+    try:
+        conf = load_config()
+        candidates.append(str(getattr(getattr(conf, "root_settings", None), "base_url", "") or ""))
+    except Exception:
+        pass
+    try:
+        settings = get_ctx().settings
+        candidates.append(str(getattr(settings, "api_base", "") or ""))
+    except Exception:
+        pass
+    candidates.extend(
+        [
+            os.getenv("PUBLIC_ROOT_BASE") or "",
+            os.getenv("ADAOS_API_BASE") or "",
+            os.getenv("ROOT_BASE_URL") or "",
+        ]
+    )
+    for candidate in candidates:
+        value = str(candidate or "").strip().rstrip("/")
+        if value:
+            return value
+    return "https://api.inimatic.com"
+
+
+def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(name) or "").strip() or default)
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _jpeg_payload_from_image(path: Path, *, max_bytes: int, max_dim: int) -> tuple[bytes, str, str, dict[str, Any]]:
+    filename = path.with_suffix(".jpg").name
+    meta: dict[str, Any] = {"encoded": False, "source_bytes": 0, "bytes": 0}
+    try:
+        meta["source_bytes"] = int(path.stat().st_size)
+    except Exception:
+        pass
+    try:
+        from PIL import Image, ImageOps  # type: ignore
+
+        with Image.open(path) as original:
+            original = ImageOps.exif_transpose(original)
+            if getattr(original, "is_animated", False):
+                original.seek(0)
+            dims = [max_dim]
+            for dim in (1600, 1280, 1024, 768, 640):
+                if dim < max_dim and dim not in dims:
+                    dims.append(dim)
+            for dim in dims:
+                image = original.copy()
+                image.thumbnail((dim, dim), Image.Resampling.LANCZOS)
+                if image.mode in {"RGBA", "LA"}:
+                    canvas = Image.new("RGB", image.size, "white")
+                    canvas.paste(image, mask=image.getchannel("A"))
+                    image = canvas
+                else:
+                    image = image.convert("RGB")
+                for quality in (86, 80, 74, 68, 62, 56, 50):
+                    out = BytesIO()
+                    image.save(out, "JPEG", quality=quality, optimize=True)
+                    data = out.getvalue()
+                    if len(data) <= max_bytes:
+                        meta.update({"encoded": True, "bytes": len(data), "max_dim": dim, "quality": quality})
+                        return data, "image/jpeg", filename, meta
+    except Exception as exc:
+        meta["encode_error"] = f"{type(exc).__name__}: {exc}"
+
+    data = path.read_bytes()
+    mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    if len(data) > max_bytes:
+        raise ValueError(f"telegram_photo_too_large:{len(data)}>{max_bytes}")
+    meta.update({"bytes": len(data), "mime": mime})
+    return data, mime, path.name, meta
 
 
 def _json_fingerprint(value: Any) -> str:
@@ -241,38 +344,122 @@ def telegram_photo(
     bot_id: str | None = None,
     chat_id: str | None = None,
     hub_id: str | None = None,
+    root_base: str | None = None,
     _meta: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     path = str(image_path or "").strip()
-    target_chat = str(chat_id or "").strip()
-    if not target_chat:
-        import os
-
-        target_chat = str(os.getenv("SLIDESHOW_TG_CHAT_ID") or os.getenv("TG_CHAT_ID") or "").strip()
     if not path:
         return {"ok": False, "error": "missing_image_path"}
-    if not target_chat:
-        return {"ok": False, "error": "telegram_chat_id_not_configured"}
-    target_bot = str(bot_id or "").strip() or "main-bot"
+    image_file = Path(path)
+    if not image_file.exists() or not image_file.is_file():
+        return {"ok": False, "error": "image_path_not_found", "image_path": path}
+
+    target_chat = str(
+        chat_id
+        or os.getenv("SLIDESHOW_TG_CHAT_ID")
+        or os.getenv("TG_CHAT_ID")
+        or os.getenv("TELEGRAM_CHAT_ID")
+        or ""
+    ).strip()
+    target_bot = str(bot_id or os.getenv("SLIDESHOW_TG_BOT_ID") or os.getenv("TG_BOT_ID") or "").strip()
     try:
-        conf = load_config()
-        default_hub = str(getattr(conf, "subnet_id", "") or "").strip()
-    except Exception:
-        default_hub = ""
-    target_hub = str(hub_id or "").strip() or default_hub or "unknown_hub"
-    message: dict[str, Any] = {"type": "photo", "image_path": path}
-    if isinstance(caption, str) and caption.strip():
-        message["text"] = caption.strip()
-    payload = {
-        "target": {"bot_id": target_bot, "hub_id": target_hub, "chat_id": target_chat},
-        "messages": [message],
-        "options": None,
+        max_bytes = _int_env("ADAOS_TG_PHOTO_MAX_BYTES", 900 * 1024, minimum=32 * 1024, maximum=1024 * 1024)
+        max_dim = _int_env("ADAOS_TG_PHOTO_MAX_DIM", 1600, minimum=256, maximum=4096)
+        photo_bytes, mime, filename, media_meta = _jpeg_payload_from_image(image_file, max_bytes=max_bytes, max_dim=max_dim)
+    except Exception as exc:
+        return {"ok": False, "error": "telegram_photo_encode_failed", "detail": str(exc), "image_path": path}
+
+    target_hub = str(hub_id or "").strip() or _local_subnet_id()
+    if not target_hub and not target_chat:
+        return {"ok": False, "error": "hub_id_or_chat_id_required"}
+    message: dict[str, Any] = {
+        "type": "photo",
+        "image_base64": base64.b64encode(photo_bytes).decode("ascii"),
+        "filename": filename,
+        "mime": mime,
     }
+    if isinstance(caption, str) and caption.strip():
+        message["caption"] = caption.strip()
+    body: dict[str, Any] = {"messages": [message]}
+    if target_hub:
+        body["hub_id"] = target_hub
+    if target_chat:
+        body["chat_id"] = target_chat
+    if target_bot:
+        body["bot_id"] = target_bot
     meta = _merged_meta(_meta)
     if meta:
-        payload["_meta"] = meta
-    _publish(f"tg.output.{target_bot}.chat.{target_chat}", payload, source="sdk.io.out")
-    return {"ok": True, "bot_id": target_bot, "chat_id": target_chat}
+        body["_meta"] = meta
+
+    root_url = _root_base_url(root_base)
+    try:
+        import requests
+
+        resp = requests.post(
+            f"{root_url.rstrip('/')}/io/tg/send",
+            json=body,
+            headers={"Content-Type": "application/json"},
+            timeout=(2.0, 8.0),
+        )
+        try:
+            data = resp.json() if resp.content else {}
+        except Exception:
+            data = {"body": (resp.text or "")[:300]}
+        if 200 <= int(resp.status_code or 0) < 300 and bool(data.get("ok", True)):
+            return {
+                "ok": True,
+                "transport": "root_tg_send",
+                "root_url": root_url,
+                "hub_id": target_hub,
+                "chat_id": target_chat,
+                "bot_id": target_bot,
+                "media": media_meta,
+                "result": data,
+            }
+        error = str(data.get("error") or f"root_tg_send_http_{resp.status_code}")
+        result: dict[str, Any] = {
+            "ok": False,
+            "error": error,
+            "status": int(resp.status_code or 0),
+            "root_url": root_url,
+            "hub_id": target_hub,
+            "chat_id": target_chat,
+            "bot_id": target_bot,
+            "media": media_meta,
+            "result": data,
+        }
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "error": "root_tg_send_failed",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "root_url": root_url,
+            "hub_id": target_hub,
+            "chat_id": target_chat,
+            "bot_id": target_bot,
+            "media": media_meta,
+        }
+
+    if target_chat:
+        fallback_bot = target_bot or "adaos_bot"
+        payload = {
+            "target": {"bot_id": fallback_bot, "hub_id": target_hub or "unknown_hub", "chat_id": target_chat},
+            "messages": [message],
+            "options": None,
+        }
+        if meta:
+            payload["_meta"] = meta
+        _publish(f"tg.output.{fallback_bot}.chat.{target_chat}", payload, source="sdk.io.out")
+        return {
+            "ok": True,
+            "transport": "local_tg_output_inline_fallback",
+            "root_result": result,
+            "hub_id": target_hub,
+            "chat_id": target_chat,
+            "bot_id": fallback_bot,
+            "media": media_meta,
+        }
+    return result
 
 
 @tool(
