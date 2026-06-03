@@ -100,32 +100,52 @@ def _local_subnet_id() -> str:
     return ""
 
 
-def _root_base_url(explicit: str | None = None) -> str:
+def _unique_texts(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = str(item or "").strip().rstrip("/")
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+def _root_base_candidates(explicit: str | None = None) -> list[str]:
     candidates: list[str] = []
     if explicit:
         candidates.append(explicit)
-    try:
-        conf = load_config()
-        candidates.append(str(getattr(getattr(conf, "root_settings", None), "base_url", "") or ""))
-    except Exception:
-        pass
+    candidates.extend(
+        [
+            os.getenv("PUBLIC_ROOT_BASE") or "",
+            os.getenv("ADAOS_API_BASE") or "",
+        ]
+    )
     try:
         settings = get_ctx().settings
         candidates.append(str(getattr(settings, "api_base", "") or ""))
     except Exception:
         pass
+    try:
+        conf = load_config()
+        candidates.append(str(getattr(getattr(conf, "root_settings", None), "base_url", "") or ""))
+    except Exception:
+        pass
     candidates.extend(
         [
-            os.getenv("PUBLIC_ROOT_BASE") or "",
-            os.getenv("ADAOS_API_BASE") or "",
             os.getenv("ROOT_BASE_URL") or "",
+            "https://api.inimatic.com",
         ]
     )
-    for candidate in candidates:
-        value = str(candidate or "").strip().rstrip("/")
-        if value:
-            return value
-    return "https://api.inimatic.com"
+    return _unique_texts(candidates) or ["https://api.inimatic.com"]
+
+
+def _root_base_url(explicit: str | None = None) -> str:
+    return _root_base_candidates(explicit)[0]
 
 
 def _int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -391,49 +411,79 @@ def telegram_photo(
     if meta:
         body["_meta"] = meta
 
-    root_url = _root_base_url(root_base)
+    result: dict[str, Any] | None = None
+    tried_roots: list[str] = []
     try:
         import requests
 
-        resp = requests.post(
-            f"{root_url.rstrip('/')}/io/tg/send",
-            json=body,
-            headers={"Content-Type": "application/json"},
-            timeout=(2.0, 8.0),
-        )
-        try:
-            data = resp.json() if resp.content else {}
-        except Exception:
-            data = {"body": (resp.text or "")[:300]}
-        if 200 <= int(resp.status_code or 0) < 300 and bool(data.get("ok", True)):
-            return {
-                "ok": True,
-                "transport": "root_tg_send",
-                "root_url": root_url,
-                "hub_id": target_hub,
-                "chat_id": target_chat,
-                "bot_id": target_bot,
-                "media": media_meta,
-                "result": data,
-            }
-        error = str(data.get("error") or f"root_tg_send_http_{resp.status_code}")
-        result: dict[str, Any] = {
-            "ok": False,
-            "error": error,
-            "status": int(resp.status_code or 0),
-            "root_url": root_url,
-            "hub_id": target_hub,
-            "chat_id": target_chat,
-            "bot_id": target_bot,
-            "media": media_meta,
-            "result": data,
-        }
+        for root_url in _root_base_candidates(root_base):
+            tried_roots.append(root_url)
+            try:
+                resp = requests.post(
+                    f"{root_url.rstrip('/')}/io/tg/send",
+                    json=body,
+                    headers={"Content-Type": "application/json"},
+                    timeout=(2.0, 8.0),
+                )
+                try:
+                    data = resp.json() if resp.content else {}
+                except Exception:
+                    data = {"body": (resp.text or "")[:300]}
+                if 200 <= int(resp.status_code or 0) < 300 and bool(data.get("ok", True)):
+                    return {
+                        "ok": True,
+                        "transport": "root_tg_send",
+                        "root_url": root_url,
+                        "tried_roots": tried_roots,
+                        "hub_id": target_hub,
+                        "chat_id": target_chat,
+                        "bot_id": target_bot,
+                        "media": media_meta,
+                        "result": data,
+                    }
+                error = str(data.get("error") or f"root_tg_send_http_{resp.status_code}")
+                result = {
+                    "ok": False,
+                    "error": error,
+                    "status": int(resp.status_code or 0),
+                    "root_url": root_url,
+                    "tried_roots": list(tried_roots),
+                    "hub_id": target_hub,
+                    "chat_id": target_chat,
+                    "bot_id": target_bot,
+                    "media": media_meta,
+                    "result": data,
+                }
+                if error != "pairing_not_found" and int(resp.status_code or 0) not in {404, 503}:
+                    break
+            except Exception as exc:
+                result = {
+                    "ok": False,
+                    "error": "root_tg_send_failed",
+                    "detail": f"{type(exc).__name__}: {exc}",
+                    "root_url": root_url,
+                    "tried_roots": list(tried_roots),
+                    "hub_id": target_hub,
+                    "chat_id": target_chat,
+                    "bot_id": target_bot,
+                    "media": media_meta,
+                }
     except Exception as exc:
         result = {
             "ok": False,
             "error": "root_tg_send_failed",
             "detail": f"{type(exc).__name__}: {exc}",
-            "root_url": root_url,
+            "tried_roots": tried_roots,
+            "hub_id": target_hub,
+            "chat_id": target_chat,
+            "bot_id": target_bot,
+            "media": media_meta,
+        }
+    if result is None:
+        result = {
+            "ok": False,
+            "error": "root_tg_send_failed",
+            "tried_roots": tried_roots,
             "hub_id": target_hub,
             "chat_id": target_chat,
             "bot_id": target_bot,
