@@ -226,6 +226,186 @@ Status by priority:
 Follow-up tasks created from this checkpoint are recorded in the related
 sections below instead of as a separate tracker.
 
+## Local Runtime Log Triage 2026-06-04
+
+Scope:
+
+- Local Windows machine, current AdaOS checkout, `.adaos/logs`.
+- Included files dated `2026-06-03` plus active files with local mtime just
+  after midnight on `2026-06-04`, because the running session crossed the
+  calendar boundary.
+- This checkpoint is a triage input for stabilization work, not an acceptance
+  report.
+
+Observed signals:
+
+- The dominant pressure is still WebIO/Yjs snapshot fanout. Central logs show
+  thousands of slow async handlers around `webio.stream.snapshot.requested` and
+  `webio.yjs.snapshot.requested`, with observed handler durations up to about
+  `31s`.
+- The hottest snapshot participants in the local logs are `slideshow_skill`,
+  `infrastate_skill`, `infrascope_skill`, and `browsers_skill`; the next tier
+  includes `weather_skill`, `demo_metrics_skill`, `new_face_vision_skill`, and
+  `voice_chat_skill`.
+- Hub-route starvation is present but lower volume: observed `publish_slow`
+  and `flush_slow` records around `/yws/desktop`, including HTTP response
+  flushes that exceed the `1000 ms` timeout. Treat this as a symptom until the
+  snapshot/event-loop pressure is reduced.
+- The `y_py::y_map::YMap is unsendbale, but is dropped on another thread`
+  runtime error appears twice in historical local stderr. This matches the
+  unsafe stack-formatting class that was fixed locally by avoiding
+  `traceback.format_stack()` across foreign/y-py frames; verify that fresh
+  runs no longer emit it.
+- Yjs effective-branch repair and owner-flow pressure are frequent in the same
+  window, including initial client update reconcile paths and owner pressure
+  from core and skill owners. This should be rechecked after the opt-in repair
+  change for initial client updates.
+- `media_indexer.action` has an extreme slow-handler outlier around `481s`.
+  The media indexer runtime log also shows slow stream publish handlers, so
+  media indexing/publishing needs focused investigation rather than being
+  hidden under generic eventbus pressure.
+- Startup and activation fanout remains expensive. Slow topics include
+  `sys.ready`, `skills.activated`, and `scenarios.synced`; examples include
+  `new_face_vision_skill` startup handlers in the tens-of-seconds range.
+- NLU/Teacher handlers are less frequent but can be individually expensive:
+  `nlp.teacher.request`, `nlp.intent.detect.request`,
+  `nlp.teacher.candidate.apply`, and neural/neuro-lite detection paths need to
+  avoid blocking the shared eventbus.
+- The UI runtime log is too large for normal local diagnostics
+  (`service.__ui_runtime__.ui_runtime.log` was hundreds of MiB). Its tail is
+  dominated by WebIO event churn, cursor debug, control websocket transitions,
+  Yjs subscription/snapshot records, and reconnect telemetry. Rotation and
+  debug sampling are needed.
+- Root HTTP slow-report records, especially `/v1/hub/control/report`, are
+  common but lower priority unless they remain after loop pressure is reduced.
+
+### Tasks
+
+#### LRLT-001: Coalesce WebIO/Yjs snapshot requests per webspace and target
+
+Status: planned.
+
+Priority: P0.
+
+Actions:
+
+- [ ] Add single-flight/coalescing for concurrent
+  `webio.stream.snapshot.requested` and `webio.yjs.snapshot.requested` work by
+  webspace and target identity.
+- [ ] Return recent cached snapshots when a request is covered by an in-flight
+  rebuild or a fresh enough result.
+- [ ] Add metrics that distinguish served-from-cache, joined-in-flight,
+  rebuilt, timed out, and dropped requests.
+- [ ] Prove that repeated local snapshot storms no longer produce multi-second
+  event-loop lag or hub-route starvation.
+
+#### LRLT-002: Move hot snapshot handlers off the shared event loop
+
+Status: planned.
+
+Priority: P0.
+
+Actions:
+
+- [ ] Audit `slideshow_skill`, `infrastate_skill`, `infrascope_skill`, and
+  `browsers_skill` snapshot handlers for synchronous file, media, Yjs, or
+  projection rebuild work.
+- [ ] Convert heavyweight snapshot generation to cached reads, bounded worker
+  execution, or projection-service materialization.
+- [ ] Add per-skill slow-handler regression coverage for the first converted
+  handler.
+
+#### LRLT-003: Isolate media indexer action and stream publish stalls
+
+Status: planned.
+
+Priority: P0.
+
+Actions:
+
+- [ ] Inspect `media_indexer.action` paths for blocking filesystem scans,
+  unbounded media decoding, or synchronous publish loops.
+- [ ] Add explicit timing spans around indexing, frame extraction, stream
+  publish, and downstream acknowledgement/backpressure.
+- [ ] Bound media indexer concurrency and payload size so a single action
+  cannot occupy the shared eventbus for minutes.
+- [ ] Add a focused test or diagnostic command that reproduces and measures
+  the slow path without requiring a full UI run.
+
+#### LRLT-004: Keep y-py objects thread-affine in diagnostics and Yjs guards
+
+Status: verify.
+
+Priority: P0.
+
+Actions:
+
+- [ ] Run a fresh local session after the safe stack-dump and initial-repair
+  changes; confirm that `YMap is unsendbale` no longer appears.
+- [ ] Keep watchdog/diagnostic stack capture away from `traceback.format_stack`
+  or other helpers that may touch y-py frame locals from another thread.
+- [ ] Recount Yjs effective-branch repair and owner-flow pressure after the
+  fresh run to confirm that initial client update repair is no longer a
+  startup amplifier by default.
+
+#### LRLT-005: Defer or bound startup fanout from skill activation
+
+Status: planned.
+
+Priority: P1.
+
+Actions:
+
+- [ ] Audit `sys.ready`, `skills.activated`, and `scenarios.synced` handlers
+  for heavy synchronous refresh work.
+- [ ] Convert startup refreshes to bounded background tasks with explicit
+  readiness/progress events instead of blocking the startup eventbus.
+- [ ] Add per-topic timing summaries to make startup fanout regressions visible
+  without reading raw logs.
+
+#### LRLT-006: Make NLU/Teacher long-running work non-blocking
+
+Status: planned.
+
+Priority: P1.
+
+Actions:
+
+- [ ] Identify which NLU/Teacher handlers perform LLM calls, neural inference,
+  model loading, or heavy candidate application on the shared eventbus.
+- [ ] Move long-running inference/apply work behind bounded workers or
+  asynchronous job records with pending/completed events.
+- [ ] Preserve fast-path behavior for cheap resolver and regex cases.
+
+#### LRLT-007: Reduce UI runtime log volume while preserving diagnostics
+
+Status: planned.
+
+Priority: P1.
+
+Actions:
+
+- [ ] Add rotation or size caps for `service.__ui_runtime__.ui_runtime.log`.
+- [ ] Sample or aggregate high-volume `webio.event`, cursor, subscription, and
+  reconnect diagnostics.
+- [ ] Keep operator-visible summaries for reconnect storms and snapshot churn
+  so reducing raw log volume does not remove root-cause visibility.
+
+#### LRLT-008: Recheck transport and root HTTP slow paths after loop-pressure fixes
+
+Status: planned.
+
+Priority: P2.
+
+Actions:
+
+- [ ] Recount NATS/websocket transient close records after snapshot and startup
+  pressure are reduced.
+- [ ] Treat persistent `[WinError 121]` websocket timeouts as a separate
+  transport issue only if they continue without event-loop starvation nearby.
+- [ ] Re-evaluate `/v1/hub/control/report` slow records after the hot paths are
+  bounded; tune only if they remain frequent.
+
 ## Stipot Final Harvest and Cutover
 
 ### Goal
