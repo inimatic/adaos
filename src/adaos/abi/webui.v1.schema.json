@@ -58,6 +58,7 @@
         "feedback.statusBar",
         "ui.chat",
         "ui.voiceInput",
+        "ui.voiceDebug",
         "ui.list",
         "ui.table",
         "ui.form",
@@ -111,6 +112,18 @@
       "items": { "$ref": "#/$defs/widgetCatalogEntry" }
     },
 
+    "launchAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Compact catalog launch action used by desktop app tiles.",
+      "properties": {
+        "openModal": { "$ref": "#/$defs/id" },
+        "openOverlay": { "$ref": "#/$defs/id" },
+        "openWorkspace": { "$ref": "#/$defs/id" },
+        "url": { "type": "string" }
+      }
+    },
+
     "app": {
       "type": "object",
       "additionalProperties": true,
@@ -118,8 +131,10 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "title": { "type": "string" },
+        "subtitle": { "type": "string" },
         "icon": { "type": "string", "description": "Ionicon name (e.g. 'mic-outline')." },
         "launchModal": { "$ref": "#/$defs/id" },
+        "action": { "$ref": "#/$defs/launchAction" },
         "url": { "type": "string" },
         "load": { "$ref": "#/$defs/loadHint" }
       }
@@ -138,7 +153,17 @@
         "inputs": { "type": "object", "additionalProperties": true },
         "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
         "load": { "$ref": "#/$defs/loadHint" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "visual.frameViewer" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/frameViewerInputs" }
+            }
+          }
+        }
+      ]
     },
 
     "registry": {
@@ -233,9 +258,27 @@
       "required": ["id", "layout", "widgets"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" },
         "layout": { "$ref": "#/$defs/layout" },
         "widgets": { "type": "array", "items": { "$ref": "#/$defs/widgetConfig" } },
-        "load": { "$ref": "#/$defs/loadHint" }
+        "load": { "$ref": "#/$defs/loadHint" },
+        "initialState": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Local page/modal state defaults applied only for keys that are not already set."
+        },
+        "autoActions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/autoAction" },
+          "description": "Lightweight interval actions active only while this page/modal is mounted."
+        },
+        "semantic": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Optional semantic UI layer consumed by the client adapter."
+        },
+        "surfaceClass": { "type": "string" },
+        "surfaceObjectKind": { "type": "string" }
       }
     },
     "layout": {
@@ -269,7 +312,8 @@
       "required": ["id"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "role": { "type": "string" }
+        "role": { "type": "string" },
+        "label": { "type": "string" }
       }
     },
 
@@ -286,7 +330,17 @@
         "inputs": { "type": "object", "additionalProperties": true },
         "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
         "load": { "$ref": "#/$defs/loadHint" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "visual.frameViewer" } } },
+          "then": {
+            "properties": {
+              "inputs": { "$ref": "#/$defs/frameViewerInputs" }
+            }
+          }
+        }
+      ]
     },
 
     "dataSource": {
@@ -294,8 +348,24 @@
       "additionalProperties": true,
       "required": ["kind"],
       "properties": {
-        "kind": { "type": "string", "enum": ["y", "stream"] },
+        "kind": { "type": "string", "enum": ["skill", "api", "static", "y", "stream"] },
+        "name": {
+          "type": "string",
+          "description": "Skill data source target in '<skill>.<method>' form."
+        },
+        "url": { "type": "string" },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+        },
+        "params": { "type": "object", "additionalProperties": true },
+        "body": {},
+        "value": {},
         "path": { "type": "string" },
+        "nodeId": {
+          "type": "string",
+          "description": "Optional node id or state template for node-scoped stream/Yjs sources."
+        },
         "transform": { "type": "string" },
         "observeRoot": {
           "type": "boolean",
@@ -320,10 +390,188 @@
       },
       "allOf": [
         {
+          "if": { "properties": { "kind": { "const": "skill" } } },
+          "then": { "required": ["name"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "api" } } },
+          "then": { "required": ["url"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "static" } } },
+          "then": { "required": ["value"] }
+        },
+        {
           "if": { "properties": { "kind": { "const": "stream" } } },
           "then": { "required": ["receiver"] }
         }
       ]
+    },
+
+    "autoAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["action"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "intervalMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Requested interval. The client clamps very small values to a safe minimum."
+        },
+        "enabledIf": {
+          "type": "string",
+          "description": "Client state expression evaluated before each tick."
+        },
+        "action": { "$ref": "#/$defs/action" }
+      }
+    },
+
+    "fieldPath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Dot-separated path read from the current widget payload or page state."
+    },
+
+    "frameViewerInputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Inputs for visual.frameViewer. Payloads may provide image.media as a browser-routed media descriptor or image.src/src/url/base64 for local previews.",
+      "properties": {
+        "imageField": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "Payload path for a direct image URL/data URL. Defaults to image.src."
+        },
+        "fullscreenMediaField": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "Payload path for the high-quality fullscreen media descriptor. Defaults include image.fullscreen_media."
+        },
+        "prefetchMediaField": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "Payload path for the next media descriptor to prefetch while fullscreen is open. Defaults include image.next_media."
+        },
+        "aspectRatio": {
+          "type": "string",
+          "description": "CSS aspect-ratio token for the inline frame stage, e.g. '16 / 9'."
+        },
+        "fullscreenOnClick": {
+          "type": "boolean",
+          "description": "Open the frame viewer fullscreen surface when the image is clicked/tapped."
+        },
+        "nativeFullscreen": {
+          "type": "boolean",
+          "description": "Request browser native fullscreen after opening the runtime fullscreen surface."
+        },
+        "retainLastImageOnEmpty": {
+          "type": "boolean",
+          "description": "Keep the last loaded image when a stream update omits image data."
+        },
+        "emptyText": { "type": "string" },
+        "alt": { "type": "string" },
+        "headerActions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/frameActionButton" }
+        },
+        "fullscreenActions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/frameActionButton" }
+        },
+        "keyboardActions": { "$ref": "#/$defs/keyActionMap" },
+        "swipeActions": { "$ref": "#/$defs/swipeActionMap" },
+        "metrics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/metricBinding" }
+        },
+        "metricItems": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/metricBinding" }
+        }
+      }
+    },
+
+    "frameActionButton": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string" },
+        "icon": {
+          "type": "string",
+          "description": "Ionicon token. The client provides compact glyph fallbacks when icons are unavailable."
+        },
+        "glyph": { "type": "string" },
+        "labelField": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "Payload path that overrides label at render time."
+        },
+        "iconField": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "Payload path that overrides icon at render time."
+        },
+        "idField": {
+          "$ref": "#/$defs/fieldPath",
+          "description": "Payload path that overrides action id at render time."
+        },
+        "local": {
+          "type": "string",
+          "description": "Client-local frame action. Currently supported: closeFullscreen."
+        },
+        "kind": { "type": "string" }
+      }
+    },
+
+    "keyActionMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/id" },
+      "description": "Map from KeyboardEvent.key to a widget action id."
+    },
+
+    "swipeActionMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "left": { "$ref": "#/$defs/id" },
+        "right": { "$ref": "#/$defs/id" },
+        "up": { "$ref": "#/$defs/id" },
+        "down": { "$ref": "#/$defs/id" }
+      }
+    },
+
+    "metricBinding": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "label": { "type": "string" },
+        "path": { "$ref": "#/$defs/fieldPath" },
+        "field": { "$ref": "#/$defs/fieldPath" }
+      }
+    },
+
+    "mediaDescriptor": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Browser-facing media reference carried in stream payloads, commonly at image.media. WebUI streams should prefer this over inline base64 for large media.",
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": ["hub_browser_media", "root_media_relay", "node_media_file"],
+          "description": "Runtime route the browser should use to resolve the media object."
+        },
+        "browser_route": {
+          "type": "string",
+          "enum": ["hub_browser_media", "root_media_relay", "node_media_file"]
+        },
+        "path": { "type": "string" },
+        "browser_path": { "type": "string" },
+        "content_path": { "type": "string" },
+        "url": { "type": "string" },
+        "node_url": { "type": "string" },
+        "browser_url": { "type": "string" },
+        "filename": { "type": "string" },
+        "mime": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 0 }
+      }
     },
 
     "webio": {
@@ -537,6 +785,11 @@
           "description": "Known: 'app' | 'widget'."
         },
         "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "icon": { "type": "string" },
+        "launchModal": { "$ref": "#/$defs/id" },
+        "action": { "$ref": "#/$defs/launchAction" },
         "autoInstall": { "type": "boolean", "default": false }
       }
     }

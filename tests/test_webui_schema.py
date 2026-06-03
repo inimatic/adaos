@@ -121,6 +121,145 @@ def test_webui_schema_accepts_stream_receivers_and_stream_data_sources() -> None
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_runtime_data_sources_and_auto_actions() -> None:
+    schema = _load_schema()
+    payload = {
+        "apps": [
+            {
+                "id": "runtime_app",
+                "title": "Runtime",
+                "subtitle": "Runtime-backed UI",
+                "icon": "pulse-outline",
+                "launchModal": "runtime_modal",
+                "action": {"openModal": "runtime_modal"},
+            }
+        ],
+        "registry": {
+            "modals": {
+                "runtime_modal": {
+                    "schema": {
+                        "id": "runtime_modal",
+                        "initialState": {"poll": "on"},
+                        "autoActions": [
+                            {
+                                "id": "runtime_tick",
+                                "intervalMs": 2500,
+                                "enabledIf": "$state.poll === 'on'",
+                                "action": {
+                                    "on": "interval",
+                                    "type": "callSkill",
+                                    "target": "runtime_skill.refresh",
+                                    "params": {"reason": "auto"},
+                                },
+                            }
+                        ],
+                        "layout": {
+                            "type": "single",
+                            "pattern": "stack",
+                            "areas": [{"id": "main", "label": "Main"}],
+                        },
+                        "widgets": [
+                            {
+                                "id": "skill_data",
+                                "type": "ui.jsonViewer",
+                                "area": "main",
+                                "dataSource": {"kind": "skill", "name": "runtime_skill.snapshot"},
+                            },
+                            {
+                                "id": "api_data",
+                                "type": "ui.jsonViewer",
+                                "area": "main",
+                                "dataSource": {"kind": "api", "url": "/api/node/status", "method": "GET"},
+                            },
+                            {
+                                "id": "static_data",
+                                "type": "ui.jsonViewer",
+                                "area": "main",
+                                "dataSource": {"kind": "static", "value": {"ok": True}},
+                            },
+                        ],
+                    }
+                }
+            }
+        },
+        "contributions": [
+            {
+                "extensionPoint": "desktop.apps",
+                "type": "app",
+                "id": "runtime_app",
+                "title": "Runtime",
+                "subtitle": "Runtime-backed UI",
+                "icon": "pulse-outline",
+                "launchModal": "runtime_modal",
+                "action": {"openModal": "runtime_modal"},
+                "autoInstall": True,
+            }
+        ],
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_frame_viewer_media_surface_contract() -> None:
+    schema = _load_schema()
+    payload = {
+        "widgets": [
+            {
+                "id": "slideshow_widget",
+                "title": "ReDevice slideshow",
+                "type": "visual.frameViewer",
+                "dataSource": {
+                    "kind": "stream",
+                    "receiver": "slideshow.session",
+                    "nodeId": "$state.nodeId",
+                },
+                "inputs": {
+                    "imageField": "image.src",
+                    "fullscreenMediaField": "image.fullscreen_media",
+                    "prefetchMediaField": "image.next_media",
+                    "aspectRatio": "16 / 9",
+                    "fullscreenOnClick": True,
+                    "nativeFullscreen": True,
+                    "retainLastImageOnEmpty": True,
+                    "emptyText": "Start slideshow to show the current photo.",
+                    "headerActions": [
+                        {"id": "play", "label": "Play", "icon": "play-outline"},
+                        {
+                            "id": "fav",
+                            "label": "Favorite",
+                            "icon": "star-outline",
+                            "labelField": "favorite_label",
+                            "iconField": "favorite_icon",
+                            "idField": "favorite_action",
+                        },
+                    ],
+                    "fullscreenActions": [
+                        {
+                            "id": "close",
+                            "label": "Close",
+                            "icon": "close-outline",
+                            "local": "closeFullscreen",
+                        }
+                    ],
+                    "keyboardActions": {"ArrowLeft": "next", "ArrowRight": "prev", "ArrowUp": "fav"},
+                    "swipeActions": {"left": "next", "right": "prev", "up": "fav", "down": "hide"},
+                    "metrics": [{"label": "Frame", "path": "frame.label"}],
+                },
+                "actions": [
+                    {
+                        "on": "click:play",
+                        "type": "callSkill",
+                        "target": "slideshow.control",
+                        "params": {"action": "start"},
+                    }
+                ],
+            }
+        ],
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_rejects_invalid_stream_route_metadata() -> None:
     schema = _load_schema()
     payload = {
