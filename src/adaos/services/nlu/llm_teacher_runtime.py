@@ -1352,6 +1352,96 @@ def _strategy_candidate_kind(primary: str) -> tuple[str, str, str]:
     return ("nlu_strategy", "nlu_strategy", primary or "ignore")
 
 
+def _builder_task_for_strategy(
+    *,
+    candidate_id: str,
+    request_id: str,
+    text: str,
+    primary: str,
+    intent: str | None,
+    owner: Mapping[str, Any] | None,
+    candidate_payload: Mapping[str, Any],
+    context: Mapping[str, Any],
+    notes: str,
+) -> dict[str, Any] | None:
+    if primary not in {"descriptor_fix", "development_task"}:
+        return None
+    suffix = candidate_id.removeprefix("cand.")
+    requested_behavior = (
+        candidate_payload.get("requested_behavior")
+        or candidate_payload.get("description")
+        or notes
+        or text
+        or f"{primary} requested by NLU Teacher"
+    )
+    target_type = str((owner or {}).get("type") or candidate_payload.get("target_type") or "").strip()
+    target_id = str((owner or {}).get("id") or candidate_payload.get("target_id") or "").strip()
+    artifact_kind = target_type if target_type in {"skill", "scenario"} else "unknown"
+    missing_surface = str(candidate_payload.get("missing_surface") or "").strip() or (
+        "llm_hints/nlu_hints" if primary == "descriptor_fix" else ""
+    )
+    artifact_hints: dict[str, Any] = {
+        "preferred_kind": artifact_kind,
+        "preferred_id": target_id,
+        "create_new": primary == "development_task" and not target_id,
+    }
+    if missing_surface:
+        artifact_hints["missing_surface"] = missing_surface
+    origin_scenario_id = context.get("current_scenario")
+    links: dict[str, Any] = {
+        "candidate_id": candidate_id,
+        "request_id": request_id,
+    }
+    if isinstance(origin_scenario_id, str) and origin_scenario_id:
+        links["origin_scenario_id"] = origin_scenario_id
+    context_snapshot: dict[str, Any] = {}
+    for key in ("webspace_id", "current_scenario", "current_modal", "request_locale"):
+        value = context.get(key)
+        if isinstance(value, str) and value:
+            context_snapshot[key] = value
+    if intent:
+        context_snapshot["intent"] = intent
+    if owner:
+        context_snapshot["owner"] = {
+            key: str(value)
+            for key, value in owner.items()
+            if key in {"type", "id", "name"} and value is not None
+        }
+    task: dict[str, Any] = {
+        "task_id": f"btask.{suffix}",
+        "kind": primary,
+        "status": "proposed",
+        "source": {
+            "type": "nlu_teacher",
+            "text": text,
+            "request_id": request_id,
+            "candidate_id": candidate_id,
+        },
+        "requested_behavior": str(requested_behavior).strip(),
+        "target": {
+            "type": artifact_kind,
+            "id": target_id,
+        },
+        "context_snapshot": context_snapshot,
+        "artifact_hints": artifact_hints,
+        "side_effect_class": "unknown" if primary == "development_task" else "none",
+        "privacy": {
+            "utterance_retention": "bounded_text" if text else "fingerprint_only",
+            "contains_personal_data": False,
+        },
+        "acceptance": {
+            "checks": ["schema_valid", "tests_pass", "runtime_preview_passes"],
+            "replay_phrase": text,
+            "expected_result": str(requested_behavior).strip(),
+        },
+        "links": links,
+        "notes": notes,
+    }
+    if intent:
+        task["artifact_hints"]["intent"] = intent
+    return task
+
+
 def _build_strategy_candidate_entry(
     *,
     candidate_id: str,
@@ -1419,6 +1509,19 @@ def _build_strategy_candidate_entry(
         strategy_candidate["proposal"] = dict(candidate_payload)
     if regex_rejection:
         strategy_candidate["regex_rejection"] = dict(regex_rejection)
+    builder_task = _builder_task_for_strategy(
+        candidate_id=candidate_id,
+        request_id=request_id,
+        text=text,
+        primary=primary,
+        intent=intent,
+        owner=owner,
+        candidate_payload=candidate_payload,
+        context=context,
+        notes=notes,
+    )
+    if builder_task:
+        strategy_candidate["builder_task"] = builder_task
 
     entry = {
         "id": candidate_id,
@@ -1439,6 +1542,7 @@ def _build_strategy_candidate_entry(
         },
         "training_strategy": dict(training_strategy),
         "strategy_candidate": strategy_candidate,
+        **({"builder_task": builder_task} if builder_task else {}),
         "llm": dict(llm_meta),
         "notes": notes,
         "status": status,

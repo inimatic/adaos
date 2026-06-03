@@ -79,6 +79,9 @@ What is implemented in this slice:
 - bounded root-issued MCP access-token primitives for external clients
 - initial audit persistence, filtering, and scoped MCP auth
 - local `stdio` Codex bridge for VS Code and Codex CLI using a workspace-local profile plus token file
+- `builder.get_context` as the first compact Builder context bundle over
+  descriptor provenance, NLU authoring context, runtime status, and redaction
+  boundaries
 
 This is still an early skeleton.
 It proves the first `hub -> root -> Root MCP` operational loop and the first end-to-end external-client workflow through a local bridge.
@@ -103,6 +106,8 @@ Phase is complete when:
 - [x] expose architecture, SDK, manifest, schema, template, and public registry descriptors through typed plane contracts
 - [x] make `AdaOSDevPlane` the preferred Builder descriptive surface
 - [x] keep descriptive responses root-curated and cache-backed by default
+- [x] publish Builder task and draft schemas as descriptor sets available to
+  `builder.get_context`
 
 Phase is complete when:
 

@@ -5,6 +5,21 @@
 	"triggers": [],
 	"slots": {},
 	"params": {},
+	"llm_hints": {
+		"description": "",
+		"aliases": [],
+		"primary_actions": [],
+		"examples": [],
+		"owner_hints": []
+	},
+	"nlu": {
+		"nlu_hints": {
+			"aliases": [],
+			"examples": [],
+			"slot_schemas": {},
+			"entities": []
+		}
+	},
 	"io": {
 		"input": ["voice", "text"],
 		"output": ["voice", "text"],

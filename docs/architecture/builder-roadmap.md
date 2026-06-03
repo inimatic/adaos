@@ -46,16 +46,20 @@ Current implementation slices:
 - [x] Skill and scenario schemas exist under `src/adaos/abi/`.
 - [x] `llm_hints` / `nlu_hints` are partially consumed through skill/scenario
   descriptors and `webui.json`.
+- [x] `builder.get_context` exposes a compact read-only Builder context bundle
+  through Root MCP.
+- [x] Builder task and draft schemas are published as Root MCP descriptor sets
+  with provenance.
 
 Open work:
 
-- [ ] Freeze `llm_hints` / `nlu_hints` schemas for skills, scenarios, and
+- [x] Freeze initial `llm_hints` / `nlu_hints` schemas for skills, scenarios, and
   `webui.json`.
-- [ ] Make Root MCP descriptor freshness and provenance visible in Builder
+- [x] Make Root MCP descriptor freshness and provenance visible in Builder
   task context.
-- [ ] Add a compact Builder context bundle that links architecture, SDK,
+- [x] Add a compact Builder context bundle that links architecture, SDK,
   templates, registries, current webspace, NLU context, and runtime status.
-- [ ] Add redaction policy for Builder prompt/context bundles.
+- [x] Add redaction policy for Builder prompt/context bundles.
 
 Primary references:
 
@@ -76,16 +80,21 @@ Current implementation slices:
 - [x] Teacher state persists candidates and event evidence.
 - [x] Root MCP exposes phrase checks and action context used to avoid inventing
   unavailable actions.
+- [x] `builder.task.v1` defines the first structured Builder handoff packet.
+- [x] NLU Teacher attaches Builder tasks to `descriptor_fix` and
+  `development_task` candidates.
 
 Open work:
 
-- [ ] Define Builder task schema with requested behavior, source utterance,
+- [x] Define Builder task schema with requested behavior, source utterance,
   context snapshot, target artifact hints, side-effect class, privacy notes,
   and acceptance evidence.
-- [ ] Link `development_task` candidates to Builder tasks.
-- [ ] Link `descriptor_fix` candidates to concrete manifest/webui/nlu hint
-  patches.
-- [ ] Add candidate lifecycle states shared by Teacher UI and Builder:
+- [x] Link `development_task` candidates to Builder tasks.
+- [x] Link `descriptor_fix` candidates to Builder tasks that target
+  manifest/webui/nlu hint surfaces.
+- [ ] Add concrete patch materialization for `descriptor_fix` tasks across
+  manifest, `webui.json`, and NLU hint files.
+- [x] Add candidate lifecycle states shared by Teacher UI and Builder:
   `proposed`, `accepted`, `drafting`, `previewed`, `approved`, `applied`,
   `rejected`, `rolled_back`, and `superseded`.
 - [ ] Link completed Builder tasks back to the originating Teacher candidate or
@@ -111,19 +120,22 @@ Current implementation slices:
 - [x] Skill runtime supports prepare/test/activate/rollback.
 - [x] Scenario manager supports install/validate/run/test and dependency
   bootstrap.
+- [x] `builder.draft.v1` defines draft workspace metadata before runtime apply.
+- [x] Default skill and scenario templates include `builder.draft.json`
+  metadata.
 
 Open work:
 
-- [ ] Create a Builder draft workspace contract distinct from active runtime
+- [x] Create a Builder draft workspace contract distinct from active runtime
   slots.
-- [ ] Define draft metadata: task id, source idea, selected template,
+- [x] Define draft metadata: task id, source idea, selected template,
   target artifact, assumptions, risk notes, and expected tests.
 - [ ] Add `adaos builder draft` or equivalent API/CLI route after the draft
   contract stabilizes.
-- [ ] Make skill/scenario scaffolds Builder-aware: hints, route plan skeleton,
+- [x] Make skill/scenario scaffolds Builder-aware: hints, route plan skeleton,
   tests, lifecycle hooks, and webui descriptors.
 - [ ] Provide scenario-specific Builder guidance matching the skill guide.
-- [ ] Add template quality gates so templates are safe defaults for generated
+- [x] Add template quality gates so templates are safe defaults for generated
   work.
 
 Primary references:

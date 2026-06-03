@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.draft.v1",
+  "title": "AdaOS Builder Draft",
+  "description": "Metadata contract for a Builder-generated draft workspace before the draft is validated, previewed, approved, and applied to active runtime slots.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["draft_id", "task_id", "status", "source", "artifact", "metadata", "quality_gates"],
+  "properties": {
+    "draft_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable draft id inside the Builder workflow."
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Builder task id that owns this draft."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "validating", "previewed", "approved", "applied", "rejected", "superseded"],
+      "description": "Draft lifecycle state. Runtime activation is outside this contract."
+    },
+    "source": { "$ref": "#/$defs/sourceRef" },
+    "artifact": { "$ref": "#/$defs/artifactRef" },
+    "metadata": { "$ref": "#/$defs/draftMetadata" },
+    "quality_gates": { "$ref": "#/$defs/qualityGates" },
+    "links": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "candidate_id": { "type": "string" },
+        "request_id": { "type": "string" },
+        "builder_task_id": { "type": "string" },
+        "preview_id": { "type": "string" },
+        "operation_id": { "type": "string" }
+      }
+    },
+    "created_by": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["human_idea", "nlu_teacher", "runtime_guard", "test_failure", "operator", "template"]
+        },
+        "text": { "type": "string" },
+        "request_id": { "type": "string" },
+        "candidate_id": { "type": "string" },
+        "event_id": { "type": "string" }
+      }
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "id", "template_id"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["skill", "scenario", "webui", "nlu_overlay"]
+        },
+        "id": { "type": "string", "minLength": 1 },
+        "template_id": { "type": "string", "minLength": 1 },
+        "draft_root": {
+          "type": "string",
+          "description": "Workspace-relative or package-relative root for draft files."
+        },
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fileRef" }
+        }
+      }
+    },
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["path", "role"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "role": {
+          "type": "string",
+          "enum": ["manifest", "handler", "test", "webui", "nlu", "route_plan", "asset", "doc", "other"]
+        },
+        "required": { "type": "boolean" }
+      }
+    },
+    "draftMetadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["source_idea", "assumptions", "risk_notes", "expected_tests"],
+      "properties": {
+        "source_idea": {
+          "type": "string",
+          "description": "Human-readable idea or problem statement that produced the draft."
+        },
+        "assumptions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "risk_notes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "expected_tests": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "route_plan_required": { "type": "boolean" },
+        "human_review_required": { "type": "boolean" }
+      }
+    },
+    "qualityGates": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schemas", "tests", "previews", "requires_human_approval"],
+      "properties": {
+        "schemas": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "tests": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "previews": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "requires_human_approval": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

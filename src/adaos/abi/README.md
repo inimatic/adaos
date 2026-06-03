@@ -9,6 +9,10 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
 - `scenario.schema.json` - scenario manifest (`scenario.yaml` or `scenario.json`)
 - `skill.schema.json` - skill manifest (`skill.yaml`), including browser
   `data_routes` for explicit Yjs/stream/details route planning
+- `builder.task.v1.schema.json` - Builder task handoff packet for human,
+  AI-assisted, and human-in-the-loop capability creation workflows
+- `builder.draft.v1.schema.json` - Builder draft workspace metadata before
+  validation, preview, approval, and runtime apply
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
   staged readiness hints, stream receiver budget/guard metadata, runtime
   data sources, and browser media surface contracts such as

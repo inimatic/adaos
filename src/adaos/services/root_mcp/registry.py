@@ -63,7 +63,7 @@ def _plane_registry_payload() -> dict[str, Any]:
                     "public_scenario_registry_summary",
                     "named_entity_registry",
                 ],
-                "tool_prefixes": ["adaos_dev."],
+                "tool_prefixes": ["adaos_dev.", "builder."],
                 "capability_profiles": [],
                 "backing_store": "root_descriptor_cache",
             },
@@ -188,6 +188,14 @@ def _scenario_manifest_schema() -> dict[str, Any]:
     return _load_json(_package_root() / "abi" / "scenario.schema.json")
 
 
+def _builder_task_schema() -> dict[str, Any]:
+    return _load_json(_package_root() / "abi" / "builder.task.v1.schema.json")
+
+
+def _builder_draft_schema() -> dict[str, Any]:
+    return _load_json(_package_root() / "abi" / "builder.draft.v1.schema.json")
+
+
 def _status_vocab() -> dict[str, list[str]]:
     return {
         "operational": [item.value for item in CanonicalStatus],
@@ -303,6 +311,8 @@ def _descriptor_build_profile() -> dict[str, Any]:
             "system_model_vocabulary",
             "skill_manifest_schema",
             "scenario_manifest_schema",
+            "builder_task_schema",
+            "builder_draft_schema",
             "template_catalog",
             "architecture_catalog",
             "public_skill_registry_summary",
@@ -429,6 +439,10 @@ def _descriptor_payload(descriptor_id: str, *, level: str = "std") -> Any:
         return _skill_manifest_schema()
     if token == "scenario_manifest_schema":
         return _scenario_manifest_schema()
+    if token == "builder_task_schema":
+        return _builder_task_schema()
+    if token == "builder_draft_schema":
+        return _builder_draft_schema()
     if token == "template_catalog":
         return _template_catalog()
     if token == "capability_registry":
@@ -520,6 +534,22 @@ def list_descriptor_sets() -> list[dict[str, Any]]:
             source_kind="scenario_manifest_schema",
             descriptor_class="schema",
             tags=["development", "scenario", "schema"],
+        ),
+        _descriptor_entry(
+            "builder_task_schema",
+            title="Builder task schema",
+            summary="Current JSON schema for Builder task handoff packets.",
+            source_kind="builder_task_schema",
+            descriptor_class="schema",
+            tags=["development", "builder", "task", "schema"],
+        ),
+        _descriptor_entry(
+            "builder_draft_schema",
+            title="Builder draft schema",
+            summary="Current JSON schema for Builder draft workspace metadata.",
+            source_kind="builder_draft_schema",
+            descriptor_class="schema",
+            tags=["development", "builder", "draft", "schema"],
         ),
         _descriptor_entry(
             "template_catalog",

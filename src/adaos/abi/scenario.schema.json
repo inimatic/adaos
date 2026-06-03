@@ -29,6 +29,14 @@
       "type": "string",
       "description": "Short English description of what the scenario does."
     },
+    "llm_hints": {
+      "$ref": "#/$defs/authoringHints",
+      "description": "Builder-readable scenario capability hints for AI-assisted and human authoring workflows."
+    },
+    "nlu_hints": {
+      "$ref": "#/$defs/authoringHints",
+      "description": "Builder-readable NLU hints for scenario aliases, examples, slot schemas, entities, and owner routing."
+    },
     "depends": {
       "type": "array",
       "description": "List of skills this scenario depends on (skill ids).",
@@ -164,12 +172,117 @@
           "type": "object"
         }
       }
+    },
+    "nlu": {
+      "description": "Optional scenario-level NLU intents, examples, and Builder hints.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "llm_hints": { "$ref": "#/$defs/authoringHints" },
+        "nlu_hints": { "$ref": "#/$defs/authoringHints" }
+      }
     }
   },
   "required": ["id", "version"],
 
   "$defs": {
     "identifier": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "authoringHints": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "description": { "type": "string" },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "primary_actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/authoringActionHint" }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/authoringActionHint" }
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "$ref": "#/$defs/authoringExample" }
+            ]
+          }
+        },
+        "slot_schemas": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "$ref": "#/$defs/authoringEntityHint" }
+            ]
+          }
+        },
+        "owner_hints": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "side_effect_class": {
+          "type": "string",
+          "enum": ["none", "read_only", "local_write", "runtime_write", "external_io", "destructive"]
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "authoringActionHint": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "intent": { "type": "string", "minLength": 1 },
+        "tool": { "type": "string", "minLength": 1 },
+        "event": { "type": "string", "minLength": 1 },
+        "slots": { "type": "object", "additionalProperties": true },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "side_effect_class": {
+          "type": "string",
+          "enum": ["none", "read_only", "local_write", "runtime_write", "external_io", "destructive"]
+        }
+      }
+    },
+    "authoringExample": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "locale": { "type": "string", "minLength": 1 },
+        "intent": { "type": "string", "minLength": 1 },
+        "slots": { "type": "object", "additionalProperties": true }
+      },
+      "required": ["text"]
+    },
+    "authoringEntityHint": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "canonical_ref": { "type": "string", "minLength": 1 },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "callPath": {
       "type": "string",
       "pattern": "^[A-Za-z_][\\w]*(\\.[A-Za-z_][\\w]*)*$"
