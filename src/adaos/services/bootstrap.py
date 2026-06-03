@@ -1800,6 +1800,25 @@ class BootstrapService:
                     except Exception:
                         return False
 
+                def _safe_thread_stack(frame: Any, *, limit: int) -> tuple[str | None, str | None]:
+                    try:
+                        frames: list[str] = []
+                        cur = frame
+                        remaining = max(1, int(limit))
+                        while cur is not None and remaining > 0:
+                            filename = str(getattr(getattr(cur, "f_code", None), "co_filename", "") or "")
+                            func = str(getattr(getattr(cur, "f_code", None), "co_name", "") or "")
+                            lineno = int(getattr(cur, "f_lineno", 0) or 0)
+                            norm = filename.replace("\\", "/")
+                            if "y_py" in norm or "site-packages/y_py" in norm:
+                                return None, "y_py_frame"
+                            frames.append(f'  File "{filename}", line {lineno}, in {func}')
+                            cur = getattr(cur, "f_back", None)
+                            remaining -= 1
+                        return "\n".join(reversed(frames)), None
+                    except Exception as exc:
+                        return None, f"{type(exc).__name__}: {exc}"
+
                 def _run_report() -> Any:
                     try:
                         return report_hub_control_lifecycle_state(conf)
@@ -1827,7 +1846,16 @@ class BootstrapService:
                                     trigger,
                                 )
                                 return
-                            st = "".join(traceback.format_stack(fr, limit=40))
+                            st, stack_error = _safe_thread_stack(fr, limit=40)
+                            if stack_error:
+                                self._log.warning(
+                                    "control lifecycle await resume delayed lag_s=%.3f trigger=%s stack_unavailable=%s",
+                                    lag_s,
+                                    trigger,
+                                    stack_error,
+                                )
+                                return
+                            st = st or ""
                             if _is_idle_event_loop_stack(st):
                                 self._log.debug(
                                     "control lifecycle await resume delayed but main loop idle lag_s=%.3f trigger=%s",
@@ -2281,6 +2309,26 @@ class BootstrapService:
                             return False
                         return False
 
+                    def _safe_thread_stack(frame: Any, *, limit: int) -> tuple[str | None, str | None]:
+                        try:
+                            frames: list[str] = []
+                            cur = frame
+                            remaining = max(1, int(limit))
+                            while cur is not None and remaining > 0:
+                                code = getattr(cur, "f_code", None)
+                                filename = str(getattr(code, "co_filename", "") or "")
+                                func = str(getattr(code, "co_name", "") or "")
+                                lineno = int(getattr(cur, "f_lineno", 0) or 0)
+                                norm = filename.replace("\\", "/")
+                                if "y_py" in norm or "site-packages/y_py" in norm:
+                                    return None, "y_py_frame"
+                                frames.append(f'  File "{filename}", line {lineno}, in {func}')
+                                cur = getattr(cur, "f_back", None)
+                                remaining -= 1
+                            return "\n".join(reversed(frames)), None
+                        except Exception as exc:
+                            return None, f"{type(exc).__name__}: {exc}"
+
                     def _watch() -> None:
                         last_dump = 0.0
                         while True:
@@ -2298,7 +2346,16 @@ class BootstrapService:
                                     print(f"[diag] event loop hang {dt_ms:.0f}ms (no frame)")
                                     diag_log.warning("event loop hang dt_ms=%.0f frame=none", dt_ms)
                                     continue
-                                st = "".join(_traceback.format_stack(fr, limit=stack_limit))
+                                st, stack_error = _safe_thread_stack(fr, limit=stack_limit)
+                                if stack_error:
+                                    print(f"[diag] event loop hang {dt_ms:.0f}ms stack unavailable: {stack_error}")
+                                    diag_log.warning(
+                                        "event loop hang dt_ms=%.0f stack_unavailable=%s",
+                                        dt_ms,
+                                        stack_error,
+                                    )
+                                    continue
+                                st = st or ""
                                 if _is_idle_event_loop_wait(st):
                                     diag_log.debug("event loop hang suppressed idle wait dt_ms=%.0f", dt_ms)
                                     continue

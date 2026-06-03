@@ -188,6 +188,43 @@ def test_gateway_coerces_legacy_default_webspace_to_runtime_default() -> None:
     assert gateway_module._coerce_gateway_webspace_id("lab") == "lab"
 
 
+def test_gateway_initial_effective_repair_is_opt_in_by_default() -> None:
+    assert gateway_module._YROOM_EFFECTIVE_GUARD_REPAIR_INITIAL_UPDATES == 0
+
+
+def test_room_bootstrap_rebuild_status_finalizer_is_lightweight() -> None:
+    class _Doc:
+        def get_map(self, name: str) -> dict[str, object]:
+            if name == "ui":
+                return {
+                    "application": {
+                        "desktop": {"pageSchema": {"widgets": []}},
+                        "modals": {"apps_catalog": {}, "widgets_catalog": {}},
+                    }
+                }
+            if name == "data":
+                return {
+                    "catalog": {"apps": [], "widgets": []},
+                    "installed": {"apps": [], "widgets": []},
+                    "desktop": {},
+                }
+            if name == "registry":
+                return {}
+            return {}
+
+    seed_result: dict[str, object] = {}
+    asyncio.run(
+        gateway_module._finalize_room_bootstrap_rebuild_status(
+            "desktop",
+            seed_result=seed_result,
+            room=SimpleNamespace(ydoc=_Doc()),
+        )
+    )
+
+    assert seed_result["room_bootstrap_rebuild_status"] == "ready"
+    assert seed_result["room_bootstrap_rebuild_error"] is None
+
+
 def test_gateway_effective_guard_requires_installed_arrays(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_YROOM_EFFECTIVE_GUARD_SNAPSHOT_DETAILS", True)
 
