@@ -14,18 +14,29 @@ cross-cutting source of truth for Builder readiness.
 - [Builder](builder.md) defines the role and architecture boundary.
 - Checked items mean an implementation slice exists, not necessarily full
   product maturity.
+- Every checklist item carries a four-level MoSCoW-style priority label.
 - Specialized roadmaps continue to own detailed sequencing for their domains.
 - Builder milestones should link out to domain roadmaps instead of duplicating
   every low-level checklist.
 
+## Status Labels
+
+- `[must]`: first-order work required for the Builder architecture to be
+  coherent through the current phase.
+- `[should]`: hardening, guidance, or workflow work that materially improves
+  safety, operator confidence, or reuse.
+- `[could]`: useful optional ergonomics, diagnostics, or product polish.
+- `[deferred]`: intentionally postponed until a later phase owns the contract
+  or user experience.
+
 ## Phase 0. Terminology And Ownership
 
-- [x] Adopt `Builder` as the canonical role name.
-- [x] Define Builder as executor-neutral: human, AI-assisted, or hybrid.
-- [x] Treat `LLM programmer` as historical wording and replace it in
+- [x] `[must]` Adopt `Builder` as the canonical role name.
+- [x] `[must]` Define Builder as executor-neutral: human, AI-assisted, or hybrid.
+- [x] `[must]` Treat `LLM programmer` as historical wording and replace it in
   documentation surfaces.
-- [x] Create this roadmap and [Builder](builder.md) as the terminology anchor.
-- [x] Add a short glossary entry in product terminology once product naming is
+- [x] `[must]` Create this roadmap and [Builder](builder.md) as the terminology anchor.
+- [x] `[could]` Add a short glossary entry in product terminology once product naming is
   ready.
 
 Phase is complete when all architecture and developer docs point to Builder
@@ -37,29 +48,29 @@ Goal: Builder can understand AdaOS without guessing.
 
 Current implementation slices:
 
-- [x] Root MCP foundation exists.
-- [x] `AdaOSDevPlane` exposes architecture, SDK metadata, template catalog,
+- [x] `[must]` Root MCP foundation exists.
+- [x] `[must]` `AdaOSDevPlane` exposes architecture, SDK metadata, template catalog,
   public skill registry, public scenario registry, and named entities.
-- [x] `NLUAuthoringPlane` exposes current action context, phrase check,
+- [x] `[must]` `NLUAuthoringPlane` exposes current action context, phrase check,
   traces, dialog context, training targets, templates, and patch preview
   surfaces.
-- [x] Skill and scenario schemas exist under `src/adaos/abi/`.
-- [x] `llm_hints` / `nlu_hints` are partially consumed through skill/scenario
+- [x] `[must]` Skill and scenario schemas exist under `src/adaos/abi/`.
+- [x] `[must]` `llm_hints` / `nlu_hints` are partially consumed through skill/scenario
   descriptors and `webui.json`.
-- [x] `builder.get_context` exposes a compact read-only Builder context bundle
+- [x] `[must]` `builder.get_context` exposes a compact read-only Builder context bundle
   through Root MCP.
-- [x] Builder task and draft schemas are published as Root MCP descriptor sets
+- [x] `[must]` Builder task and draft schemas are published as Root MCP descriptor sets
   with provenance.
 
 Open work:
 
-- [x] Freeze initial `llm_hints` / `nlu_hints` schemas for skills, scenarios, and
+- [x] `[must]` Freeze initial `llm_hints` / `nlu_hints` schemas for skills, scenarios, and
   `webui.json`.
-- [x] Make Root MCP descriptor freshness and provenance visible in Builder
+- [x] `[should]` Make Root MCP descriptor freshness and provenance visible in Builder
   task context.
-- [x] Add a compact Builder context bundle that links architecture, SDK,
+- [x] `[must]` Add a compact Builder context bundle that links architecture, SDK,
   templates, registries, current webspace, NLU context, and runtime status.
-- [x] Add redaction policy for Builder prompt/context bundles.
+- [x] `[must]` Add redaction policy for Builder prompt/context bundles.
 
 Primary references:
 
@@ -75,29 +86,29 @@ actions.
 
 Current implementation slices:
 
-- [x] NLU Teacher emits `descriptor_fix` candidates.
-- [x] NLU Teacher emits `development_task` candidates.
-- [x] Teacher state persists candidates and event evidence.
-- [x] Root MCP exposes phrase checks and action context used to avoid inventing
+- [x] `[must]` NLU Teacher emits `descriptor_fix` candidates.
+- [x] `[must]` NLU Teacher emits `development_task` candidates.
+- [x] `[must]` Teacher state persists candidates and event evidence.
+- [x] `[must]` Root MCP exposes phrase checks and action context used to avoid inventing
   unavailable actions.
-- [x] `builder.task.v1` defines the first structured Builder handoff packet.
-- [x] NLU Teacher attaches Builder tasks to `descriptor_fix` and
+- [x] `[must]` `builder.task.v1` defines the first structured Builder handoff packet.
+- [x] `[must]` NLU Teacher attaches Builder tasks to `descriptor_fix` and
   `development_task` candidates.
 
 Open work:
 
-- [x] Define Builder task schema with requested behavior, source utterance,
+- [x] `[must]` Define Builder task schema with requested behavior, source utterance,
   context snapshot, target artifact hints, side-effect class, privacy notes,
   and acceptance evidence.
-- [x] Link `development_task` candidates to Builder tasks.
-- [x] Link `descriptor_fix` candidates to Builder tasks that target
+- [x] `[must]` Link `development_task` candidates to Builder tasks.
+- [x] `[must]` Link `descriptor_fix` candidates to Builder tasks that target
   manifest/webui/nlu hint surfaces.
-- [ ] Add concrete patch materialization for `descriptor_fix` tasks across
+- [x] `[must]` Add concrete patch materialization for `descriptor_fix` tasks across
   manifest, `webui.json`, and NLU hint files.
-- [x] Add candidate lifecycle states shared by Teacher UI and Builder:
+- [x] `[must]` Add candidate lifecycle states shared by Teacher UI and Builder:
   `proposed`, `accepted`, `drafting`, `previewed`, `approved`, `applied`,
   `rejected`, `rolled_back`, and `superseded`.
-- [ ] Link completed Builder tasks back to the originating Teacher candidate or
+- [ ] `[deferred]` Link completed Builder tasks back to the originating Teacher candidate or
   user idea.
 
 Primary references:
@@ -113,29 +124,29 @@ schemas.
 
 Current implementation slices:
 
-- [x] Skill scaffold exists.
-- [x] Scenario scaffold exists.
-- [x] Skill and scenario templates exist.
-- [x] Skill manifest supports `data_routes` and `data_projections`.
-- [x] Skill runtime supports prepare/test/activate/rollback.
-- [x] Scenario manager supports install/validate/run/test and dependency
+- [x] `[must]` Skill scaffold exists.
+- [x] `[must]` Scenario scaffold exists.
+- [x] `[must]` Skill and scenario templates exist.
+- [x] `[must]` Skill manifest supports `data_routes` and `data_projections`.
+- [x] `[must]` Skill runtime supports prepare/test/activate/rollback.
+- [x] `[must]` Scenario manager supports install/validate/run/test and dependency
   bootstrap.
-- [x] `builder.draft.v1` defines draft workspace metadata before runtime apply.
-- [x] Default skill and scenario templates include `builder.draft.json`
+- [x] `[must]` `builder.draft.v1` defines draft workspace metadata before runtime apply.
+- [x] `[must]` Default skill and scenario templates include `builder.draft.json`
   metadata.
 
 Open work:
 
-- [x] Create a Builder draft workspace contract distinct from active runtime
+- [x] `[must]` Create a Builder draft workspace contract distinct from active runtime
   slots.
-- [x] Define draft metadata: task id, source idea, selected template,
+- [x] `[must]` Define draft metadata: task id, source idea, selected template,
   target artifact, assumptions, risk notes, and expected tests.
-- [ ] Add `adaos builder draft` or equivalent API/CLI route after the draft
+- [x] `[must]` Add `adaos builder draft` or equivalent API/CLI route after the draft
   contract stabilizes.
-- [x] Make skill/scenario scaffolds Builder-aware: hints, route plan skeleton,
+- [x] `[must]` Make skill/scenario scaffolds Builder-aware: hints, route plan skeleton,
   tests, lifecycle hooks, and webui descriptors.
-- [ ] Provide scenario-specific Builder guidance matching the skill guide.
-- [x] Add template quality gates so templates are safe defaults for generated
+- [x] `[should]` Provide scenario-specific Builder guidance matching the skill guide.
+- [x] `[must]` Add template quality gates so templates are safe defaults for generated
   work.
 
 Primary references:
@@ -144,6 +155,7 @@ Primary references:
 - [Scenarios](../scenarios.md)
 - [Skill Runtime Lifecycle](../skill_runtime.md)
 - [Builder-Safe Skill Development Guide](../guides/llm-skill-development.md)
+- [Builder-Safe Scenario Development Guide](../guides/builder-scenario-development.md)
 
 ## Phase 4. Validation And Preview
 
@@ -152,24 +164,24 @@ behavior.
 
 Current implementation slices:
 
-- [x] Skill runtime can prepare, test, activate, and rollback.
-- [x] Scenario install/update APIs can use async operation records.
-- [x] NLU phrase probe exists.
-- [x] Root MCP exposes `nlu_authoring.check_phrase`.
-- [x] Root MCP exposes NLU template patch preview.
-- [x] Runtime guards and status cards provide initial safety evidence.
+- [x] `[must]` Skill runtime can prepare, test, activate, and rollback.
+- [x] `[must]` Scenario install/update APIs can use async operation records.
+- [x] `[must]` NLU phrase probe exists.
+- [x] `[must]` Root MCP exposes `nlu_authoring.check_phrase`.
+- [x] `[should]` Root MCP exposes NLU template patch preview.
+- [x] `[should]` Runtime guards and status cards provide initial safety evidence.
 
 Open work:
 
-- [ ] Add Builder preview bundle: diff, schemas, route plan, NLU probe,
+- [x] `[must]` Add Builder preview bundle: diff, schemas, route plan, NLU probe,
   action preview, UI preview, test plan, and risk summary.
-- [ ] Add blast-radius preview for learned regex and action descriptor changes.
-- [ ] Add browser/webui preview for generated widgets, modals, and data
+- [x] `[should]` Add blast-radius preview for learned regex and action descriptor changes.
+- [x] `[should]` Add browser/webui preview for generated widgets, modals, and data
   bindings.
-- [ ] Add static checks for unsafe direct Yjs mutation and unbounded process
+- [x] `[must]` Add static checks for unsafe direct Yjs mutation and unbounded process
   memory in generated skills.
-- [ ] Add route-budget validation for `data_routes`, streams, and projections.
-- [ ] Add previewable scenario dependency bootstrap report.
+- [x] `[must]` Add route-budget validation for `data_routes`, streams, and projections.
+- [x] `[should]` Add previewable scenario dependency bootstrap report.
 
 Primary references:
 
@@ -177,6 +189,7 @@ Primary references:
 - [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md)
 - [Post-Deploy E2E Testing](post-deploy-e2e-testing.md)
 - [Web UI Architecture](web-ui-architecture.md)
+- [Builder-Safe Scenario Development Guide](../guides/builder-scenario-development.md)
 
 ## Phase 5. Human-In-The-Loop Apply
 
@@ -185,15 +198,15 @@ matters.
 
 Open work:
 
-- [ ] Define approval profiles: manual-only, low-risk auto-draft,
+- [ ] `[must]` Define approval profiles: manual-only, low-risk auto-draft,
   low-risk auto-apply, and restricted maintenance repair.
-- [ ] Define which changes always require human approval: secrets, new
+- [ ] `[must]` Define which changes always require human approval: secrets, new
   permissions, external IO, destructive actions, endpoint control, high-rate
   streams, broad NLU patterns, and service processes.
-- [ ] Add review UI/workbench for Builder tasks and previews.
-- [ ] Attach policy evidence and approval identity to every applied Builder
+- [ ] `[should]` Add review UI/workbench for Builder tasks and previews.
+- [ ] `[must]` Attach policy evidence and approval identity to every applied Builder
   change.
-- [ ] Support reject/redirect feedback that becomes new Builder context instead
+- [ ] `[should]` Support reject/redirect feedback that becomes new Builder context instead
   of being lost as chat history.
 
 Primary references:
@@ -208,19 +221,19 @@ Goal: Builder output lands through normal AdaOS lifecycle rails.
 
 Current implementation slices:
 
-- [x] Skill runtime has A/B slots, semantic buckets, lifecycle hooks,
+- [x] `[must]` Skill runtime has A/B slots, semantic buckets, lifecycle hooks,
   deactivation, quarantine, and rollback.
-- [x] Scenario manager handles dependency bootstrap and webspace rebuild.
-- [x] Runtime operations and notifications are projected into Yjs.
+- [x] `[must]` Scenario manager handles dependency bootstrap and webspace rebuild.
+- [x] `[should]` Runtime operations and notifications are projected into Yjs.
 
 Open work:
 
-- [ ] Make Builder apply create a release record linking draft, validation,
+- [ ] `[must]` Make Builder apply create a release record linking draft, validation,
   approval, runtime slot, and rollback target.
-- [ ] Add durable operation recovery for long Builder install/test/apply flows.
-- [ ] Define rollback UX for Builder-authored changes across skill,
+- [ ] `[should]` Add durable operation recovery for long Builder install/test/apply flows.
+- [ ] `[should]` Define rollback UX for Builder-authored changes across skill,
   scenario, NLU overlay, and entity alias surfaces.
-- [ ] Add post-activation checks that can route failures back to Builder repair
+- [ ] `[must]` Add post-activation checks that can route failures back to Builder repair
   tasks.
 
 Primary references:
@@ -235,18 +248,18 @@ Goal: runtime evidence becomes actionable improvement work.
 
 Current implementation slices:
 
-- [x] Runtime guards can produce diagnostics and quarantine evidence.
-- [x] NLU Teacher stores misses, candidates, and LLM audit fingerprints.
-- [x] Root MCP audit and target status exist.
+- [x] `[must]` Runtime guards can produce diagnostics and quarantine evidence.
+- [x] `[must]` NLU Teacher stores misses, candidates, and LLM audit fingerprints.
+- [x] `[must]` Root MCP audit and target status exist.
 
 Open work:
 
-- [ ] Convert guard/quarantine reports into Builder repair tasks when the
+- [ ] `[must]` Convert guard/quarantine reports into Builder repair tasks when the
   issue is design-time fixable.
-- [ ] Feed failed tests, import errors, route pressure, memory growth, and NLU
+- [ ] `[must]` Feed failed tests, import errors, route pressure, memory growth, and NLU
   misses into task context.
-- [ ] Add repair task deduplication and supersession.
-- [ ] Add acceptance evidence that proves the repaired capability now works and
+- [ ] `[should]` Add repair task deduplication and supersession.
+- [ ] `[must]` Add acceptance evidence that proves the repaired capability now works and
   did not regress the triggering behavior.
 
 Primary references:
@@ -261,14 +274,14 @@ Goal: a non-specialist can say what they want and safely become a creator.
 
 Open work:
 
-- [ ] Define the first user-facing Builder entrypoint.
-- [ ] Support the phrase-level flow: "I have an idea. Let's build it."
-- [ ] Provide guided clarification when the idea is underspecified.
-- [ ] Show assumptions, preview, risks, and expected behavior in non-specialist
+- [ ] `[must]` Define the first user-facing Builder entrypoint.
+- [ ] `[must]` Support the phrase-level flow: "I have an idea. Let's build it."
+- [ ] `[should]` Provide guided clarification when the idea is underspecified.
+- [ ] `[must]` Show assumptions, preview, risks, and expected behavior in non-specialist
   language.
-- [ ] Keep advanced diffs, schemas, route plans, and runtime evidence available
+- [ ] `[should]` Keep advanced diffs, schemas, route plans, and runtime evidence available
   for developers.
-- [ ] Make completed Builder work visible in catalog, scenario, and skill
+- [ ] `[could]` Make completed Builder work visible in catalog, scenario, and skill
   history.
 
 ## Cross-Document Anchors
@@ -285,6 +298,8 @@ Builder is intentionally cross-cutting. Detailed work remains in:
   lifecycle
 - [Builder-Safe Skill Development Guide](../guides/llm-skill-development.md):
   generated skill safety and data-route requirements
+- [Builder-Safe Scenario Development Guide](../guides/builder-scenario-development.md):
+  generated scenario dependency, NLU, UI, and preview requirements
 - [Scenarios](../scenarios.md): scenario lifecycle basics
 - [Web UI Architecture](web-ui-architecture.md): browser-facing generated UI
 - [Runtime Guarding](runtime-guarding.md): guard/quarantine feedback into repair
