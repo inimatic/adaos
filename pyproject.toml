@@ -68,8 +68,14 @@ where = ["src"]
 [tool.setuptools.package-data]
 adaos = [
   "skills_templates/**/*.yaml",
+  "skills_templates/**/*.yml",
+  "skills_templates/**/*.json",
+  "skills_templates/**/*.md",
   "skills_templates/**/*.py",
+  "skills_templates/**/*.intent",
   "skills_templates/**/tests/**/*",
+  "scenario_templates/**/*.json",
+  "scenario_templates/**/*.md",
   "abi/*.json",
   "services/skill/*.json",
   "locales/*.json",

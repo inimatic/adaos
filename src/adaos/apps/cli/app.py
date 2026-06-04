@@ -402,6 +402,7 @@ from adaos.apps.cli.i18n import _
 from adaos.services.agent_context import get_ctx
 from adaos.services.runtime_paths import current_base_dir
 from adaos.apps.cli.commands import monitor, skill, runtime, llm, tests as tests_cmd, api, scenario, sdk_export as _sdk_export, repo, dev, node, hub, realtime
+from adaos.apps.cli.commands import builder as builder_cmd
 from adaos.apps.cli.commands import diag360
 from adaos.apps.cli.commands import git as git_cmd
 from adaos.apps.cli.commands import interpreter
@@ -562,6 +563,7 @@ app.add_typer(tests_cmd.app, name="tests", help=_("cli.help_test"))
 app.add_typer(runtime.app, name="runtime", help=_("cli.help_runtime"))
 app.add_typer(llm.app, name="llm", help=_("cli.help_llm"))
 app.add_typer(api.app, name="api")
+app.add_typer(builder_cmd.app, name="builder", help="Builder draft and preview workflows")
 app.add_typer(realtime.app, name="realtime", help="Realtime sidecar")
 app.add_typer(diag360.app, name="360log", help="360log flight-recorder snapshots")
 app.add_typer(node.app, name="node", help="Node onboarding and role management")

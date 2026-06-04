@@ -117,6 +117,7 @@ Scenarios remain the orchestration and desktop/workflow unit.
 Builder-created scenarios must follow:
 
 - [Scenarios](../scenarios.md)
+- [Builder-Safe Scenario Development Guide](../guides/builder-scenario-development.md)
 - [Skill Activation and Scenario Binding](skill-activation-and-scenario-binding.md)
 - [Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md)
 - [WebIO](../interfaces/webio.md)
@@ -194,6 +195,16 @@ Builder work should move through explicit contracts before runtime mutation:
 The default skill and scenario templates include `builder.draft.json` metadata
 so generated work starts as a reviewable draft rather than an active runtime
 change.
+
+The first implemented write-neutral Builder surface is:
+
+- `adaos builder draft`: creates an isolated draft workspace under Builder
+  state, including template metadata or descriptor-fix materialization.
+- `adaos builder preview`: creates an inspectable preview bundle with diff,
+  schemas, route plan, NLU/action/UI preview summaries, static safety checks,
+  dependency bootstrap evidence, and human-review reasons.
+- `POST /api/builder/draft` and `POST /api/builder/preview`: HTTP equivalents
+  for local UI/workbench integration.
 
 ## Relationship To Web UI
 
