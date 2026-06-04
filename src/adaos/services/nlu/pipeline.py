@@ -895,6 +895,19 @@ async def _on_detect_request(evt: Any) -> None:
     else:
         downstream_event = "nlp.intent.detect.rasa"
         downstream_via = "rasa"
+    active_stages = {
+        "regex": regex_enabled,
+        "neuro_lite": use_neuro_lite_stage,
+        "neural": use_neural_stage,
+        "rasa": rasa_enabled,
+    }
+    pipeline_evidence = {
+        "delegate_event": downstream_event,
+        "delegate_via": downstream_via,
+        "active_stages": active_stages,
+        "neuro_lite_policy": _neuro_lite_stage_policy(),
+        "neural_policy": _neural_stage_policy(),
+    }
     _emit_stage(
         ctx,
         stage="pipeline",
@@ -906,18 +919,20 @@ async def _on_detect_request(evt: Any) -> None:
         reason=downstream_event,
         raw={
             "flags": flags,
-            "active_stages": {
-                "regex": regex_enabled,
-                "neuro_lite": use_neuro_lite_stage,
-                "neural": use_neural_stage,
-                "rasa": rasa_enabled,
-            },
+            "active_stages": active_stages,
             "neuro_lite_policy": _neuro_lite_stage_policy(),
             "neural_policy": _neural_stage_policy(),
         },
         meta=meta,
     )
-    downstream_payload: dict[str, Any] = {"text": text, "webspace_id": webspace_id, "request_id": rid, "_meta": meta}
+    downstream_meta = dict(meta)
+    downstream_meta["nlu_pipeline"] = pipeline_evidence
+    downstream_payload: dict[str, Any] = {
+        "text": text,
+        "webspace_id": webspace_id,
+        "request_id": rid,
+        "_meta": downstream_meta,
+    }
     if locale:
         downstream_payload["locale"] = locale
         downstream_payload["request_locale"] = locale

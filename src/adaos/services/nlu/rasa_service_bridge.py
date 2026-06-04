@@ -17,7 +17,7 @@ from .runtime_flags import is_stage_enabled
 
 _log = logging.getLogger("adaos.nlu.rasa")
 _SEMAPHORE = asyncio.Semaphore(2)
-_PARSE_TIMEOUT_S = float(os.getenv("ADAOS_NLU_RASA_PARSE_TIMEOUT_S", "8.0") or "8.0")
+_PARSE_TIMEOUT_S = float(os.getenv("ADAOS_NLU_RASA_PARSE_TIMEOUT_S", "12.0") or "12.0")
 _START_LOCK = asyncio.Lock()
 _ISSUE_WINDOW_S = float(os.getenv("ADAOS_NLU_RASA_ISSUE_WINDOW_S", "60") or "60")
 _ISSUE_THRESHOLD = int(os.getenv("ADAOS_NLU_RASA_ISSUE_THRESHOLD", "3") or "3")
