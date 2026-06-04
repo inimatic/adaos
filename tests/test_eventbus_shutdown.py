@@ -25,6 +25,47 @@ async def test_local_event_bus_waits_for_async_handlers():
     assert seen == ["subnet.stopping"]
 
 
+@pytest.mark.asyncio
+async def test_thread_publish_uses_owner_loop_for_async_handlers():
+    bus = LocalEventBus()
+    owner_loop = asyncio.get_running_loop()
+    release = asyncio.Event()
+    started = asyncio.Event()
+    seen_owner_loop: list[bool] = []
+
+    async def handler(event: Event):
+        seen_owner_loop.append(asyncio.get_running_loop() is owner_loop)
+        started.set()
+        await release.wait()
+
+    bus.subscribe("io.out.stream.publish", handler)
+    bus.publish(Event(type="prime.noop", payload={}, source="test", ts=0.0))
+
+    def publish_from_thread() -> None:
+        bus.publish(
+            Event(
+                type="io.out.stream.publish",
+                payload={
+                    "receiver": "browsers.summary",
+                    "data": {"seq": 1},
+                    "_meta": {"webspace_id": "desktop"},
+                },
+                source="test",
+                ts=0.0,
+            )
+        )
+
+    await asyncio.wait_for(asyncio.to_thread(publish_from_thread), timeout=0.5)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    assert seen_owner_loop == [True]
+
+    release.set()
+    ok = await bus.wait_for_idle(timeout=1.0)
+
+    assert ok is True
+
+
 def test_local_event_bus_subscribe_debug_is_quiet_by_default(monkeypatch):
     monkeypatch.delenv("ADAOS_EVENTBUS_TRACE_SUBSCRIBE", raising=False)
     messages: list[str] = []

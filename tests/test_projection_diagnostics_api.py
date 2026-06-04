@@ -77,7 +77,6 @@ def _write_runtime_demand() -> None:
                     consumer_kind="page",
                 ),
             ],
-            updated_at=10.0,
         )
     )
 

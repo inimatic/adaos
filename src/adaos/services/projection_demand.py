@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import time
 from threading import RLock
 from typing import Any, Iterable, Mapping
@@ -11,6 +12,8 @@ from adaos.domain import (
     make_client_subscription_record,
     normalize_client_subscription_record,
 )
+
+DEFAULT_PROJECTION_DEMAND_STALE_AFTER_S = 300.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +134,27 @@ def list_client_subscription_records(*, webspace_id: str | None = None) -> list[
     return sorted(records, key=lambda item: (item.webspace_id, item.client_id, item.session_id))
 
 
+def default_projection_demand_stale_after_s() -> float | None:
+    raw = str(os.getenv("ADAOS_PROJECTION_DEMAND_STALE_AFTER_S") or "").strip()
+    if not raw:
+        return DEFAULT_PROJECTION_DEMAND_STALE_AFTER_S
+    try:
+        value = float(raw)
+    except Exception:
+        return DEFAULT_PROJECTION_DEMAND_STALE_AFTER_S
+    return value if value > 0.0 else None
+
+
+def resolve_projection_demand_stale_after_s(stale_after_s: float | None) -> float | None:
+    if stale_after_s is None:
+        return default_projection_demand_stale_after_s()
+    try:
+        value = float(stale_after_s)
+    except Exception:
+        return default_projection_demand_stale_after_s()
+    return value if value > 0.0 else None
+
+
 def _is_stale(record: ClientSubscriptionRecord, *, now: float, stale_after_s: float | None) -> bool:
     if stale_after_s is None:
         return False
@@ -139,6 +163,15 @@ def _is_stale(record: ClientSubscriptionRecord, *, now: float, stale_after_s: fl
     except Exception:
         return False
     return age_s > max(0.0, float(stale_after_s))
+
+
+def is_client_subscription_record_stale(
+    record: ClientSubscriptionRecord,
+    *,
+    now: float,
+    stale_after_s: float | None,
+) -> bool:
+    return _is_stale(record, now=now, stale_after_s=stale_after_s)
 
 
 def _consumer_from_subscription(
@@ -290,13 +323,17 @@ def make_empty_client_subscription_record(
 
 __all__ = [
     "ProjectionDemandConsumer",
+    "DEFAULT_PROJECTION_DEMAND_STALE_AFTER_S",
     "clear_projection_demand_registry",
     "delete_client_subscription_record",
+    "default_projection_demand_stale_after_s",
     "demanded_projection_keys",
+    "is_client_subscription_record_stale",
     "list_client_subscription_records",
     "make_empty_client_subscription_record",
     "projection_demand_consumers",
     "projection_demand_snapshot",
+    "resolve_projection_demand_stale_after_s",
     "touch_client_subscription_record",
     "write_client_subscription_record",
 ]

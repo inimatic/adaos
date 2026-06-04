@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 from adaos.domain import EventEnvelope, normalize_event_envelope, status_card_projection_key
 from adaos.domain.projection_keys import STATUS_CARD_PROJECTION_PREFIX
-from adaos.services.projection_demand import projection_demand_consumers
+from adaos.services.projection_demand import projection_demand_consumers, resolve_projection_demand_stale_after_s
 from adaos.services.projection_dispatcher import dispatch_demanded_projection_refresh
 from adaos.services.projection_record_yjs import materialize_projection_records_to_yjs
 from adaos.services.status_projection import ensure_status_card_projection_handler
@@ -67,7 +67,12 @@ def _webspace_ids_from_event(envelope: EventEnvelope, *, projection_key: str) ->
             out.append(token)
     if out:
         return out
-    for consumer in projection_demand_consumers(projection_key=projection_key):
+    for consumer in projection_demand_consumers(
+        projection_key=projection_key,
+        include_stale=False,
+        stale_after_s=resolve_projection_demand_stale_after_s(None),
+        now=time.time(),
+    ):
         token = str(consumer.webspace_id or "").strip()
         if token and token not in out:
             out.append(token)

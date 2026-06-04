@@ -95,6 +95,27 @@ def test_materialize_projection_demand_to_yjs_writes_runtime_clients(monkeypatch
     assert runtime["clients"]["browser-1"]["session-1"]["subscriptions"][0]["projection_key"] == "status-card:runtime"
 
 
+def test_materialize_projection_demand_to_yjs_skips_stale_clients_by_default(monkeypatch) -> None:
+    fake_doc = _FakeDoc()
+    from adaos.services import projection_demand_yjs
+
+    monkeypatch.setattr(projection_demand_yjs, "mutate_live_room", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(projection_demand_yjs, "async_get_ydoc", lambda *_args, **_kwargs: _FakeAsyncDocContext(fake_doc))
+    _write_demand()
+
+    result = asyncio.run(materialize_projection_demand_to_yjs(webspace_id="desktop", now=400.0))
+    diagnostic = asyncio.run(
+        materialize_projection_demand_to_yjs(webspace_id="desktop", include_stale=True, now=400.0)
+    )
+
+    assert result["client_total"] == 0
+    assert result["consumer_total"] == 0
+    assert result["projection_keys"] == []
+    assert diagnostic["client_total"] == 1
+    assert diagnostic["consumer_total"] == 1
+    assert diagnostic["payload"]["projections"][0]["stale_total"] == 1
+
+
 def test_restore_projection_demand_from_yjs_rebuilds_registry(monkeypatch) -> None:
     fake_doc = _FakeDoc()
     from adaos.services import projection_demand_yjs

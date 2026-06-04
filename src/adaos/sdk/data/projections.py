@@ -768,9 +768,13 @@ class ProjectionRuntime:
     ) -> dict[str, Any]:
         """Restore SDK-local active demand from canonical client subscription records."""
 
-        from adaos.services.projection_demand import projection_demand_consumers
+        from adaos.services.projection_demand import (
+            projection_demand_consumers,
+            resolve_projection_demand_stale_after_s,
+        )
 
         prefix = str(projection_prefix or "").strip()
+        resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
         restored: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         with self._lock:
@@ -779,7 +783,7 @@ class ProjectionRuntime:
             webspace_id=webspace_id,
             include_hidden=include_hidden,
             include_stale=include_stale,
-            stale_after_s=stale_after_s,
+            stale_after_s=resolved_stale_after_s,
         ):
             projection_key = str(consumer.projection_key or "").strip()
             if prefix and not projection_key.startswith(prefix):

@@ -3004,6 +3004,30 @@ def test_webspace_go_home_event_forwards_explicit_wait_for_rebuild(monkeypatch) 
     assert captured == [("phase2-home", True)]
 
 
+def test_webspace_go_home_event_defaults_to_background_rebuild(monkeypatch) -> None:
+    captured: list[tuple[str, bool]] = []
+
+    async def _fake_go_home(
+        webspace_id: str,
+        *,
+        wait_for_rebuild: bool = True,
+    ) -> dict[str, object]:
+        captured.append((webspace_id, wait_for_rebuild))
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "go_home_webspace", _fake_go_home)
+
+    asyncio.run(
+        webspace_runtime_module._on_webspace_go_home(
+            {
+                "webspace_id": "phase2-home",
+            }
+        )
+    )
+
+    assert captured == [("phase2-home", False)]
+
+
 def test_reload_preview_webspaces_for_scenario_project(monkeypatch) -> None:
     scenario_id = "prompt_engineer_scenario"
     preview_a = "dev-prompt-a"

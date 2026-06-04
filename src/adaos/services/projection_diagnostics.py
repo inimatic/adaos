@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Mapping
 
-from adaos.services.projection_demand import projection_demand_snapshot
+from adaos.services.projection_demand import projection_demand_snapshot, resolve_projection_demand_stale_after_s
 from adaos.services.projection_dispatcher import projection_dispatcher_snapshot
 from adaos.services.projection_records import projection_record_registry_snapshot
 from adaos.domain.projection_keys import STATUS_CARD_PROJECTION_PREFIX, status_card_id_from_projection_key
@@ -123,16 +123,17 @@ def _yjs_cache_record_details(
 def projection_operator_diagnostics(
     *,
     webspace_id: str | None = None,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     now: float | None = None,
     yjs_cache: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ts = float(now if now is not None else time.time())
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     demand = projection_demand_snapshot(
         webspace_id=webspace_id,
         include_stale=include_stale,
-        stale_after_s=stale_after_s,
+        stale_after_s=resolved_stale_after_s,
         now=ts,
     )
     dispatcher = projection_dispatcher_snapshot()

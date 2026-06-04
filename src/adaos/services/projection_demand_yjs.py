@@ -12,8 +12,10 @@ from adaos.domain import (
     projection_fingerprint,
 )
 from adaos.services.projection_demand import (
+    is_client_subscription_record_stale,
     list_client_subscription_records,
     projection_demand_snapshot,
+    resolve_projection_demand_stale_after_s,
     write_client_subscription_record,
 )
 
@@ -101,12 +103,30 @@ def _projection_demand_yjs_envelope(
 def build_projection_demand_yjs_payload(
     *,
     webspace_id: str | None = None,
+    include_stale: bool = False,
+    stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     target_webspace_id = _webspace_token(webspace_id)
     ts = float(now if now is not None else time.time())
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     records = list_client_subscription_records(webspace_id=target_webspace_id)
-    snapshot = projection_demand_snapshot(webspace_id=target_webspace_id, now=ts)
+    if not include_stale:
+        records = [
+            record
+            for record in records
+            if not is_client_subscription_record_stale(
+                record,
+                now=ts,
+                stale_after_s=resolved_stale_after_s,
+            )
+        ]
+    snapshot = projection_demand_snapshot(
+        webspace_id=target_webspace_id,
+        include_stale=include_stale,
+        stale_after_s=resolved_stale_after_s,
+        now=ts,
+    )
     records_payload = [record.to_dict() for record in records]
     clients = _clients_payload(records)
     envelope = _projection_demand_yjs_envelope(
@@ -122,6 +142,8 @@ def build_projection_demand_yjs_payload(
         "client_total": len(records_payload),
         "projection_total": int(snapshot.get("projection_total") or 0),
         "consumer_total": int(snapshot.get("consumer_total") or 0),
+        "include_stale": bool(include_stale),
+        "stale_after_s": resolved_stale_after_s,
         "projection_keys": sorted(
             {
                 subscription.projection_key
@@ -160,10 +182,17 @@ def _write_payload_to_doc(ydoc: Any, txn: Any, payload: Mapping[str, Any]) -> bo
 async def materialize_projection_demand_to_yjs(
     *,
     webspace_id: str | None = None,
+    include_stale: bool = False,
+    stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     target_webspace_id = _webspace_token(webspace_id)
-    payload = build_projection_demand_yjs_payload(webspace_id=target_webspace_id, now=now)
+    payload = build_projection_demand_yjs_payload(
+        webspace_id=target_webspace_id,
+        include_stale=include_stale,
+        stale_after_s=stale_after_s,
+        now=now,
+    )
     changed = {"value": False}
 
     def _apply(ydoc: Any, txn: Any) -> None:
@@ -198,6 +227,8 @@ async def materialize_projection_demand_to_yjs(
         "client_total": int(payload["client_total"]),
         "projection_total": int(payload["projection_total"]),
         "consumer_total": int(payload["consumer_total"]),
+        "include_stale": bool(payload["include_stale"]),
+        "stale_after_s": payload["stale_after_s"],
         "projection_keys": list(payload["projection_keys"]),
         "envelope_present": True,
         "envelope_ok": True,
@@ -213,10 +244,17 @@ async def materialize_projection_demand_to_yjs(
 async def safe_materialize_projection_demand_to_yjs(
     *,
     webspace_id: str | None = None,
+    include_stale: bool = False,
+    stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     try:
-        return await materialize_projection_demand_to_yjs(webspace_id=webspace_id, now=now)
+        return await materialize_projection_demand_to_yjs(
+            webspace_id=webspace_id,
+            include_stale=include_stale,
+            stale_after_s=stale_after_s,
+            now=now,
+        )
     except Exception as exc:
         return {
             "ok": False,
@@ -408,12 +446,13 @@ async def restore_projection_demand_from_yjs(
     *,
     webspace_id: str | None = None,
     include_hidden: bool = True,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     target_webspace_id = _webspace_token(webspace_id)
     ts = float(now if now is not None else time.time())
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     cache = await read_projection_demand_yjs(webspace_id=target_webspace_id)
     if not cache.get("ok"):
         return {
@@ -451,7 +490,7 @@ async def restore_projection_demand_from_yjs(
             record,
             include_hidden=include_hidden,
             include_stale=include_stale,
-            stale_after_s=stale_after_s,
+            stale_after_s=resolved_stale_after_s,
             now=ts,
         )
         if filtered is None:
@@ -470,7 +509,12 @@ async def restore_projection_demand_from_yjs(
         "skipped_total": len(skipped),
         "restored": restored,
         "skipped": skipped,
-        "snapshot": projection_demand_snapshot(webspace_id=target_webspace_id, now=ts),
+        "snapshot": projection_demand_snapshot(
+            webspace_id=target_webspace_id,
+            include_stale=include_stale,
+            stale_after_s=resolved_stale_after_s,
+            now=ts,
+        ),
         "updated_at": ts,
     }
 

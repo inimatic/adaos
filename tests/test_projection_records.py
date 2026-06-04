@@ -176,6 +176,43 @@ def test_browser_projection_record_snapshot_returns_only_demanded_records() -> N
     assert snapshot["cache_contract"]["browser_write"] is False
 
 
+def test_browser_projection_record_snapshot_skips_stale_demand_by_default() -> None:
+    write_projection_record(
+        make_projection_record(
+            projection_key="status-card:runtime",
+            kind="status-card",
+            webspace_id="desktop",
+            data={"summary": "runtime ready"},
+        )
+    )
+    write_client_subscription_record(
+        make_client_subscription_record(
+            client_id="browser-1",
+            device_id="desktop",
+            session_id="session-1",
+            webspace_id="desktop",
+            role="operator",
+            subscriptions=[
+                make_projection_subscription(
+                    projection_key="status-card:runtime",
+                    consumer_id="widget:runtime",
+                    consumer_kind="widget",
+                )
+            ],
+            updated_at=10.0,
+        )
+    )
+
+    active = browser_projection_record_snapshot(webspace_id="desktop", now=400.0)
+    diagnostic = browser_projection_record_snapshot(webspace_id="desktop", include_stale=True, now=400.0)
+
+    assert active["demanded_projection_total"] == 0
+    assert active["record_total"] == 0
+    assert diagnostic["demanded_projection_total"] == 1
+    assert diagnostic["records"]["status-card:runtime"]["data"]["summary"] == "runtime ready"
+    assert diagnostic["entries"][0]["consumers"][0]["stale"] is True
+
+
 def test_browser_projection_record_snapshot_can_scope_to_client_session() -> None:
     for projection_key in ["status-card:runtime", "status-card:desktop-shell"]:
         write_projection_record(
