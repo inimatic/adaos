@@ -118,9 +118,16 @@ async def test_candidate_apply_persists_rule_and_notifies():
     assert acquired[-1]["intent"] == "desktop.open_weather"
     flags = await get_runtime_flags(webspace_id)
     assert flags["regex_enabled"] is True
-    async with async_get_ydoc(webspace_id) as ydoc:
-        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
-        candidates = list((teacher or {}).get("candidates") or [])
+    candidates = []
+    for _ in range(100):
+        async with async_get_ydoc(webspace_id) as ydoc:
+            teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+            candidates = list((teacher or {}).get("candidates") or [])
+        latest = candidates[-1] if candidates else {}
+        promotion = latest.get("promotion") if isinstance(latest, dict) else {}
+        if isinstance(promotion, dict) and isinstance(promotion.get("applied_artifact"), dict):
+            break
+        await asyncio.sleep(0.01)
     assert candidates[-1]["validation"]["status"] == "passed"
     assert candidates[-1]["promotion"]["applied_artifact"]["rule_id"] == saved_rule["id"]
     assert candidates[-1]["provenance"]["rollback_pointer"]["rule_id"] == saved_rule["id"]

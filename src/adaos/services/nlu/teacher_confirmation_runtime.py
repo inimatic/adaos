@@ -19,7 +19,7 @@ _log = logging.getLogger("adaos.nlu.teacher.confirmation")
 
 _MAX_CONFIRMATIONS = 50
 _CONFIRMATION_TTL_S = 15 * 60
-_RECONFIRMABLE_CANDIDATE_STATUSES = {"pending", "validation_failed"}
+_RECONFIRMABLE_CANDIDATE_STATUSES = {"pending", "validation_failed", "apply_requested"}
 _YES_RE = re.compile(r"^\s*(да|ага|угу|ок|okay|yes|y|верно|подтверждаю|применяй|открой)\b", re.I | re.U)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|n|не\s+то|неверно|ошибка)\b", re.I | re.U)
 _FIRST_ANSWERS = {
@@ -951,21 +951,23 @@ async def _on_voice_chat_user(evt: Any) -> None:
             "Принял. Применяю новое правило NLU; после этого повторите запрос для проверки.",
             merged_meta,
         )
-        bus_emit(
-            get_ctx().bus,
-            "nlp.teacher.candidate.apply",
-            {
-                "webspace_id": webspace_id,
-                "candidate_id": candidate_id,
-                "target": confirmation.get("target") if isinstance(confirmation.get("target"), Mapping) else None,
-                "_meta": {
-                    **merged_meta,
-                    "nlu_teacher_confirmation_id": confirmation_id,
-                    "nlu_teacher_confirmation_answer": "yes",
-                },
-            },
-            source="nlu.teacher.confirmation",
-        )
+        try:
+            from adaos.services.nlu.candidates_runtime import _on_candidate_apply  # local import to avoid cycles
+
+            await _on_candidate_apply(
+                {
+                    "webspace_id": webspace_id,
+                    "candidate_id": candidate_id,
+                    "target": confirmation.get("target") if isinstance(confirmation.get("target"), Mapping) else None,
+                    "_meta": {
+                        **merged_meta,
+                        "nlu_teacher_confirmation_id": confirmation_id,
+                        "nlu_teacher_confirmation_answer": "yes",
+                    },
+                }
+            )
+        except Exception:
+            _log.warning("failed to apply confirmed NLU Teacher candidate webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
         return
 
     if attempt < 1:

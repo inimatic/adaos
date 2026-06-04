@@ -20,6 +20,8 @@ from adaos.services.yjs.webspace import default_webspace_id
 
 _log = logging.getLogger("adaos.nlu.teacher.candidates")
 
+_LOOKUP_SLOT_NAMES = {"modal_id", "scenario_id", "app_id", "node_ref", "skill_id", "webspace_id"}
+
 
 def _nlu_candidates_write_meta():
     return ystore_write_metadata(
@@ -45,6 +47,27 @@ def _resolve_webspace_id(payload: Mapping[str, Any]) -> str:
     if isinstance(token, str) and token.strip():
         return token.strip()
     return default_webspace_id()
+
+
+def _candidate_static_rule_slots(candidate: Mapping[str, Any]) -> dict[str, str]:
+    """Return canonical slot constants that should override regex captures."""
+    out: dict[str, str] = {}
+    normalization = coerce_dict(candidate.get("normalization"))
+    repair = coerce_dict(normalization.get("llm_proposal_repair"))
+    for key in _LOOKUP_SLOT_NAMES:
+        value = repair.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+
+    action = candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+    action_slots = action.get("slots") if isinstance(action.get("slots"), Mapping) else {}
+    for key in _LOOKUP_SLOT_NAMES:
+        if key in out:
+            continue
+        value = action_slots.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+    return out
 
 
 def _teacher_obj(data_map: Any) -> dict[str, Any]:
@@ -306,23 +329,29 @@ async def _on_candidate_apply(evt: Any) -> None:
                     candidate=candidate,
                     payload_target=payload_target,
                 )
-                next_candidates: list[dict[str, Any]] = []
-                validated_candidate: dict[str, Any] | None = None
-                for item in iter_mappings(teacher.get("candidates")):
-                    d = dict(item)
-                    if d.get("id") == candidate_id:
-                        d["validation"] = dict(validation)
-                        d["validated_at"] = time.time()
-                        if not validation.get("ok"):
-                            d["status"] = "validation_failed"
-                            d["validation_failed_at"] = time.time()
-                        validated_candidate = d
-                    next_candidates.append(d)
-                teacher["candidates"] = next_candidates
-                with ydoc.begin_transaction() as txn:
-                    data_map.set(txn, "nlu_teacher", teacher)
-                if validated_candidate is not None:
-                    candidate = validated_candidate
+                kind = candidate.get("kind")
+                if validation.get("ok") and kind == "regex_rule":
+                    candidate = dict(candidate)
+                    candidate["validation"] = dict(validation)
+                    candidate["validated_at"] = time.time()
+                else:
+                    next_candidates: list[dict[str, Any]] = []
+                    validated_candidate: dict[str, Any] | None = None
+                    for item in iter_mappings(teacher.get("candidates")):
+                        d = dict(item)
+                        if d.get("id") == candidate_id:
+                            d["validation"] = dict(validation)
+                            d["validated_at"] = time.time()
+                            if not validation.get("ok"):
+                                d["status"] = "validation_failed"
+                                d["validation_failed_at"] = time.time()
+                            validated_candidate = d
+                        next_candidates.append(d)
+                    teacher["candidates"] = next_candidates
+                    with ydoc.begin_transaction() as txn:
+                        data_map.set(txn, "nlu_teacher", teacher)
+                    if validated_candidate is not None:
+                        candidate = validated_candidate
                 if not validation.get("ok"):
                     await _emit_apply_rejected(
                         ctx=ctx,
@@ -342,7 +371,6 @@ async def _on_candidate_apply(evt: Any) -> None:
                     )
                     return
 
-                kind = candidate.get("kind")
                 if kind == "regex_rule":
                     rr = candidate.get("regex_rule") if isinstance(candidate.get("regex_rule"), Mapping) else {}
                     intent = rr.get("intent")
@@ -386,18 +414,23 @@ async def _on_candidate_apply(evt: Any) -> None:
                                         target = {"type": "scenario", "id": scenario_id}
                                 except Exception:
                                     target = None
-                        bus_emit(
-                            ctx.bus,
-                            "nlp.teacher.regex_rule.apply",
+                        from adaos.services.nlu.regex_rules_runtime import apply_regex_rule  # local import to avoid cycles
+
+                        static_slots = _candidate_static_rule_slots(candidate)
+                        await apply_regex_rule(
                             {
                                 "webspace_id": webspace_id,
                                 "candidate_id": candidate_id,
                                 "intent": intent.strip(),
                                 "pattern": pattern,
                                 **({"target": target} if target else {}),
+                                **({"slots": static_slots} if static_slots else {}),
+                                "candidate_patch": {
+                                    "validation": dict(validation),
+                                    "validated_at": candidate.get("validated_at") or time.time(),
+                                },
                                 "_meta": dict(meta),
-                            },
-                            source="nlu.teacher.candidates",
+                            }
                         )
                     return
 

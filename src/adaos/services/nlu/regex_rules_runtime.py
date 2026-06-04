@@ -91,6 +91,13 @@ def _append_or_update_rule(existing: list[dict[str, Any]], rule: dict[str, Any])
                 updated["created_at"] = rule.get("created_at")
             if updated.get("enabled") is None:
                 updated["enabled"] = True
+            if isinstance(rule.get("slots"), Mapping):
+                merged_slots = dict(updated.get("slots") or {}) if isinstance(updated.get("slots"), Mapping) else {}
+                for key, value in rule.get("slots", {}).items():
+                    if isinstance(key, str) and isinstance(value, str) and key.strip() and value.strip():
+                        merged_slots[key.strip()] = value.strip()
+                if merged_slots:
+                    updated["slots"] = merged_slots
             cleaned.append(updated)
         else:
             cleaned.append(dict(item))
@@ -222,6 +229,47 @@ def _remove_skill_regex_rule(
     return removed
 
 
+def _remove_workspace_regex_rules(
+    *,
+    candidate_id: str | None,
+    intent: str | None,
+    pattern: str | None,
+) -> int:
+    if not candidate_id and not (intent and pattern):
+        return 0
+    ctx = get_ctx()
+    removed = 0
+    try:
+        scenarios_root = Path(ctx.paths.scenarios_dir())
+        for item in scenarios_root.iterdir():
+            if not item.is_dir() or not (item / "scenario.json").exists():
+                continue
+            removed += _remove_scenario_regex_rule(
+                scenario_id=item.name,
+                rule_id=None,
+                candidate_id=candidate_id,
+                intent=intent,
+                pattern=pattern,
+            )
+    except Exception:
+        _log.debug("failed to scan workspace scenarios during regex rollback", exc_info=True)
+    try:
+        skills_root = Path(ctx.paths.skills_dir())
+        for item in skills_root.iterdir():
+            if not item.is_dir() or not (item / "skill.yaml").exists():
+                continue
+            removed += _remove_skill_regex_rule(
+                skill_name=item.name,
+                rule_id=None,
+                candidate_id=candidate_id,
+                intent=intent,
+                pattern=pattern,
+            )
+    except Exception:
+        _log.debug("failed to scan workspace skills during regex rollback", exc_info=True)
+    return removed
+
+
 def _write_scenario_regex_rule(*, scenario_id: str, rule: dict[str, Any]) -> bool:
     root = scenarios_loader.scenario_root(scenario_id)
     path = root / "scenario.json"
@@ -306,6 +354,17 @@ def _normalize_rule(rule: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         value = rule.get(key)
         if value not in (None, "", [], {}):
             out[key] = dict(value) if isinstance(value, Mapping) else value
+    slots = rule.get("slots")
+    if isinstance(slots, Mapping):
+        clean_slots: dict[str, str] = {}
+        for key, value in slots.items():
+            if not isinstance(key, str) or not key.strip():
+                continue
+            if not isinstance(value, str) or not value.strip():
+                continue
+            clean_slots[key.strip()] = value.strip()
+        if clean_slots:
+            out["slots"] = clean_slots
     return out
 
 
@@ -338,6 +397,7 @@ async def _mark_candidate_verification(
     webspace_id: str,
     candidate_id: str | None,
     verification: Mapping[str, Any],
+    candidate_patch: Mapping[str, Any] | None = None,
 ) -> None:
     if not isinstance(candidate_id, str) or not candidate_id.strip():
         return
@@ -349,6 +409,9 @@ async def _mark_candidate_verification(
             for item in iter_mappings(teacher.get("candidates")):
                 d = dict(item)
                 if d.get("id") == candidate_id:
+                    for key, value in (candidate_patch or {}).items():
+                        if value not in (None, "", [], {}):
+                            d[key] = dict(value) if isinstance(value, Mapping) else value
                     d["verification"] = dict(verification)
                     d["verified_at"] = time.time()
                     provenance = coerce_dict(d.get("provenance"))
@@ -423,6 +486,12 @@ async def _on_regex_rule_rollback(evt: Any) -> None:
                             intent=intent,
                             pattern=pattern,
                         )
+                if not removed_owner:
+                    removed_owner = _remove_workspace_regex_rules(
+                        candidate_id=candidate_id,
+                        intent=intent,
+                        pattern=pattern,
+                    )
 
                 nlu_obj = _read_nlu_obj(data_map)
                 rules = [dict(x) for x in iter_mappings(nlu_obj.get("regex_rules"))]
@@ -492,8 +561,7 @@ async def _on_regex_rule_rollback(evt: Any) -> None:
     bus_emit(ctx.bus, "nlp.teacher.regex_rule.rolled_back", payload_out, source="nlu.regex_rules")
 
 
-@subscribe("nlp.teacher.regex_rule.apply")
-async def _on_regex_rule_apply(evt: Any) -> None:
+async def apply_regex_rule(evt: Any) -> None:
     """
     Apply a proposed regex rule (typically from NLU Teacher UI).
 
@@ -513,6 +581,15 @@ async def _on_regex_rule_apply(evt: Any) -> None:
     pattern = payload.get("pattern")
     meta = coerce_dict(payload.get("_meta"))
     payload_target = payload.get("target") if isinstance(payload.get("target"), Mapping) else None
+    candidate_patch = payload.get("candidate_patch") if isinstance(payload.get("candidate_patch"), Mapping) else {}
+    payload_slots = payload.get("slots") if isinstance(payload.get("slots"), Mapping) else {}
+    static_slots: dict[str, str] = {}
+    for key, value in payload_slots.items():
+        if not isinstance(key, str) or not key.strip():
+            continue
+        if not isinstance(value, str) or not value.strip():
+            continue
+        static_slots[key.strip()] = value.strip()
 
     if not isinstance(intent, str) or not intent.strip():
         return
@@ -545,10 +622,13 @@ async def _on_regex_rule_apply(evt: Any) -> None:
         "provenance": dict(artifact_meta["provenance"]),
         "privacy": dict(artifact_meta["privacy"]),
     }
+    if static_slots:
+        rule["slots"] = static_slots
     request_id: str | None = None
     request_text: str = ""
     applied_to: dict[str, Any] | None = None
     runtime_flags_update: dict[str, Any] | None = None
+    applied_candidate_patch: dict[str, Any] = {}
 
     try:
         async with _nlu_regex_rules_write_meta():
@@ -652,14 +732,41 @@ async def _on_regex_rule_apply(evt: Any) -> None:
                 # Mark candidate as applied (if present)
                 candidates = teacher.get("candidates")
                 if isinstance(candidate_id, str) and candidate_id:
+                    applied_at = time.time()
+                    base_promotion = {
+                        "state": "local_learned",
+                        "portability": rule["promotion"]["portability"],
+                        "applied_artifact": {
+                            "type": "regex_rule",
+                            "rule_id": rule_id,
+                            "target": dict(applied_to or {}),
+                        },
+                    }
+                    base_provenance = coerce_dict(rule.get("provenance"))
+                    base_provenance["rollback_pointer"] = {"rule_id": rule_id, "target": dict(applied_to or {})}
+                    base_provenance["accepted_artifact_source"] = "local_overlay"
+                    applied_candidate_patch = {
+                        **({"validation": dict(candidate_patch.get("validation"))} if isinstance(candidate_patch.get("validation"), Mapping) else {}),
+                        **({"validated_at": candidate_patch.get("validated_at")} if candidate_patch.get("validated_at") not in (None, "", [], {}) else {}),
+                        "status": "applied",
+                        "applied_at": applied_at,
+                        "applied": {"type": "regex_rule", "rule_id": rule_id, "target": dict(applied_to or {})},
+                        "promotion": base_promotion,
+                        "provenance": base_provenance,
+                        "privacy": dict(rule.get("privacy") or {}),
+                    }
                     next_candidates: list[dict[str, Any]] = []
                     for item in iter_mappings(candidates):
                         d = dict(item)
                         if d.get("id") == candidate_id:
                             request_id = d.get("request_id") if isinstance(d.get("request_id"), str) else None
                             request_text = d.get("text") if isinstance(d.get("text"), str) else ""
+                            for key in ("validation", "validated_at"):
+                                value = candidate_patch.get(key)
+                                if value not in (None, "", [], {}):
+                                    d[key] = dict(value) if isinstance(value, Mapping) else value
                             d["status"] = "applied"
-                            d["applied_at"] = time.time()
+                            d["applied_at"] = applied_at
                             d["applied"] = {"type": "regex_rule", "rule_id": rule_id, "target": dict(applied_to or {})}
                             promotion = coerce_dict(d.get("promotion"))
                             promotion.setdefault("state", "local_learned")
@@ -674,6 +781,20 @@ async def _on_regex_rule_apply(evt: Any) -> None:
                             provenance["rollback_pointer"] = {"rule_id": rule_id, "target": dict(applied_to or {})}
                             provenance["accepted_artifact_source"] = "local_overlay"
                             d["provenance"] = provenance
+                            applied_candidate_patch = {
+                                key: d[key]
+                                for key in (
+                                    "validation",
+                                    "validated_at",
+                                    "status",
+                                    "applied_at",
+                                    "applied",
+                                    "promotion",
+                                    "provenance",
+                                    "privacy",
+                                )
+                                if key in d
+                            }
                         next_candidates.append(d)
                     teacher["candidates"] = next_candidates
 
@@ -743,6 +864,7 @@ async def _on_regex_rule_apply(evt: Any) -> None:
                 webspace_id=webspace_id,
                 candidate_id=candidate_id if isinstance(candidate_id, str) else None,
                 verification=verification,
+                candidate_patch=applied_candidate_patch,
             )
             bus_emit(
                 ctx.bus,
@@ -877,3 +999,8 @@ async def _on_regex_rule_apply(evt: Any) -> None:
         )
     except Exception:
         pass
+
+
+@subscribe("nlp.teacher.regex_rule.apply")
+async def _on_regex_rule_apply(evt: Any) -> None:
+    await apply_regex_rule(evt)

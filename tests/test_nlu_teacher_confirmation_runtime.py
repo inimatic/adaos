@@ -23,7 +23,6 @@ async def test_voice_candidate_proposal_requests_confirmation():
         "target": {"type": "scenario", "id": "homepoint"},
         "preview": {"ok": True, "slots": {"scenario_id": "Infrascope"}},
     }
-
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
             ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [candidate], "events": []})
@@ -128,10 +127,27 @@ async def test_voice_existing_candidate_reasks_confirmation():
 async def test_voice_confirmation_yes_applies_candidate():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.nlu.probe import probe_phrase
     from adaos.services.yjs.doc import async_get_ydoc
+    import asyncio
+    import json
+    from pathlib import Path
 
     ctx = get_ctx()
     webspace_id = "ws-test-teacher-confirmation-yes"
+    scenario_id = "test_teacher_confirmation_yes_scenario"
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    scenario_json = scenario_root / "scenario.json"
+    scenario_json.write_text(
+        json.dumps(
+            {"id": scenario_id, "version": "0.0.1", "nlu": {"intents": {"demo.open_panel": {"actions": []}}}},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     candidate = {
         "id": "cand.confirm.yes",
         "ts": 10.0,
@@ -143,9 +159,19 @@ async def test_voice_confirmation_yes_applies_candidate():
         "target": {"type": "scenario", "id": "homepoint"},
         "preview": {"ok": True, "slots": {"scenario_id": "Infrascope"}},
     }
+    candidate.update(
+        {
+            "text": "open raw panel",
+            "regex_rule": {"intent": "demo.open_panel", "pattern": r"\bopen\s+(?P<modal_id>raw\s+panel)\b"},
+            "target": {"type": "scenario", "id": scenario_id},
+            "preview": {"ok": True, "slots": {"modal_id": "raw panel"}},
+            "normalization": {"llm_proposal_repair": {"modal_id": "canonical_panel"}},
+        }
+    )
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
             ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [candidate], "events": []})
 
     applied: list[dict] = []
@@ -155,7 +181,7 @@ async def test_voice_confirmation_yes_applies_candidate():
         if isinstance(payload, dict):
             applied.append(dict(payload))
 
-    ctx.bus.subscribe("nlp.teacher.candidate.apply", _capture_apply)
+    ctx.bus.subscribe("nlp.teacher.regex_rule.applied", _capture_apply)
 
     await conf._on_candidate_proposed(
         {
@@ -172,6 +198,20 @@ async def test_voice_confirmation_yes_applies_candidate():
         }
     )
 
+    acquired: list[dict] = []
+
+    def _capture_acquired(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            acquired.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.understanding.acquired", _capture_acquired)
+
+    for _ in range(100):
+        if applied:
+            break
+        await asyncio.sleep(0.01)
+
     async with async_get_ydoc(webspace_id) as ydoc:
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}
         confirmations = list(teacher.get("pending_confirmations") or [])
@@ -183,8 +223,16 @@ async def test_voice_confirmation_yes_applies_candidate():
     assert clarifications[-1]["answer"] == "да"
     assert any(item.get("kind") == "confirmation.accepted" for item in events)
     assert applied
-    assert applied[-1]["candidate_id"] == candidate["id"]
-    assert applied[-1]["_meta"]["nlu_teacher_confirmation_answer"] == "yes"
+
+    saved = json.loads(scenario_json.read_text(encoding="utf-8"))
+    rules = (saved.get("nlu") or {}).get("regex_rules") or []
+    saved_rule = next(item for item in rules if item.get("candidate_id") == candidate["id"])
+    assert saved_rule["slots"] == {"modal_id": "canonical_panel"}
+
+    probe = await probe_phrase("open raw panel", webspace_id=webspace_id, use_rasa=False, emit_trace=False)
+    assert probe["accepted"] is True
+    assert probe["intent"] == "demo.open_panel"
+    assert probe["slots"]["modal_id"] == "canonical_panel"
 
 
 @pytest.mark.anyio

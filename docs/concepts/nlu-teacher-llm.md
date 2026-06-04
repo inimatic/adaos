@@ -828,7 +828,11 @@ Apply can be triggered from UI or programmatically:
   - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
   - candidate Apply first stores M4 validation evidence and rejects blocked
     candidates before writing owner artifacts or runtime mirrors
-  - for `regex_rule` candidates the runtime delegates to `nlp.teacher.regex_rule.apply { intent, pattern, target? }`
+- for `regex_rule` candidates the runtime applies
+  `nlp.teacher.regex_rule.apply { intent, pattern, target?, slots? }`; `slots`
+  is a canonical constant-slot override for lookup-backed captures such as
+  `modal_id` when the regex must match a longer natural phrase than the
+  canonical alias itself
   - for `training_example` candidates the runtime emits
     `nlp.teacher.example.save` for the curated examples
   - for `entity_alias`, `descriptor_fix`, and `development_task` candidates
@@ -855,6 +859,12 @@ The teacher does not "bake" regexes into the hub code. A rule is stored as data 
 
 Every rule has a stable identity: `id="rx.<uuid>"`.
 
+Rules may also carry `slots` with canonical constant values. During
+`regex.dynamic`, named captures are extracted first and then `rule.slots`
+overrides them before lookup canonicalization and dispatch. This lets a rule
+match phrases such as "покажи состояние инфраструктуры" while dispatching the
+stable registry value selected by MCP/desktop lookup repair.
+
 ## Target selection (skill vs scenario)
 
 When the teacher proposes a regex rule, it should also propose a storage target:
@@ -867,6 +877,12 @@ ownership logic. For the current UI, there is intentionally no separate
 "Apply to scenario" button: it could incorrectly move skill-owned NLU into a
 scenario. If a future override is needed, it should be an explicit advanced
 action with owner/impact evidence.
+
+Voice confirmation calls candidate Apply synchronously after a positive answer
+and waits for the validation/apply/verification path to finish. The visible
+chat answer still tells the user that learning is being applied, but the
+Teacher event log must end in either `understanding.acquired`,
+`candidate.apply_rejected`, or `candidate.verified` with a failure status.
 
 ## Auto-apply policy (trusted skills)
 
