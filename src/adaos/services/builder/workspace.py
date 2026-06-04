@@ -177,23 +177,23 @@ def _ctx_path(paths: Any, attr: str) -> Path | None:
         return None
 
 
-def _builder_root_from_paths(paths: Any) -> Path | None:
-    base_dir = _ctx_path(paths, "base_dir")
-    if base_dir is not None:
-        return base_dir / "dev" / "builder"
-
-    dev_dir = _ctx_path(paths, "dev_dir")
-    if dev_dir is not None:
-        if dev_dir.parent.name == "dev":
-            return dev_dir.parent / "builder"
-        return dev_dir / "builder"
-
-    dev_skills_root = _ctx_path(paths, "dev_skills_dir")
-    if dev_skills_root is not None:
-        dev_space_root = dev_skills_root.parent
-        if dev_space_root.parent.name == "dev":
-            dev_space_root = dev_space_root.parent
-        return dev_space_root / "builder"
+def _ctx_config_dev_workspace(ctx: Any) -> Path | None:
+    try:
+        config = getattr(ctx, "config", None)
+        base_dir = _ctx_path(ctx.paths, "base_dir")
+        if base_dir is None:
+            return None
+        workspace = str(getattr(getattr(config, "dev_settings", None), "workspace", "") or "").strip()
+        if workspace and workspace != "dev":
+            path = Path(workspace).expanduser()
+            if not path.is_absolute():
+                path = base_dir / path
+            return path.resolve()
+        subnet_id = str(getattr(config, "subnet_id", "") or "").strip()
+        if subnet_id:
+            return (base_dir / "dev" / subnet_id).resolve()
+    except Exception:
+        return None
     return None
 
 
@@ -207,6 +207,8 @@ class BuilderWorkspaceService:
     workspace_root: Path | None = None
     skills_root: Path | None = None
     scenarios_root: Path | None = None
+    dev_skills_root: Path | None = None
+    dev_scenarios_root: Path | None = None
 
     @classmethod
     def from_context(cls) -> "BuilderWorkspaceService":
@@ -216,6 +218,8 @@ class BuilderWorkspaceService:
         workspace_root = None
         skills_root = None
         scenarios_root = None
+        dev_skills_root = None
+        dev_scenarios_root = None
         try:
             from adaos.services.agent_context import get_ctx
 
@@ -223,7 +227,13 @@ class BuilderWorkspaceService:
             workspace_root = _ctx_path(ctx.paths, "workspace_dir")
             skills_root = _ctx_path(ctx.paths, "skills_dir")
             scenarios_root = _ctx_path(ctx.paths, "scenarios_dir")
-            builder_root = _builder_root_from_paths(ctx.paths)
+            dev_workspace = _ctx_config_dev_workspace(ctx)
+            if dev_workspace is not None:
+                dev_skills_root = dev_workspace / "skills"
+                dev_scenarios_root = dev_workspace / "scenarios"
+            else:
+                dev_skills_root = _ctx_path(ctx.paths, "dev_skills_dir")
+                dev_scenarios_root = _ctx_path(ctx.paths, "dev_scenarios_dir")
         except Exception:
             if repo_root is not None:
                 workspace_root = repo_root / ".adaos" / "workspace"
@@ -236,6 +246,8 @@ class BuilderWorkspaceService:
             workspace_root=workspace_root,
             skills_root=skills_root,
             scenarios_root=scenarios_root,
+            dev_skills_root=dev_skills_root,
+            dev_scenarios_root=dev_scenarios_root,
         )
 
     @property
@@ -256,6 +268,21 @@ class BuilderWorkspaceService:
         path = self.root / "previews"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _dev_artifact_root(self, kind: str, artifact_id: str) -> Path:
+        if kind == "skill":
+            root = self.dev_skills_root
+            if root is None and self.repo_root is not None:
+                root = Path(self.repo_root) / ".adaos" / "dev" / "skills"
+        elif kind == "scenario":
+            root = self.dev_scenarios_root
+            if root is None and self.repo_root is not None:
+                root = Path(self.repo_root) / ".adaos" / "dev" / "scenarios"
+        else:
+            raise ValueError("kind must be skill or scenario")
+        if root is None:
+            raise ValueError("AdaOS dev workspace is not available in the current context")
+        return (Path(root).expanduser().resolve() / artifact_id).resolve()
 
     def create_draft(
         self,
@@ -292,7 +319,12 @@ class BuilderWorkspaceService:
         template_id = template_id or ("skill_default" if kind == "skill" else "scenario_default")
         draft_id = self._new_draft_id(artifact_id)
         draft_dir = self.drafts_dir() / draft_id
-        artifact_root = draft_dir / "artifact"
+        artifact_root = self._dev_artifact_root(kind, artifact_id)
+        if artifact_root.exists():
+            raise ValueError(
+                f"{kind} '{artifact_id}' already exists in DEV workspace at {artifact_root}; "
+                "use descriptor_fix or remove/rename the DEV artifact first"
+            )
         _copytree(_template_dir(kind, template_id), artifact_root)
 
         if kind == "skill":
@@ -413,7 +445,7 @@ class BuilderWorkspaceService:
         data = _read_json(manifest)
         data["id"] = artifact_id
         data.setdefault("version", "0.1.0")
-        data["name"] = data.get("name") or artifact_id
+        data["name"] = artifact_id
         data["description"] = data.get("description") or source_idea
         data.setdefault("llm_hints", {})
         data["llm_hints"]["description"] = source_idea
@@ -440,8 +472,9 @@ class BuilderWorkspaceService:
         source_root = self._resolve_target_root(target_kind, artifact_id, explicit=target_root)
         draft_id = self._new_draft_id(f"{artifact_id}.descriptor")
         draft_dir = self.drafts_dir() / draft_id
-        artifact_root = draft_dir / "artifact"
-        _copytree(source_root, artifact_root)
+        artifact_root = self._dev_artifact_root(target_kind, artifact_id)
+        if not artifact_root.exists():
+            _copytree(source_root, artifact_root)
         materialization = self._materialize_descriptor_fix(
             artifact_root=artifact_root,
             target_kind=target_kind,

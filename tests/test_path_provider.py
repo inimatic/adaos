@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from adaos.adapters.fs.path_provider import PathProvider
 from adaos.services.agent_context import get_ctx
 from adaos.services.settings import Settings
+
+
+class _Config:
+    subnet_id = "sn_path_test"
+
+
+class _Ctx:
+    config = _Config()
 
 
 def test_path_provider_locales_base_dir(tmp_path):
@@ -32,6 +41,17 @@ def test_path_provider_workspace_layout(tmp_path):
     # Compatibility aliases
     assert provider.skills_dir() == provider.skills_workspace_dir()
     assert provider.scenarios_dir() == provider.scenarios_workspace_dir()
+
+
+def test_path_provider_dev_dir_uses_attached_config_subnet_when_settings_is_empty(tmp_path):
+    settings = Settings.from_sources().with_overrides(base_dir=tmp_path / "adaos-test", profile="test")
+    settings = replace(settings, subnet_id=None)
+    provider = PathProvider(settings)
+    provider.ctx = _Ctx()
+
+    base = Path(settings.base_dir).expanduser().resolve()
+    assert provider.dev_dir() == base / "dev" / "sn_path_test"
+    assert provider.dev_scenarios_dir() == base / "dev" / "sn_path_test" / "scenarios"
 
 
 def test_agent_context_exposes_locales_from_provider():

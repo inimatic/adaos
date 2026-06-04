@@ -21,6 +21,7 @@ class PathProvider:
     base: Path
     package_dir: Path
     subnet_id: str
+    ctx: object | None
 
     # --- конструкторы ---
     @classmethod
@@ -41,6 +42,7 @@ class PathProvider:
         self.subnet_id = subnet_id
         object.__setattr__(self, "base", Path(base).expanduser().resolve())
         object.__setattr__(self, "package_dir", Path(package_dir).expanduser().resolve())
+        object.__setattr__(self, "ctx", None)
 
     # --- базовые каталоги ---
     def package_path(self) -> Path:
@@ -133,7 +135,14 @@ class PathProvider:
     # dev section
 
     def dev_dir(self) -> Path:
-        return (self.base / "dev" / self.subnet_id).resolve()
+        subnet_id = self.subnet_id
+        if not subnet_id:
+            try:
+                config = getattr(getattr(self, "ctx", None), "config", None)
+                subnet_id = str(getattr(config, "subnet_id", "") or "").strip()
+            except Exception:
+                subnet_id = ""
+        return (self.base / "dev" / subnet_id).resolve()
 
     def dev_skills_dir(self) -> Path:
         return (self.dev_dir() / "skills").resolve()
