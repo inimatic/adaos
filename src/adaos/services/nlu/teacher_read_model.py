@@ -234,7 +234,12 @@ async def _read_yjs_context_snapshot_async(webspace_id: str) -> dict[str, Any]:
 
     ws = _webspace_id(webspace_id)
     try:
-        async with async_get_ydoc(ws, read_only=True, load_mark_roots=["ui", "data", "registry"]) as ydoc:
+        async with async_get_ydoc(
+            ws,
+            read_only=True,
+            prefer_live_room=True,
+            load_mark_roots=["ui", "data", "registry"],
+        ) as ydoc:
             ui_map = ydoc.get_map("ui")
             data_map = ydoc.get_map("data")
             registry_map = ydoc.get_map("registry")

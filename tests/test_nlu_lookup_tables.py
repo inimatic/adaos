@@ -84,3 +84,42 @@ async def test_desktop_lookup_tables_overlay_live_yjs_registry() -> None:
         assert "Kitchen Display" in lookup_values(payload, "node_ref")
     finally:
         reset_ystore_for_webspace(webspace_id)
+
+
+@pytest.mark.anyio
+async def test_desktop_lookup_tables_async_prefers_live_room(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu_lookup_tables import collect_desktop_lookup_tables_async
+    import adaos.services.yjs.doc as ydoc_module
+
+    calls: list[dict[str, object]] = []
+
+    class _FakeYDoc:
+        def get_map(self, name: str):
+            if name == "ui":
+                return {"application": {"modals": {}}, "current_scenario": "web_desktop"}
+            if name == "registry":
+                return {"merged": {"modals": {}}}
+            if name == "data":
+                return {"catalog": {"apps": []}, "installed": {"apps": []}, "nodes": {}}
+            return {}
+
+    class _FakeAsyncDoc:
+        async def __aenter__(self):
+            return _FakeYDoc()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    def _fake_async_get_ydoc(*_args, **kwargs):
+        calls.append(dict(kwargs))
+        return _FakeAsyncDoc()
+
+    monkeypatch.setattr(ydoc_module, "async_get_ydoc", _fake_async_get_ydoc)
+
+    payload = await collect_desktop_lookup_tables_async(get_ctx(), webspace_id="desktop", include_live=True)
+
+    assert payload["live_overlay"] == {"attempted": True, "ok": True}
+    assert calls
+    assert calls[0]["read_only"] is True
+    assert calls[0]["prefer_live_room"] is True

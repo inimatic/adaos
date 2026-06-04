@@ -108,6 +108,52 @@ async def test_ui_runtime_diagnostics_preserve_unattributed_fallback_log_name(tm
         clear_ctx()
 
 
+@pytest.mark.asyncio
+async def test_ui_runtime_diagnostics_drop_noisy_runtime_debug_webio_events(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    set_ctx(SimpleNamespace(paths=paths, skill_ctx=InprocSkillContext()))
+    try:
+        result = await ingest_ui_runtime_diagnostics(
+            {
+                "webspace_id": "desktop",
+                "events": [
+                    {
+                        "level": "debug",
+                        "source": "ui.runtime_debug",
+                        "code": "webio.event",
+                        "message": "webio.event",
+                        "details": {
+                            "runtime_debug": {
+                                "kind": "webio.event",
+                                "session_id": "brs-1",
+                                "tab_id": "tab-1",
+                                "details": {
+                                    "receiver": "slideshow_skill.session",
+                                    "topic": "webio.stream.desktop.slideshow_skill.session",
+                                },
+                            }
+                        },
+                    },
+                    {
+                        "level": "debug",
+                        "source": "ui.runtime_debug",
+                        "code": "runtime_debug.cursor",
+                        "message": "runtime_debug.cursor",
+                        "details": {"runtime_debug_cursor": {"latest_seq": 42}},
+                    },
+                ],
+            }
+        )
+        assert result["accepted"] == 1
+
+        log_path = paths.skill_ui_diagnostics_log_path("__ui_runtime__")
+        lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        assert [line["code"] for line in lines] == ["runtime_debug.cursor"]
+    finally:
+        clear_ctx()
+
+
 def test_skill_context_logs_route_to_skill_runtime_log_not_platform_log(tmp_path: Path) -> None:
     paths = PathProvider(tmp_path)
     paths.ensure_tree()

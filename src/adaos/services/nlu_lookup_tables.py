@@ -538,7 +538,12 @@ async def collect_desktop_lookup_tables_async(
         try:
             from adaos.services.yjs.doc import async_get_ydoc
 
-            async with async_get_ydoc(ws, read_only=True, load_mark_roots=["ui", "registry", "data"]) as ydoc:
+            async with async_get_ydoc(
+                ws,
+                read_only=True,
+                prefer_live_room=True,
+                load_mark_roots=["ui", "registry", "data"],
+            ) as ydoc:
                 _collect_from_live_doc(buckets, ydoc, source="ydoc")
             live_overlay["ok"] = True
         except Exception as exc:

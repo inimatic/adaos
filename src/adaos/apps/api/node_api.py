@@ -1741,7 +1741,7 @@ async def _describe_yjs_materialization(
             rebuild_state=rebuild_state,
         )
     try:
-        async with async_read_ydoc(target_webspace_id, prefer_live_room=False) as ydoc:
+        async with async_read_ydoc(target_webspace_id, prefer_live_room=True) as ydoc:
             ui_map = ydoc.get_map("ui")
             data_map = ydoc.get_map("data")
             registry_map = ydoc.get_map("registry")
@@ -1898,7 +1898,7 @@ async def _describe_yjs_materialization(
 async def _read_yjs_materialization_snapshot(webspace_id: str, *, scope: str = "essential") -> dict[str, Any]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     normalized_scope = str(scope or "").strip().lower() or "essential"
-    async with async_read_ydoc(target_webspace_id, prefer_live_room=False) as ydoc:
+    async with async_read_ydoc(target_webspace_id, prefer_live_room=True) as ydoc:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         registry_map = ydoc.get_map("registry")

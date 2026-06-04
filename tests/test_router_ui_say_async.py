@@ -22,6 +22,45 @@ from adaos.services.router.service import RouterService
 pytestmark = pytest.mark.anyio
 
 
+async def test_webio_receiver_metadata_prefers_live_room(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Doc:
+        def get_map(self, name: str) -> dict[str, object]:
+            assert name == "data"
+            return {
+                "webio": {
+                    "receivers": {
+                        "telemetry_feed": {
+                            "budget": {"maxPayloadBytes": 1024},
+                            "route": {"owner": "skill:telemetry_skill"},
+                        }
+                    }
+                }
+            }
+
+    class _Session:
+        async def __aenter__(self) -> _Doc:
+            return _Doc()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    def _async_get_ydoc(*args: object, **kwargs: object) -> _Session:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _Session()
+
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", _async_get_ydoc)
+
+    metadata = await router_service_module._read_webio_receiver_metadata("desktop", "telemetry_feed")
+
+    assert metadata["budget"] == {"maxPayloadBytes": 1024}
+    assert captured["kwargs"]["read_only"] is True
+    assert captured["kwargs"]["prefer_live_room"] is True
+    assert captured["kwargs"]["load_mark_roots"] == ["data"]
+
+
 async def test_ui_say_handler_is_async() -> None:
     """
     ui.say can be emitted during boot (e.g. greet_on_boot_skill). The router must not

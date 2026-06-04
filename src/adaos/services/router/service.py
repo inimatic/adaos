@@ -219,7 +219,12 @@ def webio_stream_guard_snapshot(
 
 async def _read_webio_receiver_metadata(webspace_id: str, receiver: str) -> dict[str, Any]:
     try:
-        async with async_get_ydoc(webspace_id, read_only=True, load_mark_roots=["data"]) as ydoc:
+        async with async_get_ydoc(
+            webspace_id,
+            read_only=True,
+            prefer_live_room=True,
+            load_mark_roots=["data"],
+        ) as ydoc:
             data = _as_dict(ydoc.get_map("data"))
             webio = data.get("webio") if isinstance(data.get("webio"), dict) else {}
             receivers = webio.get("receivers") if isinstance(webio.get("receivers"), dict) else {}
