@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 from typing import Any, Mapping
 
@@ -17,6 +19,19 @@ _SYSTEM_ACTION_INTENTS = {
     "desktop.reload_webspace": "host.desktop.webspace.reload",
     "desktop.reset_webspace": "host.desktop.webspace.reset",
 }
+
+
+def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = os.getenv(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except Exception:
+        value = float(default)
+    return max(float(min_value), min(float(max_value), value))
+
+
+def _action_preview_timeout_s() -> float:
+    return _float_env("ADAOS_NLU_TEACHER_ACTION_PREVIEW_TIMEOUT_S", 4.0, min_value=0.2, max_value=60.0)
 _PROMPT_INJECTION_MARKERS = (
     "ignore previous",
     "ignore all previous",
@@ -286,13 +301,32 @@ async def _run_action_preview_async(
     params = _action_preview_params(candidate, intent)
 
     if action_id or host_action or intent in _SYSTEM_ACTION_INTENTS:
-        preview = await preview_interface_action_async(
-            webspace_id=webspace_id,
-            action_id=action_id,
-            intent=intent if not action_id else None,
-            host_action=host_action,
-            params=params,
-        )
+        try:
+            preview = await asyncio.wait_for(
+                preview_interface_action_async(
+                    webspace_id=webspace_id,
+                    action_id=action_id,
+                    intent=intent if not action_id else None,
+                    host_action=host_action,
+                    params=params,
+                ),
+                timeout=_action_preview_timeout_s(),
+            )
+        except asyncio.TimeoutError:
+            preview = {
+                "ok": False,
+                "status": "timeout",
+                "reason": "action_preview_timeout",
+                "params": params,
+            }
+        except Exception as exc:
+            preview = {
+                "ok": False,
+                "status": "error",
+                "reason": "action_preview_error",
+                "error": str(exc),
+                "params": params,
+            }
         return preview, [_check("action_preview", bool(preview.get("ok")), str(preview.get("status") or "unknown"))]
 
     if action_class in {"interface_action", "skill_action", "endpoint_action"}:

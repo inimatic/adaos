@@ -141,6 +141,9 @@ Useful optional env vars on hub:
 - `ADAOS_NLU_LLM_RATE_WINDOW_S=30`
 - `ADAOS_NLU_LLM_RATE_MAX_PER_WINDOW=6`
 - `ADAOS_NLU_LLM_REPEAT_SUPPRESS_TTL_S=20`
+- `ADAOS_NLU_TEACHER_ACTION_PREVIEW_TIMEOUT_S=4`
+- `ADAOS_NLU_TEACHER_REGEX_APPLY_TIMEOUT_S=8`
+- `ADAOS_NLU_TEACHER_CONFIRM_APPLY_TIMEOUT_S=12`
 - `ADAOS_NLU_TEACHER_DEFERRED_MAX=250`
 - `ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT=1`
 - `ADAOS_ROOT_NLU_AUTHORING_INCLUDE_LIVE=1`
@@ -409,7 +412,11 @@ durable Apply:
    candidate apply/regex verification records `understanding.acquired` when
    the planned intent matches. If the candidate side-effect policy allows
    auto-dispatch, AdaOS continues through the regular `nlp.intent.detected`
-   path so the user sees the requested UI/action behavior.
+   path so the user sees the requested UI/action behavior. Positive
+   confirmation waits for Apply with a bounded timeout and then rereads the
+   candidate state; a candidate that remains `apply_requested` becomes
+   `apply_failed` with `candidate.apply_rejected` evidence and visible Voice
+   feedback.
 5. If the user answers `нет`, AdaOS marks the candidate `rejected`, writes
    `confirmation.rejected`, and starts one retry LLM pass with the rejected
    candidate in prompt context. If the user included a correction such as
@@ -432,6 +439,16 @@ question again before using the generic not-understood fallback. This keeps an
 unresolved hypothesis actionable when Root/OpenAI timed out, duplicate
 suppression skipped a new candidate, or descriptor aliases were fixed after an
 earlier Apply rejection.
+
+`apply_requested` is not reconfirmable. It means the user already accepted the
+hypothesis and AdaOS is applying it. While it is fresh, a repeated phrase gets
+in-flight feedback; when it is stale or Apply returns without a terminal state,
+Teacher marks it `apply_failed` instead of asking the same question again.
+
+For regex candidates, candidate Apply reads the candidate snapshot and then
+releases the YJS document before async validation and regex persistence. This
+keeps Voice confirmation Apply from deadlocking on nested webspace reads or
+writes.
 
 Late duplicate `candidate.proposed` events for the same voice request do not
 reopen the same confirmation question after a confirmation is already awaiting

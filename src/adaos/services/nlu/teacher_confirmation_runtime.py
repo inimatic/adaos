@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 import time
 from collections.abc import Iterable
@@ -20,7 +22,7 @@ _log = logging.getLogger("adaos.nlu.teacher.confirmation")
 _MAX_CONFIRMATIONS = 50
 _CONFIRMATION_TTL_S = 15 * 60
 _CONSUMED_CONFIRMATION_ANSWER_TTL_S = 15.0
-_RECONFIRMABLE_CANDIDATE_STATUSES = {"pending", "validation_failed", "apply_requested"}
+_RECONFIRMABLE_CANDIDATE_STATUSES = {"pending", "validation_failed"}
 _YES_RE = re.compile(r"^\s*(да|ага|угу|ок|okay|yes|y|верно|подтверждаю|применяй|открой)\b", re.I | re.U)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|n|не\s+то|неверно|ошибка)\b", re.I | re.U)
 _FIRST_ANSWERS = {
@@ -46,6 +48,24 @@ _SECOND_ANSWERS = {
     "вариант два",
 }
 _CONSUMED_CONFIRMATION_ANSWERS: dict[tuple[str, str], float] = {}
+
+
+def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = os.getenv(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except Exception:
+        value = float(default)
+    return max(float(min_value), min(float(max_value), value))
+
+
+def _confirm_apply_timeout_s() -> float:
+    return _float_env("ADAOS_NLU_TEACHER_CONFIRM_APPLY_TIMEOUT_S", 12.0, min_value=1.0, max_value=120.0)
+
+
+def _apply_requested_inflight_s() -> float:
+    default = max(30.0, _confirm_apply_timeout_s() * 2.0)
+    return _float_env("ADAOS_NLU_TEACHER_APPLY_REQUESTED_INFLIGHT_S", default, min_value=2.0, max_value=600.0)
 
 
 def _nlu_confirmation_write_meta():
@@ -126,6 +146,51 @@ def _is_reconfirmable_voice_regex_candidate(candidate: Mapping[str, Any], text: 
         and bool(_candidate_id(candidate))
         and _candidate_matches_request_text(candidate, text)
     )
+
+
+def _is_apply_requested_voice_regex_candidate(candidate: Mapping[str, Any], text: str) -> bool:
+    return (
+        candidate.get("kind") == "regex_rule"
+        and str(candidate.get("status") or "").strip() == "apply_requested"
+        and bool(_candidate_id(candidate))
+        and _candidate_matches_request_text(candidate, text)
+    )
+
+
+def _candidate_status_marker(candidate: Mapping[str, Any]) -> float:
+    for key in ("apply_requested_at", "updated_at", "answered_at", "ts"):
+        try:
+            value = float(candidate.get(key) or 0.0)
+        except Exception:
+            value = 0.0
+        if value > 0:
+            return value
+    return 0.0
+
+
+def _apply_failure_validation(*, webspace_id: str, candidate_id: str, reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "status": "blocked",
+        "webspace_id": webspace_id,
+        "candidate_id": candidate_id,
+        "checks": [
+            {
+                "name": "candidate_apply",
+                "ok": False,
+                "status": "failed",
+                "reason": reason,
+            }
+        ],
+        "failed_checks": [
+            {
+                "name": "candidate_apply",
+                "ok": False,
+                "status": "failed",
+                "reason": reason,
+            }
+        ],
+    }
 
 
 def _clarification_from_confirmation(confirmation: Mapping[str, Any]) -> dict[str, Any]:
@@ -331,6 +396,49 @@ async def _write_teacher(webspace_id: str, mutator) -> dict[str, Any]:
             return dict(teacher)
 
 
+async def _read_candidate(webspace_id: str, candidate_id: str) -> dict[str, Any] | None:
+    if not candidate_id:
+        return None
+    teacher = await _read_teacher(webspace_id)
+    for item in _as_list(teacher.get("candidates")):
+        if str(item.get("id") or "").strip() == candidate_id:
+            return dict(item)
+    return None
+
+
+async def _reject_candidate_apply(
+    *,
+    webspace_id: str,
+    candidate_id: str,
+    reason: str,
+    meta: Mapping[str, Any],
+    request_id: str = "",
+    request_text: str = "",
+) -> None:
+    validation = _apply_failure_validation(webspace_id=webspace_id, candidate_id=candidate_id, reason=reason)
+    try:
+        from adaos.services.nlu.candidates_runtime import reject_candidate_apply  # local import to avoid cycles
+
+        await reject_candidate_apply(
+            webspace_id=webspace_id,
+            candidate_id=candidate_id,
+            reason=reason,
+            meta=meta,
+            request_id=request_id or None,
+            request_text=request_text,
+            validation=validation,
+            candidate_patch={
+                "validation": dict(validation),
+                "validated_at": time.time(),
+                "status": "apply_failed",
+                "apply_failed_at": time.time(),
+                "status_reason": reason,
+            },
+        )
+    except Exception:
+        _log.warning("failed to mark NLU Teacher candidate apply failure webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+
+
 async def _append_confirmation(webspace_id: str, confirmation: dict[str, Any]) -> None:
     candidate_id = str(confirmation.get("candidate_id") or "").strip()
 
@@ -383,6 +491,8 @@ async def _patch_confirmation(
                 if next_item.get("id") == candidate_id:
                     next_item["status"] = candidate_status
                     next_item["status_reason"] = "voice_confirmation"
+                    if candidate_status == "apply_requested":
+                        next_item["apply_requested_at"] = time.time()
                     if isinstance(feedback, Mapping):
                         next_item["feedback_status"] = "rejected"
                         next_item["feedback_evidence"] = dict(feedback)
@@ -849,6 +959,40 @@ async def request_existing_candidate_confirmation(
         _log.debug("failed to read teacher state for existing confirmation webspace=%s", webspace_id, exc_info=True)
         return False
 
+    apply_requested = [
+        candidate
+        for candidate in _as_list(teacher.get("candidates"))
+        if _is_apply_requested_voice_regex_candidate(candidate, request_text)
+    ]
+    if apply_requested:
+        apply_requested.sort(key=lambda item: _candidate_status_marker(item), reverse=True)
+        candidate = apply_requested[0]
+        marker = _candidate_status_marker(candidate)
+        age_s = time.time() - marker if marker > 0 else _apply_requested_inflight_s() + 1.0
+        candidate_id = _candidate_id(candidate)
+        candidate_request_id = _request_id(candidate)
+        effective_request_id = str(request_id or candidate_request_id or "").strip()
+        if age_s <= _apply_requested_inflight_s():
+            try:
+                await _emit_chat(
+                    webspace_id,
+                    "Для такого обращения правило NLU уже принято и сейчас применяется. Подождите несколько секунд и повторите запрос для проверки.",
+                    merged_meta,
+                )
+                return True
+            except Exception:
+                _log.warning("failed to emit in-flight apply feedback webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+                return True
+        await _reject_candidate_apply(
+            webspace_id=webspace_id,
+            candidate_id=candidate_id,
+            reason="candidate_apply_stale",
+            meta=merged_meta,
+            request_id=effective_request_id,
+            request_text=request_text,
+        )
+        return True
+
     candidates = [
         candidate
         for candidate in _as_list(teacher.get("candidates"))
@@ -1043,28 +1187,56 @@ async def _on_voice_chat_user(evt: Any) -> None:
                 meta=merged_meta,
             ),
         )
-        await _emit_chat(
-            webspace_id,
-            "Принял. Применяю новое правило NLU; после этого повторите запрос для проверки.",
-            merged_meta,
-        )
+        apply_meta = {
+            **merged_meta,
+            "nlu_teacher_confirmation_id": confirmation_id,
+            "nlu_teacher_confirmation_answer": "yes",
+        }
+        await _emit_chat(webspace_id, "Принял. Применяю новое правило NLU.", merged_meta)
         try:
             from adaos.services.nlu.candidates_runtime import _on_candidate_apply  # local import to avoid cycles
 
-            await _on_candidate_apply(
-                {
-                    "webspace_id": webspace_id,
-                    "candidate_id": candidate_id,
-                    "target": confirmation.get("target") if isinstance(confirmation.get("target"), Mapping) else None,
-                    "_meta": {
-                        **merged_meta,
-                        "nlu_teacher_confirmation_id": confirmation_id,
-                        "nlu_teacher_confirmation_answer": "yes",
-                    },
-                }
+            await asyncio.wait_for(
+                _on_candidate_apply(
+                    {
+                        "webspace_id": webspace_id,
+                        "candidate_id": candidate_id,
+                        "target": confirmation.get("target") if isinstance(confirmation.get("target"), Mapping) else None,
+                        "_meta": apply_meta,
+                    }
+                ),
+                timeout=_confirm_apply_timeout_s(),
+            )
+            candidate_after = await _read_candidate(webspace_id, candidate_id)
+            status_after = str((candidate_after or {}).get("status") or "").strip()
+            if status_after == "apply_requested":
+                await _reject_candidate_apply(
+                    webspace_id=webspace_id,
+                    candidate_id=candidate_id,
+                    reason="candidate_apply_no_terminal_state",
+                    meta=apply_meta,
+                    request_id=request_id,
+                    request_text=request_text,
+                )
+        except asyncio.TimeoutError:
+            await _reject_candidate_apply(
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="voice_confirmation_apply_timeout",
+                meta=apply_meta,
+                request_id=request_id,
+                request_text=request_text,
             )
         except Exception:
             _log.warning("failed to apply confirmed NLU Teacher candidate webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+            await _reject_candidate_apply(
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="voice_confirmation_apply_error",
+                meta=apply_meta,
+                request_id=request_id,
+                request_text=request_text,
+            )
         return
 
     if attempt < 1:
