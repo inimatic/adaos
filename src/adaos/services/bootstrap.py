@@ -1241,6 +1241,8 @@ class BootstrapService:
         self._hub_root_nc: Any = None
         # Best-effort route relay reset hook installed by the hub-route runtime once subscriptions are live.
         self._hub_root_route_reset: Any = None
+        self._hub_root_bridge_task_name = "adaos-nats-io-bridge"
+        self._hub_root_bridge_factory: Callable[[], Awaitable[Any]] | None = None
 
     def _find_live_boot_task(self, task_name: str) -> asyncio.Task | None:
         live_tasks: list[asyncio.Task] = []
@@ -1262,6 +1264,46 @@ class BootstrapService:
         task = asyncio.create_task(coro_factory(), name=task_name)
         self._boot_tasks.append(task)
         return task
+
+    def _start_hub_root_bridge_task(self, coro_factory: Callable[[], Awaitable[Any]]) -> asyncio.Task:
+        self._hub_root_bridge_factory = coro_factory
+        return self._start_boot_task_once(self._hub_root_bridge_task_name, coro_factory)
+
+    def _ensure_hub_root_bridge_task(self) -> dict[str, Any]:
+        factory = self._hub_root_bridge_factory
+        task_name = self._hub_root_bridge_task_name
+        if not callable(factory):
+            return {
+                "attempted": False,
+                "started": False,
+                "task_name": task_name,
+                "reason": "bridge_factory_unavailable",
+            }
+        existing = self._find_live_boot_task(task_name)
+        if existing is not None:
+            return {
+                "attempted": True,
+                "started": False,
+                "task_name": task_name,
+                "state": "already_running",
+            }
+        try:
+            task = asyncio.create_task(factory(), name=task_name)
+            self._boot_tasks.append(task)
+            return {
+                "attempted": True,
+                "started": True,
+                "task_name": task_name,
+                "state": "started",
+            }
+        except Exception as exc:
+            return {
+                "attempted": True,
+                "started": False,
+                "task_name": task_name,
+                "state": "failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
     def is_ready(self) -> bool:
         return self._ready.is_set()
@@ -1331,6 +1373,7 @@ class BootstrapService:
         tr = str(transport or "").strip().lower() or None
         override = str(url_override or "").strip() or None
         close_diag: dict[str, Any] = {"attempted": False, "timeout": False, "forced_ws_close": False}
+        bridge_diag: dict[str, Any] = {"attempted": False, "started": False}
 
         def _safe_strategy() -> dict[str, Any]:
             try:
@@ -1435,11 +1478,32 @@ class BootstrapService:
                             pass
                 except Exception:
                     pass
+            try:
+                bridge_diag = self._ensure_hub_root_bridge_task()
+                if bridge_diag.get("started"):
+                    try:
+                        record_hub_root_transport_event(
+                            "bridge_rearmed",
+                            transport=tr,
+                            server=override,
+                            summary="manual hub-root reconnect rearmed bridge task",
+                            details=dict(bridge_diag),
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                bridge_diag = {
+                    "attempted": True,
+                    "started": False,
+                    "state": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             return {
                 "ok": True,
                 "requested": {"transport": tr, "url_override": override},
                 "strategy": _safe_strategy(),
                 "close": close_diag,
+                "bridge": bridge_diag,
             }
         except Exception as exc:
             return {
@@ -1447,6 +1511,7 @@ class BootstrapService:
                 "requested": {"transport": tr, "url_override": override},
                 "strategy": _safe_strategy(),
                 "close": close_diag,
+                "bridge": bridge_diag,
                 "error": f"{type(exc).__name__}: {exc}",
             }
 
@@ -10106,7 +10171,7 @@ class BootstrapService:
                                 delay = min(max(delay, 0.5), 2.0)
 
                 # TODO restore nats WS subscription
-                self._start_boot_task_once("adaos-nats-io-bridge", _nats_bridge_supervisor)
+                self._start_hub_root_bridge_task(_nats_bridge_supervisor)
         except Exception:
             try:
                 if os.getenv("HUB_NATS_VERBOSE", "0") == "1" or os.getenv("ADAOS_CLI_DEBUG", "0") == "1":
