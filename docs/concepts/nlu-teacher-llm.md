@@ -215,6 +215,11 @@ Teacher bridge classifies `nlp.intent.not_obtained.reason` before the LLM
 runtime receives a request. Low-confidence/no-intent outcomes are teachable NLU
 gaps; provider disabled/down/timeout/unresolved states are stored for
 diagnostics but skipped so the LLM does not create templates for outages.
+Timeout/failed transient provider outcomes are only skipped when they are the
+sole evidence. If another enabled stage already produced fallback/miss evidence,
+the request remains teachable and carries `provider_issue` warning evidence so
+the UI can distinguish "NLU gap with provider warning" from a hard provider
+outage.
 
 ## Target UI
 

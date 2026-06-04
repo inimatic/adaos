@@ -30,6 +30,8 @@ async def test_pipeline_routes_to_neural_when_flag_enabled(monkeypatch):
     assert payload["text"] == "непонятный запрос"
     assert payload["webspace_id"] == "ws1"
     assert payload["request_id"] == "rid1"
+    assert payload["_meta"]["nlu_pipeline"]["delegate_via"] == "neural"
+    assert payload["_meta"]["nlu_pipeline"]["active_stages"]["neural"] is True
     assert source == "nlu.pipeline"
 
 
@@ -90,6 +92,8 @@ async def test_pipeline_routes_to_rasa_when_flag_disabled(monkeypatch):
     assert payload["text"] == "another"
     assert payload["webspace_id"] == "ws2"
     assert payload["request_id"] == "rid2"
+    assert payload["_meta"]["nlu_pipeline"]["delegate_via"] == "rasa"
+    assert payload["_meta"]["nlu_pipeline"]["active_stages"]["rasa"] is True
     assert source == "nlu.pipeline"
 
 

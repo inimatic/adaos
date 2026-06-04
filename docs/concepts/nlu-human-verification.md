@@ -21,6 +21,9 @@ Verifiable today:
   and runtime regex cache invalidation.
 - Root MCP read-only phrase check through `nlu_authoring.check_phrase` / Codex
   bridge `check_nlu_phrase`.
+- Teacher bridge evidence that separates hard provider/stage outages from
+  teachable NLU gaps, including transient provider warnings when another active
+  engine already produced miss evidence.
 
 Not yet verifiable through UI:
 
@@ -232,8 +235,12 @@ Expected current behavior:
 
 Known UI gap:
 
-- There is no Check phrase field yet.
-- There is no first-class ranking/entities/trace panel yet.
+- Check phrase is available through the current Teacher UI/backend action
+  slice, but the product UI still lacks a first-class ranking/entities/trace
+  panel.
+- Provider-vs-NLU-gap evidence is stored in Teacher events/classification today;
+  the UI still needs a dedicated visual summary for descriptor gaps,
+  unsupported actions, ambiguous entities, and missing capabilities.
 - Correct/Fix/Save example are not implemented as operator controls yet.
 
 ## 5. Teacher UI Acceptance Criteria
