@@ -7703,7 +7703,7 @@ async def _on_webspace_go_home(evt: Dict[str, Any]) -> None:
     webspace_id = _webspace_id(payload)
     if not webspace_id:
         return
-    wait_for_rebuild = bool(payload.get("wait_for_rebuild")) if "wait_for_rebuild" in payload else True
+    wait_for_rebuild = bool(payload.get("wait_for_rebuild")) if "wait_for_rebuild" in payload else False
     await go_home_webspace(webspace_id, wait_for_rebuild=wait_for_rebuild)
 
 

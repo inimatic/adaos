@@ -5,7 +5,7 @@ import time
 from typing import Any, Iterable, Mapping
 
 from adaos.domain import ProjectionRecord, normalize_projection_record, projection_fingerprint
-from adaos.services.projection_demand import demanded_projection_keys
+from adaos.services.projection_demand import demanded_projection_keys, resolve_projection_demand_stale_after_s
 from adaos.services.projection_records import list_projection_records, projection_record_registry_snapshot
 PROJECTION_RECORDS_YJS_KEY = "projectionRecords"
 PROJECTION_RECORDS_YJS_PATH = f"data/{PROJECTION_RECORDS_YJS_KEY}"
@@ -62,10 +62,20 @@ def _select_records(
     webspace_id: str,
     projection_keys: Iterable[Any] | None = None,
     demanded_only: bool = False,
+    include_stale: bool = False,
+    stale_after_s: float | None = None,
+    now: float | None = None,
 ) -> list[ProjectionRecord]:
     requested = _projection_key_set(projection_keys)
     if demanded_only:
-        demanded = set(demanded_projection_keys(webspace_id=webspace_id))
+        demanded = set(
+            demanded_projection_keys(
+                webspace_id=webspace_id,
+                include_stale=include_stale,
+                stale_after_s=stale_after_s,
+                now=now,
+            )
+        )
         requested = demanded if requested is None else requested.intersection(demanded)
     records = list_projection_records(webspace_id=webspace_id)
     if requested is not None:
@@ -159,14 +169,20 @@ def build_projection_records_yjs_payload(
     webspace_id: str | None = None,
     projection_keys: Iterable[Any] | None = None,
     demanded_only: bool = False,
+    include_stale: bool = False,
+    stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     target_webspace_id = _webspace_token(webspace_id)
     ts = float(now if now is not None else time.time())
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     records = _select_records(
         webspace_id=target_webspace_id,
         projection_keys=projection_keys,
         demanded_only=demanded_only,
+        include_stale=include_stale,
+        stale_after_s=resolved_stale_after_s,
+        now=ts,
     )
     items = [record.to_dict() for record in records]
     by_key = {str(record.meta.projection_key): record.to_dict() for record in records}
@@ -185,6 +201,8 @@ def build_projection_records_yjs_payload(
         "error_total": sum(1 for record in records if record.status == "error"),
         "unavailable_total": sum(1 for record in records if record.status == "unavailable"),
         "demanded_only": bool(demanded_only),
+        "include_stale": bool(include_stale),
+        "stale_after_s": resolved_stale_after_s,
         "projection_keys": sorted(by_key),
         "node_ids": node_ids,
         "records": by_key,
@@ -326,6 +344,8 @@ async def materialize_projection_records_to_yjs(
     webspace_id: str | None = None,
     projection_keys: Iterable[Any] | None = None,
     demanded_only: bool = False,
+    include_stale: bool = False,
+    stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     target_webspace_id = _webspace_token(webspace_id)
@@ -333,6 +353,8 @@ async def materialize_projection_records_to_yjs(
         webspace_id=target_webspace_id,
         projection_keys=projection_keys,
         demanded_only=demanded_only,
+        include_stale=include_stale,
+        stale_after_s=stale_after_s,
         now=now,
     )
     changed = {"value": False}
@@ -367,6 +389,8 @@ async def materialize_projection_records_to_yjs(
         "yjs_path": PROJECTION_RECORDS_YJS_PATH,
         "schema": PROJECTION_RECORDS_YJS_SCHEMA,
         "demanded_only": bool(demanded_only),
+        "include_stale": bool(payload["include_stale"]),
+        "stale_after_s": payload["stale_after_s"],
         "projection_keys": list(payload["projection_keys"]),
         "node_ids": list(payload["node_ids"]),
         "envelope_present": True,

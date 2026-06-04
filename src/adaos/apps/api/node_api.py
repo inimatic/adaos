@@ -5,10 +5,12 @@ import json
 import logging
 import gc
 import os
+import sys
 import time
 import threading
 import tracemalloc
 import uuid
+from collections import Counter
 from functools import partial
 from typing import Any, Mapping, Optional
 
@@ -90,6 +92,7 @@ from adaos.services.status.guard_cards import guard_status_cards_from_runtime
 from adaos.services.projection_demand import (
     delete_client_subscription_record,
     projection_demand_snapshot,
+    resolve_projection_demand_stale_after_s,
     touch_client_subscription_record,
     write_client_subscription_record,
 )
@@ -2187,13 +2190,15 @@ class ProjectionRecordsYjsMaterializeRequest(BaseModel):
 
 class ProjectionDemandYjsMaterializeRequest(BaseModel):
     webspace_id: str | None = None
+    include_stale: bool = False
+    stale_after_s: float | None = None
     now: float | None = None
 
 
 class ProjectionDemandYjsRestoreRequest(BaseModel):
     webspace_id: str | None = None
     include_hidden: bool = True
-    include_stale: bool = True
+    include_stale: bool = False
     stale_after_s: float | None = None
     now: float | None = None
 
@@ -2388,6 +2393,8 @@ async def node_projection_demand_yjs_materialize(
     request_payload = payload or ProjectionDemandYjsMaterializeRequest()
     return await materialize_projection_demand_to_yjs(
         webspace_id=_coerce_node_webspace_id(request_payload.webspace_id or webspace_id),
+        include_stale=request_payload.include_stale,
+        stale_after_s=resolve_projection_demand_stale_after_s(request_payload.stale_after_s),
         now=request_payload.now,
     )
 
@@ -2414,10 +2421,11 @@ async def node_projection_demand(
     stale_after_s: float | None = None,
 ) -> dict[str, Any]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     return projection_demand_snapshot(
         webspace_id=target_webspace_id,
         include_stale=include_stale,
-        stale_after_s=stale_after_s,
+        stale_after_s=resolved_stale_after_s,
     )
 
 
@@ -2551,7 +2559,7 @@ async def node_projection_records_browser_cache(
     session_id: str | None = None,
     projection_keys: list[str] | None = Query(default=None),
     include_hidden: bool = True,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Any:
@@ -2563,7 +2571,7 @@ async def node_projection_records_browser_cache(
         projection_keys=projection_keys,
         include_hidden=include_hidden,
         include_stale=include_stale,
-        stale_after_s=stale_after_s,
+        stale_after_s=resolve_projection_demand_stale_after_s(stale_after_s),
     )
     etag = str(payload.get("etag") or "")
     headers = {"Cache-Control": "no-cache", "ETag": etag}
@@ -2663,7 +2671,8 @@ async def node_projection_dispatcher_core_skill_contract(
     webspace_id: str | None = None,
     projection_keys: list[str] | None = Query(default=None),
     include_hidden: bool = True,
-    include_stale: bool = True,
+    include_stale: bool = False,
+    stale_after_s: float | None = None,
 ) -> dict[str, Any]:
     _ensure_projection_runtime_handlers()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -2672,6 +2681,7 @@ async def node_projection_dispatcher_core_skill_contract(
         projection_keys=projection_keys,
         include_hidden=include_hidden,
         include_stale=include_stale,
+        stale_after_s=resolve_projection_demand_stale_after_s(stale_after_s),
     )
 
 
@@ -2705,7 +2715,7 @@ async def node_projection_dispatcher_dispatch(payload: ProjectionDispatchRequest
 @router.get("/projection-diagnostics", dependencies=[Depends(require_token)])
 async def node_projection_diagnostics(
     webspace_id: str | None = None,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     include_yjs_cache: bool = False,
     materialize_yjs_cache: bool = False,
@@ -2731,7 +2741,7 @@ async def node_projection_diagnostics(
     diagnostics = projection_operator_diagnostics(
         webspace_id=target_webspace_id,
         include_stale=include_stale,
-        stale_after_s=stale_after_s,
+        stale_after_s=resolve_projection_demand_stale_after_s(stale_after_s),
         yjs_cache=yjs_cache,
     )
     if refreshes:
@@ -3053,6 +3063,153 @@ async def node_memory_status() -> dict[str, Any]:
             "tracemalloc_peak_bytes": traced_peak,
         },
         "errors": {"psutil": psutil_error} if psutil_error else {},
+    }
+
+
+def _memory_loaded_module_flags() -> dict[str, bool]:
+    modules = (
+        "torch",
+        "torchvision",
+        "faiss",
+        "numpy",
+        "PIL",
+        "cv2",
+        "vosk",
+        "av",
+        "y_py",
+        "sentence_transformers",
+    )
+    loaded = set(sys.modules)
+    return {name: any(mod == name or mod.startswith(f"{name}.") for mod in loaded) for name in modules}
+
+
+def _memory_top_gc_types(*, limit: int = 25) -> list[dict[str, Any]]:
+    counts: Counter[str] = Counter()
+    for obj in gc.get_objects():
+        typ = type(obj)
+        module = getattr(typ, "__module__", "") or ""
+        name = getattr(typ, "__qualname__", getattr(typ, "__name__", "")) or ""
+        counts[f"{module}.{name}" if module else name] += 1
+    return [{"type": key, "count": int(value)} for key, value in counts.most_common(max(1, int(limit)))]
+
+
+def _windows_virtual_memory_summary() -> dict[str, Any]:
+    if os.name != "nt":
+        return {"available": False, "reason": "non_windows"}
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        MEM_COMMIT = 0x1000
+        MEM_RESERVE = 0x2000
+        MEM_PRIVATE = 0x20000
+        MEM_MAPPED = 0x40000
+        MEM_IMAGE = 0x1000000
+        PAGE_NOACCESS = 0x01
+        PAGE_READONLY = 0x02
+        PAGE_READWRITE = 0x04
+        PAGE_EXECUTE_READ = 0x20
+        PAGE_EXECUTE_READWRITE = 0x40
+
+        class MEMORY_BASIC_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BaseAddress", ctypes.c_void_p),
+                ("AllocationBase", ctypes.c_void_p),
+                ("AllocationProtect", wintypes.DWORD),
+                ("__alignment1", wintypes.WORD),
+                ("RegionSize", ctypes.c_size_t),
+                ("State", wintypes.DWORD),
+                ("Protect", wintypes.DWORD),
+                ("Type", wintypes.DWORD),
+                ("__alignment2", wintypes.WORD),
+            ]
+
+        virtual_query = ctypes.windll.kernel32.VirtualQuery
+        mbi = MEMORY_BASIC_INFORMATION()
+        addr = 0
+        summary: Counter[tuple[str, str, str]] = Counter()
+        private_rw_sizes: Counter[int] = Counter()
+        private_rw_total = 0
+        private_commit_total = 0
+        private_rw_regions = 0
+
+        while addr < (1 << 47):
+            ret = virtual_query(ctypes.c_void_p(addr), ctypes.byref(mbi), ctypes.sizeof(mbi))
+            if not ret:
+                break
+            size = int(mbi.RegionSize)
+            state = int(mbi.State)
+            typ = int(mbi.Type)
+            protect = int(mbi.Protect)
+            state_name = "COMMIT" if state == MEM_COMMIT else "RESERVE" if state == MEM_RESERVE else hex(state)
+            type_name = (
+                "PRIVATE"
+                if typ == MEM_PRIVATE
+                else "MAPPED"
+                if typ == MEM_MAPPED
+                else "IMAGE"
+                if typ == MEM_IMAGE
+                else hex(typ)
+            )
+            if protect & PAGE_READWRITE:
+                protect_name = "RW"
+            elif protect & PAGE_EXECUTE_READWRITE:
+                protect_name = "XRW"
+            elif protect & PAGE_READONLY:
+                protect_name = "R"
+            elif protect & PAGE_EXECUTE_READ:
+                protect_name = "XR"
+            elif protect & PAGE_NOACCESS:
+                protect_name = "NOACCESS"
+            else:
+                protect_name = hex(protect)
+            summary[(state_name, type_name, protect_name)] += size
+            if state == MEM_COMMIT and typ == MEM_PRIVATE:
+                private_commit_total += size
+                if protect & PAGE_READWRITE:
+                    private_rw_total += size
+                    private_rw_regions += 1
+                    private_rw_sizes[size] += 1
+            addr = int(mbi.BaseAddress or addr) + size
+
+        return {
+            "available": True,
+            "private_commit_bytes": int(private_commit_total),
+            "private_rw_bytes": int(private_rw_total),
+            "private_rw_regions": int(private_rw_regions),
+            "top_regions": [
+                {"state": key[0], "type": key[1], "protect": key[2], "bytes": int(value)}
+                for key, value in summary.most_common(12)
+            ],
+            "top_private_rw_region_sizes": [
+                {"bytes": int(size), "count": int(count), "total_bytes": int(size * count)}
+                for size, count in private_rw_sizes.most_common(12)
+            ],
+        }
+    except Exception as exc:
+        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+@router.get("/memory/diagnostics", dependencies=[Depends(require_token)])
+async def node_memory_diagnostics() -> dict[str, Any]:
+    """Return bounded heap/native-memory diagnostics for debug builds."""
+    base = await node_memory_status()
+    errors: dict[str, str] = dict(base.get("errors") or {})
+    gc_types: list[dict[str, Any]] = []
+    try:
+        gc_types = _memory_top_gc_types()
+    except Exception as exc:
+        errors["gc_types"] = f"{type(exc).__name__}: {exc}"
+    return {
+        **base,
+        "diagnostics": {
+            "loaded_modules": _memory_loaded_module_flags(),
+            "allocated_blocks": int(getattr(sys, "getallocatedblocks", lambda: 0)()),
+            "gc_objects_total": len(gc.get_objects()),
+            "top_gc_types": gc_types,
+            "virtual_memory": _windows_virtual_memory_summary(),
+        },
+        "errors": errors,
     }
 
 

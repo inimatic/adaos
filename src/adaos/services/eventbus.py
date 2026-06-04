@@ -176,6 +176,8 @@ class LocalEventBus(EventBus):
     def __init__(self) -> None:
         self._subs: DefaultDict[str, List[Handler]] = defaultdict(list)
         self._lock = RLock()
+        self._owner_loop: asyncio.AbstractEventLoop | None = None
+        self._threadsafe_scheduled = 0
         self._pending_tasks: set[asyncio.Task[Any]] = set()
         self._pending_task_meta: dict[asyncio.Task[Any], tuple[str, str, float]] = {}
         self._pending_by_type: DefaultDict[str, int] = defaultdict(int)
@@ -562,6 +564,77 @@ class LocalEventBus(EventBus):
             snapshot["top_bounded_superseded_topics"],
         )
 
+    def _resolve_dispatch_loop(self) -> tuple[asyncio.AbstractEventLoop | None, bool]:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        with self._lock:
+            owner_loop = self._owner_loop
+            if owner_loop is not None and owner_loop.is_closed():
+                self._owner_loop = None
+                owner_loop = None
+            if owner_loop is None:
+                if current_loop is not None and not current_loop.is_closed():
+                    self._owner_loop = current_loop
+                    return current_loop, False
+                return None, False
+            if current_loop is owner_loop:
+                return owner_loop, False
+            return owner_loop, True
+
+    def _forget_owner_loop_locked(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._owner_loop is loop:
+            self._owner_loop = None
+
+    def _call_soon_threadsafe(self, loop: asyncio.AbstractEventLoop, callback: Callable[[], None]) -> bool:
+        if loop.is_closed():
+            with self._lock:
+                self._forget_owner_loop_locked(loop)
+            return False
+
+        with self._lock:
+            self._threadsafe_scheduled += 1
+
+        def _wrapped() -> None:
+            try:
+                callback()
+            except Exception:  # pragma: no cover - defensive logging
+                _log.warning("eventbus cross-thread dispatch failed", exc_info=True)
+            finally:
+                with self._lock:
+                    self._threadsafe_scheduled = max(0, int(self._threadsafe_scheduled) - 1)
+
+        try:
+            loop.call_soon_threadsafe(_wrapped)
+        except RuntimeError:
+            with self._lock:
+                self._threadsafe_scheduled = max(0, int(self._threadsafe_scheduled) - 1)
+                self._forget_owner_loop_locked(loop)
+            return False
+        return True
+
+    def _schedule_task_threadsafe(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        coro: Awaitable[Any],
+        handler: Handler,
+        event: Event,
+    ) -> bool:
+        def _create_task() -> None:
+            task = loop.create_task(_run_coro_with_timing(coro, handler, event))
+            self._track_task(task, handler, event)
+
+        return self._call_soon_threadsafe(loop, _create_task)
+
+    def _ensure_bounded_workers_threadsafe(self, loop: asyncio.AbstractEventLoop, topic_key: str) -> bool:
+        def _ensure_workers() -> None:
+            with self._lock:
+                self._ensure_bounded_workers_locked(loop, topic_key)
+
+        return self._call_soon_threadsafe(loop, _ensure_workers)
+
     def _track_task(self, task: asyncio.Task[Any], handler: Handler, event: Event) -> None:
         event_type = str(getattr(event, "type", "<unknown>") or "<unknown>")
         handler_name = _handler_label(handler)
@@ -657,7 +730,8 @@ class LocalEventBus(EventBus):
                 pending = [task for task in self._pending_tasks if not task.done()]
                 worker_pending = [task for task in self._bounded_worker_tasks if not task.done()]
                 bounded_queued = sum(len(queue) for queue in self._bounded_queues.values())
-            if not pending and not worker_pending and bounded_queued <= 0:
+                threadsafe_scheduled = int(self._threadsafe_scheduled)
+            if not pending and not worker_pending and bounded_queued <= 0 and threadsafe_scheduled <= 0:
                 return True
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -733,6 +807,7 @@ class LocalEventBus(EventBus):
 
     def publish(self, event: Event) -> None:
         event_type = str(getattr(event, "type", "<unknown>") or "<unknown>")
+        dispatch_loop, dispatch_threadsafe = self._resolve_dispatch_loop()
         with self._lock:
             self._incoming_total += 1
             self._incoming_by_type[event_type] += 1
@@ -741,7 +816,7 @@ class LocalEventBus(EventBus):
 
         if _log.isEnabledFor(logging.DEBUG):
             total_handlers = sum(
-                len(hs) for p, hs in pairs if p == "" or p == "*" or event.type.startswith(p)
+                len(hs) for p, hs in pairs if p == "" or p == "*" or event_type.startswith(p)
             )
             _log.debug(
                 "bus.publish type=%s source=%s handlers=%d",
@@ -751,7 +826,7 @@ class LocalEventBus(EventBus):
             )
 
         for prefix, handlers in pairs:
-            if prefix != "*" and prefix != "" and not event.type.startswith(prefix):
+            if prefix != "*" and prefix != "" and not event_type.startswith(prefix):
                 continue
             for h in handlers:
                 started = time.perf_counter()
@@ -767,10 +842,8 @@ class LocalEventBus(EventBus):
                     continue
 
                 if asyncio.iscoroutine(res):
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        # Если нет текущего цикла, fallback на asyncio.run (CLI/скрипты).
+                    loop = dispatch_loop
+                    if loop is None:
                         asyncio.run(res)
                     else:
                         topic_key = self._bounded_topic_key(event_type)
@@ -817,7 +890,10 @@ class LocalEventBus(EventBus):
                                     bounded_total = sum(len(items) for items in self._bounded_queues.values())
                                     if bounded_total > self._bounded_queue_peak:
                                         self._bounded_queue_peak = bounded_total
-                                    self._ensure_bounded_workers_locked(loop, topic_key)
+                                    if dispatch_threadsafe:
+                                        self._ensure_bounded_workers_threadsafe(loop, topic_key)
+                                    else:
+                                        self._ensure_bounded_workers_locked(loop, topic_key)
                                     self._maybe_log_pending_backlog_locked()
                             for superseded_coro in superseded_coros:
                                 try:
@@ -840,8 +916,13 @@ class LocalEventBus(EventBus):
                                     )
                                 continue
                         else:
-                            task = loop.create_task(_run_coro_with_timing(res, h, event))
-                            self._track_task(task, h, event)
+                            if dispatch_threadsafe:
+                                if self._schedule_task_threadsafe(loop, res, h, event):
+                                    continue
+                                asyncio.run(res)
+                            else:
+                                task = loop.create_task(_run_coro_with_timing(res, h, event))
+                                self._track_task(task, h, event)
                 else:
                     duration = time.perf_counter() - started
                     if duration >= _slow_handler_threshold_s("sync", 0.1):

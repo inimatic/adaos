@@ -64,6 +64,25 @@ def test_dispatcher_selects_only_demanded_projection_in_event_webspace() -> None
     ]
 
 
+def test_dispatcher_skips_stale_projection_demand_by_default() -> None:
+    _write_demand("desktop", "status-card:runtime")
+    event = Event(
+        type="node.status",
+        payload={"webspace_id": "desktop"},
+        source="test",
+        ts=400.0,
+    )
+
+    contexts = demanded_projection_refresh_contexts(event, now=400.0)
+    stale_contexts = demanded_projection_refresh_contexts(event, include_stale=True, now=400.0)
+
+    assert contexts == ()
+    assert [(item.webspace_id, item.projection_key) for item in stale_contexts] == [
+        ("desktop", "status-card:runtime")
+    ]
+    assert stale_contexts[0].consumers[0].stale is True
+
+
 def test_dispatcher_does_not_cross_webspace_when_explicit_scope_is_used() -> None:
     _write_demand("desktop", "status-card:runtime")
     _write_demand("dev", "status-card:runtime")

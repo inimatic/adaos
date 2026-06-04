@@ -19,6 +19,12 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu.teacher_events import append_event, make_event
+from adaos.services.nlu.teacher_governance import (
+    append_deferred_enrichment,
+    apply_candidate_governance,
+    ensure_teacher_policy_snapshot,
+    record_budget_event,
+)
 from adaos.services.reliability import (
     ReadinessStatus,
     observe_hub_root_integration_outbox,
@@ -2424,6 +2430,16 @@ async def _append_llm_log(webspace_id: str, entry: dict[str, Any]) -> None:
             logs = list(iter_mappings(teacher.get("llm_logs")))
             logs.append(entry)
             teacher["llm_logs"] = logs[-300:]
+            teacher = record_budget_event(
+                teacher,
+                status=str(entry.get("status") or "unknown"),
+                request_id=entry.get("request_id") if isinstance(entry.get("request_id"), str) else None,
+                model=entry.get("model") if isinstance(entry.get("model"), str) else None,
+                reason=entry.get("skip_reason") if isinstance(entry.get("skip_reason"), str) else None,
+                duration_s=entry.get("duration_s") if isinstance(entry.get("duration_s"), (int, float)) else None,
+                token_usage=entry.get("token_usage") if isinstance(entry.get("token_usage"), Mapping) else None,
+                cache=entry.get("cache") if isinstance(entry.get("cache"), Mapping) else None,
+            )
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
 
@@ -2435,14 +2451,33 @@ async def _patch_llm_log(webspace_id: str, *, log_id: str, patch: dict[str, Any]
             teacher = _teacher_obj(data_map)
             logs = list(iter_mappings(teacher.get("llm_logs")))
             next_logs: list[dict[str, Any]] = []
+            updated_log: dict[str, Any] | None = None
             for item in logs:
                 if item.get("id") == log_id:
                     updated = dict(item)
                     updated.update(patch)
+                    updated_log = dict(updated)
                     next_logs.append(updated)
                 else:
                     next_logs.append(item)
             teacher["llm_logs"] = next_logs[-300:]
+            if updated_log is not None and isinstance(patch.get("status"), str):
+                protocol = updated_log.get("protocol") if isinstance(updated_log.get("protocol"), Mapping) else {}
+                cache = protocol.get("cache") if isinstance(protocol.get("cache"), Mapping) else None
+                token_usage = updated_log.get("token_usage") if isinstance(updated_log.get("token_usage"), Mapping) else None
+                if token_usage is None and isinstance(updated_log.get("response"), Mapping):
+                    response = updated_log.get("response")
+                    token_usage = response.get("usage") if isinstance(response.get("usage"), Mapping) else None
+                teacher = record_budget_event(
+                    teacher,
+                    status=str(updated_log.get("status") or "unknown"),
+                    request_id=updated_log.get("request_id") if isinstance(updated_log.get("request_id"), str) else None,
+                    model=updated_log.get("model") if isinstance(updated_log.get("model"), str) else None,
+                    reason=updated_log.get("error") if isinstance(updated_log.get("error"), str) else None,
+                    duration_s=updated_log.get("duration_s") if isinstance(updated_log.get("duration_s"), (int, float)) else None,
+                    token_usage=token_usage if isinstance(token_usage, Mapping) else None,
+                    cache=cache,
+                )
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
 
@@ -2473,16 +2508,76 @@ async def _update_revision_by_request_id(
             return updated
 
 
-async def _append_candidate(webspace_id: str, candidate: dict[str, Any]) -> None:
+async def _append_candidate(webspace_id: str, candidate: dict[str, Any], *, meta: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    normalized = apply_candidate_governance(candidate, webspace_id=webspace_id, meta=meta)
     async with _nlu_llm_write_meta():
         async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = _teacher_obj(data_map)
             candidates = list(iter_mappings(teacher.get("candidates")))
-            candidates.append(candidate)
+            candidates.append(normalized)
             teacher["candidates"] = candidates[-200:]
+            teacher = ensure_teacher_policy_snapshot(teacher)
             with ydoc.begin_transaction() as txn:
                 data_map.set(txn, "nlu_teacher", teacher)
+    return normalized
+
+
+async def _record_deferred_enrichment(
+    webspace_id: str,
+    *,
+    request_id: str,
+    text: str,
+    reason: str,
+    error: str | None,
+    log_id: str | None,
+    meta: Mapping[str, Any],
+) -> None:
+    payload = {
+        "webspace_id": webspace_id,
+        "request_id": request_id,
+        "reason": reason,
+        "error": error,
+        "log_id": log_id,
+        "_meta": dict(meta),
+    }
+    try:
+        async with _nlu_llm_write_meta():
+            async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+                data_map = ydoc.get_map("data")
+                teacher = append_deferred_enrichment(
+                    _teacher_obj(data_map),
+                    request_id=request_id,
+                    text=text,
+                    reason=reason,
+                    error=error,
+                    log_id=log_id,
+                    meta=meta,
+                )
+                with ydoc.begin_transaction() as txn:
+                    data_map.set(txn, "nlu_teacher", teacher)
+    except Exception:
+        _log.debug("failed to record deferred NLU Teacher enrichment webspace=%s request_id=%s", webspace_id, request_id, exc_info=True)
+    try:
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=text,
+                kind="llm.deferred",
+                title="LLM enrichment deferred",
+                subtitle=reason,
+                raw=payload,
+                meta=meta,
+            ),
+        )
+    except Exception:
+        _log.debug("failed to append teacher event (llm.deferred) webspace=%s", webspace_id, exc_info=True)
+    try:
+        bus_emit(get_ctx().bus, "nlp.teacher.llm.deferred", payload, source="nlu.teacher.llm")
+    except Exception:
+        pass
 
 
 async def _propose_strategy_candidate(
@@ -2495,7 +2590,7 @@ async def _propose_strategy_candidate(
     meta: Mapping[str, Any],
 ) -> None:
     try:
-        await _append_candidate(webspace_id, entry)
+        entry = await _append_candidate(webspace_id, entry, meta=meta)
     except Exception:
         _log.debug("failed to append strategy candidate webspace=%s", webspace_id, exc_info=True)
     bus_emit(
@@ -2572,6 +2667,21 @@ async def _handle_teacher_request(evt: Any) -> None:
         if not _teacher_enabled(ctx):
             return
         if not _llm_teacher_enabled(ctx):
+            try:
+                await _append_llm_log(
+                    webspace_id,
+                    {
+                        "id": f"llm.skip.{int(time.time() * 1000)}",
+                        "ts": time.time(),
+                        "request_id": request_id,
+                        "webspace_id": webspace_id,
+                        "model": _MODEL,
+                        "status": "skipped",
+                        "skip_reason": "llm_teacher_disabled",
+                    },
+                )
+            except Exception:
+                _log.debug("failed to append disabled llm skip log webspace=%s", webspace_id, exc_info=True)
             try:
                 await append_event(
                     webspace_id,
@@ -2834,6 +2944,15 @@ async def _handle_teacher_request(evt: Any) -> None:
                 )
             except Exception:
                 _log.debug("failed to patch llm log webspace=%s", webspace_id, exc_info=True)
+            await _record_deferred_enrichment(
+                webspace_id,
+                request_id=request_id,
+                text=text,
+                reason="root_llm_unavailable",
+                error=str(exc),
+                log_id=log_id,
+                meta=req_meta,
+            )
             return
 
         raw_text = _extract_first_output_text(res)
@@ -2852,6 +2971,15 @@ async def _handle_teacher_request(evt: Any) -> None:
                 )
             except Exception:
                 _log.debug("failed to patch llm log webspace=%s", webspace_id, exc_info=True)
+            await _record_deferred_enrichment(
+                webspace_id,
+                request_id=request_id,
+                text=text,
+                reason="empty_llm_output",
+                error="empty_output",
+                log_id=log_id,
+                meta=req_meta,
+            )
             return
 
         suggestion = _parse_llm_json_object(raw_text)
@@ -3280,7 +3408,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                         )
                     return
                 try:
-                    await _append_candidate(webspace_id, entry)
+                    entry = await _append_candidate(webspace_id, entry, meta=req_meta)
                 except Exception:
                     _log.debug("failed to append regex rule candidate webspace=%s", webspace_id, exc_info=True)
                 bus_emit(
@@ -3367,7 +3495,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                 "status": "pending",
             }
             try:
-                await _append_candidate(webspace_id, entry)
+                entry = await _append_candidate(webspace_id, entry, meta=req_meta)
             except Exception:
                 _log.debug("failed to append candidate webspace=%s", webspace_id, exc_info=True)
             bus_emit(

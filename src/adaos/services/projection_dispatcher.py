@@ -7,7 +7,11 @@ from threading import RLock
 from typing import Any, Awaitable, Callable, Mapping
 
 from adaos.domain import Event, EventEnvelope, normalize_event_envelope
-from adaos.services.projection_demand import ProjectionDemandConsumer, projection_demand_consumers
+from adaos.services.projection_demand import (
+    ProjectionDemandConsumer,
+    projection_demand_consumers,
+    resolve_projection_demand_stale_after_s,
+)
 from adaos.services.projection_records import write_projection_record_if_valid
 
 
@@ -294,7 +298,7 @@ def core_skill_refresh_contract_snapshot(
     webspace_ids: list[str] | tuple[str, ...] | set[str] | None = None,
     projection_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     include_hidden: bool = True,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
@@ -308,13 +312,14 @@ def core_skill_refresh_contract_snapshot(
         ts=ts,
     )
     envelope = normalize_event_envelope(source_event)
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     contexts = demanded_projection_refresh_contexts(
         envelope,
         webspace_ids=webspace_ids,
         projection_keys=projection_keys,
         include_hidden=include_hidden,
         include_stale=include_stale,
-        stale_after_s=stale_after_s,
+        stale_after_s=resolved_stale_after_s,
         now=ts,
     )
     demands = []
@@ -473,7 +478,7 @@ def demanded_projection_refresh_contexts(
     webspace_ids: list[str] | tuple[str, ...] | set[str] | None = None,
     projection_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     include_hidden: bool = True,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     now: float | None = None,
 ) -> tuple[ProjectionRefreshContext, ...]:
@@ -482,13 +487,14 @@ def demanded_projection_refresh_contexts(
     allowed = {str(item or "").strip() for item in projection_keys or [] if str(item or "").strip()} or None
     ts = float(now if now is not None else time.time())
     contexts: list[ProjectionRefreshContext] = []
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     for webspace_id in target_webspaces:
         consumers_by_projection: dict[str, list[ProjectionDemandConsumer]] = {}
         for consumer in projection_demand_consumers(
             webspace_id=webspace_id,
             include_hidden=include_hidden,
             include_stale=include_stale,
-            stale_after_s=stale_after_s,
+            stale_after_s=resolved_stale_after_s,
             now=ts,
         ):
             if not _projection_key_allowed(consumer.projection_key, allowed):
@@ -532,7 +538,7 @@ async def dispatch_demanded_projection_refresh(
     webspace_ids: list[str] | tuple[str, ...] | set[str] | None = None,
     projection_keys: list[str] | tuple[str, ...] | set[str] | None = None,
     include_hidden: bool = True,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     bus: Any | None = None,
     now: float | None = None,

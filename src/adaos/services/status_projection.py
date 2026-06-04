@@ -10,7 +10,7 @@ from adaos.domain.projection_keys import (
     status_card_projection_key,
 )
 from adaos.services.agent_context import get_ctx
-from adaos.services.projection_demand import demanded_projection_keys
+from adaos.services.projection_demand import demanded_projection_keys, resolve_projection_demand_stale_after_s
 from adaos.services.projection_dispatcher import (
     ProjectionRefreshContext,
     ProjectionRefreshResult,
@@ -184,7 +184,12 @@ def materialize_status_card_projection_records(
     if demanded_only:
         demanded_ids = {
             _status_card_id_token(key)
-            for key in demanded_projection_keys(webspace_id=webspace_id)
+            for key in demanded_projection_keys(
+                webspace_id=webspace_id,
+                include_stale=False,
+                stale_after_s=resolve_projection_demand_stale_after_s(None),
+                now=now,
+            )
             if str(key or "").strip().startswith(STATUS_CARD_PROJECTION_PREFIX)
         }
         requested_ids = demanded_ids if requested_ids is None else requested_ids.intersection(demanded_ids)

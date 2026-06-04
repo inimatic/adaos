@@ -5,7 +5,7 @@ from threading import RLock
 from typing import Any, Iterable, Mapping
 
 from adaos.domain import ProjectionRecord, normalize_projection_record, projection_fingerprint
-from adaos.services.projection_demand import projection_demand_consumers
+from adaos.services.projection_demand import projection_demand_consumers, resolve_projection_demand_stale_after_s
 
 
 _LOCK = RLock()
@@ -295,7 +295,7 @@ def browser_projection_record_snapshot(
     session_id: str | None = None,
     projection_keys: Iterable[Any] | None = None,
     include_hidden: bool = True,
-    include_stale: bool = True,
+    include_stale: bool = False,
     stale_after_s: float | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
@@ -305,11 +305,12 @@ def browser_projection_record_snapshot(
     client_token = str(client_id or "").strip()
     session_token = str(session_id or "").strip()
     requested_keys = _projection_key_filter(projection_keys)
+    resolved_stale_after_s = resolve_projection_demand_stale_after_s(stale_after_s)
     consumers = projection_demand_consumers(
         webspace_id=webspace_token or None,
         include_hidden=include_hidden,
         include_stale=include_stale,
-        stale_after_s=stale_after_s,
+        stale_after_s=resolved_stale_after_s,
         now=now,
     )
     if client_token:
@@ -454,6 +455,7 @@ def browser_projection_record_snapshot(
         "requested_projection_keys": sorted(requested_keys or []),
         "include_hidden": bool(include_hidden),
         "include_stale": bool(include_stale),
+        "stale_after_s": resolved_stale_after_s,
         "demanded_projection_total": len(demanded_keys),
         "record_total": len(records),
         "missing_record_total": len(missing_projection_keys),
