@@ -113,7 +113,10 @@
           "items": { "type": "string", "minLength": 1 }
         },
         "route_plan_required": { "type": "boolean" },
-        "human_review_required": { "type": "boolean" }
+        "human_review_required": {
+          "type": "boolean",
+          "description": "Explicit legacy/manual override. Normal review decisions are made by Builder preview review_policy and the selected approval profile."
+        }
       }
     },
     "qualityGates": {

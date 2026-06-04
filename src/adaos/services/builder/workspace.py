@@ -46,6 +46,61 @@ _YJS_PATTERNS = (
     "get_ydoc",
 )
 _MEMORY_NAME_RE = re.compile(r"(cache|history|histories|events|logs|frames|sessions|state|buffer|queue)", re.I)
+_APPROVAL_PROFILES: dict[str, dict[str, Any]] = {
+    "manual_only": {
+        "id": "manual_only",
+        "title": "Manual only",
+        "summary": "Every Builder preview requires explicit human review before apply.",
+        "auto_draft": False,
+        "auto_preview": True,
+        "auto_apply": False,
+        "requires_human_review": "always",
+    },
+    "low_risk_auto_draft": {
+        "id": "low_risk_auto_draft",
+        "title": "Low-risk auto-draft",
+        "summary": "Builder may create and preview low-risk drafts, but apply still requires review.",
+        "auto_draft": True,
+        "auto_preview": True,
+        "auto_apply": False,
+        "requires_human_review": "before_apply",
+    },
+    "low_risk_auto_apply": {
+        "id": "low_risk_auto_apply",
+        "title": "Low-risk auto-apply",
+        "summary": "Only clean low-risk previews without mandatory-review classes are eligible for automatic apply.",
+        "auto_draft": True,
+        "auto_preview": True,
+        "auto_apply": True,
+        "requires_human_review": "on_policy_block",
+    },
+    "restricted_maintenance_repair": {
+        "id": "restricted_maintenance_repair",
+        "title": "Restricted maintenance repair",
+        "summary": "Allows narrow descriptor, NLU-hint, and metadata repairs when no mandatory-review class is present.",
+        "auto_draft": True,
+        "auto_preview": True,
+        "auto_apply": True,
+        "requires_human_review": "on_policy_block",
+        "allowed_surfaces": ["manifest", "nlu", "webui"],
+    },
+}
+_MANDATORY_REVIEW_CLASSES: dict[str, str] = {
+    "secrets": "Secrets or credential-like material changed.",
+    "new_permissions": "Permissions or capability declarations changed.",
+    "external_io": "Generated code may call external networks, filesystems, processes, or sockets.",
+    "destructive_actions": "Action hints include destructive or lifecycle-changing operations.",
+    "endpoint_control": "Generated code or metadata may control endpoints, tunnels, browsers, or runtime routes.",
+    "high_rate_streams": "Streams or projections can exceed low-risk event budgets.",
+    "broad_nlu_patterns": "NLU examples or aliases are broad enough to affect unrelated utterances.",
+    "service_processes": "Generated code may spawn or manage long-running processes.",
+}
+_SECRET_HINT_RE = re.compile(r"(secret|api[_-]?key|access[_-]?token|private[_-]?key|password|credential)", re.I)
+_PERMISSION_HINT_RE = re.compile(r"^\+\s*(permissions|capabilities|security|scopes)\s*[:=]", re.I | re.M)
+_EXTERNAL_IO_RE = re.compile(r"^\+\s*(import|from)\s+(requests|httpx|aiohttp|socket|websocket|urllib|ftplib|smtplib)\b", re.I | re.M)
+_PROCESS_RE = re.compile(r"^\+\s*(import|from)\s+(subprocess|multiprocessing)\b|Popen\(|run\(", re.I | re.M)
+_ENDPOINT_RE = re.compile(r"(endpoint|websocket|tunnel|route[_-]?reset|browser[_-]?route|control[_-]?plane)", re.I)
+_DESTRUCTIVE_ACTION_RE = re.compile(r"(delete|remove|purge|drop|format|shutdown|restart|reset|rollback|deactivate|kill)", re.I)
 
 
 def _now_iso() -> str:
@@ -269,6 +324,9 @@ class BuilderWorkspaceService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def approval_profiles(self) -> list[dict[str, Any]]:
+        return [dict(profile) for profile in _APPROVAL_PROFILES.values()]
+
     def _dev_artifact_root(self, kind: str, artifact_id: str) -> Path:
         if kind == "skill":
             root = self.dev_skills_root
@@ -364,10 +422,11 @@ class BuilderWorkspaceService:
             raise FileNotFoundError(f"Builder draft not found: {draft_id}")
         return _read_json(path)
 
-    def preview(self, *, draft_id: str) -> dict[str, Any]:
+    def preview(self, *, draft_id: str, approval_profile: str | None = None) -> dict[str, Any]:
         draft_id = str(draft_id or "").strip()
         draft_dir = self.drafts_dir() / draft_id
         draft = self.load_draft(draft_id)
+        profile_id = self._normalize_approval_profile(approval_profile)
         artifact = draft.get("artifact") if isinstance(draft.get("artifact"), dict) else {}
         artifact_root = self._draft_artifact_root(draft_dir, artifact)
         target_root = self._preview_target_root(draft)
@@ -385,7 +444,18 @@ class BuilderWorkspaceService:
         blast_radius = self._blast_radius_report(diff, action_preview, ui_preview, route_plan)
         test_plan = self._test_plan(draft, artifact_kind)
         risk_summary = self._risk_summary(draft, schemas, route_plan, static_checks, blast_radius, bootstrap)
-        human_review = self._human_review_summary(draft, risk_summary)
+        review_policy = self._review_policy_report(
+            draft=draft,
+            profile_id=profile_id,
+            diff=diff,
+            route_plan=route_plan,
+            static_checks=static_checks,
+            blast_radius=blast_radius,
+            action_preview=action_preview,
+            nlu_probe=nlu_probe,
+            bootstrap=bootstrap,
+        )
+        human_review = self._human_review_summary(draft, risk_summary, review_policy)
 
         preview = {
             "ok": not any(item.get("level") == "error" for group in (schemas, route_plan, static_checks) for item in group.get("issues", [])),
@@ -404,12 +474,15 @@ class BuilderWorkspaceService:
             "static_checks": static_checks,
             "blast_radius": blast_radius,
             "scenario_dependency_bootstrap": bootstrap,
+            "review_policy": review_policy,
             "human_review": human_review,
             "summary": {
                 "changed_files": len(diff.get("files") or []),
                 "schema_ok": schemas.get("ok"),
                 "route_plan_ok": route_plan.get("ok"),
                 "static_ok": static_checks.get("ok"),
+                "approval_profile": profile_id,
+                "review_decision": review_policy.get("decision"),
                 "human_review_required": human_review.get("required"),
             },
         }
@@ -677,7 +750,7 @@ class BuilderWorkspaceService:
                 "risk_notes": risk_notes,
                 "expected_tests": expected_tests,
                 "route_plan_required": artifact_kind == "skill",
-                "human_review_required": True,
+                "human_review_required": False,
             },
             "quality_gates": quality,
             "links": merged_links,
@@ -1187,11 +1260,229 @@ class BuilderWorkspaceService:
             risks.append({"level": "error", "code": "scenario_dependencies.missing", "message": "scenario has missing required skills", "failed": bootstrap.get("failed")})
         return risks
 
-    def _human_review_summary(self, draft: dict[str, Any], risk_summary: list[dict[str, Any]]) -> dict[str, Any]:
+    def _normalize_approval_profile(self, value: str | None) -> str:
+        profile_id = str(value or "manual_only").strip().lower().replace("-", "_")
+        if profile_id not in _APPROVAL_PROFILES:
+            allowed = ", ".join(sorted(_APPROVAL_PROFILES))
+            raise ValueError(f"unknown Builder approval profile: {value}; allowed: {allowed}")
+        return profile_id
+
+    def _review_policy_report(
+        self,
+        *,
+        draft: dict[str, Any],
+        profile_id: str,
+        diff: dict[str, Any],
+        route_plan: dict[str, Any],
+        static_checks: dict[str, Any],
+        blast_radius: dict[str, Any],
+        action_preview: dict[str, Any],
+        nlu_probe: dict[str, Any],
+        bootstrap: dict[str, Any],
+    ) -> dict[str, Any]:
+        profile = dict(_APPROVAL_PROFILES[profile_id])
+        mandatory = self._mandatory_review_findings(
+            draft=draft,
+            diff=diff,
+            route_plan=route_plan,
+            static_checks=static_checks,
+            action_preview=action_preview,
+            nlu_probe=nlu_probe,
+            bootstrap=bootstrap,
+        )
+        policy_blocks = self._approval_policy_blocks(
+            profile=profile,
+            mandatory=mandatory,
+            blast_radius=blast_radius,
+            route_plan=route_plan,
+            static_checks=static_checks,
+            bootstrap=bootstrap,
+        )
+        metadata = draft.get("metadata") if isinstance(draft.get("metadata"), dict) else {}
+        if metadata.get("human_review_required", False):
+            policy_blocks.append({"code": "draft_metadata_requires_review"})
+        required = profile.get("requires_human_review") == "always" or bool(policy_blocks)
+        auto_apply_eligible = bool(profile.get("auto_apply")) and not required
+        decision = "auto_apply_eligible" if auto_apply_eligible else "human_review_required"
+        return {
+            "profile": profile,
+            "mandatory_classes": mandatory,
+            "policy_blocks": policy_blocks,
+            "required_before_apply": required,
+            "auto_apply_eligible": auto_apply_eligible,
+            "decision": decision,
+            "evidence": {
+                "blast_radius_risk": blast_radius.get("risk"),
+                "surfaces": blast_radius.get("surfaces") or [],
+                "route_plan_ok": route_plan.get("ok"),
+                "static_ok": static_checks.get("ok"),
+                "scenario_dependency_status": bootstrap.get("status"),
+            },
+        }
+
+    def _mandatory_review_findings(
+        self,
+        *,
+        draft: dict[str, Any],
+        diff: dict[str, Any],
+        route_plan: dict[str, Any],
+        static_checks: dict[str, Any],
+        action_preview: dict[str, Any],
+        nlu_probe: dict[str, Any],
+        bootstrap: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        findings: dict[str, dict[str, Any]] = {}
+
+        def add(code: str, evidence: Any = None) -> None:
+            if code not in _MANDATORY_REVIEW_CLASSES:
+                return
+            item = findings.setdefault(
+                code,
+                {
+                    "class": code,
+                    "description": _MANDATORY_REVIEW_CLASSES[code],
+                    "evidence": [],
+                },
+            )
+            if evidence is not None and evidence not in item["evidence"]:
+                item["evidence"].append(evidence)
+
+        for item in diff.get("files") or []:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "")
+            patch = str(item.get("patch") or "")
+            if _SECRET_HINT_RE.search(path) or any(_SECRET_HINT_RE.search(line) for line in patch.splitlines() if line.startswith("+")):
+                add("secrets", path)
+            if _PERMISSION_HINT_RE.search(patch):
+                add("new_permissions", path)
+            if _EXTERNAL_IO_RE.search(patch):
+                add("external_io", path)
+            if _PROCESS_RE.search(patch):
+                add("service_processes", path)
+            if _ENDPOINT_RE.search(patch):
+                add("endpoint_control", path)
+
+        for issue in static_checks.get("issues") or []:
+            if not isinstance(issue, dict):
+                continue
+            code = str(issue.get("code") or "")
+            if code == "static.unsafe_direct_yjs":
+                add("endpoint_control", issue.get("where"))
+            if code == "static.unbounded_memory":
+                add("service_processes", issue.get("where"))
+
+        for route in route_plan.get("routes") or []:
+            if not isinstance(route, dict):
+                continue
+            if str(route.get("route") or "").strip() == "stream" and self._route_budget_rate(route.get("budget")) > 10:
+                add("high_rate_streams", route.get("surface") or route.get("receiver"))
+            surface = str(route.get("surface") or "")
+            if _ENDPOINT_RE.search(surface):
+                add("endpoint_control", surface)
+
+        for receiver in route_plan.get("receivers") or []:
+            if not isinstance(receiver, dict):
+                continue
+            if self._route_budget_rate(receiver.get("budget")) > 10:
+                add("high_rate_streams", receiver.get("id"))
+
+        for action in action_preview.get("actions") or []:
+            if not isinstance(action, dict):
+                continue
+            text = " ".join(str(action.get(key) or "") for key in ("id", "name", "title", "description", "label", "tool", "target"))
+            if _DESTRUCTIVE_ACTION_RE.search(text):
+                add("destructive_actions", text[:160])
+            if _ENDPOINT_RE.search(text):
+                add("endpoint_control", text[:160])
+
+        for example in nlu_probe.get("candidate_examples") or []:
+            text = str(example or "").strip()
+            if not text:
+                continue
+            token_count = len(text.split())
+            if token_count <= 1 or ".*" in text or "*" in text:
+                add("broad_nlu_patterns", text[:160])
+
+        if bootstrap.get("status") == "blocked":
+            add("new_permissions", {"missing_dependencies": bootstrap.get("failed") or []})
+
+        source = draft.get("source") if isinstance(draft.get("source"), dict) else {}
+        side_effect = str(source.get("side_effect_class") or "").strip().lower()
+        if side_effect in {"external_io", "network", "destructive", "endpoint_control", "secrets"}:
+            if side_effect == "destructive":
+                add("destructive_actions", side_effect)
+            elif side_effect == "network":
+                add("external_io", side_effect)
+            else:
+                add(side_effect if side_effect in _MANDATORY_REVIEW_CLASSES else "external_io", side_effect)
+
+        return [findings[key] for key in sorted(findings)]
+
+    def _route_budget_rate(self, budget: Any) -> float:
+        if not isinstance(budget, dict):
+            return 0.0
+        for key in ("events_per_second", "max_events_per_second", "rate_hz", "max_hz", "fps"):
+            try:
+                value = float(budget.get(key))
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return 0.0
+
+    def _approval_policy_blocks(
+        self,
+        *,
+        profile: dict[str, Any],
+        mandatory: list[dict[str, Any]],
+        blast_radius: dict[str, Any],
+        route_plan: dict[str, Any],
+        static_checks: dict[str, Any],
+        bootstrap: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        if mandatory:
+            blocks.append({"code": "mandatory_review_class", "classes": [item["class"] for item in mandatory]})
+        if profile.get("requires_human_review") == "before_apply":
+            blocks.append({"code": "profile_requires_review_before_apply", "profile": profile.get("id")})
+        if blast_radius.get("risk") in {"medium", "high"} and profile.get("id") == "low_risk_auto_apply":
+            blocks.append({"code": "not_low_risk", "risk": blast_radius.get("risk")})
+        allowed_surfaces = set(profile.get("allowed_surfaces") or [])
+        if allowed_surfaces:
+            surfaces = set(blast_radius.get("surfaces") or [])
+            disallowed = sorted(surfaces - allowed_surfaces)
+            if disallowed:
+                blocks.append({"code": "surface_not_allowed_by_profile", "surfaces": disallowed})
+        if not route_plan.get("ok", True):
+            blocks.append({"code": "route_plan_errors"})
+        if not static_checks.get("ok", True):
+            blocks.append({"code": "static_check_errors"})
+        if bootstrap.get("status") == "blocked":
+            blocks.append({"code": "scenario_dependency_blocked", "failed": bootstrap.get("failed") or []})
+        return blocks
+
+    def _human_review_summary(
+        self,
+        draft: dict[str, Any],
+        risk_summary: list[dict[str, Any]],
+        review_policy: dict[str, Any],
+    ) -> dict[str, Any]:
         quality = draft.get("quality_gates") if isinstance(draft.get("quality_gates"), dict) else {}
         reasons = list(quality.get("requires_human_approval") or [])
         reasons.extend(item.get("code") for item in risk_summary if item.get("level") in {"error", "warning"})
+        reasons.extend(item.get("class") for item in review_policy.get("mandatory_classes") or [])
+        reasons.extend(item.get("code") for item in review_policy.get("policy_blocks") or [])
         reasons = [str(item) for item in reasons if item]
         metadata = draft.get("metadata") if isinstance(draft.get("metadata"), dict) else {}
-        required = bool(metadata.get("human_review_required", True) or any(item.get("level") == "error" for item in risk_summary))
-        return {"required": required, "reasons": list(dict.fromkeys(reasons))}
+        required = bool(
+            metadata.get("human_review_required", False)
+            or review_policy.get("required_before_apply")
+            or any(item.get("level") == "error" for item in risk_summary)
+        )
+        return {
+            "required": required,
+            "reasons": list(dict.fromkeys(reasons)),
+            "profile_id": (review_policy.get("profile") or {}).get("id"),
+            "decision": review_policy.get("decision"),
+        }
