@@ -7,12 +7,13 @@ import contextlib
 import contextvars
 import asyncio
 import inspect
+import threading
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Tuple
 
 import anyio
 import y_py as Y
-from anyio import Event, Lock, TASK_STATUS_IGNORED
+from anyio import Event, TASK_STATUS_IGNORED
 from anyio.abc import TaskStatus
 from ypy_websocket.ystore import BaseYStore, YDocNotFound
 
@@ -326,7 +327,7 @@ class AdaosMemoryYStore(BaseYStore):
         self.auto_backup_after_compact = _env_flag("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", True)
         self.auto_backup_cooldown_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_COOLDOWN_SEC", 30.0, minimum=0.0)
         self.auto_backup_debounce_sec = _env_float("ADAOS_YSTORE_AUTOBACKUP_DEBOUNCE_SEC", 0.5, minimum=0.0)
-        self._lock: Lock = Lock()
+        self._lock = threading.RLock()
         self._updates: List[Tuple[bytes, bytes, float]] = []
         self._base_snapshot_present = False
         self._loaded_from_disk = False
@@ -415,7 +416,7 @@ class AdaosMemoryYStore(BaseYStore):
         return released_entries, released_bytes
 
     async def evict_runtime_state(self) -> dict[str, int]:
-        async with self._lock:
+        with self._lock:
             released_entries, released_bytes = self._clear_runtime_state_locked()
         return {
             "released_update_entries": int(released_entries),
@@ -445,7 +446,7 @@ class AdaosMemoryYStore(BaseYStore):
         payload = bytes(data or b"")
         now = time.time()
         if not payload:
-            async with self._lock:
+            with self._lock:
                 self._write_skipped_total += 1
             return False
 
@@ -468,13 +469,13 @@ class AdaosMemoryYStore(BaseYStore):
                     update_bytes=len(payload),
                 )
                 if not allowed:
-                    async with self._lock:
+                    with self._lock:
                         self._write_skipped_total += 1
                     return False
             except Exception:
                 _log.debug("failed to apply YStore primary-doc governance webspace=%s", self.path, exc_info=True)
         auto_backup_reason: str | None = None
-        async with self._lock:
+        with self._lock:
             was_empty = not self._updates
             self._write_total += 1
             if update_kind == "diff":
@@ -523,7 +524,7 @@ class AdaosMemoryYStore(BaseYStore):
 
     async def apply_updates(self, ydoc: Y.YDoc) -> None:  # type: ignore[override]
         await self._load_from_disk_if_needed()
-        async with self._lock:
+        with self._lock:
             if not self._updates:
                 raise YDocNotFound
             updates = list(self._updates)
@@ -565,7 +566,7 @@ class AdaosMemoryYStore(BaseYStore):
                     last_yield = time.perf_counter()
                     await asyncio.sleep(0)
         finally:
-            async with self._lock:
+            with self._lock:
                 self._apply_total += 1
                 self._applied_update_total += applied_total
                 self._applied_update_bytes += applied_bytes
@@ -595,7 +596,7 @@ class AdaosMemoryYStore(BaseYStore):
         """
         await self._load_from_disk_if_needed()
         snapshot = b""
-        async with self._lock:
+        with self._lock:
             if len(self._updates) != 1 or not self._base_snapshot_present:
                 self._state_vector_cache_miss_total += 1
                 return None
@@ -607,11 +608,11 @@ class AdaosMemoryYStore(BaseYStore):
         try:
             state_vector = await anyio.to_thread.run_sync(_decode_state_vector_from_snapshot, snapshot)
         except Exception:
-            async with self._lock:
+            with self._lock:
                 self._state_vector_cache_miss_total += 1
             return None
 
-        async with self._lock:
+        with self._lock:
             if len(self._updates) == 1 and self._base_snapshot_present:
                 self._base_state_vector = bytes(state_vector or b"") or None
                 self._state_vector_compute_total += 1
@@ -720,7 +721,7 @@ class AdaosMemoryYStore(BaseYStore):
 
         metadata = await self.get_metadata()
         now = time.time()
-        async with self._lock:
+        with self._lock:
             if not self._updates:
                 self._updates.append((data, metadata, now))
                 self._base_snapshot_present = True
@@ -782,7 +783,7 @@ class AdaosMemoryYStore(BaseYStore):
                     exc_info=True,
                 )
             finally:
-                async with self._lock:
+                with self._lock:
                     self._auto_backup_inflight = False
 
         try:
@@ -795,7 +796,7 @@ class AdaosMemoryYStore(BaseYStore):
     async def request_runtime_compaction(self, *, reason: str = "manual", min_quiet_sec: float = 0.0) -> bool:
         token = str(reason or "").strip().lower().replace(" ", "_") or "manual"
         now = time.time()
-        async with self._lock:
+        with self._lock:
             has_replay_tail = len(self._updates) > 1 or self._replay_window_bytes_locked() > 0
             if not has_replay_tail or self._auto_backup_inflight:
                 return False
@@ -805,7 +806,7 @@ class AdaosMemoryYStore(BaseYStore):
             self._auto_backup_inflight = True
         if self._schedule_auto_backup(reason=f"idle_{token}"):
             return True
-        async with self._lock:
+        with self._lock:
             self._auto_backup_inflight = False
         return False
 
@@ -814,7 +815,7 @@ class AdaosMemoryYStore(BaseYStore):
         Async iterator over stored updates (update, metadata).
         """
         await self._load_from_disk_if_needed()
-        async with self._lock:
+        with self._lock:
             if not self._updates:
                 raise YDocNotFound
             snapshot = list(self._updates)
@@ -831,7 +832,7 @@ class AdaosMemoryYStore(BaseYStore):
         """
         Persist the current YDoc state as a single update snapshot.
         """
-        async with self._lock:
+        with self._lock:
             updates = list(self._updates)
             generation = int(self._generation)
             metadata = updates[-1][1] if updates else b""
@@ -857,7 +858,7 @@ class AdaosMemoryYStore(BaseYStore):
         skip_write = bool(not snapshot and not snapshot_exists)
         written_bytes = 0
         if not skip_write:
-            async with self._lock:
+            with self._lock:
                 persisted_generation = int(self._persisted_generation)
                 persisted_snapshot_bytes = int(self._persisted_snapshot_bytes)
             up_to_date = bool(
@@ -872,7 +873,7 @@ class AdaosMemoryYStore(BaseYStore):
             else:
                 written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, snapshot)
         now = time.time()
-        async with self._lock:
+        with self._lock:
             self._backup_total += 1
             if used_fast_path:
                 self._backup_fast_path_total += 1

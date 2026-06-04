@@ -449,6 +449,15 @@ def _env_truthy(value: Any, *, default: bool = False) -> bool:
     return str(value).strip().lower() not in ("", "0", "false", "off", "no")
 
 
+def _loop_hang_watchdog_enabled_from_env() -> bool:
+    if not _env_truthy(os.getenv("ADAOS_LOOP_HANG_WATCHDOG"), default=False):
+        return False
+    # The watchdog samples another thread's frame chain via sys._current_frames().
+    # Frame references can hold y_py YDoc/YMap locals and drop them on the
+    # watchdog thread, which trips PyO3's thread-affinity guard on Windows.
+    return _env_truthy(os.getenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE"), default=False)
+
+
 def _hub_channel_console_trace_enabled() -> bool:
     return _env_truthy(os.getenv("HUB_CHANNEL_CONSOLE_TRACE"), default=False)
 
@@ -2247,11 +2256,8 @@ class BootstrapService:
         # Optional: hang watchdog (thread-based) to capture the main thread stack during prolonged
         # event loop stalls. This catches cases where asyncio tasks show "await" positions only.
         try:
-            # Keep thread-based frame capture opt-in. On Windows, sampling the
-            # event-loop thread while it is inside y_py can trip PyO3
-            # thread-affinity checks for YDoc/YMap locals.
-            hang_watchdog_default = "0"
-            if os.getenv("ADAOS_LOOP_HANG_WATCHDOG", hang_watchdog_default) == "1":
+            # Keep thread-based frame capture behind an explicit unsafe opt-in.
+            if _loop_hang_watchdog_enabled_from_env():
                 try:
                     import threading as _threading
                     import sys as _sys

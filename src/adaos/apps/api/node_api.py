@@ -3810,7 +3810,11 @@ async def node_yjs_webspace_materialization_snapshot(
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     snapshot_scope = "full" if str(scope or "").strip().lower() == "full" else "essential"
     rebuild = describe_webspace_rebuild_state(target_webspace_id)
-    materialization = await _describe_yjs_materialization(target_webspace_id, rebuild_state=rebuild)
+    materialization = await _describe_yjs_materialization(
+        target_webspace_id,
+        rebuild_state=rebuild,
+        verify_live=True,
+    )
     snapshot = await _read_yjs_materialization_snapshot(target_webspace_id, scope=snapshot_scope)
     result = {
         "ok": True,

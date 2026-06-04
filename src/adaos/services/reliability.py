@@ -5688,6 +5688,11 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
         if isinstance(selected_webspace.get("gateway_room"), dict)
         else {}
     )
+    effective_branches = (
+        gateway_room.get("effective_branches")
+        if isinstance(gateway_room.get("effective_branches"), dict)
+        else {}
+    )
     webspaces = runtime.get("webspaces") if isinstance(runtime.get("webspaces"), dict) else {}
     selected_entry = (
         webspaces.get(selected_webspace_id)
@@ -5728,7 +5733,8 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     else:
         first_sync_state = "pending"
 
-    materialization_ready = bool(materialization.get("ready"))
+    gateway_effective_ready = bool(effective_branches.get("ready"))
+    materialization_ready = bool(materialization.get("ready")) or gateway_effective_ready
     if transport_state == "not_applicable":
         semantic_state = "not_applicable"
     elif materialization_ready and (assessment_state in {"nominal", "idle"} or maintenance_pressure_only):
@@ -5748,6 +5754,8 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
         else semantic_state
     )
     last_materialization_at = rebuild.get("finished_at") or rebuild.get("updated_at") or load_mark.get("updated_at")
+    if gateway_effective_ready and not last_materialization_at:
+        last_materialization_at = gateway_room.get("last_bootstrap_finished_at") or gateway_room.get("last_open_at")
     last_good_sync_at = gateway_room.get("last_open_at") or last_materialization_at
     replay_entries = int(selected_entry.get("replay_window_entries") or 0)
     replay_limit = int(selected_entry.get("replay_window_limit") or 0)
@@ -5758,10 +5766,11 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
         blockers.append(reason)
     if semantic_state == "stale" and not materialization_ready:
         blockers.append(str(materialization.get("readiness_state") or "materialization_not_ready"))
-    for item in list(materialization.get("missing_branches") or []):
-        text = str(item).strip()
-        if text:
-            blockers.append(f"missing_branch:{text}")
+    if not materialization_ready:
+        for item in list(materialization.get("missing_branches") or []):
+            text = str(item).strip()
+            if text:
+                blockers.append(f"missing_branch:{text}")
     error = str(rebuild.get("error") or "").strip()
     if error:
         blockers.append(error)

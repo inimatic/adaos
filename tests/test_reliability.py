@@ -2339,6 +2339,54 @@ def test_state_sync_keeps_ready_semantics_for_bounded_replay_maintenance_pressur
     assert snapshot["blockers"] == ["bounded_replay_window_near_limit"]
 
 
+def test_state_sync_uses_gateway_effective_branches_when_rebuild_cache_missing() -> None:
+    snapshot = _state_sync_snapshot(
+        {
+            "available": True,
+            "selected_webspace_id": "desktop",
+            "assessment": {
+                "state": "nominal",
+                "reason": "bounded_sync_runtime_observed",
+            },
+            "transport": {
+                "server_ready": True,
+            },
+            "channel_contract": {
+                "recovery_model": "snapshot_plus_diff",
+            },
+            "selected_webspace": {
+                "webspace_id": "desktop",
+                "rebuild": {
+                    "status": "idle",
+                    "materialization": {},
+                },
+                "gateway_room": {
+                    "ready": True,
+                    "last_open_at": 1778055332.0,
+                    "last_bootstrap_finished_at": 1778055331.0,
+                    "effective_branches": {
+                        "ready": True,
+                        "mode": "cached",
+                    },
+                },
+            },
+            "webspaces": {
+                "desktop": {
+                    "replay_window_entries": 21,
+                    "replay_window_limit": 32,
+                },
+            },
+        }
+    )
+
+    assert snapshot["transport_state"] == "attached"
+    assert snapshot["first_sync_state"] == "complete"
+    assert snapshot["semantic_state"] == "ready"
+    assert snapshot["freshness_state"] == "fresh"
+    assert snapshot["last_materialization_at"] == 1778055331.0
+    assert snapshot["blockers"] == ["bounded_sync_runtime_observed"]
+
+
 def test_replay_pressure_compaction_request_schedules_background_task(monkeypatch) -> None:
     async def _run() -> None:
         calls: list[tuple[str, dict[str, object]]] = []
