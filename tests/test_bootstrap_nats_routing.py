@@ -39,6 +39,17 @@ def test_nats_url_does_not_need_public_ws_refresh_for_local_or_ws_url() -> None:
     assert bootstrap_mod._nats_url_needs_public_ws_refresh("wss://nats.inimatic.com/nats") is False
 
 
+def test_loop_hang_watchdog_requires_explicit_unsafe_opt_in(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG", "1")
+    monkeypatch.delenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE", raising=False)
+
+    assert bootstrap_mod._loop_hang_watchdog_enabled_from_env() is False
+
+    monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE", "1")
+
+    assert bootstrap_mod._loop_hang_watchdog_enabled_from_env() is True
+
+
 def test_realtime_sidecar_fallback_candidates_disable_tcp_fallback_by_default(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_REALTIME_ALLOW_TCP_FALLBACK", raising=False)
 

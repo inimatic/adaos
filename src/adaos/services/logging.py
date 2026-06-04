@@ -45,6 +45,48 @@ class JsonFormatter(logging.Formatter):
         return _json_formatter(record)
 
 
+class TolerantRotatingFileHandler(RotatingFileHandler):
+    """Keep logging alive when Windows briefly locks a log during rollover."""
+
+    def shouldRollover(self, record: logging.LogRecord) -> bool:
+        if self.stream is None:
+            self.stream = self._open()
+        if self.maxBytes <= 0:
+            return False
+        try:
+            pos = self.stream.tell()
+            if not pos:
+                return False
+            msg = f"{self.format(record)}\n"
+            return pos + len(msg) >= self.maxBytes
+        except OSError as exc:
+            if _is_rollover_lock_error(exc):
+                return False
+            raise
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+        except OSError as exc:
+            if not _is_rollover_lock_error(exc):
+                raise
+            # On Windows another process can hold adaos.log/adaos.log.1 open
+            # while RotatingFileHandler tries to rename it. Reopen the current
+            # file so the pending record is still written; the next rollover
+            # attempt can retry once the lock is gone.
+            if self.stream is None:
+                self.stream = self._open()
+
+
+def _is_rollover_lock_error(exc: OSError) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    try:
+        return int(getattr(exc, "winerror", 0) or 0) == 32
+    except Exception:
+        return False
+
+
 def _parse_log_level(name: str | None, *, default: int) -> int:
     if not name:
         return default
@@ -201,7 +243,7 @@ class SkillContextLogRouter(logging.Handler):
         if handler is not None:
             return handler
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(
+        handler = TolerantRotatingFileHandler(
             resolved,
             maxBytes=self._max_bytes,
             backupCount=self._backup_count,
@@ -233,7 +275,7 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     stream_h.setFormatter(JsonFormatter())
     stream_h.setLevel(logger.level)
 
-    file_h = RotatingFileHandler(logfile, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+    file_h = TolerantRotatingFileHandler(logfile, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
     file_h.setFormatter(JsonFormatter())
     file_h.setLevel(logger.level)
 

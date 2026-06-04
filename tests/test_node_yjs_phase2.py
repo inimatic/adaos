@@ -1105,7 +1105,7 @@ def test_node_yjs_webspace_materialization_state_endpoint_returns_lightweight_sn
     monkeypatch.setattr(
         node_api_module,
         "_describe_yjs_materialization",
-        lambda webspace_id, rebuild_state=None: _awaitable(
+        lambda webspace_id, rebuild_state=None, verify_live=False: _awaitable(
             {
                 "ready": False,
                 "webspace_id": webspace_id,
@@ -1134,6 +1134,7 @@ def test_node_yjs_webspace_materialization_state_endpoint_returns_lightweight_sn
             "readiness_state": "interactive",
             "missing_branches": ["data.desktop"],
         },
+        "live_verification": False,
         "rebuild": {
             "webspace_id": "desktop",
             "status": "running",
@@ -1174,17 +1175,33 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
         "describe_webspace_rebuild_state",
         lambda webspace_id: {"webspace_id": webspace_id, "status": "ready"},
     )
-    monkeypatch.setattr(
-        node_api_module,
-        "_describe_yjs_materialization",
-        lambda webspace_id, rebuild_state=None: _awaitable(
+    describe_calls: list[dict[str, object]] = []
+
+    def _fake_describe_materialization(
+        webspace_id: str,
+        rebuild_state=None,
+        verify_live: bool = False,
+    ):
+        describe_calls.append(
+            {
+                "webspace_id": webspace_id,
+                "rebuild_state": rebuild_state,
+                "verify_live": verify_live,
+            }
+        )
+        return _awaitable(
             {
                 "ready": True,
                 "webspace_id": webspace_id,
                 "readiness_state": "ready",
                 "missing_branches": [],
             }
-        ),
+        )
+
+    monkeypatch.setattr(
+        node_api_module,
+        "_describe_yjs_materialization",
+        _fake_describe_materialization,
     )
     read_calls: list[dict[str, object]] = []
 
@@ -1213,12 +1230,16 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
     assert result["snapshot"]["data"]["installed"]["widgets"] == ["w1"]
     assert result["snapshot"]["registry"]["scenarios"]["hub-1"]["web_desktop"]["title"] == "Desktop"
     assert result["runtime"]["webspace_id"] == "desktop"
+    assert describe_calls
+    assert all(call["verify_live"] is True for call in describe_calls)
 
     essential = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default"))
     assert essential["snapshot_scope"] == "essential"
     assert sorted(essential["snapshot"]["data"].keys()) == ["catalog", "desktop", "installed", "nodes", "webspaces"]
     assert essential["snapshot"]["data"]["nodes"]["hub-1"]["weather"]["current"]["city"] == "Moscow"
     assert essential["snapshot"]["registry"] == {}
+    assert len(describe_calls) == 2
+    assert all(call["verify_live"] is True for call in describe_calls)
     assert read_calls
     assert all(call.get("prefer_live_room") is True for call in read_calls)
 

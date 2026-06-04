@@ -45,6 +45,35 @@ async def test_async_get_ydoc_uses_diff_writeback() -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_memory_ystore_supports_sync_readers_from_worker_threads() -> None:
+    webspace_id = _webspace_id("threaded-readers")
+    errors: list[BaseException] = []
+    threads: list[threading.Thread] = []
+    try:
+        async with async_get_ydoc(webspace_id) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("data").set(txn, "flag", True)
+
+        def _reader() -> None:
+            try:
+                with get_ydoc(webspace_id, read_only=True) as ydoc:
+                    assert ydoc.get_map("data").get("flag") is True
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_reader, name=f"ystore-reader-{idx}") for idx in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5.0)
+
+        alive = [thread.name for thread in threads if thread.is_alive()]
+        assert not alive
+        assert not errors
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_async_read_ydoc_collects_timings_without_name_error() -> None:
     webspace_id = _webspace_id("read-timings")
     timings: dict[str, float] = {}
