@@ -146,6 +146,137 @@ Representative action kinds:
 - `open_workspace`
 - `apply_review_change`
 
+## Interaction Behavior Model
+
+Some browser behavior is neither domain state nor renderer styling. It should
+be modeled as UI behavior data so skills, scenarios, Builder, and NLU surfaces
+can reason about it without changing the client core.
+
+The first system-level behavior contracts belong in `webui.json`:
+
+- `interaction.initialFocus`: the first semantic element to focus when a
+  page, modal, form, or widget becomes interactive. This should reference a
+  semantic target such as `widget:weather-city-input`, not a CSS selector.
+- `interaction.submit.defaultAction`: the action that runs when Enter submits
+  the current form context. Enter must not implicitly activate the first
+  visible button.
+- `resources`: stable skill/scenario UI resources such as icons, SVGs, and
+  preview images. Authored manifests reference them as `resource:<id>`, while
+  AdaOS resolves and delivers them through the core/browser channel.
+- `action.feedback`: pending, success, error, and timeout behavior for an
+  action that expects an asynchronous Yjs or stream state change. The current
+  `params._observe` shape is a legacy compatibility pattern and should
+  converge into `feedback.observe`.
+- `loading`: element-level loading and degraded-state behavior. This extends
+  the coarse `loadHint` readiness model without turning every widget into a
+  custom renderer.
+
+Example:
+
+```json
+{
+  "resources": {
+    "weather.current": {
+      "kind": "svg",
+      "path": "assets/icons/current.svg",
+      "delivery": "core",
+      "cacheKey": "sha256:..."
+    }
+  },
+  "apps": [
+    {
+      "id": "weather_app",
+      "title": "Weather",
+      "icon": "resource:weather.current",
+      "launchModal": "weather_modal"
+    }
+  ],
+  "registry": {
+    "modals": {
+      "weather_modal": {
+        "schema": {
+          "id": "weather_modal",
+          "interaction": {
+            "initialFocus": "widget:weather-city-input",
+            "submit": {
+              "defaultAction": "weather.search",
+              "enterKey": "submit",
+              "scope": "focused_form"
+            }
+          },
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [{ "id": "main" }]
+          },
+          "widgets": [
+            {
+              "id": "weather-city-input",
+              "type": "input.text",
+              "area": "main",
+              "loading": {
+                "loadingText": "Loading weather...",
+                "skeleton": "card",
+                "timeoutMs": 9000
+              },
+              "actions": [
+                {
+                  "id": "weather.search",
+                  "on": "change",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "params": {
+                    "event_type": "weather.location.requested",
+                    "payload": {
+                      "city": "$event.value",
+                      "request_id": "$client.requestId"
+                    }
+                  },
+                  "feedback": {
+                    "pending": {
+                      "disable": true,
+                      "label": "Searching...",
+                      "icon": "sync-outline"
+                    },
+                    "observe": {
+                      "kind": "y",
+                      "path": "data/weather/current",
+                      "scope": "node",
+                      "timeoutMs": 9000,
+                      "match": {
+                        "request_id": "$client.requestId",
+                        "pending": false
+                      },
+                      "advanceFields": ["request_id", "updated_at", "pending"]
+                    },
+                    "timeout": {
+                      "state": "degraded",
+                      "message": "Weather update timed out"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Useful follow-on behavior contracts that should be considered before the
+client grows more per-widget special cases:
+
+- idempotency keys for actions that can be double-clicked, retried, or
+  resumed after reconnect
+- explicit cancel actions for long-running pending controls
+- stale state and dirty-form state, separate from loading
+- destructive-action confirmation policy with side-effect class and preview
+  evidence
+- optimistic update policy, including rollback on failed observation
+- accessibility hints such as live-region priority for async status changes
+
 ## Top-Level Surface Model
 
 The browser client should be organized around three top-level surface classes.

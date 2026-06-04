@@ -780,6 +780,10 @@ Before publishing:
 - verify stream receivers have bounded modes and snapshot-on-subscribe behavior
 - verify stream receivers have `initialState`, freshness metadata, and a
   recovery path after resubscribe
+- verify `webui.json` declares shared interaction behavior for first focus,
+  Enter/default submit actions, pending action feedback, element loading
+  states, and skill UI resources instead of hiding these rules in widget
+  special cases
 - verify no handler rewrites broad Yjs roots
 - verify hot events have debounce/budget tests
 - verify SDK projection diagnostics show the expected `by_event` pressure

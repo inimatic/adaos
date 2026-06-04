@@ -16,7 +16,38 @@ The browser should resolve these resources through a stable manifest, cache them
 
 ## Runtime Shape
 
-Recommended projection:
+Authored `webui.json` should declare stable resource ids. The runtime resolves
+those declarations into browser URLs, cache keys, and delivery diagnostics.
+
+Recommended authored shape:
+
+```json
+{
+  "resources": {
+    "weather.current": {
+      "kind": "svg",
+      "path": "assets/icons/current.svg",
+      "mime": "image/svg+xml",
+      "delivery": "core",
+      "cacheKey": "sha256:..."
+    },
+    "weather.preview": {
+      "kind": "image",
+      "path": "assets/preview.webp",
+      "mime": "image/webp"
+    }
+  },
+  "apps": [
+    {
+      "id": "weather_app",
+      "title": "Weather",
+      "icon": "resource:weather.current"
+    }
+  ]
+}
+```
+
+Recommended materialized projection:
 
 ```yaml
 skill_assets:

@@ -200,6 +200,116 @@ def test_webui_schema_accepts_runtime_data_sources_and_auto_actions() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_interaction_resources_and_action_feedback() -> None:
+    schema = _load_schema()
+    payload = {
+        "resources": {
+            "weather.current": {
+                "kind": "svg",
+                "path": "assets/icons/current.svg",
+                "mime": "image/svg+xml",
+                "cacheKey": "sha256:abc123",
+                "delivery": "core",
+            },
+            "weather.preview": {
+                "kind": "image",
+                "path": "assets/preview.webp",
+                "mime": "image/webp",
+                "alt": "Weather preview",
+            },
+        },
+        "apps": [
+            {
+                "id": "weather_app",
+                "title": "Weather",
+                "icon": "resource:weather.current",
+                "launchModal": "weather_modal",
+            }
+        ],
+        "registry": {
+            "modals": {
+                "weather_modal": {
+                    "title": "Weather",
+                    "loading": {
+                        "statePath": "data/weather/current",
+                        "loadingText": "Loading weather...",
+                        "skeleton": "card",
+                        "timeoutMs": 9000,
+                    },
+                    "schema": {
+                        "id": "weather_modal",
+                        "layout": {"type": "single", "pattern": "stack", "areas": [{"id": "main"}]},
+                        "interaction": {
+                            "initialFocus": {"ref": "widget:weather-city-input", "strategy": "restore_or_first"},
+                            "submit": {
+                                "defaultAction": "weather.search",
+                                "enterKey": "submit",
+                                "scope": "focused_form",
+                            },
+                        },
+                        "widgets": [
+                            {
+                                "id": "weather-preview",
+                                "type": "visual.image",
+                                "area": "main",
+                                "dataSource": {"kind": "resource", "resource": "weather.preview"},
+                                "loading": {"skeleton": "card", "emptyText": "No preview yet"},
+                            },
+                            {
+                                "id": "weather-city-input",
+                                "type": "input.text",
+                                "area": "main",
+                                "inputs": {
+                                    "bindField": "city",
+                                    "commitMode": "manual",
+                                    "saveLabel": "Search",
+                                },
+                                "interaction": {"defaultAction": "weather.search"},
+                                "actions": [
+                                    {
+                                        "id": "weather.search",
+                                        "on": "change",
+                                        "type": "callHost",
+                                        "target": "skill.event.publish",
+                                        "params": {
+                                            "event_type": "weather.location.requested",
+                                            "payload": {
+                                                "city": "$event.value",
+                                                "request_id": "$client.requestId",
+                                            },
+                                        },
+                                        "feedback": {
+                                            "pending": {
+                                                "disable": True,
+                                                "label": "Searching...",
+                                                "icon": "sync-outline",
+                                            },
+                                            "observe": {
+                                                "kind": "y",
+                                                "path": "data/weather/current",
+                                                "scope": "node",
+                                                "timeoutMs": 9000,
+                                                "match": {
+                                                    "request_id": "$client.requestId",
+                                                    "pending": False,
+                                                },
+                                                "advanceFields": ["request_id", "updated_at", "pending"],
+                                            },
+                                            "timeout": {"state": "degraded", "message": "Weather update timed out"},
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                }
+            }
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_frame_viewer_media_surface_contract() -> None:
     schema = _load_schema()
     payload = {

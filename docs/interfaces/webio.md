@@ -842,6 +842,131 @@ surfaces are first-paint critical versus off-focus or deferred, but they do
 not encode a low-level scheduler. Keep them at page/widget/modal/catalog
 granularity rather than annotating every leaf control.
 
+### Interaction behavior contracts
+
+`webui.json` also models browser behavior that should be shared by widgets and
+semantic renderers instead of being reimplemented per skill.
+
+Use `interaction.initialFocus` for the first focus target when a page/modal is
+interactive:
+
+```json
+{
+  "schema": {
+    "id": "search_modal",
+    "interaction": {
+      "initialFocus": {
+        "ref": "widget:search-input",
+        "strategy": "restore_or_first"
+      }
+    }
+  }
+}
+```
+
+Use `interaction.submit.defaultAction` to define what Enter does inside a form
+context. Do not rely on button order:
+
+```json
+{
+  "schema": {
+    "id": "search_modal",
+    "interaction": {
+      "submit": {
+        "defaultAction": "media.search",
+        "enterKey": "submit",
+        "scope": "focused_form"
+      }
+    }
+  }
+}
+```
+
+Use `action.feedback` for controls that wait for an async Yjs or stream result.
+This is the normalized form of the existing `params._observe` pattern used by
+some current manifests:
+
+```json
+{
+  "id": "media.search",
+  "on": "change",
+  "type": "callHost",
+  "target": "media_indexer.action",
+  "params": {
+    "id": "search",
+    "query": "$event.value",
+    "request_id": "$client.requestId"
+  },
+  "feedback": {
+    "pending": {
+      "disable": true,
+      "label": "Searching..."
+    },
+    "observe": {
+      "kind": "y",
+      "path": "data/media_indexer/results",
+      "scope": "node",
+      "timeoutMs": 60000,
+      "match": {
+        "request_id": "$client.requestId",
+        "pending": false
+      },
+      "advanceFields": ["request_id", "updated_at", "pending"]
+    },
+    "timeout": {
+      "state": "degraded",
+      "message": "Search result did not arrive before timeout."
+    }
+  }
+}
+```
+
+Use `loading` for element-level loading, empty, and degraded states. Keep it
+separate from `load`, which describes coarse staged materialization intent:
+
+```json
+{
+  "id": "media-results",
+  "type": "ui.table",
+  "loading": {
+    "statePath": "data/media_indexer/results",
+    "readyWhen": "$value.pending === false",
+    "loadingText": "Loading results...",
+    "emptyText": "No results yet",
+    "degradedText": "Results are stale",
+    "skeleton": "table",
+    "timeoutMs": 60000,
+    "retainLastValue": true
+  }
+}
+```
+
+Static UI resources should be declared under top-level `resources` and
+referenced as `resource:<id>`. The runtime resolves and delivers core-owned
+asset URLs over the active browser/core channel; skill code should not expose
+ad-hoc static-file servers for UI icons and preview images.
+
+```json
+{
+  "resources": {
+    "media.search": {
+      "kind": "svg",
+      "path": "assets/icons/search.svg",
+      "mime": "image/svg+xml",
+      "delivery": "core",
+      "cacheKey": "sha256:..."
+    }
+  },
+  "apps": [
+    {
+      "id": "media_indexer_app",
+      "title": "Media Indexer",
+      "icon": "resource:media.search"
+    }
+  ]
+}
+```
+
 ### Overlay presentation and focus lifecycle
 
 Schema-driven modals are runtime-owned overlays. A `webui.json` manifest
