@@ -220,6 +220,9 @@ Open work:
 - [x] `[should]` Add blast-radius preview for learned regex and action descriptor changes.
 - [x] `[should]` Add browser/webui preview for generated widgets, modals, and data
   bindings.
+- [x] `[should]` Keep Builder/Prompt IDE workflow widgets on shared control-plane
+  YDoc paths (`data/prompt/*`) so preview actions and status bars do not drift
+  into node-scoped runtime data.
 - [x] `[must]` Add static checks for unsafe direct Yjs mutation and unbounded process
   memory in generated skills.
 - [x] `[must]` Add route-budget validation for `data_routes`, streams, and projections.
