@@ -13,6 +13,7 @@ from typing import Any
 _LOCK = threading.RLock()
 _RUNTIME: Any | None = None
 _MODEL_PATH: Path | None = None
+_WARM_STATUS: dict[str, Any] = {"status": "not_started"}
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
@@ -126,6 +127,27 @@ def _load_runtime(model_path: Path) -> Any:
         return _RUNTIME
 
 
+def _warm_default_runtime() -> None:
+    global _WARM_STATUS
+    model_path = _latest_model_path()
+    if not model_path or not model_path.exists():
+        _WARM_STATUS = {"status": "missing_model", "models_dir": str(_default_models_dir())}
+        return
+    _WARM_STATUS = {"status": "loading", "model_path": str(model_path)}
+    try:
+        _load_runtime(model_path)
+    except Exception as exc:
+        traceback.print_exc(file=sys.stderr)
+        _WARM_STATUS = {"status": "failed", "model_path": str(model_path), "error": str(exc)}
+        return
+    _WARM_STATUS = {"status": "ready", "model_path": str(model_path)}
+
+
+def _start_warmup_thread() -> None:
+    thread = threading.Thread(target=_warm_default_runtime, name="rasa-nlu-warmup", daemon=True)
+    thread.start()
+
+
 def _train(payload: dict[str, Any]) -> dict[str, Any]:
     project_dir = payload.get("project_dir")
     out_dir = payload.get("out_dir")
@@ -188,6 +210,7 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "service": "rasa_nlu_service_skill",
                     "model_path": str(_MODEL_PATH) if _MODEL_PATH else None,
+                    "warmup": dict(_WARM_STATUS),
                 },
             )
             return
@@ -226,4 +249,5 @@ if __name__ == "__main__":
         port = int(os.getenv("ADAOS_SERVICE_PORT", "18092") or "18092")
     except Exception:
         port = 18092
+    _start_warmup_thread()
     ThreadingHTTPServer((host, port), Handler).serve_forever()

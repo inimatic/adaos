@@ -101,6 +101,73 @@ async def test_teacher_bridge_skips_provider_outage_before_llm(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_teacher_bridge_keeps_transient_provider_failure_teachable_when_other_engines_miss(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_bridge
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-transient-provider-warning"
+    monkeypatch.setattr(teacher_bridge, "_ENABLED", True)
+
+    requests: list[dict] = []
+    skipped: list[dict] = []
+
+    def _capture_request(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            requests.append(dict(payload))
+
+    def _capture_skipped(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            skipped.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.request", _capture_request)
+    ctx.bus.subscribe("nlp.teacher.skipped", _capture_skipped)
+
+    await teacher_bridge._on_not_obtained(
+        {
+            "text": "show infrastructure risks",
+            "webspace_id": webspace_id,
+            "request_id": "req.transient.provider.warning",
+            "via": "rasa",
+            "reason": "rasa_timeout",
+            "_meta": {
+                "webspace_id": webspace_id,
+                "route_id": "voice_chat",
+                "neuro_lite_fallback": True,
+                "neuro_lite_fallback_reason": "below_margin_threshold",
+                "nlu_pipeline": {
+                    "active_stages": {
+                        "regex": True,
+                        "neuro_lite": True,
+                        "rasa": True,
+                    }
+                },
+            },
+        }
+    )
+
+    assert requests
+    assert not skipped
+    classification = requests[-1]["request"]["classification"]
+    assert classification["class"] == "nlu_gap"
+    assert classification["teachable"] is True
+    assert classification["provider_issue"]["reason"] == "rasa_timeout"
+    assert classification["provider_issue"]["fallbacks"]["neuro_lite_fallback_reason"] == "below_margin_threshold"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        items = list((teacher or {}).get("items") or [])
+        events = list((teacher or {}).get("events") or [])
+
+    assert items[-1]["status"] == "pending"
+    assert items[-1]["classification"]["provider_issue"]["pipeline"]["active_stages"]["rasa"] is True
+    assert events[-1]["kind"] == "not_obtained"
+
+
+@pytest.mark.anyio
 async def test_teacher_bridge_allows_low_confidence_as_nlu_gap(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_bridge
