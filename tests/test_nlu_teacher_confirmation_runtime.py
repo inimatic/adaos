@@ -66,6 +66,77 @@ async def test_voice_candidate_proposal_requests_confirmation():
 
 
 @pytest.mark.anyio
+async def test_voice_candidate_proposal_skips_recent_accepted_duplicate():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-confirmation-accepted-duplicate"
+    request_text = "show infrastructure state"
+    candidate = {
+        "id": "cand.confirm.duplicate.new",
+        "ts": time.time(),
+        "kind": "regex_rule",
+        "status": "pending",
+        "text": request_text,
+        "request_id": "req.confirm.duplicate.new",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow infrastructure state\b"},
+        "preview": {"ok": True, "slots": {"modal_id": "infrastate_modal"}},
+    }
+    accepted_confirmation = {
+        "id": "confirm.duplicate.old",
+        "ts": time.time(),
+        "status": "accepted",
+        "candidate_id": "cand.confirm.duplicate.old",
+        "request_id": "req.confirm.duplicate.old",
+        "request_text": request_text,
+        "question": "Open infrastructure state?",
+        "answer": "yes",
+        "answered_at": time.time(),
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(
+                txn,
+                "nlu_teacher",
+                {
+                    "pending_confirmations": [accepted_confirmation],
+                    "candidates": [candidate],
+                    "events": [],
+                },
+            )
+
+    messages: list[dict] = []
+
+    def _capture_chat(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            messages.append(dict(payload))
+
+    ctx.bus.subscribe("io.out.chat.append", _capture_chat)
+
+    await conf._on_candidate_proposed(
+        {
+            "webspace_id": webspace_id,
+            "candidate": candidate,
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        confirmations = list(teacher.get("pending_confirmations") or [])
+        events = list(teacher.get("events") or [])
+
+    assert confirmations == [accepted_confirmation]
+    assert not events
+    assert not messages
+
+
+@pytest.mark.anyio
 async def test_voice_existing_candidate_reasks_confirmation():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf
@@ -259,6 +330,45 @@ async def test_voice_confirmation_suppresses_short_stt_tail():
     assert await conf.should_suppress_voice_text_for_confirmation(webspace_id, "от сети")
     assert not await conf.should_suppress_voice_text_for_confirmation(webspace_id, "да")
     assert not await conf.should_suppress_voice_text_for_confirmation(webspace_id, "покажи браузеры")
+
+
+@pytest.mark.anyio
+async def test_voice_confirmation_answer_consumed_after_teacher_accepts():
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-teacher-confirmation-answer-consumed"
+    confirmation = {
+        "id": "confirm.answer.consumed",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "candidate_id": "cand.answer.consumed",
+        "request_id": "req.answer.consumed",
+        "request_text": "show infrastructure state",
+        "question": "Open infrastructure state?",
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"pending_confirmations": [confirmation], "events": []})
+
+    assert await conf.should_consume_voice_confirmation_answer(webspace_id, "yes")
+
+    await conf._on_voice_chat_user(
+        {
+            "webspace_id": webspace_id,
+            "text": "yes",
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        confirmations = list(teacher.get("pending_confirmations") or [])
+
+    assert confirmations[-1]["status"] == "accepted"
+    assert await conf.should_consume_voice_confirmation_answer(webspace_id, "yes")
 
 
 @pytest.mark.anyio

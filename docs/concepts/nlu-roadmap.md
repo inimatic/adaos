@@ -904,10 +904,16 @@ below remain useful for tracking existing implementation work.
   and a second rejection asks for clarification.
 - [x] `[must]` Voice confirmation answers are not routed into normal NLU detection, so
   short replies such as `да` and `нет` do not create extra Teacher misses.
+- [x] `[must]` Voice confirmation answer routing is race-safe: Teacher records a
+  short-lived consumed-answer marker, and the Voice router checks it before
+  publishing normal `nlp.intent.detect.request`.
 - [x] `[must]` Repeated voice phrases reuse a matching unresolved candidate and repeat
   the confirmation prompt before the generic miss/fallback response. This
   covers `pending`, `apply_requested`, and `validation_failed` candidates whose
   Apply can pass after descriptor/lookup aliases are fixed.
+- [x] `[must]` Late duplicate `candidate.proposed` events for the same voice request
+  do not reopen the same confirmation question after a confirmation is already
+  awaiting an answer or has just been accepted.
 - [x] `[must]` Positive Voice confirmation applies the candidate synchronously through
   the same validation/apply/verification path used by API Apply, preventing
   candidates from staying indefinitely in `apply_requested` without

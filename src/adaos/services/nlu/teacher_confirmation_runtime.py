@@ -19,6 +19,7 @@ _log = logging.getLogger("adaos.nlu.teacher.confirmation")
 
 _MAX_CONFIRMATIONS = 50
 _CONFIRMATION_TTL_S = 15 * 60
+_CONSUMED_CONFIRMATION_ANSWER_TTL_S = 15.0
 _RECONFIRMABLE_CANDIDATE_STATUSES = {"pending", "validation_failed", "apply_requested"}
 _YES_RE = re.compile(r"^\s*(да|ага|угу|ок|okay|yes|y|верно|подтверждаю|применяй|открой)\b", re.I | re.U)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|n|не\s+то|неверно|ошибка)\b", re.I | re.U)
@@ -44,6 +45,7 @@ _SECOND_ANSWERS = {
     "вариант 2",
     "вариант два",
 }
+_CONSUMED_CONFIRMATION_ANSWERS: dict[tuple[str, str], float] = {}
 
 
 def _nlu_confirmation_write_meta():
@@ -183,6 +185,35 @@ def _is_voice_regex_candidate(candidate: Mapping[str, Any], meta: Mapping[str, A
         and candidate.get("status") == "pending"
         and bool(_candidate_id(candidate))
     )
+
+
+def _has_recent_related_confirmation(
+    teacher: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    within_s: float = 20.0,
+) -> bool:
+    candidate_id = _candidate_id(candidate)
+    request_key = _match_text_key(candidate.get("text") or candidate.get("request_text"))
+    if not candidate_id and not request_key:
+        return False
+    now = time.time()
+    items = _as_list(teacher.get("pending_confirmations")) + _as_list(teacher.get("clarification_sessions"))
+    for item in reversed(items):
+        status = str(item.get("status") or "").strip()
+        if status not in {"awaiting_user", "accepted", "answered"}:
+            continue
+        try:
+            marker = float(item.get("answered_at") or item.get("ts") or 0.0)
+        except Exception:
+            marker = 0.0
+        if marker <= 0 or now - marker > max(1.0, float(within_s)):
+            continue
+        if candidate_id and str(item.get("candidate_id") or "").strip() == candidate_id:
+            return True
+        if request_key and _match_text_key(item.get("request_text")) == request_key:
+            return True
+    return False
 
 
 def _slot_value(candidate: Mapping[str, Any], *keys: str) -> str:
@@ -544,6 +575,42 @@ def is_confirmation_answer(text: str) -> bool:
     return bool(_classify_answer(text))
 
 
+def _prune_consumed_confirmation_answers(now: float | None = None) -> None:
+    marker = time.time() if now is None else float(now)
+    ttl = max(1.0, _CONSUMED_CONFIRMATION_ANSWER_TTL_S)
+    stale = [key for key, ts in _CONSUMED_CONFIRMATION_ANSWERS.items() if marker - float(ts or 0.0) > ttl]
+    for key in stale:
+        _CONSUMED_CONFIRMATION_ANSWERS.pop(key, None)
+
+
+def _remember_consumed_voice_confirmation_answer(webspace_id: str, text: str) -> None:
+    normalized = _normalize_answer_text(text)
+    if not normalized:
+        return
+    now = time.time()
+    _prune_consumed_confirmation_answers(now)
+    _CONSUMED_CONFIRMATION_ANSWERS[(str(webspace_id or "").strip() or default_webspace_id(), normalized)] = now
+
+
+def _was_recently_consumed_voice_confirmation_answer(
+    webspace_id: str,
+    text: str,
+    *,
+    within_s: float = _CONSUMED_CONFIRMATION_ANSWER_TTL_S,
+) -> bool:
+    normalized = _normalize_answer_text(text)
+    if not normalized:
+        return False
+    now = time.time()
+    _prune_consumed_confirmation_answers(now)
+    key = (str(webspace_id or "").strip() or default_webspace_id(), normalized)
+    try:
+        marker = float(_CONSUMED_CONFIRMATION_ANSWERS.get(key) or 0.0)
+    except Exception:
+        marker = 0.0
+    return marker > 0 and now - marker <= max(1.0, float(within_s))
+
+
 def _looks_like_correction_text(text: str) -> bool:
     raw = str(text or "").strip()
     if not raw:
@@ -750,6 +817,19 @@ async def has_recent_voice_confirmation(webspace_id: str, *, within_s: float = 1
     return False
 
 
+async def should_consume_voice_confirmation_answer(
+    webspace_id: str,
+    text: str,
+    *,
+    within_s: float = 15.0,
+) -> bool:
+    if not is_confirmation_answer(text):
+        return False
+    if _was_recently_consumed_voice_confirmation_answer(webspace_id, text, within_s=within_s):
+        return True
+    return await has_recent_voice_confirmation(webspace_id, within_s=within_s)
+
+
 async def request_existing_candidate_confirmation(
     webspace_id: str,
     text: str,
@@ -842,6 +922,21 @@ async def _on_candidate_proposed(evt: Any) -> None:
         attempt = int(meta.get("nlu_teacher_confirmation_attempt") or 0)
     except Exception:
         attempt = 0
+    try:
+        teacher = await _read_teacher(webspace_id)
+        if _has_recent_related_confirmation(teacher, candidate):
+            try:
+                _log.debug(
+                    "skip duplicate voice confirmation webspace=%s candidate_id=%s request_text=%r",
+                    webspace_id,
+                    _candidate_id(candidate),
+                    request_text,
+                )
+            except Exception:
+                pass
+            return
+    except Exception:
+        _log.debug("failed to check duplicate voice confirmation webspace=%s", webspace_id, exc_info=True)
     confirmation = {
         "id": f"confirm.{int(time.time() * 1000)}",
         "ts": time.time(),
@@ -899,6 +994,7 @@ async def _on_voice_chat_user(evt: Any) -> None:
         return
     if not confirmation:
         if clarification:
+            _remember_consumed_voice_confirmation_answer(webspace_id, text)
             try:
                 await _answer_clarification(
                     webspace_id,
@@ -921,6 +1017,7 @@ async def _on_voice_chat_user(evt: Any) -> None:
         attempt = 0
     confirmation_meta = coerce_dict(confirmation.get("_meta"))
     merged_meta = {**confirmation_meta, **dict(meta), "route_id": "voice_chat"}
+    _remember_consumed_voice_confirmation_answer(webspace_id, text)
 
     if answer == "yes":
         await _patch_confirmation(
