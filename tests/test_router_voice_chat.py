@@ -232,6 +232,86 @@ async def test_voice_chat_user_defaults_history_to_local_node_when_target_missin
     assert seen_nlu[0].payload["_meta"]["target_node_id"] == "hub-node"
 
 
+async def test_voice_chat_confirmation_answer_is_not_routed_to_nlu(monkeypatch) -> None:
+    class _Txn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Map(dict):
+        def set(self, txn, key, value):  # noqa: ARG002
+            self[key] = value
+
+        def to_json(self):
+            return dict(self)
+
+    class _Doc:
+        def __init__(self) -> None:
+            self._maps = {"data": _Map()}
+
+        def get_map(self, name: str):
+            return self._maps.setdefault(name, _Map())
+
+        def begin_transaction(self):
+            return _Txn()
+
+    class _AsyncDoc:
+        async def __aenter__(self):
+            return doc
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _MetaCtx:
+        async def __aenter__(self):
+            return {}
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    async def _fake_consume_confirmation_answer(webspace_id: str, text: str, **_kwargs) -> bool:
+        return webspace_id == "desktop" and text == "yes"
+
+    doc = _Doc()
+    bus = LocalEventBus()
+    seen_nlu: list[Event] = []
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    monkeypatch.setattr(conf, "should_consume_voice_confirmation_answer", _fake_consume_confirmation_answer)
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc())
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda ev: seen_nlu.append(ev))
+
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "yes",
+                "webspace_id": "desktop",
+                "_meta": {"route_id": "voice_chat"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    messages = doc.get_map("data")["nodes"]["hub-node"]["voice_chat"]["messages"]
+    assert messages[-1]["from"] == "user"
+    assert messages[-1]["text"] == "yes"
+    assert seen_nlu == []
+
+
 async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> None:
     class _Txn:
         def __enter__(self):

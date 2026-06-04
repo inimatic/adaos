@@ -2278,12 +2278,19 @@ class RouterService:
                 pass
             try:
                 from adaos.services.nlu.teacher_confirmation_runtime import (
-                    has_recent_voice_confirmation,
-                    is_confirmation_answer,
+                    should_consume_voice_confirmation_answer,
                     should_suppress_voice_text_for_confirmation,
                 )
 
-                if is_confirmation_answer(text) and await has_recent_voice_confirmation(ws):
+                if await should_consume_voice_confirmation_answer(ws, text):
+                    try:
+                        logging.getLogger("adaos.router.voice_chat").debug(
+                            "voice.chat.user consumed as NLU Teacher confirmation answer webspace=%s text=%r",
+                            ws,
+                            text,
+                        )
+                    except Exception:
+                        pass
                     return
                 if await should_suppress_voice_text_for_confirmation(ws, text):
                     try:
