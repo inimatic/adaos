@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import sys
 import types
 from types import SimpleNamespace
@@ -8,11 +9,17 @@ from types import SimpleNamespace
 if "nats" not in sys.modules:
     sys.modules["nats"] = types.ModuleType("nats")
 if "y_py" not in sys.modules:
-    sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
+    try:
+        importlib.import_module("y_py")
+    except Exception:
+        sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
 if "ypy_websocket" not in sys.modules:
-    ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
-    sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
-    sys.modules["ypy_websocket.ystore"] = ystore_mod
+    try:
+        importlib.import_module("ypy_websocket.ystore")
+    except Exception:
+        ystore_mod = types.SimpleNamespace(BaseYStore=object, YDocNotFound=RuntimeError)
+        sys.modules["ypy_websocket"] = types.SimpleNamespace(ystore=ystore_mod)
+        sys.modules["ypy_websocket.ystore"] = ystore_mod
 
 from adaos.apps.api import node_api as node_api_module
 from adaos.apps.cli.commands import node as node_cli_module
@@ -1179,7 +1186,13 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
             }
         ),
     )
-    monkeypatch.setattr(node_api_module, "async_read_ydoc", lambda *_args, **_kwargs: _FakeAsyncDoc(fake_state))
+    read_calls: list[dict[str, object]] = []
+
+    def _fake_async_read_ydoc(*_args, **kwargs):
+        read_calls.append(dict(kwargs))
+        return _FakeAsyncDoc(fake_state)
+
+    monkeypatch.setattr(node_api_module, "async_read_ydoc", _fake_async_read_ydoc)
     monkeypatch.setattr(
         node_api_module,
         "yjs_sync_runtime_snapshot",
@@ -1206,6 +1219,8 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
     assert sorted(essential["snapshot"]["data"].keys()) == ["catalog", "desktop", "installed", "nodes", "webspaces"]
     assert essential["snapshot"]["data"]["nodes"]["hub-1"]["weather"]["current"]["city"] == "Moscow"
     assert essential["snapshot"]["registry"] == {}
+    assert read_calls
+    assert all(call.get("prefer_live_room") is True for call in read_calls)
 
 
 def test_node_yjs_webspace_rebuild_state_endpoint_includes_cached_materialization(monkeypatch) -> None:

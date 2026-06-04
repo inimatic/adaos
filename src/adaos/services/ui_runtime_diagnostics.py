@@ -44,6 +44,8 @@ async def ingest_ui_runtime_diagnostics(
         normalized = await _normalize_event(raw, webspace_id=target_webspace_id)
         if not normalized:
             continue
+        if not _should_persist_event(normalized):
+            continue
         records.append((str(normalized["skill_id"]), normalized))
         accepted.append(
             {
@@ -63,6 +65,15 @@ async def ingest_ui_runtime_diagnostics(
         "webspace_id": target_webspace_id,
         "events": accepted,
     }
+
+
+def _should_persist_event(event: Mapping[str, Any]) -> bool:
+    source = str(event.get("source") or "").strip()
+    code = str(event.get("code") or "").strip()
+    level = str(event.get("level") or "").strip().upper()
+    if source == "ui.runtime_debug" and code == "webio.event" and level == "DEBUG":
+        return False
+    return True
 
 
 async def _normalize_event(raw: Mapping[str, Any], *, webspace_id: str) -> dict[str, Any] | None:
