@@ -168,11 +168,41 @@ def _template_dir(kind: str, template_id: str) -> Path:
     return path
 
 
+def _ctx_path(paths: Any, attr: str) -> Path | None:
+    try:
+        getter = getattr(paths, attr)
+        raw = getter() if callable(getter) else getter
+        return Path(raw).expanduser().resolve()
+    except Exception:
+        return None
+
+
+def _builder_root_from_paths(paths: Any) -> Path | None:
+    base_dir = _ctx_path(paths, "base_dir")
+    if base_dir is not None:
+        return base_dir / "dev" / "builder"
+
+    dev_dir = _ctx_path(paths, "dev_dir")
+    if dev_dir is not None:
+        if dev_dir.parent.name == "dev":
+            return dev_dir.parent / "builder"
+        return dev_dir / "builder"
+
+    dev_skills_root = _ctx_path(paths, "dev_skills_dir")
+    if dev_skills_root is not None:
+        dev_space_root = dev_skills_root.parent
+        if dev_space_root.parent.name == "dev":
+            dev_space_root = dev_space_root.parent
+        return dev_space_root / "builder"
+    return None
+
+
 @dataclass(slots=True)
 class BuilderWorkspaceService:
     """Create draft workspaces and preview bundles without mutating runtime state."""
 
     state_dir: Path | None = None
+    builder_root: Path | None = None
     repo_root: Path | None = None
     workspace_root: Path | None = None
     skills_root: Path | None = None
@@ -182,6 +212,7 @@ class BuilderWorkspaceService:
     def from_context(cls) -> "BuilderWorkspaceService":
         repo_root = current_repo_root()
         state_dir = current_state_dir()
+        builder_root = None
         workspace_root = None
         skills_root = None
         scenarios_root = None
@@ -189,9 +220,10 @@ class BuilderWorkspaceService:
             from adaos.services.agent_context import get_ctx
 
             ctx = get_ctx()
-            workspace_root = Path(ctx.paths.workspace_dir()).expanduser().resolve()
-            skills_root = Path(ctx.paths.skills_dir()).expanduser().resolve()
-            scenarios_root = Path(ctx.paths.scenarios_dir()).expanduser().resolve()
+            workspace_root = _ctx_path(ctx.paths, "workspace_dir")
+            skills_root = _ctx_path(ctx.paths, "skills_dir")
+            scenarios_root = _ctx_path(ctx.paths, "scenarios_dir")
+            builder_root = _builder_root_from_paths(ctx.paths)
         except Exception:
             if repo_root is not None:
                 workspace_root = repo_root / ".adaos" / "workspace"
@@ -199,6 +231,7 @@ class BuilderWorkspaceService:
                 scenarios_root = workspace_root / "scenarios"
         return cls(
             state_dir=state_dir,
+            builder_root=builder_root,
             repo_root=repo_root,
             workspace_root=workspace_root,
             skills_root=skills_root,
@@ -207,7 +240,10 @@ class BuilderWorkspaceService:
 
     @property
     def root(self) -> Path:
-        path = Path(self.state_dir or current_state_dir()) / "builder"
+        if self.builder_root is not None:
+            path = Path(self.builder_root).expanduser().resolve()
+        else:
+            path = Path(self.state_dir or current_state_dir()) / "builder"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

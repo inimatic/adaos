@@ -199,7 +199,9 @@ change.
 The first implemented write-neutral Builder surface is:
 
 - `adaos builder draft`: creates an isolated draft workspace under Builder
-  state, including template metadata or descriptor-fix materialization.
+  devspace (`.adaos/dev/builder/drafts` when an AdaOS context is available;
+  `state/builder/drafts` is only the fallback), including template metadata or
+  descriptor-fix materialization.
 - `adaos builder preview`: creates an inspectable preview bundle with diff,
   schemas, route plan, NLU/action/UI preview summaries, static safety checks,
   dependency bootstrap evidence, and human-review reasons.

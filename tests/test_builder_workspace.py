@@ -6,9 +6,11 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from typer.testing import CliRunner
 
 from adaos.apps.api import builder as builder_api
 from adaos.apps.api.auth import require_token
+from adaos.apps.cli.commands import builder as builder_cli
 from adaos.services.builder import BuilderWorkspaceService
 
 
@@ -16,6 +18,7 @@ def _service(tmp_path: Path) -> BuilderWorkspaceService:
     workspace = tmp_path / "workspace"
     return BuilderWorkspaceService(
         state_dir=tmp_path / "state",
+        builder_root=tmp_path / "dev" / "builder",
         repo_root=tmp_path,
         workspace_root=workspace,
         skills_root=workspace / "skills",
@@ -109,6 +112,7 @@ def test_preview_reports_scenario_dependency_bootstrap(tmp_path: Path) -> None:
     preview = service.preview(draft_id=result["draft"]["draft_id"])["preview"]
 
     bootstrap = preview["scenario_dependency_bootstrap"]
+    assert preview["summary"]["schema_ok"] is True
     assert bootstrap["available"] is True
     assert bootstrap["status"] == "blocked"
     assert bootstrap["failed"] == ["missing_skill"]
@@ -116,6 +120,36 @@ def test_preview_reports_scenario_dependency_bootstrap(tmp_path: Path) -> None:
         "good_skill": True,
         "missing_skill": False,
     }
+
+
+def test_builder_drafts_live_under_devspace(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+
+    result = service.create_draft(
+        kind="scenario",
+        artifact_id="devspace_scene",
+        source_idea="Build a scenario draft in devspace.",
+    )
+
+    draft_dir = Path(result["draft_dir"]).resolve()
+    dev_builder_root = (tmp_path / "dev" / "builder").resolve()
+    assert draft_dir.relative_to(dev_builder_root)
+    assert (draft_dir / "builder.draft.json").exists()
+
+
+def test_builder_cli_accepts_unquoted_multi_word_idea(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(builder_cli.BuilderWorkspaceService, "from_context", classmethod(lambda cls: service))
+
+    result = CliRunner().invoke(
+        builder_cli.app,
+        ["draft", "demo_scene", "--kind", "scenario", "--idea", "Build", "demo", "scenario", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["draft"]["metadata"]["source_idea"] == "Build demo scenario"
+    assert Path(payload["draft_dir"]).resolve().relative_to((tmp_path / "dev" / "builder").resolve())
 
 
 def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:

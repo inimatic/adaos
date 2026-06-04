@@ -26,10 +26,23 @@ def _read_json_arg(value: str | None) -> dict[str, Any] | None:
     return data
 
 
-@app.command("draft")
+def _read_idea_arg(value: str | None, extra: list[str]) -> str:
+    unexpected_options = [part for part in extra if str(part).startswith("-")]
+    if unexpected_options:
+        raise typer.BadParameter(f"unexpected option(s): {' '.join(unexpected_options)}")
+    parts = [str(value).strip()] if value and str(value).strip() else []
+    parts.extend(str(part).strip() for part in extra if str(part).strip())
+    idea = " ".join(parts).strip()
+    if not idea:
+        raise typer.BadParameter("--idea is required")
+    return idea
+
+
+@app.command("draft", context_settings={"allow_extra_args": True, "ignore_unknown_options": False})
 def draft(
+    ctx: typer.Context,
     artifact_id: str = typer.Argument(..., help="Target skill/scenario id or descriptor-fix target id."),
-    idea: str = typer.Option(..., "--idea", "-i", help="Human-readable source idea or requested behavior."),
+    idea: str | None = typer.Option(None, "--idea", "-i", help="Human-readable source idea or requested behavior."),
     kind: str = typer.Option("skill", "--kind", help="skill | scenario | descriptor_fix"),
     task_id: str | None = typer.Option(None, "--task-id", help="Existing Builder task id."),
     template_id: str | None = typer.Option(None, "--template", help="Template id for skill/scenario drafts."),
@@ -38,11 +51,12 @@ def draft(
     descriptor_changes: str | None = typer.Option(None, "--descriptor-changes", help="JSON object or @path for descriptor_fix materialization."),
     json_output: bool = typer.Option(False, "--json", help="Print full JSON response."),
 ) -> None:
+    source_idea = _read_idea_arg(idea, list(ctx.args))
     service = BuilderWorkspaceService.from_context()
     result = service.create_draft(
         kind=kind,
         artifact_id=artifact_id,
-        source_idea=idea,
+        source_idea=source_idea,
         task_id=task_id,
         template_id=template_id,
         target_kind=target_kind,

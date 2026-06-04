@@ -21,13 +21,40 @@ cross-cutting source of truth for Builder readiness.
 
 ## Status Labels
 
+Markdown checkboxes only distinguish done from not done. This roadmap uses a
+four-level MoSCoW-style priority vocabulary for planned Builder work:
+
 - `[must]`: first-order work required for the Builder architecture to be
-  coherent through the current phase.
+  functionally coherent through the named phase.
 - `[should]`: hardening, guidance, or workflow work that materially improves
-  safety, operator confidence, or reuse.
-- `[could]`: useful optional ergonomics, diagnostics, or product polish.
-- `[deferred]`: intentionally postponed until a later phase owns the contract
-  or user experience.
+  safety, operator confidence, or reuse, but can follow the main vertical
+  slice if the `[must]` path remains coherent.
+- `[could]`: useful optional ergonomics, diagnostics, or product polish that
+  should not compete with `[must]` / `[should]` delivery.
+- `[deferred]`: intentionally postponed until a later phase owns the contract,
+  working loop, policy boundary, or user experience.
+
+An unchecked `[should]`, `[could]`, or `[deferred]` item must not be counted as
+a blocker for the next `[must]` implementation gate unless the gate explicitly
+depends on it.
+
+## MoSCoW Gate View
+
+This view is the priority-layer projection of the phase checklist below. The
+phase sections remain the canonical checklist; this table makes the current
+gate easy to read by priority.
+
+| Phase | `[must]` gate | `[should]` layer | `[could]` layer | `[deferred]` layer |
+| --- | --- | --- | --- | --- |
+| 0. Terminology | Complete: role name, executor-neutral wording, terminology anchor. | None. | Complete: future product glossary hook. | None. |
+| 1. Context | Complete: Root MCP context, schemas, hints, redaction, descriptor sets. | Complete: descriptor freshness/provenance in task context. | None. | None. |
+| 2. Task Model | Complete: task schema, Teacher candidate links, descriptor-fix materialization, lifecycle states. | None. | None. | Open: backlink from completed Builder task to originating candidate/idea. |
+| 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, Builder-aware scaffolds, template quality gates. | Complete: scenario-specific Builder guidance. | None. | None. |
+| 4. Validation/Preview | Complete: preview bundle, static checks, route-budget validation. | Complete: blast radius, webui preview, scenario dependency bootstrap. | None. | None. |
+| 5. Human Review | Open: approval profiles, mandatory human-review classes, applied-change evidence. | Open: review workbench and reject/redirect feedback. | None. | None. |
+| 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
+| 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
+| 8. Product Experience | Open: first entrypoint, phrase-level build flow, non-specialist preview language. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -139,6 +166,9 @@ Open work:
 
 - [x] `[must]` Create a Builder draft workspace contract distinct from active runtime
   slots.
+- [x] `[must]` Store draft and preview workspaces under Builder devspace
+  (`.adaos/dev/builder`) with `state/builder` only as a context-free
+  fallback.
 - [x] `[must]` Define draft metadata: task id, source idea, selected template,
   target artifact, assumptions, risk notes, and expected tests.
 - [x] `[must]` Add `adaos builder draft` or equivalent API/CLI route after the draft
