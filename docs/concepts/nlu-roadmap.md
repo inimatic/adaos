@@ -497,6 +497,11 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Add UI evidence that distinguishes NLU gap, provider outage,
   descriptor gap, unsupported action, ambiguous entity, and missing
   capability.
+- [x] `[must]` Implementation slice: Teacher bridge now separates hard provider
+  or stage outages from teachable NLU gaps before invoking the LLM. Transient
+  provider failures with multi-engine miss evidence remain teachable and carry
+  `provider_issue` warning evidence for the UI/read-model; hard provider
+  states emit `not_obtained.skipped` / `nlp.teacher.skipped` instead.
 - [ ] `[should]` Add template inventory, patch preview, promotion controls,
   and regression impact preview.
 - [ ] `[could]` Add compact Voice affordances for listening from every
@@ -1279,8 +1284,11 @@ below remain useful for tracking existing implementation work.
   correction-thread context into the next LLM prompt when the user says
   "no/not that/нет/не то/...".
 - Teacher bridge now classifies `nlp.intent.not_obtained` reasons and skips
-  Root/OpenAI for provider/stage unavailable cases such as `rasa_timeout`,
-  while still treating low-confidence/no-intent outcomes as teachable NLU gaps.
+  Root/OpenAI for hard provider/stage unavailable cases, while still treating
+  low-confidence/no-intent outcomes as teachable NLU gaps. Transient provider
+  failures such as `rasa_timeout` remain teachable when another active stage
+  produced miss/fallback evidence, and carry `provider_issue` warning data for
+  UI/read-model inspection.
 - A closed-loop test now covers: regex miss -> LLM regex candidate -> Apply ->
   `understanding.acquired` -> repeated phrase resolves through `regex.dynamic`.
 - Added repeatable test examples for `skill_action` and `interface_action`
