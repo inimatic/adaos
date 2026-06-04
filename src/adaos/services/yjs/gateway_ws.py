@@ -4090,11 +4090,23 @@ class WorkspaceWebsocketServer(WebsocketServer):
             async with lock:
                 bootstrap_attempt_id = ""
 
-                async def _await_bootstrap_step(label: str, awaitable: Any) -> Any:
+                async def _await_bootstrap_step(label: str, awaitable: Any, *, cancel_on_timeout: bool = True) -> Any:
                     _mark_room_bootstrap_step(webspace_id, bootstrap_attempt_id, label)
                     timeout_s = max(float(_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S), 0.0)
                     if timeout_s <= 0.0:
                         return await awaitable
+                    if not cancel_on_timeout:
+                        task = asyncio.ensure_future(awaitable)
+                        try:
+                            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
+                        except asyncio.TimeoutError:
+                            _ylog.warning(
+                                "yws room bootstrap step slow; continuing without cancellation webspace=%s step=%s timeout_s=%.3f",
+                                webspace_id,
+                                label,
+                                timeout_s,
+                            )
+                            return await asyncio.shield(task)
                     try:
                         return await asyncio.wait_for(awaitable, timeout=timeout_s)
                     except asyncio.TimeoutError:
@@ -4152,6 +4164,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 space=space,
                                 ydoc=room.ydoc,
                             ),
+                            cancel_on_timeout=False,
                         )
                         await _await_bootstrap_step(
                             "effective_materialized",
@@ -4161,6 +4174,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 room,
                                 seed_result=seed_result,
                             ),
+                            cancel_on_timeout=False,
                         )
                         await _await_bootstrap_step(
                             "finalize_rebuild_status",
@@ -4169,6 +4183,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 seed_result=seed_result,
                                 room=room,
                             ),
+                            cancel_on_timeout=False,
                         )
                         self.rooms[name] = room
                         _mark_room_created(webspace_id, room)
@@ -5002,6 +5017,25 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str, *, yws_attempt_id: st
     started = time.perf_counter()
     attempts = 0
 
+    def _consume_background_room_bootstrap(task: asyncio.Task[YRoom]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            _ylog.warning(
+                "background yws room bootstrap task was cancelled webspace=%s dev=%s yws_attempt=%s",
+                webspace,
+                dev_id,
+                yws_attempt_token or None,
+            )
+        except Exception:
+            _ylog.warning(
+                "background yws room bootstrap task failed webspace=%s dev=%s yws_attempt=%s",
+                webspace,
+                dev_id,
+                yws_attempt_token or None,
+                exc_info=True,
+            )
+
     if max_wait_s <= 0.0:
         max_wait_s = timeout_s if timeout_s > 0.0 else 0.0
 
@@ -5021,6 +5055,19 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str, *, yws_attempt_id: st
                     timeout=min(timeout_s, remaining_for_wait),
                 )
             except asyncio.TimeoutError:
+                if wait_task.done():
+                    try:
+                        return wait_task.result()
+                    except asyncio.TimeoutError:
+                        _ylog.warning(
+                            "yws room bootstrap task timed out internally webspace=%s dev=%s yws_attempt=%s waited_s=%.3f",
+                            webspace,
+                            dev_id,
+                            yws_attempt_token or None,
+                            time.perf_counter() - started,
+                            exc_info=True,
+                        )
+                        raise
                 pass
 
             elapsed = time.perf_counter() - started
@@ -5065,7 +5112,6 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str, *, yws_attempt_id: st
             except Exception:
                 raise
             return room
-        wait_task.cancel()
         waited_s = time.perf_counter() - started
         _mark_room_wait_timeout(
             webspace,
@@ -5073,43 +5119,23 @@ async def _acquire_yws_room(webspace_id: str, dev_id: str, *, yws_attempt_id: st
             yws_attempt_id=yws_attempt_token,
             waited_s=waited_s,
         )
-        try:
-            await wait_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            _ylog.warning(
-                "yws room bootstrap task failed after timeout webspace=%s dev=%s",
-                webspace,
-                dev_id,
-                exc_info=True,
-            )
+        wait_task.add_done_callback(_consume_background_room_bootstrap)
+        _ylog.warning(
+            "leaving yws room bootstrap task running after room wait timeout webspace=%s dev=%s yws_attempt=%s waited_s=%.3f",
+            webspace,
+            dev_id,
+            yws_attempt_token or None,
+            waited_s,
+        )
         room = getattr(y_server, "rooms", {}).get(webspace)
         if room is not None:
             _ylog.info(
-                "yws room cache hit after cancelling timeout task webspace=%s dev=%s waited_s=%.3f",
+                "yws room cache hit after room wait timeout webspace=%s dev=%s waited_s=%.3f",
                 webspace,
                 dev_id,
                 time.perf_counter() - started,
             )
             return room
-        lock = _room_locks.get(webspace)
-        if lock is not None and not lock.locked():
-            _room_locks.pop(webspace, None)
-        elif lock is not None:
-            _ylog.warning(
-                "yws room lock remains locked after bootstrap timeout webspace=%s dev=%s yws_attempt=%s waited_s=%.3f",
-                webspace,
-                dev_id,
-                yws_attempt_token or None,
-                waited_s,
-            )
-            await _recover_stale_yws_room_bootstrap(
-                webspace,
-                dev_id,
-                waited_s=waited_s,
-                reason="room_bootstrap_timeout",
-            )
         raise
 
 
