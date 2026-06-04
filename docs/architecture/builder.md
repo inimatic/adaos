@@ -212,6 +212,23 @@ The first implemented write-neutral Builder surface is:
 - `POST /api/builder/draft` and `POST /api/builder/preview`: HTTP equivalents
   for local UI/workbench integration.
 
+Builder also exposes an operational CLI facade over the existing dev lifecycle:
+
+- `adaos builder create <id> --kind skill|scenario`: creates the artifact through
+  the same owner dev workspace flow as `adaos dev skill|scenario create`.
+- `adaos builder list --kind skill|scenario`: lists the same dev artifacts the
+  owner workspace already manages.
+- `adaos builder validate <id> --kind skill|scenario`: delegates to the dev
+  skill/scenario validators, including JSON scenario manifests created by
+  Builder drafts.
+- `adaos builder push <id> --kind skill|scenario`: uploads through the existing
+  Forge dev push path. It does not replace activation, install, approval, or
+  runtime apply gates.
+
+This facade is intentionally not a new storage layer. It exists so Builder
+work can be driven from one command branch while source ownership remains in
+the current dev workspace and lifecycle tools.
+
 ## Relationship To Web UI
 
 Builder may create browser-facing UI descriptors, but the browser runtime owns
