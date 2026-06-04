@@ -1,6 +1,6 @@
 # NLU Roadmap Checklist
 
-Current runtime implementation estimate: **96%** for the practical AdaOS NLU
+Current runtime implementation estimate: **97%** for the practical AdaOS NLU
 pipeline and provider boundary. The target NLU Teacher architecture is tracked
 separately below because it adds candidate state, correction threads, MCP
 descriptors, UI authoring, and safety gates that are not part of the runtime
@@ -482,8 +482,18 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[must]` Add Teacher UI Check phrase with trace, ranking, entities,
   canonical slots, selected action, and action preview.
+- [x] `[must]` Implementation slice: NLU Teacher has a `Check` tab wired to
+  `POST /api/nlu/teacher/{webspace_id}/probe` through a client-side
+  `nlu.teacher.probe` host action. It displays the raw dry-run probe result
+  in the modal without dispatching the matched action. Full trace/ranking
+  layout and action-preview widgets remain to be added on top of the same
+  result payload.
 - [ ] `[must]` Add Teacher UI views for candidates, clarification sessions,
   lifecycle state, Apply, Rollback, Reject, and "not that" feedback.
+- [x] `[must]` Implementation slice: current candidate UI uses explicit Teacher
+  API calls for Apply and Rollback. The materialized NLU Teacher scenario shows
+  Rollback for applied candidates; Reject / "not that" still needs a dedicated
+  backend/UI contract beyond the existing Voice confirmation rejection path.
 - [ ] `[must]` Add UI evidence that distinguishes NLU gap, provider outage,
   descriptor gap, unsupported action, ambiguous entity, and missing
   capability.
@@ -674,6 +684,8 @@ below remain useful for tracking existing implementation work.
   - does not dispatch actions
 - [x] `[must]` Human verification checklist separates current API/CLI checks from target UI behavior.
 - [ ] `[should]` UI field for "check phrase" wired to the probe endpoint.
+- [x] `[should]` Implementation slice: current NLU Teacher UI can run a dry-run
+  phrase probe from the `Check` tab and stores the result in modal state.
 - [ ] `[deferred]` UI buttons: "correct", "fix", "save example".
 - [x] `[must]` Operator-approved positive feedback stored with audit metadata.
 - [x] `[must]` Route accepted feedback to the owning NLU training artifact:
@@ -715,7 +727,7 @@ below remain useful for tracking existing implementation work.
 - [x] `[must]` NLU Teacher Candidate Apply has one primary action that uses the
   backend-resolved owner target; the obsolete duplicate "Apply to scenario"
   shortcut is removed from the current UI.
-- [ ] `[should]` NLU Teacher UI can run a phrase probe without terminal access.
+- [x] `[should]` NLU Teacher UI can run a phrase probe without terminal access.
 - [ ] `[could]` NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
 - [ ] `[deferred]` NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata for the currently safe existing-API flows.
 - [x] `[must]` Backend/API/MCP preview flow exposes stable template fingerprints and stale-write checks for template corrections.

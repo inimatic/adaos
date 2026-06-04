@@ -231,13 +231,19 @@ Current UI status:
   "Apply to scenario" shortcut was removed because host/interface actions are
   already repaired to the owning scenario while skill actions should remain
   skill-owned.
+- Implemented: candidate Apply and Rollback use explicit NLU Teacher API
+  endpoints from the client, so the workbench does not depend on the generic
+  host-command bridge for durable Teacher mutations.
 - Implemented in backend/API: dry-run phrase probe, dynamic lookup inspection,
   and operator-approved example save with skill/scenario/system-action target
   selection.
+- Implemented in UI: the `Check` tab calls the dry-run phrase probe through
+  the `nlu.teacher.probe` host action and renders the raw result in the modal
+  without dispatching any action.
 - Implemented in backend/API/MCP: trace/dialog/failure read models, template
   inventory, training target inventory, template patch preview, and desktop
   action preview.
-- Missing in UI: Check phrase, trace/ranking/entities/action preview, Correct/Fix/Save example, template inventory, and patch preview controls.
+- Missing in UI: structured trace/ranking/entities/action preview, Correct/Fix/Save example, template inventory, and patch preview controls.
 
 Target controls:
 
@@ -1017,8 +1023,12 @@ treated as `[could]` unless explicitly promoted.
 
 - Add Signals tab backed by `data.nlu_teacher.workbench_signals` for queue,
   quarantine, skip, LLM error, and acquired-understanding monitoring.
-- `[deferred]` Add Check phrase field.
-- `[could]` Show intent ranking/entities/action preview.
+- Implemented: add Check phrase field backed by
+  `POST /api/nlu/teacher/{webspace_id}/probe`.
+- Implemented: route candidate Apply/Rollback buttons through explicit NLU
+  Teacher API endpoints.
+- `[could]` Show structured intent ranking/entities/action preview instead of
+  the raw probe JSON.
 - `[deferred]` Show existing templates relevant to the phrase/intent and allow selecting one for correction.
 - `[deferred]` Add Correct/Fix actions.
 - `[deferred]` Save curated examples into scenario/skill training content.
