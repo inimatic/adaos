@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 from types import SimpleNamespace
 
 
-if "y_py" not in sys.modules:
+if "y_py" not in sys.modules and importlib.util.find_spec("y_py") is None:
     sys.modules["y_py"] = types.SimpleNamespace(YMap=dict, YArray=list)
 
 from adaos.services.weather import observer

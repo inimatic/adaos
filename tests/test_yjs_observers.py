@@ -1,8 +1,9 @@
 from __future__ import annotations
+import importlib.util
 import sys
 import types
 
-if "y_py" not in sys.modules:
+if "y_py" not in sys.modules and importlib.util.find_spec("y_py") is None:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=object,
         apply_update=lambda *args, **kwargs: None,
@@ -11,7 +12,10 @@ if "y_py" not in sys.modules:
     )
 
 existing_ypy_websocket = sys.modules.get("ypy_websocket")
-if existing_ypy_websocket is None or not hasattr(existing_ypy_websocket, "__path__"):
+if (
+    (existing_ypy_websocket is None or not hasattr(existing_ypy_websocket, "__path__"))
+    and importlib.util.find_spec("ypy_websocket") is None
+):
     ystore_mod = types.ModuleType("ypy_websocket.ystore")
     ystore_mod.BaseYStore = object
     ystore_mod.YDocNotFound = RuntimeError
