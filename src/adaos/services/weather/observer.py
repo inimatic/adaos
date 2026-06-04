@@ -243,6 +243,7 @@ def _ensure_city_observer(webspace_id: str, ydoc):
     stats = _stats_entry(key)
     stats["attach_total"] = int(stats.get("attach_total") or 0) + 1
     stats["last_attach_at"] = time.time()
+    ydoc_holder: Dict[str, Any] = {"ydoc": ydoc}
 
     def _check_interval_s() -> float:
         city = _LAST_CITY_IN_DOC.get(key)
@@ -278,27 +279,50 @@ def _ensure_city_observer(webspace_id: str, ydoc):
             except Exception:
                 pass
 
-    def _emit_current() -> None:
+    def _process_city_snapshot(
+        city: Optional[str],
+        target_node_id: Optional[str],
+        *,
+        started: float,
+    ) -> None:
         stats["emit_check_total"] = int(stats.get("emit_check_total") or 0) + 1
         stats["last_check_at"] = time.time()
-        city, target_node_id = _current_city_from_doc(ydoc)
-        if not city:
-            _LAST_CITY_IN_DOC[key] = None
-            _LAST_CITY_TARGET_NODE[key] = None
-            stats["no_city_total"] = int(stats.get("no_city_total") or 0) + 1
-            _log_no_city()
-            return
-        if _LAST_CITY_IN_DOC.get(key) == city and _LAST_CITY_TARGET_NODE.get(key) == target_node_id:
-            stats["same_city_skip_total"] = int(stats.get("same_city_skip_total") or 0) + 1
-            return
-        _log.debug("weather observer check webspace=%s city=%s target_node_id=%s", key, city, target_node_id or "-")
-        _LAST_CITY_IN_DOC[key] = city
-        _LAST_CITY_TARGET_NODE[key] = target_node_id
-        stats["emit_total"] = int(stats.get("emit_total") or 0) + 1
-        stats["last_emit_at"] = time.time()
-        stats["last_city"] = city
-        stats["last_target_node_id"] = target_node_id
-        _emit_event(city, target_node_id=target_node_id)
+        try:
+            if not city:
+                _LAST_CITY_IN_DOC[key] = None
+                _LAST_CITY_TARGET_NODE[key] = None
+                stats["no_city_total"] = int(stats.get("no_city_total") or 0) + 1
+                _log_no_city()
+                return
+            if _LAST_CITY_IN_DOC.get(key) == city and _LAST_CITY_TARGET_NODE.get(key) == target_node_id:
+                stats["same_city_skip_total"] = int(stats.get("same_city_skip_total") or 0) + 1
+                return
+            _log.debug("weather observer check webspace=%s city=%s target_node_id=%s", key, city, target_node_id or "-")
+            _LAST_CITY_IN_DOC[key] = city
+            _LAST_CITY_TARGET_NODE[key] = target_node_id
+            stats["emit_total"] = int(stats.get("emit_total") or 0) + 1
+            stats["last_emit_at"] = time.time()
+            stats["last_city"] = city
+            stats["last_target_node_id"] = target_node_id
+            _emit_event(city, target_node_id=target_node_id)
+        finally:
+            elapsed_s = time.perf_counter() - started
+            stats["last_duration_s"] = elapsed_s
+            if elapsed_s >= 0.05:
+                stats["slow_total"] = int(stats.get("slow_total") or 0) + 1
+                _log.warning("weather observer slow webspace=%s duration_s=%.3f", key, elapsed_s)
+            _PENDING_DOC_CHECKS.pop(key, None)
+
+    def _read_city_snapshot() -> Tuple[Optional[str], Optional[str]]:
+        current_ydoc = ydoc_holder.get("ydoc")
+        if current_ydoc is None:
+            return None, None
+        result = _current_city_from_doc(current_ydoc)
+        if isinstance(result, tuple) and len(result) >= 2:
+            return result[0], result[1]
+        if isinstance(result, str) and result.strip():
+            return result.strip(), None
+        return None, None
 
     def _maybe_emit(event=None) -> None:  # noqa: ARG001
         stats["callback_total"] = int(stats.get("callback_total") or 0) + 1
@@ -316,21 +340,18 @@ def _ensure_city_observer(webspace_id: str, ydoc):
             return
         _LAST_DOC_CHECK_AT[key] = now
         _PENDING_DOC_CHECKS[key] = True
+        started = time.perf_counter()
+
+        try:
+            city, target_node_id = _read_city_snapshot()
+        except Exception:
+            stats["error_total"] = int(stats.get("error_total") or 0) + 1
+            _PENDING_DOC_CHECKS.pop(key, None)
+            _log.debug("weather observer callback failed webspace=%s", key, exc_info=True)
+            return
 
         def _run_safe() -> None:
-            started = time.perf_counter()
-            try:
-                _emit_current()
-            except Exception:
-                stats["error_total"] = int(stats.get("error_total") or 0) + 1
-                _log.debug("weather observer callback failed webspace=%s", key, exc_info=True)
-            finally:
-                elapsed_s = time.perf_counter() - started
-                stats["last_duration_s"] = elapsed_s
-                if elapsed_s >= 0.05:
-                    stats["slow_total"] = int(stats.get("slow_total") or 0) + 1
-                    _log.warning("weather observer slow webspace=%s duration_s=%.3f", key, elapsed_s)
-                _PENDING_DOC_CHECKS.pop(key, None)
+            _process_city_snapshot(city, target_node_id, started=started)
 
         target_loop = _YDOC_LOOPS.get(key)
         if target_loop is not None and not target_loop.is_closed():
@@ -347,12 +368,21 @@ def _ensure_city_observer(webspace_id: str, ydoc):
 
     sub_id = ydoc.observe_after_transaction(_maybe_emit)
     _YDOC_OBSERVERS[key] = (ydoc_id, sub_id)
-    _emit_current()
+    try:
+        city, target_node_id = _read_city_snapshot()
+    except Exception:
+        stats["error_total"] = int(stats.get("error_total") or 0) + 1
+        _log.debug("weather observer initial check failed webspace=%s", key, exc_info=True)
+    else:
+        _process_city_snapshot(city, target_node_id, started=time.perf_counter())
 
     def _detach() -> None:
+        current_ydoc = ydoc_holder.get("ydoc")
         try:
-            _detach_after_transaction_observer(ydoc, sub_id=sub_id, callback=_maybe_emit)
+            if current_ydoc is not None:
+                _detach_after_transaction_observer(current_ydoc, sub_id=sub_id, callback=_maybe_emit)
         finally:
+            ydoc_holder["ydoc"] = None
             forget_weather_room_observer(key, ydoc_id)
 
     return _detach
