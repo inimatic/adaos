@@ -886,6 +886,11 @@ below remain useful for tracking existing implementation work.
   user phrases and tolerates minor inflection/noise for lookup-backed modal
   aliases. This covers phrases like "show infrastructure state" resolving to
   the registered infrastructure/Infra State modal alias before preview/apply.
+- [x] `[must]` Applied regex rules can persist canonical constant `slots`
+  alongside the regex pattern. Runtime matching extracts named groups first,
+  overlays `rule.slots`, and then canonicalizes lookup-backed values, so a
+  natural phrase can match while dispatch still receives the stable
+  `modal_id`/`scenario_id` selected from MCP/desktop registry evidence.
 - [x] `[must]` Skill/webui descriptor aliases are consumed by lookup normalization and
   Apply validation; `subnet_env` now publishes RU/EN aliases for the Subnet
   Environment modal so voice phrases for subnet environment variables resolve
@@ -901,8 +906,12 @@ below remain useful for tracking existing implementation work.
   short replies such as `да` and `нет` do not create extra Teacher misses.
 - [x] `[must]` Repeated voice phrases reuse a matching unresolved candidate and repeat
   the confirmation prompt before the generic miss/fallback response. This
-  covers `pending` and `validation_failed` candidates whose Apply can pass
-  after descriptor/lookup aliases are fixed.
+  covers `pending`, `apply_requested`, and `validation_failed` candidates whose
+  Apply can pass after descriptor/lookup aliases are fixed.
+- [x] `[must]` Positive Voice confirmation applies the candidate synchronously through
+  the same validation/apply/verification path used by API Apply, preventing
+  candidates from staying indefinitely in `apply_requested` without
+  `regex_rule.applied`, `candidate.verified`, or `candidate.apply_rejected`.
 - [x] `[must]` Voice chat no longer reads the last loaded hub message when the modal is
   opened; only newly arriving hub messages are eligible for auto-speak.
 - [x] `[must]` Voice router suppresses short non-command STT tails while an active

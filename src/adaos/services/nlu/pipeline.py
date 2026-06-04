@@ -617,6 +617,7 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
                     "pattern": pattern,
                     "rx": rx,
                     "scenario_id": item.get("scenario_id"),
+                    "slots": dict(item.get("slots") or {}) if isinstance(item.get("slots"), Mapping) else {},
                 }
             )
 
@@ -647,6 +648,9 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
         if not isinstance(intent, str) or not intent:
             continue
         slots = _clean_slots(m.groupdict())
+        static_slots = rule.get("slots") if isinstance(rule.get("slots"), Mapping) else {}
+        if static_slots:
+            slots.update(_clean_slots(static_slots))
         slots, slot_normalization = await _normalize_lookup_slots(slots, webspace_id=webspace_id)
         raw = {"rule_id": rule.get("id"), "pattern": rule.get("pattern"), "slots": slots}
         if slot_normalization:
