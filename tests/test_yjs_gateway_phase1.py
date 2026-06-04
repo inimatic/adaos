@@ -2195,6 +2195,39 @@ def test_acquire_yws_room_uses_cache_when_bootstrap_lags(monkeypatch) -> None:
     assert resolved is room
 
 
+def test_acquire_yws_room_leaves_bootstrap_running_after_wait_timeout(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_MAX_S", 0.01)
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_POLL_S", 0.005)
+
+    state = {"completed": False, "cancelled": False}
+
+    class _FakeRoom:
+        pass
+
+    async def _fake_get_room(_name: str) -> object:
+        try:
+            await asyncio.sleep(0.03)
+            state["completed"] = True
+            return _FakeRoom()
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            raise
+
+    async def _exercise() -> None:
+        try:
+            await gateway_module._acquire_yws_room("desktop", "dev-timeout")
+        except asyncio.TimeoutError:
+            pass
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _fake_get_room)
+
+    asyncio.run(_exercise())
+
+    assert state == {"completed": True, "cancelled": False}
+
+
 def test_yws_impl_cleans_up_after_first_message_timeout(monkeypatch) -> None:
     gateway_module._TRANSPORT_STATE["yws"].update(
         {
