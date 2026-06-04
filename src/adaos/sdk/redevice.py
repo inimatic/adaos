@@ -227,8 +227,15 @@ def select_transport(
     event_transport, event_route = _select_direction(profile, "events", allow_root_relay=allow_root_relay)
     content_transport = ""
     content_route: dict[str, Any] = {}
-    if intent.startswith(("display.", "audio.", "content.")):
-        content_transport, content_route = _select_direction(profile, "content_in", allow_root_relay=allow_root_relay)
+    media_direction = ""
+    if intent.startswith(("audio.input", "audio.capture", "audio.stream.in")):
+        media_direction = "audio_in"
+    elif intent.startswith(("audio.output", "audio.stream.out")):
+        media_direction = "audio_out"
+    elif intent.startswith(("display.", "content.", "audio.")):
+        media_direction = "content_in"
+    if media_direction:
+        content_transport, content_route = _select_direction(profile, media_direction, allow_root_relay=allow_root_relay)
     selected = content_transport or control_transport or event_transport or "unavailable"
     limits = _mapping(profile.get("limits"))
     route_limits = _mapping(content_route.get("limits"))
@@ -251,6 +258,7 @@ def select_transport(
         "content": {
             "transport": content_transport or "unavailable",
             "state": _text(content_route.get("state")) or "unavailable",
+            "direction": media_direction or "none",
             "inline_fits": inline_fits,
             "content_bytes": int(content_bytes or 0),
             "max_inline_command_bytes": max_inline,
