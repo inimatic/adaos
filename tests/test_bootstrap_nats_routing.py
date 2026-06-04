@@ -6,6 +6,8 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
+
 sys.modules.setdefault("nats", SimpleNamespace())
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
@@ -138,6 +140,45 @@ def test_hub_route_force_close_no_upstream_can_disable(monkeypatch) -> None:
     monkeypatch.setenv("HUB_ROUTE_FORCE_CLOSE_NO_UPSTREAM_S", "0")
 
     assert bootstrap_mod._hub_route_force_close_no_upstream_s() == 0.0
+
+
+@pytest.mark.asyncio
+async def test_hub_root_reconnect_rearms_completed_bridge_task() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    started = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        started.set()
+        await stop.wait()
+
+    old_task = asyncio.create_task(asyncio.sleep(0), name=service._hub_root_bridge_task_name)
+    await old_task
+    service._hub_root_bridge_factory = bridge
+    service._boot_tasks.append(old_task)
+
+    try:
+        result = await service.request_hub_root_reconnect()
+
+        assert result["ok"] is True
+        assert result["close"]["attempted"] is False
+        assert result["bridge"]["attempted"] is True
+        assert result["bridge"]["started"] is True
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        live_task = service._find_live_boot_task(service._hub_root_bridge_task_name)
+        assert live_task is not None
+        assert live_task is not old_task
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*service._boot_tasks, return_exceptions=True)
 
 
 def test_hub_route_max_chunk_raw_accounts_for_base64_overhead(monkeypatch) -> None:
