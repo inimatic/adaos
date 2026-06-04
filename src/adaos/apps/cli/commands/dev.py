@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import asdict
 
 import typer
+import yaml
 
 from adaos.apps.cli.i18n import _
 from adaos.apps.cli.commands.skill import _mgr
@@ -47,7 +48,7 @@ from adaos.services.root_mcp.smoke import run_root_mcp_smoke
 from adaos.services.nats_config import normalize_nats_ws_url
 from adaos.services.node_runtime_state import save_nats_runtime_config
 from adaos.services.subnet_alias import load_subnet_alias, save_subnet_alias
-from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context, load_scenario
+from adaos.sdk.scenarios.runtime import ScenarioModel, ScenarioRuntime, ensure_runtime_context, load_scenario
 
 app = typer.Typer(help="Developer utilities for Root and Forge workflows.")
 root_app = typer.Typer(help="Bootstrap and authenticate against the Root service.")
@@ -1184,6 +1185,20 @@ def _resolve_dev_scenario_file(name: str, base: Path) -> Path | None:
     return None
 
 
+def _load_dev_scenario_model(path: Path) -> ScenarioModel:
+    path = Path(path).expanduser().resolve()
+    if path.is_dir():
+        return load_scenario(path)
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path.name} must contain a scenario object")
+    fallback_id = path.parent.name if path.parent.name else path.stem
+    return ScenarioModel.from_payload(payload, fallback_id=fallback_id)
+
+
 @_run_safe
 @scenario_app.command("run")
 def scenario_run(
@@ -1221,7 +1236,7 @@ def scenario_validate(
         typer.secho(f"Scenario file not found: {target}", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    model = load_scenario(scenario_file)
+    model = _load_dev_scenario_model(scenario_file)
     runtime = ScenarioRuntime()
     errors = runtime.validate(model)
 

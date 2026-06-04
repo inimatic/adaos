@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from adaos.apps.api import builder as builder_api
 from adaos.apps.api.auth import require_token
 from adaos.apps.cli.commands import builder as builder_cli
+from adaos.apps.cli.commands import dev as dev_cli
 from adaos.services.builder import BuilderWorkspaceService
 
 
@@ -18,11 +19,12 @@ def _service(tmp_path: Path) -> BuilderWorkspaceService:
     workspace = tmp_path / "workspace"
     return BuilderWorkspaceService(
         state_dir=tmp_path / "state",
-        builder_root=tmp_path / "dev" / "builder",
         repo_root=tmp_path,
         workspace_root=workspace,
         skills_root=workspace / "skills",
         scenarios_root=workspace / "scenarios",
+        dev_skills_root=tmp_path / "dev" / "test-subnet" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "test-subnet" / "scenarios",
     )
 
 
@@ -122,7 +124,7 @@ def test_preview_reports_scenario_dependency_bootstrap(tmp_path: Path) -> None:
     }
 
 
-def test_builder_drafts_live_under_devspace(tmp_path: Path) -> None:
+def test_builder_artifacts_live_under_existing_devspace(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
     result = service.create_draft(
@@ -132,8 +134,13 @@ def test_builder_drafts_live_under_devspace(tmp_path: Path) -> None:
     )
 
     draft_dir = Path(result["draft_dir"]).resolve()
-    dev_builder_root = (tmp_path / "dev" / "builder").resolve()
-    assert draft_dir.relative_to(dev_builder_root)
+    artifact_root = Path(result["artifact_root"]).resolve()
+    dev_scenarios_root = (tmp_path / "dev" / "test-subnet" / "scenarios").resolve()
+    manifest = json.loads((artifact_root / "scenario.json").read_text(encoding="utf-8"))
+    assert artifact_root.relative_to(dev_scenarios_root)
+    assert manifest["name"] == "devspace_scene"
+    assert draft_dir.relative_to((tmp_path / "state" / "builder" / "drafts").resolve())
+    assert (artifact_root / "builder.draft.json").exists()
     assert (draft_dir / "builder.draft.json").exists()
 
 
@@ -149,7 +156,22 @@ def test_builder_cli_accepts_unquoted_multi_word_idea(tmp_path: Path, monkeypatc
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["draft"]["metadata"]["source_idea"] == "Build demo scenario"
-    assert Path(payload["draft_dir"]).resolve().relative_to((tmp_path / "dev" / "builder").resolve())
+    assert Path(payload["artifact_root"]).resolve().relative_to(
+        (tmp_path / "dev" / "test-subnet" / "scenarios").resolve()
+    )
+
+
+def test_dev_scenario_loader_accepts_builder_json_manifest(tmp_path: Path) -> None:
+    scenario_dir = tmp_path / "dev" / "sn_test" / "scenarios" / "json_scene"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.json").write_text(
+        json.dumps({"id": "json_scene", "version": "0.1.0", "steps": []}),
+        encoding="utf-8",
+    )
+
+    model = dev_cli._load_dev_scenario_model(scenario_dir / "scenario.json")
+
+    assert model.id == "json_scene"
 
 
 def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:

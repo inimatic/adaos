@@ -49,7 +49,7 @@ gate easy to read by priority.
 | 0. Terminology | Complete: role name, executor-neutral wording, terminology anchor. | None. | Complete: future product glossary hook. | None. |
 | 1. Context | Complete: Root MCP context, schemas, hints, redaction, descriptor sets. | Complete: descriptor freshness/provenance in task context. | None. | None. |
 | 2. Task Model | Complete: task schema, Teacher candidate links, descriptor-fix materialization, lifecycle states. | None. | None. | Open: backlink from completed Builder task to originating candidate/idea. |
-| 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, Builder-aware scaffolds, template quality gates. | Complete: scenario-specific Builder guidance. | None. | None. |
+| 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, CTX dev artifact roots, Builder-aware scaffolds, template quality gates. | Complete: scenario-specific Builder guidance. | None. | None. |
 | 4. Validation/Preview | Complete: preview bundle, static checks, route-budget validation. | Complete: blast radius, webui preview, scenario dependency bootstrap. | None. | None. |
 | 5. Human Review | Open: approval profiles, mandatory human-review classes, applied-change evidence. | Open: review workbench and reject/redirect feedback. | None. | None. |
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
@@ -166,9 +166,12 @@ Open work:
 
 - [x] `[must]` Create a Builder draft workspace contract distinct from active runtime
   slots.
-- [x] `[must]` Store draft and preview workspaces under Builder devspace
-  (`.adaos/dev/builder`) with `state/builder` only as a context-free
-  fallback.
+- [x] `[must]` Store Builder-authored skill/scenario source under the existing
+  CTX dev roots (`.adaos/dev/<subnet>/skills` and
+  `.adaos/dev/<subnet>/scenarios`) so `adaos dev skill|scenario validate`,
+  `push`, `test`, and `activate` continue to own the lifecycle.
+- [x] `[must]` Keep Builder draft indexes and preview records as service
+  metadata under `state/builder`, not as an alternate source tree.
 - [x] `[must]` Define draft metadata: task id, source idea, selected template,
   target artifact, assumptions, risk notes, and expected tests.
 - [x] `[must]` Add `adaos builder draft` or equivalent API/CLI route after the draft
