@@ -13,6 +13,7 @@ import yaml
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.nlu.teacher_artifacts import accepted_artifact_metadata, portability_for_target
 from adaos.services.nlu.teacher_events import append_event, make_event
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 from adaos.services.scenarios import loader as scenarios_loader
@@ -47,6 +48,10 @@ def _resolve_webspace_id(payload: Mapping[str, Any]) -> str:
     if isinstance(token, str) and token.strip():
         return token.strip()
     return default_webspace_id()
+
+
+def _rule_portability(target: Mapping[str, Any] | None) -> str:
+    return portability_for_target(target)
 
 
 def _teacher_obj(data_map: Any) -> dict[str, Any]:
@@ -289,7 +294,7 @@ def _normalize_rule(rule: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     if not isinstance(pattern, str) or not pattern.strip():
         return None
     enabled = rule.get("enabled")
-    return {
+    out = {
         "id": rule.get("id"),
         "created_at": rule.get("created_at"),
         "intent": intent.strip(),
@@ -297,6 +302,22 @@ def _normalize_rule(rule: Mapping[str, Any]) -> Optional[dict[str, Any]]:
         "enabled": bool(enabled) if enabled is not None else True,
         "source": rule.get("source"),
     }
+    for key in ("candidate_id", "promotion", "provenance", "privacy"):
+        value = rule.get(key)
+        if value not in (None, "", [], {}):
+            out[key] = dict(value) if isinstance(value, Mapping) else value
+    return out
+
+
+def _set_rule_target_metadata(rule: dict[str, Any], target: Mapping[str, Any] | None) -> None:
+    if not isinstance(target, Mapping) or not target:
+        return
+    promotion = coerce_dict(rule.get("promotion"))
+    promotion["portability"] = _rule_portability(target)
+    rule["promotion"] = promotion
+    provenance = coerce_dict(rule.get("provenance"))
+    provenance["target"] = dict(target)
+    rule["provenance"] = provenance
 
 
 def _compact_probe_result(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -330,6 +351,9 @@ async def _mark_candidate_verification(
                 if d.get("id") == candidate_id:
                     d["verification"] = dict(verification)
                     d["verified_at"] = time.time()
+                    provenance = coerce_dict(d.get("provenance"))
+                    provenance["verification_result"] = dict(verification)
+                    d["provenance"] = provenance
                     if verification.get("status") == "intent_matched":
                         d["status"] = "intent_matched"
                     else:
@@ -488,6 +512,7 @@ async def _on_regex_rule_apply(evt: Any) -> None:
     intent = payload.get("intent")
     pattern = payload.get("pattern")
     meta = coerce_dict(payload.get("_meta"))
+    payload_target = payload.get("target") if isinstance(payload.get("target"), Mapping) else None
 
     if not isinstance(intent, str) or not intent.strip():
         return
@@ -500,6 +525,14 @@ async def _on_regex_rule_apply(evt: Any) -> None:
         return
 
     rule_id = f"rx.{uuid.uuid4()}"
+    artifact_meta = accepted_artifact_metadata(
+        target=payload_target,
+        source="nlu_teacher",
+        webspace_id=webspace_id,
+        candidate_id=candidate_id if isinstance(candidate_id, str) else None,
+        operator_action="apply",
+        meta=meta,
+    )
     rule = {
         "id": rule_id,
         "created_at": time.time(),
@@ -508,6 +541,9 @@ async def _on_regex_rule_apply(evt: Any) -> None:
         "enabled": True,
         "source": "teacher",
         "candidate_id": candidate_id if isinstance(candidate_id, str) else None,
+        "promotion": dict(artifact_meta["promotion"]),
+        "provenance": dict(artifact_meta["provenance"]),
+        "privacy": dict(artifact_meta["privacy"]),
     }
     request_id: str | None = None
     request_text: str = ""
@@ -518,10 +554,34 @@ async def _on_regex_rule_apply(evt: Any) -> None:
         async with _nlu_regex_rules_write_meta():
             async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data", "ui"]) as ydoc:
                 data_map = ydoc.get_map("data")
+                teacher = _teacher_obj(data_map)
+                if isinstance(candidate_id, str) and candidate_id:
+                    for item in iter_mappings(teacher.get("candidates")):
+                        if item.get("id") != candidate_id:
+                            continue
+                        request_id = item.get("request_id") if isinstance(item.get("request_id"), str) else None
+                        request_text = item.get("text") if isinstance(item.get("text"), str) else ""
+                        thread_id = item.get("thread_id") if isinstance(item.get("thread_id"), str) else None
+                        provenance = coerce_dict(rule.get("provenance"))
+                        provenance.update(
+                            accepted_artifact_metadata(
+                                target=payload_target,
+                                source="nlu_teacher",
+                                webspace_id=webspace_id,
+                                request_id=request_id,
+                                thread_id=thread_id,
+                                candidate_id=candidate_id,
+                                operator_action="apply",
+                                meta=meta,
+                                accepted_at=rule.get("created_at") if isinstance(rule.get("created_at"), (int, float)) else None,
+                            )["provenance"]
+                        )
+                        rule["provenance"] = provenance
+                        break
 
                 # Prefer writing regex rules into scenario/skill definitions (workspace),
                 # so NLU can evolve as part of skills/scenarios rather than per-webspace state.
-                target = payload.get("target") if isinstance(payload.get("target"), Mapping) else None
+                target = payload_target
                 target_type = target.get("type") if isinstance(target, Mapping) else None
                 target_id = target.get("id") if isinstance(target, Mapping) else None
 
@@ -531,10 +591,12 @@ async def _on_regex_rule_apply(evt: Any) -> None:
 
                 applied_ok = False
                 if target_type == "scenario" and isinstance(target_id, str) and target_id.strip():
+                    _set_rule_target_metadata(rule, {"type": "scenario", "id": target_id.strip()})
                     applied_ok = _write_scenario_regex_rule(scenario_id=target_id.strip(), rule=rule)
                     if applied_ok:
                         applied_to = {"type": "scenario", "id": target_id.strip()}
                 elif target_type == "skill" and isinstance(target_id, str) and target_id.strip():
+                    _set_rule_target_metadata(rule, {"type": "skill", "id": target_id.strip()})
                     applied_ok = _write_skill_regex_rule(skill_name=target_id.strip(), rule=rule)
                     if applied_ok:
                         applied_to = {"type": "skill", "id": target_id.strip()}
@@ -545,11 +607,13 @@ async def _on_regex_rule_apply(evt: Any) -> None:
                         content = {}
                     intents = (content.get("nlu") or {}).get("intents") if isinstance(content, dict) else None
                     if isinstance(intents, dict) and intent.strip() in intents:
+                        _set_rule_target_metadata(rule, {"type": "scenario", "id": scenario_id})
                         applied_ok = _write_scenario_regex_rule(scenario_id=scenario_id, rule=rule)
                         if applied_ok:
                             applied_to = {"type": "scenario", "id": scenario_id}
 
                 if not applied_ok:
+                    _set_rule_target_metadata(rule, {"type": "webspace", "id": webspace_id})
                     # Backward-compatible fallback: keep per-webspace storage if we can't
                     # resolve a skill/scenario target.
                     nlu_obj = _read_nlu_obj(data_map)
@@ -586,7 +650,6 @@ async def _on_regex_rule_apply(evt: Any) -> None:
                         pass
 
                 # Mark candidate as applied (if present)
-                teacher = _teacher_obj(data_map)
                 candidates = teacher.get("candidates")
                 if isinstance(candidate_id, str) and candidate_id:
                     next_candidates: list[dict[str, Any]] = []
@@ -598,6 +661,19 @@ async def _on_regex_rule_apply(evt: Any) -> None:
                             d["status"] = "applied"
                             d["applied_at"] = time.time()
                             d["applied"] = {"type": "regex_rule", "rule_id": rule_id, "target": dict(applied_to or {})}
+                            promotion = coerce_dict(d.get("promotion"))
+                            promotion.setdefault("state", "local_learned")
+                            promotion.setdefault("portability", rule["promotion"]["portability"])
+                            promotion["applied_artifact"] = {
+                                "type": "regex_rule",
+                                "rule_id": rule_id,
+                                "target": dict(applied_to or {}),
+                            }
+                            d["promotion"] = promotion
+                            provenance = coerce_dict(d.get("provenance"))
+                            provenance["rollback_pointer"] = {"rule_id": rule_id, "target": dict(applied_to or {})}
+                            provenance["accepted_artifact_source"] = "local_overlay"
+                            d["provenance"] = provenance
                         next_candidates.append(d)
                     teacher["candidates"] = next_candidates
 

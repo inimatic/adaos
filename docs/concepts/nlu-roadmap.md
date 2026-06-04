@@ -36,6 +36,12 @@ candidates can now emit the normal AdaOS `nlp.intent.detected` path after
 `understanding.acquired`. Remaining target-roadmap items belong mainly to
 dispatch outcome verification, promotion, and UI/operator surfaces.
 
+Current governance/offline slice: **implemented for local learned artifacts**.
+Teacher candidates and accepted regex rules now carry promotion, portability,
+provenance, privacy, MCP audit, rollback, and verification metadata. Teacher
+state exposes retention/threat/budget policy snapshots, budget counters, and a
+bounded deferred enrichment queue for Root/OpenAI failures or empty LLM output.
+
 Current MCP-aware LLM status: **hybrid bridge implemented**. NLU Teacher still
 collects a bounded Root MCP snapshot for compatibility, but it can also attach
 a scoped Root MCP `responses_tool` descriptor to `/v1/llm/response` so OpenAI
@@ -432,20 +438,40 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[must]` Separate local learned overlays from repo-owned skill/scenario
   artifacts and public reusable templates.
+- [x] `[must]` Implementation slice: LLM-created candidates, accepted regex
+  rules, governed training examples, and plan/development candidates now carry
+  a local learned promotion envelope. Public export is blocked by default until
+  a future explicit promotion gate approves it.
 - [ ] `[must]` Add promotion states: `local_learned`,
   `promotion_candidate`, `promoted_to_workspace`, `pushed_to_repo`,
   `published`, and `rejected_for_publication`.
+- [x] `[must]` Implementation slice: `local_learned` is the default state for
+  every accepted Teacher artifact; applied plan candidates are marked for
+  operator/developer handoff rather than treated as publishable.
 - [ ] `[must]` Add template portability class: `session-local`,
   `user-local`, `workspace-local`, `scenario-local`, `skill-global`,
   `system-global`, or `public-reusable`.
+- [x] `[must]` Implementation slice: candidates and accepted artifacts carry
+  target-derived portability (`scenario-local`, `skill-global`,
+  `system-global`, `workspace-local`, `session-local`, `user-local`, or
+  `public-reusable`).
 - [ ] `[must]` Attach provenance to every accepted artifact: request id,
   thread id, prompt/context hashes, model id/version, owner, operator/user
   feedback, verification result, rollback pointer, and commit/push id when
   promoted.
+- [x] `[must]` Implementation slice: candidates store request/thread, model,
+  decision, prompt/context/request hashes, owner, route/device audit, MCP tool
+  audit without bearer material; accepted regex candidates store rollback
+  pointer and verification result, and governed training examples store
+  request/candidate provenance in Teacher dataset/system-action feedback.
 - [ ] `[should]` Provide operator controls to promote high-value local
   examples into skill/scenario repositories after regression checks.
 - [ ] `[must]` Keep private/local aliases and user-specific names out of
   public artifacts unless explicitly approved.
+- [x] `[must]` Implementation slice: promotion/privacy policy snapshot marks
+  local entity names, device names, user aliases, personal examples, and MCP
+  session scope as private fields that block public promotion until explicit
+  approval.
 - [ ] `[deferred]` Publish a shared public NLU template registry across
   independent AdaOS installations.
 - [ ] `[deferred]` Implement anonymization/redaction of named entities before
@@ -472,14 +498,28 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[must]` Define retention policy for raw utterances, STT text,
   normalized text, LLM prompt context, traces, candidates, and feedback.
+- [x] `[must]` Implementation slice: Teacher state carries
+  `nlu.teacher.retention.v1` with local retention scopes for raw utterances,
+  STT text, normalized text, prompt context hashes, traces, candidates, and
+  feedback.
 - [ ] `[must]` Define promotion privacy gates: local entity names, device
   names, user aliases, and personal examples stay private unless explicitly
   approved.
+- [x] `[must]` Implementation slice: `nlu.teacher.promotion.v1` blocks public
+  export by default and requires explicit approval before local private fields
+  can leave the workspace/local overlay.
 - [ ] `[must]` Ensure MCP bearer/session scope is recorded as audit evidence
   but never embedded into prompts, templates, examples, or published artifacts.
+- [x] `[must]` Implementation slice: candidate provenance records MCP
+  mode/status/source/tool-list hashes and `mcp_session_scope_recorded`,
+  redacts token-like keys, and tests assert `mcp_bearer_embedded=false`.
 - [ ] `[must]` Add minimal threat-model checklist for NLU Teacher and skill
   hints: prompt injection, malicious descriptors, alias hijacking, overbroad
   destructive templates, and cross-subnet MCP scope confusion.
+- [x] `[must]` Implementation slice: Teacher state publishes
+  `nlu.teacher.threat_model.v1` covering prompt injection, untrusted
+  descriptors, alias hijacking, overbroad destructive templates, unexpected
+  MCP target scope, and cross-subnet scope confusion.
 - [ ] `[should]` Add delete/export hooks for Teacher traces and learned local
   overlays by request/thread/webspace.
 - [ ] `[deferred]` Implement robust anonymization of named entities for public
@@ -490,8 +530,16 @@ below remain useful for tracking existing implementation work.
 - [ ] `[must]` Add Teacher LLM budget controls: per-webspace rate limit,
   repeated-miss dedupe, max retries, queue depth, and fallback behavior when
   Root/OpenAI is unavailable.
+- [x] `[must]` Implementation slice: existing per-webspace/route rate and
+  repeated-miss gates now write budget counters, skipped/error/deferred
+  reasons, recent events, policy metadata, and bounded
+  `deferred_enrichment_queue` entries.
 - [ ] `[must]` Keep NLU fast path fully operational when Root/OpenAI is down;
   store misses for later batch enrichment instead of blocking Voice/chat.
+- [x] `[must]` Implementation slice: Root/OpenAI call failures and empty LLM
+  outputs now record `llm.deferred`, update budget state, and keep the
+  original miss available for later batch enrichment without mutating the
+  deterministic NLU fast path.
 - [ ] `[should]` Add MCP descriptor cache metrics and invalidation triggers so
   cost/performance tuning can be based on evidence.
 - [ ] `[could]` Add batch review mode for accumulated misses instead of
@@ -1100,6 +1148,12 @@ below remain useful for tracking existing implementation work.
   evidence with rejected candidate ids and selected answer data, so rejected
   alternatives are visible through Teacher events/dialog context instead of
   existing only as retry metadata.
+- Teacher accepted artifacts now share a governance envelope across regex
+  rules, governed training examples, and plan/development candidates:
+  `promotion`, target-derived portability, `provenance`, and `privacy`.
+  System-action feedback JSONL records persist the same envelope, while
+  scenario/skill example saves keep the artifact mutation simple and expose
+  the envelope through Teacher dataset/result audit.
 - M4 candidate Apply validation is now enforced by a dedicated
   `teacher_validation` gate. It runs template preview, built-in action preview,
   side-effect policy, duplicate checks, overbroad-regex checks, prompt-injection

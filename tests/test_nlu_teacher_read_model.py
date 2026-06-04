@@ -240,6 +240,17 @@ async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
                             }
                         ],
                         "candidates": [{"id": "cand-1", "status": "pending"}],
+                        "budget": {"counters": {"request": 2, "response": 1}, "policy": {"fallback_behavior": "store_miss_for_later_batch_enrichment"}},
+                        "policies": {"retention": {"version": "nlu.teacher.retention.v1"}},
+                        "deferred_enrichment_queue": [
+                            {
+                                "id": "deferred.req-2",
+                                "status": "pending",
+                                "request_id": "req-2",
+                                "reason": "root_llm_unavailable",
+                                "ts": 13.0,
+                            }
+                        ],
                         "events": [
                             {
                                 "ts": 12.0,
@@ -262,7 +273,12 @@ async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
         assert surface["runtime_state"]["active_teacher_sessions"]["pending_confirmations"][0]["id"] == "confirm-1"
         assert surface["runtime_state"]["active_teacher_sessions"]["clarification_sessions"][0]["id"] == "clarify-1"
         assert surface["runtime_state"]["recent_errors"][0]["kind"] == "candidate.quarantined"
+        assert surface["runtime_state"]["teacher_budget"]["counters"]["request"] == 2
+        assert surface["runtime_state"]["teacher_policies"]["retention"]["version"] == "nlu.teacher.retention.v1"
+        assert surface["runtime_state"]["deferred_enrichment_queue"][0]["request_id"] == "req-2"
         assert surface["process_state"]["teacher_queue"]["pending_candidates"] == 1
+        assert surface["process_state"]["teacher_queue"]["deferred_enrichment"] == 1
+        assert surface["process_state"]["teacher_budget"]["counters"]["response"] == 1
         assert surface["process_state"]["process_rows"][0]["id"] == "job-1"
         assert any(item.get("id") == "host.desktop.modal.open" for item in surface["available_actions"])
         assert any(item.get("owner") == {"type": "skill", "id": skill_id} for item in surface["available_actions"])
