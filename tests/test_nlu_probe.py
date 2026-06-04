@@ -104,6 +104,9 @@ async def test_nlu_teacher_probe_api_delegates_to_probe_phrase(monkeypatch):
         *,
         webspace_id=None,
         use_rasa=True,
+        use_neuro_lite=False,
+        use_neural=False,
+        collect_all=False,
         emit_trace=True,
         request_locale=None,
         preferred_locales=None,
@@ -113,6 +116,9 @@ async def test_nlu_teacher_probe_api_delegates_to_probe_phrase(monkeypatch):
                 "text": text,
                 "webspace_id": webspace_id,
                 "use_rasa": use_rasa,
+                "use_neuro_lite": use_neuro_lite,
+                "use_neural": use_neural,
+                "collect_all": collect_all,
                 "emit_trace": emit_trace,
                 "request_locale": request_locale,
                 "preferred_locales": preferred_locales,
@@ -133,19 +139,103 @@ async def test_nlu_teacher_probe_api_delegates_to_probe_phrase(monkeypatch):
 
     result = await api.probe(
         "ws-api",
-        api.ProbePhraseRequest(text=" show nlu teacher ", use_rasa=False, emit_trace=False),
+        api.ProbePhraseRequest(
+            text=" show nlu teacher ",
+            use_rasa=False,
+            use_neuro_lite=True,
+            use_neural=True,
+            collect_all=True,
+            emit_trace=False,
+        ),
     )
 
     assert seen == {
         "text": " show nlu teacher ",
         "webspace_id": "ws-api",
         "use_rasa": False,
+        "use_neuro_lite": True,
+        "use_neural": True,
+        "collect_all": True,
         "emit_trace": False,
         "request_locale": None,
         "preferred_locales": [],
     }
     assert result["ok"] is True
     assert result["intent"] == "desktop.open_modal"
+
+
+@pytest.mark.anyio
+async def test_probe_phrase_collect_all_records_multi_engine_evidence(monkeypatch):
+    from adaos.services.nlu import probe as probe_module
+
+    async def _fake_neuro_lite(text, *, webspace_id=None, request_id=None, locale=None, preferred_locales=None):
+        return {
+            "ok": False,
+            "accepted": False,
+            "via": "neuro_lite",
+            "intent": "desktop.open_modal",
+            "confidence": 0.41,
+            "reason": "neuro_lite_low_confidence",
+        }
+
+    async def _fake_neural(
+        text,
+        *,
+        webspace_id=None,
+        request_id=None,
+        meta=None,
+        locale=None,
+        preferred_locales=None,
+        entity_resolution=None,
+        record_usage_stats=True,
+    ):
+        return {
+            "ok": False,
+            "accepted": False,
+            "via": "neural",
+            "reason": "neural_abstained",
+            "confidence": 0.0,
+            "entity_resolution": entity_resolution,
+        }
+
+    async def _fake_rasa(text, *, webspace_id=None, request_id=None, meta=None):
+        return {
+            "ok": True,
+            "via": "rasa",
+            "intent": "desktop.open_modal",
+            "confidence": 0.86,
+            "slots": {"modal_id": "nlu_teacher_modal"},
+            "raw": {"source": "test"},
+        }
+
+    monkeypatch.setattr(probe_module.neuro_lite_service_bridge, "parse_text", _fake_neuro_lite)
+    monkeypatch.setattr(probe_module.neural_service_bridge, "parse_text", _fake_neural)
+    monkeypatch.setattr(probe_module.rasa_service_bridge, "parse_text", _fake_rasa)
+
+    result = await probe_module.probe_phrase(
+        "please show nlu teacher",
+        webspace_id="ws-probe",
+        use_neuro_lite=True,
+        use_neural=True,
+        use_rasa=True,
+        collect_all=True,
+        emit_trace=False,
+    )
+
+    assert result["ok"] is True
+    assert result["via"] == "rasa"
+    assert result["engine_results"]["regex"]["reason"] == "no_match"
+    assert result["engine_results"]["neuro_lite"]["reason"] == "neuro_lite_low_confidence"
+    assert result["engine_results"]["neural"]["reason"] == "neural_abstained"
+    assert result["engine_results"]["rasa"]["ok"] is True
+    assert [(stage["stage"], stage["status"]) for stage in result["stages"]] == [
+        ("request", "received"),
+        ("named_entity", result["stages"][1]["status"]),
+        ("regex", "miss"),
+        ("neuro_lite", "miss"),
+        ("neural", "miss"),
+        ("rasa", "hit"),
+    ]
 
 
 @pytest.mark.anyio

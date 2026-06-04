@@ -502,6 +502,9 @@ def _implemented_tool_contracts() -> list[RootMcpToolContract]:
                     "target_id": {"type": "string"},
                     "webspace_id": {"type": "string"},
                     "use_rasa": {"type": "boolean"},
+                    "use_neuro_lite": {"type": "boolean"},
+                    "use_neural": {"type": "boolean"},
+                    "collect_all": {"type": "boolean"},
                     "emit_trace": {"type": "boolean"},
                     "request_locale": {"type": "string"},
                     "preferred_locales": {"type": "array", "items": {"type": "string"}},
@@ -1734,6 +1737,9 @@ def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bo
     webspace_id = _text_or_none(arguments.get("webspace_id")) or "desktop"
     root_scope = _mcp_root_scope(arguments)
     use_rasa = bool(arguments.get("use_rasa", True))
+    use_neuro_lite = bool(arguments.get("use_neuro_lite", False))
+    use_neural = bool(arguments.get("use_neural", False))
+    collect_all = bool(arguments.get("collect_all", False))
     emit_trace = False if dry_run else bool(arguments.get("emit_trace", False))
     request_locale = _text_or_none(arguments.get("request_locale"))
     preferred_locales = _text_list(arguments.get("preferred_locales"))
@@ -1742,6 +1748,9 @@ def _handle_nlu_authoring_check_phrase(arguments: dict[str, Any], *, dry_run: bo
             text,
             webspace_id=webspace_id,
             use_rasa=use_rasa,
+            use_neuro_lite=use_neuro_lite,
+            use_neural=use_neural,
+            collect_all=collect_all,
             emit_trace=emit_trace,
             request_locale=request_locale,
             preferred_locales=preferred_locales,

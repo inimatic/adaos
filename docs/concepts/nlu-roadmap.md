@@ -343,6 +343,16 @@ below remain useful for tracking existing implementation work.
   selected strategy on every candidate, and routes non-regex strategies into
   first-class `training_example`, `entity_alias`, `descriptor_fix`,
   `development_task`, or `clarification` records.
+- [x] `[must]` Implementation slice: dry-run phrase probe can collect
+  per-engine evidence for regex, Neuro Lite, Neural, and Rasa through explicit
+  `collect_all` / `use_*` flags. Root MCP exposes those flags through
+  `nlu_authoring.check_phrase`, and LLM Teacher requests full audit evidence
+  for strategy selection while regex Apply verification stays fast and scoped.
+- [ ] `[must]` Add multi-engine training publication policy: after a confirmed
+  understanding, decide which engines receive examples/templates based on
+  phrase class, action class, engine readiness, and validation evidence. Engines
+  that abstain or are structurally unsuitable should record evidence and remain
+  untrained for that case.
 - [x] `[must]` Require LLM to reject regex for broad semantic, highly
   contextual, or ambiguous phrases and choose Rasa/Neural/clarification or a
   descriptor fix instead.

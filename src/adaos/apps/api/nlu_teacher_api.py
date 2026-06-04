@@ -149,6 +149,9 @@ class PruneTeacherRequestsRequest(BaseModel):
 class ProbePhraseRequest(BaseModel):
     text: str = Field(..., min_length=1)
     use_rasa: bool = True
+    use_neuro_lite: bool = False
+    use_neural: bool = False
+    collect_all: bool = False
     emit_trace: bool = True
     request_locale: Optional[str] = None
     preferred_locales: list[str] = Field(default_factory=list)
@@ -442,6 +445,9 @@ async def probe(webspace_id: str, body: ProbePhraseRequest):
             body.text,
             webspace_id=ws,
             use_rasa=bool(body.use_rasa),
+            use_neuro_lite=bool(body.use_neuro_lite),
+            use_neural=bool(body.use_neural),
+            collect_all=bool(body.collect_all),
             emit_trace=bool(body.emit_trace),
             request_locale=body.request_locale,
             preferred_locales=body.preferred_locales,
