@@ -484,12 +484,15 @@ def _extract_webspace_context(snapshot: dict[str, Any]) -> dict[str, Any]:
     def _strip_app(app: Any) -> Optional[dict[str, Any]]:
         if not isinstance(app, Mapping):
             return None
+        aliases = app.get("aliases")
+        alias_list = [str(item).strip() for item in aliases if str(item).strip()] if isinstance(aliases, list) else []
         out = {
             "id": app.get("id"),
             "title": app.get("title"),
             "scenario_id": app.get("scenario_id"),
             "launchModal": app.get("launchModal"),
             "origin": app.get("origin"),
+            "aliases": alias_list[:20] if alias_list else None,
         }
         return {k: v for k, v in out.items() if v is not None}
 
@@ -994,6 +997,15 @@ def _row_aliases(row: Mapping[str, Any]) -> list[str]:
     return out
 
 
+def _mapping_aliases(item: Mapping[str, Any]) -> list[str]:
+    out: list[str] = []
+    for key in ("aliases", "display_aliases", "displayAliases", "nlu_aliases", "synonyms"):
+        raw = item.get(key)
+        if isinstance(raw, list):
+            out.extend(str(alias).strip() for alias in raw if str(alias).strip())
+    return out
+
+
 def _regex_alt(value: str) -> str:
     escaped = re.escape(str(value or "").strip())
     return re.sub(r"(?:\\\s|\s)+", r"\\s+", escaped)
@@ -1053,6 +1065,7 @@ def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[s
             str(app.get("id") or "").strip(),
             str(app.get("title") or "").strip(),
             str(app.get("name") or "").strip(),
+            *_mapping_aliases(app),
         ]
         if not _lookup_phrase_matches(entity, aliases):
             continue
@@ -1794,6 +1807,9 @@ def _collect_root_mcp_authoring_evidence(
         **base_args,
         "text": text,
         "use_rasa": True,
+        "use_neuro_lite": True,
+        "use_neural": True,
+        "collect_all": True,
         "emit_trace": False,
     }
     check_result = _invoke_root_mcp_authoring_tool(
@@ -2299,6 +2315,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- context.root_mcp.nlu_authoring_context.action_surface.available_actions is the primary governed action inventory. Prefer actions/intents from this surface and use runtime_state/process_state/developer_hints to resolve what is currently available.\n"
         "- If developer_hints describe aliases, primary_actions, slot_schemas, entities, or owner_hints for a skill/scenario, treat them as curated authoring guidance and prefer them over guessing from names alone.\n"
         "- context.root_mcp.desktop_registry_lookup contains canonical modal_id/app_id/scenario_id values and labels/aliases. Use canonical slots for intended actions; display labels are only match evidence.\n"
+        "- context.root_mcp.nlu_authoring_phrase_check may contain engine_results for regex, neuro_lite, neural, and Rasa. Treat per-engine miss/low-confidence/abstain as evidence, not as a global failure. Choose the training_strategy that fits the phrase and the engines that can realistically learn it.\n"
         "- context.root_mcp.nlu_training_targets and nlu_templates are the governed placement/inventory surfaces; choose a target that exists there and avoid duplicate examples/regex patterns.\n"
         "- SDK surfaces in context.root_mcp are descriptive only. The LLM must propose AdaOS actions/templates, not direct SDK calls.\n"
         "- If context.correction_thread.active=true, the utterance is a correction of a previous candidate. Use the previous candidate only as failure context, and propose a corrected candidate rather than repeating the same rule.\n"

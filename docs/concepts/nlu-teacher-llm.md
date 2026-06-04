@@ -632,6 +632,12 @@ Current Root MCP implementation status:
   route proxy and remain side-effect-free. If the hub is disconnected or has
   not received the admin call endpoint yet, root returns cached
   `requires_live_hub` evidence instead of blocking or inventing a result.
+- implemented in phrase check: `nlu_authoring.check_phrase` can request
+  explicit multi-engine evidence with `collect_all=true` plus
+  `use_neuro_lite`, `use_neural`, and `use_rasa`. The result carries
+  `engine_results` for regex, Neuro Lite, Neural, and Rasa where requested.
+  A miss/abstain/timeout in one engine is evidence for strategy selection, not
+  a global NLU failure.
 - implemented in LLM Teacher: the prompt context includes read-only Root MCP
   evidence from context, phrase check, dialog context, training targets,
   templates, and SDK surface descriptors before Root/OpenAI is asked to

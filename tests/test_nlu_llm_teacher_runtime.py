@@ -2329,6 +2329,137 @@ async def test_llm_teacher_repairs_open_modal_label_slot_to_canonical_modal(monk
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_repairs_open_modal_from_catalog_app_alias_when_registry_is_empty(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-open-modal-catalog-alias-repair"
+    scenario_id = "test_open_modal_catalog_alias_repair"
+    request_text = "show infrastructure state"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_modal": {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.modal.open",
+                                    "params": {"modal_id": "$slot.modal_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(
+                txn,
+                "catalog",
+                {
+                    "apps": [
+                        {
+                            "id": "infrastate_app",
+                            "title": "Infra State",
+                            "launchModal": "infrastate_modal",
+                            "aliases": ["infrastructure"],
+                        }
+                    ]
+                },
+            )
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_modal",
+                                    "regex_rule": {
+                                        "intent": "desktop.open_modal",
+                                        "pattern": r"\b(?:show|open)\s+(?P<modal_id>Infra\s*State)\b",
+                                    },
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "confidence": 0.8,
+                                    "notes": "LLM selected the right modal but used a display label that does not match the phrase.",
+                                    "candidate": None,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(
+        llm,
+        "_collect_root_mcp_authoring_evidence",
+        lambda **kwargs: {
+            "desktop_registry_lookup": {
+                "ok": True,
+                "webspace_id": webspace_id,
+                "lookups": {"modal_id": [], "app_id": [], "scenario_id": []},
+                "summary": [],
+                "fingerprint": "fp.empty",
+            }
+        },
+    )
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.infrastructure-state",
+                "request_id": "req.infrastructure-state",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    candidate = candidates[-1]
+    assert candidate["status"] == "pending"
+    assert candidate["regex_rule"]["intent"] == "desktop.open_modal"
+    assert candidate["preview"]["ok"] is True
+    assert candidate["preview"]["slots"] == {"modal_id": "infrastructure state"}
+    assert candidate["normalization"]["llm_proposal_repair"]["modal_id"] == "infrastate_modal"
+    assert candidate["normalization"]["llm_proposal_repair"]["matched"] == "catalog.app.launchModal"
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_repairs_scenario_switch_target_and_slot_alias(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
