@@ -102,7 +102,16 @@ async def test_candidate_apply_persists_rule_and_notifies():
 
     saved = json.loads(scenario_json.read_text(encoding="utf-8"))
     rules = (saved.get("nlu") or {}).get("regex_rules") or []
-    assert any(r.get("intent") == "desktop.open_weather" and r.get("pattern") == pattern for r in rules if isinstance(r, dict))
+    saved_rule = next(
+        r
+        for r in rules
+        if isinstance(r, dict) and r.get("intent") == "desktop.open_weather" and r.get("pattern") == pattern
+    )
+    assert saved_rule["promotion"]["state"] == "local_learned"
+    assert saved_rule["promotion"]["public_export_allowed"] is False
+    assert saved_rule["provenance"]["candidate_id"] == candidate_id
+    assert saved_rule["provenance"]["mcp_bearer_embedded"] is False
+    assert saved_rule["privacy"]["public_promotion_requires_review"] is True
 
     assert any("NLU Teacher acquired a new understanding" in t for t in notified)
     assert acquired
@@ -113,6 +122,9 @@ async def test_candidate_apply_persists_rule_and_notifies():
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}
         candidates = list((teacher or {}).get("candidates") or [])
     assert candidates[-1]["validation"]["status"] == "passed"
+    assert candidates[-1]["promotion"]["applied_artifact"]["rule_id"] == saved_rule["id"]
+    assert candidates[-1]["provenance"]["rollback_pointer"]["rule_id"] == saved_rule["id"]
+    assert candidates[-1]["provenance"]["verification_result"]["status"] == "intent_matched"
 
 
 @pytest.mark.anyio

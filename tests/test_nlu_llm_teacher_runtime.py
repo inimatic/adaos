@@ -311,9 +311,63 @@ async def test_llm_teacher_records_disabled_llm_skip(monkeypatch):
     async with async_get_ydoc(webspace_id) as ydoc:
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}
         events = list(teacher.get("events") or [])
+        logs = list(teacher.get("llm_logs") or [])
 
     assert events[-1]["kind"] == "llm.skipped"
     assert events[-1]["raw"]["reason"] == "llm_teacher_disabled"
+    assert logs[-1]["status"] == "skipped"
+    assert logs[-1]["skip_reason"] == "llm_teacher_disabled"
+    assert teacher["budget"]["counters"]["skipped"] >= 1
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_defers_miss_when_root_llm_unavailable(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-llm-deferred-unavailable"
+    request_text = "show offline only panel"
+
+    async def _failing_llm_call(messages, *, request_id=None, **kwargs):
+        raise RuntimeError("root proxy unavailable")
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_llm_call", _failing_llm_call)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.deferred",
+                "request_id": "req.deferred",
+                "text": request_text,
+                "reason": "below_margin_threshold",
+                "via": "rasa",
+                "_meta": {"route_id": "voice_chat"},
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        queue = list(teacher.get("deferred_enrichment_queue") or [])
+        events = list(teacher.get("events") or [])
+        logs = list(teacher.get("llm_logs") or [])
+
+    assert queue
+    assert queue[-1]["request_id"] == "req.deferred"
+    assert queue[-1]["reason"] == "root_llm_unavailable"
+    assert "root proxy unavailable" in queue[-1]["error"]
+    assert any(event.get("kind") == "llm.deferred" for event in events)
+    assert logs[-1]["status"] == "error"
+    assert teacher["budget"]["counters"]["deferred"] >= 1
+    assert teacher["budget"]["by_reason"]["root_llm_unavailable"] >= 1
 
 
 @pytest.mark.anyio
@@ -588,6 +642,18 @@ async def test_llm_teacher_prompt_includes_mcp_evidence_and_stores_regex_candida
     assert candidate["template_candidate"]["engine"] == "regex"
     assert candidate["template_candidate"]["operation"] == "add_regex_rule"
     assert candidate["template_candidate"]["training_strategy"]["primary"] == "regex"
+    assert candidate["promotion"]["state"] == "local_learned"
+    assert candidate["promotion"]["public_export_allowed"] is False
+    assert candidate["privacy"]["public_promotion_requires_review"] is True
+    assert candidate["provenance"]["request_id"] == "req.llm"
+    assert candidate["provenance"]["mcp_bearer_embedded"] is False
+    assert candidate["provenance"]["mcp"]["enabled"] in {True, False}
+    assert "authorization" not in json.dumps(candidate["provenance"], ensure_ascii=False).lower()
+    assert teacher["policies"]["retention"]["version"] == "nlu.teacher.retention.v1"
+    assert teacher["policies"]["promotion_privacy"]["default_state"] == "local_learned"
+    assert teacher["budget"]["policy"]["fallback_behavior"] == "store_miss_for_later_batch_enrichment"
+    assert teacher["budget"]["counters"]["request"] >= 1
+    assert teacher["budget"]["counters"]["response"] >= 1
 
 
 @pytest.mark.anyio

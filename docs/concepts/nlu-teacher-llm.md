@@ -101,6 +101,24 @@ candidates through `candidate.llm.audit`. They let an operator correlate a
 candidate with the bounded prompt/context snapshot without embedding bearer
 tokens or unbounded dialog history.
 
+Generated candidates and accepted Teacher artifacts carry a governance
+envelope. The current backend slice covers regex rules, governed training
+examples, and plan/development candidates:
+
+- `promotion`: local learned state, portability class, public-export gate
+- `provenance`: request/thread/candidate ids, model/decision, prompt/context/request
+  hashes, owner, route/device audit, MCP tool audit without bearer material,
+  rollback pointer, and verification result when available
+- `privacy`: retention/promotion policy versions and local-only/private-scope
+  flags
+
+The Teacher state stores policy snapshots under `data.nlu_teacher.policies`:
+`nlu.teacher.retention.v1`, `nlu.teacher.promotion.v1`,
+`nlu.teacher.threat_model.v1`, and `nlu.teacher.budget.v1`. These are not a
+full privacy engine yet; they are the contract that prevents local learned data
+from being confused with public reusable artifacts before promotion tooling
+exists.
+
 ## Enable
 
 NLU Teacher enablement follows root policy first:
@@ -123,6 +141,7 @@ Useful optional env vars on hub:
 - `ADAOS_NLU_LLM_RATE_WINDOW_S=30`
 - `ADAOS_NLU_LLM_RATE_MAX_PER_WINDOW=6`
 - `ADAOS_NLU_LLM_REPEAT_SUPPRESS_TTL_S=20`
+- `ADAOS_NLU_TEACHER_DEFERRED_MAX=250`
 - `ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT=1`
 - `ADAOS_ROOT_NLU_AUTHORING_INCLUDE_LIVE=1`
 - `ADAOS_ROOT_NLU_AUTHORING_INCLUDE_HINTS=1`
@@ -141,6 +160,14 @@ class; it suppresses repeated routed phrases for a short TTL and records
 `llm.skipped` / `nlp.teacher.llm.skipped` with rate evidence. Correction and
 confirmation retries are exempt so user feedback can still drive the next
 analysis cycle.
+
+Budget/offline behavior is explicit in Teacher state. LLM request, response,
+skip, error, and deferred decisions update `data.nlu_teacher.budget`. If
+Root/OpenAI fails or returns an empty output, the Teacher records
+`llm.deferred`, appends a bounded row to
+`data.nlu_teacher.deferred_enrichment_queue`, and leaves the deterministic NLU
+fast path untouched. Later batch enrichment can replay that queue without
+blocking Voice/chat in the failed turn.
 
 ## Teacher context (inputs)
 
@@ -437,6 +464,11 @@ plane and future UI controls:
 
 All preview endpoints are dry-run only: they do not write training data and do
 not dispatch UI/host events.
+
+The contextual action surface and dialog context also expose compact
+governance/offline state for UI/MCP inspection: budget counters, active
+retention/promotion/threat policies, deferred enrichment queue size, and recent
+deferred entries. These are read-only diagnostics.
 
 ## Human verification contract
 
@@ -871,6 +903,10 @@ treated as `[could]` unless explicitly promoted.
 - Redact MCP bearer material from Teacher logs; store only mode, status,
   target/zone metadata, allowed tool ids, descriptor hash, and OpenAI protocol
   evidence such as MCP item counts.
+- Store local learned governance on every candidate and accepted regex
+  artifact: promotion state, portability, provenance, privacy policy, rollback
+  pointer, and verification result. Public promotion stays blocked until an
+  explicit operator-approved promotion gate is implemented.
 - Include skill-authored `nlu.llm_hints` and inferred desktop registry lookup
   evidence, especially app/modal aliases and primary interface actions. Skill
   authors prepare these hints during skill development; AdaOS still validates
@@ -885,6 +921,9 @@ treated as `[could]` unless explicitly promoted.
 - Persist every Teacher event immediately to the Teacher store, not only to the
   live YDoc, so `llm.request`, `llm.response`, and error/skip events survive a
   backend restart before a candidate is produced.
+- Record `llm.deferred` and queue the original miss when Root/OpenAI is
+  unavailable or returns an empty response; do not block or mutate the normal
+  NLU fast path.
 - Repair common regex-candidate mistakes before preview/apply: canonical slot
   aliases such as `scenario -> scenario_id`, `modal -> modal_id`, and
   host-action targets that should be stored in the current scenario owner.

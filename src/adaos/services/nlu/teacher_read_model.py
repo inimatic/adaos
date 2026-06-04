@@ -284,6 +284,10 @@ def _compact_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     target = candidate.get("target") if isinstance(candidate.get("target"), Mapping) else {}
     preview = candidate.get("preview") if isinstance(candidate.get("preview"), Mapping) else {}
     verification = candidate.get("verification") if isinstance(candidate.get("verification"), Mapping) else {}
+    promotion = candidate.get("promotion") if isinstance(candidate.get("promotion"), Mapping) else {}
+    provenance = candidate.get("provenance") if isinstance(candidate.get("provenance"), Mapping) else {}
+    privacy = candidate.get("privacy") if isinstance(candidate.get("privacy"), Mapping) else {}
+    dispatch = candidate.get("dispatch") if isinstance(candidate.get("dispatch"), Mapping) else {}
     return {
         "id": candidate.get("id"),
         "request_id": candidate.get("request_id"),
@@ -294,6 +298,11 @@ def _compact_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "regex_rule": dict(regex_rule) if regex_rule else None,
         "preview": dict(preview) if preview else None,
         "verification": dict(verification) if verification else None,
+        "promotion": dict(promotion) if promotion else None,
+        "provenance": dict(provenance) if provenance else None,
+        "privacy": dict(privacy) if privacy else None,
+        "dispatch_status": candidate.get("dispatch_status"),
+        "dispatch": dict(dispatch) if dispatch else None,
         "created_at": candidate.get("ts"),
         "applied": dict(candidate.get("applied") or {}) if isinstance(candidate.get("applied"), Mapping) else None,
         "rolled_back_at": candidate.get("rolled_back_at"),
@@ -1259,6 +1268,19 @@ def _runtime_state_from_snapshot(snapshot: Mapping[str, Any], *, lookup_payload:
         ],
         "active_teacher_sessions": _active_teacher_sessions(teacher),
         "recent_errors": _recent_teacher_errors(teacher),
+        "teacher_budget": dict(teacher.get("budget") or {}) if isinstance(teacher.get("budget"), Mapping) else {},
+        "teacher_policies": dict(teacher.get("policies") or {}) if isinstance(teacher.get("policies"), Mapping) else {},
+        "deferred_enrichment_queue": [
+            {
+                "id": item.get("id"),
+                "ts": item.get("ts"),
+                "status": item.get("status"),
+                "request_id": item.get("request_id"),
+                "reason": item.get("reason"),
+                "log_id": item.get("log_id"),
+            }
+            for item in sorted(_as_list(teacher.get("deferred_enrichment_queue")), key=_event_ts, reverse=True)[:20]
+        ],
         "lookup_counts": {
             "modal_id": _lookup_count("modal_id"),
             "app_id": _lookup_count("app_id"),
@@ -1297,9 +1319,12 @@ def _process_state_from_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             "quarantined_candidates": sum(
                 1 for item in _as_list(teacher.get("candidates")) if item.get("status") == "quarantined"
             ),
+            "deferred_enrichment": len(_as_list(teacher.get("deferred_enrichment_queue"))),
             "active_confirmations": len(_active_teacher_sessions(teacher).get("pending_confirmations") or []),
             "active_clarifications": len(_active_teacher_sessions(teacher).get("clarification_sessions") or []),
         },
+        "teacher_budget": dict(teacher.get("budget") or {}) if isinstance(teacher.get("budget"), Mapping) else {},
+        "teacher_policies": dict(teacher.get("policies") or {}) if isinstance(teacher.get("policies"), Mapping) else {},
         "workbench_signals": workbench[:20],
         "recent_teacher_events": [
             {

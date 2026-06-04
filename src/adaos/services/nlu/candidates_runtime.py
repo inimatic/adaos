@@ -10,6 +10,7 @@ import yaml
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.nlu.teacher_artifacts import accepted_artifact_metadata
 from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_events_by_candidate
 from adaos.services.nlu.teacher_validation import validate_candidate_apply_async
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
@@ -456,6 +457,16 @@ async def _on_candidate_apply(evt: Any) -> None:
                     for item in iter_mappings(teacher.get("candidates")):
                         d = dict(item)
                         if d.get("id") == candidate_id:
+                            artifact_meta = accepted_artifact_metadata(
+                                target=target,
+                                source="nlu_teacher",
+                                webspace_id=webspace_id,
+                                request_id=request_id,
+                                thread_id=d.get("thread_id") if isinstance(d.get("thread_id"), str) else None,
+                                candidate_id=candidate_id,
+                                operator_action="save_example_request",
+                                meta=meta,
+                            )
                             d["status"] = "apply_requested"
                             d["applied_at"] = time.time()
                             d["applied"] = {
@@ -463,6 +474,9 @@ async def _on_candidate_apply(evt: Any) -> None:
                                 "examples_count": len(examples),
                                 "target": dict(target or {}),
                             }
+                            d["promotion"] = dict(artifact_meta["promotion"])
+                            d["provenance"] = dict(artifact_meta["provenance"])
+                            d["privacy"] = dict(artifact_meta["privacy"])
                             applied_candidate = d
                         next_candidates.append(d)
                     teacher["candidates"] = next_candidates
@@ -476,6 +490,7 @@ async def _on_candidate_apply(evt: Any) -> None:
                             "nlp.teacher.example.save",
                             {
                                 "webspace_id": webspace_id,
+                                "candidate_id": candidate_id,
                                 "text": example,
                                 "intent": intent.strip(),
                                 **({"target": dict(target)} if isinstance(target, Mapping) else {}),
@@ -497,9 +512,27 @@ async def _on_candidate_apply(evt: Any) -> None:
                 for item in iter_mappings(teacher.get("candidates")):
                     d = dict(item)
                     if d.get("id") == candidate_id:
+                        target = d.get("target") if isinstance(d.get("target"), Mapping) else payload_target
+                        artifact_meta = accepted_artifact_metadata(
+                            target=target,
+                            source="nlu_teacher",
+                            webspace_id=webspace_id,
+                            request_id=request_id,
+                            thread_id=d.get("thread_id") if isinstance(d.get("thread_id"), str) else None,
+                            candidate_id=candidate_id,
+                            operator_action="apply_plan",
+                            meta=meta,
+                        )
                         d["status"] = "applied"
                         d["applied_at"] = time.time()
                         d["applied"] = {"type": "plan"}
+                        promotion = coerce_dict(artifact_meta["promotion"])
+                        promotion["plan_status"] = "pending_developer_or_operator_handoff"
+                        d["promotion"] = promotion
+                        provenance = coerce_dict(artifact_meta["provenance"])
+                        provenance["accepted_artifact_source"] = "teacher_plan"
+                        d["provenance"] = provenance
+                        d["privacy"] = dict(artifact_meta["privacy"])
                     next_candidates.append(d)
                 teacher["candidates"] = next_candidates
 
@@ -517,6 +550,9 @@ async def _on_candidate_apply(evt: Any) -> None:
                     "candidate": coerce_dict(candidate.get("candidate")),
                     "strategy_candidate": coerce_dict(candidate.get("strategy_candidate")),
                     "training_strategy": coerce_dict(candidate.get("training_strategy")),
+                    "promotion": coerce_dict(candidate.get("promotion")),
+                    "provenance": coerce_dict(candidate.get("provenance")),
+                    "privacy": coerce_dict(candidate.get("privacy")),
                     "notes": candidate.get("notes"),
                 }
                 plan.append(plan_item)
