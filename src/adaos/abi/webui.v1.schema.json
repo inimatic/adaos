@@ -13,6 +13,10 @@
     "widgets": { "$ref": "#/$defs/catalogWidgets" },
 
     "registry": { "$ref": "#/$defs/registry" },
+    "resources": {
+      "$ref": "#/$defs/uiResources",
+      "description": "Skill UI resources resolved by the AdaOS runtime and browser client, not by arbitrary skill-hosted static routes."
+    },
     "nlu": { "$ref": "#/$defs/nluDescriptor" },
     "llm_hints": {
       "$ref": "#/$defs/authoringHints",
@@ -141,6 +145,52 @@
         }
       }
     },
+    "uiResources": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/uiResource" },
+      "description": "Map of stable resource ids to browser-facing static assets. References use resource:<id> tokens from icons, images, inputs, or semantic config."
+    },
+    "uiResource": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["icon", "image", "svg", "font", "stylesheet", "template", "data"],
+          "description": "Semantic resource role. The browser decides the concrete renderer/cache behavior."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Skill-relative or package-relative path. Runtime must normalize and serve it through the core channel."
+        },
+        "url": {
+          "type": "string",
+          "description": "Optional already-resolved URL, usually produced by runtime materialization rather than authored by a skill."
+        },
+        "mime": { "type": "string" },
+        "title": { "type": "string" },
+        "alt": { "type": "string" },
+        "cacheKey": {
+          "type": "string",
+          "description": "Stable cache key such as sha256:<digest>; changes invalidate browser caches."
+        },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "delivery": {
+          "type": "string",
+          "enum": ["core", "external"],
+          "default": "core",
+          "description": "core means the asset is delivered by AdaOS over the active browser/core channel."
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["skill", "scenario", "system", "external"],
+          "default": "skill"
+        },
+        "fallback": {}
+      }
+    },
     "loadPhase": {
       "type": "string",
       "enum": ["eager", "visible", "interaction", "deferred"],
@@ -204,6 +254,97 @@
         "offFocusReadyState": { "$ref": "#/$defs/readinessState" }
       }
     },
+    "initialFocus": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Semantic target ref such as widget:search-box or control:city."
+            },
+            "strategy": {
+              "type": "string",
+              "enum": ["first_available", "restore_or_first", "always"],
+              "default": "restore_or_first"
+            },
+            "required": {
+              "type": "boolean",
+              "description": "When true, missing focus target is a manifest/design issue instead of a silent no-op."
+            }
+          }
+        }
+      ]
+    },
+    "submitBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaultAction": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Action id/ref invoked when Enter submits the current form context."
+        },
+        "enterKey": {
+          "type": "string",
+          "enum": ["submit", "newline", "ignore"],
+          "default": "submit"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["focused_form", "widget", "surface"],
+          "default": "focused_form"
+        },
+        "allowTextAreaNewline": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "interactionBehavior": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "initialFocus": { "$ref": "#/$defs/initialFocus" },
+        "submit": { "$ref": "#/$defs/submitBehavior" },
+        "defaultAction": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shortcut for submit.defaultAction on simple widgets/surfaces."
+        }
+      }
+    },
+    "loadingBehavior": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "statePath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional Yjs/view-state path that carries loading/status information."
+        },
+        "readyWhen": {
+          "type": "string",
+          "description": "Client expression for considering the element ready."
+        },
+        "loadingText": { "type": "string" },
+        "emptyText": { "type": "string" },
+        "degradedText": { "type": "string" },
+        "skeleton": {
+          "type": "string",
+          "enum": ["none", "line", "card", "table", "chart", "custom"]
+        },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "retainLastValue": {
+          "type": "boolean",
+          "description": "Keep the last rendered value while a fresh value is loading or stale."
+        }
+      }
+    },
 
     "catalog": {
       "type": "object",
@@ -242,7 +383,7 @@
         "id": { "$ref": "#/$defs/id" },
         "title": { "type": "string" },
         "subtitle": { "type": "string" },
-        "icon": { "type": "string", "description": "Ionicon name (e.g. 'mic-outline')." },
+        "icon": { "type": "string", "description": "Ionicon name (e.g. 'mic-outline') or resource:<id>." },
         "launchModal": { "$ref": "#/$defs/id" },
         "action": { "$ref": "#/$defs/launchAction" },
         "url": { "type": "string" },
@@ -262,7 +403,9 @@
         "dataSource": { "$ref": "#/$defs/dataSource" },
         "inputs": { "type": "object", "additionalProperties": true },
         "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
-        "load": { "$ref": "#/$defs/loadHint" }
+        "load": { "$ref": "#/$defs/loadHint" },
+        "loading": { "$ref": "#/$defs/loadingBehavior" },
+        "interaction": { "$ref": "#/$defs/interactionBehavior" }
       },
       "allOf": [
         {
@@ -308,6 +451,7 @@
         "title": { "type": "string" },
         "schema": { "$ref": "#/$defs/pageSchema" },
         "load": { "$ref": "#/$defs/loadHint" },
+        "loading": { "$ref": "#/$defs/loadingBehavior" },
         "presentation": { "$ref": "#/$defs/overlayPresentation" },
         "overlay": {
           "$ref": "#/$defs/overlayPresentation",
@@ -372,6 +516,8 @@
         "layout": { "$ref": "#/$defs/layout" },
         "widgets": { "type": "array", "items": { "$ref": "#/$defs/widgetConfig" } },
         "load": { "$ref": "#/$defs/loadHint" },
+        "loading": { "$ref": "#/$defs/loadingBehavior" },
+        "interaction": { "$ref": "#/$defs/interactionBehavior" },
         "initialState": {
           "type": "object",
           "additionalProperties": true,
@@ -439,7 +585,9 @@
         "dataSource": { "$ref": "#/$defs/dataSource" },
         "inputs": { "type": "object", "additionalProperties": true },
         "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
-        "load": { "$ref": "#/$defs/loadHint" }
+        "load": { "$ref": "#/$defs/loadHint" },
+        "loading": { "$ref": "#/$defs/loadingBehavior" },
+        "interaction": { "$ref": "#/$defs/interactionBehavior" }
       },
       "allOf": [
         {
@@ -458,7 +606,7 @@
       "additionalProperties": true,
       "required": ["kind"],
       "properties": {
-        "kind": { "type": "string", "enum": ["skill", "api", "static", "y", "stream"] },
+        "kind": { "type": "string", "enum": ["skill", "api", "static", "resource", "y", "stream"] },
         "name": {
           "type": "string",
           "description": "Skill data source target in '<skill>.<method>' form."
@@ -471,6 +619,10 @@
         "params": { "type": "object", "additionalProperties": true },
         "body": {},
         "value": {},
+        "resource": {
+          "$ref": "#/$defs/id",
+          "description": "Resource id from top-level resources when kind='resource'."
+        },
         "path": { "type": "string" },
         "nodeId": {
           "type": "string",
@@ -512,6 +664,10 @@
           "then": { "required": ["value"] }
         },
         {
+          "if": { "properties": { "kind": { "const": "resource" } } },
+          "then": { "required": ["resource"] }
+        },
+        {
           "if": { "properties": { "kind": { "const": "stream" } } },
           "then": { "required": ["receiver"] }
         }
@@ -534,6 +690,89 @@
           "description": "Client state expression evaluated before each tick."
         },
         "action": { "$ref": "#/$defs/action" }
+      }
+    },
+    "actionFeedback": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "pending": { "$ref": "#/$defs/pendingFeedback" },
+        "observe": { "$ref": "#/$defs/actionObservation" },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Fallback timeout when observe.timeoutMs is omitted."
+        },
+        "timeout": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Fallback state/message when observation does not complete."
+        },
+        "success": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "pendingFeedback": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "disable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Disable the triggering control while the action is awaiting feedback."
+        },
+        "label": { "type": "string" },
+        "icon": {
+          "type": "string",
+          "description": "Ionicon name or resource:<id> for the pending state."
+        },
+        "state": { "type": "string" }
+      }
+    },
+    "actionObservation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["y", "stream"] },
+        "path": {
+          "type": "string",
+          "description": "Yjs path for kind='y'."
+        },
+        "receiver": {
+          "$ref": "#/$defs/id",
+          "description": "Stream receiver for kind='stream'."
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["auto", "node", "shared", "local", "workspace"]
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["auto", "member", "hub"]
+        },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Legacy spelling accepted for existing _observe-style manifests."
+        },
+        "match": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "advanceFields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "updatedAtField": { "type": "string", "minLength": 1 },
+        "sequenceField": { "type": "string", "minLength": 1 }
       }
     },
 
@@ -825,9 +1064,19 @@
       "required": ["type"],
       "properties": {
         "on": { "type": "string", "description": "Trigger name (e.g. 'select')." },
+        "id": {
+          "$ref": "#/$defs/id",
+          "description": "Stable action id used by defaultAction, submit, keyboard, and feedback contracts."
+        },
+        "label": { "type": "string" },
+        "icon": {
+          "type": "string",
+          "description": "Ionicon name or resource:<id>."
+        },
         "type": { "type": "string", "minLength": 1, "description": "Action type (e.g. 'callHost')." },
         "target": { "type": "string" },
-        "params": { "type": "object", "additionalProperties": true }
+        "params": { "type": "object", "additionalProperties": true },
+        "feedback": { "$ref": "#/$defs/actionFeedback" }
       },
       "allOf": [
         {
