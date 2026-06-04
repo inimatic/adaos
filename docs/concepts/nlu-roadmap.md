@@ -126,6 +126,12 @@ implemented in smaller slices:
   browsers, apps, modals, scenarios, skills, and processes need canonical ids,
   voice aliases, locale, scope, ownership, and ambiguity evidence. Entity
   learning must not be folded into intent learning by default.
+- **UI affordances are voice-control objects too.** A modal or scenario is not
+  the smallest useful target. Tabs, sections, toolbar buttons, row actions,
+  filters, and active process controls need stable ids, labels, aliases,
+  scope, owner, side-effect class, and a previewable activation path. A phrase
+  like "show installed skills" should not become a guessed modal regex if the
+  intended result is "open Infrastate and select the Installed skills section".
 - **NLU strategy is selected, not assumed.** Regex is preferred only for stable
   command phrases and lookup-backed slots. Broad semantic phrasing, repeated
   corrections, or high ambiguity should push the Teacher toward Rasa/Neural
@@ -156,6 +162,10 @@ Reference flows that must stay representable:
 - **Capability gap**: phrase asks for behavior no installed skill/scenario can
   provide -> create `development_task` with the original phrase, context,
   missing surface, and replay check.
+- **Nested UI affordance**: `Show installed skills` -> voice affordance lookup
+  resolves `infrastate.installed_skills` -> compound action preview
+  (`desktop.open_modal(infrastate_modal)` + `ui.affordance.activate(...)`) ->
+  dispatch/outcome verification.
 
 Minimal milestone gates:
 
@@ -233,6 +243,16 @@ below remain useful for tracking existing implementation work.
   `action_surface.available_actions` with system/interface actions,
   skill/scenario intent routes, required slots, examples, side-effect class,
   owner, preview method, and fingerprint.
+- [ ] `[must]` Publish `voice_affordances` for nested UI targets: modal tabs,
+  sections, command buttons, list/table actions, filters, and process controls
+  that are visible or contextually reachable. Each affordance needs a stable
+  id, parent target, labels/aliases, locale, owner, visibility condition,
+  side-effect class, and a previewable activation path.
+- [ ] `[must]` Support compound interface candidates that combine a container
+  action with an affordance activation, for example open `infrastate_modal`
+  and select `infrastate.installed_skills`. Apply/dispatch must still go
+  through AdaOS preview and outcome verification, not through direct LLM UI
+  calls.
 - [x] `[must]` Expose current state through API/MCP: open modals, home/current
   scenario, focused route/node/browser, selected device, active/pending
   confirmations, recent errors, and user route context.
