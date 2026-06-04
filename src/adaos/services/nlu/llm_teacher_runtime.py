@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -945,6 +946,33 @@ def _compact_lookup_key(value: Any) -> str:
     return re.sub(r"[\s_\-:]+", "", str(value or "").strip()).casefold()
 
 
+def _lookup_phrase_matches(entity: str, aliases: list[str]) -> bool:
+    entity_key = _lookup_key(entity)
+    entity_compact = _compact_lookup_key(entity)
+    if not entity_key:
+        return False
+    for alias in aliases:
+        alias_key = _lookup_key(alias)
+        alias_compact = _compact_lookup_key(alias)
+        if not alias_key:
+            continue
+        if entity_key == alias_key or entity_compact == alias_compact:
+            return True
+        # Allow "show infrastructure state" to match the registered
+        # "infrastructure" alias, but keep very short aliases exact-only.
+        if len(alias_key) >= 5 and (
+            re.search(rf"(?<!\w){re.escape(alias_key)}(?!\w)", entity_key, re.IGNORECASE | re.UNICODE)
+            or re.search(rf"(?<!\w){re.escape(entity_key)}(?!\w)", alias_key, re.IGNORECASE | re.UNICODE)
+        ):
+            return True
+        if len(alias_compact) >= 8:
+            entity_tokens = [token for token in re.split(r"\W+", entity_key, flags=re.UNICODE) if len(token) >= 8]
+            for token in entity_tokens:
+                if SequenceMatcher(None, token, alias_compact).ratio() >= 0.86:
+                    return True
+    return False
+
+
 def _lookup_rows_from_context(context: Mapping[str, Any], lookup: str) -> list[dict[str, Any]]:
     root_mcp = coerce_dict(context.get("root_mcp"))
     registry = coerce_dict(root_mcp.get("desktop_registry_lookup"))
@@ -998,8 +1026,6 @@ def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[s
     entity = str(match.group("entity") or "").strip().strip(" \t\r\n\"'«»")
     if not entity:
         return None
-    entity_key = _lookup_key(entity)
-    entity_compact = _compact_lookup_key(entity)
 
     modal_rows = _lookup_rows_from_context(context, "modal_id")
     for row in modal_rows:
@@ -1007,9 +1033,7 @@ def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[s
         if not modal_id or modal_id.startswith("node:"):
             continue
         aliases = _row_aliases(row)
-        alias_keys = {_lookup_key(alias) for alias in aliases if alias}
-        alias_compact_keys = {_compact_lookup_key(alias) for alias in aliases if alias}
-        if entity_key not in alias_keys and entity_compact not in alias_compact_keys:
+        if not _lookup_phrase_matches(entity, aliases):
             continue
         return {
             "intent": "desktop.open_modal",
@@ -1030,9 +1054,7 @@ def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[s
             str(app.get("title") or "").strip(),
             str(app.get("name") or "").strip(),
         ]
-        alias_keys = {_lookup_key(alias) for alias in aliases if alias}
-        alias_compact_keys = {_compact_lookup_key(alias) for alias in aliases if alias}
-        if entity_key not in alias_keys and entity_compact not in alias_compact_keys:
+        if not _lookup_phrase_matches(entity, aliases):
             continue
         return {
             "intent": "desktop.open_modal",
@@ -3365,7 +3387,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                     )
                 except Exception:
                     duplicate = None
-                if isinstance(duplicate, Mapping):
+                if isinstance(duplicate, Mapping) and bool(preview.get("ok")):
                     duplicate_payload = {
                         "webspace_id": webspace_id,
                         "request_id": request_id,

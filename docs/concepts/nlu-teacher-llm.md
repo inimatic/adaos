@@ -360,6 +360,19 @@ planned intent, pattern, and storage target. The duplicate is not appended to
 `nlp.teacher.candidate.duplicate_suppressed` and records a
 `candidate.duplicate_suppressed` Teacher event instead.
 
+Duplicate suppression is terminal only for proposals whose local preview
+already matches the source phrase. If the LLM proposes a duplicate-looking
+regex that does not match the user's phrase, AdaOS keeps it as quarantined
+anomaly evidence and emits visible Voice/UI feedback. This prevents the
+"not understood, recorded for training, then nothing" failure mode.
+
+For lookup-backed `desktop.open_modal` repairs, Teacher can match longer
+registered descriptor aliases inside the user's phrase and tolerate minor
+inflection/noise for long aliases. Example: a phrase such as "show
+infrastructure state" can resolve through the registered infrastructure/Infra
+State modal alias before preview/apply. Short aliases remain exact-only to
+avoid broad accidental matches.
+
 If the probe result matches the planned candidate intent, AdaOS:
 
 - marks the candidate as `intent_matched`
@@ -421,6 +434,19 @@ Voice confirmation now also suppresses short non-command STT tails while a
 confirmation is pending, so fragments such as "от сети" do not become a second
 Teacher request. Voice history is served as a compact router/YJS-owned stream
 shared by the modal and the header Listen button.
+
+Voice feedback is required for every terminal or near-terminal Teacher outcome
+for a voice-origin request:
+
+- duplicate/anomaly: explain whether an existing valid template already covers
+  the phrase or whether a proposed template failed preview and was quarantined
+- deferred LLM/MCP: explain that analysis did not finish and the request is
+  kept for later enrichment
+- ignored decision: explain that no safe template/action was found
+- verification failure: explain that Apply ran but replay did not confirm the
+  planned intent
+- acquired understanding: tell the user that the new understanding was
+  installed and verified before normal AdaOS dispatch continues.
 
 Current rollback surface:
 
