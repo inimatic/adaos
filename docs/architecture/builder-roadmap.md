@@ -49,8 +49,8 @@ gate easy to read by priority.
 | 0. Terminology | Complete: role name, executor-neutral wording, terminology anchor. | None. | Complete: future product glossary hook. | None. |
 | 1. Context | Complete: Root MCP context, schemas, hints, redaction, descriptor sets. | Complete: descriptor freshness/provenance in task context. | None. | None. |
 | 2. Task Model | Complete: task schema, Teacher candidate links, descriptor-fix materialization, lifecycle states. | None. | None. | Open: backlink from completed Builder task to originating candidate/idea. |
-| 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, CTX dev artifact roots, Builder-aware scaffolds, template quality gates. | Complete: scenario-specific Builder guidance. | None. | None. |
-| 4. Validation/Preview | Complete: preview bundle, static checks, route-budget validation. | Complete: blast radius, webui preview, scenario dependency bootstrap. | None. | None. |
+| 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, CTX dev artifact roots, Builder-aware scaffolds, template quality gates, dev lifecycle CLI facade. | Complete: scenario-specific Builder guidance and artifact listing ergonomics. | None. | None. |
+| 4. Validation/Preview | Complete: preview bundle, static checks, route-budget validation, Builder validation facade. | Complete: blast radius, webui preview, scenario dependency bootstrap, Forge push facade. | None. | None. |
 | 5. Human Review | Open: approval profiles, mandatory human-review classes, applied-change evidence. | Open: review workbench and reject/redirect feedback. | None. | None. |
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
@@ -176,6 +176,12 @@ Open work:
   target artifact, assumptions, risk notes, and expected tests.
 - [x] `[must]` Add `adaos builder draft` or equivalent API/CLI route after the draft
   contract stabilizes.
+- [x] `[must]` Add `adaos builder create <id> --kind skill|scenario` as a
+  facade over the existing `adaos dev skill|scenario create` owner workspace
+  flow.
+- [x] `[should]` Add `adaos builder list --kind skill|scenario` so Builder
+  operators can inspect the same dev artifacts without switching command
+  branches.
 - [x] `[must]` Make skill/scenario scaffolds Builder-aware: hints, route plan skeleton,
   tests, lifecycle hooks, and webui descriptors.
 - [x] `[should]` Provide scenario-specific Builder guidance matching the skill guide.
@@ -208,6 +214,9 @@ Open work:
 
 - [x] `[must]` Add Builder preview bundle: diff, schemas, route plan, NLU probe,
   action preview, UI preview, test plan, and risk summary.
+- [x] `[must]` Add `adaos builder validate <id> --kind skill|scenario` as a
+  facade over the existing dev validators, including JSON scenario manifests
+  created by Builder drafts.
 - [x] `[should]` Add blast-radius preview for learned regex and action descriptor changes.
 - [x] `[should]` Add browser/webui preview for generated widgets, modals, and data
   bindings.
@@ -215,6 +224,9 @@ Open work:
   memory in generated skills.
 - [x] `[must]` Add route-budget validation for `data_routes`, streams, and projections.
 - [x] `[should]` Add previewable scenario dependency bootstrap report.
+- [x] `[should]` Add `adaos builder push <id> --kind skill|scenario` as a
+  convenience facade over the existing Forge dev upload path. Runtime activation
+  and policy approval stay in later phases.
 
 Primary references:
 

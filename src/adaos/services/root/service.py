@@ -2138,6 +2138,8 @@ class RootDeveloperService:
                 continue
             data = _load_manifest(manifest_path)
             data["name"] = name
+            if kind == "scenarios":
+                data["id"] = name
             if set_prototype and prototype is not None:
                 data["prototype"] = prototype
 

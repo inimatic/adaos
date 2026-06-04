@@ -208,6 +208,10 @@ _STATE_CHANGING_COMMANDS = {
     ("autostart", "update-restore-root"),
     ("autostart", "update-rollback"),
     ("autostart", "update-start"),
+    ("builder", "create"),
+    ("builder", "draft"),
+    ("builder", "preview"),
+    ("builder", "push"),
     ("maintenance", "apply-retention"),
     ("maintenance", "run"),
     ("node", "join"),
@@ -563,7 +567,7 @@ app.add_typer(tests_cmd.app, name="tests", help=_("cli.help_test"))
 app.add_typer(runtime.app, name="runtime", help=_("cli.help_runtime"))
 app.add_typer(llm.app, name="llm", help=_("cli.help_llm"))
 app.add_typer(api.app, name="api")
-app.add_typer(builder_cmd.app, name="builder", help="Builder draft and preview workflows")
+app.add_typer(builder_cmd.app, name="builder", help="Builder authoring, draft, and preview workflows")
 app.add_typer(realtime.app, name="realtime", help="Realtime sidecar")
 app.add_typer(diag360.app, name="360log", help="360log flight-recorder snapshots")
 app.add_typer(node.app, name="node", help="Node onboarding and role management")
