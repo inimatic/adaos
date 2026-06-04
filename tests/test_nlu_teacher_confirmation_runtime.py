@@ -195,6 +195,61 @@ async def test_voice_existing_candidate_reasks_confirmation():
 
 
 @pytest.mark.anyio
+async def test_voice_existing_apply_requested_candidate_is_not_reconfirmed():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-existing-apply-requested"
+    candidate = {
+        "id": "cand.confirm.apply-requested",
+        "ts": time.time(),
+        "updated_at": time.time(),
+        "apply_requested_at": time.time(),
+        "kind": "regex_rule",
+        "status": "apply_requested",
+        "text": "show infrastructure state",
+        "request_id": "req.confirm.apply-requested",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow infrastructure state\b"},
+        "preview": {"ok": True, "slots": {"modal_id": "infrastate_modal"}},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [candidate], "events": []})
+
+    messages: list[dict] = []
+
+    def _capture_chat(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            messages.append(dict(payload))
+
+    ctx.bus.subscribe("io.out.chat.append", _capture_chat)
+
+    handled = await conf.request_existing_candidate_confirmation(
+        webspace_id,
+        "show infrastructure state",
+        request_id="req.confirm.apply-repeat",
+        meta={"route_id": "voice_chat", "webspace_id": webspace_id},
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        confirmations = list(teacher.get("pending_confirmations") or [])
+        events = list(teacher.get("events") or [])
+        candidates = list(teacher.get("candidates") or [])
+
+    assert handled is True
+    assert confirmations == []
+    assert events == []
+    assert candidates[-1]["status"] == "apply_requested"
+    assert messages
+    assert "NLU" in messages[-1]["text"]
+
+
+@pytest.mark.anyio
 async def test_voice_confirmation_yes_applies_candidate():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf
@@ -369,6 +424,84 @@ async def test_voice_confirmation_answer_consumed_after_teacher_accepts():
 
     assert confirmations[-1]["status"] == "accepted"
     assert await conf.should_consume_voice_confirmation_answer(webspace_id, "yes")
+
+
+@pytest.mark.anyio
+async def test_voice_confirmation_apply_timeout_marks_candidate_failed(monkeypatch):
+    import asyncio
+
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import candidates_runtime
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-confirmation-apply-timeout"
+    candidate = {
+        "id": "cand.confirm.apply-timeout",
+        "ts": time.time(),
+        "kind": "regex_rule",
+        "status": "pending",
+        "text": "show infrastructure state",
+        "request_id": "req.confirm.apply-timeout",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow infrastructure state\b"},
+        "preview": {"ok": True, "slots": {"modal_id": "infrastate_modal"}},
+    }
+    confirmation = {
+        "id": "confirm.apply-timeout",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "candidate_id": candidate["id"],
+        "request_id": candidate["request_id"],
+        "request_text": candidate["text"],
+        "question": "Open infrastructure state?",
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(
+                txn,
+                "nlu_teacher",
+                {"candidates": [candidate], "pending_confirmations": [confirmation], "events": []},
+            )
+
+    async def _slow_apply(_evt):
+        await asyncio.sleep(1.0)
+
+    monkeypatch.setenv("ADAOS_NLU_TEACHER_CONFIRM_APPLY_TIMEOUT_S", "0.01")
+    monkeypatch.setattr(candidates_runtime, "_on_candidate_apply", _slow_apply)
+
+    messages: list[dict] = []
+
+    def _capture_chat(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            messages.append(dict(payload))
+
+    ctx.bus.subscribe("io.out.chat.append", _capture_chat)
+
+    await conf._on_voice_chat_user(
+        {
+            "webspace_id": webspace_id,
+            "text": "yes",
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        confirmations = list(teacher.get("pending_confirmations") or [])
+        events = list(teacher.get("events") or [])
+        candidates = list(teacher.get("candidates") or [])
+
+    assert confirmations[-1]["status"] == "accepted"
+    assert candidates[-1]["status"] == "apply_failed"
+    assert candidates[-1]["status_reason"] == "voice_confirmation_apply_timeout"
+    assert candidates[-1]["validation"]["failed_checks"][0]["reason"] == "voice_confirmation_apply_timeout"
+    assert any(item.get("kind") == "confirmation.accepted" for item in events)
+    assert any(item.get("kind") == "candidate.apply_rejected" for item in events)
+    assert messages
 
 
 @pytest.mark.anyio

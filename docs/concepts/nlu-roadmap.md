@@ -909,8 +909,13 @@ below remain useful for tracking existing implementation work.
   publishing normal `nlp.intent.detect.request`.
 - [x] `[must]` Repeated voice phrases reuse a matching unresolved candidate and repeat
   the confirmation prompt before the generic miss/fallback response. This
-  covers `pending`, `apply_requested`, and `validation_failed` candidates whose
-  Apply can pass after descriptor/lookup aliases are fixed.
+  covers `pending` and `validation_failed` candidates whose Apply can pass
+  after descriptor/lookup aliases are fixed. `apply_requested` is treated as
+  an in-flight Apply state, not as a reconfirmable hypothesis.
+- [x] `[must]` Stale or non-terminal `apply_requested` candidates now resolve to
+  `apply_failed` with `candidate.apply_rejected` evidence and visible Voice
+  feedback instead of asking the user to confirm the same already accepted
+  hypothesis again.
 - [x] `[must]` Late duplicate `candidate.proposed` events for the same voice request
   do not reopen the same confirmation question after a confirmation is already
   awaiting an answer or has just been accepted.
@@ -918,6 +923,13 @@ below remain useful for tracking existing implementation work.
   the same validation/apply/verification path used by API Apply, preventing
   candidates from staying indefinitely in `apply_requested` without
   `regex_rule.applied`, `candidate.verified`, or `candidate.apply_rejected`.
+- [x] `[must]` Regex candidate Apply reads the candidate snapshot, then releases
+  the YJS document before running async validation and regex persistence, so
+  confirmation Apply cannot deadlock on nested webspace writes.
+- [x] `[must]` Action preview, regex persistence, and positive confirmation Apply
+  have bounded timeouts; timeout paths write `candidate.apply_rejected` /
+  `apply_failed` evidence instead of leaving the API or Voice workflow
+  waiting silently.
 - [x] `[must]` Voice chat no longer reads the last loaded hub message when the modal is
   opened; only newly arriving hub messages are eligible for auto-speak.
 - [x] `[must]` Voice router suppresses short non-command STT tails while an active

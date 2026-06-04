@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -21,6 +23,19 @@ from adaos.services.yjs.webspace import default_webspace_id
 _log = logging.getLogger("adaos.nlu.teacher.candidates")
 
 _LOOKUP_SLOT_NAMES = {"modal_id", "scenario_id", "app_id", "node_ref", "skill_id", "webspace_id"}
+
+
+def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = os.getenv(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except Exception:
+        value = float(default)
+    return max(float(min_value), min(float(max_value), value))
+
+
+def _regex_apply_timeout_s() -> float:
+    return _float_env("ADAOS_NLU_TEACHER_REGEX_APPLY_TIMEOUT_S", 8.0, min_value=1.0, max_value=120.0)
 
 
 def _nlu_candidates_write_meta():
@@ -80,6 +95,21 @@ def _find_candidate(teacher: Mapping[str, Any], candidate_id: str) -> Optional[d
         if item.get("id") == candidate_id:
             return dict(item)
     return None
+
+
+async def _read_candidate_snapshot(
+    *,
+    webspace_id: str,
+    candidate_id: str,
+    include_ui: bool = False,
+) -> tuple[dict[str, Any] | None, str | None]:
+    roots = ["data", "ui"] if include_ui else ["data"]
+    async with async_get_ydoc(webspace_id, read_only=True, prefer_live_room=True, load_mark_roots=roots) as ydoc:
+        data_map = ydoc.get_map("data")
+        teacher = _teacher_obj(data_map)
+        candidate = _find_candidate(teacher, candidate_id)
+        scenario_id = _read_current_scenario_id(ydoc) if include_ui else None
+        return candidate, scenario_id
 
 
 def _read_current_scenario_id(ydoc: Any) -> str | None:
@@ -253,6 +283,32 @@ async def _emit_apply_rejected(
         pass
 
 
+async def reject_candidate_apply(
+    *,
+    webspace_id: str,
+    candidate_id: str,
+    reason: str,
+    meta: Mapping[str, Any],
+    request_id: str | None = None,
+    request_text: str = "",
+    validation: Mapping[str, Any] | None = None,
+    preview: Mapping[str, Any] | None = None,
+    candidate_patch: Mapping[str, Any] | None = None,
+) -> None:
+    await _emit_apply_rejected(
+        ctx=get_ctx(),
+        webspace_id=webspace_id,
+        candidate_id=candidate_id,
+        reason=reason,
+        meta=meta,
+        request_id=request_id,
+        request_text=request_text,
+        validation=validation,
+        preview=preview,
+        candidate_patch=candidate_patch,
+    )
+
+
 @subscribe("nlp.teacher.candidate.apply")
 async def _on_candidate_apply(evt: Any) -> None:
     """
@@ -296,6 +352,224 @@ async def _on_candidate_apply(evt: Any) -> None:
     candidate: Optional[dict[str, Any]] = None
     request_id: Optional[str] = None
     request_text: str = ""
+
+    try:
+        candidate, scenario_id = await _read_candidate_snapshot(
+            webspace_id=webspace_id,
+            candidate_id=candidate_id,
+            include_ui=True,
+        )
+    except Exception:
+        _log.warning("failed to read candidate snapshot webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+        return
+    if not candidate:
+        return
+
+    request_id = candidate.get("request_id") if isinstance(candidate.get("request_id"), str) else None
+    request_text = candidate.get("text") if isinstance(candidate.get("text"), str) else ""
+    if candidate.get("status") == "quarantined":
+        await _emit_apply_rejected(
+            ctx=ctx,
+            webspace_id=webspace_id,
+            candidate_id=candidate_id,
+            reason="candidate_quarantined",
+            preview=dict(candidate.get("preview") or {}) if isinstance(candidate.get("preview"), Mapping) else {},
+            meta=meta,
+            request_id=request_id,
+            request_text=request_text,
+        )
+        return
+
+    if candidate.get("kind") == "regex_rule":
+        try:
+            validation = await validate_candidate_apply_async(
+                webspace_id=webspace_id,
+                candidate=candidate,
+                payload_target=payload_target,
+            )
+        except Exception:
+            _log.warning("failed to validate regex candidate webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+            validation = {
+                "ok": False,
+                "status": "blocked",
+                "candidate_id": candidate_id,
+                "failed_checks": [
+                    {
+                        "name": "candidate_validation",
+                        "ok": False,
+                        "status": "exception",
+                        "reason": "validation_exception",
+                    }
+                ],
+            }
+        if not validation.get("ok"):
+            await _emit_apply_rejected(
+                ctx=ctx,
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="m4_validation_failed",
+                validation=validation,
+                meta=meta,
+                request_id=request_id,
+                request_text=request_text,
+                candidate_patch={
+                    "validation": dict(validation),
+                    "validated_at": time.time(),
+                    "status": "validation_failed",
+                    "validation_failed_at": time.time(),
+                },
+            )
+            return
+
+        rr = candidate.get("regex_rule") if isinstance(candidate.get("regex_rule"), Mapping) else {}
+        intent = rr.get("intent")
+        pattern = rr.get("pattern")
+        if not (isinstance(intent, str) and intent.strip() and isinstance(pattern, str) and pattern.strip()):
+            validation = {
+                "ok": False,
+                "status": "blocked",
+                "candidate_id": candidate_id,
+                "failed_checks": [
+                    {
+                        "name": "regex_rule",
+                        "ok": False,
+                        "status": "missing",
+                        "reason": "missing_intent_or_pattern",
+                    }
+                ],
+            }
+            await _emit_apply_rejected(
+                ctx=ctx,
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="missing_regex_rule",
+                validation=validation,
+                meta=meta,
+                request_id=request_id,
+                request_text=request_text,
+                candidate_patch={
+                    "validation": dict(validation),
+                    "validated_at": time.time(),
+                    "status": "apply_failed",
+                    "apply_failed_at": time.time(),
+                    "status_reason": "missing_regex_rule",
+                },
+            )
+            return
+
+        target: dict[str, Any] | None = None
+        if isinstance(payload_target, Mapping):
+            t_type = payload_target.get("type")
+            t_id = payload_target.get("id")
+            if isinstance(t_type, str) and isinstance(t_id, str) and t_type.strip() and t_id.strip():
+                target = {"type": t_type.strip(), "id": t_id.strip()}
+
+        if target is None:
+            cand_target = candidate.get("target") if isinstance(candidate.get("target"), Mapping) else None
+            if isinstance(cand_target, Mapping):
+                t_type = cand_target.get("type")
+                t_id = cand_target.get("id")
+                if isinstance(t_type, str) and isinstance(t_id, str) and t_type.strip() and t_id.strip():
+                    target = {"type": t_type.strip(), "id": t_id.strip()}
+
+        if target is None and scenario_id:
+            for call_target in _extract_callskill_targets_for_intent(scenario_id=scenario_id, intent=intent.strip()):
+                skill = _find_skill_subscribing_to(call_target)
+                if skill:
+                    target = {"type": "skill", "id": skill}
+                    break
+
+            if target is None:
+                try:
+                    from adaos.services.scenarios import loader as scenarios_loader  # local import to avoid cycles
+
+                    content = scenarios_loader.read_content(scenario_id)
+                    intents = (content.get("nlu") or {}).get("intents") if isinstance(content, dict) else None
+                    if isinstance(intents, dict) and intent.strip() in intents:
+                        target = {"type": "scenario", "id": scenario_id}
+                except Exception:
+                    target = None
+
+        from adaos.services.nlu.regex_rules_runtime import apply_regex_rule  # local import to avoid cycles
+
+        static_slots = _candidate_static_rule_slots(candidate)
+        apply_payload = {
+            "webspace_id": webspace_id,
+            "candidate_id": candidate_id,
+            "intent": intent.strip(),
+            "pattern": pattern,
+            **({"target": target} if target else {}),
+            **({"slots": static_slots} if static_slots else {}),
+            "candidate_patch": {
+                "validation": dict(validation),
+                "validated_at": time.time(),
+            },
+            "_meta": dict(meta),
+        }
+        try:
+            await asyncio.wait_for(apply_regex_rule(apply_payload), timeout=_regex_apply_timeout_s())
+        except asyncio.TimeoutError:
+            await _emit_apply_rejected(
+                ctx=ctx,
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="regex_apply_timeout",
+                validation=validation,
+                meta=meta,
+                request_id=request_id,
+                request_text=request_text,
+                candidate_patch={
+                    "validation": dict(validation),
+                    "validated_at": time.time(),
+                    "status": "apply_failed",
+                    "apply_failed_at": time.time(),
+                    "status_reason": "regex_apply_timeout",
+                },
+            )
+            return
+        except Exception:
+            _log.warning("failed to apply regex candidate webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
+            await _emit_apply_rejected(
+                ctx=ctx,
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="regex_apply_error",
+                validation=validation,
+                meta=meta,
+                request_id=request_id,
+                request_text=request_text,
+                candidate_patch={
+                    "validation": dict(validation),
+                    "validated_at": time.time(),
+                    "status": "apply_failed",
+                    "apply_failed_at": time.time(),
+                    "status_reason": "regex_apply_error",
+                },
+            )
+            return
+        try:
+            after, _ = await _read_candidate_snapshot(webspace_id=webspace_id, candidate_id=candidate_id)
+        except Exception:
+            after = None
+        if not after or str(after.get("status") or "").strip() != "applied":
+            await _emit_apply_rejected(
+                ctx=ctx,
+                webspace_id=webspace_id,
+                candidate_id=candidate_id,
+                reason="regex_apply_no_terminal_state",
+                validation=validation,
+                meta=meta,
+                request_id=request_id,
+                request_text=request_text,
+                candidate_patch={
+                    "validation": dict(validation),
+                    "validated_at": time.time(),
+                    "status": "apply_failed",
+                    "apply_failed_at": time.time(),
+                    "status_reason": "regex_apply_no_terminal_state",
+                },
+            )
+        return
 
     try:
         async with _nlu_candidates_write_meta():
