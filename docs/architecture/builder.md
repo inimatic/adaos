@@ -206,11 +206,40 @@ The first implemented write-neutral Builder surface is:
   `draft_id`.
 - `adaos builder preview`: creates an inspectable preview bundle with diff,
   schemas, route plan, NLU/action/UI preview summaries, static safety checks,
-  dependency bootstrap evidence, and human-review reasons. Preview records are
-  service metadata under `state/builder/previews`, not an alternate source
-  tree.
+  dependency bootstrap evidence, review-policy evidence, and human-review
+  reasons. Preview records are service metadata under `state/builder/previews`,
+  not an alternate source tree.
 - `POST /api/builder/draft` and `POST /api/builder/preview`: HTTP equivalents
   for local UI/workbench integration.
+- `GET /api/builder/approval-profiles` and
+  `adaos builder approval-profiles`: expose the current Builder approval
+  profiles for UI, CLI, and workbench surfaces.
+
+Preview accepts an approval profile:
+
+- `manual_only`: every preview requires explicit human review before apply.
+- `low_risk_auto_draft`: Builder may draft and preview, but apply remains a
+  human decision.
+- `low_risk_auto_apply`: only clean low-risk previews without mandatory review
+  classes are eligible for automatic apply.
+- `restricted_maintenance_repair`: only narrow descriptor, NLU-hint, and
+  metadata repairs can be eligible without review.
+
+Mandatory human-review classes are:
+
+- secrets or credential-like material
+- new permissions or capability declarations
+- external IO
+- destructive actions
+- endpoint, route, tunnel, browser, or control-plane control
+- high-rate streams or projections
+- broad NLU patterns
+- service or process management
+
+`review_policy` in the preview bundle records the chosen profile, detected
+mandatory classes, policy blocks, eligibility decision, and evidence. Older
+drafts with `metadata.human_review_required=true` are treated as an explicit
+manual-review override.
 
 Builder also exposes an operational CLI facade over the existing dev lifecycle:
 

@@ -31,6 +31,12 @@ class BuilderDraftRequest(BaseModel):
 
 class BuilderPreviewRequest(BaseModel):
     draft_id: str = Field(..., min_length=1)
+    approval_profile: str | None = Field(default=None, description="Builder approval profile id.")
+
+
+@router.get("/approval-profiles")
+def approval_profiles(service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
+    return {"ok": True, "profiles": service.approval_profiles()}
 
 
 @router.post("/draft")
@@ -63,7 +69,7 @@ def get_draft(draft_id: str, service: BuilderWorkspaceService = Depends(_get_ser
 @router.post("/preview")
 def preview(body: BuilderPreviewRequest, service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     try:
-        return service.preview(draft_id=body.draft_id)
+        return service.preview(draft_id=body.draft_id, approval_profile=body.approval_profile)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

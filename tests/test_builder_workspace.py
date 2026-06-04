@@ -126,6 +126,76 @@ def test_preview_reports_scenario_dependency_bootstrap(tmp_path: Path) -> None:
     }
 
 
+def test_preview_policy_marks_clean_low_risk_preview_auto_apply_eligible(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    result = service.create_draft(
+        kind="scenario",
+        artifact_id="policy_scene",
+        source_idea="Show a simple local dashboard.",
+    )
+
+    preview = service.preview(
+        draft_id=result["draft"]["draft_id"],
+        approval_profile="low_risk_auto_apply",
+    )["preview"]
+
+    policy = preview["review_policy"]
+    assert policy["profile"]["id"] == "low_risk_auto_apply"
+    assert policy["mandatory_classes"] == []
+    assert policy["auto_apply_eligible"] is True
+    assert preview["summary"]["review_decision"] == "auto_apply_eligible"
+    assert preview["summary"]["human_review_required"] is False
+
+
+def test_preview_policy_respects_legacy_draft_review_override(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    result = service.create_draft(
+        kind="scenario",
+        artifact_id="legacy_review_scene",
+        source_idea="Show a simple local dashboard.",
+    )
+    draft = result["draft"]
+    draft["metadata"]["human_review_required"] = True
+    draft_path = Path(result["draft_dir"]) / "builder.draft.json"
+    artifact_draft_path = Path(result["artifact_root"]) / "builder.draft.json"
+    draft_path.write_text(json.dumps(draft), encoding="utf-8")
+    artifact_draft_path.write_text(json.dumps(draft), encoding="utf-8")
+
+    preview = service.preview(
+        draft_id=draft["draft_id"],
+        approval_profile="low_risk_auto_apply",
+    )["preview"]
+
+    blocks = {item["code"] for item in preview["review_policy"]["policy_blocks"]}
+    assert "draft_metadata_requires_review" in blocks
+    assert preview["review_policy"]["auto_apply_eligible"] is False
+    assert preview["summary"]["review_decision"] == "human_review_required"
+
+
+def test_preview_policy_blocks_external_io_for_auto_apply(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    result = service.create_draft(
+        kind="skill",
+        artifact_id="external_skill",
+        source_idea="Fetch remote data for a dashboard.",
+    )
+    artifact_root = Path(result["artifact_root"])
+    handler = artifact_root / "handlers" / "main.py"
+    handler.write_text("import requests\n\ndef handle(payload=None):\n    return requests.get('https://example.com').status_code\n", encoding="utf-8")
+
+    preview = service.preview(
+        draft_id=result["draft"]["draft_id"],
+        approval_profile="low-risk-auto-apply",
+    )["preview"]
+
+    classes = {item["class"] for item in preview["review_policy"]["mandatory_classes"]}
+    blocks = {item["code"] for item in preview["review_policy"]["policy_blocks"]}
+    assert "external_io" in classes
+    assert "mandatory_review_class" in blocks
+    assert preview["review_policy"]["auto_apply_eligible"] is False
+    assert preview["summary"]["human_review_required"] is True
+
+
 def test_builder_artifacts_live_under_existing_devspace(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
@@ -228,6 +298,22 @@ def test_builder_cli_list_and_push_use_existing_dev_service(tmp_path: Path, monk
     payload = json.loads(result.output)
     assert payload["stored_path"] == "skills/builder_skill.zip"
     assert payload["bytes_uploaded"] == 42
+
+
+def test_builder_cli_lists_approval_profiles(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    monkeypatch.setattr(builder_cli.BuilderWorkspaceService, "from_context", classmethod(lambda cls: service))
+
+    result = CliRunner().invoke(builder_cli.app, ["approval-profiles", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert {item["id"] for item in payload["profiles"]} >= {
+        "manual_only",
+        "low_risk_auto_draft",
+        "low_risk_auto_apply",
+        "restricted_maintenance_repair",
+    }
 
 
 def test_builder_cli_validate_scenario_uses_dev_json_loader(tmp_path: Path, monkeypatch) -> None:
@@ -347,8 +433,16 @@ def test_builder_api_exposes_draft_and_preview(tmp_path: Path) -> None:
     draft: dict[str, Any] = response.json()["draft"]
     assert draft["artifact"]["id"] == "api_scene"
 
-    response = client.post("/api/builder/preview", json={"draft_id": draft["draft_id"]})
+    profiles_response = client.get("/api/builder/approval-profiles")
+    assert profiles_response.status_code == 200
+    assert {item["id"] for item in profiles_response.json()["profiles"]} >= {"manual_only", "low_risk_auto_apply"}
+
+    response = client.post(
+        "/api/builder/preview",
+        json={"draft_id": draft["draft_id"], "approval_profile": "low_risk_auto_apply"},
+    )
     assert response.status_code == 200
     preview = response.json()["preview"]
     assert preview["draft_id"] == draft["draft_id"]
     assert preview["summary"]["changed_files"] >= 1
+    assert preview["summary"]["approval_profile"] == "low_risk_auto_apply"

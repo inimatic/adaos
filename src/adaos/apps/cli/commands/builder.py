@@ -127,6 +127,28 @@ def _echo_list_result(items: list[ArtifactListItem], json_output: bool) -> None:
         typer.echo("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
 
 
+def _echo_approval_profiles(profiles: list[dict[str, Any]], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps({"ok": True, "profiles": profiles}, ensure_ascii=False, indent=2))
+        return
+    headers = ["Profile", "Auto draft", "Auto apply", "Review", "Summary"]
+    rows = [
+        [
+            item.get("id", ""),
+            "yes" if item.get("auto_draft") else "no",
+            "yes" if item.get("auto_apply") else "no",
+            item.get("requires_human_review", ""),
+            item.get("summary", ""),
+        ]
+        for item in profiles
+    ]
+    widths = [max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))]
+    typer.echo("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
+    typer.echo("  ".join("-" * widths[i] for i in range(len(headers))))
+    for row in rows:
+        typer.echo("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
+
+
 def _resolve_dev_artifact_path(kind: str, artifact_id: str) -> Path | None:
     try:
         service = _service()
@@ -184,6 +206,15 @@ def list_cmd(
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(1)
     _echo_list_result(items, json_output)
+
+
+@app.command("approval-profiles")
+def approval_profiles(
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """List Builder approval profiles used by preview/review policy."""
+    service = BuilderWorkspaceService.from_context()
+    _echo_approval_profiles(service.approval_profiles(), json_output)
 
 
 @app.command("push")
@@ -335,10 +366,15 @@ def draft(
 @app.command("preview")
 def preview(
     draft_id: str = typer.Argument(..., help="Builder draft id."),
+    approval_profile: str | None = typer.Option(
+        None,
+        "--approval-profile",
+        help="Approval profile: manual_only | low_risk_auto_draft | low_risk_auto_apply | restricted_maintenance_repair.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Print full JSON response."),
 ) -> None:
     service = BuilderWorkspaceService.from_context()
-    result = service.preview(draft_id=draft_id)
+    result = service.preview(draft_id=draft_id, approval_profile=approval_profile)
     if json_output:
         typer.echo(json.dumps(result, ensure_ascii=True, indent=2))
         return
@@ -348,4 +384,6 @@ def preview(
     typer.echo(f"changed_files: {summary.get('changed_files', 0)}")
     typer.echo(f"schema_ok: {summary.get('schema_ok')}")
     typer.echo(f"route_plan_ok: {summary.get('route_plan_ok')}")
+    typer.echo(f"approval_profile: {summary.get('approval_profile')}")
+    typer.echo(f"review_decision: {summary.get('review_decision')}")
     typer.echo(f"human_review_required: {summary.get('human_review_required')}")
