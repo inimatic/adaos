@@ -364,6 +364,62 @@ def test_member_link_coalesces_yjs_node_state_schedules(monkeypatch) -> None:
     asyncio.run(_exercise())
 
 
+def test_member_link_reuses_cached_yjs_node_state_for_reconnect(monkeypatch) -> None:
+    node_state = {"ready": True, "seq": 1}
+
+    class _FakeYDoc:
+        def get_map(self, _name: str):
+            return SimpleNamespace(to_json=lambda: {"nodes": {"member-1": dict(node_state)}})
+
+    class _Store:
+        def __init__(self) -> None:
+            self.starts = 0
+            self.applies = 0
+            self.stops = 0
+
+        async def start(self) -> None:
+            self.starts += 1
+
+        async def apply_updates(self, _ydoc) -> None:
+            self.applies += 1
+
+        def stop(self) -> None:
+            self.stops += 1
+
+    async def _exercise() -> None:
+        client = mod.MemberLinkClient()
+        store = _Store()
+        monkeypatch.setattr(mod.Y, "YDoc", _FakeYDoc)
+        monkeypatch.setattr(mod, "get_ystore_for_webspace", lambda _webspace_id: store)
+        monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="member-1")))
+        monkeypatch.setattr(client, "_yjs_node_state_timeout_s", lambda: None)
+
+        await client._queue_yjs_node_state(webspace_id="desktop", reason="member_link_connected")
+        first = client._out_q.get_nowait()
+        assert first["state"]["seq"] == 1
+
+        node_state["seq"] = 2
+        await client._queue_yjs_node_state(webspace_id="desktop", reason="member_link_connected")
+        cached = client._out_q.get_nowait()
+        assert cached["state"]["seq"] == 1
+        assert store.applies == 1
+        assert store.stops == 1
+        assert client._yjs_node_state_full_read_total == 1
+        assert client._yjs_node_state_cache_hit_total == 1
+
+        client._yjs_node_state_dirty.add("desktop")
+        await client._queue_yjs_node_state(webspace_id="desktop", reason="member_link_connected")
+        refreshed = client._out_q.get_nowait()
+        assert refreshed["state"]["seq"] == 2
+        assert store.applies == 2
+        assert store.stops == 2
+        assert client._yjs_node_state_full_read_total == 2
+        assert client._yjs_node_state_cache_hit_total == 1
+        assert client._yjs_node_state_dirty == set()
+
+    asyncio.run(_exercise())
+
+
 def test_member_link_yjs_node_state_snapshot_times_out(monkeypatch) -> None:
     class _FakeYDoc:
         def get_map(self, _name: str):
