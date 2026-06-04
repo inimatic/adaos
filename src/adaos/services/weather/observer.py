@@ -317,12 +317,39 @@ def _ensure_city_observer(webspace_id: str, ydoc):
         current_ydoc = ydoc_holder.get("ydoc")
         if current_ydoc is None:
             return None, None
-        result = _current_city_from_doc(current_ydoc)
+        return _normalize_city_snapshot(_current_city_from_doc(current_ydoc))
+
+    def _normalize_city_snapshot(result: Any) -> Tuple[Optional[str], Optional[str]]:
         if isinstance(result, tuple) and len(result) >= 2:
             return result[0], result[1]
         if isinstance(result, str) and result.strip():
             return result.strip(), None
         return None, None
+
+    async def _read_city_snapshot_from_store() -> Tuple[Optional[str], Optional[str]]:
+        from adaos.services.yjs.doc import async_get_ydoc
+
+        async with async_get_ydoc(
+            key,
+            read_only=True,
+            prefer_live_room=False,
+            load_mark_roots=["data"],
+        ) as detached_ydoc:
+            return _normalize_city_snapshot(_current_city_from_doc(detached_ydoc))
+
+    def _mark_callback_error(exc: Exception, *, stage: str) -> None:
+        stats["error_total"] = int(stats.get("error_total") or 0) + 1
+        stats["last_error"] = f"{type(exc).__name__}: {exc}"
+        stats["last_error_stage"] = stage
+        _PENDING_DOC_CHECKS.pop(key, None)
+        _log.debug(
+            "weather observer callback failed webspace=%s stage=%s error_type=%s error=%s",
+            key,
+            stage,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
 
     def _maybe_emit(event=None) -> None:  # noqa: ARG001
         stats["callback_total"] = int(stats.get("callback_total") or 0) + 1
@@ -342,21 +369,30 @@ def _ensure_city_observer(webspace_id: str, ydoc):
         _PENDING_DOC_CHECKS[key] = True
         started = time.perf_counter()
 
-        try:
-            city, target_node_id = _read_city_snapshot()
-        except Exception:
-            stats["error_total"] = int(stats.get("error_total") or 0) + 1
-            _PENDING_DOC_CHECKS.pop(key, None)
-            _log.debug("weather observer callback failed webspace=%s", key, exc_info=True)
-            return
-
         def _run_safe() -> None:
+            try:
+                city, target_node_id = _read_city_snapshot()
+            except Exception as exc:
+                _mark_callback_error(exc, stage="live_fallback")
+                return
+            _process_city_snapshot(city, target_node_id, started=started)
+
+        async def _run_safe_async() -> None:
+            try:
+                city, target_node_id = await _read_city_snapshot_from_store()
+            except Exception as exc:
+                _mark_callback_error(exc, stage="store_read")
+                return
             _process_city_snapshot(city, target_node_id, started=started)
 
         target_loop = _YDOC_LOOPS.get(key)
         if target_loop is not None and not target_loop.is_closed():
             try:
-                target_loop.call_soon_threadsafe(_run_safe)
+                create_task = getattr(target_loop, "create_task", None)
+                if callable(create_task):
+                    target_loop.call_soon_threadsafe(lambda: create_task(_run_safe_async()))
+                else:
+                    target_loop.call_soon_threadsafe(_run_safe)
                 stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
                 return
             except RuntimeError:
