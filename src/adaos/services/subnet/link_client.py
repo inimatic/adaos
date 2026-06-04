@@ -206,6 +206,10 @@ class MemberLinkClient:
         self._snapshot_task: asyncio.Task | None = None
         self._yjs_node_state_tasks: dict[str, asyncio.Task] = {}
         self._yjs_node_state_reasons: dict[str, str] = {}
+        self._yjs_node_state_cache: dict[str, dict[str, Any]] = {}
+        self._yjs_node_state_dirty: set[str] = set()
+        self._yjs_node_state_full_read_total = 0
+        self._yjs_node_state_cache_hit_total = 0
         self._last_connect_full_snapshot_at = 0.0
         self._last_connect_yjs_state_at = 0.0
         self._link_session_end_total = 0
@@ -375,6 +379,10 @@ class MemberLinkClient:
                     if self._last_yjs_node_state_timeout_at
                     else None
                 ),
+                "node_state_cache_entries": len(self._yjs_node_state_cache),
+                "node_state_dirty_webspaces": sorted(self._yjs_node_state_dirty)[:10],
+                "node_state_full_read_total": int(self._yjs_node_state_full_read_total),
+                "node_state_cache_hit_total": int(self._yjs_node_state_cache_hit_total),
             },
             "transition_state": str(transition.get("transition_state") or "ready"),
             "transition_reason": str(transition.get("reason") or "none"),
@@ -732,6 +740,7 @@ class MemberLinkClient:
             self._last_yjs_write_at = time.time()
             self._last_yjs_write_webspace_id = str(webspace_id or "default")
             self._last_yjs_write_bytes = len(update)
+            self._yjs_node_state_dirty.add(str(webspace_id or "default"))
             if not self._connected.is_set():
                 self._yjs_write_drop_disconnected_total += 1
                 return
@@ -774,26 +783,50 @@ class MemberLinkClient:
             local_node_id = ""
         if not local_node_id:
             return
-        ydoc = Y.YDoc()
-        store = get_ystore_for_webspace(ws_id)
 
         async def _read_node_state() -> dict[str, Any] | None:
-            await store.start()
-            await store.apply_updates(ydoc)
-            data_map = ydoc.get_map("data")
-            data = data_map.to_json() if hasattr(data_map, "to_json") else {}
-            if isinstance(data, str):
-                data = json.loads(data)
-            nodes = data.get("nodes") if isinstance(data, dict) else {}
-            node_state = nodes.get(local_node_id) if isinstance(nodes, dict) else None
-            return node_state if isinstance(node_state, dict) else None
+            ydoc = Y.YDoc()
+            store = get_ystore_for_webspace(ws_id)
+            try:
+                await store.start()
+                await store.apply_updates(ydoc)
+                data_map = ydoc.get_map("data")
+                data = data_map.to_json() if hasattr(data_map, "to_json") else {}
+                if isinstance(data, str):
+                    data = json.loads(data)
+                nodes = data.get("nodes") if isinstance(data, dict) else {}
+                node_state = nodes.get(local_node_id) if isinstance(nodes, dict) else None
+                return node_state if isinstance(node_state, dict) else None
+            finally:
+                try:
+                    store.stop()
+                except Exception:
+                    pass
+                try:
+                    del ydoc
+                except Exception:
+                    pass
 
         try:
-            timeout_s = self._yjs_node_state_timeout_s()
-            if timeout_s is None:
-                node_state = await _read_node_state()
+            cache_allowed = (
+                str(reason or "").strip() == "member_link_connected"
+                and ws_id in self._yjs_node_state_cache
+                and ws_id not in self._yjs_node_state_dirty
+            )
+            if cache_allowed:
+                cached = self._yjs_node_state_cache.get(ws_id)
+                node_state = json.loads(json.dumps(cached)) if isinstance(cached, dict) else None
+                self._yjs_node_state_cache_hit_total += 1
             else:
-                node_state = await asyncio.wait_for(_read_node_state(), timeout=timeout_s)
+                timeout_s = self._yjs_node_state_timeout_s()
+                if timeout_s is None:
+                    node_state = await _read_node_state()
+                else:
+                    node_state = await asyncio.wait_for(_read_node_state(), timeout=timeout_s)
+                self._yjs_node_state_full_read_total += 1
+                if isinstance(node_state, dict):
+                    self._yjs_node_state_cache[ws_id] = json.loads(json.dumps(node_state))
+                    self._yjs_node_state_dirty.discard(ws_id)
             if not node_state:
                 return
             msg = {
@@ -824,11 +857,6 @@ class MemberLinkClient:
         except Exception:
             self._yjs_snapshot_failed_total += 1
             _log.debug("failed to queue member-link Yjs state snapshot webspace=%s", ws_id, exc_info=True)
-        finally:
-            try:
-                store.stop()
-            except Exception:
-                pass
 
     def _schedule_yjs_node_state(self, *, webspace_id: str, reason: str) -> bool:
         if not self._yjs_enabled:
