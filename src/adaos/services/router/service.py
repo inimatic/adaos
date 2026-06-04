@@ -2410,11 +2410,14 @@ class RouterService:
             cand = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
             req_text = cand.get("text") if isinstance(cand.get("text"), str) else ""
             kind = cand.get("kind") if isinstance(cand.get("kind"), str) else "skill"
+            status = cand.get("status") if isinstance(cand.get("status"), str) else ""
             if route_id.strip() == "voice_chat" and kind == "regex_rule" and cand.get("status") == "pending":
                 return
             cdef = cand.get("candidate") if isinstance(cand.get("candidate"), dict) else {}
             name = cdef.get("name") if isinstance(cdef.get("name"), str) else ""
             desc = cdef.get("description") if isinstance(cdef.get("description"), str) else ""
+            preview = cand.get("preview") if isinstance(cand.get("preview"), dict) else {}
+            preview_status = preview.get("status") if isinstance(preview.get("status"), str) else ""
 
             if kind == "regex_rule":
                 label_kind = "правило regex"
@@ -2423,6 +2426,13 @@ class RouterService:
             msg = "Я подготовил предложение для обучения NLU."
             if req_text:
                 msg = f"Вы просили: «{req_text}».\n\nЯ подумал и добавил в план разработки кандидат: {label_kind}."
+            if status == "quarantined":
+                reason = preview_status or "preview_failed"
+                msg = (
+                    (f"Вы просили: «{req_text}».\n\n" if req_text else "")
+                    + f"Я нашел гипотезу обучения, но не могу применить ее без исправления: проверка дала {reason}. "
+                    "Кандидат помещен в карантин в NLU Teacher."
+                )
             if name:
                 msg += f"\nНазвание: {name}"
             if desc:

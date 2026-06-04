@@ -441,8 +441,12 @@ below remain useful for tracking existing implementation work.
 - [x] `[must]` M4 implementation slice: repeated voice misses re-open confirmation for
   an existing `pending` / `validation_failed` regex candidate before falling
   back to the generic "not understood" message, so unresolved hypotheses stay
-  actionable even when Root/OpenAI times out or duplicate suppression skips a
-  new LLM candidate.
+  actionable even when Root/OpenAI times out or an earlier candidate needs
+  validation repair.
+- [x] `[must]` M4 implementation slice: duplicate suppression is only terminal
+  when the proposed regex preview already matches the source phrase. Duplicate
+  LLM proposals that fail preview are kept as quarantined anomaly evidence and
+  produce Voice/UI feedback instead of ending the workflow silently.
 - [ ] `[should]` Add golden positive/negative phrase suites, ambiguity
   fixtures, STT-noise fixtures, and per-skill regression reports.
 - [ ] `[should]` Add cost accounting metrics for Teacher: LLM calls, retries,
@@ -522,6 +526,11 @@ below remain useful for tracking existing implementation work.
   provider failures with multi-engine miss evidence remain teachable and carry
   `provider_issue` warning evidence for the UI/read-model; hard provider
   states emit `not_obtained.skipped` / `nlp.teacher.skipped` instead.
+- [x] `[must]` Implementation slice: Voice route now reports terminal and
+  near-terminal Teacher outcomes: duplicate/anomaly, deferred LLM/MCP,
+  ignored decisions, verification failure, and verified understanding. A user
+  should see either a confirmation question, an acquired-understanding message,
+  or a concrete anomaly/deferred reason.
 - [ ] `[should]` Add template inventory, patch preview, promotion controls,
   and regression impact preview.
 - [ ] `[could]` Add compact Voice affordances for listening from every
@@ -863,6 +872,10 @@ below remain useful for tracking existing implementation work.
   display labels/aliases to canonical modal evidence before preview/apply, so
   commands like "show subnet environment variables" can validate against
   `subnet_env_modal`.
+- [x] `[must]` LLM regex repair now matches longer descriptor aliases inside
+  user phrases and tolerates minor inflection/noise for lookup-backed modal
+  aliases. This covers phrases like "show infrastructure state" resolving to
+  the registered infrastructure/Infra State modal alias before preview/apply.
 - [x] `[must]` Skill/webui descriptor aliases are consumed by lookup normalization and
   Apply validation; `subnet_env` now publishes RU/EN aliases for the Subnet
   Environment modal so voice phrases for subnet environment variables resolve
@@ -890,6 +903,9 @@ below remain useful for tracking existing implementation work.
   the header Listen button share the same history.
 - [x] `[must]` Candidate Apply rejection writes a Teacher event and visible UI/chat
   feedback instead of failing silently when validation blocks a candidate.
+- [x] `[must]` Teacher duplicate, deferred, ignored, verification-failed, and
+  understanding-acquired events write visible Voice feedback for voice-origin
+  requests. This closes the "recorded for training, then nothing" failure mode.
 - [x] `[must]` Teacher read-model API methods that use synchronous YDoc/read-model
   helpers run off the API event loop, so trace/template/target reads do not
   fail inside async FastAPI handlers.

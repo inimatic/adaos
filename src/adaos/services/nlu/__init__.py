@@ -24,3 +24,4 @@ from . import candidates_runtime as _candidates_runtime  # noqa: F401
 from . import teacher_confirmation_runtime as _teacher_confirmation_runtime  # noqa: F401
 from . import teacher_dispatch_runtime as _teacher_dispatch_runtime  # noqa: F401
 from . import teacher_store_runtime as _teacher_store_runtime  # noqa: F401
+from . import teacher_voice_feedback_runtime as _teacher_voice_feedback_runtime  # noqa: F401
