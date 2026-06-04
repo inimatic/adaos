@@ -452,6 +452,26 @@ def test_nlu_teacher_schema_accepts_contract_bundle() -> None:
             "status": "action_previewed",
             "phrase_preview": {"ok": True},
             "action_preview": {"ok": True, "action_id": "desktop.modal.open"},
+            "promotion": {
+                "state": "local_learned",
+                "portability": "scenario-local",
+                "public_export_allowed": False,
+                "privacy_gate": "operator_approval_required",
+            },
+            "provenance": {
+                "source": "nlu_teacher",
+                "webspace_id": "desktop",
+                "request_id": "req.1",
+                "candidate_id": "cand.1",
+                "operator_action": "apply",
+                "mcp_bearer_embedded": False,
+            },
+            "privacy": {
+                "retention_policy": "nlu.teacher.retention.v1",
+                "promotion_policy": "nlu.teacher.promotion.v1",
+                "raw_utterance_scope": "local_state",
+                "public_promotion_requires_review": True,
+            },
         },
         "template_candidate": {
             "id": "tplcand.1",
@@ -465,6 +485,17 @@ def test_nlu_teacher_schema_accepts_contract_bundle() -> None:
             "patch": {"pattern": "open weather"},
             "linked_action_candidate_id": "act.1",
             "status": "phrase_previewed",
+            "promotion": {
+                "state": "local_learned",
+                "portability": "scenario-local",
+                "public_export_allowed": False,
+            },
+            "provenance": {
+                "source": "nlu_teacher",
+                "request_id": "req.1",
+                "candidate_id": "cand.1",
+                "mcp_bearer_embedded": False,
+            },
         },
         "clarification_session": {
             "id": "clarify.1",

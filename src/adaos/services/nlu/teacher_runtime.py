@@ -12,6 +12,7 @@ from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu.feedback_examples import save_feedback_example
+from adaos.services.nlu.teacher_artifacts import accepted_artifact_metadata
 from adaos.services.nlu.teacher_events import append_event, make_event, rebuild_events_by_candidate
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 from adaos.services.scenarios import loader as scenarios_loader
@@ -248,14 +249,30 @@ async def _on_example_save(evt: Any) -> None:
     slots = payload.get("slots") if isinstance(payload.get("slots"), Mapping) else {}
     target = payload.get("target") if isinstance(payload.get("target"), Mapping) else None
     request_id = payload.get("request_id") if isinstance(payload.get("request_id"), str) else None
+    thread_id = payload.get("thread_id") if isinstance(payload.get("thread_id"), str) else None
+    candidate_id = payload.get("candidate_id") if isinstance(payload.get("candidate_id"), str) else None
+    accepted_at = time.time()
     audit = {
         "webspace_id": webspace_id,
         "request_id": request_id,
+        "thread_id": thread_id,
+        "candidate_id": candidate_id,
         "source": payload.get("source") if isinstance(payload.get("source"), str) else "nlu_teacher",
         "note": payload.get("note") if isinstance(payload.get("note"), str) else None,
         "meta": dict(meta),
-        "accepted_at": time.time(),
+        "accepted_at": accepted_at,
     }
+    artifact_meta = accepted_artifact_metadata(
+        target=target,
+        source="nlu_teacher",
+        webspace_id=webspace_id,
+        request_id=request_id,
+        thread_id=thread_id,
+        candidate_id=candidate_id,
+        operator_action="save_example",
+        meta=meta,
+        accepted_at=accepted_at,
+    )
 
     result = save_feedback_example(
         ctx=ctx,
@@ -264,6 +281,9 @@ async def _on_example_save(evt: Any) -> None:
         example=text,
         slots=slots,
         audit=audit,
+        promotion=artifact_meta["promotion"],
+        provenance=artifact_meta["provenance"],
+        privacy=artifact_meta["privacy"],
     )
     dataset_item = {
         "id": f"ds.{int(time.time()*1000)}",
@@ -274,7 +294,11 @@ async def _on_example_save(evt: Any) -> None:
         "slots": dict(slots),
         "target": result.get("target") or (dict(target) if isinstance(target, Mapping) else {}),
         "request_id": request_id,
+        "candidate_id": candidate_id,
         "audit": audit,
+        "promotion": artifact_meta["promotion"],
+        "provenance": artifact_meta["provenance"],
+        "privacy": artifact_meta["privacy"],
         "result": result,
     }
     try:

@@ -106,6 +106,75 @@
         "unknown"
       ]
     },
+    "promotionState": {
+      "type": "string",
+      "enum": [
+        "local_learned",
+        "promotion_candidate",
+        "promoted_to_workspace",
+        "pushed_to_repo",
+        "published",
+        "rejected_for_publication"
+      ]
+    },
+    "portabilityClass": {
+      "type": "string",
+      "enum": [
+        "session-local",
+        "user-local",
+        "workspace-local",
+        "scenario-local",
+        "skill-global",
+        "system-global",
+        "public-reusable"
+      ]
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "state": { "$ref": "#/$defs/promotionState" },
+        "portability": { "$ref": "#/$defs/portabilityClass" },
+        "public_export_allowed": { "type": "boolean" },
+        "privacy_gate": { "type": "string" },
+        "applied_artifact": { "type": "object", "additionalProperties": true },
+        "commit_id": { "type": "string" },
+        "push_id": { "type": "string" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "source": { "type": "string" },
+        "webspace_id": { "type": "string" },
+        "request_id": { "type": "string" },
+        "thread_id": { "type": "string" },
+        "candidate_id": { "type": "string" },
+        "owner": { "$ref": "#/$defs/owner" },
+        "target": { "type": "object", "additionalProperties": true },
+        "operator_action": { "type": "string" },
+        "model_id": { "type": "string" },
+        "model_version": { "type": "string" },
+        "prompt_hash": { "type": "string" },
+        "context_hash": { "type": "string" },
+        "verification_result": { "type": "object", "additionalProperties": true },
+        "rollback_pointer": { "type": "object", "additionalProperties": true },
+        "mcp_scope": { "$ref": "#/$defs/scope" },
+        "mcp_bearer_embedded": { "type": "boolean" },
+        "accepted_at": { "type": "number" }
+      }
+    },
+    "artifactPrivacy": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "retention_policy": { "type": "string" },
+        "promotion_policy": { "type": "string" },
+        "raw_utterance_scope": { "type": "string" },
+        "public_promotion_requires_review": { "type": "boolean" }
+      }
+    },
     "owner": {
       "type": "object",
       "additionalProperties": true,
@@ -162,6 +231,9 @@
         "feedback_status": { "type": "string" },
         "audit_ids": { "type": "array", "items": { "type": "string" } },
         "rollback_pointer": { "type": "string" },
+        "promotion": { "$ref": "#/$defs/promotion" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "privacy": { "$ref": "#/$defs/artifactPrivacy" },
         "scope": { "$ref": "#/$defs/scope" },
         "idempotency": { "$ref": "#/$defs/idempotency" }
       }
@@ -185,6 +257,9 @@
         "patch": { "type": "object", "additionalProperties": true },
         "linked_action_candidate_id": { "type": "string" },
         "status": { "$ref": "#/$defs/candidateLifecycleStatus" },
+        "promotion": { "$ref": "#/$defs/promotion" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "privacy": { "$ref": "#/$defs/artifactPrivacy" },
         "scope": { "$ref": "#/$defs/scope" }
       }
     },

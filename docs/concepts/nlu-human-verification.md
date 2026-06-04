@@ -13,6 +13,10 @@ Verifiable today:
 - Current NLU Teacher modal smoke behavior: missed requests, candidates, raw event payloads, and Apply.
 - Candidate Apply through API/event bus, including regex persistence, immediate
   probe verification, `intent_matched`, and `nlp.teacher.understanding.acquired`.
+- Accepted Teacher artifacts expose a governance envelope:
+  `promotion.state=local_learned`, target portability, `provenance`,
+  `privacy.public_promotion_requires_review=true`, and
+  `provenance.mcp_bearer_embedded=false`.
 - Candidate rollback through API/event bus, including owner-artifact cleanup
   and runtime regex cache invalidation.
 - Root MCP read-only phrase check through `nlu_authoring.check_phrase` / Codex
@@ -49,6 +53,8 @@ The current Teacher candidate-apply and Root MCP phrase-check slice is covered b
 Expected result:
 
 - Candidate Apply persists a regex rule into the scenario/skill owner.
+- The persisted rule and updated candidate carry `promotion`, `provenance`,
+  and `privacy` fields; no bearer/session secret is embedded.
 - The original phrase is probed again and the candidate becomes `intent_matched`
   only when the planned intent matches the probe result.
 - `nlp.teacher.understanding.acquired` is emitted.
@@ -157,6 +163,8 @@ Expected result:
 - For an existing `regex_rule` candidate, the apply handler persists the rule,
   re-probes the original phrase, and emits `nlp.teacher.understanding.acquired`
   when the planned intent matches.
+- The resulting rule/candidate metadata records local promotion state,
+  portability, rollback pointer, verification result, and private-public gate.
 
 Candidate rollback endpoint:
 
