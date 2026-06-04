@@ -123,6 +123,8 @@ class SaveExampleRequest(BaseModel):
     target: SaveExampleTarget
     slots: Dict[str, Any] = Field(default_factory=dict)
     request_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    candidate_id: Optional[str] = None
     source: Optional[str] = None
     note: Optional[str] = None
 
@@ -323,6 +325,8 @@ async def save_example(webspace_id: str, body: SaveExampleRequest):
         "target": body.target.model_dump(exclude_none=True),
         "slots": dict(body.slots or {}),
         "request_id": body.request_id.strip() if isinstance(body.request_id, str) and body.request_id.strip() else None,
+        "thread_id": body.thread_id.strip() if isinstance(body.thread_id, str) and body.thread_id.strip() else None,
+        "candidate_id": body.candidate_id.strip() if isinstance(body.candidate_id, str) and body.candidate_id.strip() else None,
         "source": body.source.strip() if isinstance(body.source, str) and body.source.strip() else "api.nlu.teacher",
         "note": body.note.strip() if isinstance(body.note, str) and body.note.strip() else None,
         "_meta": {"webspace_id": ws},

@@ -31,6 +31,7 @@ async def test_teacher_save_example_routes_to_scenario_artifact() -> None:
         {
             "webspace_id": webspace_id,
             "request_id": "rid-save-1",
+            "candidate_id": "cand-save-1",
             "text": "open diagnostics panel",
             "intent": "desktop.open_modal",
             "slots": {"modal_id": "diagnostics"},
@@ -47,6 +48,13 @@ async def test_teacher_save_example_routes_to_scenario_artifact() -> None:
         dataset = ((ydoc.get_map("data").get("nlu_teacher") or {}).get("dataset")) or []
     assert dataset[-1]["status"] == "positive_feedback"
     assert dataset[-1]["audit"]["request_id"] == "rid-save-1"
+    assert dataset[-1]["candidate_id"] == "cand-save-1"
+    assert dataset[-1]["promotion"]["state"] == "local_learned"
+    assert dataset[-1]["promotion"]["portability"] == "scenario-local"
+    assert dataset[-1]["provenance"]["request_id"] == "rid-save-1"
+    assert dataset[-1]["provenance"]["candidate_id"] == "cand-save-1"
+    assert dataset[-1]["provenance"]["mcp_bearer_embedded"] is False
+    assert dataset[-1]["privacy"]["public_promotion_requires_review"] is True
     assert emitted[-1][0] == "nlp.teacher.example.saved"
 
 
@@ -113,6 +121,10 @@ async def test_teacher_save_example_routes_to_system_action_feedback_and_exports
     rows = [json.loads(line) for line in feedback_path.read_text(encoding="utf-8").splitlines()]
     assert rows[-1]["target"] == {"type": "system_action", "id": "host.desktop.webspace.reload"}
     assert rows[-1]["audit"]["request_id"] == "rid-save-system"
+    assert rows[-1]["promotion"]["state"] == "local_learned"
+    assert rows[-1]["promotion"]["portability"] == "system-global"
+    assert rows[-1]["provenance"]["request_id"] == "rid-save-system"
+    assert rows[-1]["privacy"]["public_promotion_requires_review"] is True
 
     sync_from_scenarios_and_skills(ctx)
     ws = InterpreterWorkspace(ctx)

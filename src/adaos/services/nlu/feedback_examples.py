@@ -171,6 +171,9 @@ def append_system_action_feedback(
     example: str,
     slots: Mapping[str, Any] | None = None,
     audit: Mapping[str, Any] | None = None,
+    promotion: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    privacy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ctx = ctx or get_ctx()
     action_id = str(action_id or "").strip()
@@ -190,10 +193,17 @@ def append_system_action_feedback(
         "slots": dict(slots or {}),
         "audit": dict(audit or {}),
     }
+    if isinstance(promotion, Mapping) and promotion:
+        record["promotion"] = dict(promotion)
+    if isinstance(provenance, Mapping) and provenance:
+        record["provenance"] = dict(provenance)
+    if isinstance(privacy, Mapping) and privacy:
+        record["privacy"] = dict(privacy)
     path = system_action_feedback_path(ctx)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    existing_ids: set[str] = set()
+    existing: list[dict[str, Any]] = []
+    replaced = False
     if path.exists():
         try:
             for line in path.read_text(encoding="utf-8").splitlines():
@@ -202,10 +212,22 @@ def append_system_action_feedback(
                 except Exception:
                     continue
                 if isinstance(item, dict) and isinstance(item.get("id"), str):
-                    existing_ids.add(item["id"])
+                    if item["id"] == record["id"]:
+                        merged = dict(item)
+                        merged.update(record)
+                        existing.append(merged)
+                        replaced = True
+                    else:
+                        existing.append(item)
         except Exception:
-            existing_ids = set()
-    if record["id"] not in existing_ids:
+            existing = []
+            replaced = False
+    if replaced:
+        path.write_text(
+            "".join(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n" for item in existing),
+            encoding="utf-8",
+        )
+    else:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
     return {"ok": True, "target": target, "path": str(path), "record": record}
@@ -244,6 +266,9 @@ def save_feedback_example(
     example: str,
     slots: Mapping[str, Any] | None = None,
     audit: Mapping[str, Any] | None = None,
+    promotion: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    privacy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ctx = ctx or get_ctx()
     intent = str(intent or "").strip()
@@ -263,10 +288,19 @@ def save_feedback_example(
             example=example,
             slots=slots,
             audit=audit,
+            promotion=promotion,
+            provenance=provenance,
+            privacy=privacy,
         )
     else:
         return {"ok": False, "reason": "unsupported_or_missing_target", "target": normalized_target}
     if result.get("ok"):
         result["intent"] = intent
         result["example"] = example
+        if isinstance(promotion, Mapping) and promotion:
+            result["promotion"] = dict(promotion)
+        if isinstance(provenance, Mapping) and provenance:
+            result["provenance"] = dict(provenance)
+        if isinstance(privacy, Mapping) and privacy:
+            result["privacy"] = dict(privacy)
     return result
