@@ -228,14 +228,14 @@ This is the current compatibility bridge for "P2P/member if possible, hub if
 not" behavior.
 
 When a user requests a semantic Yjs soft reload for the currently open
-webspace, the browser now also performs an explicit provider resync even if
-the transport still reports `connected`. This keeps the browser aligned with
-the backend-owned effective branches after rebuild instead of trusting an
-already-open provider session to notice the semantic reset on its own.
-The browser link indicator treats an open Yjs transport as connected while the
-first sync event or semantic recovery catches up, so a slow initial snapshot
-does not leave the whole desktop stuck in "recovering" when the websocket path
-is already alive.
+webspace, the browser keeps an already-connected provider attached and waits
+for backend-owned materialization to arrive through the live room. It only
+performs provider resync when the transport is already disconnected. Hard reset
+or explicit room recreation remain the paths that intentionally recycle the
+YWS provider. The browser link indicator treats an open Yjs transport as
+connected while the first sync event or semantic recovery catches up, so a slow
+initial snapshot does not leave the whole desktop stuck in "recovering" when
+the websocket path is already alive.
 
 Targeting rules:
 
