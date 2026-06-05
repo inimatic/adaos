@@ -653,6 +653,34 @@ def test_webio_yjs_projection_subscription_tracks_active_demand() -> None:
     clear_projection_demand()
 
 
+def test_webio_yjs_projection_subscription_dedupes_repeated_control_events() -> None:
+    from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
+
+    published: list[object] = []
+
+    class _Bus:
+        def publish(self, event: object) -> None:
+            published.append(event)
+
+    clear_projection_demand()
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+    gateway_module.get_agent_ctx = lambda: SimpleNamespace(bus=_Bus())
+
+    for _ in range(2):
+        gateway_module._publish_webio_yjs_projection_subscription_change(
+            {"webio.yjs.default.browsers.devices"},
+            action="subscribed",
+            transport="ws",
+            connection_id="client-1",
+        )
+
+    assert has_projection_demand("browsers.devices", webspace_id="desktop") is True
+    assert len(published) == 1
+    assert getattr(published[0], "type", "") == "webio.yjs.subscription.changed"
+    clear_projection_demand()
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+
+
 def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot() -> None:
     published: list[object] = []
 
@@ -674,6 +702,27 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot() -
     assert getattr(event, "payload", {}).get("slot") == "infrastate.summary"
     assert getattr(event, "payload", {}).get("node_id") == "member-01"
     assert getattr(event, "payload", {}).get("_meta", {}).get("target_node_id") == "member-01"
+
+
+def test_request_webio_yjs_projection_snapshots_dedupes_repeated_control_events() -> None:
+    published: list[object] = []
+
+    class _Bus:
+        def publish(self, event: object) -> None:
+            published.append(event)
+
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+    gateway_module.get_agent_ctx = lambda: SimpleNamespace(bus=_Bus())
+
+    for _ in range(2):
+        gateway_module._request_webio_yjs_projection_snapshots(
+            {"webio.yjs.default.nodes.member-01.infrastate.summary"},
+            transport="ws",
+        )
+
+    assert len(published) == 1
+    assert getattr(published[0], "type", "") == "webio.yjs.snapshot.requested"
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
 
 
 def test_diagnostic_room_skips_empty_y_update() -> None:
@@ -1552,6 +1601,66 @@ def test_device_register_skips_yjs_post_steps_when_yws_guard_is_active(monkeypat
     }
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
+
+
+def test_device_register_skips_yjs_post_steps_when_direct_yws_disabled(monkeypatch) -> None:
+    published: list[tuple[str, dict[str, object] | None]] = []
+    responses: list[dict[str, object]] = []
+    monkeypatch.setattr(gateway_module, "_yws_direct_transport_enabled", lambda: False)
+    monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))))
+
+    async def _fake_start_y_server() -> None:
+        raise AssertionError("device.register should not start Y server when direct yws is disabled")
+
+    async def _fake_update_device_presence(_webspace_id: str, _device_id: str) -> None:
+        raise AssertionError("device.register should not write YDoc when direct yws is disabled")
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    monkeypatch.setattr(gateway_module, "start_y_server", _fake_start_y_server)
+    monkeypatch.setattr(gateway_module, "_update_device_presence", _fake_update_device_presence)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="device.register",
+            cmd_id="cmd-direct-disabled",
+            payload={"device_id": "dev-direct-disabled", "webspace_id": "ops"},
+            device_id="dev-direct-disabled",
+            webspace_id="default",
+            send_response=_send_response,
+        )
+    )
+
+    assert published == [
+        (
+            "device.registered",
+            {
+                "device_id": "dev-direct-disabled",
+                "webspace_id": "ops",
+                "kind": "browser",
+                "yjs_post_skipped": True,
+                "yjs_guard_reason": "direct_yws_disabled",
+            },
+        )
+    ]
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"] == {
+        "webspace_id": "ops",
+        "yjs_post_skipped": True,
+        "yjs_guard_reason": "direct_yws_disabled",
+    }
+
+
+def test_update_device_presence_skips_room_when_direct_yws_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_yws_direct_transport_enabled", lambda: False)
+
+    async def _room_must_not_start(*args, **kwargs):
+        raise AssertionError("device presence should not acquire YRoom when direct yws is disabled")
+
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _room_must_not_start)
+
+    asyncio.run(gateway_module._update_device_presence("desktop", "dev-disabled"))
 
 
 def test_accept_websocket_returns_false_when_handshake_already_closed() -> None:

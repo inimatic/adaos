@@ -1585,6 +1585,138 @@ def test_yjs_sync_runtime_snapshot_marks_reconnect_storm_as_pressure(monkeypatch
     assert snapshot["transport"]["hot_client_total"] == 1
 
 
+def test_yjs_sync_runtime_snapshot_marks_recent_browser_disconnect_without_active_session_as_degraded(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.store",
+        SimpleNamespace(
+            ystore_runtime_snapshot=lambda **kwargs: {
+                "webspace_total": 1,
+                "active_webspace_total": 1,
+                "webspaces": {
+                    "default": {
+                        "log_mode": "snapshot_plus_diff",
+                        "update_log_entries": 1,
+                        "max_update_log_entries": 128,
+                        "replay_window_entries": 0,
+                        "replay_window_bytes": 0,
+                        "compact_total": 1,
+                        "runtime_compaction_eligible": False,
+                        "backup_fast_path_total": 0,
+                        "backup_skipped_total": 0,
+                    }
+                },
+            }
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway_ws",
+        SimpleNamespace(
+            gateway_transport_snapshot=lambda: {
+                "transports": {
+                    "yws": {
+                        "active_connections": 0,
+                        "recent_open_10s": 1,
+                        "recent_open_60s": 1,
+                        "last_close_ago_s": 12.0,
+                        "storm_detected": False,
+                        "guard": {"last_short_session_recent": 1},
+                    }
+                },
+                "servers": {"yws": {"requested": True, "started_event": True, "task_running": True, "ready": True, "room_total": 1}},
+                "ownership": {"yws": {}},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_selected_webspace_snapshot",
+        lambda webspace_id: {"webspace_id": webspace_id or "default"},
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_recovery_policy",
+        lambda selected_entry, selected_webspace: ({}, {}, {}),
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_webspace_guidance",
+        lambda selected_webspace, action_overrides: {},
+    )
+
+    snapshot = yjs_sync_runtime_snapshot(role="hub", webspace_id="default")
+
+    assert snapshot["assessment"]["state"] == "degraded"
+    assert "browser_yjs_no_active_session_after_recent_activity" in str(snapshot["assessment"]["reason"] or "")
+    assert snapshot["transport"]["active_yws_connections"] == 0
+
+
+def test_yjs_sync_runtime_snapshot_marks_browser_ws_without_yws_as_degraded(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.store",
+        SimpleNamespace(
+            ystore_runtime_snapshot=lambda **kwargs: {
+                "webspace_total": 1,
+                "active_webspace_total": 1,
+                "webspaces": {
+                    "default": {
+                        "log_mode": "snapshot_plus_diff",
+                        "update_log_entries": 1,
+                        "max_update_log_entries": 128,
+                        "replay_window_entries": 0,
+                        "replay_window_bytes": 0,
+                        "compact_total": 1,
+                        "runtime_compaction_eligible": False,
+                        "backup_fast_path_total": 0,
+                        "backup_skipped_total": 0,
+                    }
+                },
+            }
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway_ws",
+        SimpleNamespace(
+            gateway_transport_snapshot=lambda: {
+                "transports": {
+                    "ws": {
+                        "active_connections": 1,
+                        "send_queue": {"connection_total": 1},
+                    },
+                    "yws": {
+                        "active_connections": 0,
+                        "recent_open_10s": 0,
+                        "recent_open_60s": 0,
+                        "storm_detected": False,
+                    },
+                },
+                "servers": {"yws": {"requested": True, "started_event": True, "task_running": True, "ready": True, "room_total": 0}},
+                "ownership": {"yws": {}},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_selected_webspace_snapshot",
+        lambda webspace_id: {"webspace_id": webspace_id or "default"},
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_recovery_policy",
+        lambda selected_entry, selected_webspace: ({}, {}, {}),
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_webspace_guidance",
+        lambda selected_webspace, action_overrides: {},
+    )
+
+    snapshot = yjs_sync_runtime_snapshot(role="hub", webspace_id="default")
+
+    assert snapshot["assessment"]["state"] == "degraded"
+    assert "browser_yjs_no_active_session_with_browser_ws" in str(snapshot["assessment"]["reason"] or "")
+    assert snapshot["transport"]["active_ws_connections"] == 1
+    assert snapshot["transport"]["active_browser_event_connections"] == 1
+    assert snapshot["transport"]["active_yws_connections"] == 0
+
+
 def test_media_plane_runtime_snapshot_exposes_live_update_guard(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
@@ -2337,6 +2469,54 @@ def test_state_sync_keeps_ready_semantics_for_bounded_replay_maintenance_pressur
     assert snapshot["freshness_state"] == "fresh"
     assert snapshot["replay"]["cursor"] == "32/32"
     assert snapshot["blockers"] == ["bounded_replay_window_near_limit"]
+
+
+def test_state_sync_marks_ready_room_degraded_when_browser_transport_has_no_live_channel() -> None:
+    snapshot = _state_sync_snapshot(
+        {
+            "available": True,
+            "selected_webspace_id": "desktop",
+            "assessment": {
+                "state": "degraded",
+                "reason": "browser_yjs_no_active_session_after_recent_activity",
+            },
+            "transport": {
+                "server_ready": True,
+                "active_yws_connections": 0,
+                "webrtc_open_yjs_channels": 0,
+            },
+            "channel_contract": {
+                "recovery_model": "snapshot_plus_diff",
+            },
+            "selected_webspace": {
+                "webspace_id": "desktop",
+                "rebuild": {
+                    "finished_at": 1778055331.0,
+                    "materialization": {
+                        "ready": True,
+                        "readiness_state": "ready",
+                        "missing_branches": [],
+                    },
+                },
+                "gateway_room": {
+                    "ready": True,
+                    "last_open_at": 1778055332.0,
+                    "last_bootstrap_finished_at": 1778055331.0,
+                },
+            },
+            "webspaces": {
+                "desktop": {
+                    "replay_window_entries": 21,
+                    "replay_window_limit": 32,
+                },
+            },
+        }
+    )
+
+    assert snapshot["transport_state"] == "degraded"
+    assert snapshot["first_sync_state"] == "timeout"
+    assert snapshot["semantic_state"] == "degraded"
+    assert snapshot["blockers"] == ["browser_yjs_no_active_session_after_recent_activity"]
 
 
 def test_state_sync_uses_gateway_effective_branches_when_rebuild_cache_missing() -> None:

@@ -4725,6 +4725,7 @@ def yjs_sync_runtime_snapshot(
         }
     transports = gateway.get("transports") if isinstance(gateway.get("transports"), dict) else {}
     ownership = gateway.get("ownership") if isinstance(gateway.get("ownership"), dict) else {}
+    ws_transport = transports.get("ws") if isinstance(transports.get("ws"), dict) else {}
     yws_transport = transports.get("yws") if isinstance(transports.get("yws"), dict) else {}
     yws_ownership = ownership.get("yws") if isinstance(ownership.get("yws"), dict) else {}
     servers = gateway.get("servers") if isinstance(gateway.get("servers"), dict) else {}
@@ -4779,10 +4780,39 @@ def yjs_sync_runtime_snapshot(
         reasons.append("bounded_replay_window_near_limit")
     else:
         reasons.append("bounded_sync_runtime_observed")
-    if bool(yws_transport.get("storm_detected")):
+    active_yws_connections = int(yws_transport.get("active_connections") or 0)
+    active_ws_connections = int(ws_transport.get("active_connections") or 0)
+    ws_send_queue = ws_transport.get("send_queue") if isinstance(ws_transport.get("send_queue"), dict) else {}
+    active_browser_event_connections = int(ws_send_queue.get("connection_total") or 0)
+    active_browser_control_connections = max(active_ws_connections, active_browser_event_connections)
+    recent_yws_open_60s = int(yws_transport.get("recent_open_60s") or 0)
+    last_yws_close_ago_s = yws_transport.get("last_close_ago_s")
+    fresh_yws_close = (
+        isinstance(last_yws_close_ago_s, (int, float))
+        and float(last_yws_close_ago_s) <= 60.0
+    )
+    yws_guard = yws_transport.get("guard") if isinstance(yws_transport.get("guard"), dict) else {}
+    recent_short_yws_sessions = int(yws_guard.get("last_short_session_recent") or 0)
+    if bool(yws_transport.get("storm_detected")) or bool(yws_transport.get("client_reconnect_storm_detected")):
         if assessment_state in {"nominal", "idle"}:
             assessment_state = "pressure"
         reasons.append("browser_yjs_reconnect_storm")
+    if (
+        active_yws_connections <= 0
+        and bool(yws_server.get("ready"))
+        and (fresh_yws_close or recent_yws_open_60s > 0 or recent_short_yws_sessions > 0)
+    ):
+        if assessment_state == "nominal":
+            assessment_state = "degraded"
+        reasons.append("browser_yjs_no_active_session_after_recent_activity")
+    if (
+        active_yws_connections <= 0
+        and bool(yws_server.get("ready"))
+        and active_browser_control_connections > 0
+    ):
+        if assessment_state == "nominal":
+            assessment_state = "degraded"
+        reasons.append("browser_yjs_no_active_session_with_browser_ws")
     if yws_server and not bool(yws_server.get("ready")):
         if assessment_state == "nominal":
             assessment_state = "degraded"
@@ -4856,7 +4886,9 @@ def yjs_sync_runtime_snapshot(
         },
         "channel_contract": channel_contract,
         "transport": {
-            "active_yws_connections": int(yws_transport.get("active_connections") or 0),
+            "active_ws_connections": active_ws_connections,
+            "active_browser_event_connections": active_browser_event_connections,
+            "active_yws_connections": active_yws_connections,
             "last_open_ago_s": yws_transport.get("last_open_ago_s"),
             "last_close_ago_s": yws_transport.get("last_close_ago_s"),
             "recent_open_10s": int(yws_transport.get("recent_open_10s") or 0),
@@ -5711,11 +5743,23 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
         and assessment_reasons
         and all(item == "bounded_replay_window_near_limit" for item in assessment_reasons)
     )
+    live_yjs_channel = (
+        int(transport.get("active_yws_connections") or 0) > 0
+        or int(transport.get("webrtc_open_yjs_channels") or 0) > 0
+    )
+    browser_transport_degraded = (
+        assessment_state in {"degraded", "pressure", "unavailable"}
+        and not live_yjs_channel
+        and not maintenance_pressure_only
+    )
     if not bool(runtime.get("available")) and assessment_state == "not_applicable":
         transport_state = "not_applicable"
     elif bool(transport.get("server_ready")) or bool(gateway_room.get("ready")):
-        transport_state = "attached"
-    elif int(transport.get("active_yws_connections") or 0) > 0 or int(transport.get("webrtc_open_yjs_channels") or 0) > 0:
+        if browser_transport_degraded:
+            transport_state = "degraded"
+        else:
+            transport_state = "attached"
+    elif live_yjs_channel:
         transport_state = "attached"
     elif assessment_state in {"degraded", "pressure", "unavailable"}:
         transport_state = "degraded"
@@ -5726,7 +5770,9 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
 
     if transport_state == "not_applicable":
         first_sync_state = "not_applicable"
-    elif bool(gateway_room.get("ready")) or int(transport.get("active_yws_connections") or 0) > 0 or int(transport.get("webrtc_open_yjs_channels") or 0) > 0:
+    elif browser_transport_degraded:
+        first_sync_state = "timeout"
+    elif (bool(gateway_room.get("ready")) and not browser_transport_degraded) or live_yjs_channel:
         first_sync_state = "complete"
     elif int(gateway_room.get("open_total") or 0) > 0 or int(transport.get("room_open_total") or 0) > 0:
         first_sync_state = "timeout" if assessment_state in {"degraded", "pressure", "unavailable"} else "pending"

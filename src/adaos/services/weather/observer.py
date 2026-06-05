@@ -332,7 +332,7 @@ def _ensure_city_observer(webspace_id: str, ydoc):
         async with async_get_ydoc(
             key,
             read_only=True,
-            prefer_live_room=False,
+            prefer_live_room=True,
             load_mark_roots=["data"],
         ) as detached_ydoc:
             return _normalize_city_snapshot(_current_city_from_doc(detached_ydoc))

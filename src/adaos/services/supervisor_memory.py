@@ -334,6 +334,7 @@ class MemoryTelemetrySample:
     managed_pid: int | None = None
     profile_mode: str = "normal"
     suspicion_state: str = "idle"
+    suspicion_reason: str | None = None
     process_rss_bytes: int | None = None
     family_rss_bytes: int | None = None
     available_memory_bytes: int | None = None
@@ -353,6 +354,7 @@ class MemoryTelemetrySample:
             managed_pid=_int(source.get("managed_pid")),
             profile_mode=_string(source.get("profile_mode"), default="normal"),
             suspicion_state=_string(source.get("suspicion_state"), default="idle"),
+            suspicion_reason=_optional_string(source.get("suspicion_reason")),
             process_rss_bytes=_int(source.get("process_rss_bytes")),
             family_rss_bytes=_int(source.get("family_rss_bytes")),
             available_memory_bytes=_int(source.get("available_memory_bytes")),
@@ -371,6 +373,7 @@ class MemoryTelemetrySample:
             "managed_pid": self.managed_pid,
             "profile_mode": self.profile_mode,
             "suspicion_state": self.suspicion_state,
+            "suspicion_reason": self.suspicion_reason,
             "process_rss_bytes": self.process_rss_bytes,
             "family_rss_bytes": self.family_rss_bytes,
             "available_memory_bytes": self.available_memory_bytes,
@@ -577,6 +580,7 @@ class MemoryRuntimeState:
     baseline_family_rss_bytes: int | None = None
     rss_growth_bytes: int | None = None
     rss_growth_bytes_per_min: float | None = None
+    suspicion_family_rss_threshold_bytes: int | None = None
     suspicion_growth_threshold_bytes: int | None = None
     suspicion_slope_threshold_bytes_per_min: float | None = None
     telemetry_path: str | None = None
@@ -642,6 +646,7 @@ class MemoryRuntimeState:
             baseline_family_rss_bytes=_positive_int(source.get("baseline_family_rss_bytes")),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
+            suspicion_family_rss_threshold_bytes=_int(source.get("suspicion_family_rss_threshold_bytes")),
             suspicion_growth_threshold_bytes=_int(source.get("suspicion_growth_threshold_bytes")),
             suspicion_slope_threshold_bytes_per_min=_float(source.get("suspicion_slope_threshold_bytes_per_min")),
             telemetry_path=_optional_string(source.get("telemetry_path")),
@@ -692,6 +697,7 @@ class MemoryRuntimeState:
             "baseline_family_rss_bytes": self.baseline_family_rss_bytes,
             "rss_growth_bytes": self.rss_growth_bytes,
             "rss_growth_bytes_per_min": self.rss_growth_bytes_per_min,
+            "suspicion_family_rss_threshold_bytes": self.suspicion_family_rss_threshold_bytes,
             "suspicion_growth_threshold_bytes": self.suspicion_growth_threshold_bytes,
             "suspicion_slope_threshold_bytes_per_min": self.suspicion_slope_threshold_bytes_per_min,
             "telemetry_path": self.telemetry_path,
