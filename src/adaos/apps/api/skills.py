@@ -12,7 +12,7 @@ from starlette.requests import ClientDisconnect
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import AgentContext, get_ctx
-from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.manager import SkillCoreCompatibilityError, SkillDependencyIsolationError, SkillManager
 from adaos.services.skill.artifacts import (
     request_upload_metadata,
     skill_upload_max_bytes,
@@ -591,7 +591,10 @@ async def push(body: PushReq, mgr: SkillManager = Depends(_get_manager)):
 
 @router.post("/runtime/prepare")
 async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_get_manager)):
-    result = mgr.prepare_runtime(body.name, run_tests=body.run_tests, preferred_slot=body.slot)
+    try:
+        result = mgr.prepare_runtime(body.name, run_tests=body.run_tests, preferred_slot=body.slot)
+    except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     payload = {
         "ok": True,
         "name": result.name,
@@ -620,6 +623,8 @@ async def runtime_activate(
             source_of_truth="skill_runtime",
         )
         return {"ok": True, "slot": slot, "handler_reload": reload_result, "materialization_cache": materialization_cache}
+    except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         msg = str(exc).lower()
         if not body.auto_prepare or ("is not prepared" not in msg and "no installed versions" not in msg):
@@ -629,8 +634,11 @@ async def runtime_activate(
             raise HTTPException(status_code=422, detail=str(exc))
         # auto-prepare then retry
         pref_slot = body.slot
-        prep = mgr.prepare_runtime(body.name, run_tests=False, preferred_slot=pref_slot)
-        slot = mgr.activate_for_space(body.name, version=prep.version, slot=prep.slot, space="default", webspace_id=webspace_id)
+        try:
+            prep = mgr.prepare_runtime(body.name, run_tests=False, preferred_slot=pref_slot)
+            slot = mgr.activate_for_space(body.name, version=prep.version, slot=prep.slot, space="default", webspace_id=webspace_id)
+        except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as compat_exc:
+            raise HTTPException(status_code=409, detail=str(compat_exc)) from compat_exc
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
         materialization_cache = invalidate_webspace_materialization_cache(
             webspace_id,

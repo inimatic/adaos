@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -17,7 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 import yaml
+from packaging.version import InvalidVersion, Version
 from adaos.adapters.git.workspace import wait_for_materialized
+from adaos.build_info import BUILD_INFO
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
 
 from adaos.domain import SkillMeta, SkillRecord
@@ -31,7 +34,7 @@ from adaos.services.git.workspace_guard import ensure_clean
 from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext, get_ctx, use_ctx
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
-from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
+from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget, heavy_dependency_names
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
 from adaos.services.skill.tests_runner import TestResult, run_tests as run_skill_tests
 from adaos.services.models.artifacts import (
@@ -393,6 +396,14 @@ class RuntimeInstallResult:
     tests: Dict[str, TestResult]
     data_migration: Dict[str, Any] | None = None
     lifecycle: Dict[str, Any] | None = None
+
+
+class SkillCoreCompatibilityError(RuntimeError):
+    """Raised when a skill manifest requires a newer AdaOS core runtime."""
+
+
+class SkillDependencyIsolationError(RuntimeError):
+    """Raised when a skill dependency declaration violates runtime isolation policy."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -1591,11 +1602,166 @@ class SkillManager:
         )
         payload["version"] = bump_version(existing_version, bump_index(effective_bump))
         payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        self._stamp_core_compatibility_for_push(payload)
         skill_yaml.write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False) + "\n",
             encoding="utf-8",
         )
         return str(payload.get("version") or "")
+
+    def _stamp_core_compatibility_for_push(self, manifest: dict[str, Any]) -> None:
+        compatibility = manifest.get("compatibility")
+        compat_payload = dict(compatibility) if isinstance(compatibility, Mapping) else {}
+        core = compat_payload.get("adaos_core")
+        core_payload = dict(core) if isinstance(core, Mapping) else {}
+        snapshot = self._current_core_compatibility_snapshot()
+        core_payload.update(
+            {
+                "min_version": snapshot.get("version") or "",
+                "recorded_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "source": "skill_push",
+            }
+        )
+        if snapshot.get("commit"):
+            core_payload["min_commit"] = snapshot["commit"]
+        if snapshot.get("short_commit"):
+            core_payload["min_short_commit"] = snapshot["short_commit"]
+        if snapshot.get("build_date"):
+            core_payload["build_date"] = snapshot["build_date"]
+        compat_payload["adaos_core"] = core_payload
+        manifest["compatibility"] = compat_payload
+
+    def _current_core_compatibility_snapshot(self) -> dict[str, str]:
+        repo_root = self._current_core_repo_root()
+        commit = self._git_text(repo_root, "rev-parse", "HEAD") if repo_root is not None else ""
+        short_commit = self._git_text(repo_root, "rev-parse", "--short", "HEAD") if repo_root is not None else ""
+        return {
+            "version": str(BUILD_INFO.version or "").strip(),
+            "build_date": str(BUILD_INFO.build_date or "").strip(),
+            "commit": commit,
+            "short_commit": short_commit,
+        }
+
+    def _current_core_repo_root(self) -> Path | None:
+        candidates: list[Path] = []
+        for raw in (os.getenv("ADAOS_SLOT_REPO_ROOT"), os.getenv("ADAOS_REPO_ROOT")):
+            text = str(raw or "").strip()
+            if text:
+                candidates.append(Path(text).expanduser())
+        try:
+            candidates.append(Path(__file__).resolve().parents[4])
+        except Exception:
+            pass
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except Exception:
+                resolved = candidate
+            if (resolved / ".git").exists():
+                return resolved
+        return candidates[0].resolve() if candidates else None
+
+    def _git_text(self, repo_root: Path | None, *args: str) -> str:
+        if repo_root is None:
+            return ""
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(repo_root), *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            )
+        except Exception:
+            return ""
+        return (completed.stdout or "").strip()
+
+    def _ensure_core_compatible(self, manifest: Mapping[str, Any], *, skill_name: str, stage: str) -> None:
+        requirement = self._core_compatibility_requirement(manifest)
+        if not requirement:
+            return
+        required_version = str(requirement.get("min_version") or "").strip()
+        required_commit = str(requirement.get("min_commit") or "").strip()
+        if not required_version and not required_commit:
+            return
+        current = self._current_core_compatibility_snapshot()
+        if self._core_requirement_satisfied(
+            required_version=required_version,
+            required_commit=required_commit,
+            current_version=current.get("version") or "",
+            current_commit=current.get("commit") or "",
+        ):
+            return
+        required_label = required_version or "unknown"
+        current_label = current.get("version") or "unknown"
+        required_short = str(requirement.get("min_short_commit") or required_commit[:12] or "").strip()
+        current_short = str(current.get("short_commit") or current.get("commit", "")[:12] or "").strip()
+        required_suffix = f" commit={required_short}" if required_short else ""
+        current_suffix = f" commit={current_short}" if current_short else ""
+        raise SkillCoreCompatibilityError(
+            f"skill '{skill_name}' requires AdaOS core >= {required_label}{required_suffix}; "
+            f"current core is {current_label}{current_suffix}. Update AdaOS core before skill {stage}."
+        )
+
+    def _core_compatibility_requirement(self, manifest: Mapping[str, Any]) -> dict[str, Any]:
+        compatibility = manifest.get("compatibility")
+        if not isinstance(compatibility, Mapping):
+            return {}
+        core = compatibility.get("adaos_core") or compatibility.get("core")
+        return dict(core) if isinstance(core, Mapping) else {}
+
+    def _core_requirement_satisfied(
+        self,
+        *,
+        required_version: str,
+        required_commit: str,
+        current_version: str,
+        current_commit: str,
+    ) -> bool:
+        if required_commit and current_commit:
+            ancestry = self._current_core_contains_commit(required_commit, current_commit=current_commit)
+            if ancestry is not None:
+                return ancestry
+        if required_version:
+            return self._version_at_least(current_version, required_version)
+        return True
+
+    def _current_core_contains_commit(self, required_commit: str, *, current_commit: str) -> bool | None:
+        if required_commit == current_commit or current_commit.startswith(required_commit) or required_commit.startswith(current_commit):
+            return True
+        repo_root = self._current_core_repo_root()
+        if repo_root is None:
+            return None
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", required_commit, current_commit],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception:
+            return None
+        if completed.returncode == 0:
+            return True
+        if completed.returncode == 1:
+            return False
+        return None
+
+    def _version_at_least(self, current_version: str, required_version: str) -> bool:
+        current = str(current_version or "").strip()
+        required = str(required_version or "").strip()
+        if not required:
+            return True
+        if not current:
+            return False
+        try:
+            current_parsed = Version(current)
+            required_parsed = Version(required)
+        except InvalidVersion:
+            return current == required
+        if current_parsed.public == required_parsed.public and not (current_parsed.local and required_parsed.local):
+            return True
+        return current_parsed >= required_parsed
 
     # ------------------------------------------------------------------
     # Runtime lifecycle helpers
@@ -1615,6 +1781,7 @@ class SkillManager:
             raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
 
         manifest = self._load_manifest(skill_dir)
+        self._ensure_core_compatible(manifest, skill_name=name, stage="prepare")
         version = version_override or str(manifest.get("version") or "0.0.0")
 
         env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
@@ -1815,6 +1982,7 @@ class SkillManager:
             if not manifest_path.exists():
                 raise RuntimeError(f"slot {target_slot} of version {target_version} is not prepared")
         target_manifest = self._read_json_dict(manifest_path)
+        self._ensure_core_compatible(target_manifest, skill_name=name, stage="activate")
         lifecycle = self._slot_lifecycle_state(metadata=metadata, slot=target_slot)
         persist_state = self._invoke_persist_before_switch(
             env=env,
@@ -2968,17 +3136,23 @@ class SkillManager:
         if constraints:
             base_cmd.extend(["-c", str(constraints)])
 
-        shared_cmd = [*base_cmd, *python_args]
+        mode = self._dependency_install_mode(manifest)
+        policy_args = self._dependency_policy_scan_args(python_args, requirements_file=requirements_file)
+        heavy_deps = heavy_dependency_names(policy_args)
+        if heavy_deps and not self._allow_heavy_in_process_dependencies(manifest):
+            deps_label = ", ".join(heavy_deps)
+            raise SkillDependencyIsolationError(
+                f"skill '{slot.skill_name}' declares heavy/native Python dependencies ({deps_label}) "
+                "but is not a service skill. In-process skills install only light dependencies into "
+                "the runtime bucket vendor by default. Convert the skill to runtime.kind: service "
+                "with runtime.env.mode: venv, or set runtime.env.allow_heavy_dependencies: true "
+                "for a controlled transitional install."
+            )
+
         vendor_dir = slot.vendor_dir
-        
+
         run_cwd = skill_dir if skill_dir.exists() else slot.src_dir
         has_requirements_file = requirements_file.exists()
-        ensure_dependency_disk_budget(
-            Path(sys.prefix),
-            python_args,
-            has_requirements_file=has_requirements_file,
-            skill_name=slot.skill_name,
-        )
 
         def _run(cmd: list[str]) -> tuple[bool, str]:
             try:
@@ -2989,25 +3163,39 @@ class SkillManager:
             out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
             return ok, out
 
-        # 1) Try pip in current interpreter; bootstrap pip if missing
-        ok, out = _run(shared_cmd)
-        if not ok and ("No module named pip" in out or "No module named pip" in out.replace("\r", "\n")):
-            _run([str(sys.executable), "-m", "ensurepip", "--upgrade"])  # best-effort
-            ok, out = _run(shared_cmd)
-        if ok:
-            # clean vendor if present
-            if vendor_dir.exists():
-                for child in vendor_dir.iterdir():
-                    if child.is_dir():
-                        shutil.rmtree(child, ignore_errors=True)
-                    else:
-                        try:
-                            child.unlink()
-                        except FileNotFoundError:
-                            pass
-            return []
+        uv_base = ["uv", "pip", "install", "--upgrade"]
+        if constraints:
+            uv_base.extend(["-c", str(constraints)])
 
-        # 2) Fallback: pip --target vendor (after ensurepip)
+        if mode == "shared":
+            shared_cmd = [*base_cmd, *python_args]
+            ensure_dependency_disk_budget(
+                Path(sys.prefix),
+                python_args,
+                has_requirements_file=has_requirements_file,
+                skill_name=slot.skill_name,
+            )
+            ok, out = _run(shared_cmd)
+            if not ok and ("No module named pip" in out or "No module named pip" in out.replace("\r", "\n")):
+                _run([str(sys.executable), "-m", "ensurepip", "--upgrade"])  # best-effort
+                ok, out = _run(shared_cmd)
+            if ok:
+                self._clear_runtime_vendor(vendor_dir)
+                return []
+
+            ok3, out3 = _run([*uv_base, *python_args])
+            if ok3:
+                self._clear_runtime_vendor(vendor_dir)
+                return []
+
+            raise RuntimeError(
+                f"failed to install shared dependencies for skill '{slot.skill_name}':\n"
+                f"pip(shared) -> {out}\n"
+                f"uv(shared) -> {out3}"
+            )
+
+        # Default non-service dependencies are isolated from the active core
+        # interpreter in the runtime bucket vendor overlay.
         vendor_dir.mkdir(parents=True, exist_ok=True)
         ensure_dependency_disk_budget(
             vendor_dir,
@@ -3029,25 +3217,7 @@ class SkillManager:
         if ok2:
             return [str(vendor_dir)]
 
-        # 3) Last resort: try `uv pip install` (if available)
-        uv_base = ["uv", "pip", "install", "--upgrade"]
-        if constraints:
-            uv_base.extend(["-c", str(constraints)])
-        ok3, out3 = _run([*uv_base, *python_args])
-        if ok3:
-            # uv installs into environment; keep vendor clean
-            if vendor_dir.exists():
-                for child in vendor_dir.iterdir():
-                    if child.is_dir():
-                        shutil.rmtree(child, ignore_errors=True)
-                    else:
-                        try:
-                            child.unlink()
-                        except FileNotFoundError:
-                            pass
-            return []
-
-        # Try uv with --target vendor
+        # Last resort: try `uv pip install --target` (if available)
         uv_vendor = [*uv_base, "--target", str(vendor_dir), *python_args]
         ok4, out4 = _run(uv_vendor)
         if ok4:
@@ -3056,11 +3226,86 @@ class SkillManager:
         # Failed all strategies
         raise RuntimeError(
             f"failed to install dependencies for skill '{slot.skill_name}':\n"
-            f"pip(shared) -> {out}\n"
             f"pip(target) -> {out2}\n"
-            f"uv(shared) -> {out3}\n"
             f"uv(target) -> {out4}"
         )
+
+    def _dependency_install_mode(self, manifest: Mapping[str, Any]) -> str:
+        runtime_cfg = manifest.get("runtime") or {}
+        env_cfg = runtime_cfg.get("env") if isinstance(runtime_cfg, Mapping) else {}
+        if not isinstance(env_cfg, Mapping):
+            env_cfg = {}
+
+        raw_mode = env_cfg.get("dependency_mode") or env_cfg.get("install_mode") or env_cfg.get("mode")
+        mode = str(raw_mode or "auto").strip().lower()
+        if mode in {"", "auto", "vendor"}:
+            return "vendor"
+        if mode in {"shared", "core", "global"}:
+            return "shared"
+        if mode == "venv":
+            raise SkillDependencyIsolationError(
+                "runtime.env.mode: venv is only supported for runtime.kind: service skills"
+            )
+        raise SkillDependencyIsolationError(f"unsupported runtime.env.mode for Python dependency install: {mode}")
+
+    def _dependency_policy_scan_args(self, python_args: list[str], *, requirements_file: Path) -> list[str]:
+        args = list(python_args)
+        if not requirements_file.exists():
+            return args
+        try:
+            text = requirements_file.read_text(encoding="utf-8")
+        except Exception:
+            return args
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            try:
+                args.extend(shlex.split(stripped, comments=True, posix=True))
+            except ValueError:
+                args.extend(stripped.split())
+        return args
+
+    def _allow_heavy_in_process_dependencies(self, manifest: Mapping[str, Any]) -> bool:
+        runtime_cfg = manifest.get("runtime") or {}
+        env_cfg = runtime_cfg.get("env") if isinstance(runtime_cfg, Mapping) else {}
+        if not isinstance(runtime_cfg, Mapping):
+            runtime_cfg = {}
+        if not isinstance(env_cfg, Mapping):
+            env_cfg = {}
+        keys = (
+            "allow_heavy_dependencies",
+            "allow_native_dependencies",
+            "allow_unsafe_dependencies",
+            "allow_heavy_vendor",
+            "allow_native_vendor",
+        )
+        for cfg in (env_cfg, runtime_cfg):
+            if any(self._manifest_bool(cfg.get(key)) for key in keys):
+                return True
+        return False
+
+    @staticmethod
+    def _manifest_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return False
+
+    def _clear_runtime_vendor(self, vendor_dir: Path) -> None:
+        if not vendor_dir.exists():
+            return
+        for child in vendor_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                try:
+                    child.unlink()
+                except FileNotFoundError:
+                    pass
 
     def _constraints_file(self) -> Path | None:
         candidates: list[Path] = []
@@ -4080,6 +4325,7 @@ class SkillManager:
                 "sandbox_cpu_seconds": defaults.sandbox_cpu_seconds,
             },
             "policy_overrides": dict(policy_overrides),
+            "compatibility": manifest.get("compatibility") if isinstance(manifest.get("compatibility"), Mapping) else {},
             "secrets": self._preserve_secret_placeholders(manifest.get("secrets", [])),
             "events": manifest.get("events"),
             "models": manifest.get("models"),
@@ -4155,6 +4401,7 @@ class SkillManager:
             manifest = self._load_manifest(skill_dir)
         except FileNotFoundError:
             manifest = {}
+        self._ensure_core_compatible(manifest, skill_name=name, stage="prepare")
         version = version_override or str(manifest.get("version") or "dev")
 
         env = SkillRuntimeEnvironment(skills_root=dev_root, skill_name=name)
@@ -4306,6 +4553,7 @@ class SkillManager:
                 raise RuntimeError(f"slot {target_slot} of version {target_version} is not prepared")
 
         target_manifest = self._read_json_dict(manifest_path)
+        self._ensure_core_compatible(target_manifest, skill_name=name, stage="activate")
         lifecycle = self._slot_lifecycle_state(metadata=metadata, slot=target_slot)
         lifecycle["persist"] = {"ok": True, "skipped": True, "hook": "persist_before_switch", "reason": "dev_runtime"}
         previous_active_version = env.resolve_active_version()

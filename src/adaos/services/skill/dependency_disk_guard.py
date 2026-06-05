@@ -1,22 +1,32 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Iterable
 
 
 _GIB = 1024 * 1024 * 1024
-_HEAVY_DEP_TOKENS = (
-    "torch",
-    "tensorflow",
-    "opencv",
-    "faiss",
+_HEAVY_DEP_NAMES = {
     "easyocr",
-    "transformers",
+    "faiss",
+    "faiss-cpu",
+    "faiss-gpu",
+    "opencv-contrib-python",
+    "opencv-python",
+    "opencv-python-headless",
     "sentence-transformers",
-    "static_ffmpeg",
-)
+    "static-ffmpeg",
+    "tensorflow",
+    "tensorflow-cpu",
+    "tensorflow-gpu",
+    "tensorflow-intel",
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "transformers",
+}
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -60,10 +70,43 @@ def _install_specs(args: Iterable[str]) -> list[str]:
     return specs
 
 
+def _normalize_package_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).strip("-").lower()
+
+
+def _package_name_from_spec(spec: str) -> str:
+    raw = str(spec or "").strip()
+    if not raw or raw.startswith(("-", ".", "~")):
+        return ""
+    if " @ " in raw:
+        raw = raw.split(" @ ", 1)[0].strip()
+    lowered = raw.lower()
+    if lowered.startswith(("git+", "http:", "https:", "ssh:", "file:")):
+        return ""
+    if "/" in raw or "\\" in raw:
+        return ""
+    raw = raw.split(";", 1)[0].strip()
+    match = re.match(r"([A-Za-z0-9][A-Za-z0-9_.-]*)", raw)
+    return _normalize_package_name(match.group(1)) if match else ""
+
+
+def heavy_dependency_names(args: Iterable[str]) -> list[str]:
+    names = {
+        name
+        for spec in _install_specs(args)
+        for name in [_package_name_from_spec(spec)]
+        if name in _HEAVY_DEP_NAMES
+    }
+    return sorted(names)
+
+
+def dependency_args_contain_heavy_packages(args: Iterable[str]) -> bool:
+    return bool(heavy_dependency_names(args))
+
+
 def dependency_disk_budget_bytes(args: Iterable[str], *, has_requirements_file: bool = False) -> int:
     specs = _install_specs(args)
-    lowered = " ".join(specs).lower()
-    if any(token in lowered for token in _HEAVY_DEP_TOKENS):
+    if dependency_args_contain_heavy_packages(specs):
         return _env_bytes("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", 5.0)
 
     base = _env_bytes("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", 2.0)

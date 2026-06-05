@@ -53,3 +53,12 @@ def test_dependency_disk_budget_counts_specs_not_pip_flags(monkeypatch):
     )
 
     assert required == 7 * 1024 * 1024 * 1024
+
+
+def test_heavy_dependency_detection_uses_package_names_not_substrings():
+    assert guard.heavy_dependency_names(["torch==2.10.0", "opencv-python-headless==4.13.0.92"]) == [
+        "opencv-python-headless",
+        "torch",
+    ]
+    assert guard.heavy_dependency_names(["torch @ https://example.invalid/torch.whl"]) == ["torch"]
+    assert guard.heavy_dependency_names(["notorch-helper==1.0", "my-transformers-ui==1.0"]) == []
