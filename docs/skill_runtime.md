@@ -187,6 +187,13 @@ After activation, stateful skills are expected to rebuild derived runtime state 
 
 Both live under `v<major>.<minor>` so patch A/B deployments do not duplicate dependency environments. A minor or major bucket gives the skill a fresh dependency boundary when the migration model says compatibility changed.
 
+Dependency admission policy:
+
+- In-process Python skills use the bucket `vendor/` overlay by default.
+- `runtime.env.mode: shared` is an explicit legacy/diagnostic mode that installs into the current core interpreter. It is not used as an automatic fallback.
+- Heavy/native dependency stacks such as Torch, TensorFlow, OpenCV, FAISS, EasyOCR, and transformer runtimes are rejected for in-process skills by default. They should be declared as `runtime.kind: service` with `runtime.env.mode: venv`, or later as a core-owned dependency profile.
+- `runtime.env.allow_heavy_dependencies: true` is a transitional override for controlled stand work. It keeps the operator-visible risk explicit and should not be used as the production shape for ML/model skills.
+
 ### Runtime lifecycle hooks
 
 AdaOS now supports optional lifecycle hooks in the resolved skill manifest.
