@@ -496,6 +496,18 @@ def test_supervisor_manager_marks_plateaued_growth_as_suspected(monkeypatch, tmp
     assert second["rss_growth_bytes"] == 60 * 1024 * 1024
 
 
+def test_supervisor_family_rss_threshold_defaults_to_two_gib(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES", raising=False)
+
+    assert supervisor._memory_suspicion_family_rss_threshold_bytes() == 2 * 1024 * 1024 * 1024
+
+
+def test_supervisor_family_rss_threshold_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES", "off")
+
+    assert supervisor._memory_suspicion_family_rss_threshold_bytes() is None
+
+
 def test_supervisor_manager_marks_absolute_family_rss_threshold_as_suspected(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC", "5")
