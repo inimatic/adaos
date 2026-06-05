@@ -271,6 +271,20 @@ Representative examples:
 - `sdk.data.device_access.set_device_lifetime(device_ref, preset)`
 - `sdk.data.device_access.detach_device(device_ref)`
 
+Endpoint-specific scenarios should still enter through this device access
+surface. For example, ReDevice scenario skills should use generic endpoint refs
+such as `redevice:<endpoint_id>` and call:
+
+- `sdk.data.devices.list_devices(kind="redevice")`
+- `sdk.data.device_access.send_endpoint_command(device_ref, command)`
+- `sdk.data.device_access.update_endpoint_profile(device_ref, ...)`
+- `sdk.data.device_access.revoke_endpoint(device_ref)`
+- `sdk.data.device_access.retire_endpoint(device_ref)`
+
+The current ReDevice implementation may bridge these helpers to the legacy
+ReDevice root API. That bridge is temporary; the target owner for command
+delivery is EndpointRouter.
+
 This keeps the skill API stable while allowing the core storage, aggregation, and enforcement internals to evolve.
 
 ## 6. Device inventory read model
@@ -405,6 +419,12 @@ That makes the architecture reusable for:
 - voice assistant skills
 - policy automation skills
 - admin or fleet-management surfaces
+
+`redevice_settings` is the first ReDevice-specific consumer of the same model.
+It should be treated as a scenario service skill, not as a browser-client
+feature. It composes the device inventory read model with endpoint settings
+commands, assignment, active app/surface status, and scenario links to
+`slideshow_skill` and `redevice_voice`.
 
 ## 9. `web_desktop` as a device-centric shell
 
