@@ -47,6 +47,7 @@ def _write_neural_skill_fixture(root: Path) -> Path:
     )
     (source / "scripts" / "train_artifacts.py").write_text("def main():\n    return 0\n", encoding="utf-8")
     (source / "tests" / "test_fixture.py").write_text("def test_fixture():\n    assert True\n", encoding="utf-8")
+    (source / ".adaos-managed.json").write_text("legacy marker\n", encoding="utf-8")
     return source
 
 
@@ -71,7 +72,7 @@ def test_ensure_neural_service_skill_installed_creates_skill_tree(monkeypatch, t
     assert (target / "handlers" / "main.py").exists()
     assert (target / "scripts" / "train_artifacts.py").exists()
     assert (target / "tests" / "test_fixture.py").exists()
-    assert (target / ".adaos-managed.json").exists()
+    assert not (target / ".adaos-managed.json").exists()
     assert "AdaOSNeuralNLU/0.2" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
     manifest_text = (target / "skill.yaml").read_text(encoding="utf-8")
     assert "mode: venv" in manifest_text
@@ -86,7 +87,9 @@ def test_ensure_neural_service_skill_installed_creates_skill_tree(monkeypatch, t
     slot = env.read_active_slot(version)
     slot_skill = env.build_slot_paths(version, slot).src_dir / "skills" / "neural_nlu_service_skill"
     assert (slot_skill / "skill.yaml").exists()
-    assert (slot_skill / ".adaos-managed.json").exists()
+    assert not (slot_skill / ".adaos-managed.json").exists()
+    metadata = env.read_version_metadata(version)
+    assert metadata["slots"][slot]["source_fingerprint"]
 
 
 def test_ensure_neural_service_skill_installed_respects_disabled_flag(monkeypatch):

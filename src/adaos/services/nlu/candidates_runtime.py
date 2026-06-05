@@ -252,21 +252,23 @@ async def _emit_apply_rejected(
                 save_teacher_state(webspace_id=webspace_id, teacher=next_teacher)
             except Exception:
                 pass
+    is_voice_route = str(meta.get("route_id") or meta.get("route") or "").strip() == "voice_chat"
+    if not is_voice_route:
+        try:
+            bus_emit(
+                ctx.bus,
+                "ui.notify",
+                {
+                    "text": f"NLU Teacher: candidate was not applied ({reason}).",
+                    "webspace_id": webspace_id,
+                    "_meta": dict(meta),
+                },
+                source="nlu.teacher.candidates",
+            )
+        except Exception:
+            pass
     try:
-        bus_emit(
-            ctx.bus,
-            "ui.notify",
-            {
-                "text": f"NLU Teacher: candidate was not applied ({reason}).",
-                "webspace_id": webspace_id,
-                "_meta": dict(meta),
-            },
-            source="nlu.teacher.candidates",
-        )
-    except Exception:
-        pass
-    try:
-        if str(meta.get("route_id") or meta.get("route") or "").strip() == "voice_chat":
+        if is_voice_route:
             bus_emit(
                 ctx.bus,
                 "io.out.chat.append",

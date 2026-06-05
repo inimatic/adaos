@@ -22,7 +22,8 @@ from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 _SKILL_NAME = "rasa_nlu_service_skill"
 _PACKAGE = "adaos.interpreter_data"
 _RESOURCE_DIR = "rasa_nlu_service_skill"
-_MANAGED_META = ".adaos-managed.json"
+_LEGACY_MANAGED_META = ".adaos-managed.json"
+_SOURCE_FINGERPRINT_KEY = "source_fingerprint"
 _RASA_PORT_SUBMODULE = Path("src/adaos/integrations/rasa-port")
 _DEFAULT_RASA_PORT_REQUIREMENT = "adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main"
 _FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled", "none"}
@@ -424,7 +425,7 @@ def _should_refresh_template(src: Path, target: Path) -> bool:
     return False
 
 
-def _managed_file_payload(target: Path, dependencies: list[str]) -> dict[str, Any]:
+def _source_fingerprint_payload(target: Path, dependencies: list[str]) -> dict[str, Any]:
     files: dict[str, str] = {}
     for rel in ("skill.yaml", "requirements.in", "README.md"):
         path = target / rel
@@ -440,13 +441,14 @@ def _managed_file_payload(target: Path, dependencies: list[str]) -> dict[str, An
     return payload
 
 
-def _write_managed_metadata(target: Path, dependencies: list[str]) -> dict[str, Any]:
-    payload = _managed_file_payload(target, dependencies)
-    (target / _MANAGED_META).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return payload
+def _remove_legacy_managed_metadata(root: Path) -> None:
+    try:
+        (root / _LEGACY_MANAGED_META).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
-def _active_runtime_skill_root(ctx: Any) -> Path | None:
+def _active_runtime_selection(ctx: Any) -> tuple[SkillRuntimeEnvironment, str, str, Path] | None:
     skills_root = Path(ctx.paths.skills_dir())
     env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_SKILL_NAME)
     version = env.resolve_active_version()
@@ -457,21 +459,36 @@ def _active_runtime_skill_root(ctx: Any) -> Path | None:
         root = env.build_slot_paths(version, slot).src_dir / "skills" / _SKILL_NAME
     except Exception:
         return None
-    return root if (root / "skill.yaml").exists() else None
+    return (env, version, slot, root) if (root / "skill.yaml").exists() else None
 
 
 def _runtime_matches(ctx: Any, fingerprint: str) -> bool:
-    root = _active_runtime_skill_root(ctx)
-    if root is None:
+    selection = _active_runtime_selection(ctx)
+    if selection is None:
         return False
-    meta_path = root / _MANAGED_META
-    if not meta_path.exists():
+    env, version, slot, _root = selection
+    metadata = env.read_version_metadata(version)
+    slots = metadata.get("slots") if isinstance(metadata, dict) else None
+    slot_meta = slots.get(slot) if isinstance(slots, dict) else None
+    if not isinstance(slot_meta, dict):
         return False
-    try:
-        payload = json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    return isinstance(payload, dict) and payload.get("fingerprint") == fingerprint
+    return slot_meta.get(_SOURCE_FINGERPRINT_KEY) == fingerprint
+
+
+def _record_runtime_fingerprint(ctx: Any, version: str, slot: str, fingerprint: str) -> None:
+    skills_root = Path(ctx.paths.skills_dir())
+    env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_SKILL_NAME)
+    metadata = env.read_version_metadata(version)
+    slots = metadata.setdefault("slots", {})
+    if not isinstance(slots, dict):
+        slots = {}
+        metadata["slots"] = slots
+    slot_meta = slots.setdefault(slot, {})
+    if not isinstance(slot_meta, dict):
+        slot_meta = {}
+        slots[slot] = slot_meta
+    slot_meta[_SOURCE_FINGERPRINT_KEY] = fingerprint
+    env.write_version_metadata(version, metadata)
 
 
 def _prepare_slotted_runtime(target: Path, fingerprint: str) -> None:
@@ -493,6 +510,7 @@ def _prepare_slotted_runtime(target: Path, fingerprint: str) -> None:
         bus=ctx.bus,
     )
     runtime = mgr.prepare_runtime(_SKILL_NAME, path=target, run_tests=False)
+    _record_runtime_fingerprint(ctx, runtime.version, runtime.slot, fingerprint)
     mgr.activate_for_space(
         _SKILL_NAME,
         version=runtime.version,
@@ -531,7 +549,8 @@ def ensure_rasa_service_skill_installed() -> Path | None:
                 dependencies = _manifest_dependencies(target)
                 if not dependencies or _dependencies_need_rasa_port_refresh(dependencies, ctx):
                     dependencies = _write_rasa_port_dependency(target, ctx)
-        meta = _write_managed_metadata(target, dependencies)
+        _remove_legacy_managed_metadata(target)
+        meta = _source_fingerprint_payload(target, dependencies)
         _prepare_slotted_runtime(target, str(meta["fingerprint"]))
     except Exception:
         _log.warning("failed to install rasa_nlu_service_skill", exc_info=True)

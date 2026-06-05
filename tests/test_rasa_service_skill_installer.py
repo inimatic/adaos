@@ -31,7 +31,10 @@ def test_ensure_rasa_service_skill_installed_creates_skill_tree():
     slot = env.read_active_slot(version)
     slot_skill = env.build_slot_paths(version, slot).src_dir / "skills" / "rasa_nlu_service_skill"
     assert (slot_skill / "skill.yaml").exists()
-    assert (slot_skill / ".adaos-managed.json").exists()
+    assert not (target / ".adaos-managed.json").exists()
+    assert not (slot_skill / ".adaos-managed.json").exists()
+    metadata = env.read_version_metadata(version)
+    assert metadata["slots"][slot]["source_fingerprint"]
 
 
 def test_ensure_rasa_service_skill_installed_refreshes_managed_files():
@@ -84,6 +87,7 @@ def test_ensure_rasa_service_skill_installed_does_not_downgrade_newer_workspace_
         encoding="utf-8",
     )
     (target / "handlers" / "main.py").write_text("sentinel = 'keep-newer'\n", encoding="utf-8")
+    (target / ".adaos-managed.json").write_text("legacy marker\n", encoding="utf-8")
 
     installed = installer.ensure_rasa_service_skill_installed()
 
@@ -91,7 +95,7 @@ def test_ensure_rasa_service_skill_installed_does_not_downgrade_newer_workspace_
     manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
     assert manifest["version"] == "9.9.9"
     assert "keep-newer" in (target / "handlers" / "main.py").read_text(encoding="utf-8")
-    assert (target / ".adaos-managed.json").exists()
+    assert not (target / ".adaos-managed.json").exists()
 
 
 def test_ensure_rasa_service_skill_installed_refreshes_stale_file_dependency(monkeypatch):
