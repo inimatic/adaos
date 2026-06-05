@@ -239,6 +239,11 @@ def _memory_auto_profile_browser_live_ttl_sec() -> float:
         return 45.0
 
 
+def _memory_auto_profile_allow_browser_sessions() -> bool:
+    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_ALLOW_BROWSER_SESSIONS")
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _memory_auto_profile_circuit_window_sec() -> float:
     try:
         return max(300.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_WINDOW_SEC") or "1800").strip()))
@@ -2845,7 +2850,7 @@ class SupervisorManager:
             browser_total = 0
             browser_latest_age = None
         runtime_payload = runtime if isinstance(runtime, dict) else self._runtime_reliability_payload(timeout=1.0)
-        if browser_total > 0:
+        if browser_total > 0 and not _memory_auto_profile_allow_browser_sessions():
             age_text = "-" if browser_latest_age is None else f"{browser_latest_age:.1f}s"
             return True, f"browser_sessions_connected:{browser_total}:last_seen={age_text}"
         if not runtime_payload:
