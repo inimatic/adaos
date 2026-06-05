@@ -198,6 +198,22 @@ member. A member-hosted skill sends its endpoint request to the hub-owned
 endpoint router; the hub applies policy, resolves assignment, chooses the
 transport adapter, and records audit evidence.
 
+ReDevice-specific SDK helpers may exist as compatibility bridges during the
+first implementation, but new scenario skills should prefer the generic device
+and endpoint surfaces:
+
+```text
+sdk.data.devices.list_devices(kind="redevice")
+sdk.data.device_access.get_command_profile(device_ref)
+sdk.data.device_access.send_endpoint_command(device_ref, command)
+sdk.data.device_access.update_endpoint_profile(device_ref, ...)
+sdk.data.device_access.revoke_endpoint(device_ref)
+sdk.data.device_access.retire_endpoint(device_ref)
+```
+
+This keeps ReDevice as one endpoint kind inside Endpoint Registry instead of a
+parallel application plane such as `adaos.redevice.*`.
+
 ## ReDevice UI As Data
 
 ReDevice UI should be data-driven, but it should not use Yjs and it should not
@@ -689,6 +705,33 @@ It should show:
 
 The skill is a consumer of EndpointRegistry and EndpointRouter, not the owner
 of endpoint infrastructure.
+
+## ReDevice User Face Scenario
+
+`redevice_user_face` is the first scenario-level composition over ReDevice
+endpoints. It is not the endpoint infrastructure owner. It groups:
+
+- `redevice_settings`: service skill for settings, status, assignment and
+  policy-bound device actions;
+- `slideshow_skill`: display endpoint scenario skill;
+- `redevice_voice`: audio input endpoint scenario skill.
+
+The scenario demonstrates how a user-facing ReDevice dashboard can be assembled
+from generic SDK surfaces. Later user-customized faces, LLM-authored dashboards
+and voice interfaces should reuse the same Endpoint Registry and EndpointRouter
+contracts rather than adding ReDevice-specific browser-client logic.
+
+`redevice_settings` should show Wi-Fi, Bluetooth, sound, display, battery,
+location, apps/assignments and about/security sections. Actions are classified
+as:
+
+- `read_only`: display state only;
+- `assisted`: guide the operator or open native OS settings;
+- `best_effort`: try a native command and fall back to assisted flow;
+- `privileged`: require system/root-installed endpoint capabilities.
+
+The current MVP may keep scenario assignment in skill memory, but the target
+owner is `EndpointAssignment` in Endpoint Registry.
 
 ## First Vertical Slice
 

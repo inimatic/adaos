@@ -48,6 +48,8 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [ ] Keep `sdk.data.access_links` as the low-level access-policy surface.
 - [x] Migrate device skills to SDK entrypoints instead of direct `services.*` imports.
 - [x] Expose a stable settings-schema or command-profile contract through the SDK for modal and assistant consumers.
+- [~] Expose ReDevice endpoint command compatibility helpers through `sdk.data.device_access` while `EndpointRouter` is being built.
+- [ ] Move ReDevice endpoint commands from the compatibility bridge to core `EndpointRouter`.
 
 ## Enforcement and lifecycle
 
@@ -107,10 +109,27 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 
 - [ ] Use `display_name` as the canonical voice-facing device label.
 - [ ] Expose device policies to automation and assistant skills.
+- [ ] Treat ReDevice aliases as endpoint named-entity labels for active-app routing.
+- [ ] Route phrases such as "tablet, next" to the selected endpoint's active app.
 - [ ] Support operator and assistant intents such as:
   - [ ] "disconnect the living room TV"
   - [ ] "show apps on kitchen tablet"
   - [ ] "give this browser access for one day"
+  - [ ] "open ReDevice settings"
+  - [ ] "start slideshow on the kitchen tablet"
+  - [ ] "tablet, next"
+
+## ReDevice User Face scenario
+
+- [x] Create `redevice_user_face` scenario with required skills:
+  `redevice_settings`, `slideshow_skill`, and `redevice_voice`.
+- [x] Add `redevice_settings` as the service skill for endpoint settings and status.
+- [~] Keep scenario assignment in `redevice_settings` memory for the first slice.
+- [ ] Move scenario assignment into core `EndpointAssignment`.
+- [ ] Add native ReDevice Agent support for Wi-Fi/Bluetooth settings intents,
+  speaker test, volume, diagnostics, logout, and active-app controls.
+- [ ] Keep the browser client generic: it renders `webui.json` and does not
+  gain ReDevice-specific business logic.
 
 ## Recommended execution order
 
@@ -124,3 +143,5 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
 - [~] Phase 8: browser and member convergence cleanup, reconciler rollout, and `connected_to_subnet` migration.
 - [ ] Phase 9: issuer-side autorotation.
 - [ ] Phase 10: system-model, voice, and automation integration.
+- [~] Phase 11: ReDevice User Face scenario and Endpoint Registry-backed
+  endpoint settings surfaces.
