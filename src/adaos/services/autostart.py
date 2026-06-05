@@ -306,6 +306,15 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
     lines = ["#!/usr/bin/env bash", "set -euo pipefail"]
     for k, v in env.items():
         lines.append(f"export {k}={_sh_quote(str(v))}")
+    lines.extend(
+        [
+            "if [ -n \"${ADAOS_SHARED_DOTENV_PATH:-}\" ] && [ -f \"${ADAOS_SHARED_DOTENV_PATH}\" ]; then",
+            "  set -a",
+            "  . \"${ADAOS_SHARED_DOTENV_PATH}\"",
+            "  set +a",
+            "fi",
+        ]
+    )
     quoted = " ".join(_sh_quote(str(x)) for x in argv)
     lines.append(f"exec {quoted}")
     _write_text(path, "\n".join(lines) + "\n")

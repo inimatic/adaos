@@ -253,6 +253,84 @@ def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(mo
     assert supervisor.status(spec.skill)["running"] is True
 
 
+def test_service_supervisor_refuses_duplicate_start_when_unhealthy_listener_exists(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill import service_supervisor as mod
+
+    ctx = get_ctx()
+    root = (
+        Path(ctx.paths.skills_dir())
+        / ".runtime"
+        / "rasa_nlu_service_skill"
+        / "v0.2"
+        / "slots"
+        / "A"
+        / "src"
+        / "skills"
+        / "rasa_nlu_service_skill"
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    spec = mod.ServiceSpec(
+        skill="rasa_nlu_service_skill",
+        skill_root=root,
+        host="127.0.0.1",
+        port=18092,
+        command=["-m", "handlers.main"],
+        workdir=root,
+        env_mode="global",
+        python_selector=None,
+        venv_dir=None,
+        dependencies=[],
+        requirements_file=None,
+        health_path="/health",
+        health_timeout_ms=1000,
+        self_managed_enabled=False,
+        crash_max_in_window=3,
+        crash_window_s=60,
+        crash_cooloff_s=60,
+        health_interval_s=10,
+        health_failures_before_issue=3,
+        hook_on_issue=None,
+        hook_on_self_heal=None,
+        hook_timeout_s=10.0,
+        doctor_enabled=False,
+        doctor_cooldown_s=300,
+        doctor_issue_types=[],
+        doctor_include_log_tail_lines=0,
+    )
+
+    spawned: list[list[str]] = []
+
+    def _popen_should_not_run(cmd, **kwargs):
+        spawned.append(list(cmd))
+        raise AssertionError("unhealthy occupied port should not spawn duplicate service")
+
+    monkeypatch.setattr(mod, "_service_health_ok", lambda _spec: False)
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda _spec: {
+            "pid": 4242,
+            "cwd": str(root),
+            "cmdline": ["python", "-m", "handlers.main"],
+            "workdir_matches": True,
+        },
+    )
+    monkeypatch.setattr(mod.subprocess, "Popen", _popen_should_not_run)
+
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor._specs[spec.skill] = spec
+    supervisor.ensure_discovered = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    asyncio.run(supervisor.ensure_started(spec.skill, spec, force=False))
+
+    assert spawned == []
+    assert supervisor._cooloff_until[spec.skill] > time.time()
+    issues = supervisor.issues(spec.skill)
+    assert issues[-1]["type"] == "service_endpoint_unhealthy_listener_present"
+    assert issues[-1]["details"]["pid"] == 4242
+
+
 def test_service_supervisor_installs_changed_dependencies_for_existing_venv(tmp_path, monkeypatch):
     from adaos.services.skill import service_supervisor as mod
 

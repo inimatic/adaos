@@ -28,6 +28,19 @@ from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 _log = logging.getLogger("adaos.skill.service")
 
 
+def _ensure_failure_cooloff_s(failures: int) -> float:
+    try:
+        base = float(str(os.getenv("ADAOS_SERVICE_ENSURE_FAILURE_COOLOFF_S") or "15").strip())
+    except Exception:
+        base = 15.0
+    base = max(1.0, min(base, 300.0))
+    try:
+        multiplier = 2 ** max(0, min(int(failures or 1) - 1, 5))
+    except Exception:
+        multiplier = 1
+    return min(300.0, base * multiplier)
+
+
 @dataclass(slots=True)
 class ServiceSpec:
     skill: str
@@ -385,6 +398,7 @@ class ServiceSkillSupervisor:
         self._doctor_requests_cache: dict[str, list[dict[str, Any]]] = {}
         self._external_ready_specs: dict[str, tuple[Any, ...]] = {}
         self._external_ready_at: dict[str, float] = {}
+        self._ensure_failure_counts: dict[str, int] = {}
         self._discover_lock = threading.Lock()
         self._discover_async_lock: asyncio.Lock | None = None
         self._discover_async_lock_loop: asyncio.AbstractEventLoop | None = None
@@ -582,7 +596,8 @@ class ServiceSkillSupervisor:
         for name, spec in list(self._specs.items()):
             try:
                 await self.ensure_started(name, spec, force=False)
-            except Exception:
+            except Exception as exc:
+                await self._record_ensure_failure(name, spec, exc)
                 _log.warning("failed to start service skill=%s", name, exc_info=True)
 
         self._ensure_background_tasks()
@@ -629,6 +644,7 @@ class ServiceSkillSupervisor:
         spec_key = self._spec_key(spec)
         if proc and proc.poll() is None:
             if self._proc_specs.get(name) == spec_key:
+                self._ensure_failure_counts.pop(name, None)
                 return
             await self.stop(name, timeout_s=3.0)
 
@@ -654,6 +670,7 @@ class ServiceSkillSupervisor:
                         {"skill": name, "pid": listener.get("pid"), "external": True},
                         source="skill.service",
                     )
+                self._ensure_failure_counts.pop(name, None)
                 return
 
             stale_pid = int(listener.get("pid") or 0)
@@ -691,6 +708,33 @@ class ServiceSkillSupervisor:
                     message="service endpoint is healthy but its runtime location cannot be verified; refusing duplicate start",
                     severity="error",
                     details={"listener": listener, "expected_workdir": str(spec.workdir), "host": spec.host, "port": spec.port},
+                )
+                return
+        else:
+            listener = await asyncio.to_thread(_service_listener_snapshot, spec)
+            listener_pid = int(listener.get("pid") or 0)
+            if listener_pid > 0:
+                failures = self._ensure_failure_counts.get(name, 0) + 1
+                self._ensure_failure_counts[name] = failures
+                cooloff_s = max(float(spec.crash_cooloff_s or 0), _ensure_failure_cooloff_s(failures))
+                self._cooloff_until[name] = time.time() + cooloff_s
+                await self._record_issue(
+                    name,
+                    issue_type="service_endpoint_unhealthy_listener_present",
+                    message="service listener already owns the configured port but healthcheck failed; refusing duplicate start",
+                    severity="warning",
+                    details={
+                        "pid": listener_pid,
+                        "cwd": listener.get("cwd"),
+                        "cmdline": listener.get("cmdline"),
+                        "workdir_matches": listener.get("workdir_matches"),
+                        "expected_workdir": str(spec.workdir),
+                        "host": spec.host,
+                        "port": spec.port,
+                        "health_path": spec.health_path,
+                        "cooloff_s": cooloff_s,
+                        "failures": failures,
+                    },
                 )
                 return
         self._external_ready_specs.pop(name, None)
@@ -760,8 +804,30 @@ class ServiceSkillSupervisor:
                 {"skill": name, "pid": None, "external": True},
                 source="skill.service",
             )
+            self._ensure_failure_counts.pop(name, None)
             return
         emit(self._ctx.bus, "skill.service.ready", {"skill": name, "pid": proc.pid}, source="skill.service")
+        self._ensure_failure_counts.pop(name, None)
+
+    async def _record_ensure_failure(self, name: str, spec: ServiceSpec, exc: BaseException) -> None:
+        failures = self._ensure_failure_counts.get(name, 0) + 1
+        self._ensure_failure_counts[name] = failures
+        cooloff_s = max(float(spec.crash_cooloff_s or 0), _ensure_failure_cooloff_s(failures))
+        self._cooloff_until[name] = time.time() + cooloff_s
+        await self._record_issue(
+            name,
+            issue_type="service_ensure_failed",
+            message="service ensure failed; applying backoff before retry",
+            severity="warning",
+            details={
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "cooloff_s": cooloff_s,
+                "failures": failures,
+                "host": spec.host,
+                "port": spec.port,
+            },
+        )
 
     async def shutdown(self) -> None:
         for name, proc in list(self._procs.items()):
@@ -1158,7 +1224,8 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     continue
                 try:
                     await self.ensure_started(name, spec, force=False)
-                except Exception:
+                except Exception as exc:
+                    await self._record_ensure_failure(name, spec, exc)
                     _log.warning("failed to ensure service running skill=%s", name, exc_info=True)
 
             for name, proc in list(self._procs.items()):
@@ -1197,7 +1264,8 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
 
                 try:
                     await self.ensure_started(name, spec, force=False)
-                except Exception:
+                except Exception as exc:
+                    await self._record_ensure_failure(name, spec, exc)
                     _log.warning("failed to restart service skill=%s", name, exc_info=True)
 
     async def _health_loop(self) -> None:
