@@ -4580,6 +4580,39 @@ def test_memory_policy_auto_profile_is_blocked_while_hub_has_connected_members(m
     assert reason == "subnet_members_connected:1"
 
 
+def test_memory_policy_auto_profile_can_ignore_browser_sessions(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "0")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_ALLOW_BROWSER_SESSIONS", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._last_start_at = 100.0
+    monkeypatch.setattr(supervisor.time, "time", lambda: 401.0)
+
+    from adaos.services import access_links
+
+    monkeypatch.setattr(
+        access_links,
+        "browser_snapshot",
+        lambda: [
+            {
+                "last_seen_at": 400.0,
+                "connection_state": "open",
+                "online": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        manager,
+        "_runtime_reliability_payload",
+        lambda timeout=1.0: {"node": {"role": "hub"}, "hub_member_connection_state": {"connected_total": 0}},
+    )
+
+    allowed, reason = manager._memory_policy_auto_profile_guard(now=401.0)
+
+    assert allowed is True
+    assert reason is None
+
+
 def test_policy_memory_profile_restart_is_delayed_during_min_uptime(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "300")
