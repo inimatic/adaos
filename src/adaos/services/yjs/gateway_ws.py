@@ -2398,6 +2398,8 @@ def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str)
             ctx = get_agent_ctx()
             payload = dict(parsed)
             payload["transport"] = str(transport or "ws")
+            if _should_drop_duplicate_webio_control_event("webio.yjs.snapshot.requested", payload):
+                continue
             ctx.bus.publish(
                 DomainEvent(
                     type="webio.yjs.snapshot.requested",
@@ -2434,6 +2436,8 @@ def _publish_webio_yjs_projection_subscription_change(
                 record_projection_subscription_change(payload)
             except Exception:
                 _ylog.debug("failed to record webio yjs projection demand topic=%s", topic, exc_info=True)
+            if _should_drop_duplicate_webio_control_event("webio.yjs.subscription.changed", payload):
+                continue
             ctx = get_agent_ctx()
             ctx.bus.publish(
                 DomainEvent(
@@ -5032,6 +5036,13 @@ async def _update_device_presence(webspace_id: str, device_id: str) -> None:
     """
     Project basic device presence into the Yjs doc under devices/<device_id>.
     """
+    if not _yws_direct_transport_enabled():
+        _log.warning(
+            "skipped device presence Yjs update because direct yws is disabled webspace=%s device=%s",
+            webspace_id,
+            device_id,
+        )
+        return
     room = await y_server.get_room(webspace_id)
     ydoc = room.ydoc
     now_ms = int(time.time() * 1000)
@@ -5780,6 +5791,16 @@ async def process_events_command(
 
         async def _post_register() -> dict[str, Any]:
             try:
+                if not _yws_direct_transport_enabled():
+                    _log.warning(
+                        "device.register skipped Yjs post steps because direct yws is disabled webspace=%s device=%s",
+                        captured_ws,
+                        captured_device,
+                    )
+                    return {
+                        "yjs_post_skipped": True,
+                        "yjs_guard_reason": "direct_yws_disabled",
+                    }
                 guard_reason, guard_diag = _yws_guard_reject_reason(captured_ws, captured_device)
                 if guard_reason:
                     _log.warning(

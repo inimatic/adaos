@@ -496,6 +496,60 @@ def test_supervisor_manager_marks_plateaued_growth_as_suspected(monkeypatch, tmp
     assert second["rss_growth_bytes"] == 60 * 1024 * 1024
 
 
+def test_supervisor_manager_marks_absolute_family_rss_threshold_as_suspected(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC", "60")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES", str(150 * 1024 * 1024))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES", str(1024 * 1024 * 1024))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN", str(1024 * 1024 * 1024))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "0")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 4321
+
+        @staticmethod
+        def poll():
+            return None
+
+    samples = iter(
+        [
+            (100 * 1024 * 1024, 100 * 1024 * 1024),
+            (100 * 1024 * 1024, 160 * 1024 * 1024),
+        ]
+    )
+    times = iter([10.0, 70.0])
+    manager._proc = _Proc()
+    manager._managed_runtime_instance_id = "rt-a-a-1"
+    manager._managed_transition_role = "active"
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(supervisor, "_proc_details", lambda proc, cwd_hint=None: {"managed_pid": 4321})
+    monkeypatch.setattr(supervisor, "_process_family_rss_bytes", lambda pid: next(samples))
+    monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
+    monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    first = manager._sample_memory_telemetry()
+    second = manager._sample_memory_telemetry()
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_rss_bytes",
+        lambda pid: (100 * 1024 * 1024, 160 * 1024 * 1024),
+    )
+    monkeypatch.setattr(supervisor.time, "time", lambda: 80.0)
+    status = manager.memory_status()
+
+    assert first is not None
+    assert second is not None
+    assert second["suspicion_state"] == "suspected"
+    assert second["suspicion_reason"] == "family_rss_threshold"
+    assert status["suspicion_family_rss_threshold_bytes"] == 150 * 1024 * 1024
+    assert status["requested_profile_mode"] == "sampled_profile"
+    assert status["requested_session_id"]
+
+
 def test_supervisor_manager_ignores_zero_memory_baseline(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC", "5")

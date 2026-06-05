@@ -195,6 +195,17 @@ def _memory_suspicion_growth_threshold_bytes() -> int:
         return default_value
 
 
+def _memory_suspicion_family_rss_threshold_bytes() -> int | None:
+    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        return None
+    return max(32 * 1024 * 1024, value)
+
+
 def _memory_suspicion_slope_threshold_bytes_per_min() -> float:
     try:
         return max(
@@ -3144,8 +3155,14 @@ class SupervisorManager:
         suspicion_state = "stable"
         suspicion_reason: str | None = None
         growth_threshold = _memory_suspicion_growth_threshold_bytes()
+        family_rss_threshold = _memory_suspicion_family_rss_threshold_bytes()
         slope_threshold = _memory_suspicion_slope_threshold_bytes_per_min()
-        if growth_bytes >= growth_threshold and slope >= slope_threshold:
+        if family_rss_threshold is not None and family_rss_value >= family_rss_threshold:
+            suspicion_state = "suspected"
+            suspicion_reason = "family_rss_threshold"
+            if self._memory_suspicion_since is None:
+                self._memory_suspicion_since = now
+        elif growth_bytes >= growth_threshold and slope >= slope_threshold:
             suspicion_state = "suspected"
             suspicion_reason = "growth_and_slope_threshold"
             if self._memory_suspicion_since is None:
@@ -3174,6 +3191,7 @@ class SupervisorManager:
                 "managed_pid": managed_pid,
                 "profile_mode": self._memory_profile_mode,
                 "suspicion_state": suspicion_state,
+                "suspicion_reason": suspicion_reason,
                 "process_rss_bytes": process_rss_bytes,
                 "family_rss_bytes": family_rss_bytes,
                 "available_memory_bytes": self._memory_last_available_bytes,
@@ -3201,6 +3219,7 @@ class SupervisorManager:
                             reason=f"memory.{suspicion_reason or 'threshold'}",
                             trigger_source="policy",
                             trigger_threshold=(
+                                f"family_rss>={family_rss_threshold or 0}; "
                                 f"growth>={growth_threshold}; slope>={int(slope_threshold)}"
                             ),
                         )
@@ -4772,6 +4791,7 @@ class SupervisorManager:
             "baseline_family_rss_bytes": self._memory_baseline_family_rss_bytes,
             "rss_growth_bytes": self._memory_last_growth_bytes,
             "rss_growth_bytes_per_min": self._memory_last_growth_bytes_per_min,
+            "suspicion_family_rss_threshold_bytes": _memory_suspicion_family_rss_threshold_bytes(),
             "suspicion_growth_threshold_bytes": _memory_suspicion_growth_threshold_bytes(),
             "suspicion_slope_threshold_bytes_per_min": _memory_suspicion_slope_threshold_bytes_per_min(),
             "policy_profile_restarts_enabled": _memory_policy_profile_restarts_enabled(),

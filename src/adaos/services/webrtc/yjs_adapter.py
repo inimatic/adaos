@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -80,6 +81,10 @@ class DataChannelYjsAdapter:
 
     async def serve(self) -> None:
         """Start serving Yjs sync on this DataChannel."""
+        enabled_token = str(os.getenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED", "1") or "1").strip().lower()
+        if enabled_token in {"0", "false", "no", "off"}:
+            _log.info("yjs datachannel disabled by ADAOS_WEBRTC_YJS_CHANNEL_ENABLED webspace=%s", self._path)
+            return
         await yjs_gateway.start_y_server()
         try:
             await yjs_gateway.y_server.serve(self)  # type: ignore[arg-type]
