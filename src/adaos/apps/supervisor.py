@@ -101,6 +101,7 @@ from adaos.services.supervisor_memory import (
 
 
 _SKIP_PENDING_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
+_DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
 _LOG = logging.getLogger("adaos.supervisor")
 
 
@@ -198,11 +199,13 @@ def _memory_suspicion_growth_threshold_bytes() -> int:
 def _memory_suspicion_family_rss_threshold_bytes() -> int | None:
     raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES")
     if raw is None or not str(raw).strip():
+        return _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
+    if str(raw).strip().lower() in {"0", "false", "no", "off", "disabled", "none"}:
         return None
     try:
         value = int(str(raw).strip())
     except Exception:
-        return None
+        return _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
     return max(32 * 1024 * 1024, value)
 
 
