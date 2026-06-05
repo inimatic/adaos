@@ -180,6 +180,8 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "aliases": _normalize_text_list(data.get("aliases")),
         "labels": _normalize_label_list(data.get("labels")),
         "browser_family": str(data.get("browser_family") or "").strip() or None,
+        "client_build_id": str(data.get("client_build_id") or "").strip() or None,
+        "client_build_version": str(data.get("client_build_version") or "").strip() or None,
         "os_name": str(data.get("os_name") or "").strip() or None,
         "form_factor": str(data.get("form_factor") or "").strip() or None,
         "user_agent": str(data.get("user_agent") or "").strip() or None,
@@ -250,6 +252,8 @@ _ENTITY_REGISTRY_FIELDS = {
     "access_class",
     "aliases",
     "browser_family",
+    "client_build_id",
+    "client_build_version",
     "display_name",
     "form_factor",
     "hostname",
@@ -423,6 +427,8 @@ def touch_browser_session(
     os_name: str | None = None,
     form_factor: str | None = None,
     user_agent: str | None = None,
+    client_build_id: str | None = None,
+    client_build_version: str | None = None,
 ) -> dict[str, Any] | None:
     token = str(device_id or "").strip()
     if not token:
@@ -450,6 +456,10 @@ def touch_browser_session(
         entry["form_factor"] = str(form_factor or "").strip() or None
     if user_agent is not None:
         entry["user_agent"] = str(user_agent or "").strip() or None
+    if client_build_id is not None:
+        entry["client_build_id"] = str(client_build_id or "").strip() or None
+    if client_build_version is not None:
+        entry["client_build_version"] = str(client_build_version or "").strip() or None
     entry = _updated(entry)
     saved = _put_entry(registry, "browser", entry)
     _save_registry(registry)

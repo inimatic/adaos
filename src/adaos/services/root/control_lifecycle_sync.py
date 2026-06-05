@@ -23,6 +23,9 @@ from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
 
 _CONTROL_LIFECYCLE_FLOW_ID = "hub_root.control.lifecycle"
 _LOG = logging.getLogger("adaos.startup")
+_NLU_AUTHORING_SNAPSHOT_CACHE: dict[str, Any] | None = None
+_NLU_AUTHORING_SNAPSHOT_CACHE_KEY: tuple[Any, ...] | None = None
+_NLU_AUTHORING_SNAPSHOT_CACHE_AT = 0.0
 
 
 def _startup_stage_logs_enabled() -> bool:
@@ -123,6 +126,17 @@ def _env_int(name: str, *, default: int, min_value: int = 1, max_value: int = 10
     return max(min_value, min(parsed, max_value))
 
 
+def _nlu_authoring_snapshot_ttl_s() -> float:
+    raw = str(os.getenv("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT_TTL_S") or "").strip()
+    if not raw:
+        return 300.0
+    try:
+        value = float(raw)
+    except Exception:
+        return 300.0
+    return max(0.0, min(value, 3600.0))
+
+
 def _compact_value(
     value: Any,
     *,
@@ -184,8 +198,8 @@ def _snapshot_part(name: str, errors: list[dict[str, Any]], factory) -> Any:
     return payload
 
 
-def _compact_nlu_authoring_snapshot() -> dict[str, Any]:
-    if not _env_bool("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", default=True):
+def _compact_nlu_authoring_snapshot_uncached() -> dict[str, Any]:
+    if not _env_bool("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", default=False):
         return {
             "ok": False,
             "status": "disabled",
@@ -335,6 +349,55 @@ def _compact_nlu_authoring_snapshot() -> dict[str, Any]:
         },
         "authoring_boundaries": {"side_effects": "none", "dispatch": False, "training_mutation": False},
     }
+
+
+def _compact_nlu_authoring_snapshot() -> dict[str, Any]:
+    global _NLU_AUTHORING_SNAPSHOT_CACHE, _NLU_AUTHORING_SNAPSHOT_CACHE_AT, _NLU_AUTHORING_SNAPSHOT_CACHE_KEY
+
+    if not _env_bool("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", default=False):
+        return _compact_nlu_authoring_snapshot_uncached()
+
+    ttl_s = _nlu_authoring_snapshot_ttl_s()
+    try:
+        from adaos.services.yjs.webspace import default_webspace_id
+
+        webspace_id = str(os.getenv("ADAOS_ROOT_NLU_AUTHORING_WEBSPACE") or "").strip() or default_webspace_id()
+    except Exception:
+        webspace_id = str(os.getenv("ADAOS_ROOT_NLU_AUTHORING_WEBSPACE") or "").strip() or "desktop"
+    cache_key = (
+        webspace_id,
+        _env_bool("ADAOS_ROOT_NLU_AUTHORING_INCLUDE_LIVE", default=True),
+        _env_bool("ADAOS_ROOT_NLU_AUTHORING_INCLUDE_HINTS", default=True),
+        _env_int("ADAOS_ROOT_NLU_AUTHORING_MAX_ACTIONS", default=120, min_value=10, max_value=300),
+        _env_int("ADAOS_ROOT_NLU_AUTHORING_MAX_TEMPLATES", default=160, min_value=20, max_value=500),
+        _env_int("ADAOS_ROOT_NLU_AUTHORING_MAX_TARGETS", default=120, min_value=20, max_value=500),
+    )
+    now = time.monotonic()
+    if (
+        ttl_s > 0
+        and _NLU_AUTHORING_SNAPSHOT_CACHE is not None
+        and _NLU_AUTHORING_SNAPSHOT_CACHE_KEY == cache_key
+        and now - _NLU_AUTHORING_SNAPSHOT_CACHE_AT <= ttl_s
+    ):
+        cached = dict(_NLU_AUTHORING_SNAPSHOT_CACHE)
+        meta = dict(cached.get("_meta") or {})
+        meta["cached"] = True
+        meta["cache_age_s"] = round(now - _NLU_AUTHORING_SNAPSHOT_CACHE_AT, 3)
+        meta["cache_ttl_s"] = ttl_s
+        cached["_meta"] = meta
+        return cached
+
+    snapshot = _compact_nlu_authoring_snapshot_uncached()
+    if ttl_s > 0 and bool(snapshot.get("ok")):
+        _NLU_AUTHORING_SNAPSHOT_CACHE = dict(snapshot)
+        _NLU_AUTHORING_SNAPSHOT_CACHE_KEY = cache_key
+        _NLU_AUTHORING_SNAPSHOT_CACHE_AT = now
+        meta = dict(snapshot.get("_meta") or {})
+        meta["cached"] = False
+        meta["cache_ttl_s"] = ttl_s
+        snapshot["_meta"] = meta
+        _NLU_AUTHORING_SNAPSHOT_CACHE = dict(snapshot)
+    return snapshot
 
 
 def _compact_protocol_runtime() -> dict[str, Any]:

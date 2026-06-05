@@ -812,6 +812,7 @@ def test_supervisor_profile_session_requests_finalize_after_runtime_window(monke
             "session_state": "running",
             "requested_at": 10.0,
             "started_at": 10.0,
+            "profile_window_started_at": 10.0,
         }
     )
 
@@ -821,6 +822,37 @@ def test_supervisor_profile_session_requests_finalize_after_runtime_window(monke
     assert decision["session_id"] == "mem-001"
     assert decision["profile_mode"] == "sampled_profile"
     assert decision["reason"] == "supervisor.memory.profile_window_complete.sampled_profile"
+
+
+def test_supervisor_profile_session_waits_for_runtime_api_before_window(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_SAMPLED_PROFILE_MAX_RUNTIME_SEC", "40")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._memory_active_session_id = "mem-001"
+    manager._memory_profile_mode = "sampled_profile"
+    manager._managed_runtime_instance_id = "rt-a-a-1"
+    manager._managed_transition_role = "active"
+    manager._persist_runtime_state = lambda: None
+    manager._upsert_memory_session_summary(
+        {
+            "session_id": "mem-001",
+            "profile_mode": "sampled_profile",
+            "session_state": "running",
+            "requested_at": 10.0,
+            "started_at": 10.0,
+        }
+    )
+    monkeypatch.setattr(manager, "status", lambda: {"runtime_api_ready": False})
+
+    assert manager._should_finalize_active_memory_profile(now=55.0) is None
+    assert manager.memory_session("mem-001")["session"].get("profile_window_started_at") is None
+
+    monkeypatch.setattr(manager, "status", lambda: {"runtime_api_ready": True})
+
+    assert manager._should_finalize_active_memory_profile(now=56.0) is None
+    session = manager.memory_session("mem-001")["session"]
+    assert session["profile_window_started_at"] == 56.0
+    assert session["operation_window"]["profile_window_started_reason"] == "runtime_api_ready"
 
 
 def test_supervisor_observes_runtime_profile_finalize_markers(monkeypatch, tmp_path) -> None:
