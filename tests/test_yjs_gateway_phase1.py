@@ -338,6 +338,46 @@ def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
     ]
 
 
+def test_browser_session_authorize_rejects_client_below_min_version(monkeypatch) -> None:
+    touched: list[dict[str, object]] = []
+
+    from adaos.services import access_links
+
+    monkeypatch.setenv("ADAOS_BROWSER_MIN_CLIENT_BUILD_VERSION", "0.0.62")
+    monkeypatch.setattr(
+        access_links,
+        "authorize_link",
+        lambda kind, entry_id: (_ for _ in ()).throw(AssertionError("policy lookup should not run")),
+    )
+    monkeypatch.setattr(
+        access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+    )
+
+    payload = asyncio.run(
+        gateway_module.browser_session_authorize(
+            dev="dev_old",
+            ws="desktop",
+            client_build_id="old-build",
+            client_build_version="0.0.61+old-build",
+        )
+    )
+
+    assert payload["allowed"] is False
+    assert payload["reason"] == "client_version_unsupported"
+    assert touched == [
+        {
+            "device_id": "dev_old",
+            "webspace_id": "desktop",
+            "connection_state": "client_version_unsupported",
+            "online": False,
+            "client_build_id": "old-build",
+            "client_build_version": "0.0.61+old-build",
+        }
+    ]
+
+
 def test_yws_denied_browser_accepts_before_policy_close(monkeypatch) -> None:
     touched: list[dict[str, object]] = []
 
@@ -386,6 +426,119 @@ def test_yws_denied_browser_accepts_before_policy_close(monkeypatch) -> None:
             "browser_family": "Chrome",
             "os_name": "Android",
             "form_factor": "TV",
+        }
+    ]
+
+
+def test_yws_denies_env_revoked_browser_before_guard(monkeypatch) -> None:
+    touched: list[dict[str, object]] = []
+
+    class FakeWebSocket:
+        query_params = {
+            "dev": "dev_storm",
+            "browser_session_id": "bs-1",
+            "client_build_version": "0.0.62+current",
+        }
+
+        def __init__(self) -> None:
+            self.accepted = False
+            self.closed: dict[str, object] | None = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed = {"code": code, "reason": reason}
+
+    from adaos.services import access_links
+
+    monkeypatch.setenv("ADAOS_BROWSER_REVOKED_DEVICE_IDS", "dev_storm")
+    monkeypatch.setattr(
+        access_links,
+        "authorize_link",
+        lambda kind, entry_id: (_ for _ in ()).throw(AssertionError("policy lookup should not run")),
+    )
+    monkeypatch.setattr(
+        access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "_record_yws_guard_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("guard should not run")),
+    )
+
+    websocket = FakeWebSocket()
+    asyncio.run(gateway_module._yws_impl(websocket, room="desktop"))
+
+    assert websocket.accepted is True
+    assert websocket.closed == {"code": 1008, "reason": "device_revoked"}
+    assert touched == [
+        {
+            "device_id": "dev_storm",
+            "webspace_id": "desktop",
+            "connection_state": "revoked",
+            "online": False,
+            "client_build_version": "0.0.62+current",
+        }
+    ]
+
+
+def test_yws_direct_disabled_rejects_before_room_acquire(monkeypatch) -> None:
+    _clear_yws_guard_state()
+    touched: list[dict[str, object]] = []
+
+    class FakeWebSocket:
+        query_params = {
+            "dev": "dev_browser",
+            "browser_session_id": "bs-1",
+            "client_build_version": "0.0.99+current",
+        }
+
+        def __init__(self) -> None:
+            self.accepted = False
+            self.closed: dict[str, object] | None = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed = {"code": code, "reason": reason}
+
+    from adaos.services import access_links
+
+    monkeypatch.setattr(access_links, "authorize_link", lambda kind, entry_id: (True, "ok"))
+    monkeypatch.setattr(
+        access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+    )
+    monkeypatch.setattr(gateway_module, "_yws_direct_transport_enabled", lambda: False)
+    monkeypatch.setattr(gateway_module, "_yws_disabled_reject_hold_sec", lambda: 0.0)
+    monkeypatch.setattr(
+        gateway_module,
+        "_record_yws_guard_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("guard should not run")),
+    )
+
+    async def _room_must_not_start(*args, **kwargs):
+        raise AssertionError("disabled direct yws should avoid YRoom startup")
+
+    monkeypatch.setattr(gateway_module, "_acquire_yws_room", _room_must_not_start)
+
+    websocket = FakeWebSocket()
+    asyncio.run(gateway_module._yws_impl(websocket, room="desktop"))
+
+    assert websocket.accepted is True
+    assert websocket.closed == {"code": 1013, "reason": "yws_guard_direct_yws_disabled"}
+    assert touched == [
+        {
+            "device_id": "dev_browser",
+            "webspace_id": "desktop",
+            "connection_state": "yws_disabled",
+            "online": True,
+            "client_build_version": "0.0.99+current",
         }
     ]
 
@@ -1296,6 +1449,54 @@ def test_process_events_command_publishes_device_registered(monkeypatch) -> None
     assert responses[-1]["data"] == {"webspace_id": "ops"}
 
 
+def test_device_register_rejects_missing_client_version_when_min_version_set(monkeypatch) -> None:
+    responses: list[dict[str, object]] = []
+    touched: list[dict[str, object]] = []
+
+    from adaos.services import access_links
+
+    monkeypatch.setenv("ADAOS_BROWSER_MIN_CLIENT_BUILD_VERSION", "0.0.62")
+    monkeypatch.setattr(
+        access_links,
+        "touch_browser_session",
+        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "start_y_server",
+        lambda: (_ for _ in ()).throw(AssertionError("device.register should not start Y server")),
+    )
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="device.register",
+            cmd_id="cmd-version",
+            payload={"device_id": "dev-old", "webspace_id": "ops"},
+            device_id="dev-old",
+            webspace_id="default",
+            send_response=_send_response,
+        )
+    )
+
+    assert responses[-1]["ok"] is False
+    assert responses[-1]["error"] == "client_version_unsupported"
+    assert responses[-1]["data"] == {
+        "webspace_id": "ops",
+        "reason": "client_version_unsupported",
+    }
+    assert touched == [
+        {
+            "device_id": "dev-old",
+            "webspace_id": "ops",
+            "connection_state": "client_version_unsupported",
+            "online": False,
+        }
+    ]
+
+
 def test_device_register_skips_yjs_post_steps_when_yws_guard_is_active(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []
@@ -1729,12 +1930,20 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
     )
     monkeypatch.setattr(gateway_module, "start_y_server", _start_y_server_must_not_run)
     monkeypatch.setattr(gateway_module, "_publish_runtime_event", lambda topic, payload=None, source="yjs.gateway": events.append((topic, payload)))
+    close_existing_calls: list[tuple[object, ...]] = []
+
+    async def _close_existing_must_not_run(*args: object, **kwargs: object) -> int:
+        close_existing_calls.append(args)
+        raise AssertionError("guard should reject before replacing active YWS clients")
+
+    monkeypatch.setattr(gateway_module, "_close_existing_yws_client_connections", _close_existing_must_not_run)
 
     websocket = _FakeWebSocket()
     asyncio.run(gateway_module._yws_impl(websocket, "desktop"))
 
     assert websocket.accepted is True
     assert websocket.closed == (1013, "yws_guard_active_limit")
+    assert close_existing_calls == []
     assert touched[0]["connection_state"] == "yws_guard_active_limit"
     assert events[0][0] == "browser.session.changed"
     assert events[0][1]["yjs_channel_state"] == "rejected"
@@ -2050,7 +2259,7 @@ def test_yws_guard_scopes_reconnect_history_by_browser_session(monkeypatch) -> N
     _clear_yws_guard_state()
 
 
-def test_yws_guard_allows_rescue_connection_when_client_backoff_has_no_active_yws() -> None:
+def test_yws_guard_rejects_client_backoff_even_without_active_yws() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
@@ -2060,13 +2269,13 @@ def test_yws_guard_allows_rescue_connection_when_client_backoff_has_no_active_yw
 
     reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-hot")
 
-    assert reason == ""
+    assert reason == "client_reconnect_backoff"
     assert diag["client_quarantine_cleared"] is False
     assert client_key in gateway_module._YWS_GUARD_QUARANTINE_UNTIL
     _clear_yws_guard_state()
 
 
-def test_yws_guard_scoped_replacement_allows_client_backoff_recovery(monkeypatch) -> None:
+def test_yws_guard_scoped_replacement_keeps_client_backoff_quarantined(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
@@ -2106,7 +2315,7 @@ def test_yws_guard_scoped_replacement_allows_client_backoff_recovery(monkeypatch
 
     assert closed == 1
     assert stale.closed == [(1012, "replaced_by_new_yws_session")]
-    assert reason == ""
+    assert reason == "client_reconnect_backoff"
     assert diag["active_total"] == 0
     assert diag["dependency_recovery_allowed"] is False
     _clear_yws_guard_state()

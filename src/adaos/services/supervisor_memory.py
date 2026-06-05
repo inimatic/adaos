@@ -397,6 +397,8 @@ class MemorySessionSummary:
     rss_growth_bytes: int | None = None
     requested_at: float | None = None
     started_at: float | None = None
+    profile_window_started_at: float | None = None
+    profile_window_started_reason: str | None = None
     finished_at: float | None = None
     stopped_at: float | None = None
     stop_reason: str | None = None
@@ -435,6 +437,8 @@ class MemorySessionSummary:
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             requested_at=_float(source.get("requested_at")),
             started_at=_float(source.get("started_at")),
+            profile_window_started_at=_float(source.get("profile_window_started_at")),
+            profile_window_started_reason=_optional_string(source.get("profile_window_started_reason")),
             finished_at=_float(source.get("finished_at")),
             stopped_at=_float(source.get("stopped_at")),
             stop_reason=_optional_string(source.get("stop_reason")),
@@ -474,6 +478,8 @@ class MemorySessionSummary:
             "rss_growth_bytes": self.rss_growth_bytes,
             "requested_at": self.requested_at,
             "started_at": self.started_at,
+            "profile_window_started_at": self.profile_window_started_at,
+            "profile_window_started_reason": self.profile_window_started_reason,
             "finished_at": self.finished_at,
             "stopped_at": self.stopped_at,
             "stop_reason": self.stop_reason,

@@ -83,6 +83,75 @@ def test_nlu_authoring_snapshot_can_be_disabled(monkeypatch) -> None:
     assert snapshot["snapshot_id"] == "adaos.root.nlu_authoring_snapshot.v1"
 
 
+def test_nlu_authoring_snapshot_is_opt_in_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", raising=False)
+
+    snapshot = control_lifecycle_sync._compact_nlu_authoring_snapshot()
+
+    assert snapshot["ok"] is False
+    assert snapshot["status"] == "disabled"
+
+
+def test_nlu_authoring_snapshot_uses_ttl_cache(monkeypatch) -> None:
+    calls = {"count": 0}
+    control_lifecycle_sync._NLU_AUTHORING_SNAPSHOT_CACHE = None
+    control_lifecycle_sync._NLU_AUTHORING_SNAPSHOT_CACHE_KEY = None
+    control_lifecycle_sync._NLU_AUTHORING_SNAPSHOT_CACHE_AT = 0.0
+    monkeypatch.setenv("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", "1")
+    monkeypatch.setenv("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT_TTL_S", "300")
+    monkeypatch.setenv("ADAOS_ROOT_NLU_AUTHORING_WEBSPACE", "desktop")
+    monkeypatch.setattr(control_lifecycle_sync.time, "monotonic", lambda: 100.0)
+
+    def fake_uncached() -> dict:
+        calls["count"] += 1
+        return {
+            "ok": True,
+            "snapshot_id": "adaos.root.nlu_authoring_snapshot.v1",
+            "generated_at": 1.0,
+            "_meta": {},
+        }
+
+    monkeypatch.setattr(control_lifecycle_sync, "_compact_nlu_authoring_snapshot_uncached", fake_uncached)
+
+    first = control_lifecycle_sync._compact_nlu_authoring_snapshot()
+    second = control_lifecycle_sync._compact_nlu_authoring_snapshot()
+
+    assert calls["count"] == 1
+    assert first["_meta"]["cached"] is False
+    assert second["_meta"]["cached"] is True
+
+
+def test_nlu_authoring_snapshot_refreshes_after_ttl(monkeypatch) -> None:
+    calls = {"count": 0}
+    now = {"value": 100.0}
+    control_lifecycle_sync._NLU_AUTHORING_SNAPSHOT_CACHE = None
+    control_lifecycle_sync._NLU_AUTHORING_SNAPSHOT_CACHE_KEY = None
+    control_lifecycle_sync._NLU_AUTHORING_SNAPSHOT_CACHE_AT = 0.0
+    monkeypatch.setenv("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT", "1")
+    monkeypatch.setenv("ADAOS_ROOT_NLU_AUTHORING_SNAPSHOT_TTL_S", "10")
+    monkeypatch.setenv("ADAOS_ROOT_NLU_AUTHORING_WEBSPACE", "desktop")
+    monkeypatch.setattr(control_lifecycle_sync.time, "monotonic", lambda: now["value"])
+
+    def fake_uncached() -> dict:
+        calls["count"] += 1
+        return {
+            "ok": True,
+            "snapshot_id": "adaos.root.nlu_authoring_snapshot.v1",
+            "generated_at": float(calls["count"]),
+            "_meta": {},
+        }
+
+    monkeypatch.setattr(control_lifecycle_sync, "_compact_nlu_authoring_snapshot_uncached", fake_uncached)
+
+    first = control_lifecycle_sync._compact_nlu_authoring_snapshot()
+    now["value"] = 111.0
+    second = control_lifecycle_sync._compact_nlu_authoring_snapshot()
+
+    assert calls["count"] == 2
+    assert first["generated_at"] == 1.0
+    assert second["generated_at"] == 2.0
+
+
 def test_core_update_report_surfaces_runtime_identity(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-a-abcdef12")
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")

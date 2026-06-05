@@ -54,6 +54,12 @@ _WEBIO_CONTROL_DEDUPE_LOCK = threading.RLock()
 _WEBIO_CONTROL_DEDUPE_TTL_S = max(0.0, float(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_TTL_S", "1.5") or "1.5"))
 _WEBIO_CONTROL_DEDUPE_MAX = max(32, int(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_MAX", "512") or "512"))
 _WEBIO_CONTROL_DEDUPE_RECENT: dict[str, float] = {}
+_WEBIO_CONTROL_EVENT_TYPES = {
+    "webio.stream.snapshot.requested",
+    "webio.stream.subscription.changed",
+    "webio.yjs.snapshot.requested",
+    "webio.yjs.subscription.changed",
+}
 _TRANSPORT_STATE: dict[str, dict[str, Any]] = {
     "ws": {
         "active_connections": 0,
@@ -161,16 +167,61 @@ def _clean_browser_metadata_value(value: Any, *, max_len: int = 256) -> str | No
 def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     raw: dict[str, Any] = {
         "browser_family": params.get("browser_family") or params.get("browserFamily") or params.get("browser"),
+        "client_build_id": params.get("client_build_id") or params.get("clientBuildId") or params.get("build_id") or params.get("buildId"),
+        "client_build_version": params.get("client_build_version") or params.get("clientBuildVersion") or params.get("build_version") or params.get("buildVersion"),
         "os_name": params.get("os_name") or params.get("osName") or params.get("os") or params.get("platform"),
         "form_factor": params.get("form_factor") or params.get("formFactor") or params.get("form"),
         "user_agent": params.get("user_agent") or params.get("userAgent") or params.get("ua"),
     }
     out: dict[str, str] = {}
     for key, value in raw.items():
-        cleaned = _clean_browser_metadata_value(value, max_len=512 if key == "user_agent" else 96)
+        cleaned = _clean_browser_metadata_value(
+            value,
+            max_len=512 if key == "user_agent" else (128 if key == "client_build_version" else 96),
+        )
         if cleaned:
             out[key] = cleaned
     return out
+
+
+def _parse_client_build_version(value: Any) -> tuple[int, int, int] | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    core = token.split("+", 1)[0].split("-", 1)[0].strip()
+    parts = core.split(".")
+    if not 1 <= len(parts) <= 3:
+        return None
+    parsed: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            return None
+        parsed.append(int(part))
+    while len(parsed) < 3:
+        parsed.append(0)
+    return parsed[0], parsed[1], parsed[2]
+
+
+def _browser_env_rejected_reason(dev_id: str, browser_metadata: dict[str, Any]) -> str | None:
+    revoked_raw = os.getenv("ADAOS_BROWSER_REVOKED_DEVICE_IDS", "") or ""
+    revoked = {item.strip() for item in revoked_raw.replace(";", ",").split(",") if item.strip()}
+    if str(dev_id or "").strip() in revoked:
+        return "revoked"
+    minimum = _parse_client_build_version(os.getenv("ADAOS_BROWSER_MIN_CLIENT_BUILD_VERSION", ""))
+    if minimum is None:
+        return None
+    current = _parse_client_build_version(browser_metadata.get("client_build_version"))
+    if current is None or current < minimum:
+        return "client_version_unsupported"
+    return None
+
+
+def _yws_direct_transport_enabled() -> bool:
+    return _env_flag("ADAOS_YWS_DIRECT_TRANSPORT_ENABLED", True)
+
+
+def _yws_disabled_reject_hold_sec() -> float:
+    return _env_float("ADAOS_YWS_DISABLED_REJECT_HOLD_SEC", 20.0, minimum=0.0)
 
 
 def _yws_client_limit_key(
@@ -2161,7 +2212,7 @@ def _webio_control_dedupe_key(event_type: str, payload: dict[str, Any]) -> str:
 
 
 def _should_drop_duplicate_webio_control_event(event_type: str, payload: Any) -> bool:
-    if event_type not in {"webio.stream.snapshot.requested", "webio.stream.subscription.changed"}:
+    if event_type not in _WEBIO_CONTROL_EVENT_TYPES:
         return False
     if not isinstance(payload, dict) or _WEBIO_CONTROL_DEDUPE_TTL_S <= 0:
         return False
@@ -3038,6 +3089,78 @@ async def _hold_yws_guard_reject(
             return False
 
 
+async def _reject_yws_guard_connection(
+    websocket: WebSocket,
+    *,
+    webspace_id: str,
+    dev_id: str,
+    browser_metadata: dict[str, Any],
+    attempt_id: str,
+    client_attempt_id: str | None,
+    guard_reason: str,
+    guard_diag: dict[str, Any],
+) -> None:
+    state_token = f"yws_guard_{guard_reason}"
+    _remember_yws_attempt(attempt_id, "guard_reject")
+    _ylog.warning(
+        "yws guard rejected connection webspace=%s dev=%s attempt=%s client_attempt=%s reason=%s active=%s recent_open_10s=%s client_open_15s=%s",
+        webspace_id,
+        dev_id,
+        attempt_id,
+        client_attempt_id or None,
+        guard_reason,
+        guard_diag.get("active_total"),
+        guard_diag.get("recent_open_10s"),
+        guard_diag.get("client_open_15s"),
+    )
+    if _yws_guard_should_notify(webspace_id=webspace_id, dev_id=dev_id, reason=guard_reason):
+        try:
+            from adaos.services.access_links import touch_browser_session
+
+            touch_browser_session(
+                dev_id,
+                webspace_id=webspace_id,
+                connection_state=state_token,
+                online=False,
+                **browser_metadata,
+            )
+        except Exception:
+            _ylog.debug("browser access registry guard update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
+        _publish_runtime_event(
+            "browser.session.changed",
+            {
+                "device_id": dev_id,
+                "webspace_id": webspace_id,
+                "connection_state": state_token,
+                "yjs_channel_state": "rejected",
+                "yjs_attempt_id": attempt_id,
+                "client_yws_attempt_id": client_attempt_id or None,
+                "reason": guard_reason,
+                "active_yws": guard_diag.get("active_total"),
+                "recent_open_10s": guard_diag.get("recent_open_10s"),
+                "client_open_15s": guard_diag.get("client_open_15s"),
+                "source": "yws.gateway.guard",
+            },
+        )
+    try:
+        should_close = await _hold_yws_guard_reject(
+            websocket,
+            webspace_id=webspace_id,
+            dev_id=dev_id,
+            attempt_id=attempt_id,
+            client_attempt_id=client_attempt_id or None,
+            guard_reason=guard_reason,
+            guard_diag=guard_diag,
+        )
+        if should_close:
+            await websocket.close(code=1013, reason=state_token[:120])
+            _remember_yws_attempt(attempt_id, "closed", close_code=1013, close_reason=state_token[:120])
+        else:
+            _remember_yws_attempt(attempt_id, "closed", close_reason="guard_reject_peer_disconnected")
+    except Exception:
+        pass
+
+
 def _yws_client_recent_open_counts_locked(webspace_key: str, now: float) -> tuple[int, int]:
     recent_10s = 0
     distinct_clients_10s = 0
@@ -3342,23 +3465,11 @@ def _yws_guard_reject_reason(
         webspace_quarantine_until = float(
             _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
-        client_backoff_active = (
-            active_total > 0
-            or client_15s >= _YWS_GUARD_CLIENT_OPEN_15S
-            or client_short_sessions >= _YWS_GUARD_SHORT_SESSION_LIMIT
-        )
-        if client_quarantine_until > now and client_backoff_active:
+        if client_quarantine_until > now:
             quarantine_until = client_quarantine_until
             quarantine_ttl_s = max(0.0, client_quarantine_until - now)
-            if _dependency_allows_recovery("client_reconnect_backoff"):
-                _record_dependency_recovery()
-            elif active_total <= 0:
-                dependency_recovery_allowed = True
-                dependency_recovery_reason = "client_reconnect_backoff_no_active_yws"
-                _record_dependency_recovery()
-            else:
-                reason = "client_reconnect_backoff"
-        elif webspace_quarantine_until > now and active_total > 0:
+            reason = "client_reconnect_backoff"
+        elif webspace_quarantine_until > now:
             reason = "webspace_reconnect_backoff"
             quarantine_until = webspace_quarantine_until
             quarantine_ttl_s = max(0.0, webspace_quarantine_until - now)
@@ -3370,7 +3481,7 @@ def _yws_guard_reject_reason(
                 recent_10s >= _YWS_GUARD_RECENT_OPEN_10S
                 and webspace_distinct_clients_10s >= _YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S
             )
-            if client_reconnect_storm and active_total > 0:
+            if client_reconnect_storm:
                 _yws_guard_note_client_storm(
                     webspace_id=webspace_key,
                     dev_id=dev_key,
@@ -3418,7 +3529,7 @@ def _yws_guard_reject_reason(
                     _YWS_GUARD_DIAG["last_client_short_session_storm_webspace_id"] = webspace_key
                     _YWS_GUARD_DIAG["last_client_short_session_storm_dev_id"] = dev_key
                     _YWS_GUARD_DIAG["last_client_short_session_storm_recent"] = client_short_sessions
-            if webspace_reconnect_storm and active_total > 0:
+            if webspace_reconnect_storm:
                 _yws_guard_note_webspace_storm(
                     webspace_id=webspace_key,
                     dev_id=dev_key,
@@ -5223,7 +5334,10 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     try:
         from adaos.services.access_links import authorize_link, touch_browser_session
 
-        allowed, reason = authorize_link("browser", dev_id)
+        reason = _browser_env_rejected_reason(dev_id, browser_metadata)
+        allowed = reason is None
+        if allowed:
+            allowed, reason = authorize_link("browser", dev_id)
         if not allowed:
             reason_token = str(reason or "denied").strip().lower() or "denied"
             try:
@@ -5248,6 +5362,30 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             return
     except Exception:
         _ylog.debug("browser access policy check failed webspace=%s dev=%s attempt=%s", webspace_id, dev_id, attempt_id, exc_info=True)
+    if not _yws_direct_transport_enabled():
+        try:
+            from adaos.services.access_links import touch_browser_session
+
+            touch_browser_session(
+                dev_id,
+                webspace_id=webspace_id,
+                connection_state="yws_disabled",
+                online=True,
+                **browser_metadata,
+            )
+        except Exception:
+            pass
+        if await _accept_websocket(websocket, channel="yws.disabled"):
+            try:
+                hold_s = _yws_disabled_reject_hold_sec()
+                if hold_s > 0.0:
+                    await asyncio.sleep(min(hold_s, 120.0))
+                close_reason = "yws_guard_direct_yws_disabled"
+                await websocket.close(code=1013, reason=close_reason)
+                _remember_yws_attempt(attempt_id, "closed", close_code=1013, close_reason=close_reason)
+            except Exception:
+                pass
+        return
     _record_yws_guard_attempt(
         webspace_id,
         dev_id,
@@ -5255,6 +5393,24 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         client_attempt_id=client_attempt_id or None,
     )
     if not await _accept_websocket(websocket, channel="yws"):
+        return
+    guard_reason, guard_diag = _yws_guard_reject_reason(
+        webspace_id,
+        dev_id,
+        browser_session_id=browser_session_id,
+        client_attempt_id=client_attempt_id or None,
+    )
+    if guard_reason:
+        await _reject_yws_guard_connection(
+            websocket,
+            webspace_id=webspace_id,
+            dev_id=dev_id,
+            browser_metadata=browser_metadata,
+            attempt_id=attempt_id,
+            client_attempt_id=client_attempt_id or None,
+            guard_reason=guard_reason,
+            guard_diag=guard_diag,
+        )
         return
     replaced_existing = await _close_existing_yws_client_connections(
         webspace_id,
@@ -5275,73 +5431,6 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             and time.monotonic() < deadline
         ):
             await asyncio.sleep(0.05)
-    guard_reason, guard_diag = _yws_guard_reject_reason(
-        webspace_id,
-        dev_id,
-        browser_session_id=browser_session_id,
-        client_attempt_id=client_attempt_id or None,
-    )
-    if guard_reason:
-        state_token = f"yws_guard_{guard_reason}"
-        _remember_yws_attempt(attempt_id, "guard_reject")
-        _ylog.warning(
-            "yws guard rejected connection webspace=%s dev=%s attempt=%s client_attempt=%s reason=%s active=%s recent_open_10s=%s client_open_15s=%s",
-            webspace_id,
-            dev_id,
-            attempt_id,
-            client_attempt_id or None,
-            guard_reason,
-            guard_diag.get("active_total"),
-            guard_diag.get("recent_open_10s"),
-            guard_diag.get("client_open_15s"),
-        )
-        if _yws_guard_should_notify(webspace_id=webspace_id, dev_id=dev_id, reason=guard_reason):
-            try:
-                from adaos.services.access_links import touch_browser_session
-
-                touch_browser_session(
-                    dev_id,
-                    webspace_id=webspace_id,
-                    connection_state=state_token,
-                    online=False,
-                    **browser_metadata,
-                )
-            except Exception:
-                _ylog.debug("browser access registry guard update failed webspace=%s dev=%s", webspace_id, dev_id, exc_info=True)
-            _publish_runtime_event(
-                "browser.session.changed",
-                {
-                    "device_id": dev_id,
-                    "webspace_id": webspace_id,
-                    "connection_state": state_token,
-                    "yjs_channel_state": "rejected",
-                    "yjs_attempt_id": attempt_id,
-                    "client_yws_attempt_id": client_attempt_id or None,
-                    "reason": guard_reason,
-                    "active_yws": guard_diag.get("active_total"),
-                    "recent_open_10s": guard_diag.get("recent_open_10s"),
-                    "client_open_15s": guard_diag.get("client_open_15s"),
-                    "source": "yws.gateway.guard",
-                },
-            )
-        try:
-            should_close = await _hold_yws_guard_reject(
-                websocket,
-                webspace_id=webspace_id,
-                dev_id=dev_id,
-                attempt_id=attempt_id,
-                client_attempt_id=client_attempt_id or None,
-                guard_reason=guard_reason,
-                guard_diag=guard_diag,
-            )
-            if should_close:
-                await websocket.close(code=1013, reason=state_token[:120])
-                _remember_yws_attempt(attempt_id, "closed", close_code=1013, close_reason=state_token[:120])
-            else:
-                _remember_yws_attempt(attempt_id, "closed", close_reason="guard_reject_peer_disconnected")
-        except Exception:
-            pass
-        return
     if guard_diag.get("client_reconnect_storm") or guard_diag.get("webspace_reconnect_storm"):
         _ylog.warning(
             "yws guard allowed reconnect storm webspace=%s dev=%s attempt=%s client_attempt=%s client_storm=%s webspace_storm=%s active=%s recent_open_10s=%s client_open_15s=%s",
@@ -5531,6 +5620,8 @@ async def browser_session_authorize(
     dev: str | None = None,
     ws: str | None = None,
     browser_family: str | None = None,
+    client_build_id: str | None = None,
+    client_build_version: str | None = None,
     os_name: str | None = None,
     form_factor: str | None = None,
     user_agent: str | None = None,
@@ -5548,6 +5639,8 @@ async def browser_session_authorize(
     metadata = _browser_session_metadata(
         {
             "browser_family": browser_family or "",
+            "client_build_id": client_build_id or "",
+            "client_build_version": client_build_version or "",
             "os_name": os_name or "",
             "form_factor": form_factor or "",
             "user_agent": user_agent or "",
@@ -5556,7 +5649,10 @@ async def browser_session_authorize(
     try:
         from adaos.services.access_links import authorize_link, touch_browser_session
 
-        allowed, reason = authorize_link("browser", dev_id)
+        reason = _browser_env_rejected_reason(dev_id, metadata)
+        allowed = reason is None
+        if allowed:
+            allowed, reason = authorize_link("browser", dev_id)
         if not allowed:
             try:
                 touch_browser_session(
@@ -5661,9 +5757,26 @@ async def process_events_command(
         new_device = payload.get("device_id") or "dev-unknown"
         requested_webspace = payload.get("webspace_id") or payload.get("id")
         new_webspace = _coerce_gateway_webspace_id(requested_webspace)
+        browser_metadata = _browser_session_metadata(payload)
 
         captured_device = new_device
         captured_ws = new_webspace
+        env_reject_reason = _browser_env_rejected_reason(captured_device, browser_metadata)
+        if env_reject_reason:
+            try:
+                from adaos.services.access_links import touch_browser_session
+
+                touch_browser_session(
+                    captured_device,
+                    webspace_id=captured_ws,
+                    connection_state=env_reject_reason,
+                    online=False,
+                    **browser_metadata,
+                )
+            except Exception:
+                pass
+            await _ack(False, data={"webspace_id": new_webspace, "reason": env_reject_reason}, error=env_reject_reason)
+            return new_webspace
 
         async def _post_register() -> dict[str, Any]:
             try:

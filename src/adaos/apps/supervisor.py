@@ -3004,8 +3004,6 @@ class SupervisorManager:
             return None
         current_time = time.time() if now is None else float(now)
         window_started_at = float(summary.get("profile_window_started_at") or 0.0)
-        if window_started_at <= 0.0 and started_at > 0.0:
-            window_started_at = started_at
         if window_started_at <= 0.0:
             runtime_snapshot = self.status()
             if not bool(runtime_snapshot.get("runtime_api_ready")):
