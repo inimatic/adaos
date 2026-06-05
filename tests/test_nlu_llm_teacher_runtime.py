@@ -2460,6 +2460,142 @@ async def test_llm_teacher_repairs_open_modal_from_catalog_app_alias_when_regist
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_repairs_open_modal_from_llm_action_params_when_phrase_is_localized(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-open-modal-action-param-repair"
+    scenario_id = "test_open_modal_action_param_repair"
+    entity = "\u0441\u043b\u0430\u0439\u0434\u0448\u043e\u0443"
+    request_text = f"\u041f\u043e\u043a\u0430\u0436\u0438 {entity}"
+    pattern = rf"\b(?:\u043f\u043e\u043a\u0430\u0436\u0438|\u043e\u0442\u043a\u0440\u043e\u0439|show|launch)\s+(?P<modal_id>{entity})\b"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_modal": {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.modal.open",
+                                    "params": {"modal_id": "$slot.modal_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(
+                txn,
+                "catalog",
+                {
+                    "apps": [
+                        {
+                            "id": "slideshow_skill_app",
+                            "title": "Slideshow",
+                            "launchModal": "slideshow_modal",
+                            "action": {"openModal": "slideshow_modal"},
+                        }
+                    ]
+                },
+            )
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_modal",
+                                    "regex_rule": {"intent": "desktop.open_modal", "pattern": pattern},
+                                    "target": {"type": "skill", "id": "slideshow_skill"},
+                                    "action_candidate": {
+                                        "type": "callHost",
+                                        "target": "desktop.modal.open",
+                                        "params": {"modal_id": "slideshow", "webspace_id": webspace_id},
+                                    },
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "confidence": 0.6,
+                                    "notes": "LLM selected the slideshow app and provided an English action parameter.",
+                                    "candidate": None,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(
+        llm,
+        "_collect_root_mcp_authoring_evidence",
+        lambda **kwargs: {
+            "desktop_registry_lookup": {
+                "ok": True,
+                "webspace_id": webspace_id,
+                "lookups": {"modal_id": [], "app_id": [], "scenario_id": []},
+                "summary": [],
+                "fingerprint": "fp.empty",
+            }
+        },
+    )
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.slideshow-localized",
+                "request_id": "req.slideshow-localized",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    candidate = candidates[-1]
+    assert candidate["status"] == "pending"
+    assert candidate["regex_rule"]["intent"] == "desktop.open_modal"
+    assert candidate["preview"]["ok"] is True
+    assert candidate["preview"]["slots"] == {"modal_id": entity}
+    repair = candidate["normalization"]["llm_proposal_repair"]
+    assert repair["modal_id"] == "slideshow_modal"
+    assert repair["matched"] == "llm.action_candidate.params.modal_id"
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_repairs_scenario_switch_target_and_slot_alias(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm

@@ -1006,6 +1006,69 @@ def _mapping_aliases(item: Mapping[str, Any]) -> list[str]:
     return out
 
 
+def _derived_lookup_aliases(value: Any) -> list[str]:
+    token = str(value or "").strip()
+    if not token:
+        return []
+    out: list[str] = []
+    spaced = re.sub(r"[_\-]+", " ", token).strip()
+    if spaced and spaced != token:
+        out.append(spaced)
+    base = re.sub(r"(?:[_\-\s]+(?:modal|app|skill|scenario))+$", "", spaced, flags=re.IGNORECASE).strip()
+    if base and _lookup_key(base) not in {_lookup_key(token), _lookup_key(spaced)}:
+        out.append(base)
+    return out
+
+
+def _append_unique_hint(out: list[tuple[str, str]], seen: set[str], value: Any, source: str) -> None:
+    token = str(value or "").strip()
+    if not token:
+        return
+    key = _lookup_key(token)
+    if not key or key in seen:
+        return
+    seen.add(key)
+    out.append((token, source))
+    for alias in _derived_lookup_aliases(token):
+        alias_key = _lookup_key(alias)
+        if alias_key and alias_key not in seen:
+            seen.add(alias_key)
+            out.append((alias, f"{source}.derived"))
+
+
+def _open_modal_hint_entities(suggestion: Mapping[str, Any] | None) -> list[tuple[str, str]]:
+    if not isinstance(suggestion, Mapping):
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    action_candidate = (
+        suggestion.get("action_candidate") if isinstance(suggestion.get("action_candidate"), Mapping) else {}
+    )
+    for container_name in ("params", "slots"):
+        container = action_candidate.get(container_name) if isinstance(action_candidate, Mapping) else None
+        if not isinstance(container, Mapping):
+            continue
+        for key in (
+            "modal_id",
+            "modalId",
+            "modal",
+            "launchModal",
+            "openModal",
+            "app_id",
+            "appId",
+            "skill_id",
+            "skillId",
+        ):
+            _append_unique_hint(out, seen, container.get(key), f"llm.action_candidate.{container_name}.{key}")
+    for key in ("modal_id", "modalId", "app_id", "appId", "skill_id", "skillId"):
+        if isinstance(action_candidate, Mapping):
+            _append_unique_hint(out, seen, action_candidate.get(key), f"llm.action_candidate.{key}")
+        _append_unique_hint(out, seen, suggestion.get(key), f"llm.{key}")
+    target = suggestion.get("target") if isinstance(suggestion.get("target"), Mapping) else {}
+    _append_unique_hint(out, seen, target.get("id") if isinstance(target, Mapping) else None, "llm.target.id")
+    return out
+
+
 def _regex_alt(value: str) -> str:
     escaped = re.escape(str(value or "").strip())
     return re.sub(r"(?:\\\s|\s)+", r"\\s+", escaped)
@@ -1029,7 +1092,12 @@ def _open_modal_pattern_for_entity(*, entity: str, modal_id: str, aliases: list[
     return r"\b(?:покажи|открой|показать|открыть|show|open|launch)\s+(?P<modal_id>" + "|".join(alts) + r")\b"
 
 
-def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[str, Any] | None:
+def _infer_open_modal_repair(
+    *,
+    text: str,
+    context: Mapping[str, Any],
+    suggestion: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
     if _SCENARIO_WORD_RE.search(text or ""):
         return None
     match = _OPEN_MODAL_TEXT_RE.match(text or "")
@@ -1038,21 +1106,33 @@ def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[s
     entity = str(match.group("entity") or "").strip().strip(" \t\r\n\"'«»")
     if not entity:
         return None
+    hints: list[tuple[str, str]] = [(entity, "utterance")]
+    seen = {_lookup_key(entity)}
+    for value, source in _open_modal_hint_entities(suggestion):
+        key = _lookup_key(value)
+        if key and key not in seen:
+            seen.add(key)
+            hints.append((value, source))
 
     modal_rows = _lookup_rows_from_context(context, "modal_id")
     for row in modal_rows:
         modal_id = str(row.get("value") or "").strip()
         if not modal_id or modal_id.startswith("node:"):
             continue
-        aliases = _row_aliases(row)
-        if not _lookup_phrase_matches(entity, aliases):
+        aliases = [*_row_aliases(row), *_derived_lookup_aliases(modal_id)]
+        matched_source = ""
+        for hint, source in hints:
+            if _lookup_phrase_matches(hint, aliases):
+                matched_source = "modal_id" if source == "utterance" else source
+                break
+        if not matched_source:
             continue
         return {
             "intent": "desktop.open_modal",
             "pattern": _open_modal_pattern_for_entity(entity=entity, modal_id=modal_id, aliases=aliases),
             "modal_id": modal_id,
             "entity": entity,
-            "matched": "modal_id",
+            "matched": matched_source,
         }
 
     catalog = coerce_dict(context.get("catalog"))
@@ -1061,20 +1141,30 @@ def _infer_open_modal_repair(*, text: str, context: Mapping[str, Any]) -> dict[s
         launch_modal = str(app.get("launchModal") or app.get("launch_modal") or "").strip()
         if not launch_modal:
             continue
+        action = app.get("action") if isinstance(app.get("action"), Mapping) else {}
         aliases = [
             str(app.get("id") or "").strip(),
             str(app.get("title") or "").strip(),
             str(app.get("name") or "").strip(),
+            launch_modal,
+            str(action.get("openModal") or action.get("modalId") or "").strip(),
             *_mapping_aliases(app),
+            *_derived_lookup_aliases(app.get("id")),
+            *_derived_lookup_aliases(launch_modal),
         ]
-        if not _lookup_phrase_matches(entity, aliases):
+        matched_source = ""
+        for hint, source in hints:
+            if _lookup_phrase_matches(hint, aliases):
+                matched_source = "catalog.app.launchModal" if source == "utterance" else source
+                break
+        if not matched_source:
             continue
         return {
             "intent": "desktop.open_modal",
             "pattern": _open_modal_pattern_for_entity(entity=entity, modal_id=launch_modal, aliases=aliases),
             "modal_id": launch_modal,
             "entity": entity,
-            "matched": "catalog.app.launchModal",
+            "matched": matched_source,
         }
     return None
 
@@ -3298,7 +3388,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                     )
                     return
                 initial_preview = _preview_regex_candidate(pattern=rr_pattern, text=text)
-                open_modal_repair = _infer_open_modal_repair(text=text, context=context)
+                open_modal_repair = _infer_open_modal_repair(text=text, context=context, suggestion=suggestion)
                 repair_meta: dict[str, Any] | None = None
                 initial_preview_slots = initial_preview.get("slots") if isinstance(initial_preview.get("slots"), Mapping) else {}
                 captured_modal_id = str(initial_preview_slots.get("modal_id") or "").strip()
