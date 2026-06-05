@@ -81,6 +81,21 @@ def test_default_spec_exports_shared_dotenv(monkeypatch, tmp_path: Path) -> None
     assert spec.env["ADAOS_ROOT_REPO_ROOT"] == str(repo_root.resolve())
 
 
+def test_linux_wrapper_sources_shared_dotenv(tmp_path: Path) -> None:
+    wrapper = tmp_path / "adaos-autostart.sh"
+    dotenv = tmp_path / ".env"
+    autostart._write_wrapper_sh(
+        wrapper,
+        argv=("python", "-m", "adaos.apps.supervisor"),
+        env={"ADAOS_SHARED_DOTENV_PATH": str(dotenv)},
+    )
+
+    text = wrapper.read_text(encoding="utf-8")
+    assert "ADAOS_SHARED_DOTENV_PATH" in text
+    assert '. "${ADAOS_SHARED_DOTENV_PATH}"' in text
+    assert "set -a" in text
+
+
 def test_bootstrap_core_slot_uses_explicit_revision(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     package_dir = repo_root / "src" / "adaos"
