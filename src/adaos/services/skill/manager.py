@@ -3103,12 +3103,6 @@ class SkillManager:
         slot: SkillSlotPaths,
         skill_dir: Path,
     ) -> list[str]:
-        runtime_cfg = manifest.get("runtime") or {}
-        if isinstance(runtime_cfg, Mapping) and runtime_cfg.get("kind") == "service":
-            # Service skills manage dependencies in their own environment
-            # (see ServiceSkillSupervisor). Never install them into the hub venv.
-            return []
-
         requirements_file = skill_dir / "requirements.in"
         dependencies = resolve_skill_dependency_args(
             self._collect_dependencies(manifest),
@@ -3141,6 +3135,14 @@ class SkillManager:
         heavy_deps = heavy_dependency_names(policy_args)
         if heavy_deps and not self._allow_heavy_in_process_dependencies(manifest):
             deps_label = ", ".join(heavy_deps)
+            runtime_cfg = manifest.get("runtime") or {}
+            if isinstance(runtime_cfg, Mapping) and runtime_cfg.get("kind") == "service":
+                raise SkillDependencyIsolationError(
+                    f"service skill '{slot.skill_name}' declares heavy/native Python dependencies ({deps_label}) "
+                    "that cannot be loaded through the in-process action runner. Keep heavy dependencies inside "
+                    "the service runtime venv and expose those operations through the service boundary, or set "
+                    "runtime.env.allow_heavy_dependencies: true for a controlled transitional vendor install."
+                )
             raise SkillDependencyIsolationError(
                 f"skill '{slot.skill_name}' declares heavy/native Python dependencies ({deps_label}) "
                 "but is not a service skill. In-process skills install only light dependencies into "
@@ -3233,10 +3235,13 @@ class SkillManager:
     def _dependency_install_mode(self, manifest: Mapping[str, Any]) -> str:
         runtime_cfg = manifest.get("runtime") or {}
         env_cfg = runtime_cfg.get("env") if isinstance(runtime_cfg, Mapping) else {}
+        runtime_kind = runtime_cfg.get("kind") if isinstance(runtime_cfg, Mapping) else None
         if not isinstance(env_cfg, Mapping):
             env_cfg = {}
 
-        raw_mode = env_cfg.get("dependency_mode") or env_cfg.get("install_mode") or env_cfg.get("mode")
+        raw_mode = env_cfg.get("dependency_mode") or env_cfg.get("install_mode")
+        if raw_mode is None and runtime_kind != "service":
+            raw_mode = env_cfg.get("mode")
         mode = str(raw_mode or "auto").strip().lower()
         if mode in {"", "auto", "vendor"}:
             return "vendor"
