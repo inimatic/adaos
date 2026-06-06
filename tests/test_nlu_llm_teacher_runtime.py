@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -654,6 +655,144 @@ async def test_llm_teacher_prompt_includes_mcp_evidence_and_stores_regex_candida
     assert teacher["budget"]["policy"]["fallback_behavior"] == "store_miss_for_later_batch_enrichment"
     assert teacher["budget"]["counters"]["request"] >= 1
     assert teacher["budget"]["counters"]["response"] >= 1
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_repairs_nlo_teacher_stt_variant(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-nlo-teacher-repair"
+    scenario_id = "test_llm_nlo_teacher_repair"
+    request_text = "Покажи НЛО teacher"
+    llm_pattern = r"\b(?:покажи|открой|show)\s+(?P<modal_id>nlu_teacher_modal|NLU\s+Teacher)\b"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {
+                "id": scenario_id,
+                "version": "0.0.1",
+                "nlu": {
+                    "intents": {
+                        "desktop.open_modal": {
+                            "actions": [
+                                {
+                                    "type": "callHost",
+                                    "target": "desktop.modal.open",
+                                    "params": {"modal_id": "$slot.modal_id", "webspace_id": "$ctx.webspace_id"},
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            ui_map.set(txn, "current_scenario", scenario_id)
+            data_map.set(
+                txn,
+                "catalog",
+                {
+                    "apps": [
+                        {
+                            "id": "nlu_teacher_app",
+                            "title": "NLU Teacher",
+                            "launchModal": "nlu_teacher_modal",
+                        }
+                    ],
+                    "widgets": [],
+                },
+            )
+            data_map.set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    async def _fake_llm_call(messages, *, request_id=None, **kwargs):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": "desktop.open_modal",
+                                    "regex_rule": {
+                                        "intent": "desktop.open_modal",
+                                        "pattern": llm_pattern,
+                                    },
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text, "открой NLU Teacher", "show NLU Teacher"],
+                                    "slots": {"modal_id": {"type": "string"}},
+                                    "confidence": 0.7,
+                                    "notes": "Resolved NLU Teacher from the desktop catalog.",
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+
+    proposed: list[dict] = []
+
+    def _capture_proposed(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            proposed.append(dict(payload))
+
+    ctx.bus.subscribe("nlp.teacher.candidate.proposed", _capture_proposed)
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.nlo",
+                "request_id": "req.nlo",
+                "text": request_text,
+                "reason": "rasa_low_confidence",
+                "via": "rasa",
+                "_meta": {"request_locale": "ru", "route_id": "voice_chat"},
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert proposed
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["status"] == "pending"
+    assert candidate["regex_rule"]["intent"] == "desktop.open_modal"
+    assert candidate["preview"]["status"] == "regex_matched"
+    assert candidate["preview"]["slots"]["modal_id"] == "НЛО teacher"
+    assert re.search(candidate["regex_rule"]["pattern"], request_text, re.IGNORECASE | re.UNICODE)
+    repair = candidate["normalization"]["llm_proposal_repair"]
+    assert repair["modal_id"] == "nlu_teacher_modal"
+    assert repair["from_preview"]["status"] == "source_text_miss"
+    assert repair["matched"] == "catalog.app.launchModal"
+    assert candidate["action_candidate"]["intent"] == "desktop.open_modal"
+    assert candidate["target"] == {"type": "scenario", "id": scenario_id}
 
 
 @pytest.mark.anyio

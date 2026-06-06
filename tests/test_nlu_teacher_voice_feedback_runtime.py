@@ -37,6 +37,41 @@ async def test_voice_feedback_reports_duplicate_template_anomaly():
 
 
 @pytest.mark.anyio
+async def test_voice_feedback_reports_quarantined_candidate():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_voice_feedback_runtime as feedback
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-voice-feedback-quarantine"
+    messages: list[dict] = []
+
+    def _capture_chat(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            messages.append(dict(payload))
+
+    ctx.bus.subscribe("io.out.chat.append", _capture_chat)
+
+    await feedback._on_candidate_proposed(
+        {
+            "webspace_id": webspace_id,
+            "request_id": "req.quarantined",
+            "candidate": {
+                "id": "cand.quarantined",
+                "status": "quarantined",
+                "preview": {"ok": False, "status": "source_text_miss"},
+            },
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    assert messages
+    assert "не смог надежно распознать команду" in messages[-1]["text"]
+    assert "source_text_miss" in messages[-1]["text"]
+    assert "карантин" in messages[-1]["text"]
+
+
+@pytest.mark.anyio
 async def test_voice_feedback_reports_verified_understanding():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_voice_feedback_runtime as feedback
