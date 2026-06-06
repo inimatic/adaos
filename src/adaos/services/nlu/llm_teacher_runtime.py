@@ -949,17 +949,53 @@ def _compact_lookup_key(value: Any) -> str:
     return re.sub(r"[\s_\-:]+", "", str(value or "").strip()).casefold()
 
 
+_STT_ACRONYM_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("nlu", ("nlo", "нлу", "нло")),
+    ("nlo", ("nlu", "нлу", "нло")),
+    ("нлу", ("nlu", "nlo", "нло")),
+    ("нло", ("nlu", "nlo", "нлу")),
+)
+
+
+def _stt_acronym_aliases(value: Any) -> list[str]:
+    token = str(value or "").strip()
+    if not token:
+        return []
+    out: list[str] = []
+    seen = {_lookup_key(token)}
+    for source, replacements in _STT_ACRONYM_ALIASES:
+        pattern = rf"(?<!\w){re.escape(source)}(?!\w)"
+        if not re.search(pattern, token, flags=re.IGNORECASE | re.UNICODE):
+            continue
+        for replacement in replacements:
+            alias = re.sub(pattern, replacement, token, flags=re.IGNORECASE | re.UNICODE).strip()
+            key = _lookup_key(alias)
+            if alias and key not in seen:
+                seen.add(key)
+                out.append(alias)
+    return out
+
+
+def _compact_lookup_key_variants(value: Any) -> set[str]:
+    variants = {_compact_lookup_key(value)}
+    variants.update(_compact_lookup_key(alias) for alias in _stt_acronym_aliases(value))
+    return {item for item in variants if item}
+
+
 def _lookup_phrase_matches(entity: str, aliases: list[str]) -> bool:
     entity_key = _lookup_key(entity)
-    entity_compact = _compact_lookup_key(entity)
+    entity_keys = _lookup_key_variants(entity)
+    entity_compacts = _compact_lookup_key_variants(entity)
     if not entity_key:
         return False
     for alias in aliases:
         alias_key = _lookup_key(alias)
+        alias_keys = _lookup_key_variants(alias)
         alias_compact = _compact_lookup_key(alias)
+        alias_compacts = _compact_lookup_key_variants(alias)
         if not alias_key:
             continue
-        if entity_key == alias_key or entity_compact == alias_compact:
+        if entity_keys & alias_keys or entity_compacts & alias_compacts:
             return True
         # Allow "show infrastructure state" to match the registered
         # "infrastructure" alias, but keep very short aliases exact-only.
@@ -1006,6 +1042,12 @@ def _mapping_aliases(item: Mapping[str, Any]) -> list[str]:
     return out
 
 
+def _lookup_key_variants(value: Any) -> set[str]:
+    variants = {_lookup_key(value)}
+    variants.update(_lookup_key(alias) for alias in _stt_acronym_aliases(value))
+    return {item for item in variants if item}
+
+
 def _derived_lookup_aliases(value: Any) -> list[str]:
     token = str(value or "").strip()
     if not token:
@@ -1017,6 +1059,13 @@ def _derived_lookup_aliases(value: Any) -> list[str]:
     base = re.sub(r"(?:[_\-\s]+(?:modal|app|skill|scenario))+$", "", spaced, flags=re.IGNORECASE).strip()
     if base and _lookup_key(base) not in {_lookup_key(token), _lookup_key(spaced)}:
         out.append(base)
+    seen = {_lookup_key(token), *(_lookup_key(item) for item in out)}
+    for source in (token, spaced, base):
+        for alias in _stt_acronym_aliases(source):
+            key = _lookup_key(alias)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(alias)
     return out
 
 
@@ -1078,14 +1127,14 @@ def _open_modal_pattern_for_entity(*, entity: str, modal_id: str, aliases: list[
     values: list[str] = []
     seen: set[str] = set()
     for raw in [entity, *aliases, modal_id]:
-        token = str(raw or "").strip()
-        if not token or token.startswith("node:"):
-            continue
-        key = _lookup_key(token)
-        if key in seen:
-            continue
-        seen.add(key)
-        values.append(token)
+        for token in [str(raw or "").strip(), *_stt_acronym_aliases(raw)]:
+            if not token or token.startswith("node:"):
+                continue
+            key = _lookup_key(token)
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(token)
     alts = [_regex_alt(item) for item in values[:10] if item.strip()]
     if not alts:
         alts = [_regex_alt(entity)]
@@ -1150,6 +1199,8 @@ def _infer_open_modal_repair(
             str(action.get("openModal") or action.get("modalId") or "").strip(),
             *_mapping_aliases(app),
             *_derived_lookup_aliases(app.get("id")),
+            *_derived_lookup_aliases(app.get("title")),
+            *_derived_lookup_aliases(app.get("name")),
             *_derived_lookup_aliases(launch_modal),
         ]
         matched_source = ""
@@ -2433,6 +2484,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Use the exact slot names expected by the existing intent/action. For scenario switching use (?P<scenario_id>...), not (?P<scenario>...). For modal opening use (?P<modal_id>...), not (?P<modal>...).\n"
         "- The regex must match the exact user request text after normal case-insensitive Python regex matching.\n"
         "- When the user used a localized label (e.g. Russian text), include that surface form in the regex alternative so preview matches the exact request; AdaOS will canonicalize the captured label through lookup aliases.\n"
+        "- When the user utterance has an acceptable STT/acronym variant of a known label, include both the source utterance form and the canonical label/alias in regex alternatives; do not silently replace the source form with only the canonical name.\n"
         "- Regex rules should be reasonably general (avoid overfitting to a single verb like \"покажи\"); capture city via (?P<city>...).\n"
         "- When proposing a regex rule, also set target to where the rule should be stored:\n"
         "  - Prefer the skill that handles the intent (see context.intent_routes) over the scenario.\n"

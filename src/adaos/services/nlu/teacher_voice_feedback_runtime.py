@@ -76,6 +76,33 @@ async def _on_candidate_duplicate_suppressed(evt: Any) -> None:
     _emit_chat(webspace_id, text, meta)
 
 
+@subscribe("nlp.teacher.candidate.proposed")
+async def _on_candidate_proposed(evt: Any) -> None:
+    payload = _payload(evt)
+    meta = _voice_meta(payload)
+    if meta is None:
+        return
+    candidate = coerce_dict(payload.get("candidate"))
+    candidate_payload: Mapping[str, Any] = candidate if candidate else payload
+    if str(candidate_payload.get("status") or "").strip() != "quarantined":
+        return
+    preview = coerce_dict(candidate_payload.get("preview"))
+    if not preview:
+        action_candidate = coerce_dict(candidate_payload.get("action_candidate"))
+        preview = coerce_dict(action_candidate.get("phrase_preview"))
+    reason = str(preview.get("status") or "quarantined").strip()
+    webspace_id = _resolve_webspace_id(payload)
+    _emit_chat(
+        webspace_id,
+        (
+            "Я не смог надежно распознать команду. "
+            f"Предложенное правило NLU не прошло проверку ({reason}) и отправлено в карантин. "
+            "Повторите команду, пожалуйста. Детали записаны в NLU Teacher."
+        ),
+        meta,
+    )
+
+
 @subscribe("nlp.teacher.llm.deferred")
 async def _on_llm_deferred(evt: Any) -> None:
     payload = _payload(evt)
