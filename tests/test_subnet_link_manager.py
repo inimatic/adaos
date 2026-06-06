@@ -325,6 +325,35 @@ def test_member_infrastate_projection_carries_core_slot_version() -> None:
     assert projection["build_meta"]["runtime_build_version"] == "0.1.0+1.16fcc7a"
 
 
+def test_member_infrastate_projection_infers_version_for_stale_default_manifest() -> None:
+    projection = mod._member_infrastate_projection(
+        "member-1",
+        node_names=["Mediapoint"],
+        captured_at=120.0,
+        snapshot={
+            "node_id": "member-1",
+            "node_names": ["Mediapoint"],
+            "node_state": "ready",
+            "build": {
+                "runtime_build_version": "0.1.0+1.b10da50",
+                "runtime_git_short_commit": "b10da50",
+            },
+            "update_status": {"state": "succeeded", "phase": "validate", "action": "update"},
+            "slots": {
+                "active_slot": "A",
+                "active_manifest": {
+                    "slot": "A",
+                    "build_version": "0.1.0+1.b10da50",
+                    "git_short_commit": "b10da50",
+                    "git_subject": "chore: bump adaos version to 0.1.217",
+                },
+            },
+        },
+    )
+
+    assert projection["summary"]["subtitle"] == "slot A | 0.1.217 | b10da50"
+
+
 def test_member_node_state_ingest_preserves_hub_infrastate_projection() -> None:
     existing = {
         "desktop": {"theme": "dark"},

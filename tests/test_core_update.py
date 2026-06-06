@@ -606,6 +606,37 @@ def test_resolved_root_promotion_detects_stale_build_info_dependency(monkeypatch
     assert "src/adaos/build_info.py" in payload["effective_mismatched_paths"]
 
 
+def test_resolved_root_promotion_detects_stale_pyproject_version(monkeypatch, tmp_path) -> None:
+    from adaos.services.core_update import resolved_root_promotion_requirement
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slots" / "B" / "repo"
+    root_dir.mkdir(parents=True, exist_ok=True)
+    slot_repo.mkdir(parents=True, exist_ok=True)
+    (root_dir / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (slot_repo / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.217"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+
+    required, payload = resolved_root_promotion_requirement(
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "bootstrap_update": {"required": False, "changed_paths": []},
+        }
+    )
+
+    assert required is True
+    assert payload["declared_required"] is False
+    assert "pyproject.toml" in payload["effective_mismatched_paths"]
+
+
 def test_promote_root_from_slot_copies_changed_bootstrap_files(monkeypatch, tmp_path) -> None:
     from adaos.services.core_update import promote_root_from_slot
 
@@ -639,6 +670,46 @@ def test_promote_root_from_slot_copies_changed_bootstrap_files(monkeypatch, tmp_
     assert (root_dir / "src" / "adaos" / "apps" / "supervisor.py").read_text(encoding="utf-8") == "new\n"
     backup_file = Path(payload["backup_dir"]) / "src" / "adaos" / "apps" / "supervisor.py"
     assert backup_file.read_text(encoding="utf-8") == "old\n"
+
+
+def test_promote_root_from_slot_copies_pyproject_version_metadata(monkeypatch, tmp_path) -> None:
+    from adaos.services.core_update import promote_root_from_slot
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slots" / "B" / "repo"
+    root_dir.mkdir(parents=True, exist_ok=True)
+    slot_repo.mkdir(parents=True, exist_ok=True)
+    (root_dir / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (slot_repo / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.217"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+
+    write_slot_manifest(
+        "B",
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "bootstrap_update": {
+                "required": True,
+                "changed_paths": ["pyproject.toml"],
+            },
+        },
+    )
+    activate_slot("B")
+
+    payload = promote_root_from_slot()
+
+    assert payload["ok"] is True
+    assert "pyproject.toml" in payload["promoted_paths"]
+    assert 'version = "0.1.217"' in (root_dir / "pyproject.toml").read_text(encoding="utf-8")
+    backup_file = Path(payload["backup_dir"]) / "pyproject.toml"
+    assert 'version = "0.1.0"' in backup_file.read_text(encoding="utf-8")
 
 
 def test_promote_root_from_slot_prefers_manifest_root_repo_root(monkeypatch, tmp_path) -> None:
