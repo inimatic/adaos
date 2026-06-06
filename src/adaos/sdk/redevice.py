@@ -32,6 +32,83 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _local_scope() -> tuple[str, str]:
+    hub_id = _text(os.environ.get("ADAOS_SUBNET_ID") or os.environ.get("ADAOS_HUB_ID"))
+    owner_id = _text(os.environ.get("ADAOS_OWNER_ID") or os.environ.get("ADAOS_SUBNET_OWNER_ID"))
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        conf = getattr(get_ctx(), "config", None)
+        if conf is not None:
+            hub_id = hub_id or _text(getattr(conf, "subnet_id", ""))
+            owner_id = owner_id or _text(getattr(conf, "owner_id", ""))
+            root = getattr(conf, "root_settings", None)
+            owner = getattr(root, "owner", None)
+            owner_id = owner_id or _text(getattr(owner, "owner_id", ""))
+    except Exception:
+        pass
+    if not hub_id:
+        try:
+            from adaos.services.node_config import load_config
+
+            conf = load_config()
+            hub_id = _text(getattr(conf, "subnet_id", ""))
+            owner_id = owner_id or _text(getattr(conf, "owner_id", ""))
+            root = getattr(conf, "root_settings", None)
+            owner = getattr(root, "owner", None)
+            owner_id = owner_id or _text(getattr(owner, "owner_id", ""))
+        except Exception:
+            pass
+    return hub_id, owner_id
+
+
+def endpoint_scope(endpoint: Mapping[str, Any]) -> dict[str, str]:
+    policy = _mapping(endpoint.get("endpoint_policy"))
+    manifest = _mapping(endpoint.get("endpoint_manifest"))
+    admission = _mapping(endpoint.get("admission_session"))
+    return {
+        "hub_id": (
+            _text(endpoint.get("hub_id"))
+            or _text(endpoint.get("subnet_id"))
+            or _text(policy.get("hub_id"))
+            or _text(policy.get("subnet_id"))
+            or _text(manifest.get("hub_id"))
+            or _text(manifest.get("subnet_id"))
+            or _text(admission.get("hub_id"))
+            or _text(admission.get("subnet_id"))
+        ),
+        "owner_id": (
+            _text(endpoint.get("owner_id"))
+            or _text(policy.get("owner_id"))
+            or _text(policy.get("subnet_owner_id"))
+            or _text(manifest.get("owner_id"))
+            or _text(admission.get("owner_id"))
+        ),
+    }
+
+
+def endpoint_matches_scope(
+    endpoint: Mapping[str, Any],
+    *,
+    hub_id: str | None = None,
+    owner_id: str | None = None,
+) -> bool:
+    scope = endpoint_scope(endpoint)
+    expected_hub = _text(hub_id)
+    expected_owner = _text(owner_id)
+    endpoint_hub = _text(scope.get("hub_id"))
+    endpoint_owner = _text(scope.get("owner_id"))
+    if not expected_hub and not expected_owner:
+        return True
+    if not endpoint_hub and not endpoint_owner:
+        return False
+    if expected_hub and endpoint_hub and endpoint_hub != expected_hub:
+        return False
+    if expected_owner and endpoint_owner and endpoint_owner != expected_owner:
+        return False
+    return True
+
+
 def _iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -276,6 +353,7 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
     policy = _mapping(endpoint.get("endpoint_policy"))
     manifest = _mapping(endpoint.get("endpoint_manifest"))
     last_event = _mapping(endpoint.get("last_event"))
+    scope = endpoint_scope(endpoint)
     active_app = _mapping(endpoint.get("active_app")) or _mapping(last_event.get("active_app"))
     active_surface = _mapping(endpoint.get("active_surface")) or _mapping(last_event.get("active_surface"))
     code = pair_code(endpoint)
@@ -288,6 +366,9 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
         "id": code or eid,
         "code": code,
         "endpoint_id": eid,
+        "hub_id": _text(scope.get("hub_id")),
+        "subnet_id": _text(scope.get("hub_id")),
+        "owner_id": _text(scope.get("owner_id")),
         "title": display_name(endpoint),
         "display_name": display_name(endpoint),
         "state": state,
@@ -319,6 +400,23 @@ class ReDeviceBridge:
     def base_url(self) -> str:
         return _root_base(self.root_base)
 
+    def _scope_query(self, *, hub_id: str | None = None, owner_id: str | None = None) -> str:
+        expected_hub, expected_owner = _local_scope()
+        expected_hub = _text(hub_id) or expected_hub
+        expected_owner = _text(owner_id) or expected_owner
+        query = urllib.parse.urlencode(
+            {
+                key: value
+                for key, value in {
+                    "hub_id": expected_hub,
+                    "subnet_id": expected_hub,
+                    "owner_id": expected_owner,
+                }.items()
+                if value
+            }
+        )
+        return f"?{query}" if query else ""
+
     def request_json(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         body = None if payload is None else json.dumps(dict(payload)).encode("utf-8")
@@ -335,10 +433,25 @@ class ReDeviceBridge:
         except Exception as exc:
             return {"ok": False, "error": "request_failed", "detail": str(exc)}
 
-    def list_endpoints(self, *, sync_registry: bool = True) -> list[dict[str, Any]]:
-        res = self.request_json("GET", "/v1/redevice/devices")
+    def list_endpoints(
+        self,
+        *,
+        sync_registry: bool = True,
+        hub_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        expected_hub, expected_owner = _local_scope()
+        expected_hub = _text(hub_id) or expected_hub
+        expected_owner = _text(owner_id) or expected_owner
+        path = "/v1/redevice/devices" + self._scope_query(hub_id=expected_hub, owner_id=expected_owner)
+        res = self.request_json("GET", path)
         devices = res.get("devices") if isinstance(res, Mapping) else None
         endpoints = [dict(item) for item in devices if isinstance(item, Mapping)] if isinstance(devices, list) else []
+        endpoints = [
+            item
+            for item in endpoints
+            if endpoint_matches_scope(item, hub_id=expected_hub, owner_id=expected_owner)
+        ]
         if sync_registry:
             self.sync_local_registry(endpoints)
         return endpoints
@@ -348,21 +461,30 @@ class ReDeviceBridge:
             from adaos.services import access_links
         except Exception:
             return
+        expected_hub, expected_owner = _local_scope()
         for endpoint in endpoints:
+            if not endpoint_matches_scope(endpoint, hub_id=expected_hub, owner_id=expected_owner):
+                continue
             eid = endpoint_id(endpoint)
             if not eid:
                 continue
             compact = compact_endpoint(endpoint)
             policy = _mapping(endpoint.get("endpoint_policy"))
+            manifest = _mapping(endpoint.get("endpoint_manifest"))
+            scope = endpoint_scope(endpoint)
             trust = _text(policy.get("trust_level") or compact.get("trust_level")) or "limited"
             try:
                 access_links.touch_redevice_link(
                     eid,
                     display_name=display_name(endpoint),
+                    pair_code=pair_code(endpoint) or None,
+                    hub_id=_text(scope.get("hub_id")) or None,
+                    owner_id=_text(scope.get("owner_id")) or None,
                     online=compact.get("online_state") in {"online", "stale"},
                     connection_state=_text(compact.get("online_state")) or None,
                     trust_level=trust,
                     endpoint_policy=policy or None,
+                    endpoint_manifest=manifest or None,
                     diagnostic_report=_mapping(endpoint.get("diagnostic_report")) or None,
                     endpoint_health=_mapping(endpoint.get("endpoint_health")) or None,
                     service_state=_mapping(endpoint.get("service_state")) or None,
@@ -376,7 +498,7 @@ class ReDeviceBridge:
         token = urllib.parse.quote(_text(code), safe="")
         if not token:
             return {"ok": False, "error": "code_required"}
-        return self.request_json("POST", f"/v1/redevice/devices/{token}/commands", {"command": dict(command)})
+        return self.request_json("POST", f"/v1/redevice/devices/{token}/commands{self._scope_query()}", {"command": dict(command)})
 
     def update_profile(
         self,
@@ -393,27 +515,33 @@ class ReDeviceBridge:
             payload["display_name"] = _text(display_name)
         if aliases is not None:
             payload["aliases"] = [_text(item) for item in aliases if _text(item)]
-        return self.request_json("PATCH", f"/v1/redevice/devices/{token}/profile", payload)
+        return self.request_json("PATCH", f"/v1/redevice/devices/{token}/profile{self._scope_query()}", payload)
 
     def revoke(self, code: str) -> dict[str, Any]:
         token = urllib.parse.quote(_text(code), safe="")
         if not token:
             return {"ok": False, "error": "code_required"}
-        return self.request_json("POST", f"/v1/redevice/devices/{token}/revoke", {})
+        return self.request_json("POST", f"/v1/redevice/devices/{token}/revoke{self._scope_query()}", {})
 
     def retire(self, code: str) -> dict[str, Any]:
         token = urllib.parse.quote(_text(code), safe="")
         if not token:
             return {"ok": False, "error": "code_required"}
-        return self.request_json("POST", f"/v1/redevice/devices/{token}/retire", {})
+        return self.request_json("POST", f"/v1/redevice/devices/{token}/retire{self._scope_query()}", {})
 
 
 def bridge(root_base: str | None = None) -> ReDeviceBridge:
     return ReDeviceBridge(root_base=root_base)
 
 
-def list_endpoints(*, root_base: str | None = None, sync_registry: bool = True) -> list[dict[str, Any]]:
-    return bridge(root_base).list_endpoints(sync_registry=sync_registry)
+def list_endpoints(
+    *,
+    root_base: str | None = None,
+    sync_registry: bool = True,
+    hub_id: str | None = None,
+    owner_id: str | None = None,
+) -> list[dict[str, Any]]:
+    return bridge(root_base).list_endpoints(sync_registry=sync_registry, hub_id=hub_id, owner_id=owner_id)
 
 
 def send_command(code: str, command: Mapping[str, Any], *, root_base: str | None = None) -> dict[str, Any]:

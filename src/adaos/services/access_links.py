@@ -504,10 +504,14 @@ def touch_redevice_link(
     endpoint_id: str,
     *,
     display_name: str | None = None,
+    pair_code: str | None = None,
+    hub_id: str | None = None,
+    owner_id: str | None = None,
     online: bool | None = None,
     connection_state: str | None = None,
     trust_level: str | None = None,
     endpoint_policy: Mapping[str, Any] | None = None,
+    endpoint_manifest: Mapping[str, Any] | None = None,
     diagnostic_report: Mapping[str, Any] | None = None,
     endpoint_health: Mapping[str, Any] | None = None,
     service_state: Mapping[str, Any] | None = None,
@@ -525,6 +529,14 @@ def touch_redevice_link(
     entry.setdefault("lifetime_mode", "permanent")
     if display_name is not None:
         entry["display_name"] = str(display_name or "").strip()
+    if pair_code is not None:
+        entry["pair_code"] = str(pair_code or "").strip() or None
+        entry["code"] = str(pair_code or "").strip() or None
+    if hub_id is not None:
+        entry["hub_id"] = str(hub_id or "").strip() or None
+        entry["subnet_id"] = str(hub_id or "").strip() or None
+    if owner_id is not None:
+        entry["owner_id"] = str(owner_id or "").strip() or None
     if online is not None:
         entry["online"] = bool(online)
     if connection_state is not None:
@@ -533,6 +545,8 @@ def touch_redevice_link(
         entry["trust_level"] = str(trust_level or "").strip().lower() or None
     if endpoint_policy is not None:
         entry["endpoint_policy"] = dict(endpoint_policy)
+    if endpoint_manifest is not None:
+        entry["endpoint_manifest"] = dict(endpoint_manifest)
     if diagnostic_report is not None:
         entry["diagnostic_report"] = dict(diagnostic_report)
     if endpoint_health is not None:
