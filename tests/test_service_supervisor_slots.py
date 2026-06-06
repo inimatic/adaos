@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 import time
 
@@ -95,6 +96,48 @@ def test_service_supervisor_refresh_discovery_does_not_block_event_loop():
         return ticks
 
     assert asyncio.run(_run()) >= 3
+
+
+def test_service_supervisor_defaults_dependency_service_to_bucket_venv(tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    runtime_root = tmp_path / ".runtime" / "slideshow_skill" / "v0.1"
+    skill_root = runtime_root / "slots" / "A" / "src" / "skills" / "slideshow_skill"
+    skill_root.mkdir(parents=True)
+
+    spec = mod._resolve_service_spec(
+        "slideshow_skill",
+        skill_root,
+        {
+            "name": "slideshow_skill",
+            "runtime": {"kind": "service"},
+            "service": {
+                "host": "127.0.0.1",
+                "port": 18104,
+                "command": ["-m", "handlers.service"],
+            },
+            "dependencies": ["pillow>=10.0.0"],
+        },
+    )
+
+    assert spec is not None
+    assert spec.env_mode == "venv"
+    assert spec.venv_dir == runtime_root / "venv"
+
+
+def test_service_supervisor_pythonpath_includes_package_root(tmp_path):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill import service_supervisor as mod
+
+    ctx = get_ctx()
+    skill_root = tmp_path / "skills" / "demo_service"
+    skill_root.mkdir(parents=True)
+
+    entries = mod._service_pythonpath(ctx.paths, skill_root).split(os.pathsep)
+    package_dir = ctx.paths.package_dir() if callable(ctx.paths.package_dir) else ctx.paths.package_dir
+
+    assert str(skill_root) in entries
+    assert str(Path(package_dir).resolve().parent) in entries
 
 
 def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
@@ -383,3 +426,55 @@ def test_service_supervisor_installs_changed_dependencies_for_existing_venv(tmp_
 
     assert supervisor._select_python(_spec(["demo-dep==2"])) == python
     assert installs == [["demo-dep==1"], ["demo-dep==2"]]
+
+
+def test_service_supervisor_refreshes_host_site_overlay_for_existing_venv_with_current_marker(tmp_path, monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "dep_service"
+    skill_root.mkdir(parents=True)
+    venv_dir = tmp_path / "venv"
+    python = venv_dir / ("Scripts/python.exe" if mod.os.name == "nt" else "bin/python")
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    host_site = tmp_path / "host" / "Lib" / "site-packages"
+    host_site.mkdir(parents=True)
+
+    spec = mod.ServiceSpec(
+        skill="dep_service",
+        skill_root=skill_root,
+        host="127.0.0.1",
+        port=18111,
+        command=["-m", "handlers.main"],
+        workdir=skill_root,
+        env_mode="venv",
+        python_selector="3.11",
+        venv_dir=venv_dir,
+        dependencies=["demo-dep==1"],
+        requirements_file=None,
+        health_path="/health",
+        health_timeout_ms=1000,
+        self_managed_enabled=False,
+        crash_max_in_window=3,
+        crash_window_s=60,
+        crash_cooloff_s=60,
+        health_interval_s=10,
+        health_failures_before_issue=3,
+        hook_on_issue=None,
+        hook_on_self_heal=None,
+        hook_timeout_s=10.0,
+        doctor_enabled=False,
+        doctor_cooldown_s=300,
+        doctor_issue_types=[],
+        doctor_include_log_tail_lines=0,
+    )
+
+    supervisor = mod.ServiceSkillSupervisor()
+    marker_path = venv_dir / ".adaos-service-deps.json"
+    marker_path.write_text(supervisor._dependency_marker(spec), encoding="utf-8")
+    monkeypatch.setattr(mod, "_current_interpreter_site_packages", lambda: [host_site])
+    monkeypatch.setattr(supervisor, "_install_deps", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected install")))
+
+    assert supervisor._select_python(spec) == python
+    overlay = mod._venv_site_packages(venv_dir) / "_adaos_host_site.pth"
+    assert overlay.read_text(encoding="utf-8") == f"{host_site.resolve()}\n"

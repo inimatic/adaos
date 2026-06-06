@@ -8,8 +8,10 @@ import hashlib
 import json
 import logging
 import os
+import site
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 from dataclasses import dataclass
@@ -167,19 +169,6 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     workdir_raw = service.get("workdir")
     workdir = (skill_root / workdir_raw).resolve() if isinstance(workdir_raw, str) and workdir_raw else skill_root
 
-    env_cfg = runtime.get("env") or {}
-    if not isinstance(env_cfg, Mapping):
-        env_cfg = {}
-    env_mode = str(env_cfg.get("mode") or "global")
-    python_selector = env_cfg.get("python") if isinstance(env_cfg.get("python"), str) else None
-    venv_dir_raw = env_cfg.get("venv_dir") if isinstance(env_cfg.get("venv_dir"), str) else None
-    if venv_dir_raw:
-        raw_venv_dir = Path(venv_dir_raw).expanduser()
-        venv_dir = (skill_root / raw_venv_dir).resolve() if not raw_venv_dir.is_absolute() else raw_venv_dir.resolve()
-    else:
-        bucket_root = _infer_runtime_bucket_root(skill_root, skill_name)
-        venv_dir = (bucket_root / "venv").resolve() if env_mode == "venv" and bucket_root is not None else None
-
     deps: list[str] = []
     dep_list = manifest.get("dependencies") or []
     if isinstance(dep_list, list):
@@ -189,6 +178,20 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     req_in = skill_root / "requirements.in"
     if req_in.exists():
         requirements_file = req_in
+
+    env_cfg = runtime.get("env") or {}
+    if not isinstance(env_cfg, Mapping):
+        env_cfg = {}
+    explicit_env_mode = env_cfg.get("mode")
+    env_mode = str(explicit_env_mode or ("venv" if deps or requirements_file else "global"))
+    python_selector = env_cfg.get("python") if isinstance(env_cfg.get("python"), str) else None
+    venv_dir_raw = env_cfg.get("venv_dir") if isinstance(env_cfg.get("venv_dir"), str) else None
+    if venv_dir_raw:
+        raw_venv_dir = Path(venv_dir_raw).expanduser()
+        venv_dir = (skill_root / raw_venv_dir).resolve() if not raw_venv_dir.is_absolute() else raw_venv_dir.resolve()
+    else:
+        bucket_root = _infer_runtime_bucket_root(skill_root, skill_name)
+        venv_dir = (bucket_root / "venv").resolve() if env_mode == "venv" and bucket_root is not None else None
 
     health = service.get("healthcheck") or {}
     if not isinstance(health, Mapping):
@@ -378,6 +381,83 @@ def _optional_path_value(owner: Any, *names: str) -> Path | None:
         except Exception:
             continue
     return None
+
+
+def _service_pythonpath(owner: Any, skill_root: Path, current: str = "") -> str:
+    entries: list[str] = [str(skill_root)]
+    package_path = _optional_path_value(owner, "package_path", "package_dir")
+    if package_path is not None:
+        package_root = package_path.parent if package_path.name == "adaos" else package_path
+        entries.append(str(package_root))
+    repo_root = _optional_path_value(owner, "repo_root")
+    if repo_root is not None:
+        repo_src = repo_root / "src"
+        entries.append(str(repo_src if repo_src.exists() else repo_root))
+    if current:
+        entries.extend(current.split(os.pathsep))
+    return os.pathsep.join(dict.fromkeys(entry for entry in entries if entry)).strip(os.pathsep)
+
+
+def _current_interpreter_site_packages() -> list[Path]:
+    candidates: list[Path] = []
+    for key in ("purelib", "platlib"):
+        try:
+            raw = sysconfig.get_paths().get(key)
+        except Exception:
+            raw = None
+        if raw:
+            candidates.append(Path(raw).expanduser())
+    try:
+        candidates.extend(Path(raw).expanduser() for raw in site.getsitepackages())
+    except Exception:
+        pass
+
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            path = candidate.resolve()
+        except Exception:
+            continue
+        if path.name not in {"site-packages", "dist-packages"} or not path.exists():
+            continue
+        key = str(path).casefold()
+        if key not in seen:
+            seen.add(key)
+            paths.append(path)
+    return paths
+
+
+def _venv_site_packages(venv_dir: Path) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Lib" / "site-packages"
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    return venv_dir / "lib" / version / "site-packages"
+
+
+def _write_host_site_overlay(venv_dir: Path) -> None:
+    target_site = _venv_site_packages(venv_dir).resolve()
+    host_sites = [
+        path
+        for path in _current_interpreter_site_packages()
+        if str(path.resolve()).casefold() != str(target_site).casefold()
+    ]
+    overlay = target_site / "_adaos_host_site.pth"
+    if not host_sites:
+        try:
+            overlay.unlink(missing_ok=True)
+        except Exception:
+            _log.debug("failed to remove empty host site overlay path=%s", overlay, exc_info=True)
+        return
+
+    target_site.mkdir(parents=True, exist_ok=True)
+    content = "".join(f"{path}\n" for path in host_sites)
+    try:
+        if overlay.exists() and overlay.read_text(encoding="utf-8") == content:
+            return
+        overlay.write_text(content, encoding="utf-8")
+    except Exception:
+        _log.warning("failed to write service host site overlay path=%s", overlay, exc_info=True)
 
 
 class ServiceSkillSupervisor:
@@ -770,7 +850,7 @@ class ServiceSkillSupervisor:
         ):
             if path_value is not None:
                 env.setdefault(env_name, str(path_value))
-        env["PYTHONPATH"] = os.pathsep.join([str(spec.skill_root), env.get("PYTHONPATH", "")]).strip(os.pathsep)
+        env["PYTHONPATH"] = _service_pythonpath(self._ctx.paths, spec.skill_root, env.get("PYTHONPATH", ""))
 
         cmd = self._build_command(python, spec.command)
         logs_dir = self._ctx.paths.logs_dir()
@@ -1042,7 +1122,7 @@ result = asyncio.run(_run_async(ep, payload))
 print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
 """
         env = os.environ.copy()
-        env["PYTHONPATH"] = os.pathsep.join([str(spec.skill_root), env.get("PYTHONPATH", "")]).strip(os.pathsep)
+        env["PYTHONPATH"] = _service_pythonpath(self._ctx.paths, spec.skill_root, env.get("PYTHONPATH", ""))
 
         try:
             proc = await asyncio.to_thread(
@@ -1096,6 +1176,7 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         venv_dir = spec.venv_dir or (self._service_state_dir(spec.skill) / "venv")
         python = self._venv_python(venv_dir)
         if python.exists():
+            _write_host_site_overlay(venv_dir)
             self._install_deps_if_needed(python, spec, venv_dir)
             return python
 
@@ -1108,6 +1189,7 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         subprocess.run(cmd, check=True)
 
         python = self._venv_python(venv_dir)
+        _write_host_site_overlay(venv_dir)
         self._install_deps_if_needed(python, spec, venv_dir)
         return python
 
