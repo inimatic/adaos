@@ -44,6 +44,64 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _local_redevice_scope() -> tuple[str, str]:
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        conf = getattr(get_ctx(), "config", None)
+    except Exception:
+        conf = None
+    if conf is None:
+        try:
+            from adaos.services.node_config import load_config
+
+            conf = load_config()
+        except Exception:
+            conf = None
+    if conf is None:
+        return "", ""
+    hub_id = _text(getattr(conf, "subnet_id", ""))
+    owner_id = _text(getattr(conf, "owner_id", ""))
+    root = getattr(conf, "root_settings", None)
+    owner = getattr(root, "owner", None)
+    owner_id = owner_id or _text(getattr(owner, "owner_id", ""))
+    return hub_id, owner_id
+
+
+def _redevice_scope(entry: Mapping[str, Any]) -> tuple[str, str]:
+    policy = _mapping(entry.get("endpoint_policy"))
+    manifest = _mapping(entry.get("endpoint_manifest"))
+    hub_id = (
+        _text(entry.get("hub_id"))
+        or _text(entry.get("subnet_id"))
+        or _text(policy.get("hub_id"))
+        or _text(policy.get("subnet_id"))
+        or _text(manifest.get("hub_id"))
+        or _text(manifest.get("subnet_id"))
+    )
+    owner_id = (
+        _text(entry.get("owner_id"))
+        or _text(policy.get("owner_id"))
+        or _text(policy.get("subnet_owner_id"))
+        or _text(manifest.get("owner_id"))
+    )
+    return hub_id, owner_id
+
+
+def _redevice_entry_matches_local_scope(entry: Mapping[str, Any]) -> bool:
+    expected_hub, expected_owner = _local_redevice_scope()
+    if not expected_hub and not expected_owner:
+        return True
+    hub_id, owner_id = _redevice_scope(entry)
+    if not hub_id and not owner_id:
+        return False
+    if expected_hub and hub_id and hub_id != expected_hub:
+        return False
+    if expected_owner and owner_id and owner_id != expected_owner:
+        return False
+    return True
+
+
 def _list_of_texts(value: Any, *, role: str | None = None) -> list[str]:
     items = list(value) if isinstance(value, list) else []
     return normalize_node_names(items, role=role)
@@ -297,6 +355,8 @@ class DeviceInventoryService:
             policy_entries = []
         for raw in policy_entries:
             entry = _mapping(raw)
+            if not _redevice_entry_matches_local_scope(entry):
+                continue
             endpoint_id = _text(entry.get("id") or entry.get("endpoint_id"))
             if not endpoint_id:
                 continue
