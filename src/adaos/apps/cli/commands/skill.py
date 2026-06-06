@@ -507,6 +507,43 @@ def _release_changed_skills(
     }
 
 
+def _workspace_registry_remote_config() -> tuple[str, str, str]:
+    return (
+        os.getenv("ADAOS_WORKSPACE_REGISTRY_REPO", "https://github.com/inimatic/adaos-registry.git"),
+        os.getenv("ADAOS_WORKSPACE_REGISTRY_REMOTE", "registry"),
+        os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH", "main"),
+    )
+
+
+def _refresh_workspace_registry_tracking_ref_after_push(
+    *,
+    workspace_root: Path | None = None,
+) -> str | None:
+    try:
+        root = workspace_root or Path(get_ctx().paths.workspace_dir())
+    except Exception:
+        return None
+    registry_url, registry_remote, registry_branch = _workspace_registry_remote_config()
+    err = ensure_remote(root, name=registry_remote, url=registry_url)
+    if err:
+        return err
+    err = fetch_remote(root, remote=registry_remote)
+    if err:
+        return err
+    if not ref_exists(root, f"{registry_remote}/{registry_branch}"):
+        return f"registry tracking ref {registry_remote}/{registry_branch} is not available after fetch"
+    return None
+
+
+def _warn_if_registry_tracking_refresh_failed() -> None:
+    err = _refresh_workspace_registry_tracking_ref_after_push()
+    if err:
+        typer.secho(
+            f"warning: pushed, but failed to refresh registry tracking ref: {err}",
+            fg=typer.colors.YELLOW,
+        )
+
+
 def _resolve_skill_display_version(
     *,
     space: str,
@@ -1227,6 +1264,7 @@ def push_command(
             else:
                 typer.echo("No skill release changes to push.")
             return
+        _warn_if_registry_tracking_refresh_failed()
         released = [item for item in result.get("released") or [] if isinstance(item, dict)]
         skill_names = ", ".join(str(item.get("name") or "") for item in released if str(item.get("name") or "").strip()) or "(unknown)"
         base_ref = str(result.get("base_ref") or "(none)")
@@ -1257,6 +1295,7 @@ def push_command(
     if res in {"nothing-to-push", "nothing-to-commit"}:
         typer.echo(_("cli.skill.push.nothing"))
     else:
+        _warn_if_registry_tracking_refresh_failed()
         typer.echo(_("cli.skill.push.done", name=skill_name, revision=res))
 
 

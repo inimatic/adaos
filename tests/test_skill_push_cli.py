@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,14 +27,23 @@ def test_skill_push_rejoins_split_message(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(skill_cmd, "_resolve_skill_path", lambda target: skill_dir)
 
     class _Mgr:
-        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
+        def push(
+            self,
+            skill_name: str,
+            message: str,
+            signoff: bool = False,
+            bump: bool = True,
+            publish_private_models: bool = False,
+        ) -> str:
             assert skill_name == "demo_skill"
             assert message == "initial commit"
             assert signoff is False
             assert bump is True
+            assert publish_private_models is False
             return "rev-1"
 
     monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: None)
     result = runner.invoke(skill_cmd.app, ["push", "demo_skill", "--message", "initial", "commit"])
     assert result.exit_code == 0, result.output
     assert "done" in result.output.lower() or "rev-1" in result.output
@@ -44,7 +54,15 @@ def test_skill_push_without_message_releases_changed_skills(monkeypatch, tmp_pat
     pushed: list[tuple[str, str, bool]] = []
 
     class _Mgr:
-        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
+        def push(
+            self,
+            skill_name: str,
+            message: str,
+            signoff: bool = False,
+            bump: bool = True,
+            publish_private_models: bool = False,
+        ) -> str:
+            assert publish_private_models is False
             pushed.append((skill_name, message, signoff, bump))
             return f"rev-{skill_name}"
 
@@ -62,6 +80,7 @@ def test_skill_push_without_message_releases_changed_skills(monkeypatch, tmp_pat
             ],
         },
     )
+    monkeypatch.setattr(skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: None)
 
     result = runner.invoke(skill_cmd.app, ["push", "--signoff"])
 
@@ -79,7 +98,15 @@ def test_skill_push_without_message_does_not_bump_registry_only_drift(monkeypatc
     pushed: list[tuple[str, bool]] = []
 
     class _Mgr:
-        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
+        def push(
+            self,
+            skill_name: str,
+            message: str,
+            signoff: bool = False,
+            bump: bool = True,
+            publish_private_models: bool = False,
+        ) -> str:
+            assert publish_private_models is False
             pushed.append((skill_name, bump))
             return f"rev-{skill_name}"
 
@@ -97,6 +124,7 @@ def test_skill_push_without_message_does_not_bump_registry_only_drift(monkeypatc
             ],
         },
     )
+    monkeypatch.setattr(skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: None)
 
     result = runner.invoke(skill_cmd.app, ["push"])
 
@@ -143,13 +171,115 @@ def test_skill_push_message_can_disable_version_bump(monkeypatch, tmp_path: Path
     monkeypatch.setattr(skill_cmd, "_resolve_skill_path", lambda target: skill_dir)
 
     class _Mgr:
-        def push(self, skill_name: str, message: str, signoff: bool = False, bump: bool = True) -> str:
+        def push(
+            self,
+            skill_name: str,
+            message: str,
+            signoff: bool = False,
+            bump: bool = True,
+            publish_private_models: bool = False,
+        ) -> str:
+            assert publish_private_models is False
             pushed.append((skill_name, message, bump))
             return "rev-1"
 
     monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: None)
 
     result = runner.invoke(skill_cmd.app, ["push", "demo_skill", "--message", "catch up registry", "--no-bump"])
 
     assert result.exit_code == 0, result.output
     assert pushed == [("demo_skill", "catch up registry", False)]
+
+
+def test_skill_push_message_refreshes_registry_tracking_ref(monkeypatch, tmp_path: Path) -> None:
+    runner = CliRunner()
+    skill_dir = tmp_path / "demo_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    refreshed: list[bool] = []
+
+    monkeypatch.setattr(skill_cmd, "_resolve_skill_path", lambda target: skill_dir)
+
+    class _Mgr:
+        def push(
+            self,
+            skill_name: str,
+            message: str,
+            signoff: bool = False,
+            bump: bool = True,
+            publish_private_models: bool = False,
+        ) -> str:
+            return "rev-1"
+
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Mgr())
+    monkeypatch.setattr(skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: refreshed.append(True))
+
+    result = runner.invoke(skill_cmd.app, ["push", "demo_skill", "-m", "publish demo"])
+
+    assert result.exit_code == 0, result.output
+    assert refreshed == [True]
+
+
+def test_skill_push_refreshes_registry_tracking_ref_after_auto_release(monkeypatch) -> None:
+    runner = CliRunner()
+    refreshed: list[bool] = []
+
+    monkeypatch.setattr(
+        skill_cmd,
+        "_release_changed_skills",
+        lambda **_kwargs: {
+            "pushed": True,
+            "base_ref": "registry/main",
+            "ahead_count": 1,
+            "behind_count": 0,
+            "released": [{"name": "demo_skill", "revision": "rev-1", "reasons": ["git-ahead"]}],
+        },
+    )
+    monkeypatch.setattr(skill_cmd, "_warn_if_registry_tracking_refresh_failed", lambda: refreshed.append(True))
+
+    result = runner.invoke(skill_cmd.app, ["push"])
+
+    assert result.exit_code == 0, result.output
+    assert refreshed == [True]
+
+
+def test_refresh_workspace_registry_tracking_ref_after_push_catches_up_stale_registry_ref(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    remote = tmp_path / "registry.git"
+    workspace = tmp_path / "workspace"
+
+    def _git(args: list[str], cwd: Path) -> str:
+        proc = subprocess.run(["git", *args], cwd=str(cwd), text=True, capture_output=True, timeout=30)
+        assert proc.returncode == 0, proc.stderr or proc.stdout
+        return (proc.stdout or "").strip()
+
+    workspace.mkdir()
+    _git(["init", "--bare", str(remote)], tmp_path)
+    _git(["init"], workspace)
+    _git(["branch", "-M", "main"], workspace)
+    _git(["config", "user.name", "AdaOS Test"], workspace)
+    _git(["config", "user.email", "test@adaos.local"], workspace)
+    _git(["remote", "add", "origin", str(remote)], workspace)
+    _git(["remote", "add", "registry", str(remote)], workspace)
+
+    (workspace / "registry.json").write_text("{}\n", encoding="utf-8")
+    _git(["add", "registry.json"], workspace)
+    _git(["commit", "-m", "initial"], workspace)
+    _git(["push", "-u", "origin", "main"], workspace)
+    _git(["fetch", "registry", "main"], workspace)
+    old_registry_ref = _git(["rev-parse", "registry/main"], workspace)
+
+    (workspace / "registry.json").write_text('{"changed": true}\n', encoding="utf-8")
+    _git(["commit", "-am", "publish skill"], workspace)
+    _git(["push", "origin", "main"], workspace)
+    new_head = _git(["rev-parse", "HEAD"], workspace)
+    assert old_registry_ref != new_head
+    assert _git(["rev-parse", "registry/main"], workspace) == old_registry_ref
+
+    monkeypatch.setenv("ADAOS_WORKSPACE_REGISTRY_REPO", str(remote))
+    err = skill_cmd._refresh_workspace_registry_tracking_ref_after_push(workspace_root=workspace)
+
+    assert err is None
+    assert _git(["rev-parse", "registry/main"], workspace) == new_head
