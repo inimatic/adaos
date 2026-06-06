@@ -639,6 +639,28 @@ def test_detect_bootstrap_promotion_requirement_reports_changed_paths(tmp_path: 
     assert "src/adaos/apps/supervisor.py" in payload["changed_paths"]
 
 
+def test_detect_bootstrap_promotion_requirement_reports_changed_pyproject(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    current_root = tmp_path / "root"
+    candidate = tmp_path / "candidate"
+    current_root.mkdir()
+    candidate.mkdir()
+    (current_root / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (candidate / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.217"\n',
+        encoding="utf-8",
+    )
+
+    payload = mod._detect_bootstrap_promotion_requirement(candidate, current_root)
+
+    assert payload["required"] is True
+    assert "pyproject.toml" in payload["changed_paths"]
+
+
 def test_bootstrap_critical_paths_are_shared_with_core_update_service() -> None:
     import adaos.apps.core_update_apply as apply_mod
     import adaos.services.core_update as core_mod
@@ -694,6 +716,7 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
 
     critical = set(BOOTSTRAP_CRITICAL_PATHS)
 
+    assert "pyproject.toml" in critical
     assert "src/adaos/build_info.py" in critical
     assert "src/adaos/domain/__init__.py" in critical
     assert "src/adaos/domain/event_envelope.py" in critical

@@ -288,6 +288,34 @@ def _core_public_version(value: Any) -> str:
     return public.strip() or text
 
 
+def _core_public_version_is_semver(value: Any) -> bool:
+    label = _core_public_version(value)
+    parts = label.split(".")
+    return len(parts) >= 3 and all(part.isdigit() for part in parts[:3])
+
+
+def _core_inferred_public_version(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        for raw_token in text.replace("=", " ").replace(":", " ").split():
+            token = raw_token.strip(".,;()[]{}")
+            label = _core_public_version(token)
+            if _core_public_version_is_semver(label):
+                parts = label.split(".")
+                return ".".join(parts[:3])
+    return ""
+
+
+def _core_first_public_version(*values: Any) -> str:
+    for value in values:
+        label = _core_public_version(value)
+        if label:
+            return label
+    return ""
+
+
 def _core_slot_manifest(slots_payload: dict[str, Any], active_slot: str | None = None) -> dict[str, Any]:
     active = str(active_slot or slots_payload.get("active_slot") or "").strip()
     lookup_active = active.upper()
@@ -303,19 +331,39 @@ def _core_slot_manifest(slots_payload: dict[str, Any], active_slot: str | None =
 
 
 def _core_slot_version(manifest: dict[str, Any], build: dict[str, Any]) -> str:
-    for value in (
+    manifest_label = _core_first_public_version(
         manifest.get("build_version"),
         manifest.get("base_version"),
+    )
+    build_label = _core_first_public_version(
         build.get("runtime_build_version"),
         build.get("runtime_base_version"),
         build.get("runtime_version"),
         build.get("version"),
-        manifest.get("target_version"),
+    )
+    if manifest_label and manifest_label != "0.1.0":
+        return manifest_label
+    if (
+        manifest_label == "0.1.0"
+        and build_label
+        and build_label != "0.1.0"
+        and _core_public_version_is_semver(build_label)
     ):
-        label = _core_public_version(value)
-        if label:
-            return label
-    return ""
+        return build_label
+    inferred_label = _core_inferred_public_version(
+        manifest.get("git_subject"),
+        build.get("runtime_git_subject"),
+        build.get("git_subject"),
+    )
+    if manifest_label == "0.1.0" and inferred_label and inferred_label != "0.1.0":
+        return inferred_label
+    if manifest_label:
+        return manifest_label
+    if build_label:
+        return build_label
+    return _core_first_public_version(
+        manifest.get("target_version"),
+    )
 
 
 def _core_slot_commit(manifest: dict[str, Any], build: dict[str, Any]) -> str:

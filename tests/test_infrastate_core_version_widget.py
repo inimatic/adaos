@@ -71,3 +71,40 @@ def test_infrastate_core_slot_summary_prefers_running_version_for_legacy_manifes
     )
 
     assert subtitle == "slot A | 0.1.64 | 6b63485"
+
+
+def test_infrastate_core_slot_summary_uses_running_version_for_stale_default_manifest() -> None:
+    mod = _load_infrastate_module()
+
+    subtitle = mod._core_slot_summary_subtitle(
+        {
+            "active_slot": "B",
+            "active_manifest": {
+                "slot": "B",
+                "build_version": "0.1.0+1.b10da50",
+                "git_short_commit": "b10da50",
+            },
+        },
+        {"version": "0.1.217", "runtime_build_version": "0.1.217+1.b10da50"},
+    )
+
+    assert subtitle == "slot B | 0.1.217 | b10da50"
+
+
+def test_infrastate_core_slot_summary_infers_bumped_version_from_stale_manifest_subject() -> None:
+    mod = _load_infrastate_module()
+
+    subtitle = mod._core_slot_summary_subtitle(
+        {
+            "active_slot": "B",
+            "active_manifest": {
+                "slot": "B",
+                "build_version": "0.1.0+1.b10da50",
+                "git_short_commit": "b10da50",
+                "git_subject": "chore: bump adaos version to 0.1.217",
+            },
+        },
+        {"version": "0.1.0"},
+    )
+
+    assert subtitle == "slot B | 0.1.217 | b10da50"
