@@ -14,7 +14,7 @@ Read this together with:
 - [Transport Ownership](transport-ownership.md)
 - [AdaOS Supervisor](adaos-supervisor.md)
 
-For the first rollout, `adaos-realtime` owns the remote hub<->root WebSocket and exposes a local `nats://127.0.0.1:<port>` endpoint to the hub. The existing hub NATS bridge stays in place and connects to the local sidecar instead of the remote `wss://.../nats` endpoint.
+For the first rollout, `adaos-realtime` owns the remote hub<->root WebSocket and exposes a local `nats://127.0.0.1:<port>` endpoint to the hub. The existing hub NATS bridge stays in place and connects to the local sidecar instead of the remote `wss://.../nats` endpoint when sidecar mode is enabled.
 
 This is intentionally minimal:
 
@@ -22,6 +22,16 @@ This is intentionally minimal:
 - no protocol change between hub bridge and root
 - no hub business-logic move
 - only transport ownership moves out of the main process
+
+## Status Labels
+
+Checklist items use the same four-level MoSCoW-style priority vocabulary as
+[Builder Roadmap](builder-roadmap.md):
+
+- `[must]`: required for the sidecar contract or current cutover gate.
+- `[should]`: hardening or operator-confidence work.
+- `[could]`: optional diagnostics or ergonomics.
+- `[deferred]`: intentionally postponed until a later phase owns the contract.
 
 ## Current Contract
 
@@ -45,7 +55,11 @@ Supervisor / runtime boundary:
 - standalone runtime keeps a temporary fallback and may still start the sidecar itself when supervisor is absent
 - hub runtime connects its existing NATS client to local `nats://127.0.0.1:7422`
 - hub runtime does not install the internal WebSocket NATS transport patch while sidecar mode is enabled
-- browser `/ws` and `/yws` transport still terminate in the runtime and explicitly report that ownership as transitional until Phase 2 is implemented
+- browser `/ws` and `/yws` transport can be proxied through sidecar local
+  websocket listeners for the current transport-only scope when sidecar mode is
+  enabled and listeners are ready
+- browser `/ws` and `/yws` session semantics still terminate in the runtime;
+  full Yjs room/session authority is not part of the current sidecar contract
 
 ## Why this split
 
@@ -89,59 +103,88 @@ Current status:
 - this is a target contract, not a completed capability
 - reliability/runtime diagnostics now expose this as planned continuity behavior rather than silently assuming restart safety
 - `adaos-supervisor` now also consumes that continuity guard and conservatively defers unsafe update/start paths instead of pretending hub restart continuity already exists
-- the current sidecar still owns only `hub_root` transport and does not yet preserve live WebRTC continuity during hub runtime restart
+- the current sidecar owns only transport boundaries and does not yet preserve
+  live WebRTC continuity during hub runtime restart
 
 ## Rollout
 
 ### Phase 1 - NATS transport sidecar
 
-Implemented now.
+Implemented, but current code and tests keep it disabled by default unless
+`ADAOS_REALTIME_ENABLE=1` or `HUB_REALTIME_ENABLE=1` is set.
 
-- add `adaos realtime serve`
-- add local TCP NATS relay
-- route hub NATS bridge through sidecar
-- disable direct hub WS transport when sidecar mode is on
-- expose sidecar runtime state in `GET /api/node/reliability`, CLI, and Infra State
+- [x] `[must]` Add `adaos realtime serve`.
+- [x] `[must]` Add local TCP NATS relay.
+- [x] `[must]` Route hub NATS bridge through sidecar when sidecar mode is on.
+- [x] `[must]` Disable direct hub WS transport when sidecar mode is on.
+- [x] `[must]` Expose sidecar runtime state in
+  `GET /api/node/reliability`, CLI, and Infra State.
+- [ ] `[must]` Reconcile default enablement across code, tests, deployment
+  config, and docs before calling sidecar the accepted default hub transport.
 
 Success criteria:
 
-- hub startup shows `nats ws transport: sidecar`
-- root sees one stable hub WS-NATS session
-- no `nats keepalive pong missing` caused by hub-local WS stalls
-- operators can see that sidecar owns transport only, and can inspect `transport_ready`, `control_ready`, reconnect counters, and selected remote provenance
-- operators can restart sidecar transport runtime independently from hub business runtime
+- [ ] `[must]` Hub startup shows `nats ws transport: sidecar` on the target
+  stand.
+- [ ] `[must]` Root sees one stable hub WS-NATS session through the sidecar.
+- [ ] `[must]` No `nats keepalive pong missing` caused by hub-local WS stalls
+  during the acceptance window.
+- [x] `[must]` Operators can see that sidecar owns transport only and can
+  inspect `transport_ready`, `control_ready`, reconnect counters, and selected
+  remote provenance.
+- [x] `[must]` Operators can restart sidecar transport runtime independently
+  from hub business runtime.
 
 ### Phase 2 - Route tunnel ownership
 
-Next step.
+Implemented for local transport proxy mechanics; acceptance and rollout remain
+open.
 
-- move `/ws` and `/yws` tunnel transport into sidecar
-- keep local IPC between hub core and sidecar narrow and explicit
-- leave HTTP/API orchestration in hub main process
-- until the move is complete, diagnostics must expose `current_owner=runtime`, `planned_owner=sidecar`, and the current blocker for each websocket transport
+- [x] `[must]` Move `/ws` and `/yws` tunnel transport into sidecar local
+  websocket proxy listeners for the current transport-only scope.
+- [x] `[must]` Keep local sidecar-to-runtime forwarding narrow and explicit:
+  sidecar proxies websocket frames to the runtime upstream and does not absorb
+  HTTP/API orchestration.
+- [x] `[must]` Leave HTTP/API orchestration in hub main process.
+- [x] `[must]` Expose `current_owner`, `planned_owner`, `handoff_ready`, and
+  blockers for each websocket transport in diagnostics.
+- [ ] `[must]` Capture target-stand evidence that root-routed browser ingress
+  prefers sidecar listeners and reports `current_owner=sidecar` plus
+  `handoff_ready=true`.
+- [ ] `[must]` Prove an already-open browser `/ws` and `/yws` session remains
+  usable across runtime A/B switch or restart with sidecar enabled.
+- [ ] `[should]` Add soak coverage for sidecar listener restart, runtime event
+  loop lag, root reconnect, and fallback path behavior.
 
 Success criteria:
 
-- browser realtime traffic no longer depends on hub main-process socket loop
-- route-proxy failures do not tear down control-plane logic
+- [ ] `[must]` Browser realtime traffic no longer depends on the hub
+  main-process socket loop for the accepted transport-only path.
+- [x] `[must]` Route-proxy failures do not tear down control-plane logic.
+- [ ] `[should]` Operators can distinguish accepted sidecar path, runtime
+  fallback path, and root relay path in one reliability snapshot.
 
 ### Phase 3 - Full realtime runtime
 
 Later.
 
-- move WebRTC signaling/media control into sidecar
-- move Yjs session ownership into sidecar
-- keep hub core focused on orchestration, skills, API, state transitions
-- make live media continuity explicit during updates:
-  - defer member updates while member-owned live media is active
-  - preserve hub-side sidecar continuity while hub runtime restarts
-  - keep that continuity observable through reliability, CLI, and supervisor surfaces
+- [ ] `[deferred]` Move WebRTC signaling/media control into sidecar.
+- [ ] `[deferred]` Move Yjs session ownership into sidecar.
+- [ ] `[deferred]` Keep hub core focused on orchestration, skills, API, and
+  state transitions while sidecar owns all long-lived realtime session runtime.
+- [ ] `[deferred]` Make live media continuity explicit during updates:
+  defer member updates while member-owned live media is active, preserve
+  hub-side sidecar continuity while hub runtime restarts, and keep that
+  continuity observable through reliability, CLI, and supervisor surfaces.
 
 Success criteria:
 
-- all long-lived realtime sockets are owned by one dedicated runtime
-- hub restart and realtime restart can be reasoned about independently
-- a hub runtime restart does not implicitly terminate the live media continuity path that has already been delegated to sidecar ownership
+- [ ] `[deferred]` All long-lived realtime sockets are owned by one dedicated
+  runtime.
+- [ ] `[deferred]` Hub restart and realtime restart can be reasoned about
+  independently.
+- [ ] `[deferred]` A hub runtime restart does not implicitly terminate the live
+  media continuity path that has already been delegated to sidecar ownership.
 
 ## Deferred Design Block: Sidecar-Owned Yjs Session Runtime
 
@@ -176,8 +219,10 @@ What this means for the current roadmap:
 
 ## Operational Notes
 
-- Hub runtimes now default to `sidecar on` for the current `hub_root` transport scope.
-- `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` explicitly opts out and keeps direct runtime-owned hub-root transport.
+- Current code keeps hub runtimes `sidecar off` by default unless
+  `ADAOS_REALTIME_ENABLE=1` or `HUB_REALTIME_ENABLE=1` is set.
+- `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` explicitly opts out and
+  keeps direct runtime-owned hub-root transport.
 - Non-hub roles still stay `sidecar off` by default unless enabled explicitly.
 - Local endpoint defaults to `nats://127.0.0.1:7422`.
 - Remote candidate selection still uses existing node/root NATS configuration.

@@ -1,5 +1,9 @@
 # Realtime Reliability Roadmap
 
+Status: active roadmap and checklist for realtime reliability, sidecar
+transport ownership, supervisor-assisted continuity, browser/member channels,
+Yjs sync, and media route hardening.
+
 ## Goal
 
 Fix AdaOS reliability from the top down:
@@ -15,7 +19,52 @@ Fix AdaOS reliability from the top down:
 This ordering is deliberate.
 The project must not start with sidecar or transport adapters as if they alone solved reliability.
 
-## Current status: 2026-04-21
+## Reading Rules
+
+- Checked items mean an implementation slice exists in the current tree. They
+  do not by themselves mean rollout acceptance on a live stand.
+- Every checklist item carries a four-level MoSCoW-style priority label.
+- `sidecar transport ownership` means socket/listener/relay lifecycle only.
+  It does not mean protocol authority, Yjs room/session authority, or media
+  authority unless a checklist item says that explicitly.
+- Event Model `Phase 0` can rely on the current transport-only readiness only
+  after the target stand reports sidecar enabled and `/ws` / `/yws` handoff
+  ready through the same node API, CLI, and browser/runtime surfaces.
+- `docs/architecture/adaos-realtime-sidecar.md` owns the narrow sidecar
+  contract. This roadmap owns cross-phase sequencing and acceptance gates.
+
+## Status Labels
+
+Markdown checkboxes only distinguish done from not done. This roadmap uses the
+same four-level MoSCoW-style priority vocabulary as
+[Builder Roadmap](builder-roadmap.md):
+
+- `[must]`: first-order work required for the named phase or cutover gate to be
+  functionally coherent.
+- `[should]`: hardening, rollout safety, or operator-confidence work that
+  materially improves reliability but can follow the main `[must]` gate.
+- `[could]`: useful optional diagnostics, ergonomics, or product polish.
+- `[deferred]`: intentionally postponed until a later phase owns the contract,
+  authority boundary, or user experience.
+
+An unchecked `[should]`, `[could]`, or `[deferred]` item must not be counted as
+a blocker for the next `[must]` gate unless the gate explicitly depends on it.
+
+## MoSCoW Gate View
+
+| Phase | `[must]` gate | `[should]` layer | `[could]` layer | `[deferred]` layer |
+| --- | --- | --- | --- | --- |
+| 0. Architecture freeze | Complete: channel semantics, authority, protocol, transport ownership docs. | None. | None. | None. |
+| 1. Observability | Complete for observability scope; readiness, incident, and provenance surfaces exist. | Open: keep routed/local diagnostics aligned during rollout. | None. | None. |
+| 2. Hub-root hardening | Complete for current `hub_root.*` inventory; Class A flows and route budgets are represented. | Open: broaden incident separation and policy switching evidence. | None. | None. |
+| 3. Sidecar transport boundary | Partial: code supports hub-root sidecar transport and local `/ws`/`/yws` proxy listeners, but default enablement and stand acceptance are not reconciled. | Open: rollout/soak and operator evidence. | None. | Open: full Yjs session authority and media continuity. |
+| 3.5. Supervisor continuity | In progress: supervisor owns process/update authority and candidate runtime flow; warm-switch hardening remains. | Open: browser/root signaling polish and recovery soak. | None. | None. |
+| 4. Semantic channels | Complete for current browser/hub-member semantic ownership scope. | Open: live-session validation under churn. | None. | None. |
+| 5. Yjs as SyncChannel | Complete for current sync-channel scope. | Open: operational validation across A/B and routed browsers. | None. | Open: sidecar-owned Yjs room/session runtime. |
+| 6. Media plane | Partial: bounded file media and hub loopback validation exist; general media continuity remains open. | Open: direct browser-member admission/signaling validation. | Open: multi-source expansion. | None. |
+| 7. Skill/scenario lifecycle | Open: communication model must feed lifecycle and artifact hardening. | Open: provenance UX and operator clarity. | None. | None. |
+
+## Current Status
 
 ### Stand checkpoint: 2026-05-28
 
@@ -28,6 +77,17 @@ Treat the implementation as present in code/docs but not accepted on this stand
 until rollout/config is reconciled and the same reliability surfaces report the
 transport-only `/ws` and `/yws` handoff as ready.
 
+### Repository checkpoint: current tree
+
+- Code and tests currently keep realtime sidecar disabled by default unless
+  `ADAOS_REALTIME_ENABLE=1` or `HUB_REALTIME_ENABLE=1` is set.
+- The sidecar implementation can start local route proxy listeners for `/ws`
+  and `/yws` and bootstrap route selection can prefer those listeners for
+  matching paths.
+- This repository state should be described as **implemented but not accepted
+  as default rollout behavior** until code, tests, runtime config, and live
+  reliability evidence agree.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -38,12 +98,14 @@ transport-only `/ws` and `/yws` handoff as ready.
 - those same reliability surfaces now also share a bounded `supervisor_runtime` snapshot, so browser-safe transition mode, candidate runtime visibility, and warm-switch evidence are carried through one canonical runtime payload instead of being reconstructed separately per surface
 - those same reliability/checkpoint surfaces now also carry routed-browser active-runtime selection for root-routed `/ws`, so supervisor-aware browser continuity is explicit in node API, CLI, canonical control-plane projection, and browser diagnostics instead of living only inside bootstrap route-base selection
 - those same reliability/browser surfaces now also carry one explicit sidecar enablement policy (`role_default` vs explicit env override), so hub runtime sidecar adoption remains observable while the reliable default stays opt-in
-- `adaos-realtime` now boots dedicated local websocket listeners for `/ws` and `/yws`, root-routed browser ingress prefers them for matching paths, and runtime diagnostics therefore report both transport handoffs as `ready` for the current transport-only scope
+- `adaos-realtime` now boots dedicated local websocket listeners for `/ws` and `/yws`, root-routed browser ingress can prefer them for matching paths, and runtime diagnostics can report both transport handoffs as `ready` when sidecar is enabled and listeners are ready
 - Infra State shows realtime summary and transport diagnostics through Yjs-backed UI
 - runtime now exposes canonical channel overview entries for `hub_root`, `hub_root_browser`, and `browser_hub_sync`
 - runtime now exposes `hub_root_transport_strategy` with current transport, candidate list, recent attempts, reconnect/failure history, and active hypothesis parameters
 - CLI and Infra State now surface the current hub-root transport strategy instead of only the last readiness bit
-- hub runtimes now default to `hub_root` sidecar transport unless explicitly opted out, so sidecar adoption is the normal path for current transport scope rather than an opt-in experiment
+- hub runtimes expose an explicit sidecar enablement policy; current code keeps
+  sidecar disabled by default unless explicitly enabled, so sidecar adoption is
+  still a rollout/config gate rather than accepted default behavior
 - detailed channel trace is no longer a default console behavior; summary/incident output remains visible while deep console trace is explicit opt-in
 - channel stability is now assessed from incidents and transport churn, not only from the last connected snapshot
 - Yjs runtime diagnostics now expose explicit ownership boundaries for `ui.current_scenario`, effective `ui/data/registry` branches, compatibility caches, and `yws` transport/session lifecycle
@@ -56,12 +118,12 @@ transport-only `/ws` and `/yws` handoff as ready.
 - hub-root delivery guarantees are explicit for the current `hub_root.*` flow inventory, but the broader communication track remains open because live continuity hardening, media/browser admission, and deeper sidecar scope beyond transport-only handoff are still incomplete
 - route and root-control incident classes still need clearer separation
 - transport strategy is now visible, but automatic policy-driven transport switching is not yet the default runtime behavior
-- sidecar owns the current `hub_root` transport boundary and the current transport-only `/ws` and `/yws` routed-browser ingress for the current scope, but full Yjs session authority and media transport are still outside sidecar scope
+- sidecar can own the current `hub_root` transport boundary and transport-only `/ws`/`/yws` routed-browser ingress when enabled and accepted, but full Yjs session authority and media transport are still outside sidecar scope
 - media/runtime diagnostics now also expose a planned continuity contract for live member media: member update should defer, while future hub restart behavior is expected to preserve an independent sidecar path
 - supervisor now enforces the first conservative continuity gate on top of that model: live-media-sensitive update transitions are deferred and unsafe manual runtime restart is refused until sidecar continuity becomes a real capability instead of only a declared target
 - local process/update supervision now has a separate supervisor authority in managed deployments, and default plus root-routed browser surfaces now read one shared supervisor transition/routed-base story, but warm-switch recovery soak, cleanup, and constrained-topology hardening are still in progress
 - router-side media route administration now has a normalized contract in code and a browser-visible Yjs carrier at `data.media.route`, but direct `browser <-> member` admission and signaling are still not implemented
-- full sidecar-owned Yjs room/session runtime is intentionally deferred as a separate redesign block; the current roadmap has now completed the `"/yws"` transport cutover for the current scope and keeps only the preparatory decoupling from runtime-local live-room ownership in this track
+- full sidecar-owned Yjs room/session runtime is intentionally deferred as a separate redesign block; the current roadmap has implemented the `"/yws"` transport cutover mechanics for the current scope and keeps rollout acceptance plus preparatory decoupling from runtime-local live-room ownership in this track
 
 ### Event Model dependency note
 
@@ -77,14 +139,21 @@ Phase 0 dependency tracking, the current implementation should be read as:
 - sidecar rollout policy: explicit across runtime diagnostics and browser/runtime summaries, so opt-in hub transport adoption can be audited separately from the still-open post-Phase-0 continuity and session-runtime work
 - `local supervisor browser-safe continuity`: default browser/runtime surfaces now read one shared `supervisor_runtime` snapshot, and routed-browser `/ws` continuity now exposes supervisor-aware active-runtime selection explicitly; the remaining work is warm-switch soak/recovery and final hardening, not visibility
 - `sidecar continuity`: now only blocks Event Model Phase 0 when the current runtime/media contract actually marks it as required
-- `/ws` and `/yws` ownership migration: complete for the current transport-only scope, with root-routed browser ingress now preferring sidecar local websocket listeners and runtime diagnostics reporting `current_owner=sidecar` plus `handoff_ready=true`; full sidecar-owned Yjs room/session runtime remains deferred beyond current Event Model `Phase 0`
+- `/ws` and `/yws` ownership migration: implemented for the current
+  transport-only scope when sidecar is enabled and listeners are ready, with
+  root-routed browser ingress able to prefer sidecar local websocket listeners;
+  acceptance still requires target-stand evidence that diagnostics report
+  `current_owner=sidecar` and `handoff_ready=true`; full sidecar-owned Yjs
+  room/session runtime remains deferred beyond current Event Model `Phase 0`
 - 2026-05-28 `.30` rollout caveat: the live stand reported sidecar disabled and
   `event_model.phase0.communication` `in_progress`; reconfirm this checklist on
   the target stand before using it as acceptance evidence.
 
-That means Realtime Reliability is already strong enough to support Event Model
-baseline alignment work and now closes the current Event Model `Phase 0`
-communication prerequisite set, even though broader reliability work remains open.
+That means Realtime Reliability is strong enough to continue Event Model
+baseline alignment work, but the current Event Model `Phase 0` communication
+gate should not be treated as accepted for a rollout until the target stand
+confirms the sidecar enablement and transport-only `/ws` / `/yws` handoff
+evidence.
 
 ### Newly implemented foundation
 
@@ -99,9 +168,9 @@ communication prerequisite set, even though broader reliability work remains ope
 - transport/resource isolation is still weaker than subject naming suggests
 - `.30` rollout/config can still run with sidecar disabled, leaving the
   transport-only `/ws` and `/yws` handoff unaccepted on that stand
-- hub-root message inventory is not yet fully classified by delivery class and idempotency policy
-- route/session incidents are still underrepresented compared to root-control incidents
-- update-state visibility still disappears when the main runtime is intentionally down for restart/apply/validate
+- target-stand evidence for policy-driven transport switching is still incomplete
+- route/session incident coverage still needs broader target-stand evidence
+- routed topology coverage for update-state visibility while the main runtime is intentionally down remains open
 - system skills and scenarios still rely on a transitional mix of `workspace`, `repo workspace`, `runtime slot`, and `built-in seed`
 
 ## Phase 0: Architecture freeze
@@ -119,11 +188,11 @@ Completed.
 
 ### Exit criteria
 
-- message taxonomy approved
-- delivery classes approved
-- readiness tree approved
-- degraded matrix approved
-- authority boundaries approved
+- [x] `[must]` Message taxonomy approved.
+- [x] `[must]` Delivery classes approved.
+- [x] `[must]` Readiness tree approved.
+- [x] `[must]` Degraded matrix approved.
+- [x] `[must]` Authority boundaries approved.
 
 ## Phase 1: Observability and incident-driven readiness
 
@@ -139,11 +208,16 @@ Make readiness and degradation visible before changing protocol ownership.
 
 ### Work items
 
-- keep readiness tree and degraded matrix visible in node API, CLI, and Infra State
-- keep channel stability derived from incidents, reconnect churn, and watchdog failures
-- separate `root_control` transport assessment from route/session incidents
-- expose provenance of current transport and current artifact source in diagnostics
-- make remote and direct hub diagnostics consistent when browser is connected to `:8777`
+- [x] `[must]` Keep readiness tree and degraded matrix visible in node API,
+  CLI, and Infra State.
+- [x] `[must]` Keep channel stability derived from incidents, reconnect churn,
+  and watchdog failures.
+- [x] `[must]` Separate `root_control` transport assessment from
+  route/session incidents.
+- [x] `[must]` Expose provenance of current transport and current artifact
+  source in diagnostics.
+- [ ] `[should]` Keep remote and direct hub diagnostics consistent when
+  browser is connected to `:8777`.
 
 ### Candidate code areas
 
@@ -155,9 +229,12 @@ Make readiness and degradation visible before changing protocol ownership.
 
 ### Exit criteria
 
-- `ready/stable` is never reported when fresh incidents prove the channel is unstable
-- route-session failures and root-control failures are visible as different incident classes
-- operator can tell whether a problem is transport, route, sync, or artifact-source related
+- [x] `[must]` `ready/stable` is never reported when fresh incidents prove
+  the channel is unstable.
+- [x] `[must]` Route-session failures and root-control failures are visible as
+  different incident classes.
+- [x] `[must]` Operator can tell whether a problem is transport, route, sync,
+  or artifact-source related.
 
 ## Phase 2: Hub-root protocol hardening
 
@@ -182,14 +259,20 @@ Runtime now also exposes `hardening_coverage`, and for the current `hub_root.*` 
 
 ### Work items
 
-- classify current hub-root messages by taxonomy and delivery class
-- isolate control, integration, route, and sync-metadata traffic by real budgets
-- split queues, workers, limits, and backpressure policy, not only subject prefixes
-- add explicit per-stream cursors where replay is required
-- add durable outbox only for Class A and selected integration flows
-- add inbox dedupe where retry or replay exists
-- define command-specific idempotency rules
-- define stale-authority thresholds per hub-root flow
+- [x] `[must]` Classify current hub-root messages by taxonomy and delivery
+  class.
+- [x] `[must]` Isolate control, integration, route, and sync-metadata traffic
+  by real budgets.
+- [x] `[must]` Split queues, workers, limits, and backpressure policy, not only
+  subject prefixes.
+- [x] `[must]` Add explicit per-stream cursors where replay is required.
+- [x] `[must]` Add durable outbox only for Class A and selected integration
+  flows.
+- [x] `[must]` Add inbox dedupe where retry or replay exists.
+- [x] `[must]` Define command-specific idempotency rules.
+- [x] `[must]` Define stale-authority thresholds per hub-root flow.
+- [ ] `[should]` Add target-stand evidence that automatic transport policy
+  decisions use these flow classifications instead of only reporting them.
 
 ### Candidate code areas
 
@@ -201,19 +284,25 @@ Runtime now also exposes `hardening_coverage`, and for the current `hub_root.*` 
 
 ### Exit criteria
 
-- route pressure cannot starve control readiness
-- reconnect restores control readiness through explicit protocol state
-- critical hub-root actions are duplicate-safe
-- degraded mode is driven by explicit authority and delivery rules
+- [x] `[must]` Route pressure cannot starve control readiness.
+- [x] `[must]` Reconnect restores control readiness through explicit protocol
+  state.
+- [x] `[must]` Critical hub-root actions are duplicate-safe.
+- [x] `[must]` Degraded mode is driven by explicit authority and delivery
+  rules.
 
 ## Phase 3: Sidecar as transport ownership boundary
 
 ### Status
 
-Completed for the current transport-only sidecar scope.
+Implemented for the current transport-only sidecar scope, but not accepted as
+default rollout behavior in the current repository state.
 The sidecar now exposes a protocol-facing runtime surface with explicit ownership boundary, transport readiness, control readiness, reconnect counters, quarantine/supersede history, and transport provenance.
 Sidecar lifecycle is also independently observable and restartable through the local control API and CLI, and managed deployments now place that lifecycle under `adaos-supervisor` instead of the runtime lifespan.
-This completion is intentionally transport-only: the sidecar now owns the `hub_root` NATS transport lifecycle plus the current routed-browser `/ws` and `/yws` ingress handoff, but it does not yet own Yjs room/session authority or media transport.
+This implementation is intentionally transport-only: when enabled, the sidecar
+can own the `hub_root` NATS transport lifecycle plus the current routed-browser
+`/ws` and `/yws` ingress handoff, but it does not yet own Yjs room/session
+authority or media transport.
 The intermediate ownership split is now explicit in diagnostics: current sidecar scope, lifecycle manager, and planned next boundaries are exposed alongside the deferred post-Phase-0 work for Yjs session authority and media continuity.
 
 ### Focus
@@ -222,10 +311,29 @@ Move transport ownership where it reduces blast radius, without moving protocol 
 
 ### Work items
 
-- define sidecar status API in protocol terms
-- expose control readiness, route readiness, reconnect diagnostics, and transport provenance
-- ensure hub main process remains owner of durability and degraded policy
-- use sidecar first for hub-root transport lifecycle after protocol guarantees are explicit
+- [x] `[must]` Define sidecar status API in protocol terms.
+- [x] `[must]` Expose control readiness, route readiness, reconnect
+  diagnostics, and transport provenance.
+- [x] `[must]` Ensure hub main process remains owner of durability and degraded
+  policy.
+- [x] `[must]` Implement sidecar-first routing support for hub-root transport
+  lifecycle after protocol guarantees are explicit.
+- [x] `[must]` Implement local `/ws` and `/yws` sidecar route proxy listeners
+  for the current transport-only scope.
+- [x] `[must]` Make bootstrap route-base selection able to prefer sidecar local
+  websocket listeners for matching `/ws` and `/yws` paths.
+- [ ] `[must]` Reconcile sidecar default enablement across code, tests,
+  deployment config, and docs.
+- [ ] `[must]` Capture target-stand acceptance showing sidecar enabled and
+  `/ws` plus `/yws` diagnostics reporting `current_owner=sidecar` and
+  `handoff_ready=true`.
+- [ ] `[must]` Add an A/B acceptance scenario with an already-open browser
+  `/ws` and `/yws` session that remains usable while the runtime switches
+  slots or restarts.
+- [ ] `[should]` Add sidecar soak coverage for root reconnect, local listener
+  restart, remote candidate quarantine, and runtime event-loop lag.
+- [ ] `[deferred]` Move Yjs room/session authority into sidecar.
+- [ ] `[deferred]` Move WebRTC signaling/media continuity into sidecar.
 
 ### Candidate code areas
 
@@ -235,8 +343,13 @@ Move transport ownership where it reduces blast radius, without moving protocol 
 
 ### Exit criteria
 
-- transport failures are isolated from hub business logic
-- sidecar does not become a hidden protocol authority
+- [x] `[must]` Transport failures are isolated from hub business logic for
+  hub-root sidecar transport.
+- [x] `[must]` Sidecar does not become a hidden protocol authority.
+- [ ] `[must]` Target stand proves transport-only `/ws` and `/yws` handoff
+  without relying on runtime fallback as the success path.
+- [ ] `[should]` Operator can see whether a browser path is served by sidecar
+  listener, runtime fallback, root relay, or direct local runtime.
 
 ## Phase 3.5: Local supervisor as process and update authority
 
@@ -267,37 +380,76 @@ The supervisor becomes the authority for local runtime lifecycle and update atte
 
 ### Work items
 
-- define `adaos-supervisor` local authority boundary
-- persist explicit local update attempt state independent of runtime bind state
-- add restart/apply/validate deadlines and stale-attempt recovery
-- move update-status and restart control to a supervisor API that remains live while runtime is down
-- make systemd target supervisor instead of the main runtime process
-- keep production runtime sourced from slot `A|B` even after supervisor/root updates
-- validate every candidate in an inactive slot before allowing any root/bootstrap promotion
-- detect bootstrap-managed file changes and surface `root_promotion_required` explicitly instead of silently mixing slot and root drift
-- keep supervisor-owned sidecar lifecycle observable through both supervisor and runtime-compatible node-control surfaces
-- retain standalone runtime fallback only for non-supervised deployments, without turning sidecar into protocol or update authority
-- migrate installed skill runtimes as an explicit core-update subflow rather than assuming old interpreter dependencies remain valid
-- persist per-skill migration diagnostics (`prepare` / `test` / `activate` / `rollback` / `deactivate`) in core-update results
-- surface skill migration failures and selective post-commit deactivations in Infra State and Infrascope
-- keep supervisor transition state visible in canonical operator projections (`active_runtimes`, health strips, recent changes) rather than only in ad-hoc browser badges
-- separate runtime liveness from listener/API readiness in supervisor-visible status
-- surface the active managed runtime command/source in supervisor diagnostics
-- surface active-slot structure validation in supervisor diagnostics so broken slot layouts fail explicitly
-- harden diagnostic skills so Yjs-backed operator surfaces keep the last usable local snapshot during transient control-plane file failures
-- keep browser-facing update visibility alive through pushed supervisor status on `/ws`, with supervisor polling only as fallback while `/ws` and `/yws` reconnect during slot restart
-- expose a read-only browser-safe supervisor transition surface so restart/update state is not collapsed into generic `offline`
-- distinguish browser-facing `hub restarting`, `update applying`, `rollback`, `root promotion pending`, `root restart in progress`, and `update failed` from ordinary transport reconnect state
-- surface `planned`, `deferred`, minimum-window scheduling, and queued follow-up transition state through that same browser-safe/read-only supervisor surface
-- extend the routed read-only supervisor transition surface across every browser deployment topology, not only the default `/hubs/<id>/api/...` entry path
-- reserve stable runtime ports per slot so supervisor can reason about `active` and `candidate` runtimes explicitly
-- add a memory gate that decides when dual-runtime warm-switch is safe and when supervisor must fall back to stop-and-switch
-- surface `transition_mode`, candidate runtime URL/port, and warm-switch admission reason in operator and browser-safe status
-- assign every runtime process a stable-per-boot `runtime_instance_id` and `transition_role` so root/NATS/browser can distinguish `active` from `candidate`
-- keep candidate runtimes passive on root-routed traffic subjects until cutover so prewarm does not create duplicate hub traffic consumers
-- automatically prewarm passive candidate runtime when warm-switch is admitted, surface its readiness/failure in supervisor/browser-safe status, and keep the candidate passive until supervisor explicitly commits cutover
-- harden fast-cutover authority handoff so promoted candidate runtime becomes the sole live root/browser traffic owner without ambiguous overlap
-- add stronger soak/recovery coverage for candidate promotion fallback, stale candidate cleanup, and low-memory warm-switch downgrade paths
+- [x] `[must]` Define `adaos-supervisor` local authority boundary.
+- [x] `[must]` Persist explicit local update attempt state independent of
+  runtime bind state.
+- [x] `[must]` Add restart/apply/validate deadlines and stale-attempt recovery.
+- [x] `[must]` Move update-status and restart control to a supervisor API that
+  remains live while runtime is down.
+- [x] `[must]` Make service/autostart topology target supervisor instead of the
+  main runtime process in managed deployments.
+- [x] `[must]` Keep production runtime sourced from slot `A|B` even after
+  supervisor/root updates.
+- [x] `[must]` Validate every candidate in an inactive slot before allowing any
+  root/bootstrap promotion.
+- [x] `[must]` Detect bootstrap-managed file changes and surface
+  `root_promotion_required` explicitly instead of silently mixing slot and
+  root drift.
+- [x] `[must]` Keep supervisor-owned sidecar lifecycle observable through both
+  supervisor and runtime-compatible node-control surfaces.
+- [x] `[must]` Retain standalone runtime fallback only for non-supervised
+  deployments, without turning sidecar into protocol or update authority.
+- [x] `[must]` Migrate installed skill runtimes as an explicit core-update
+  subflow rather than assuming old interpreter dependencies remain valid.
+- [x] `[must]` Persist per-skill migration diagnostics (`prepare` / `test` /
+  `activate` / `rollback` / `deactivate`) in core-update results.
+- [x] `[must]` Surface skill migration failures and selective post-commit
+  deactivations in Infra State and Infrascope.
+- [x] `[must]` Keep supervisor transition state visible in canonical operator
+  projections (`active_runtimes`, health strips, recent changes) rather than
+  only in ad-hoc browser badges.
+- [x] `[must]` Separate runtime liveness from listener/API readiness in
+  supervisor-visible status.
+- [x] `[must]` Surface the active managed runtime command/source in supervisor
+  diagnostics.
+- [x] `[must]` Surface active-slot structure validation in supervisor
+  diagnostics so broken slot layouts fail explicitly.
+- [ ] `[should]` Harden diagnostic skills so Yjs-backed operator surfaces keep
+  the last usable local snapshot during transient control-plane file failures.
+- [x] `[must]` Keep browser-facing update visibility alive through pushed
+  supervisor status on `/ws`, with supervisor polling only as fallback while
+  `/ws` and `/yws` reconnect during slot restart.
+- [x] `[must]` Expose a read-only browser-safe supervisor transition surface so
+  restart/update state is not collapsed into generic `offline`.
+- [x] `[must]` Distinguish browser-facing `hub restarting`, `update applying`,
+  `rollback`, `root promotion pending`, `root restart in progress`, and
+  `update failed` from ordinary transport reconnect state.
+- [x] `[must]` Surface `planned`, `deferred`, minimum-window scheduling, and
+  queued follow-up transition state through that same browser-safe/read-only
+  supervisor surface.
+- [ ] `[must]` Extend the routed read-only supervisor transition surface across
+  every browser deployment topology, not only the default
+  `/hubs/<id>/api/...` entry path.
+- [x] `[must]` Reserve stable runtime ports per slot so supervisor can reason
+  about `active` and `candidate` runtimes explicitly.
+- [x] `[must]` Add a memory gate that decides when dual-runtime warm-switch is
+  safe and when supervisor must fall back to stop-and-switch.
+- [x] `[must]` Surface `transition_mode`, candidate runtime URL/port, and
+  warm-switch admission reason in operator and browser-safe status.
+- [x] `[must]` Assign every runtime process a stable-per-boot
+  `runtime_instance_id` and `transition_role` so root/NATS/browser can
+  distinguish `active` from `candidate`.
+- [x] `[must]` Keep candidate runtimes passive on root-routed traffic subjects
+  until cutover so prewarm does not create duplicate hub traffic consumers.
+- [x] `[must]` Automatically prewarm passive candidate runtime when warm-switch
+  is admitted, surface its readiness/failure in supervisor/browser-safe status,
+  and keep the candidate passive until supervisor explicitly commits cutover.
+- [ ] `[must]` Harden fast-cutover authority handoff so promoted candidate
+  runtime becomes the sole live root/browser traffic owner without ambiguous
+  overlap.
+- [ ] `[should]` Add stronger soak/recovery coverage for candidate promotion
+  fallback, stale candidate cleanup, and low-memory warm-switch downgrade
+  paths.
 
 ### Candidate code areas
 
@@ -310,19 +462,38 @@ The supervisor becomes the authority for local runtime lifecycle and update atte
 
 ### Exit criteria
 
-- update status remains visible while runtime is stopped
-- stale `restarting` / `applying` states resolve deterministically
-- rollback decision is owned by supervisor logic rather than only runtime-side best effort
-- sidecar remains transport-only and does not absorb process/update authority
-- operators can identify which installed skill failed during a core migration and at which stage
-- operators can distinguish `slot validation`, `root promotion pending`, and `root restart in progress` from supervisor-visible state
-- browser header/status surfaces can distinguish controlled supervisor-managed restart/update transitions from plain hub offline or transport loss
-- routed browser sessions can continue reading live supervisor transition state even while runtime `/api`, `/ws`, and `/yws` are unavailable
-- browser/operator transition surfaces can also distinguish a passive `candidate` runtime from the current `active` runtime by `runtime_instance_id`, role, and candidate readiness state instead of showing only one opaque "hub restarting" bucket
-- operators can tell whether the next transition is planned as `warm_switch` or `stop_and_switch`, and why
-- local fallback control resolution cannot accidentally target a passive `candidate` runtime as if it were the active admin endpoint
-- root/browser diagnostics can distinguish concurrent `active` and `candidate` runtimes by explicit runtime instance identity instead of only `hub_id`
-- when warm-switch is admitted and candidate prewarm succeeds, supervisor can promote/adopt that candidate instead of forcing a second fresh runtime launch, while fallback to stop-and-switch remains deterministic
+- [x] `[must]` Update status remains visible while runtime is stopped.
+- [x] `[must]` Stale `restarting` / `applying` states resolve
+  deterministically.
+- [x] `[must]` Rollback decision is owned by supervisor logic rather than only
+  runtime-side best effort.
+- [x] `[must]` Sidecar remains transport-only and does not absorb
+  process/update authority.
+- [x] `[must]` Operators can identify which installed skill failed during a
+  core migration and at which stage.
+- [x] `[must]` Operators can distinguish `slot validation`,
+  `root promotion pending`, and `root restart in progress` from
+  supervisor-visible state.
+- [x] `[must]` Browser header/status surfaces can distinguish controlled
+  supervisor-managed restart/update transitions from plain hub offline or
+  transport loss.
+- [ ] `[must]` Routed browser sessions can continue reading live supervisor
+  transition state even while runtime `/api`, `/ws`, and `/yws` are
+  unavailable.
+- [x] `[must]` Browser/operator transition surfaces can distinguish a passive
+  `candidate` runtime from the current `active` runtime by
+  `runtime_instance_id`, role, and candidate readiness state instead of showing
+  only one opaque "hub restarting" bucket.
+- [x] `[must]` Operators can tell whether the next transition is planned as
+  `warm_switch` or `stop_and_switch`, and why.
+- [x] `[must]` Local fallback control resolution cannot accidentally target a
+  passive `candidate` runtime as if it were the active admin endpoint.
+- [x] `[must]` Root/browser diagnostics can distinguish concurrent `active`
+  and `candidate` runtimes by explicit runtime instance identity instead of
+  only `hub_id`.
+- [ ] `[must]` When warm-switch is admitted and candidate prewarm succeeds,
+  supervisor can promote/adopt that candidate without ambiguous overlap, while
+  fallback to stop-and-switch remains deterministic.
 
 ## Phase 4: Hub-member semantic channels
 
@@ -366,10 +537,16 @@ Build abstraction from logical channel semantics, not from transport names.
 
 ### Work items
 
-- define `CommandChannel`, `EventChannel`, `SyncChannel`, `PresenceChannel`, `RouteChannel`, `MediaChannel`
-- map existing `/ws`, `/yws`, WebRTC data channels, and root relay traffic to those channel types
-- define path selection, failover, freeze period, and duplicate suppression rules
-- keep one active authority path per logical stream unless multipath is explicitly designed
+- [x] `[must]` Define `CommandChannel`, `EventChannel`, `SyncChannel`,
+  `PresenceChannel`, `RouteChannel`, and `MediaChannel`.
+- [x] `[must]` Map existing `/ws`, `/yws`, WebRTC data channels, and root
+  relay traffic to those channel types.
+- [x] `[must]` Define path selection, failover, freeze period, and duplicate
+  suppression rules.
+- [x] `[must]` Keep one active authority path per logical stream unless
+  multipath is explicitly designed.
+- [ ] `[should]` Add live-session validation under routed browser reconnect,
+  direct-path probe failure, and update-state fanout churn.
 
 ### Candidate code areas
 
@@ -379,9 +556,12 @@ Build abstraction from logical channel semantics, not from transport names.
 
 ### Exit criteria
 
-- one logical stream has one active authority path
-- failover rules are explicit
-- adapters no longer leak transport semantics into application code
+- [x] `[must]` One logical stream has one active authority path.
+- [x] `[must]` Failover rules are explicit.
+- [x] `[must]` Adapters no longer leak transport semantics into application
+  code.
+- [ ] `[should]` Browser/operator evidence proves the semantic selector stays
+  stable through reconnect and fallback churn.
 
 ## Phase 5: Yjs as SyncChannel
 
@@ -400,11 +580,15 @@ Make Yjs transport-independent without building a second distributed system arou
 
 ### Work items
 
-- append-only bounded update log
-- snapshot + diff recovery
-- client local persistence
-- awareness explicitly ephemeral
-- explicit resync path after route or transport churn
+- [x] `[must]` Append-only bounded update log.
+- [x] `[must]` Snapshot + diff recovery.
+- [x] `[must]` Client local persistence.
+- [x] `[must]` Awareness explicitly ephemeral.
+- [x] `[must]` Explicit resync path after route or transport churn.
+- [ ] `[should]` Validate SyncChannel recovery during A/B runtime switch with
+  an already-open rooted browser `/yws` session.
+- [ ] `[deferred]` Move Yjs websocket termination and live room/session
+  lifecycle into sidecar.
 
 ### Candidate code areas
 
@@ -414,9 +598,12 @@ Make Yjs transport-independent without building a second distributed system arou
 
 ### Exit criteria
 
-- document updates survive reconnect within replay window
-- Yjs reliability is not duplicated blindly across transport, log, and UI layers
-- awareness may drop without compromising document state
+- [x] `[must]` Document updates survive reconnect within replay window.
+- [x] `[must]` Yjs reliability is not duplicated blindly across transport,
+  log, and UI layers.
+- [x] `[must]` Awareness may drop without compromising document state.
+- [ ] `[should]` A/B acceptance evidence confirms Yjs document state recovers
+  after runtime slot switch without treating awareness continuity as durable.
 
 ### Completed for current scope
 
@@ -914,16 +1101,32 @@ For `browser <-> member` direct media, the signaling contract will also need:
 
 ### Work items
 
-- define media signaling authority
-- define direct vs relay policy
-- keep media readiness outside core control readiness
+- [x] `[must]` Define media signaling authority for the current hub-loopback
+  validation scope.
+- [x] `[must]` Define direct vs relay policy for bounded file media and current
+  A/V validation.
+- [x] `[must]` Keep media readiness outside core control readiness.
+- [ ] `[must]` Validate browser-member direct media admission and signaling
+  beyond the current hub-loopback route.
+- [ ] `[must]` Define sidecar continuity requirements for live media during hub
+  runtime restart before allowing orchestration to rely on it.
+- [ ] `[should]` Add soak evidence for peer rebuild, ICE restart, full
+  renegotiation, and media route downgrade paths.
+- [ ] `[could]` Expand from bounded hub loopback/file media into general
+  multi-party or multi-source media behavior.
 
 ### Exit criteria
 
-- media path is architecturally isolated from control and sync hardening
-- bounded relay upload/playback works through root on a live hub
-- direct WebRTC audio/video loopback can be validated end-to-end on a live hub
-- operator UI exposes media runtime, relay state, and live loopback status clearly enough for incident/debug use
+- [x] `[must]` Media path is architecturally isolated from control and sync
+  hardening.
+- [x] `[must]` Bounded relay upload/playback works through root on a live hub.
+- [x] `[must]` Direct WebRTC audio/video loopback can be validated end-to-end
+  on a live hub.
+- [x] `[must]` Operator UI exposes media runtime, relay state, and live
+  loopback status clearly enough for incident/debug use.
+- [ ] `[must]` A live media session has an explicit update/restart policy:
+  defer member update, preserve or reject hub runtime restart based on real
+  sidecar continuity evidence.
 
 ## Phase 7: Skills and scenarios lifecycle hardening
 
@@ -933,16 +1136,20 @@ Handle artifact provenance, scenario UX, and runtime lifecycle after the communi
 
 ### Work items
 
-- define a first-class artifact model for system skills and scenarios
-- separate three lifecycle operations clearly:
-  - `source sync`
-  - `runtime refresh`
-  - `A/B rollout`
-- add change classification for skill updates so the system can decide whether `runtime_update` is enough
-- make `desktop.scenario.set` transactional and observable with `requested`, `effective`, and `error` state
-- define explicit ownership for Yjs subtrees such as `ui`, `data`, `registry`, and desktop-installed artifacts
-- surface artifact provenance in diagnostics: `workspace`, `repo_workspace`, `runtime_slot`, `built_in_seed`, `dev`
-- preserve scenario install/open state through reload and rebuild of current Yjs projection
+- [ ] `[must]` Define a first-class artifact model for system skills and
+  scenarios.
+- [ ] `[must]` Separate `source sync`, `runtime refresh`, and `A/B rollout` as
+  distinct lifecycle operations.
+- [ ] `[must]` Add change classification for skill updates so the system can
+  decide whether `runtime_update` is enough.
+- [ ] `[must]` Make `desktop.scenario.set` transactional and observable with
+  `requested`, `effective`, and `error` state.
+- [ ] `[must]` Define explicit ownership for Yjs subtrees such as `ui`, `data`,
+  `registry`, and desktop-installed artifacts.
+- [ ] `[should]` Surface artifact provenance in diagnostics: `workspace`,
+  `repo_workspace`, `runtime_slot`, `built_in_seed`, and `dev`.
+- [ ] `[should]` Preserve scenario install/open state through reload and
+  rebuild of current Yjs projection.
 
 ### Candidate code areas
 
@@ -958,22 +1165,37 @@ Handle artifact provenance, scenario UX, and runtime lifecycle after the communi
 
 ### Exit criteria
 
-- operator can explain how a skill or scenario update propagates without reading the code
-- scenario switch result is observable and not inferred from UI side effects
-- remote hubs behave consistently even when local workspace assets are absent
-- installed desktop items and current scenario recover correctly after Yjs rebuild or reconnect
+- [ ] `[must]` Operator can explain how a skill or scenario update propagates
+  without reading the code.
+- [ ] `[must]` Scenario switch result is observable and not inferred from UI
+  side effects.
+- [ ] `[must]` Remote hubs behave consistently even when local workspace assets
+  are absent.
+- [ ] `[should]` Installed desktop items and current scenario recover correctly
+  after Yjs rebuild or reconnect.
 
 ## Immediate implementation order
 
 The next coding steps should follow this order:
 
-1. inventory existing hub-root subjects and messages by taxonomy and delivery class
-2. isolate route backlog from control backlog in real runtime resources
-3. define Class A hub-root flows and add outbox, inbox, and idempotency where required
-4. separate root-control and route/session incidents in readiness and diagnostics
-5. only then tighten sidecar adoption
-6. then move to hub-member, Yjs, and media semantics
-7. after the communication phases, harden skills and scenarios lifecycle and scenario UX
+1. [x] `[must]` Inventory existing hub-root subjects and messages by taxonomy
+   and delivery class.
+2. [x] `[must]` Isolate route backlog from control backlog in real runtime
+   resources.
+3. [x] `[must]` Define Class A hub-root flows and add outbox, inbox, and
+   idempotency where required.
+4. [x] `[must]` Separate root-control and route/session incidents in readiness
+   and diagnostics.
+5. [ ] `[must]` Reconcile sidecar rollout/config and capture target-stand
+   acceptance for hub-root plus `/ws` / `/yws` transport-only handoff.
+6. [ ] `[must]` Validate browser channel survival across A/B runtime switch
+   with sidecar enabled and runtime fallback treated as fallback, not success.
+7. [ ] `[should]` Harden supervisor warm-switch authority handoff and recovery
+   soak.
+8. [ ] `[should]` Validate hub-member, Yjs, and media semantics under the same
+   reconnect/A-B/load scenarios.
+9. [ ] `[must]` After communication acceptance, harden skills and scenarios
+   lifecycle and scenario UX.
 
 ## Non-goals for the first iteration
 
