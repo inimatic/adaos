@@ -3,6 +3,20 @@ import time
 import pytest
 
 
+def test_confirmation_question_shows_canonical_action_for_stt_variant():
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+
+    candidate = {
+        "kind": "regex_rule",
+        "text": "Покажи НЛО teacher",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\b(?P<modal_id>НЛО\s+teacher)\b"},
+        "preview": {"ok": True, "slots": {"modal_id": "НЛО teacher"}},
+        "normalization": {"llm_proposal_repair": {"modal_id": "nlu_teacher_modal"}},
+    }
+
+    assert conf._confirmation_question(candidate) == "Открыть NLU Teacher для запроса «Покажи НЛО teacher»?"
+
+
 @pytest.mark.anyio
 async def test_voice_candidate_proposal_requests_confirmation():
     from adaos.services.agent_context import get_ctx
