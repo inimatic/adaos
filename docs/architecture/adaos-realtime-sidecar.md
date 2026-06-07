@@ -121,12 +121,18 @@ Implemented, but current code and tests keep it disabled by default unless
   `GET /api/node/reliability`, CLI, and Infra State.
 - [ ] `[must]` Reconcile default enablement across code, tests, deployment
   config, and docs before calling sidecar the accepted default hub transport.
+- [ ] `[must]` Make sidecar launch independent from unrelated CLI imports and
+  root-checkout drift; the 2026-06-07 `adaost1` test showed supervisor-owned
+  sidecar startup can fail when `/root/adaos` lacks a module already present in
+  the active slot.
 
 Success criteria:
 
 - [ ] `[must]` Hub startup shows `nats ws transport: sidecar` on the target
   stand.
 - [ ] `[must]` Root sees one stable hub WS-NATS session through the sidecar.
+- [ ] `[must]` Hub-root sidecar NATS avoids `UnexpectedEOF` / quarantine /
+  reconnect churn during the acceptance window.
 - [ ] `[must]` No `nats keepalive pong missing` caused by hub-local WS stalls
   during the acceptance window.
 - [x] `[must]` Operators can see that sidecar owns transport only and can
@@ -153,6 +159,13 @@ open.
   `handoff_ready=true`.
 - [ ] `[must]` Prove an already-open browser `/ws` and `/yws` session remains
   usable across runtime A/B switch or restart with sidecar enabled.
+- [ ] `[must]` Preserve browser-compatible `/yws/{room}` path routing through
+  the sidecar proxy, not only `/yws?ws=<room>`.
+- [ ] `[must]` Keep sidecar status/control APIs responsive during runtime
+  event-loop lag; the 2026-06-07 `SIGSTOP` test timed out
+  `/api/supervisor/sidecar/status` while the runtime was frozen.
+- [ ] `[should]` Clear stale blocker strings from ready route tunnel
+  diagnostics when `listener_ready=true` and `handoff_ready=true`.
 - [ ] `[should]` Add soak coverage for sidecar listener restart, runtime event
   loop lag, root reconnect, and fallback path behavior.
 
@@ -160,6 +173,9 @@ Success criteria:
 
 - [ ] `[must]` Browser realtime traffic no longer depends on the hub
   main-process socket loop for the accepted transport-only path.
+- [ ] `[must]` Already-open `/ws` and `/yws` sidecar connections survive a
+  supervisor runtime restart or A/B promotion without closing only because the
+  runtime upstream disappeared.
 - [x] `[must]` Route-proxy failures do not tear down control-plane logic.
 - [ ] `[should]` Operators can distinguish accepted sidecar path, runtime
   fallback path, and root relay path in one reliability snapshot.
