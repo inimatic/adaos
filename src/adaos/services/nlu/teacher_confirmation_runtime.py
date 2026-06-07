@@ -291,19 +291,79 @@ def _slot_value(candidate: Mapping[str, Any], *keys: str) -> str:
     return ""
 
 
+def _canonical_slot_value(candidate: Mapping[str, Any], *keys: str) -> str:
+    normalization = coerce_dict(candidate.get("normalization"))
+    repair = coerce_dict(normalization.get("llm_proposal_repair"))
+    for key in keys:
+        value = repair.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    action = coerce_dict(candidate.get("action_candidate"))
+    action_slots = coerce_dict(action.get("slots"))
+    for key in keys:
+        value = action_slots.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return _slot_value(candidate, *keys)
+
+
+def _display_label(value: str) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    token = re.sub(r"(?:[_\-\s]+(?:modal|app|skill|scenario))+$", "", token, flags=re.IGNORECASE).strip()
+    token = re.sub(r"[_\-]+", " ", token).strip()
+    acronym_map = {
+        "ai": "AI",
+        "api": "API",
+        "llm": "LLM",
+        "mcp": "MCP",
+        "nlo": "NLO",
+        "nlu": "NLU",
+        "sdk": "SDK",
+        "stt": "STT",
+        "ui": "UI",
+    }
+    parts: list[str] = []
+    for part in token.split():
+        key = part.casefold()
+        if key in acronym_map:
+            parts.append(acronym_map[key])
+        elif part.isupper() or not re.search(r"[A-Za-z]", part):
+            parts.append(part)
+        else:
+            parts.append(part[:1].upper() + part[1:])
+    return " ".join(parts).strip()
+
+
+def _confirmation_request_text(candidate: Mapping[str, Any]) -> str:
+    for key in ("text", "request_text"):
+        value = candidate.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _question_for_action(verb: str, label: str, fallback: str, candidate: Mapping[str, Any]) -> str:
+    display = _display_label(label) or fallback
+    request_text = _confirmation_request_text(candidate)
+    display_key = _match_text_key(display)
+    request_key = _match_text_key(request_text)
+    if request_text and display_key and display_key not in request_key:
+        return f"{verb} {display} для запроса «{request_text}»?"
+    return f"{verb} {display}?"
+
+
 def _confirmation_question(candidate: Mapping[str, Any]) -> str:
     rr = candidate.get("regex_rule") if isinstance(candidate.get("regex_rule"), Mapping) else {}
     intent = str(rr.get("intent") or "").strip()
     if intent in {"desktop.open_scenario", "desktop.switch_scenario"}:
-        label = _slot_value(candidate, "scenario_id", "scenario")
-        if label:
-            return f"Открыть {label}?"
-        return "Открыть этот сценарий?"
+        label = _canonical_slot_value(candidate, "scenario_id", "scenario")
+        return _question_for_action("Открыть", label, "этот сценарий", candidate)
     if intent == "desktop.open_modal":
-        label = _slot_value(candidate, "modal_id", "modal", "app_id", "app")
-        if label:
-            return f"Открыть {label}?"
-        return "Открыть это окно?"
+        label = _canonical_slot_value(candidate, "modal_id", "modal", "app_id", "app")
+        return _question_for_action("Открыть", label, "это окно", candidate)
     if intent in {"desktop.open_weather", "weather.current"} or "weather" in intent:
         city = _slot_value(candidate, "city", "location")
         if city:
