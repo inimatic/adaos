@@ -162,6 +162,60 @@ def test_autostart_update_status_falls_back_to_active_manifest_payload(monkeypat
     assert "active slot: B | 0.1.0+42.8e2f6e75 | 8e2f6e75 | rev2026" in result.output
     assert "active commit: 8e2f6e7529b60f67094a7951e690558c67fdf333" in result.output
 
+
+def test_autostart_update_status_repairs_stale_default_slot_manifest_version(monkeypatch, tmp_path) -> None:
+    runner = CliRunner()
+    manifests = {
+        "A": {
+            "build_version": "0.1.0+1.7d5e114",
+            "git_short_commit": "7d5e114",
+            "git_commit": "7d5e114388a8a9a8df1a1b9a08a8ad99250c7e22",
+            "git_branch": "HEAD",
+            "git_subject": "chore: bump adaos version to 0.1.218",
+        },
+        "B": {
+            "build_version": "0.1.217+1.b10da50",
+            "git_short_commit": "b10da50",
+            "git_branch": "HEAD",
+        },
+    }
+    repo_root = tmp_path / "slots" / "A" / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text('[project]\nversion = "0.1.218"\n', encoding="utf-8")
+
+    monkeypatch.setattr(setup_cmd, "slot_dir", lambda slot_id: tmp_path / "slots" / str(slot_id).upper())
+    monkeypatch.setattr(setup_cmd, "read_slot_manifest", lambda slot_id: manifests.get(str(slot_id).upper()))
+    monkeypatch.setattr(
+        setup_cmd,
+        "_autostart_admin_get",
+        lambda path, token=None: {
+            "ok": True,
+            "status": {
+                "state": "succeeded",
+                "phase": "validate",
+                "target_rev": "rev2026",
+                "target_version": "7d5e114388a8a9a8df1a1b9a08a8ad99250c7e22",
+            },
+            "slots": {
+                "active_slot": "A",
+                "previous_slot": "B",
+                "slots": {
+                    "A": {"manifest": manifests["A"]},
+                    "B": {"manifest": manifests["B"]},
+                },
+            },
+        },
+    )
+
+    result = runner.invoke(autostart_app, ["update-status"])
+
+    assert result.exit_code == 0, result.output
+    assert "active build version: 0.1.218+1.7d5e114" in result.output
+    assert "active slot: A | 0.1.218+1.7d5e114 | 7d5e114 | HEAD" in result.output
+    assert "previous slot: B | 0.1.217+1.b10da50 | b10da50 | HEAD" in result.output
+    assert "active subject: chore: bump adaos version to 0.1.218" in result.output
+
+
 def test_autostart_update_status_prints_supervisor_attempt(monkeypatch) -> None:
     runner = CliRunner()
     monkeypatch.setattr(
