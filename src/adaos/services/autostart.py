@@ -304,17 +304,20 @@ def _write_wrapper_windows(path: Path, *, argv: Sequence[str], env: Mapping[str,
 
 def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]) -> None:
     lines = ["#!/usr/bin/env bash", "set -euo pipefail"]
+    shared_dotenv = str(env.get("ADAOS_SHARED_DOTENV_PATH") or "").strip()
+    if shared_dotenv:
+        lines.append(f"export ADAOS_SHARED_DOTENV_PATH={_sh_quote(shared_dotenv)}")
+        lines.extend(
+            [
+                "if [ -f \"${ADAOS_SHARED_DOTENV_PATH}\" ]; then",
+                "  set -a",
+                "  . \"${ADAOS_SHARED_DOTENV_PATH}\"",
+                "  set +a",
+                "fi",
+            ]
+        )
     for k, v in env.items():
         lines.append(f"export {k}={_sh_quote(str(v))}")
-    lines.extend(
-        [
-            "if [ -n \"${ADAOS_SHARED_DOTENV_PATH:-}\" ] && [ -f \"${ADAOS_SHARED_DOTENV_PATH}\" ]; then",
-            "  set -a",
-            "  . \"${ADAOS_SHARED_DOTENV_PATH}\"",
-            "  set +a",
-            "fi",
-        ]
-    )
     quoted = " ".join(_sh_quote(str(x)) for x in argv)
     lines.append(f"exec {quoted}")
     _write_text(path, "\n".join(lines) + "\n")

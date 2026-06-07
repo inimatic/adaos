@@ -173,6 +173,33 @@ def test_realtime_sidecar_route_tunnel_contract_reflects_enabled_supervisor_mode
     assert contract["yws"]["listener"]["url"].endswith("/yws")
 
 
+def test_realtime_sidecar_route_tunnel_discovers_runtime_from_persisted_supervisor_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "base"
+    state_dir = base_dir / "state" / "supervisor"
+    state_dir.mkdir(parents=True)
+    (state_dir / "runtime.json").write_text(
+        '{"runtime_url":"http://127.0.0.1:8788","desired_running":true,"managed_alive":true}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
+
+    def _unexpected_http(*args, **kwargs):
+        raise AssertionError("route tunnel discovery should not require supervisor HTTP when state is available")
+
+    monkeypatch.setattr(realtime_sidecar_mod, "urlopen", _unexpected_http)
+
+    listeners = realtime_sidecar_mod.realtime_sidecar_route_tunnel_listeners()
+
+    assert listeners["ws"]["upstream_port"] == 8788
+    assert listeners["yws"]["upstream_url"] == "ws://127.0.0.1:8788/yws"
+
+
 def test_realtime_sidecar_listener_snapshot_includes_route_tunnel_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -800,11 +827,13 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
         return _FakeProc()
 
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_BASE_DIR", "")
     monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
     monkeypatch.setattr(realtime_sidecar_mod, "_is_port_open", _fake_is_port_open)
     monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_bound", _fake_wait_bound)
     monkeypatch.setattr(realtime_sidecar_mod, "probe_realtime_sidecar_ready", _unexpected_probe)
     monkeypatch.setattr(realtime_sidecar_mod.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(realtime_sidecar_mod, "current_base_dir", lambda: tmp_path / "base")
 
     proc = await realtime_sidecar_mod.start_realtime_sidecar_subprocess(role="hub")
 
@@ -814,6 +843,7 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     assert popen_env["ADAOS_REALTIME_PREFER_DEDICATED"] == "0"
     assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "1"
     assert popen_env["ADAOS_REALTIME_WIN_LOOP"] == "proactor"
+    assert popen_env["ADAOS_BASE_DIR"] == str(tmp_path / "base")
 
 
 @pytest.mark.asyncio
