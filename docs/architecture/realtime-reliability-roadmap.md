@@ -84,6 +84,16 @@ transport-only `/ws` and `/yws` handoff as ready.
 - The sidecar implementation can start local route proxy listeners for `/ws`
   and `/yws` and bootstrap route selection can prefer those listeners for
   matching paths.
+- Supervisor-managed sidecar launch no longer depends on the full `adaos` CLI
+  import graph: the process entrypoint is now
+  `python -m adaos.services.realtime_sidecar`.
+- Supervisor sidecar status/restart responses no longer need
+  `GET /api/node/reliability`; the sidecar runtime block is built from local
+  process snapshots and the sidecar diagnostics JSONL, so the control surface
+  can remain responsive while the runtime event loop is lagging or frozen.
+- The route tunnel contract now clears stale blocker strings when `/ws` or
+  `/yws` handoff is ready, and the sidecar proxy accepts browser-compatible
+  `/yws/{room}` paths in addition to `/yws?ws=<room>`.
 - This repository state should be described as **implemented but not accepted
   as default rollout behavior** until code, tests, runtime config, and live
   reliability evidence agree.
@@ -126,6 +136,25 @@ Explicit sidecar enablement was tested on the managed hub stand with
   `UnexpectedEOF`, quarantine, and reconnect churn. Treat hub-root sidecar
   transport as not accepted on this stand.
 
+Repository follow-up after this checkpoint fixed the local causes for three of
+those findings: the dedicated sidecar module entrypoint removes the root CLI
+import drift blocker, `/yws/{room}` is accepted by the proxy, and supervisor
+sidecar status no longer calls the runtime reliability API. These fixes still
+need to be redeployed and revalidated on the target stand before the stand
+checkpoint can be marked accepted.
+
+Target-stand smoke after the repository follow-up confirmed the narrow fixes
+when the hotfix was copied to both `/root/adaos` and the active slot `B` source
+tree, because supervisor code sync otherwise restored the old sidecar file from
+the active slot. With `ADAOS_REALTIME_ENABLE=1`, supervisor reported sidecar
+`status=ready`, `control_ready=ready`, `route_ready=ready`,
+`sync_ready=ready`, and empty `/ws` plus `/yws` blockers; `/yws/default`
+connected through the sidecar listener; and `GET
+/api/supervisor/sidecar/status` returned in roughly 23 ms while the managed
+runtime process was stopped with `SIGSTOP`. The stand was restored to
+sidecar-off after the smoke. This does not close A/B survival or hub-root
+`UnexpectedEOF` soak acceptance.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -137,6 +166,9 @@ Explicit sidecar enablement was tested on the managed hub stand with
 - those same reliability/checkpoint surfaces now also carry routed-browser active-runtime selection for root-routed `/ws`, so supervisor-aware browser continuity is explicit in node API, CLI, canonical control-plane projection, and browser diagnostics instead of living only inside bootstrap route-base selection
 - those same reliability/browser surfaces now also carry one explicit sidecar enablement policy (`role_default` vs explicit env override), so hub runtime sidecar adoption remains observable while the reliable default stays opt-in
 - `adaos-realtime` now boots dedicated local websocket listeners for `/ws` and `/yws`, root-routed browser ingress can prefer them for matching paths, and runtime diagnostics can report both transport handoffs as `ready` when sidecar is enabled and listeners are ready
+- supervisor-owned sidecar boot now has a narrow module entrypoint, and
+  supervisor sidecar status/restart responses are locally derived from process
+  state plus sidecar diagnostics instead of depending on runtime reliability
 - Infra State shows realtime summary and transport diagnostics through Yjs-backed UI
 - runtime now exposes canonical channel overview entries for `hub_root`, `hub_root_browser`, and `browser_hub_sync`
 - runtime now exposes `hub_root_transport_strategy` with current transport, candidate list, recent attempts, reconnect/failure history, and active hypothesis parameters
