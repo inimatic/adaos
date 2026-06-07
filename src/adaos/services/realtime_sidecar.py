@@ -343,7 +343,40 @@ def _route_tunnel_supervisor_base_url() -> str | None:
     return f"http://{host}:{port}"
 
 
-def _route_tunnel_supervisor_runtime_endpoint() -> tuple[str, int] | None:
+def _route_tunnel_runtime_endpoint_from_payload(payload: dict[str, Any] | None) -> tuple[str, int] | None:
+    if not isinstance(payload, dict):
+        return None
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else payload
+    runtime_url = str(runtime.get("runtime_url") or "").strip().rstrip("/")
+    if not runtime_url:
+        return None
+    parsed = urlparse(runtime_url)
+    host = str(parsed.hostname or "").strip()
+    port = parsed.port
+    if not host or not isinstance(port, int) or port <= 0:
+        return None
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    return host, int(port)
+
+
+def _route_tunnel_supervisor_state_endpoint() -> tuple[str, int] | None:
+    try:
+        path = current_base_dir() / "state" / "supervisor" / "runtime.json"
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        return None
+    endpoint = _route_tunnel_runtime_endpoint_from_payload(payload if isinstance(payload, dict) else {})
+    if endpoint is None:
+        return None
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else payload
+    if isinstance(runtime, dict):
+        if runtime.get("desired_running") is False or runtime.get("managed_alive") is False:
+            return None
+    return endpoint
+
+
+def _route_tunnel_supervisor_http_endpoint() -> tuple[str, int] | None:
     base = _route_tunnel_supervisor_base_url()
     if not base:
         return None
@@ -360,18 +393,11 @@ def _route_tunnel_supervisor_runtime_endpoint() -> tuple[str, int] | None:
         return None
     except Exception:
         return None
-    runtime = payload.get("runtime") if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict) else {}
-    runtime_url = str(runtime.get("runtime_url") or "").strip().rstrip("/")
-    if not runtime_url:
-        return None
-    parsed = urlparse(runtime_url)
-    host = str(parsed.hostname or "").strip()
-    port = parsed.port
-    if not host or not isinstance(port, int) or port <= 0:
-        return None
-    if host not in {"127.0.0.1", "localhost", "::1"}:
-        return None
-    return host, int(port)
+    return _route_tunnel_runtime_endpoint_from_payload(payload if isinstance(payload, dict) else {})
+
+
+def _route_tunnel_supervisor_runtime_endpoint() -> tuple[str, int] | None:
+    return _route_tunnel_supervisor_state_endpoint() or _route_tunnel_supervisor_http_endpoint()
 
 
 def _route_tunnel_listener_url(*, host: str, port: int, path: str) -> str:
@@ -996,6 +1022,7 @@ async def start_realtime_sidecar_subprocess(
     env = merged_runtime_dotenv_env(os.environ.copy())
     env["ADAOS_REALTIME_ENABLE"] = "1"
     env["ADAOS_REALTIME_CHILD"] = "1"
+    env["ADAOS_BASE_DIR"] = str(current_base_dir())
     env.setdefault("ADAOS_REALTIME_PREFER_DEDICATED", "0")
     env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] = "1"
     env.setdefault("ADAOS_REALTIME_WIN_LOOP", "proactor")

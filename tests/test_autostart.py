@@ -61,6 +61,28 @@ def test_default_autostart_spec_uses_runner(tmp_path: Path) -> None:
     assert spec.env["ADAOS_TOKEN"] == "t1"
 
 
+def test_shell_wrapper_sources_dotenv_before_managed_exports(tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "adaos-autostart.sh"
+    shared_dotenv = tmp_path / ".env"
+
+    autostart._write_wrapper_sh(
+        wrapper,
+        argv=["/venv/bin/python", "-m", "adaos.apps.supervisor"],
+        env={
+            "ADAOS_BASE_DIR": "/var/lib/adaos",
+            "ADAOS_SHARED_DOTENV_PATH": str(shared_dotenv),
+            "ADAOS_SUPERVISOR_PORT": "8776",
+        },
+    )
+
+    text = wrapper.read_text(encoding="utf-8")
+
+    assert text.index('. "${ADAOS_SHARED_DOTENV_PATH}"') < text.rindex("export ADAOS_BASE_DIR='/var/lib/adaos'")
+    assert text.index('. "${ADAOS_SHARED_DOTENV_PATH}"') < text.rindex("export ADAOS_SUPERVISOR_PORT='8776'")
+
+
 def test_windows_disable_stops_live_autostart_wrapper_tree(monkeypatch, tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 
