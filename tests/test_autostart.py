@@ -222,6 +222,30 @@ def test_default_autostart_spec_respects_explicit_base_dir_from_shared_dotenv(mo
     assert spec.env["ADAOS_SHARED_DOTENV_PATH"] == str(shared_dotenv.resolve())
 
 
+def test_default_autostart_spec_preserves_sidecar_env_from_shared_dotenv(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    shared_dotenv = repo_root / ".env"
+    shared_dotenv.write_text(
+        "ADAOS_REALTIME_ENABLE=1\n"
+        "ADAOS_REALTIME_ROUTE_PROXY_ENABLE=1\n"
+        "ADAOS_REALTIME_ALLOW_API_FALLBACK=1\n"
+        "HUB_NATS_TRANSPORT=ws\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(autostart, "_shared_dotenv_path", lambda ctx: shared_dotenv)
+
+    spec = default_spec(_FakeCtx(tmp_path / "base"), host="127.0.0.1", port=8779, token="t1")
+
+    assert spec.env["ADAOS_REALTIME_ENABLE"] == "1"
+    assert spec.env["ADAOS_REALTIME_ROUTE_PROXY_ENABLE"] == "1"
+    assert spec.env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "1"
+    assert spec.env["HUB_NATS_TRANSPORT"] == "ws"
+
+
 def test_default_autostart_spec_prefers_stable_root_venv_over_slot_context(monkeypatch, tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 
