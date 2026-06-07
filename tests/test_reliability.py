@@ -2175,6 +2175,10 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
         raise AssertionError("thin summary must not build the full reliability payload")
 
     monkeypatch.setattr("adaos.apps.api.node_api.current_reliability_payload", _unexpected_reliability)
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_PROXY_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", "17423")
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", "17424")
     registry = StatusRegistry()
     runtime_card = {
         "id": "runtime",
@@ -2217,6 +2221,10 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     }
     assert payload["statusPlane"]["cards"][0]["detailsRef"]["receiver"] == "infrastate.runtime"
     assert "hubRootHardening" not in payload
+    assert payload["sidecarEnablement"]["enabled"] is True
+    assert payload["sidecarEnablement"]["source"] == "env_override"
+    assert payload["sidecarContinuity"]["currentSupport"] == "not_applicable"
+    assert payload["routeTunnel"]["ws"]["planned_owner"] == "sidecar"
     assert payload["detailsRef"]["summaryFull"] == "/api/node/reliability/summary?mode=full"
 
     registry.publish(runtime_card)

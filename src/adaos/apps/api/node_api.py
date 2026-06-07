@@ -930,6 +930,7 @@ def _thin_runtime_reliability_payload(
         "lastOversizedCard": _coerce_dict(diagnostics.get("lastOversizedCard")),
         "lastChangedAt": diagnostics.get("lastChangedAt"),
     }
+    sidecar_fields = _thin_sidecar_runtime_fields()
     return {
         "ok": True,
         "available": bool(status_plane.get("available", True)),
@@ -939,6 +940,7 @@ def _thin_runtime_reliability_payload(
         "webspaceId": resolved_webspace_id,
         "updatedAt": status_plane.get("updatedAt"),
         "statusPlane": status_plane,
+        **sidecar_fields,
         "detailsRef": {
             "summaryFull": "/api/node/reliability/summary?mode=full",
             "runtime": "/api/node/reliability",
@@ -1009,6 +1011,90 @@ def _compact_route_tunnel_state(value: Any) -> str:
     return "unknown"
 
 
+def _compact_sidecar_runtime_fields(sidecar_runtime: dict[str, Any]) -> dict[str, Any]:
+    sidecar = _coerce_dict(sidecar_runtime)
+    sidecar_enablement = _coerce_dict(sidecar.get("enablement"))
+    continuity = _coerce_dict(sidecar.get("continuity_contract"))
+    progress = _coerce_dict(sidecar.get("progress"))
+    route_tunnel = _coerce_dict(sidecar.get("route_tunnel_contract"))
+    ws = _coerce_dict(route_tunnel.get("ws"))
+    yws = _coerce_dict(route_tunnel.get("yws"))
+    return {
+        "sidecarContinuity": {
+            "currentSupport": str(continuity.get("current_support") or "unknown").strip() or "unknown",
+            "hubRuntimeUpdate": str(continuity.get("hub_runtime_update") or "unknown").strip() or "unknown",
+            "required": bool(continuity.get("required")),
+            "pendingBoundaries": _coerce_list(continuity.get("pending_boundaries")),
+            "readyBoundaries": _coerce_list(continuity.get("ready_boundaries")),
+            "blockers": _coerce_list(continuity.get("blockers")),
+        },
+        "sidecarEnablement": {
+            "enabled": bool(sidecar_enablement.get("enabled")),
+            "defaultEnabled": bool(sidecar_enablement.get("default_enabled")),
+            "explicit": bool(sidecar_enablement.get("explicit")),
+            "source": str(sidecar_enablement.get("source") or "unknown").strip() or "unknown",
+            "role": str(sidecar_enablement.get("role") or "").strip() or None,
+            "envVar": str(sidecar_enablement.get("env_var") or "").strip() or None,
+            "envValue": str(sidecar_enablement.get("env_value") or "").strip() or None,
+            "reason": str(sidecar_enablement.get("reason") or "").strip() or None,
+        },
+        "sidecarProgress": {
+            "state": str(progress.get("state") or "unknown").strip() or "unknown",
+            "percent": float(progress.get("percent") or 0),
+            "completedMilestones": int(progress.get("completed_milestones") or 0),
+            "milestoneTotal": int(progress.get("milestone_total") or 0),
+            "currentMilestone": str(progress.get("current_milestone") or "").strip() or None,
+            "nextBlocker": str(progress.get("next_blocker") or "").strip() or None,
+        },
+        "routeTunnel": {
+            "currentSupport": str(route_tunnel.get("current_support") or "unknown").strip() or "unknown",
+            "ownershipBoundary": str(route_tunnel.get("ownership_boundary") or "unknown").strip() or "unknown",
+            "ws": ws,
+            "yws": yws,
+        },
+        "browserWsHandoffReady": str(ws.get("current_owner") or "").strip().lower() == "sidecar" and bool(ws.get("handoff_ready")),
+        "browserYwsHandoffReady": str(yws.get("current_owner") or "").strip().lower() == "sidecar" and bool(yws.get("handoff_ready")),
+        "browserWsHandoffState": _compact_route_tunnel_state(ws),
+        "browserYwsHandoffState": _compact_route_tunnel_state(yws),
+        "browserWsHandoffBlocker": (str((_coerce_list(ws.get("blockers"))[:1] or [""])[0]).strip() or None),
+        "browserYwsHandoffBlocker": (str((_coerce_list(yws.get("blockers"))[:1] or [""])[0]).strip() or None),
+    }
+
+
+def _thin_sidecar_runtime_fields() -> dict[str, Any]:
+    try:
+        from adaos.services.reliability import sidecar_runtime_snapshot
+
+        sidecar = sidecar_runtime_snapshot(
+            role=None,
+            readiness_tree={},
+            hub_root_protocol={},
+            transport_strategy={},
+            media_runtime={},
+        )
+    except Exception as exc:
+        sidecar = {
+            "enablement": {
+                "enabled": False,
+                "default_enabled": False,
+                "explicit": False,
+                "source": "unavailable",
+                "reason": f"{type(exc).__name__}: {exc}",
+            },
+            "continuity_contract": {
+                "current_support": "unknown",
+                "hub_runtime_update": "unknown",
+                "required": False,
+                "pending_boundaries": [],
+                "ready_boundaries": [],
+                "blockers": [],
+            },
+            "progress": {},
+            "route_tunnel_contract": {},
+        }
+    return _compact_sidecar_runtime_fields(sidecar if isinstance(sidecar, dict) else {})
+
+
 def _compact_runtime_reliability_payload(
     payload: dict[str, Any],
     *,
@@ -1018,10 +1104,8 @@ def _compact_runtime_reliability_payload(
     runtime = _coerce_dict(payload.get("runtime"))
     hub_root_protocol = _coerce_dict(runtime.get("hub_root_protocol"))
     sidecar_runtime = _coerce_dict(runtime.get("sidecar_runtime"))
-    sidecar_enablement = _coerce_dict(sidecar_runtime.get("enablement"))
+    sidecar_fields = _compact_sidecar_runtime_fields(sidecar_runtime)
     hardening = _coerce_dict(hub_root_protocol.get("hardening_coverage"))
-    continuity = _coerce_dict(sidecar_runtime.get("continuity_contract"))
-    progress = _coerce_dict(sidecar_runtime.get("progress"))
     route_tunnel = _coerce_dict(sidecar_runtime.get("route_tunnel_contract"))
     ws = _coerce_dict(route_tunnel.get("ws"))
     yws = _coerce_dict(route_tunnel.get("yws"))
@@ -1061,44 +1145,7 @@ def _compact_runtime_reliability_payload(
             "totalFlows": int(hardening.get("total_flows") or 0),
             "flows": _coerce_list(hardening.get("flows")),
         },
-        "sidecarContinuity": {
-            "currentSupport": str(continuity.get("current_support") or "unknown").strip() or "unknown",
-            "hubRuntimeUpdate": str(continuity.get("hub_runtime_update") or "unknown").strip() or "unknown",
-            "required": bool(continuity.get("required")),
-            "pendingBoundaries": _coerce_list(continuity.get("pending_boundaries")),
-            "readyBoundaries": _coerce_list(continuity.get("ready_boundaries")),
-            "blockers": _coerce_list(continuity.get("blockers")),
-        },
-        "sidecarEnablement": {
-            "enabled": bool(sidecar_enablement.get("enabled")),
-            "defaultEnabled": bool(sidecar_enablement.get("default_enabled")),
-            "explicit": bool(sidecar_enablement.get("explicit")),
-            "source": str(sidecar_enablement.get("source") or "unknown").strip() or "unknown",
-            "role": str(sidecar_enablement.get("role") or "").strip() or None,
-            "envVar": str(sidecar_enablement.get("env_var") or "").strip() or None,
-            "envValue": str(sidecar_enablement.get("env_value") or "").strip() or None,
-            "reason": str(sidecar_enablement.get("reason") or "").strip() or None,
-        },
-        "sidecarProgress": {
-            "state": str(progress.get("state") or "unknown").strip() or "unknown",
-            "percent": float(progress.get("percent") or 0),
-            "completedMilestones": int(progress.get("completed_milestones") or 0),
-            "milestoneTotal": int(progress.get("milestone_total") or 0),
-            "currentMilestone": str(progress.get("current_milestone") or "").strip() or None,
-            "nextBlocker": str(progress.get("next_blocker") or "").strip() or None,
-        },
-        "routeTunnel": {
-            "currentSupport": str(route_tunnel.get("current_support") or "unknown").strip() or "unknown",
-            "ownershipBoundary": str(route_tunnel.get("ownership_boundary") or "unknown").strip() or "unknown",
-            "ws": ws,
-            "yws": yws,
-        },
-        "browserWsHandoffReady": str(ws.get("current_owner") or "").strip().lower() == "sidecar" and bool(ws.get("handoff_ready")),
-        "browserYwsHandoffReady": str(yws.get("current_owner") or "").strip().lower() == "sidecar" and bool(yws.get("handoff_ready")),
-        "browserWsHandoffState": _compact_route_tunnel_state(ws),
-        "browserYwsHandoffState": _compact_route_tunnel_state(yws),
-        "browserWsHandoffBlocker": (str((_coerce_list(ws.get("blockers"))[:1] or [""])[0]).strip() or None),
-        "browserYwsHandoffBlocker": (str((_coerce_list(yws.get("blockers"))[:1] or [""])[0]).strip() or None),
+        **sidecar_fields,
         "connectivity": {
             "requiredUpstreamLink": {
                 "kind": str(required_upstream_link.get("kind") or "").strip() or None,
