@@ -214,8 +214,10 @@ def test_realtime_sidecar_route_tunnel_contract_marks_local_websocket_handoffs_r
             assert contract["yws"]["listener_ready"] is True
             assert contract["ws"]["current_owner"] == "sidecar"
             assert contract["ws"]["handoff_ready"] is True
+            assert contract["ws"]["blockers"] == []
             assert contract["yws"]["current_owner"] == "sidecar"
             assert contract["yws"]["handoff_ready"] is True
+            assert contract["yws"]["blockers"] == []
             assert contract["ws"]["listener"]["url"].endswith("/ws")
             assert contract["yws"]["listener"]["url"].endswith("/yws")
         finally:
@@ -277,6 +279,49 @@ def test_realtime_sidecar_route_proxy_relays_local_websocket_payload(
                 await client.send("hello-through-sidecar")
                 echoed = await asyncio.wait_for(client.recv(), timeout=1.0)
                 assert echoed == "hello-through-sidecar"
+        finally:
+            await server.close()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_realtime_sidecar_yws_route_proxy_accepts_room_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_port = _free_port()
+    ws_proxy_port = _free_port()
+    yws_proxy_port = _free_port()
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", str(runtime_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(ws_proxy_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(yws_proxy_port))
+
+    async def _run() -> None:
+        websockets = pytest.importorskip("websockets")
+        upstream_paths: list[str] = []
+
+        async def _echo(websocket, _path=None):
+            request = getattr(websocket, "request", None)
+            upstream_paths.append(
+                str(getattr(websocket, "path", None) or getattr(request, "path", None) or _path or "")
+            )
+            async for message in websocket:
+                await websocket.send(message)
+
+        upstream = await websockets.serve(_echo, "127.0.0.1", runtime_port, max_size=None, compression=None)
+        server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+        await server.start()
+        try:
+            async with websockets.connect(
+                f"ws://127.0.0.1:{yws_proxy_port}/yws/default?token=dev",
+                max_size=None,
+            ) as client:
+                await client.send(b"hello-yws-room")
+                echoed = await asyncio.wait_for(client.recv(), timeout=1.0)
+                assert echoed == b"hello-yws-room"
+            assert upstream_paths == ["/yws/default?token=dev"]
         finally:
             await server.close()
             upstream.close()
@@ -605,6 +650,7 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     popen_env: dict[str, str] = {}
+    popen_args: list[str] = []
 
     class _FakeProc:
         def poll(self):
@@ -620,7 +666,8 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
         return True
 
     def _fake_popen(*args, **kwargs):
-        nonlocal popen_env
+        nonlocal popen_args, popen_env
+        popen_args = list(args[0])
         popen_env = dict(kwargs["env"])
         return _FakeProc()
 
@@ -633,6 +680,8 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     proc = await realtime_sidecar_mod.start_realtime_sidecar_subprocess(role="hub")
 
     assert proc is not None
+    assert popen_args[:3] == [realtime_sidecar_mod.sys.executable, "-m", "adaos.services.realtime_sidecar"]
+    assert "realtime" not in popen_args[:5]
     assert popen_env["ADAOS_REALTIME_PREFER_DEDICATED"] == "0"
     assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "1"
     assert popen_env["ADAOS_REALTIME_WIN_LOOP"] == "proactor"

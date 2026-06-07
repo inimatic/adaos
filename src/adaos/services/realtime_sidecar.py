@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import json
@@ -446,7 +447,9 @@ def realtime_sidecar_route_tunnel_contract(*, role: str | None = None) -> dict[s
         upstream_configured = bool(listener.get("upstream_configured"))
         handoff_ready = enabled and listener_enabled and upstream_configured and listener_ready
         blockers: list[str] = []
-        if not enabled:
+        if handoff_ready:
+            blockers = []
+        elif not enabled:
             blockers.append(ownership_blocker)
             blockers.append("realtime sidecar is disabled")
         elif not listener_enabled:
@@ -953,9 +956,7 @@ async def start_realtime_sidecar_subprocess(
     args = [
         sys.executable,
         "-m",
-        "adaos",
-        "realtime",
-        "serve",
+        "adaos.services.realtime_sidecar",
         "--host",
         host,
         "--port",
@@ -1391,7 +1392,11 @@ class RealtimeSidecarServer:
             default_path=upstream_path,
         )
         requested_path_only = str(urlparse(requested_path).path or "").strip() or upstream_path
-        if requested_path_only != upstream_path:
+        path_allowed = requested_path_only == upstream_path or (
+            str(kind or "").strip().lower() == "yws"
+            and requested_path_only.startswith(upstream_path.rstrip("/") + "/")
+        )
+        if not path_allowed:
             with contextlib.suppress(Exception):
                 await websocket.close(code=1008, reason="unexpected_path")
             return
@@ -1707,3 +1712,18 @@ async def run_realtime_sidecar(*, host: str | None = None, port: int | None = No
     finally:
         await server.close()
     return 0
+
+
+def _main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m adaos.services.realtime_sidecar",
+        description="Run the AdaOS realtime sidecar without importing the full CLI.",
+    )
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    args = parser.parse_args(argv)
+    return int(asyncio.run(run_realtime_sidecar(host=args.host, port=args.port)))
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

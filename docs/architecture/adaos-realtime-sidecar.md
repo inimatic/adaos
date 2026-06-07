@@ -121,10 +121,12 @@ Implemented, but current code and tests keep it disabled by default unless
   `GET /api/node/reliability`, CLI, and Infra State.
 - [ ] `[must]` Reconcile default enablement across code, tests, deployment
   config, and docs before calling sidecar the accepted default hub transport.
-- [ ] `[must]` Make sidecar launch independent from unrelated CLI imports and
+- [x] `[must]` Make sidecar launch independent from unrelated CLI imports and
   root-checkout drift; the 2026-06-07 `adaost1` test showed supervisor-owned
   sidecar startup can fail when `/root/adaos` lacks a module already present in
-  the active slot.
+  the active slot. The supervisor now launches
+  `python -m adaos.services.realtime_sidecar`, so sidecar boot no longer needs
+  the full `adaos` CLI import graph.
 
 Success criteria:
 
@@ -159,12 +161,15 @@ open.
   `handoff_ready=true`.
 - [ ] `[must]` Prove an already-open browser `/ws` and `/yws` session remains
   usable across runtime A/B switch or restart with sidecar enabled.
-- [ ] `[must]` Preserve browser-compatible `/yws/{room}` path routing through
+- [x] `[must]` Preserve browser-compatible `/yws/{room}` path routing through
   the sidecar proxy, not only `/yws?ws=<room>`.
-- [ ] `[must]` Keep sidecar status/control APIs responsive during runtime
+- [x] `[must]` Keep sidecar status/control APIs responsive during runtime
   event-loop lag; the 2026-06-07 `SIGSTOP` test timed out
-  `/api/supervisor/sidecar/status` while the runtime was frozen.
-- [ ] `[should]` Clear stale blocker strings from ready route tunnel
+  `/api/supervisor/sidecar/status` while the runtime was frozen. The supervisor
+  status/restart surface now builds the sidecar runtime block from local
+  process snapshots and sidecar diagnostics instead of querying runtime
+  reliability.
+- [x] `[should]` Clear stale blocker strings from ready route tunnel
   diagnostics when `listener_ready=true` and `handoff_ready=true`.
 - [ ] `[should]` Add soak coverage for sidecar listener restart, runtime event
   loop lag, root reconnect, and fallback path behavior.

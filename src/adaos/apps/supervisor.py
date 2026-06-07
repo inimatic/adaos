@@ -62,8 +62,10 @@ from adaos.services.core_update_policy import core_update_reactions_disabled_rea
 from adaos.services.node_config import load_config
 from adaos.services.realtime_sidecar import (
     probe_realtime_sidecar_ready,
+    realtime_sidecar_diag_path,
     realtime_sidecar_enabled,
     realtime_sidecar_listener_snapshot,
+    realtime_sidecar_local_url,
     restart_realtime_sidecar_subprocess,
     start_realtime_sidecar_subprocess,
     stop_realtime_sidecar_subprocess,
@@ -2364,6 +2366,12 @@ class SupervisorManager:
             self._sidecar_last_probe_error = "listener_not_running"
             self._sidecar_consecutive_probe_failures += 1
             return False
+        if bool(snapshot.get("managed_alive")) and bool(snapshot.get("listener_matches_managed")):
+            self._sidecar_last_probe_at = time.time()
+            self._sidecar_last_probe_ok = True
+            self._sidecar_last_probe_error = None
+            self._sidecar_consecutive_probe_failures = 0
+            return True
         now = time.time()
         if (
             not force
@@ -3714,8 +3722,295 @@ class SupervisorManager:
         )
 
     def _runtime_sidecar_runtime_payload(self) -> dict[str, Any]:
-        runtime = self._runtime_reliability_payload(timeout=2.0)
-        return dict(runtime.get("sidecar_runtime")) if isinstance(runtime.get("sidecar_runtime"), dict) else {}
+        status = self._sidecar_status_payload()
+        process = status.get("process") if isinstance(status.get("process"), dict) else {}
+        role = str(status.get("role") or self._sidecar_role() or "").strip().lower() or None
+        enablement = process.get("enablement_policy") if isinstance(process.get("enablement_policy"), dict) else {}
+        enabled = bool(status.get("enabled"))
+        route_tunnel_contract = (
+            process.get("route_tunnel_contract")
+            if isinstance(process.get("route_tunnel_contract"), dict)
+            else {}
+        )
+        diag_path = realtime_sidecar_diag_path()
+        record = _read_jsonl_tail(diag_path, limit=1)
+        last_diag = record[-1] if record else None
+        now_ts = time.time()
+        diag_age_s = None
+        diag_fresh = False
+        if isinstance(last_diag, dict) and isinstance(last_diag.get("ts"), (int, float)):
+            diag_age_s = round(max(0.0, now_ts - float(last_diag.get("ts"))), 3)
+            diag_fresh = float(diag_age_s) <= 10.0
+        if isinstance(last_diag, dict) and isinstance(last_diag.get("enablement_policy"), dict):
+            enablement = dict(last_diag.get("enablement_policy") or enablement or {})
+        if isinstance(last_diag, dict) and isinstance(last_diag.get("route_tunnel_contract"), dict):
+            route_tunnel_contract = dict(last_diag.get("route_tunnel_contract") or route_tunnel_contract or {})
+        listener_running = bool(process.get("listener_running"))
+        managed_alive = bool(process.get("managed_alive"))
+        status_text = "disabled"
+        summary = "realtime sidecar is disabled"
+        session_state = "disabled"
+        status_reason = str(enablement.get("reason") or "").strip() or summary
+        local_listener_state = "disabled"
+        remote_session_state = "disabled"
+        transport_ready = False
+        if enabled:
+            local_listener_state = "ready" if listener_running else "down"
+            status_text = "unknown"
+            summary = "realtime sidecar is enabled but has no diagnostics yet"
+            session_state = "starting"
+            status_reason = (
+                "sidecar process is running but has not emitted diagnostics yet"
+                if managed_alive
+                else summary
+            )
+            remote_session_state = "unknown"
+            if isinstance(last_diag, dict):
+                last_error = str(last_diag.get("last_error") or "").strip()
+                remote_connected_ago_s = last_diag.get("remote_connected_ago_s")
+                if not diag_fresh:
+                    status_text = "degraded"
+                    summary = "sidecar diagnostics are stale"
+                    session_state = "stale_diag"
+                    status_reason = summary
+                    local_listener_state = "stale" if listener_running else "down"
+                    remote_session_state = "stale"
+                elif last_error:
+                    status_text = "degraded"
+                    summary = f"sidecar reports transport error: {last_error}"
+                    session_state = "remote_connect_failed"
+                    status_reason = last_error
+                    remote_session_state = "down"
+                elif isinstance(remote_connected_ago_s, (int, float)):
+                    status_text = "ready"
+                    summary = "sidecar remote session is connected"
+                    session_state = "remote_ready"
+                    status_reason = "remote session is connected"
+                    remote_session_state = "ready"
+                    transport_ready = True
+                else:
+                    status_text = "unknown"
+                    summary = "sidecar diagnostics do not show an active session"
+                    session_state = "starting"
+                    status_reason = summary
+                    remote_session_state = "unknown"
+
+        def _route_state(kind: str) -> str:
+            entry = route_tunnel_contract.get(kind) if isinstance(route_tunnel_contract.get(kind), dict) else {}
+            if not enabled:
+                return "planned" if entry else "not_owned"
+            if bool(entry.get("handoff_ready")):
+                return "ready"
+            return "planned" if entry else "not_owned"
+
+        def _route_blocker(entry: dict[str, Any]) -> str | None:
+            return next((str(item).strip() for item in (entry.get("blockers") or []) if str(item).strip()), None)
+
+        def _handoff_step(step_id: str, title: str, entry: dict[str, Any]) -> dict[str, Any]:
+            current_owner = str(entry.get("current_owner") or "").strip().lower()
+            planned_owner = str(entry.get("planned_owner") or "").strip().lower()
+            handoff_ready = bool(entry.get("handoff_ready"))
+            listener_ready = bool(entry.get("listener_ready"))
+            blocker = _route_blocker(entry)
+            if current_owner == "sidecar" and handoff_ready:
+                status_value = "completed"
+            elif current_owner == "sidecar" or planned_owner == "sidecar":
+                status_value = "in_progress"
+            else:
+                status_value = "planned"
+            return {
+                "id": step_id,
+                "title": title,
+                "status": status_value,
+                "active_on_node": current_owner == "sidecar",
+                "ready_on_node": current_owner == "sidecar" and handoff_ready,
+                "listener_ready": listener_ready,
+                "blocker": blocker,
+                "delegation_mode": entry.get("delegation_mode"),
+                "summary": (
+                    "handoff is complete"
+                    if status_value == "completed"
+                    else (
+                        "sidecar local proxy listener is ready, but public ownership cutover is still pending"
+                        if listener_ready
+                        else blocker or "ownership handoff is not complete yet"
+                    )
+                ),
+            }
+
+        ws_entry = route_tunnel_contract.get("ws") if isinstance(route_tunnel_contract.get("ws"), dict) else {}
+        yws_entry = route_tunnel_contract.get("yws") if isinstance(route_tunnel_contract.get("yws"), dict) else {}
+        route_ready = _route_state("ws")
+        sync_ready = _route_state("yws")
+        route_handoff_ready = str(ws_entry.get("current_owner") or "").strip().lower() == "sidecar" and bool(
+            ws_entry.get("handoff_ready")
+        )
+        sync_handoff_ready = str(yws_entry.get("current_owner") or "").strip().lower() == "sidecar" and bool(
+            yws_entry.get("handoff_ready")
+        )
+        scope = {
+            "current": (
+                ["hub_root_transport"]
+                + (["browser_events_ws"] if route_handoff_ready else [])
+                + (["browser_yjs_ws"] if sync_handoff_ready else [])
+            ),
+            "planned_next_boundaries": [
+                item
+                for item, ready in (
+                    ("browser_events_ws", route_handoff_ready),
+                    ("browser_yjs_ws", sync_handoff_ready),
+                    ("live_media_continuity", False),
+                    ("webrtc_signaling", False),
+                    ("webrtc_media", False),
+                )
+                if not ready
+            ],
+            "deferred_protocol_authority": [
+                "yjs_room_state",
+                "semantic_channel_authority",
+                "webrtc_peer_lifecycle",
+            ],
+        }
+        continuity_blockers: list[str] = []
+        for boundary, entry in (("browser_events_ws", ws_entry), ("browser_yjs_ws", yws_entry)):
+            blocker = _route_blocker(entry)
+            if blocker:
+                continuity_blockers.append(f"{boundary}: {blocker}")
+        route_tunnel_ready = route_handoff_ready and sync_handoff_ready
+        continuity_contract = {
+            "required": False,
+            "enabled": enabled,
+            "member_runtime_update": "allow",
+            "hub_runtime_update": "preserve_sidecar",
+            "observed_live_topology": None,
+            "current_support": "ready" if enabled and route_tunnel_ready else ("planned" if enabled else "disabled"),
+            "required_boundaries": [],
+            "ready_boundaries": [
+                item
+                for item, ready in (
+                    ("browser_events_ws", route_handoff_ready),
+                    ("browser_yjs_ws", sync_handoff_ready),
+                )
+                if ready
+            ],
+            "pending_boundaries": [
+                item
+                for item, ready in (
+                    ("browser_events_ws", route_handoff_ready),
+                    ("browser_yjs_ws", sync_handoff_ready),
+                )
+                if not ready
+            ],
+            "blockers": continuity_blockers,
+            "target_behavior": (
+                "keep sidecar alive while the hub runtime restarts during live media sessions"
+                if enabled
+                else "transport sidecar currently isolates only hub_root transport"
+            ),
+            "reason": "supervisor-side sidecar status does not require runtime reliability API",
+        }
+        milestones = [
+            {
+                "id": "hub_root_transport_sidecar",
+                "title": "Hub-root transport sidecar",
+                "status": "completed",
+                "active_on_node": bool(enabled),
+                "ready_on_node": bool(transport_ready),
+                "summary": "sidecar owns the hub-root transport boundary",
+            },
+            {
+                "id": "supervisor_managed_sidecar",
+                "title": "Supervisor-managed sidecar lifecycle",
+                "status": "completed",
+                "active_on_node": True,
+                "ready_on_node": True,
+                "summary": "supervisor-managed sidecar lifecycle is implemented",
+            },
+            _handoff_step("browser_events_ws_handoff", "Browser /ws handoff", ws_entry),
+            _handoff_step("browser_yjs_ws_handoff", "Browser /yws handoff", yws_entry),
+        ]
+        completed_milestones = sum(1 for item in milestones if str(item.get("status") or "") == "completed")
+        milestone_total = len(milestones)
+        current_milestone = next((item for item in milestones if str(item.get("status") or "") != "completed"), None)
+        progress = {
+            "target": "first_browser_realtime_tunnel",
+            "state": "ready" if milestone_total > 0 and completed_milestones >= milestone_total else "in_progress",
+            "completed_milestones": completed_milestones,
+            "milestone_total": milestone_total,
+            "percent": int((completed_milestones * 100) / milestone_total) if milestone_total else 0,
+            "current_milestone": current_milestone.get("id") if isinstance(current_milestone, dict) else None,
+            "next_blocker": (
+                str(current_milestone.get("blocker") or "").strip() or None
+                if isinstance(current_milestone, dict)
+                else None
+            ),
+            "summary": (
+                f"{completed_milestones}/{milestone_total} milestones completed "
+                "toward first browser realtime sidecar use case"
+            ),
+            "milestones": milestones,
+            "future_targets": ["live_media_continuity", "webrtc_signaling", "webrtc_media"],
+        }
+        transport_provenance = {
+            "local_url": realtime_sidecar_local_url(),
+            "diag_path": str(diag_path),
+            "session_id": last_diag.get("session_id") if isinstance(last_diag, dict) else None,
+            "remote_url": last_diag.get("remote_url") if isinstance(last_diag, dict) else None,
+            "loop_policy": last_diag.get("loop_policy") if isinstance(last_diag, dict) else None,
+            "loop": last_diag.get("loop") if isinstance(last_diag, dict) else None,
+            "active_session": bool(last_diag.get("active_session")) if isinstance(last_diag, dict) else False,
+            "local_client_total": int(last_diag.get("local_client_total") or 0) if isinstance(last_diag, dict) else 0,
+            "session_open_total": int(last_diag.get("session_open_total") or 0) if isinstance(last_diag, dict) else 0,
+            "session_close_total": int(last_diag.get("session_close_total") or 0) if isinstance(last_diag, dict) else 0,
+            "remote_connect_total": int(last_diag.get("remote_connect_total") or 0) if isinstance(last_diag, dict) else 0,
+            "remote_connect_fail_total": int(last_diag.get("remote_connect_fail_total") or 0) if isinstance(last_diag, dict) else 0,
+            "remote_quarantine_total": int(last_diag.get("remote_quarantine_total") or 0) if isinstance(last_diag, dict) else 0,
+            "superseded_total": int(last_diag.get("superseded_total") or 0) if isinstance(last_diag, dict) else 0,
+            "last_remote_connect_error": last_diag.get("last_remote_connect_error") if isinstance(last_diag, dict) else None,
+            "last_remote_connect_error_ago_s": last_diag.get("last_remote_connect_error_ago_s") if isinstance(last_diag, dict) else None,
+            "last_remote_disconnect_ago_s": last_diag.get("last_remote_disconnect_ago_s") if isinstance(last_diag, dict) else None,
+        }
+        return {
+            "enabled": enabled,
+            "enablement": enablement,
+            "phase": "nats_transport_sidecar",
+            "transport_owner": "sidecar" if enabled else "runtime",
+            "lifecycle_manager": str(route_tunnel_contract.get("lifecycle_manager") or "supervisor"),
+            "ownership_boundary": "transport_only",
+            "ownership": {
+                "owns": ["transport sessions", "transport listeners", "transport relay lifecycle"],
+                "must_not_own": ["message semantics", "Yjs document authority", "core update authority"],
+            },
+            "delegations": {
+                "hub_root_transport": bool(enabled),
+                "route_tunnel_transport": str(ws_entry.get("current_owner") or "").strip().lower() == "sidecar",
+                "sync_transport": str(yws_entry.get("current_owner") or "").strip().lower() == "sidecar",
+                "media_transport": False,
+            },
+            "scope": scope,
+            "continuity_contract": continuity_contract,
+            "progress": progress,
+            "route_tunnel_contract": route_tunnel_contract,
+            "status": status_text,
+            "summary": summary,
+            "session_state": session_state,
+            "status_reason": status_reason,
+            "local_url": realtime_sidecar_local_url(),
+            "diag_path": str(diag_path),
+            "diag_age_s": diag_age_s,
+            "diag_fresh": diag_fresh,
+            "local_listener_state": local_listener_state,
+            "remote_session_state": remote_session_state,
+            "transport_ready": transport_ready,
+            "control_ready": "ready" if transport_ready else ("down" if enabled else "not_applicable"),
+            "route_ready": route_ready,
+            "sync_ready": sync_ready,
+            "media_ready": "not_owned",
+            "transport_provenance": transport_provenance,
+            "process": process,
+            "last_diag": last_diag,
+            "role": role,
+        }
 
     def _hub_root_watchdog_state_payload(self, *, include_events: bool = True) -> dict[str, Any]:
         log_path = _supervisor_hub_root_watchdog_log_path()

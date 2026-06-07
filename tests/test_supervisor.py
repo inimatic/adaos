@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -3463,6 +3465,127 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
     assert payload["runtime"]["transport_owner"] == "sidecar"
     assert payload["process"]["proc"] == "new-proc"
     assert persisted
+
+
+def test_supervisor_sidecar_health_uses_managed_listener_snapshot_without_tcp_probe(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._sidecar_proc = object()
+
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda proc=None, role=None: {
+            "listener_running": True,
+            "managed_alive": True,
+            "listener_matches_managed": True,
+            "host": "127.0.0.1",
+            "port": 7422,
+        },
+    )
+
+    async def _unexpected_probe(**kwargs):
+        raise AssertionError("managed sidecar health must not open the NATS listener")
+
+    monkeypatch.setattr(supervisor, "probe_realtime_sidecar_ready", _unexpected_probe)
+
+    assert asyncio.run(manager._probe_sidecar_health(force=True)) is True
+    assert manager._sidecar_last_probe_ok is True
+    assert manager._sidecar_consecutive_probe_failures == 0
+
+
+def test_supervisor_sidecar_status_does_not_query_runtime_reliability(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    def _runtime_reliability_unavailable(**kwargs):
+        raise AssertionError("sidecar status must not depend on the runtime reliability API")
+
+    monkeypatch.setattr(manager, "_runtime_reliability_payload", _runtime_reliability_unavailable)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    route_tunnel_contract = {
+        "lifecycle_manager": "supervisor",
+        "ws": {
+            "current_owner": "sidecar",
+            "planned_owner": "sidecar",
+            "handoff_ready": True,
+            "listener_ready": True,
+            "delegation_mode": "local_proxy",
+            "blockers": [],
+        },
+        "yws": {
+            "current_owner": "sidecar",
+            "planned_owner": "sidecar",
+            "handoff_ready": True,
+            "listener_ready": True,
+            "delegation_mode": "local_proxy",
+            "blockers": [],
+        },
+    }
+    diag_path = supervisor.realtime_sidecar_diag_path()
+    diag_path.parent.mkdir(parents=True, exist_ok=True)
+    diag_path.write_text(
+        json.dumps(
+            {
+                "ts": time.time(),
+                "remote_connected_ago_s": 0.2,
+                "session_id": "test-session",
+                "remote_url": "ws://root.test/ws",
+                "route_tunnel_contract": route_tunnel_contract,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda proc=None, role=None: {
+            "listener_running": True,
+            "managed_alive": True,
+            "listener_matches_managed": True,
+            "host": "127.0.0.1",
+            "port": 7422,
+            "enablement_policy": {
+                "role": "hub",
+                "enabled": True,
+                "reason": "test",
+            },
+            "route_tunnel_contract": {
+                "lifecycle_manager": "supervisor",
+                "ws": {
+                    "current_owner": "runtime",
+                    "planned_owner": "sidecar",
+                    "handoff_ready": False,
+                    "listener_ready": False,
+                    "blockers": ["stale supervisor-local route snapshot"],
+                },
+                "yws": {
+                    "current_owner": "runtime",
+                    "planned_owner": "sidecar",
+                    "handoff_ready": False,
+                    "listener_ready": False,
+                    "blockers": ["stale supervisor-local yws snapshot"],
+                },
+            },
+        },
+    )
+
+    payload = manager.sidecar_status()
+
+    assert payload["ok"] is True
+    assert payload["runtime"]["status"] == "ready"
+    assert payload["runtime"]["control_ready"] == "ready"
+    assert payload["runtime"]["route_ready"] == "ready"
+    assert payload["runtime"]["sync_ready"] == "ready"
+    assert payload["runtime"]["progress"]["state"] == "ready"
+    assert payload["runtime"]["continuity_contract"]["current_support"] == "ready"
+    assert payload["runtime"]["transport_provenance"]["session_id"] == "test-session"
+    assert payload["runtime"]["route_tunnel_contract"]["ws"]["blockers"] == []
+    assert payload["runtime"]["route_tunnel_contract"]["yws"]["blockers"] == []
 
 
 def test_runtime_state_payload_surfaces_root_promotion_requirement(monkeypatch, tmp_path) -> None:
