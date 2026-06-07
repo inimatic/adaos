@@ -607,6 +607,52 @@ def _default_core_update_target_rev() -> str:
     return branch
 
 
+def _slot_version_label(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    public, _, _local = text.partition("+")
+    return public.strip() or text
+
+
+def _slot_version_label_is_semver(value: object) -> bool:
+    label = _slot_version_label(value)
+    parts = label.split(".")
+    return len(parts) >= 3 and all(part.isdigit() for part in parts[:3])
+
+
+def _slot_inferred_version_label(*values: object) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        for raw_token in text.replace("=", " ").replace(":", " ").split():
+            token = raw_token.strip(".,;()[]{}")
+            label = _slot_version_label(token)
+            if _slot_version_label_is_semver(label):
+                return ".".join(label.split(".")[:3])
+    return ""
+
+
+def _slot_build_version_with_label(build_version: object, label: object) -> str:
+    build = str(build_version or "").strip()
+    public = _slot_version_label(label)
+    if not build or not public:
+        return build
+    _old_public, sep, local = build.partition("+")
+    if not sep:
+        return public
+    return f"{public}+{local}" if local else public
+
+
+def _slot_non_default_version_label(*values: object) -> str:
+    for value in values:
+        label = _slot_version_label(value)
+        if label and label != "0.1.0" and _slot_version_label_is_semver(label):
+            return label
+    return ""
+
+
 def _slot_build_version(slot_id: str) -> str:
     slot_name = str(slot_id or "").strip().upper()
     if not slot_name:
@@ -616,12 +662,25 @@ def _slot_build_version(slot_id: str) -> str:
     except Exception:
         return ""
     manifest = read_slot_manifest(slot_name) or {}
-    manifest_version = str(manifest.get("build_version") or "").strip()
-    if manifest_version:
-        return manifest_version
     explicit = str(os.getenv("ADAOS_BUILD_VERSION") or "").strip()
     if explicit:
         return explicit
+    manifest_version = str(manifest.get("build_version") or "").strip()
+    if manifest_version:
+        manifest_label = _slot_version_label(manifest_version)
+        if manifest_label == "0.1.0":
+            try:
+                repo_base = base_version(repo_root) if (repo_root / "pyproject.toml").exists() else ""
+            except Exception:
+                repo_base = ""
+            replacement = _slot_non_default_version_label(
+                manifest.get("base_version"),
+                repo_base,
+                _slot_inferred_version_label(manifest.get("git_subject")),
+            )
+            if replacement:
+                return _slot_build_version_with_label(manifest_version, replacement)
+        return manifest_version
     base = base_version(repo_root)
     rev_count = _repo_git_text_at(repo_root, "rev-list", "--count", "HEAD")
     if not rev_count:
