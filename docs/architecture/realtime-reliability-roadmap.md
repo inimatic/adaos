@@ -88,6 +88,44 @@ transport-only `/ws` and `/yws` handoff as ready.
   as default rollout behavior** until code, tests, runtime config, and live
   reliability evidence agree.
 
+### Stand checkpoint: 2026-06-07, `adaost1` / `91.98.89.76`
+
+Explicit sidecar enablement was tested on the managed hub stand with
+`ADAOS_REALTIME_ENABLE=1`.
+
+- Baseline before enablement matched the repository contract: sidecar disabled
+  by `role_default`, no listeners on `7422` / `7423` / `7424`, and `/ws` plus
+  `/yws` reported `current_owner=runtime`, `planned_owner=sidecar`,
+  `handoff_ready=false`.
+- First enablement attempt exposed a lifecycle blocker: supervisor launches
+  sidecar from `/root/adaos`, while the active runtime uses slot `A`; the root
+  checkout missed `heavy_dependency_names` and `python -m adaos realtime serve`
+  failed before binding. A temporary stand hotfix copied the missing active-slot
+  module into the root checkout so the test could continue.
+- After the hotfix, sidecar bound `7422`, `7423`, and `7424`; diagnostics
+  reported `status=ready`, `transport_ready=true`, `route_ready=ready`,
+  `sync_ready=ready`, and both `/ws` and `/yws` reported
+  `current_owner=sidecar` plus `handoff_ready=true`.
+- The same ready diagnostics still carried stale blocker strings such as
+  `browser route websocket still terminates in the runtime FastAPI app` and
+  `sidecar local websocket proxy listener is not running yet`.
+- Direct websocket probes confirmed `/ws` through sidecar can subscribe and
+  receive `node.status`; `/yws` through sidecar works for `/yws?ws=default` and
+  `/yws`, but `/yws/default` closes with `1008 unexpected_path` while the
+  runtime endpoint accepts that room-path form.
+- Already-open `/ws` and `/yws` sidecar connections did **not** survive
+  supervisor runtime restart; both closed with code `1000` shortly after the
+  active runtime stopped.
+- Runtime lag test with `SIGSTOP` for eight seconds showed `/ws` through
+  sidecar can remain open across a frozen runtime and resumes receiving after
+  `SIGCONT`; `/yws` closed with code `1000` after runtime continuation.
+- During the same runtime `SIGSTOP`, `GET /api/supervisor/sidecar/status` timed
+  out, so the sidecar control/diagnostic surface is not yet independent from a
+  stalled runtime in this topology.
+- Hub-root NATS through `nats://127.0.0.1:7422` connected, but repeatedly hit
+  `UnexpectedEOF`, quarantine, and reconnect churn. Treat hub-root sidecar
+  transport as not accepted on this stand.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -324,12 +362,25 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   websocket listeners for matching `/ws` and `/yws` paths.
 - [ ] `[must]` Reconcile sidecar default enablement across code, tests,
   deployment config, and docs.
+- [ ] `[must]` Make sidecar launch independent from unrelated CLI imports and
+  root-checkout drift; managed sidecar startup must use validated sidecar code
+  or a narrow entrypoint that does not import the full CLI surface.
 - [ ] `[must]` Capture target-stand acceptance showing sidecar enabled and
   `/ws` plus `/yws` diagnostics reporting `current_owner=sidecar` and
   `handoff_ready=true`.
+- [ ] `[must]` Remove stale route-tunnel blocker text from ready diagnostics so
+  `handoff_ready=true` snapshots do not still claim listeners are missing or
+  runtime owns the route.
+- [ ] `[must]` Stabilize hub-root sidecar NATS relay on the target stand; the
+  2026-06-07 run connected through `127.0.0.1:7422` but repeatedly hit
+  `UnexpectedEOF`, quarantine, and reconnect churn.
 - [ ] `[must]` Add an A/B acceptance scenario with an already-open browser
   `/ws` and `/yws` session that remains usable while the runtime switches
   slots or restarts.
+- [ ] `[must]` Preserve `/yws/{room}` browser compatibility through sidecar
+  route proxy, not only `/yws?ws=<room>`.
+- [ ] `[must]` Keep sidecar status/control surfaces responsive while the main
+  runtime event loop is stalled.
 - [ ] `[should]` Add sidecar soak coverage for root reconnect, local listener
   restart, remote candidate quarantine, and runtime event-loop lag.
 - [ ] `[deferred]` Move Yjs room/session authority into sidecar.
