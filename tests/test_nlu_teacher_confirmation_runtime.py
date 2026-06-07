@@ -505,6 +505,93 @@ async def test_voice_confirmation_apply_timeout_marks_candidate_failed(monkeypat
 
 
 @pytest.mark.anyio
+async def test_voice_confirmation_timeout_does_not_override_successful_apply(monkeypatch):
+    import asyncio
+
+    from adaos.services.nlu import candidates_runtime
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-teacher-confirmation-timeout-after-success"
+    candidate = {
+        "id": "cand.confirm.timeout-after-success",
+        "ts": time.time(),
+        "kind": "regex_rule",
+        "status": "pending",
+        "text": "show NLU Teacher",
+        "request_id": "req.confirm.timeout-after-success",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow NLU Teacher\b"},
+        "preview": {"ok": True, "slots": {"modal_id": "nlu_teacher_modal"}},
+    }
+    confirmation = {
+        "id": "confirm.timeout-after-success",
+        "ts": time.time(),
+        "status": "awaiting_user",
+        "candidate_id": candidate["id"],
+        "request_id": candidate["request_id"],
+        "request_text": candidate["text"],
+        "question": "Open NLU Teacher?",
+        "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(
+                txn,
+                "nlu_teacher",
+                {"candidates": [candidate], "pending_confirmations": [confirmation], "events": []},
+            )
+
+    async def _slow_successful_apply(_evt):
+        async with async_get_ydoc(webspace_id) as ydoc:
+            data_map = ydoc.get_map("data")
+            teacher = data_map.get("nlu_teacher") or {}
+            next_candidates = []
+            for item in list(teacher.get("candidates") or []):
+                item = dict(item)
+                if item.get("id") == candidate["id"]:
+                    item["status"] = "intent_matched"
+                    item["verification"] = {
+                        "status": "intent_matched",
+                        "expected_intent": "desktop.open_modal",
+                        "probe": {"accepted": True, "intent": "desktop.open_modal"},
+                    }
+                    item["promotion"] = {
+                        "state": "local_learned",
+                        "applied_artifact": {
+                            "type": "regex_rule",
+                            "rule_id": "rx.timeout-after-success",
+                            "target": {"type": "scenario", "id": "web_desktop"},
+                        },
+                    }
+                next_candidates.append(item)
+            teacher["candidates"] = next_candidates
+            with ydoc.begin_transaction() as txn:
+                data_map.set(txn, "nlu_teacher", teacher)
+        await asyncio.sleep(1.0)
+
+    monkeypatch.setenv("ADAOS_NLU_TEACHER_CONFIRM_APPLY_TIMEOUT_S", "0.01")
+    monkeypatch.setattr(candidates_runtime, "_on_candidate_apply", _slow_successful_apply)
+
+    await conf._on_voice_chat_user(
+        {
+            "webspace_id": webspace_id,
+            "text": "yes",
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        events = list(teacher.get("events") or [])
+        candidates = list(teacher.get("candidates") or [])
+
+    assert candidates[-1]["status"] == "intent_matched"
+    assert candidates[-1]["verification"]["status"] == "intent_matched"
+    assert not any(item.get("kind") == "candidate.apply_rejected" for item in events)
+
+
+@pytest.mark.anyio
 async def test_voice_confirmation_no_retries_once_with_rejected_candidate_context():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf

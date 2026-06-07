@@ -135,6 +135,115 @@ async def test_candidate_apply_persists_rule_and_notifies():
 
 
 @pytest.mark.anyio
+async def test_candidate_apply_is_idempotent_after_verified_understanding():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.candidates_runtime import _on_candidate_apply
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-cand-apply-idempotent-verified"
+    candidate_id = "cand.verified"
+    candidate = {
+        "id": candidate_id,
+        "kind": "regex_rule",
+        "status": "validation_failed",
+        "text": "show NLU Teacher",
+        "request_id": "req.verified",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow NLU Teacher\b"},
+        "verification": {
+            "status": "intent_matched",
+            "expected_intent": "desktop.open_modal",
+            "probe": {"accepted": True, "intent": "desktop.open_modal"},
+        },
+        "promotion": {
+            "state": "local_learned",
+            "applied_artifact": {
+                "type": "regex_rule",
+                "rule_id": "rx.verified",
+                "target": {"type": "scenario", "id": "web_desktop"},
+            },
+        },
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [candidate], "events": []})
+
+    rejected: list[dict] = []
+    ctx.bus.subscribe("nlp.teacher.candidate.apply.rejected", lambda ev: rejected.append(dict((ev.payload or {}))))
+
+    await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate_id})
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        events = list(teacher.get("events") or [])
+
+    assert not rejected
+    assert not any(item.get("kind") == "candidate.apply_rejected" for item in events)
+
+
+@pytest.mark.anyio
+async def test_candidate_apply_reject_suppresses_stale_failure_after_success():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.candidates_runtime import reject_candidate_apply
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-cand-stale-reject-suppressed"
+    candidate_id = "cand.stale-reject"
+    candidate = {
+        "id": candidate_id,
+        "kind": "regex_rule",
+        "status": "intent_matched",
+        "text": "show NLU Teacher",
+        "request_id": "req.stale-reject",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow NLU Teacher\b"},
+        "verification": {
+            "status": "intent_matched",
+            "expected_intent": "desktop.open_modal",
+            "probe": {"accepted": True, "intent": "desktop.open_modal"},
+        },
+        "promotion": {
+            "state": "local_learned",
+            "applied_artifact": {
+                "type": "regex_rule",
+                "rule_id": "rx.stale-reject",
+                "target": {"type": "scenario", "id": "web_desktop"},
+            },
+        },
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [candidate], "events": []})
+
+    rejected: list[dict] = []
+    messages: list[dict] = []
+    ctx.bus.subscribe("nlp.teacher.candidate.apply.rejected", lambda ev: rejected.append(dict((ev.payload or {}))))
+    ctx.bus.subscribe("io.out.chat.append", lambda ev: messages.append(dict((ev.payload or {}))))
+
+    await reject_candidate_apply(
+        webspace_id=webspace_id,
+        candidate_id=candidate_id,
+        reason="voice_confirmation_apply_timeout",
+        meta={"route_id": "voice_chat", "webspace_id": webspace_id},
+        request_id="req.stale-reject",
+        request_text="show NLU Teacher",
+        candidate_patch={"status": "apply_failed", "status_reason": "voice_confirmation_apply_timeout"},
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list(teacher.get("candidates") or [])
+        events = list(teacher.get("events") or [])
+
+    assert not rejected
+    assert not messages
+    assert candidates[-1]["status"] == "intent_matched"
+    assert not any(item.get("kind") == "candidate.apply_rejected" for item in events)
+
+
+@pytest.mark.anyio
 async def test_candidate_apply_rejects_duplicate_regex_before_mutation():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.candidates_runtime import _on_candidate_apply
