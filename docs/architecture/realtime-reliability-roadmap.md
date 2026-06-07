@@ -155,6 +155,16 @@ runtime process was stopped with `SIGSTOP`. The stand was restored to
 sidecar-off after the smoke. This does not close A/B survival or hub-root
 `UnexpectedEOF` soak acceptance.
 
+Follow-up implementation added route-proxy reconnect support and active
+supervisor runtime URL discovery, so sidecar no longer has to close an already
+open browser websocket only because the runtime upstream disappears or moves
+from slot port `8777` to `8778`. The 2026-06-07 target-stand retry exposed a
+separate rollout/config blocker before full A/B acceptance could be completed:
+the stand produced concurrent supervisor starts during the interrupted smoke,
+then the managed runtime repeatedly logged `NATS connect failed (no
+candidates)` and shut down. Treat this as an acceptance-environment blocker,
+not as completed A/B survival evidence.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -394,24 +404,29 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   websocket listeners for matching `/ws` and `/yws` paths.
 - [ ] `[must]` Reconcile sidecar default enablement across code, tests,
   deployment config, and docs.
-- [ ] `[must]` Make sidecar launch independent from unrelated CLI imports and
+- [x] `[must]` Make sidecar launch independent from unrelated CLI imports and
   root-checkout drift; managed sidecar startup must use validated sidecar code
   or a narrow entrypoint that does not import the full CLI surface.
 - [ ] `[must]` Capture target-stand acceptance showing sidecar enabled and
   `/ws` plus `/yws` diagnostics reporting `current_owner=sidecar` and
   `handoff_ready=true`.
-- [ ] `[must]` Remove stale route-tunnel blocker text from ready diagnostics so
+- [x] `[must]` Remove stale route-tunnel blocker text from ready diagnostics so
   `handoff_ready=true` snapshots do not still claim listeners are missing or
   runtime owns the route.
 - [ ] `[must]` Stabilize hub-root sidecar NATS relay on the target stand; the
   2026-06-07 run connected through `127.0.0.1:7422` but repeatedly hit
   `UnexpectedEOF`, quarantine, and reconnect churn.
+- [x] `[must]` Add route-proxy runtime-reconnect support so an already-open
+  browser `/ws` or `/yws` socket is not closed only because the current runtime
+  upstream disappears.
+- [x] `[must]` Make route-proxy reconnect discover the active supervisor
+  runtime URL instead of pinning sidecar to the original slot port.
 - [ ] `[must]` Add an A/B acceptance scenario with an already-open browser
   `/ws` and `/yws` session that remains usable while the runtime switches
   slots or restarts.
-- [ ] `[must]` Preserve `/yws/{room}` browser compatibility through sidecar
+- [x] `[must]` Preserve `/yws/{room}` browser compatibility through sidecar
   route proxy, not only `/yws?ws=<room>`.
-- [ ] `[must]` Keep sidecar status/control surfaces responsive while the main
+- [x] `[must]` Keep sidecar status/control surfaces responsive while the main
   runtime event loop is stalled.
 - [ ] `[should]` Add sidecar soak coverage for root reconnect, local listener
   restart, remote candidate quarantine, and runtime event-loop lag.

@@ -14,7 +14,10 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 from adaos.services.nats_config import (
     normalize_nats_ws_url,
@@ -306,6 +309,9 @@ def _route_tunnel_proxy_enabled(*, role: str | None = None) -> bool:
 
 
 def _route_tunnel_upstream_host() -> str:
+    dynamic = _route_tunnel_supervisor_runtime_endpoint()
+    if dynamic is not None:
+        return dynamic[0]
     raw = str(os.getenv("ADAOS_RUNTIME_HOST") or "").strip()
     if raw:
         return raw
@@ -313,6 +319,9 @@ def _route_tunnel_upstream_host() -> str:
 
 
 def _route_tunnel_upstream_port() -> int:
+    dynamic = _route_tunnel_supervisor_runtime_endpoint()
+    if dynamic is not None:
+        return dynamic[1]
     raw = os.getenv("ADAOS_RUNTIME_PORT")
     try:
         port = int(str(raw or "8777").strip() or "8777")
@@ -321,6 +330,48 @@ def _route_tunnel_upstream_port() -> int:
     if port <= 0:
         port = 8777
     return port
+
+
+def _route_tunnel_supervisor_base_url() -> str | None:
+    if str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+    raw = str(os.getenv("ADAOS_SUPERVISOR_URL") or os.getenv("ADAOS_SUPERVISOR_BASE") or "").strip().rstrip("/")
+    if raw:
+        return raw
+    host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
+    return f"http://{host}:{port}"
+
+
+def _route_tunnel_supervisor_runtime_endpoint() -> tuple[str, int] | None:
+    base = _route_tunnel_supervisor_base_url()
+    if not base:
+        return None
+    timeout_s = 0.25
+    try:
+        timeout_s = max(0.05, float(os.getenv("ADAOS_REALTIME_ROUTE_SUPERVISOR_TIMEOUT_S", "0.25") or "0.25"))
+    except Exception:
+        timeout_s = 0.25
+    try:
+        request = UrlRequest(base + "/api/supervisor/public/update-status", headers={"Accept": "application/json"})
+        with urlopen(request, timeout=timeout_s) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (OSError, URLError, json.JSONDecodeError, TimeoutError):
+        return None
+    except Exception:
+        return None
+    runtime = payload.get("runtime") if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict) else {}
+    runtime_url = str(runtime.get("runtime_url") or "").strip().rstrip("/")
+    if not runtime_url:
+        return None
+    parsed = urlparse(runtime_url)
+    host = str(parsed.hostname or "").strip()
+    port = parsed.port
+    if not host or not isinstance(port, int) or port <= 0:
+        return None
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    return host, int(port)
 
 
 def _route_tunnel_listener_url(*, host: str, port: int, path: str) -> str:
@@ -915,6 +966,15 @@ async def wait_realtime_sidecar_ready(*, host: str, port: int, timeout_s: float 
     return False
 
 
+async def wait_realtime_sidecar_bound(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
+    deadline = time.monotonic() + max(0.5, float(timeout_s))
+    while time.monotonic() < deadline:
+        if _find_realtime_listener_pid(host, port):
+            return True
+        await asyncio.sleep(0.1)
+    return False
+
+
 async def start_realtime_sidecar_subprocess(
     *,
     role: str | None = None,
@@ -978,7 +1038,7 @@ async def start_realtime_sidecar_subprocess(
     )
     with contextlib.suppress(Exception):
         stdout_handle.close()
-    if not await wait_realtime_sidecar_ready(host=host, port=port, timeout_s=10.0):
+    if not await wait_realtime_sidecar_bound(host=host, port=port, timeout_s=10.0):
         with contextlib.suppress(Exception):
             proc.terminate()
         raise RuntimeError(f"adaos-realtime sidecar did not bind {host}:{port}")
@@ -1366,6 +1426,29 @@ class RealtimeSidecarServer:
             kwargs.pop("ping_timeout", None)
             return await websockets.connect(target, **kwargs)
 
+    def _route_tunnel_reconnect_delay_s(self) -> float:
+        try:
+            return max(0.05, float(os.getenv("ADAOS_REALTIME_ROUTE_RECONNECT_DELAY_S", "0.25") or "0.25"))
+        except Exception:
+            return 0.25
+
+    def _route_tunnel_replay_limit(self) -> int:
+        try:
+            return max(0, int(str(os.getenv("ADAOS_REALTIME_ROUTE_REPLAY_LIMIT", "32") or "32").strip()))
+        except Exception:
+            return 32
+
+    def _route_tunnel_queue_limit(self) -> int:
+        try:
+            return max(1, int(str(os.getenv("ADAOS_REALTIME_ROUTE_QUEUE_LIMIT", "256") or "256").strip()))
+        except Exception:
+            return 256
+
+    def _route_tunnel_target_url(self, *, requested_path: str) -> str:
+        target_host = _route_tunnel_upstream_host()
+        target_port = _route_tunnel_upstream_port()
+        return f"ws://{target_host}:{target_port}{requested_path}"
+
     async def _handle_route_tunnel_websocket(
         self,
         *,
@@ -1400,46 +1483,92 @@ class RealtimeSidecarServer:
             with contextlib.suppress(Exception):
                 await websocket.close(code=1008, reason="unexpected_path")
             return
-        target = f"ws://{target_host}:{target_port}{requested_path}"
-        try:
-            upstream_ws = await self._connect_route_tunnel_upstream(target=target)
-        except Exception as exc:
-            self._log(
-                f"{kind} proxy upstream connect failed target={target} err={type(exc).__name__}: {exc}"
-            )
-            with contextlib.suppress(Exception):
-                await websocket.close(code=1011, reason="upstream_connect_failed")
-            return
+        reconnect_delay_s = self._route_tunnel_reconnect_delay_s()
+        replay_limit = self._route_tunnel_replay_limit()
+        outgoing: asyncio.Queue[Any] = asyncio.Queue(maxsize=self._route_tunnel_queue_limit())
+        replay: deque[Any] = deque(maxlen=replay_limit)
+        client_done = asyncio.Event()
 
-        async def _pipe_messages(source: Any, dest: Any) -> None:
+        async def _client_reader() -> None:
             try:
-                async for message in source:
-                    await dest.send(message)
+                async for message in websocket:
+                    if replay_limit > 0:
+                        replay.append(message)
+                    await outgoing.put(message)
             finally:
-                with contextlib.suppress(Exception):
-                    await dest.close()
+                client_done.set()
 
-        tasks = [
-            asyncio.create_task(
-                _pipe_messages(websocket, upstream_ws),
-                name=f"adaos-realtime-{kind}-proxy-upstream",
-            ),
-            asyncio.create_task(
-                _pipe_messages(upstream_ws, websocket),
-                name=f"adaos-realtime-{kind}-proxy-downstream",
-            ),
-        ]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        for task in pending:
+        async def _send_to_upstream(upstream_ws: Any, replay_messages: list[Any]) -> None:
+            for message in replay_messages:
+                await upstream_ws.send(message)
+            while not client_done.is_set():
+                try:
+                    message = await asyncio.wait_for(outgoing.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+                await upstream_ws.send(message)
+
+        async def _recv_from_upstream(upstream_ws: Any) -> None:
+            async for message in upstream_ws:
+                await websocket.send(message)
+
+        client_task = asyncio.create_task(_client_reader(), name=f"adaos-realtime-{kind}-proxy-client")
+        try:
+            while not client_done.is_set() and not self._stopped.is_set():
+                target = self._route_tunnel_target_url(requested_path=requested_path)
+                try:
+                    upstream_ws = await self._connect_route_tunnel_upstream(target=target)
+                except Exception as exc:
+                    self._log(
+                        f"{kind} proxy upstream connect failed target={target} err={type(exc).__name__}: {exc}"
+                    )
+                    try:
+                        await asyncio.wait_for(client_done.wait(), timeout=reconnect_delay_s)
+                    except asyncio.TimeoutError:
+                        continue
+                    break
+
+                replay_messages = list(replay)
+                self._log(
+                    f"{kind} proxy upstream connected target={target} replay={len(replay_messages)}"
+                )
+                send_task = asyncio.create_task(
+                    _send_to_upstream(upstream_ws, replay_messages),
+                    name=f"adaos-realtime-{kind}-proxy-upstream",
+                )
+                recv_task = asyncio.create_task(
+                    _recv_from_upstream(upstream_ws),
+                    name=f"adaos-realtime-{kind}-proxy-downstream",
+                )
+                done, pending = await asyncio.wait(
+                    [send_task, recv_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                for task in pending:
+                    with contextlib.suppress(BaseException):
+                        await task
+                with contextlib.suppress(Exception):
+                    await upstream_ws.close()
+                if client_done.is_set():
+                    break
+                for task in done:
+                    try:
+                        await task
+                    except Exception as exc:
+                        self._log(
+                            f"{kind} proxy upstream disconnected target={target} err={type(exc).__name__}: {exc}"
+                        )
+                        break
+                try:
+                    await asyncio.wait_for(client_done.wait(), timeout=reconnect_delay_s)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            client_task.cancel()
             with contextlib.suppress(BaseException):
-                await task
-        for task in done:
-            with contextlib.suppress(BaseException):
-                await task
-        with contextlib.suppress(Exception):
-            await upstream_ws.close()
+                await client_task
         with contextlib.suppress(Exception):
             await websocket.close()
 
