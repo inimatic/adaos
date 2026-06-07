@@ -200,6 +200,39 @@ def test_realtime_sidecar_route_tunnel_discovers_runtime_from_persisted_supervis
     assert listeners["yws"]["upstream_url"] == "ws://127.0.0.1:8788/yws"
 
 
+def test_realtime_sidecar_route_tunnel_refreshes_upstream_after_slot_switch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "base"
+    state_dir = base_dir / "state" / "supervisor"
+    state_dir.mkdir(parents=True)
+    runtime_state = state_dir / "runtime.json"
+    runtime_state.write_text(
+        '{"runtime_url":"http://127.0.0.1:8777","desired_running":true,"managed_alive":true}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(_free_port()))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(_free_port()))
+
+    realtime_sidecar_mod._reset_route_tunnel_runtime_state()
+    assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_listeners()["ws"]["upstream_port"] == 8777
+
+    runtime_state.write_text(
+        '{"runtime_url":"http://127.0.0.1:8778","desired_running":true,"managed_alive":true}',
+        encoding="utf-8",
+    )
+
+    listeners = realtime_sidecar_mod.realtime_sidecar_route_tunnel_listeners()
+
+    assert listeners["ws"]["upstream_port"] == 8778
+    assert listeners["ws"]["upstream_url"] == "ws://127.0.0.1:8778/ws"
+    assert listeners["yws"]["upstream_url"] == "ws://127.0.0.1:8778/yws"
+
+
 def test_realtime_sidecar_listener_snapshot_includes_route_tunnel_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

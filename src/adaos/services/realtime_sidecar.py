@@ -471,12 +471,11 @@ def realtime_sidecar_route_tunnel_listeners(*, role: str | None = None) -> dict[
             "listener_port": int(runtime_state.get("listener_port") or port),
             "listener_url": listener_url,
             "listener_ready": listener_ready,
-            "upstream_host": str(runtime_state.get("upstream_host") or upstream_host).strip() or upstream_host,
-            "upstream_port": int(runtime_state.get("upstream_port") or upstream_port),
-            "upstream_url": str(runtime_state.get("upstream_url") or "").strip()
-            or _route_tunnel_upstream_url(host=upstream_host, port=upstream_port, path=path),
+            "upstream_host": upstream_host,
+            "upstream_port": int(upstream_port),
+            "upstream_url": _route_tunnel_upstream_url(host=upstream_host, port=upstream_port, path=path),
             "upstream_path": path,
-            "upstream_configured": int(runtime_state.get("upstream_port") or upstream_port) > 0,
+            "upstream_configured": int(upstream_port) > 0,
             "lifecycle_manager": lifecycle_manager,
         }
     return listeners
