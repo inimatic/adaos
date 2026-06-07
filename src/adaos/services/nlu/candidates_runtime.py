@@ -85,6 +85,23 @@ def _candidate_static_rule_slots(candidate: Mapping[str, Any]) -> dict[str, str]
     return out
 
 
+def _candidate_apply_succeeded(candidate: Mapping[str, Any] | None) -> bool:
+    if not isinstance(candidate, Mapping):
+        return False
+    if str(candidate.get("status") or "").strip() in {"applied", "intent_matched"}:
+        return True
+    verification = coerce_dict(candidate.get("verification"))
+    if str(verification.get("status") or "").strip() == "intent_matched":
+        return True
+    promotion = coerce_dict(candidate.get("promotion"))
+    if isinstance(promotion.get("applied_artifact"), Mapping):
+        return True
+    applied = coerce_dict(candidate.get("applied"))
+    if applied:
+        return True
+    return False
+
+
 def _teacher_obj(data_map: Any) -> dict[str, Any]:
     return coerce_dict(getattr(data_map, "get", lambda _k: None)("nlu_teacher"))
 
@@ -196,6 +213,19 @@ async def _emit_apply_rejected(
     preview: Mapping[str, Any] | None = None,
     candidate_patch: Mapping[str, Any] | None = None,
 ) -> None:
+    try:
+        current_candidate, _ = await _read_candidate_snapshot(webspace_id=webspace_id, candidate_id=candidate_id)
+    except Exception:
+        current_candidate = None
+    if _candidate_apply_succeeded(current_candidate):
+        _log.info(
+            "suppressed stale NLU Teacher apply rejection webspace=%s candidate_id=%s reason=%s",
+            webspace_id,
+            candidate_id,
+            reason,
+        )
+        return
+
     payload: dict[str, Any] = {
         "webspace_id": webspace_id,
         "candidate_id": candidate_id,
@@ -365,6 +395,8 @@ async def _on_candidate_apply(evt: Any) -> None:
         _log.warning("failed to read candidate snapshot webspace=%s candidate_id=%s", webspace_id, candidate_id, exc_info=True)
         return
     if not candidate:
+        return
+    if _candidate_apply_succeeded(candidate):
         return
 
     request_id = candidate.get("request_id") if isinstance(candidate.get("request_id"), str) else None
