@@ -77,3 +77,27 @@ def test_core_version_compare_uses_local_metadata_when_available() -> None:
 
     assert not mgr._version_at_least("0.1.204+1.aaa", "0.1.204+2.bbb")
     assert mgr._version_at_least("0.1.204", "0.1.204+999.future")
+
+
+def test_core_requirement_falls_back_to_dev_build_version_when_commit_diverged(monkeypatch) -> None:
+    mgr = _manager()
+    monkeypatch.setattr(mgr, "_current_core_contains_commit", lambda *_args, **_kwargs: False)
+
+    assert mgr._core_requirement_satisfied(
+        required_version="0.1.0+2749.4b79d00f",
+        required_commit="4b79d00fed6e0c352cb3076661657cbb50ac1e64",
+        current_version="0.1.0+2756.5eb6ebda",
+        current_commit="5eb6ebda0f63a56ecb1c8b407d3df0ad76c42fd6",
+    )
+
+
+def test_core_requirement_blocks_commit_only_requirement_when_commit_diverged(monkeypatch) -> None:
+    mgr = _manager()
+    monkeypatch.setattr(mgr, "_current_core_contains_commit", lambda *_args, **_kwargs: False)
+
+    assert not mgr._core_requirement_satisfied(
+        required_version="",
+        required_commit="4b79d00fed6e0c352cb3076661657cbb50ac1e64",
+        current_version="0.1.0+2756.5eb6ebda",
+        current_commit="5eb6ebda0f63a56ecb1c8b407d3df0ad76c42fd6",
+    )

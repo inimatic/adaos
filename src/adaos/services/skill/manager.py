@@ -1720,8 +1720,10 @@ class SkillManager:
     ) -> bool:
         if required_commit and current_commit:
             ancestry = self._current_core_contains_commit(required_commit, current_commit=current_commit)
-            if ancestry is not None:
-                return ancestry
+            if ancestry is True:
+                return True
+            if ancestry is False and not required_version:
+                return False
         if required_version:
             return self._version_at_least(current_version, required_version)
         return True
