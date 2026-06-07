@@ -42,6 +42,23 @@ _LINUX_CLI_SHIM_ENV_KEYS = {
     "ADAOS_SUPERVISOR_PORT",
     "PYTHONPATH",
 }
+_AUTOSTART_PASSTHROUGH_ENV_KEYS = (
+    "ADAOS_REALTIME_ENABLE",
+    "HUB_REALTIME_ENABLE",
+    "ADAOS_REALTIME_ROUTE_PROXY_ENABLE",
+    "ADAOS_REALTIME_ALLOW_API_FALLBACK",
+    "ADAOS_REALTIME_ALLOW_TCP_FALLBACK",
+    "ADAOS_REALTIME_PREFER_DEDICATED",
+    "ADAOS_REALTIME_ROUTE_WS_PORT",
+    "ADAOS_REALTIME_ROUTE_YWS_PORT",
+    "ADAOS_REALTIME_ROUTE_RECONNECT_DELAY_S",
+    "ADAOS_REALTIME_ROUTE_REPLAY_LIMIT",
+    "ADAOS_REALTIME_ROUTE_QUEUE_LIMIT",
+    "ADAOS_REALTIME_REMOTE_WS_URL",
+    "ADAOS_REALTIME_REMOTE_WS_ALT",
+    "HUB_NATS_TRANSPORT",
+    "HUB_NATS_PREFER_DEDICATED",
+)
 
 
 def _home() -> Path:
@@ -141,6 +158,16 @@ def default_spec(
     }
     if shared_dotenv:
         env["ADAOS_SHARED_DOTENV_PATH"] = str(shared_dotenv)
+    env_file_vars: dict[str, str] = {}
+    if shared_dotenv is not None:
+        try:
+            env_file_vars = _parse_env_file(str(shared_dotenv))
+        except Exception:
+            env_file_vars = {}
+    for key in _AUTOSTART_PASSTHROUGH_ENV_KEYS:
+        value = str(os.getenv(key) or env_file_vars.get(key) or "").strip()
+        if value:
+            env[key] = value
     if repo_root is not None:
         env["ADAOS_ROOT_REPO_ROOT"] = str(repo_root)
         pythonpath_entries = [str(repo_root / "src")]
