@@ -161,6 +161,11 @@ open.
   `handoff_ready=true`.
 - [ ] `[must]` Prove an already-open browser `/ws` and `/yws` session remains
   usable across runtime A/B switch or restart with sidecar enabled.
+- [x] `[must]` Keep the sidecar browser-facing websocket open while the runtime
+  upstream reconnects, replaying bounded browser-to-runtime setup messages
+  after reconnect.
+- [x] `[must]` Re-discover the active supervisor runtime URL on route-proxy
+  reconnect so A/B slot ports do not pin sidecar to the old runtime.
 - [x] `[must]` Preserve browser-compatible `/yws/{room}` path routing through
   the sidecar proxy, not only `/yws?ws=<room>`.
 - [x] `[must]` Keep sidecar status/control APIs responsive during runtime

@@ -330,6 +330,131 @@ def test_realtime_sidecar_yws_route_proxy_accepts_room_path(
     asyncio.run(_run())
 
 
+def test_realtime_sidecar_route_proxy_keeps_browser_socket_across_upstream_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_port = _free_port()
+    ws_proxy_port = _free_port()
+    yws_proxy_port = _free_port()
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", str(runtime_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(ws_proxy_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(yws_proxy_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_RECONNECT_DELAY_S", "0.05")
+
+    async def _run() -> None:
+        websockets = pytest.importorskip("websockets")
+        first_seen = asyncio.Event()
+
+        async def _close_after_first(websocket, _path=None):
+            message = await websocket.recv()
+            first_seen.set()
+            await websocket.send(f"first:{message}")
+            await websocket.close()
+
+        async def _echo(websocket, _path=None):
+            async for message in websocket:
+                await websocket.send(f"second:{message}")
+
+        upstream = await websockets.serve(
+            _close_after_first,
+            "127.0.0.1",
+            runtime_port,
+            max_size=None,
+            compression=None,
+        )
+        server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+        await server.start()
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{ws_proxy_port}/ws?token=dev", max_size=None) as client:
+                await client.send("subscribe:node.status")
+                assert await asyncio.wait_for(client.recv(), timeout=1.0) == "first:subscribe:node.status"
+                await asyncio.wait_for(first_seen.wait(), timeout=1.0)
+                upstream.close()
+                await upstream.wait_closed()
+                upstream = await websockets.serve(_echo, "127.0.0.1", runtime_port, max_size=None, compression=None)
+                replayed = await asyncio.wait_for(client.recv(), timeout=2.0)
+                assert replayed == "second:subscribe:node.status"
+                await client.send("after-restart")
+                assert await asyncio.wait_for(client.recv(), timeout=1.0) == "second:after-restart"
+        finally:
+            await server.close()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_realtime_sidecar_route_proxy_rediscovers_active_runtime_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_runtime_port = _free_port()
+    new_runtime_port = _free_port()
+    current_runtime_port = old_runtime_port
+    ws_proxy_port = _free_port()
+    yws_proxy_port = _free_port()
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", str(old_runtime_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(ws_proxy_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(yws_proxy_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_RECONNECT_DELAY_S", "0.05")
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_route_tunnel_supervisor_runtime_endpoint",
+        lambda: ("127.0.0.1", current_runtime_port),
+    )
+
+    async def _run() -> None:
+        nonlocal current_runtime_port
+        websockets = pytest.importorskip("websockets")
+
+        async def _old_runtime(websocket, _path=None):
+            message = await websocket.recv()
+            await websocket.send(f"old:{message}")
+            await websocket.close()
+
+        async def _new_runtime(websocket, _path=None):
+            async for message in websocket:
+                await websocket.send(f"new:{message}")
+
+        old_upstream = await websockets.serve(
+            _old_runtime,
+            "127.0.0.1",
+            old_runtime_port,
+            max_size=None,
+            compression=None,
+        )
+        server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+        new_upstream = None
+        await server.start()
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{ws_proxy_port}/ws?token=dev", max_size=None) as client:
+                await client.send("subscribe")
+                assert await asyncio.wait_for(client.recv(), timeout=1.0) == "old:subscribe"
+                old_upstream.close()
+                await old_upstream.wait_closed()
+                current_runtime_port = new_runtime_port
+                new_upstream = await websockets.serve(
+                    _new_runtime,
+                    "127.0.0.1",
+                    new_runtime_port,
+                    max_size=None,
+                    compression=None,
+                )
+                assert await asyncio.wait_for(client.recv(), timeout=2.0) == "new:subscribe"
+                await client.send("after-ab")
+                assert await asyncio.wait_for(client.recv(), timeout=1.0) == "new:after-ab"
+        finally:
+            await server.close()
+            old_upstream.close()
+            await old_upstream.wait_closed()
+            if new_upstream is not None:
+                new_upstream.close()
+                await new_upstream.wait_closed()
+
+    asyncio.run(_run())
+
+
 def test_realtime_sidecar_loop_defaults_to_proactor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ADAOS_REALTIME_WIN_LOOP", raising=False)
 
@@ -662,8 +787,11 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     async def _fake_is_port_open(_host: str, _port: int) -> bool:
         return False
 
-    async def _fake_wait_ready(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
+    async def _fake_wait_bound(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
         return True
+
+    async def _unexpected_probe(**kwargs) -> bool:
+        raise AssertionError("subprocess startup must not open the NATS listener as a health probe")
 
     def _fake_popen(*args, **kwargs):
         nonlocal popen_args, popen_env
@@ -674,7 +802,8 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
     monkeypatch.setattr(realtime_sidecar_mod, "_is_port_open", _fake_is_port_open)
-    monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_ready", _fake_wait_ready)
+    monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_bound", _fake_wait_bound)
+    monkeypatch.setattr(realtime_sidecar_mod, "probe_realtime_sidecar_ready", _unexpected_probe)
     monkeypatch.setattr(realtime_sidecar_mod.subprocess, "Popen", _fake_popen)
 
     proc = await realtime_sidecar_mod.start_realtime_sidecar_subprocess(role="hub")
@@ -703,7 +832,7 @@ async def test_realtime_sidecar_subprocess_starts_for_direct_tcp_node_url(
     async def _fake_is_port_open(_host: str, _port: int) -> bool:
         return False
 
-    async def _fake_wait_ready(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
+    async def _fake_wait_bound(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
         return True
 
     def _fake_popen(*args, **kwargs):
@@ -719,7 +848,7 @@ async def test_realtime_sidecar_subprocess_starts_for_direct_tcp_node_url(
         lambda: {"nats": {"ws_url": "nats://nats.inimatic.com:4222"}},
     )
     monkeypatch.setattr(realtime_sidecar_mod, "_is_port_open", _fake_is_port_open)
-    monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_ready", _fake_wait_ready)
+    monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_bound", _fake_wait_bound)
     monkeypatch.setattr(realtime_sidecar_mod.subprocess, "Popen", _fake_popen)
 
     proc = await realtime_sidecar_mod.start_realtime_sidecar_subprocess(role="hub")
@@ -747,7 +876,7 @@ async def test_realtime_sidecar_subprocess_replaces_stale_listener(
     async def _fake_is_port_open(_host: str, _port: int) -> bool:
         return not replace_calls
 
-    async def _fake_wait_ready(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
+    async def _fake_wait_bound(*, host: str, port: int, timeout_s: float = 10.0) -> bool:
         return True
 
     def _fake_popen(*args, **kwargs):
@@ -767,7 +896,7 @@ async def test_realtime_sidecar_subprocess_replaces_stale_listener(
         "_replace_existing_realtime_listener",
         _fake_replace_existing_realtime_listener,
     )
-    monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_ready", _fake_wait_ready)
+    monkeypatch.setattr(realtime_sidecar_mod, "wait_realtime_sidecar_bound", _fake_wait_bound)
     monkeypatch.setattr(realtime_sidecar_mod.subprocess, "Popen", _fake_popen)
 
     proc = await realtime_sidecar_mod.start_realtime_sidecar_subprocess(role="hub")
