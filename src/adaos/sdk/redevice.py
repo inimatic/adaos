@@ -9,6 +9,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from adaos.services.redevice_versions import endpoint_version_info
+
 TRANSPORT_LADDER = (
     "webrtc_p2p",
     "local_ws",
@@ -362,6 +364,7 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
     online = online_state(endpoint.get("last_seen_at"))
     selected = bool(code and selected_codes and code in selected_codes)
     age = _age_seconds(endpoint.get("last_seen_at"))
+    version_info = endpoint_version_info(endpoint)
     return {
         "id": code or eid,
         "code": code,
@@ -380,6 +383,14 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
         "last_seen": "-" if age is None else f"{age}s" if age < 60 else f"{age // 60}m {age % 60}s",
         "zone_id": _text(endpoint.get("zone_id")) or "-",
         "trust_level": _text(policy.get("trust_level") or manifest.get("trust_level")) or "limited",
+        "software_version": _text(version_info.get("software_version")),
+        "software_version_code": _text(version_info.get("software_version_code")),
+        "software_version_source": _text(version_info.get("software_version_source")),
+        "served_version": _text(version_info.get("served_version")),
+        "served_version_code": _text(version_info.get("served_version_code")),
+        "served_version_source": _text(version_info.get("served_version_source")),
+        "version_status": _text(version_info.get("version_status")) or "unknown",
+        "version_info": version_info,
         "active_app": active_app or None,
         "active_surface": active_surface or None,
         "service_state": _mapping(endpoint.get("service_state")) or None,

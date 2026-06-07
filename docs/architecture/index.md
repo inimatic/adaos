@@ -38,6 +38,7 @@ Current target-state control-plane extensions are documented in:
 - [AdaOS Builder](builder.md): canonical role and end-to-end workflow for turning ideas into governed skills, scenarios, UI descriptors, NLU hints, tests, and runtime-ready changes
 - [Builder Roadmap](builder-roadmap.md): cross-cutting roadmap for the Builder vertical slice across Root MCP, NLU Teacher, skill/scenario runtime, validation, approval, activation, and repair
 - [Web UI Architecture](web-ui-architecture.md): target stable browser-client architecture over `webui.v1`, semantic views, typed actions, Taiga renderers, and Ionic shell concerns
+- [Version Observability](version-observability.md): source, served, target, used, and active-registry version planes across AdaOS core, Root, client, ReDevice, skills, and scenarios
 - [Operational Event Model](operational-event-model.md): target event, demand, lifecycle, and Yjs materialization contract for browser-facing projections
 - [Operational Event Model Reference Plan](operational-event-model-reference-plan.md): top-level coverage gates, required contract shapes, review checklist, and completion definition for implementing the event model correctly
 - [Operational Event Model Roadmap](operational-event-model-roadmap.md): master implementation order across communication, runtime contracts, Yjs shape, client adapters, platform emitters, and skill pilots
