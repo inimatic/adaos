@@ -9,6 +9,7 @@ from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
 )
+from adaos.services.redevice_versions import endpoint_version_info
 
 DeviceKind = Literal["browser", "member", "redevice"]
 
@@ -362,6 +363,7 @@ class DeviceInventoryService:
                 continue
             policy = _mapping(entry.get("endpoint_policy"))
             manifest = _mapping(entry.get("endpoint_manifest"))
+            version_info = endpoint_version_info(entry)
             effective_name = _effective_name(
                 policy_entry=entry,
                 fallback_id=endpoint_id,
@@ -401,7 +403,12 @@ class DeviceInventoryService:
                         "snapshot_state": _text_or_none(state),
                         "route_mode": "root_command_poll",
                         "connected_to_subnet": bool(entry.get("online")),
-                        "runtime_version": None,
+                        "runtime_version": _text_or_none(version_info.get("software_version")),
+                        "software_version": _text_or_none(version_info.get("software_version")),
+                        "software_version_code": _text_or_none(version_info.get("software_version_code")),
+                        "served_version": _text_or_none(version_info.get("served_version")),
+                        "served_version_code": _text_or_none(version_info.get("served_version_code")),
+                        "version_status": _text_or_none(version_info.get("version_status")),
                         "active_app": _mapping(entry.get("active_app")) or None,
                         "active_surface": _mapping(entry.get("active_surface")) or None,
                     },
@@ -414,6 +421,7 @@ class DeviceInventoryService:
                         "diagnostic_report": _mapping(entry.get("diagnostic_report")) or None,
                         "endpoint_health": _mapping(entry.get("endpoint_health")) or None,
                         "service_state": _mapping(entry.get("service_state")) or None,
+                        "version_info": version_info,
                     },
                 }
             )

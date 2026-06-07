@@ -143,6 +143,10 @@ def _label_matches_alias(label: Mapping[str, Any], alias: str, locale: str | Non
     )
 
 
+def _mapping_or_none(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, Mapping) else None
+
+
 def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     data = dict(raw or {})
     now = _now_ts()
@@ -155,7 +159,7 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
     access_class = str(data.get("access_class") or "").strip().lower()
     if access_class not in {"device", "client"}:
         access_class = "device" if lifetime_mode == "permanent" else "client"
-    return {
+    entry: dict[str, Any] = {
         "id": entry_id,
         "kind": kind,
         "display_name": str(data.get("display_name") or "").strip(),
@@ -186,6 +190,25 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "form_factor": str(data.get("form_factor") or "").strip() or None,
         "user_agent": str(data.get("user_agent") or "").strip() or None,
     }
+    if kind == "redevice":
+        entry.update(
+            {
+                "pair_code": str(data.get("pair_code") or data.get("code") or "").strip() or None,
+                "code": str(data.get("code") or data.get("pair_code") or "").strip() or None,
+                "hub_id": str(data.get("hub_id") or data.get("subnet_id") or "").strip() or None,
+                "subnet_id": str(data.get("subnet_id") or data.get("hub_id") or "").strip() or None,
+                "owner_id": str(data.get("owner_id") or "").strip() or None,
+                "trust_level": str(data.get("trust_level") or "").strip().lower() or None,
+                "endpoint_policy": _mapping_or_none(data.get("endpoint_policy")),
+                "endpoint_manifest": _mapping_or_none(data.get("endpoint_manifest")),
+                "diagnostic_report": _mapping_or_none(data.get("diagnostic_report")),
+                "endpoint_health": _mapping_or_none(data.get("endpoint_health")),
+                "service_state": _mapping_or_none(data.get("service_state")),
+                "active_app": _mapping_or_none(data.get("active_app")),
+                "active_surface": _mapping_or_none(data.get("active_surface")),
+            }
+        )
+    return entry
 
 
 def _get_entry(registry: Mapping[str, Any], kind: LinkKind, entry_id: str) -> dict[str, Any] | None:

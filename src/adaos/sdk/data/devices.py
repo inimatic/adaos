@@ -48,6 +48,12 @@ def _fallback_redevice_devices() -> list[dict[str, Any]]:
                     "snapshot_state": state,
                     "route_mode": "root_command_poll",
                     "connected_to_subnet": bool(compact.get("online")),
+                    "runtime_version": compact.get("software_version") or None,
+                    "software_version": compact.get("software_version") or None,
+                    "software_version_code": compact.get("software_version_code") or None,
+                    "served_version": compact.get("served_version") or None,
+                    "served_version_code": compact.get("served_version_code") or None,
+                    "version_status": compact.get("version_status") or "unknown",
                     "active_app": compact.get("active_app"),
                     "active_surface": compact.get("active_surface"),
                 },
@@ -59,6 +65,7 @@ def _fallback_redevice_devices() -> list[dict[str, Any]]:
                     "endpoint_health": raw.get("endpoint_health") or None,
                     "service_state": raw.get("service_state") or None,
                     "last_event": raw.get("last_event") or None,
+                    "version_info": compact.get("version_info") or None,
                 },
             }
         )

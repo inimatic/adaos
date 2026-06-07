@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from adaos.sdk.data import devices as sdk_devices
+from adaos.services import access_links
 from adaos.services import device_inventory as device_inventory
+from adaos.services.redevice_versions import endpoint_version_info
 
 
 class _FakeDirectory:
@@ -17,22 +19,27 @@ def _patch_sources(
     *,
     browser_entries: list[dict[str, object]] | None = None,
     member_entries: list[dict[str, object]] | None = None,
+    redevice_entries: list[dict[str, object]] | None = None,
     directory_nodes: list[dict[str, object]] | None = None,
     live_members: list[dict[str, object]] | None = None,
     now: float = 1000.0,
 ) -> None:
     browser_items = list(browser_entries or [])
     member_items = list(member_entries or [])
+    redevice_items = list(redevice_entries or [])
 
     def _list_links(kind=None):
         if kind == "browser":
             return [dict(item) for item in browser_items]
         if kind == "member":
             return [dict(item) for item in member_items]
-        return [dict(item) for item in browser_items + member_items]
+        if kind == "redevice":
+            return [dict(item) for item in redevice_items]
+        return [dict(item) for item in browser_items + member_items + redevice_items]
 
     monkeypatch.setattr(device_inventory, "_now_ts", lambda: now)
     monkeypatch.setattr(device_inventory._access_links, "list_links", _list_links)
+    monkeypatch.setattr(device_inventory, "_local_redevice_scope", lambda: ("", ""))
     monkeypatch.setattr(device_inventory, "get_directory", lambda: _FakeDirectory(directory_nodes))
     monkeypatch.setattr(
         device_inventory,
@@ -228,6 +235,80 @@ def test_device_inventory_reads_connected_to_subnet_field_directly(monkeypatch) 
     assert item is not None
     assert item["runtime"]["connected_to_subnet"] is True
     assert item["runtime"]["route_mode"] == "p2p"
+
+
+def test_redevice_version_info_detects_agent_version_drift() -> None:
+    info = endpoint_version_info(
+        {
+            "endpoint_manifest": {
+                "schema_version": "endpoint-manifest.v1",
+                "agent_version": "0.1.1",
+                "agent_version_code": 2,
+            },
+            "endpoint_policy": {"redevice_agent": {"version": "0.1.2", "version_code": 3}},
+        },
+        use_default_served=False,
+    )
+
+    assert info["software_version"] == "0.1.1"
+    assert info["software_version_code"] == "2"
+    assert info["served_version"] == "0.1.2"
+    assert info["served_version_code"] == "3"
+    assert info["version_status"] == "drift"
+
+
+def test_access_link_normalizer_preserves_redevice_version_payloads() -> None:
+    entry = access_links._normalize_entry(
+        "redevice",
+        "endpoint-1",
+        {
+            "endpoint_manifest": {"agent_version": "0.1.1", "agent_version_code": 2},
+            "endpoint_policy": {"redevice_agent": {"version": "0.1.1"}},
+            "diagnostic_report": {"agent_version": "0.1.1"},
+            "service_state": {"agent_version": "0.1.1"},
+            "active_app": {"app_id": "demo"},
+        },
+    )
+
+    assert entry["endpoint_manifest"] == {"agent_version": "0.1.1", "agent_version_code": 2}
+    assert entry["endpoint_policy"] == {"redevice_agent": {"version": "0.1.1"}}
+    assert entry["diagnostic_report"] == {"agent_version": "0.1.1"}
+    assert entry["service_state"] == {"agent_version": "0.1.1"}
+    assert entry["active_app"] == {"app_id": "demo"}
+
+
+def test_device_inventory_surfaces_redevice_agent_versions(monkeypatch) -> None:
+    _patch_sources(
+        monkeypatch,
+        redevice_entries=[
+            {
+                "id": "endpoint-1",
+                "kind": "redevice",
+                "display_name": "Kitchen ReDevice",
+                "online": True,
+                "connection_state": "connected",
+                "last_seen_at": 995.0,
+                "endpoint_manifest": {
+                    "schema_version": "endpoint-manifest.v1",
+                    "endpoint_id": "endpoint-1",
+                    "agent_version": "0.1.1",
+                    "agent_version_code": 2,
+                },
+                "endpoint_policy": {"redevice_agent": {"version": "0.1.2", "version_code": 3}},
+            }
+        ],
+        now=1000.0,
+    )
+
+    item = device_inventory.get_device("redevice:endpoint-1")
+
+    assert item is not None
+    assert item["runtime"]["runtime_version"] == "0.1.1"
+    assert item["runtime"]["software_version"] == "0.1.1"
+    assert item["runtime"]["software_version_code"] == "2"
+    assert item["runtime"]["served_version"] == "0.1.2"
+    assert item["runtime"]["version_status"] == "drift"
+    assert item["diagnostics"]["version_info"]["served_version_code"] == "3"
 
 
 def test_sdk_devices_inspect_device_separates_diagnostics(monkeypatch) -> None:

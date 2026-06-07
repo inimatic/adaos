@@ -17,23 +17,39 @@ These values can legitimately diverge while rollouts, browser refreshes, or
 workspace syncs are in progress. UI and CLI surfaces should label which side
 they are showing instead of merging them into one generic version.
 
+The architecture contract is described in
+[Version Observability](../architecture/version-observability.md).
+
 ## Observability matrix
 
 | Subsystem | Served source | Used source | Primary operator surface |
 | --- | --- | --- | --- |
-| AdaOS core / CLI | Git branch or update target commit | Active core runtime: dev workspace build metadata or active slot manifest repaired by local `pyproject.toml` / Git subject when a stale default manifest says `0.1.0` | `adaos autostart update-status`, Infra State summary |
+| AdaOS core / CLI | `adaos_core` in `adaos-versions.json`, Git branch, or update target commit | Active core runtime: dev workspace build metadata or active slot manifest repaired by local `pyproject.toml` / Git subject when a stale default manifest says `0.1.0` | `adaos autostart update-status`, Infra State summary |
 | Root/backend | Backend package and deployed container build | `/healthz` on the exact Root zone handling traffic | `https://api.inimatic.com/healthz`, `https://ru.api.inimatic.com/healthz` |
 | Hosted client | Hosting build `version.json` | Browser session `client_build_version` reported during the YJS/client handshake | `https://inimatic.com/version.json`, Browsers modal |
-| ReDevice/member nodes | Target core update report and Root rollout intent | Member snapshot build/runtime payload from subnet link state | Infra State node selector and member runtime details |
+| ReDevice/member nodes | Target core update report, Root rollout intent, or `redevice_agent` in `adaos-versions.json` | Member snapshot build/runtime payload or endpoint `agent_version` report | Infra State node selector, ReDevice List, ReDevice Settings |
 | Skills | Registry catalog JSON / workspace source manifest | Active skill runtime version and slot | Infra State skills inventory |
-| Scenarios | Registry catalog JSON / workspace source manifest | Active scenario registry/capacity entry; no separate runtime slot today | Infra State scenario registry |
+| Scenarios | Registry catalog JSON / workspace source manifest | Active scenario registry/capacity entry; no separate runtime slot today | Infra State scenario registry, labeled `Active registry` |
 
-The desired long-term release contract is a small aggregate manifest, for
-example `adaos-versions.json`, updated by each subsystem CI job. It should keep
-`served` and `used` out of the same object: CI can publish served versions, but
-runtime endpoints must still report used versions. Documentation and dashboards
-can then compare the aggregate served manifest with live health/browser/member
-snapshots.
+## Aggregate served manifest
+
+The release contract is `adaos-versions.json`, updated by subsystem CI jobs and
+served publicly as `https://inimatic.com/adaos-versions.json` when deployment
+publishing is enabled. Generate or update it locally with:
+
+```bash
+python tools/write_version_manifest.py --out adaos-versions.json
+python tools/write_version_manifest.py --component redevice_agent --version 0.1.2 --build-version 0.1.2+abcd123 --commit abcd123 --source android-ci
+```
+
+This file publishes only `served` versions. Runtime endpoints still own `used`
+versions:
+
+- Root/backend: `/healthz`
+- Hosted client: browser `client_build_version`
+- AdaOS core: active slot/dev metadata
+- ReDevice Agent: `endpoint_manifest.agent_version` or
+  `diagnostic_report.agent_version`
 
 ## Core version
 
@@ -122,6 +138,35 @@ Browsers report the client build they are actually running as
 diagnose stale tabs, service-worker lag, or browsers that have not reloaded to
 the latest served `version.json`.
 
+## ReDevice Agent version
+
+The ReDevice Agent source version lives in
+`src/adaos/integrations/redevice-agent/android/gradle.properties`.
+
+Android diagnostics and endpoint manifests must report the live agent version
+using `agent_version`, `agent_version_code`, and, when available,
+`agent_build.version_name` / `agent_build.version_code`.
+
+ReDevice operator surfaces compare:
+
+- `Used`: endpoint `endpoint_manifest`, `diagnostic_report`, health, or service
+  state payloads.
+- `Served`: endpoint policy `redevice_agent.version`, aggregate
+  `adaos-versions.json`, or local Gradle source fallback in dev.
+
+If both values are present and differ, ReDevice List and ReDevice Settings show
+`drift`. If either side is missing, they show `unknown`.
+
+## Scenario versions
+
+Scenarios do not have a separate runtime slot today. Infra State must not label
+their third version plane as `Installed`. Use:
+
+- `Catalog`: registry/catalog version available remotely.
+- `Workspace`: local source version from the materialized workspace.
+- `Active registry`: version selected in the scenario registry or member
+  capacity entry.
+
 ## Release sanity checklist
 
 Before announcing or debugging a release, compare:
@@ -130,6 +175,7 @@ Before announcing or debugging a release, compare:
 adaos autostart update-status --json
 curl -sS https://api.inimatic.com/healthz
 curl -sS https://inimatic.com/version.json
+python tools/write_version_manifest.py --out .adaos/version-manifest.json
 ```
 
 For zoned deployments, also check the zone-specific Root:
