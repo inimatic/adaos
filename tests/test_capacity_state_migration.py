@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 
 import yaml
@@ -57,6 +58,25 @@ def test_capacity_updates_registry_without_restoring_node_yaml_capacity() -> Non
     assert any(item.get("name") == "new_skill" for item in repo.skills_for_node(cfg.node_id))
     assert any(item.get("name") == "desk" for item in repo.scenarios_for_node(cfg.node_id))
     assert any(item.get("io_type") == "voice" for item in repo.io_for_node(cfg.node_id))
+
+
+def test_refresh_native_io_capacity_does_not_import_native_backends(monkeypatch) -> None:
+    imported: list[str] = []
+    real_import = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        root = str(name).split(".", 1)[0]
+        if root in {"aiortc", "av", "vosk", "pyttsx3"}:
+            imported.append(root)
+            raise AssertionError(f"native backend imported during capacity refresh: {root}")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    result = capacity_mod.refresh_native_io_capacity()
+
+    assert not imported
+    assert {item.get("io_type") for item in result["updated"]} >= {"say", "voice", "webrtc_media"}
 
 
 def test_legacy_capacity_writer_preserves_member_identity_fields() -> None:
