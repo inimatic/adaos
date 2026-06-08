@@ -762,7 +762,7 @@ def test_should_emit_node_status_suppresses_duplicate_fingerprint_within_window(
 
     should_emit, fingerprint2 = bootstrap_mod._should_emit_node_status(
         payload=dict(payload),
-        now=100.5,
+        now=105.0,
         last_emitted_at=100.0,
         last_fingerprint=fingerprint,
     )
@@ -776,6 +776,46 @@ def test_should_emit_node_status_suppresses_duplicate_fingerprint_within_window(
         last_fingerprint=fingerprint,
     )
     assert should_emit is True
+
+
+def test_should_emit_node_status_allows_explicit_short_dedupe_window() -> None:
+    payload = {
+        "node_id": "hub-1",
+        "subnet_id": "sn-1",
+        "role": "hub",
+        "node_names": [],
+        "primary_node_name": "hub",
+        "ready": True,
+        "node_state": "ready",
+        "draining": False,
+        "route_mode": "hub",
+        "connected_to_hub": None,
+        "trigger": "heartbeat",
+    }
+    _, fingerprint = bootstrap_mod._should_emit_node_status(
+        payload=payload,
+        now=100.0,
+        last_emitted_at=0.0,
+        last_fingerprint=None,
+    )
+
+    should_emit, _ = bootstrap_mod._should_emit_node_status(
+        payload=dict(payload),
+        now=105.0,
+        last_emitted_at=100.0,
+        last_fingerprint=fingerprint,
+        dedupe_window_s=1.0,
+    )
+
+    assert should_emit is True
+
+
+def test_node_status_dedupe_window_rejects_non_finite_values(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_NODE_STATUS_DEDUPE_WINDOW_S", "nan")
+    assert bootstrap_mod._node_status_dedupe_window_s() == 30.0
+
+    monkeypatch.setenv("ADAOS_NODE_STATUS_DEDUPE_WINDOW_S", "inf")
+    assert bootstrap_mod._node_status_dedupe_window_s() == 30.0
 
 
 def test_node_status_emit_fingerprint_reads_connected_to_subnet_alias() -> None:

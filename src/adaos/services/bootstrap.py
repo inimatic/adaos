@@ -395,6 +395,11 @@ def _should_forward_node_status_to_members(payload: object) -> bool:
     return not bool(meta.get("subnet_origin_node_id"))
 
 
+def _node_status_dedupe_window_s() -> float:
+    raw = os.getenv("ADAOS_NODE_STATUS_DEDUPE_WINDOW_S", "30") or "30"
+    return _bounded_interval_seconds(raw, default=30.0, minimum=1.0)
+
+
 def _node_status_emit_fingerprint(payload: object) -> tuple[Any, ...]:
     if not isinstance(payload, dict):
         return ("invalid",)
@@ -431,13 +436,14 @@ def _should_emit_node_status(
     now: float,
     last_emitted_at: float,
     last_fingerprint: tuple[Any, ...] | None,
-    dedupe_window_s: float = 1.0,
+    dedupe_window_s: float | None = None,
 ) -> tuple[bool, tuple[Any, ...]]:
     fingerprint = _node_status_emit_fingerprint(payload)
+    window_s = _node_status_dedupe_window_s() if dedupe_window_s is None else float(dedupe_window_s)
     if (
         last_fingerprint is not None
         and fingerprint == last_fingerprint
-        and (now - float(last_emitted_at or 0.0)) < float(dedupe_window_s)
+        and (now - float(last_emitted_at or 0.0)) < window_s
     ):
         return False, fingerprint
     return True, fingerprint
