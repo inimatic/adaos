@@ -345,6 +345,14 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
         )
     for k, v in env.items():
         lines.append(f"export {k}={_sh_quote(str(v))}")
+    lines.extend(
+        [
+            "max_nofile=$(ulimit -H -n 2>/dev/null || true)",
+            "if [ -n \"${max_nofile}\" ] && [ \"${max_nofile}\" != \"unlimited\" ]; then",
+            "  ulimit -n \"${max_nofile}\" 2>/dev/null || true",
+            "fi",
+        ]
+    )
     quoted = " ".join(_sh_quote(str(x)) for x in argv)
     lines.append(f"exec {quoted}")
     _write_text(path, "\n".join(lines) + "\n")
@@ -1434,6 +1442,7 @@ def _best_effort_remove(path: Path) -> None:
 
 
 _LINUX_SYSTEM_SERVICE_RESOURCE_LIMITS = (
+    "LimitNOFILE=524288",
     "MemoryHigh=2200M",
     "MemoryMax=3000M",
     "MemorySwapMax=1024M",
