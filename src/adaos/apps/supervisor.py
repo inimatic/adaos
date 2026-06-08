@@ -1843,9 +1843,9 @@ def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.7
     if token:
         headers["X-AdaOS-Token"] = token
     try:
-        response = requests.get(f"{base_url}/api/ping", headers=headers, timeout=max(0.1, float(timeout)))
-        response.raise_for_status()
-        payload = response.json()
+        with requests.get(f"{base_url}/api/ping", headers=headers, timeout=max(0.1, float(timeout))) as response:
+            response.raise_for_status()
+            payload = response.json()
     except Exception:
         return False
     return bool(isinstance(payload, dict) and payload.get("ok") is True)
@@ -4862,7 +4862,7 @@ class SupervisorManager:
             str(transition_role or "active"),
         )
 
-    def _runtime_state_payload(self) -> dict[str, Any]:
+    def _runtime_state_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
         proc = self._proc
         slot_snapshot = core_slot_status()
         current_slot = str(slot_snapshot.get("active_slot") or active_slot() or "").strip().upper() or None
@@ -4881,7 +4881,11 @@ class SupervisorManager:
         managed_executable = managed["managed_executable"]
         managed_cwd = managed["managed_cwd"]
         listener_running = bool(managed_alive) and _listener_running(self.runtime_host, active_runtime_port)
-        api_ready = listener_running and _runtime_api_ready(active_runtime_url, token=self.token)
+        api_ready = listener_running and _runtime_api_ready(
+            active_runtime_url,
+            token=self.token,
+            timeout=runtime_api_timeout,
+        )
         runtime_state = "stopped"
         if self._stopping:
             runtime_state = "stopping"
@@ -4919,6 +4923,7 @@ class SupervisorManager:
         candidate_runtime_api_ready = bool(candidate_listener_running and candidate_runtime_url) and _runtime_api_ready(
             str(candidate_runtime_url),
             token=self.token,
+            timeout=runtime_api_timeout,
         )
         candidate_runtime_state = None
         if candidate_slot:
@@ -5640,9 +5645,9 @@ class SupervisorManager:
             "timeout_sec": timeout_sec,
         }
 
-    def _local_supervisor_update_status_payload(self) -> dict[str, Any]:
+    def _local_supervisor_update_status_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
         payload = _local_update_payload()
-        payload["runtime"] = self.status()
+        payload["runtime"] = self.status(runtime_api_timeout=runtime_api_timeout)
         payload["_served_by"] = "supervisor_fallback"
         return _reconcile_update_status(payload)
 
@@ -6452,8 +6457,8 @@ class SupervisorManager:
         except Exception:
             _LOG.warning("failed to stop adaos-realtime sidecar", exc_info=True)
 
-    def status(self) -> dict[str, Any]:
-        payload = self._runtime_state_payload()
+    def status(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
+        payload = self._runtime_state_payload(runtime_api_timeout=runtime_api_timeout)
         payload["persisted_state"] = _read_json(_supervisor_runtime_state_path())
         payload["update_attempt"] = _read_update_attempt()
         payload["update_task_running"] = bool(self._update_task is not None and not self._update_task.done())
@@ -6464,13 +6469,13 @@ class SupervisorManager:
         if self.token:
             headers["X-AdaOS-Token"] = self.token
         try:
-            response = requests.get(
+            with requests.get(
                 self.runtime_base_url + "/api/admin/update/status",
                 headers=headers,
                 timeout=5.0,
-            )
-            response.raise_for_status()
-            payload = response.json()
+            ) as response:
+                response.raise_for_status()
+                payload = response.json()
             if isinstance(payload, dict):
                 payload.setdefault("runtime", self.status())
                 payload["_served_by"] = "runtime"
@@ -6480,7 +6485,7 @@ class SupervisorManager:
         return self._local_supervisor_update_status_payload()
 
     def public_update_status(self) -> dict[str, Any]:
-        return _public_update_status_payload(self._local_supervisor_update_status_payload())
+        return _public_update_status_payload(self._local_supervisor_update_status_payload(runtime_api_timeout=0.1))
 
     def public_memory_status(self) -> dict[str, Any]:
         runtime = self._memory_runtime_state_payload()
