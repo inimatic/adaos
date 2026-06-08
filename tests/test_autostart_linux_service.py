@@ -50,6 +50,7 @@ def test_linux_system_service_sets_memory_limits(tmp_path: Path) -> None:
     autostart._linux_write_service_file(service_path, wrapper=wrapper, scope="system")
 
     text = service_path.read_text(encoding="utf-8")
+    assert "LimitNOFILE=524288" in text
     assert "MemoryHigh=2200M" in text
     assert "MemoryMax=3000M" in text
     assert "MemorySwapMax=1024M" in text
@@ -94,6 +95,8 @@ def test_linux_wrapper_sources_shared_dotenv(tmp_path: Path) -> None:
     assert "ADAOS_SHARED_DOTENV_PATH" in text
     assert '. "${ADAOS_SHARED_DOTENV_PATH}"' in text
     assert "set -a" in text
+    assert "ulimit -H -n" in text
+    assert 'ulimit -n "${max_nofile}"' in text
 
 
 def test_bootstrap_core_slot_uses_explicit_revision(monkeypatch, tmp_path: Path) -> None:
