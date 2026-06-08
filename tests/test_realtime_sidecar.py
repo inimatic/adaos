@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import socket
 from pathlib import Path
 
@@ -528,10 +529,8 @@ def test_realtime_sidecar_ws_heartbeat_defaults_disabled(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_probe_realtime_sidecar_ready_accepts_nats_info() -> None:
+async def test_probe_realtime_sidecar_ready_accepts_open_listener() -> None:
     async def _handle(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        writer.write(b'INFO {"server_id":"test"}\r\n')
-        await writer.drain()
         writer.close()
         await writer.wait_closed()
 
@@ -545,18 +544,58 @@ async def test_probe_realtime_sidecar_ready_accepts_nats_info() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probe_realtime_sidecar_ready_rejects_empty_listener() -> None:
-    async def _handle(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+async def test_probe_realtime_sidecar_ready_rejects_closed_port() -> None:
+    port = _free_port()
+
+    assert not await realtime_sidecar_mod.probe_realtime_sidecar_ready(host="127.0.0.1", port=port, timeout_s=0.2)
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_probe_does_not_supersede_active_local_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    fake_ws = _FakeRemoteWS()
+
+    async def _fake_connect(*args, **kwargs):
+        return fake_ws
+
+    import websockets  # type: ignore
+
+    monkeypatch.setattr(websockets, "connect", _fake_connect)
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_PROBE_GRACE_S", "0.05")
+
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        writer.write(b"PING\r\n")
+        await writer.drain()
+        await asyncio.sleep(0.05)
+        assert fake_ws.sent == [b"PING\r\n"]
+
+        assert await realtime_sidecar_mod.probe_realtime_sidecar_ready(
+            host=server.listen_host,
+            port=server.listen_port,
+            timeout_s=1.0,
+        )
+        await asyncio.sleep(0.1)
+
+        writer.write(b"PING\r\n")
+        await writer.drain()
+        await asyncio.sleep(0.05)
+
+        assert fake_ws.sent == [b"PING\r\n", b"PING\r\n"]
+        assert server._stats.superseded_total == 0
         writer.close()
         await writer.wait_closed()
-
-    server = await asyncio.start_server(_handle, "127.0.0.1", 0)
-    try:
-        sock = server.sockets[0].getsockname()
-        assert not await realtime_sidecar_mod.probe_realtime_sidecar_ready(host=sock[0], port=sock[1], timeout_s=1.0)
+        with contextlib.suppress(Exception):
+            await reader.read()
     finally:
-        server.close()
-        await server.wait_closed()
+        await server.close()
 
 
 @pytest.mark.asyncio
