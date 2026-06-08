@@ -830,6 +830,15 @@ def _realtime_nats_ping_interval_s() -> float | None:
     return value
 
 
+def _realtime_probe_grace_s() -> float:
+    raw = os.getenv("ADAOS_REALTIME_PROBE_GRACE_S")
+    try:
+        value = float(str(raw if raw is not None else "0.15").strip() or "0.15")
+    except Exception:
+        value = 0.15
+    return max(0.0, min(value, 2.0))
+
+
 def _ws_socket(ws: Any) -> Any | None:
     try:
         transport = getattr(ws, "transport", None)
@@ -965,18 +974,8 @@ async def _is_port_open(host: str, port: int) -> bool:
 
 
 async def probe_realtime_sidecar_ready(*, host: str, port: int, timeout_s: float = 2.0) -> bool:
-    async def _probe() -> bool:
-        reader, writer = await asyncio.open_connection(host, port)
-        try:
-            line = await reader.readline()
-        finally:
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
-        return bool(line.startswith(b"INFO "))
-
     try:
-        return bool(await asyncio.wait_for(_probe(), timeout=max(0.1, float(timeout_s))))
+        return bool(await asyncio.wait_for(_is_port_open(host, port), timeout=max(0.1, float(timeout_s))))
     except Exception:
         return False
 
@@ -1847,6 +1846,20 @@ class RealtimeSidecarServer:
             pass
         self._stats.local_client_total = int(self._stats.local_client_total or 0) + 1
         if self._active_task is not None and not self._active_task.done():
+            try:
+                await asyncio.wait_for(reader.read(1), timeout=_realtime_probe_grace_s())
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                return
+            else:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                return
             self._log("superseding previous local NATS client")
             self._stats.superseded_total = int(self._stats.superseded_total or 0) + 1
             self._active_task.cancel()
