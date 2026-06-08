@@ -194,6 +194,10 @@ def _notify_write_listeners(webspace_id: str, update: bytes) -> None:
             continue
 
 
+def current_ystore_write_metadata() -> dict[str, Any]:
+    return dict(_WRITE_META.get() or {})
+
+
 def _encode_snapshot_update(updates: List[Tuple[bytes, bytes, float]]) -> bytes:
     """
     Heavy snapshot encoding performed in a worker thread.

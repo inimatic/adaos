@@ -61,6 +61,7 @@ _MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS: dict[str, asyncio.Task[Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_DIRTY: dict[str, Dict[str, Any]] = {}
 _MEMBER_SNAPSHOT_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
+_MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT: dict[str, str] = {}
 _RESOLVED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 64
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
@@ -320,6 +321,33 @@ def _member_snapshot_rebuild_request_id(*, webspace_id: str, node_id: str) -> st
     webspace_token = str(webspace_id or "").strip() or default_webspace_id()
     node_token = str(node_id or "").strip() or "member"
     return f"member-snapshot-rebuild:{webspace_token}:{node_token}:{time.time_ns()}"
+
+
+def _member_snapshot_desktop_material_fingerprint(node_id: str) -> str:
+    try:
+        from adaos.services.registry.subnet_directory import get_directory
+
+        node = get_directory().get_node(str(node_id or "").strip()) or {}
+    except Exception:
+        return ""
+    runtime_projection = node.get("runtime_projection") if isinstance(node.get("runtime_projection"), Mapping) else {}
+    snapshot = runtime_projection.get("snapshot") if isinstance(runtime_projection.get("snapshot"), Mapping) else {}
+    catalog = snapshot.get("desktop_catalog") if isinstance(snapshot.get("desktop_catalog"), Mapping) else {}
+    if not catalog:
+        return ""
+    material = {
+        "apps": catalog.get("apps") if isinstance(catalog.get("apps"), list) else [],
+        "widgets": catalog.get("widgets") if isinstance(catalog.get("widgets"), list) else [],
+        "registry": catalog.get("registry") if isinstance(catalog.get("registry"), Mapping) else {},
+        "resources": catalog.get("resources") if isinstance(catalog.get("resources"), Mapping) else {},
+        "webio": catalog.get("webio") if isinstance(catalog.get("webio"), Mapping) else {},
+        "ydoc_defaults": catalog.get("ydoc_defaults") if isinstance(catalog.get("ydoc_defaults"), Mapping) else {},
+    }
+    try:
+        encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except Exception:
+        return ""
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
@@ -5635,6 +5663,23 @@ async def _schedule_member_snapshot_rebuild_from_event(
         stats["last_reason"] = reason
         stats["last_requested_at"] = time.time()
         stats["last_request_id"] = request_id
+        material_fingerprint = _member_snapshot_desktop_material_fingerprint(node_id)
+        if material_fingerprint:
+            previous_fingerprint = _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.get(key)
+            if previous_fingerprint == material_fingerprint:
+                stats["skipped_unchanged_total"] = int(stats.get("skipped_unchanged_total") or 0) + 1
+                stats["last_skipped_unchanged_at"] = time.time()
+                stats["last_material_fingerprint"] = material_fingerprint
+                _log.debug(
+                    "skipped unchanged member snapshot rebuild webspace=%s node_id=%s reason=%s fingerprint=%s",
+                    webspace_id,
+                    node_id,
+                    reason,
+                    material_fingerprint[:12],
+                )
+                continue
+            _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT[key] = material_fingerprint
+            stats["last_material_fingerprint"] = material_fingerprint
         existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(key)
         if existing is not None and not existing.done():
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running", request_id=request_id)
