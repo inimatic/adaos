@@ -1028,14 +1028,11 @@ class HubLinkManager:
         )
         fingerprint = _member_infrastate_projection_fingerprint(projection)
         now = time.time()
-        min_interval = _member_infrastate_projection_min_interval_s()
         for webspace_id in _member_infrastate_webspaces():
             ws_id = str(webspace_id or "").strip() or "default"
             cache_key = (node_key, ws_id)
-            if (
-                self._member_infrastate_projection_fingerprints.get(cache_key) == fingerprint
-                and now - float(self._member_infrastate_projection_last_at.get(cache_key) or 0.0) < min_interval
-            ):
+            if self._member_infrastate_projection_fingerprints.get(cache_key) == fingerprint:
+                self._member_infrastate_projection_last_at[cache_key] = now
                 continue
             projection_copy = json.loads(json.dumps(projection, ensure_ascii=False, separators=(",", ":")))
 
