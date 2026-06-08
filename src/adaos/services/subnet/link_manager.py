@@ -280,6 +280,15 @@ def _member_infrastate_projection_min_interval_s() -> float:
     return max(5.0, min(300.0, value))
 
 
+def _member_infrastate_projection_ttl_s() -> float:
+    raw = str(os.getenv("ADAOS_SUBNET_MEMBER_INFRASTATE_PROJECTION_TTL_S") or "").strip()
+    try:
+        value = float(raw or 120.0)
+    except Exception:
+        value = 120.0
+    return max(15.0, min(86400.0, value))
+
+
 def _core_public_version(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -555,11 +564,44 @@ def _is_member_infrastate_projection(value: Any) -> bool:
     )
 
 
-def _member_node_state_for_ingest(existing: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+def _member_infrastate_projection_ts(value: Any) -> float:
+    infrastate = _coerce_json_dict(value)
+    summary = _coerce_json_dict(infrastate.get("summary"))
+    status = _coerce_json_dict(infrastate.get("status"))
+    diag = _coerce_json_dict(infrastate.get("projection_diag"))
+    best = 0.0
+    for raw in (
+        infrastate.get("last_refresh_ts"),
+        summary.get("updated_at"),
+        status.get("updated_at"),
+        diag.get("captured_at"),
+    ):
+        try:
+            ts = float(raw)
+        except Exception:
+            continue
+        if ts > best:
+            best = ts
+    return best
+
+
+def _member_infrastate_projection_is_fresh(value: Any, *, now: float | None = None) -> bool:
+    if not _is_member_infrastate_projection(value):
+        return False
+    captured_at = _member_infrastate_projection_ts(value)
+    if captured_at <= 0:
+        return False
+    now_ts = float(now if now is not None else time.time())
+    if captured_at > now_ts + 60.0:
+        return True
+    return now_ts - captured_at <= _member_infrastate_projection_ttl_s()
+
+
+def _member_node_state_for_ingest(existing: Any, incoming: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
     state = json.loads(json.dumps(incoming or {}, ensure_ascii=False, separators=(",", ":")))
     existing_state = _coerce_json_dict(existing)
     existing_infrastate = _coerce_json_dict(existing_state.get("infrastate"))
-    if _is_member_infrastate_projection(existing_infrastate):
+    if _member_infrastate_projection_is_fresh(existing_infrastate, now=now):
         state["infrastate"] = existing_infrastate
     else:
         state.pop("infrastate", None)
