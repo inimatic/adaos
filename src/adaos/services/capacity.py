@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from typing import Any, Dict, List
 from copy import deepcopy
@@ -553,6 +554,13 @@ def is_io_available(io_type: str, *, base_dir: Path | None = None, default: bool
     return is_io_capacity_entry_available(it, default=default)
 
 
+def _optional_module_available(module_name: str) -> tuple[bool, str | None]:
+    try:
+        return importlib.util.find_spec(module_name) is not None, None
+    except Exception as exc:
+        return False, str(exc)
+
+
 def refresh_native_io_capacity(*, base_dir: Path | None = None) -> Dict[str, Any]:
     """
     Detect optional native IO dependencies and reflect them in the local capacity projection.
@@ -563,12 +571,12 @@ def refresh_native_io_capacity(*, base_dir: Path | None = None) -> Dict[str, Any
     """
     out: Dict[str, Any] = {"updated": [], "warnings": []}
 
-    # TTS: pyttsx3
+    # TTS: pyttsx3. Keep this as a metadata check; importing pyttsx3 can
+    # initialize platform audio backends during API startup.
     try:
-        from adaos.adapters.audio.tts import native_tts as _native_tts
-
-        available = bool(getattr(_native_tts, "pyttsx3", None) is not None)
-        reason = None if available else str(getattr(_native_tts, "_import_error", "") or "pyttsx3 import failed")
+        available, reason = _optional_module_available("pyttsx3")
+        if not available and not reason:
+            reason = "pyttsx3 module not found"
         _set_io_state(
             "say",
             available=available,
@@ -581,15 +589,12 @@ def refresh_native_io_capacity(*, base_dir: Path | None = None) -> Dict[str, Any
     except Exception as exc:
         out["warnings"].append(f"say detect failed: {exc}")
 
-    # STT: Vosk (hub STT API)
+    # STT: Vosk (hub STT API). Do not import vosk here: libvosk/model runtime
+    # memory belongs to actual transcription requests, not capacity refresh.
     try:
-        available = True
-        reason = None
-        try:
-            import vosk  # type: ignore  # noqa: F401
-        except Exception as exc:
-            available = False
-            reason = str(exc)
+        available, reason = _optional_module_available("vosk")
+        if not available and not reason:
+            reason = "vosk module not found"
         _set_io_state(
             "voice",
             available=available,
@@ -602,19 +607,16 @@ def refresh_native_io_capacity(*, base_dir: Path | None = None) -> Dict[str, Any
     except Exception as exc:
         out["warnings"].append(f"voice detect failed: {exc}")
 
-    # WebRTC AV runtime: aiortc
+    # WebRTC AV runtime: aiortc. Importing aiortc pulls PyAV/FFmpeg native
+    # libraries into the hub process, so only check installability here.
     try:
-        from adaos.services.agent_context import get_ctx
         from adaos.services.media_capability import local_webrtc_media_capabilities
+        from adaos.services.node_config import load_config
 
-        available = True
-        reason = None
-        try:
-            import aiortc  # type: ignore  # noqa: F401
-        except Exception as exc:
-            available = False
-            reason = str(exc)
-        role = str(getattr(get_ctx().config, "role", "") or "")
+        available, reason = _optional_module_available("aiortc")
+        if not available and not reason:
+            reason = "aiortc module not found"
+        role = str(getattr(load_config(), "role", "") or "")
         _set_io_state(
             "webrtc_media",
             available=available,
