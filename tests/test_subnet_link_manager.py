@@ -358,9 +358,11 @@ def test_member_node_state_ingest_preserves_hub_infrastate_projection() -> None:
     existing = {
         "desktop": {"theme": "dark"},
         "infrastate": {
+            "last_refresh_ts": 140.0,
             "summary": {
                 "subtitle": "slot A | 0.1.2 | 72c87e4",
                 "source": "subnet.member.snapshot",
+                "updated_at": 140.0,
             },
             "projection_diag": {"source": "subnet.link_manager.member_snapshot"},
         },
@@ -376,10 +378,57 @@ def test_member_node_state_ingest_preserves_hub_infrastate_projection() -> None:
         },
     }
 
-    merged = mod._member_node_state_for_ingest(existing, incoming)
+    merged = mod._member_node_state_for_ingest(existing, incoming, now=150.0)
 
     assert merged["desktop"]["theme"] == "light"
     assert merged["infrastate"]["summary"]["subtitle"] == "slot A | 0.1.2 | 72c87e4"
+
+
+def test_member_node_state_ingest_drops_stale_hub_infrastate_projection() -> None:
+    existing = {
+        "desktop": {"theme": "dark"},
+        "infrastate": {
+            "last_refresh_ts": 10.0,
+            "summary": {
+                "subtitle": "slot B | 0.1.191 | 84f6164",
+                "source": "subnet.member.snapshot",
+                "updated_at": 10.0,
+            },
+            "projection_diag": {"source": "subnet.link_manager.member_snapshot", "captured_at": 10.0},
+        },
+    }
+    incoming = {
+        "desktop": {"theme": "light"},
+        "infrastate": {
+            "summary": {
+                "subtitle": "slot A | 78a00fe",
+                "source": "skill.infrastate_skill",
+            },
+            "projection_diag": {"source": "skill_infrastate_skill"},
+        },
+    }
+
+    merged = mod._member_node_state_for_ingest(existing, incoming, now=300.0)
+
+    assert merged == {"desktop": {"theme": "light"}}
+
+
+def test_member_node_state_ingest_drops_timestampless_hub_infrastate_projection() -> None:
+    existing = {
+        "desktop": {"theme": "dark"},
+        "infrastate": {
+            "summary": {
+                "subtitle": "slot B | 0.1.191 | 84f6164",
+                "source": "subnet.member.snapshot",
+            },
+            "projection_diag": {"source": "subnet.link_manager.member_snapshot"},
+        },
+    }
+    incoming = {"desktop": {"theme": "light"}}
+
+    merged = mod._member_node_state_for_ingest(existing, incoming, now=300.0)
+
+    assert merged == {"desktop": {"theme": "light"}}
 
 
 def test_member_node_state_ingest_drops_untrusted_infrastate_without_hub_projection() -> None:
