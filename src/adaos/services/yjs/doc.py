@@ -13,7 +13,12 @@ from typing import Iterator, AsyncIterator, Awaitable, Optional, TypeVar, Callab
 import y_py as Y
 
 from adaos.services.agent_context import get_ctx
-from adaos.services.yjs.store import get_ystore_for_webspace, ystore_write_metadata, ystore_write_metadata_sync
+from adaos.services.yjs.store import (
+    current_ystore_write_metadata,
+    get_ystore_for_webspace,
+    ystore_write_metadata,
+    ystore_write_metadata_sync,
+)
 from adaos.services.yjs.update_origin import mark_backend_room_update
 
 T = TypeVar("T")
@@ -526,9 +531,22 @@ async def async_get_ydoc(
     ystore = get_ystore_for_webspace(webspace_id)
     room = _resolve_live_room(webspace_id) if prefer_live_room else None
     use_live_room = _can_access_live_room_directly(room)
-    source_for_session = str(write_source or "").strip() or "async_get_ydoc"
-    owner_for_session = str(write_owner or "").strip() or _resolve_yjs_write_owner()
-    channel_for_session = str(write_channel or "").strip() or "yjs.doc.async"
+    inherited_write_meta = current_ystore_write_metadata()
+    source_for_session = (
+        str(write_source or "").strip()
+        or str(inherited_write_meta.get("source") or "").strip()
+        or "async_get_ydoc"
+    )
+    owner_for_session = (
+        str(write_owner or "").strip()
+        or str(inherited_write_meta.get("owner") or "").strip()
+        or _resolve_yjs_write_owner()
+    )
+    channel_for_session = (
+        str(write_channel or "").strip()
+        or str(inherited_write_meta.get("channel") or "").strip()
+        or "yjs.doc.async"
+    )
     live_source_for_session = (
         source_for_session
         if source_for_session.endswith(".live_room")

@@ -1069,6 +1069,68 @@ def test_member_snapshot_change_seeds_ydoc_defaults_without_waiting_for_rebuild(
     assert seeded["rebuild"] == ("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")
 
 
+def test_member_snapshot_changed_skips_unchanged_desktop_material(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    previous_directory_module = sys.modules.get("adaos.services.registry.subnet_directory")
+    directory_module = types.ModuleType("adaos.services.registry.subnet_directory")
+    directory_module.get_directory = lambda: SimpleNamespace(
+        get_node=lambda _node_id: {
+            "runtime_projection": {
+                "snapshot": {
+                    "desktop_catalog": {
+                        "apps": [{"id": "weather"}],
+                        "widgets": [],
+                        "ydoc_defaults": {"data/nodes/member-1/weather/current": {"city": "Berlin"}},
+                    }
+                }
+            }
+        }
+    )
+    sys.modules["adaos.services.registry.subnet_directory"] = directory_module
+
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
+    )
+    monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 0.0)
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_STATS.clear()
+    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.clear()
+
+    async def _fake_seed(**_kwargs) -> None:
+        return None
+
+    async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
+        calls.append((webspace_id, action, source_of_truth))
+        return {"accepted": True}
+
+    monkeypatch.setattr(webspace_runtime_module, "_seed_member_snapshot_ydoc_defaults", _fake_seed)
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    async def _exercise() -> None:
+        await webspace_runtime_module._on_subnet_member_snapshot_changed({"node_id": "member-1"})
+        await asyncio.sleep(0)
+        await webspace_runtime_module._on_subnet_member_snapshot_changed({"node_id": "member-1"})
+        await asyncio.sleep(0)
+
+    try:
+        asyncio.run(_exercise())
+    finally:
+        if previous_directory_module is not None:
+            sys.modules["adaos.services.registry.subnet_directory"] = previous_directory_module
+        else:
+            sys.modules.pop("adaos.services.registry.subnet_directory", None)
+
+    assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
+    stats = webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_STATS["member-1\0desktop"]
+    assert stats["skipped_unchanged_total"] == 1
+
+
 class _FakeTxn:
     def __enter__(self):
         return self
