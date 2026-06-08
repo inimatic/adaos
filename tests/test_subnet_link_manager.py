@@ -502,6 +502,90 @@ def test_update_member_snapshot_heartbeat_publishes_member_infrastate_projection
     assert projection["summary"]["subtitle"] == "slot B | 0.1.0 | 16fcc7a"
 
 
+def test_member_infrastate_projection_skips_same_material_heartbeat(monkeypatch) -> None:
+    class _FakeMap:
+        def __init__(self) -> None:
+            self.data: dict[str, object] = {}
+
+        def get(self, key: str) -> object:
+            return self.data.get(key)
+
+        def set(self, _txn: object, key: str, value: object) -> None:
+            self.data[key] = value
+
+    class _FakeDoc:
+        def __init__(self) -> None:
+            self.data_map = _FakeMap()
+
+        def get_map(self, name: str) -> _FakeMap:
+            assert name == "data"
+            return self.data_map
+
+        class _Txn:
+            def __enter__(self) -> object:
+                return object()
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+        def begin_transaction(self) -> "_FakeDoc._Txn":
+            return _FakeDoc._Txn()
+
+    class _AsyncDocCtx:
+        def __init__(self, doc: _FakeDoc) -> None:
+            self.doc = doc
+
+        async def __aenter__(self) -> _FakeDoc:
+            return self.doc
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _AsyncMetaCtx:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    fake_doc = _FakeDoc()
+    opened: list[str] = []
+    monkeypatch.setattr(mod, "mutate_live_room", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(mod, "ystore_write_metadata", lambda **_kwargs: _AsyncMetaCtx())
+    monkeypatch.setattr(
+        mod,
+        "async_get_ydoc",
+        lambda webspace_id, **_kwargs: (opened.append(str(webspace_id)) or _AsyncDocCtx(fake_doc)),
+    )
+
+    manager = mod.HubLinkManager()
+    snapshot = {
+        "node_id": "member-1",
+        "node_state": "ready",
+        "build": {"runtime_build_version": "0.1.0+1.16fcc7a", "runtime_git_short_commit": "16fcc7a"},
+        "slots": {"active_slot": "B", "active_manifest": {"build_version": "0.1.0+1.16fcc7a"}},
+    }
+
+    async def _exercise() -> None:
+        await manager._publish_member_infrastate_projection(
+            "member-1",
+            node_names=["Mediapoint"],
+            snapshot={**snapshot, "captured_at": 120.0},
+            captured_at=120.0,
+        )
+        await manager._publish_member_infrastate_projection(
+            "member-1",
+            node_names=["Mediapoint"],
+            snapshot={**snapshot, "captured_at": 200.0},
+            captured_at=200.0,
+        )
+
+    asyncio.run(_exercise())
+
+    assert opened == ["desktop"]
+    assert manager._member_infrastate_projection_total == 1
+
+
 def test_update_member_snapshot_ignores_nested_capacity_timestamps(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
