@@ -4601,7 +4601,7 @@ def test_public_update_status_does_not_probe_runtime_admin_status(monkeypatch, t
     monkeypatch.setattr(
         manager,
         "status",
-        lambda: {
+        lambda **kwargs: {
             "ok": True,
             "runtime_api_ready": False,
             "runtime_state": "spawned",
@@ -4627,6 +4627,37 @@ def test_public_update_status_does_not_probe_runtime_admin_status(monkeypatch, t
     assert payload["status"]["state"] == "restarting"
     assert payload["status"]["phase"] == "shutdown"
     assert payload["runtime"]["runtime_state"] == "spawned"
+
+
+def test_public_update_status_uses_short_runtime_probe_timeout(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._proc = object()  # type: ignore[assignment]
+
+    timeouts: list[float] = []
+    monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        supervisor,
+        "_proc_details",
+        lambda *args, **kwargs: {
+            "managed_pid": 1,
+            "managed_alive": True,
+            "managed_cmdline": [],
+            "managed_executable": "",
+            "managed_cwd": "",
+        },
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_runtime_api_ready",
+        lambda *args, **kwargs: timeouts.append(float(kwargs.get("timeout") or 0.0)) or False,
+    )
+
+    payload = manager.public_update_status()
+
+    assert payload["runtime"]["runtime_state"] == "starting"
+    assert timeouts
+    assert max(timeouts) <= 0.1
 
 
 def test_public_memory_status_uses_compact_last_session(monkeypatch, tmp_path) -> None:

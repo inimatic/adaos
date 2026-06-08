@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -1491,26 +1492,29 @@ class MemberLinkClient:
             supervisor_bases = MemberLinkClient._local_supervisor_bases()
             supervisor_attempts: list[str] = []
             for supervisor_base in supervisor_bases:
+                sess = requests.Session()
                 try:
                     token = str(resolve_control_token(base_url=supervisor_base) or "dev-local-token")
                     headers = {"X-AdaOS-Token": token, "Accept": "application/json"}
-                    sess = requests.Session()
                     try:
                         sess.trust_env = False
                     except Exception:
                         pass
-                    response = sess.post(
+                    with sess.post(
                         supervisor_base.rstrip("/") + supervisor_path,
                         headers=headers,
                         json=body,
                         timeout=8.0,
-                    )
-                    response.raise_for_status()
-                    data = response.json()
+                    ) as response:
+                        response.raise_for_status()
+                        data = response.json()
                     return data if isinstance(data, dict) else {"ok": True}
                 except Exception as exc:
                     supervisor_attempts.append(f"{supervisor_base}: {type(exc).__name__}: {str(exc)[:160]}")
                     continue
+                finally:
+                    with contextlib.suppress(Exception):
+                        sess.close()
             if supervisor_bases:
                 raise RuntimeError(
                     "supervisor_update_route_unavailable: "
@@ -1523,15 +1527,15 @@ class MemberLinkClient:
         # persisted node config still knows about.
         token = str(resolve_control_token(base_url=base) or "dev-local-token")
         headers = {"X-AdaOS-Token": token, "Accept": "application/json"}
-        sess = requests.Session()
-        try:
-            sess.trust_env = False
-        except Exception:
-            pass
-        response = sess.post(base.rstrip("/") + path, headers=headers, json=body, timeout=8.0)
-        response.raise_for_status()
-        data = response.json()
-        return data if isinstance(data, dict) else {"ok": True}
+        with requests.Session() as sess:
+            try:
+                sess.trust_env = False
+            except Exception:
+                pass
+            with sess.post(base.rstrip("/") + path, headers=headers, json=body, timeout=8.0) as response:
+                response.raise_for_status()
+                data = response.json()
+            return data if isinstance(data, dict) else {"ok": True}
 
     @staticmethod
     def _supervisor_update_path(path: str) -> str:
@@ -1606,45 +1610,44 @@ class MemberLinkClient:
             if not text or text in candidates:
                 continue
             candidates.append(text)
-        sess = requests.Session()
-        try:
-            sess.trust_env = False
-        except Exception:
-            pass
-        for supervisor_base in supervisor_candidates:
-            if not supervisor_base:
-                continue
+        with requests.Session() as sess:
             try:
-                resp = sess.get(
-                    supervisor_base + "/api/supervisor/public/update-status",
-                    headers={"Accept": "application/json"},
-                    timeout=0.6,
-                )
-                if int(resp.status_code) != 200:
-                    continue
-                payload = resp.json()
-                runtime = payload.get("runtime") if isinstance(payload, dict) else {}
-                runtime_url = str((runtime or {}).get("runtime_url") or "").strip().rstrip("/")
-                if runtime_url and runtime_url not in candidates:
-                    candidates.insert(0, runtime_url)
+                sess.trust_env = False
             except Exception:
-                continue
-        for base in candidates:
-            try:
-                resp = sess.get(base + "/api/ping", headers={"Accept": "application/json"}, timeout=0.5)
-                if int(resp.status_code) != 200:
+                pass
+            for supervisor_base in supervisor_candidates:
+                if not supervisor_base:
                     continue
-                payload = resp.json()
-                runtime = payload.get("runtime") if isinstance(payload, dict) else {}
-                transition_role = str((runtime or {}).get("transition_role") or "").strip().lower()
-                if transition_role == "candidate":
+                try:
+                    with sess.get(
+                        supervisor_base + "/api/supervisor/public/update-status",
+                        headers={"Accept": "application/json"},
+                        timeout=0.6,
+                    ) as resp:
+                        if int(resp.status_code) != 200:
+                            continue
+                        payload = resp.json()
+                    runtime = payload.get("runtime") if isinstance(payload, dict) else {}
+                    runtime_url = str((runtime or {}).get("runtime_url") or "").strip().rstrip("/")
+                    if runtime_url and runtime_url not in candidates:
+                        candidates.insert(0, runtime_url)
+                except Exception:
                     continue
-                if isinstance(runtime, dict) and runtime.get("admin_mutation_allowed") is False:
-                    continue
-                if int(resp.status_code) == 200:
+            for base in candidates:
+                try:
+                    with sess.get(base + "/api/ping", headers={"Accept": "application/json"}, timeout=0.5) as resp:
+                        if int(resp.status_code) != 200:
+                            continue
+                        payload = resp.json()
+                    runtime = payload.get("runtime") if isinstance(payload, dict) else {}
+                    transition_role = str((runtime or {}).get("transition_role") or "").strip().lower()
+                    if transition_role == "candidate":
+                        continue
+                    if isinstance(runtime, dict) and runtime.get("admin_mutation_allowed") is False:
+                        continue
                     return base
-            except Exception:
-                continue
+                except Exception:
+                    continue
         return candidates[0] if candidates else "http://127.0.0.1:8777"
 
     async def _on_core_update_request(self, ws, msg: dict[str, Any]) -> None:
