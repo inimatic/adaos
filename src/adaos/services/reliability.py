@@ -5624,7 +5624,7 @@ def _connectivity_transition_state_for_browser_route(
         if probe_age_s <= max(1.0, probe_fresh_s):
             return "ready", {"active": False, "reason": None}
     if effective_state in {"flapping", "unstable"}:
-        return "reconnecting", {"active": False, "reason": effective_state}
+        return effective_state, {"active": False, "reason": effective_state}
     if transport_state == "ready":
         return "ready", {"active": False, "reason": None}
     if transport_state in {"degraded", "disconnected"}:

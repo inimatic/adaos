@@ -29,6 +29,7 @@ from adaos.services.reliability import (
     _hub_root_control_authority_snapshot,
     _hub_root_protocol_assessment,
     _hub_member_transport_evidence_snapshot,
+    _connectivity_snapshot,
     _enrich_required_upstream_link_with_sidecar,
     _request_yjs_replay_pressure_compaction,
     _state_sync_snapshot,
@@ -309,6 +310,31 @@ def test_hub_reliability_recovers_route_after_fresh_lightweight_probe(monkeypatc
     assert route_tree["details"]["incident_recovery"] == "fresh_lightweight_route_probe"
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transition_state"] == "ready"
+
+
+def test_connectivity_snapshot_keeps_unstable_browser_route_distinct_from_reconnect() -> None:
+    snapshot = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root_browser": {
+                "effective_status": "degraded",
+                "effective_state": "unstable",
+            }
+        },
+        supervisor_runtime={
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "ready",
+                "served_by": "supervisor",
+            },
+            "status": {},
+        },
+    )
+
+    route = snapshot["browser_control_route"]
+    assert route["transport_state"] == "degraded"
+    assert route["transition_state"] == "unstable"
+    assert route["planned_transition"] == {"active": False, "reason": "unstable"}
 
 
 def test_hub_reliability_snapshot_exposes_route_reset_runtime_details() -> None:

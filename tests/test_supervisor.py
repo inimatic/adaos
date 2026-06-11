@@ -4455,6 +4455,19 @@ def test_public_update_status_payload_is_browser_safe() -> None:
                 "warm_switch_allowed": True,
                 "warm_switch_reason": "warm switch admitted",
                 "slot_ports": {"A": 8777, "B": 8778},
+                "required_upstream_link": {
+                    "kind": "hub_root",
+                    "role": "hub",
+                    "owner": "supervisor",
+                    "state": "ready",
+                    "ready": True,
+                    "visible": True,
+                    "current_owner": "sidecar",
+                    "planned_owner": "sidecar",
+                    "continuity_mode": "slot_sticky",
+                    "served_by": "supervisor",
+                    "watchdog": {"log_path": "hidden"},
+                },
                 "root_promotion_required": True,
                 "bootstrap_update": {"required": True, "changed_paths": ["src/adaos/apps/supervisor.py"]},
                 "managed_cmdline": ["hidden"],
@@ -4510,6 +4523,10 @@ def test_public_update_status_payload_is_browser_safe() -> None:
     assert payload["runtime"]["candidate_runtime_api_ready"] is True
     assert payload["runtime"]["transition_mode"] == "warm_switch"
     assert payload["runtime"]["slot_ports"]["B"] == 8778
+    assert payload["runtime"]["required_upstream_link"]["kind"] == "hub_root"
+    assert payload["runtime"]["required_upstream_link"]["state"] == "ready"
+    assert payload["runtime"]["required_upstream_link"]["current_owner"] == "sidecar"
+    assert "watchdog" not in payload["runtime"]["required_upstream_link"]
     assert payload["runtime"]["root_promotion_required"] is True
     assert payload["_served_by"] == "supervisor_fallback"
     assert "managed_cmdline" not in payload["runtime"]
