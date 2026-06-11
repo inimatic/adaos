@@ -5587,7 +5587,8 @@ def _connectivity_transition_state_for_link(
     if transport_state == "disconnected":
         return "reconnecting", {"active": False, "reason": str(data.get("reason") or "").strip() or None}
     if transport_state == "degraded":
-        return "reconnecting", {"active": False, "reason": str(data.get("reason") or "").strip() or None}
+        reason = str(data.get("reason") or "").strip() or raw_state or None
+        return "degraded", {"active": False, "reason": reason}
     return "unknown", {"active": False, "reason": str(data.get("reason") or "").strip() or None}
 
 
