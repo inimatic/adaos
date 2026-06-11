@@ -114,6 +114,13 @@ Implemented for the managed hub role. Hub runtimes now enable sidecar as the
 default realtime transport unless explicitly opted out with
 `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0`.
 
+2026-06-11 target-stand status (`adaost1` / `91.98.89.76`): active slot
+`A | 0.1.235+1.fce3706`, sidecar process owns `7422`, `7423`, and `7424`;
+runtime is behind supervisor on `8777`. Reliability and supervisor status both
+report authoritative hub enablement as `role_default`, and both `/ws` and
+`/yws` route contracts report `current_owner=sidecar` with
+`handoff_ready=true`.
+
 - [x] `[must]` Add `adaos realtime serve`.
 - [x] `[must]` Add local TCP NATS relay.
 - [x] `[must]` Route hub NATS bridge through sidecar when sidecar mode is on.
@@ -133,13 +140,21 @@ default realtime transport unless explicitly opted out with
 
 Success criteria:
 
-- [ ] `[must]` Hub startup shows `nats ws transport: sidecar` on the target
-  stand.
+- [x] `[must]` Target stand shows hub NATS transport selected through the
+  sidecar: `selected_server=nats://127.0.0.1:7422`, sidecar listener pid owns
+  `7422`, and hub enablement is reported as `role_default`.
 - [ ] `[must]` Root sees one stable hub WS-NATS session through the sidecar.
-- [ ] `[must]` Hub-root sidecar NATS avoids `UnexpectedEOF` / quarantine /
-  reconnect churn during the acceptance window.
-- [ ] `[must]` No `nats keepalive pong missing` caused by hub-local WS stalls
-  during the acceptance window.
+  Current blocker: the sidecar NATS relay is still a byte relay bound to the
+  local hub NATS client lifetime. When the runtime NATS client is replaced
+  during restart, the sidecar opens a new remote session without quarantine,
+  but the root still observes session churn. Closing this requires a
+  protocol-aware relay or sidecar-owned hub-root NATS session authority, not
+  only listener routing.
+- [x] `[must]` Hub-root sidecar NATS avoids `UnexpectedEOF`, remote
+  quarantine, and connect-failure churn during the target-stand acceptance
+  window.
+- [x] `[must]` No `nats keepalive pong missing` caused by hub-local WS stalls
+  during the target-stand acceptance window.
 - [x] `[must]` Operators can see that sidecar owns transport only and can
   inspect `transport_ready`, `control_ready`, reconnect counters, and selected
   remote provenance.
@@ -159,11 +174,18 @@ open.
 - [x] `[must]` Leave HTTP/API orchestration in hub main process.
 - [x] `[must]` Expose `current_owner`, `planned_owner`, `handoff_ready`, and
   blockers for each websocket transport in diagnostics.
-- [ ] `[must]` Capture target-stand evidence that root-routed browser ingress
-  prefers sidecar listeners and reports `current_owner=sidecar` plus
-  `handoff_ready=true`.
-- [ ] `[must]` Prove an already-open browser `/ws` and `/yws` session remains
-  usable across runtime A/B switch or restart with sidecar enabled.
+- [x] `[must]` Capture target-stand evidence that the sidecar route listeners
+  are active and report `current_owner=sidecar` plus `handoff_ready=true`.
+  2026-06-11 `91.98.89.76`: supervisor and reliability snapshots agree for
+  both `/ws` and `/yws`, and `ss` shows sidecar pid owning `7423` and `7424`.
+- [x] `[must]` Prove an already-open `/ws` and `/yws` session remains usable
+  across runtime restart with sidecar enabled. 2026-06-11 synthetic
+  browser-equivalent clients held both sidecar websocket connections open for
+  45 ping/pong cycles while `POST /api/supervisor/runtime/restart` replaced
+  the runtime process.
+- [ ] `[must]` Prove the same already-open `/ws` and `/yws` survival through a
+  full A/B slot promotion with real root-routed browser ingress, not only a
+  local sidecar-listener restart test.
 - [x] `[must]` Keep the sidecar browser-facing websocket open while the runtime
   upstream reconnects, replaying bounded browser-to-runtime setup messages
   after reconnect.
@@ -183,14 +205,20 @@ open.
   diagnostics when `listener_ready=true` and `handoff_ready=true`.
 - [ ] `[should]` Add soak coverage for sidecar listener restart, runtime event
   loop lag, root reconnect, and fallback path behavior.
+- [ ] `[should]` Treat normal websocket `Close(1000)` relay shutdown as an
+  expected session close in diagnostics instead of emitting traceback noise;
+  keep exceptional close codes visible as errors.
 
 Success criteria:
 
-- [ ] `[must]` Browser realtime traffic no longer depends on the hub
-  main-process socket loop for the accepted transport-only path.
-- [ ] `[must]` Already-open `/ws` and `/yws` sidecar connections survive a
-  supervisor runtime restart or A/B promotion without closing only because the
-  runtime upstream disappeared.
+- [x] `[must]` Browser realtime traffic no longer depends on the hub
+  main-process socket loop for the accepted local sidecar-listener
+  transport-only path.
+- [x] `[must]` Already-open `/ws` and `/yws` sidecar connections survive a
+  supervisor runtime restart without closing only because the runtime upstream
+  disappeared.
+- [ ] `[must]` Already-open `/ws` and `/yws` sidecar connections survive a full
+  A/B promotion with real root-routed browser ingress.
 - [x] `[must]` Route-proxy failures do not tear down control-plane logic.
 - [ ] `[should]` Operators can distinguish accepted sidecar path, runtime
   fallback path, and root relay path in one reliability snapshot.
