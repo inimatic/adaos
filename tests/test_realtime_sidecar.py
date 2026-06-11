@@ -78,12 +78,20 @@ class _FakeTransport:
         return None
 
 
-def test_realtime_sidecar_enabled_defaults_to_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+class _FakeProcess:
+    def __init__(self, cmdline: list[str]) -> None:
+        self._cmdline = cmdline
+
+    def cmdline(self) -> list[str]:
+        return list(self._cmdline)
+
+
+def test_realtime_sidecar_enabled_defaults_to_hub_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ADAOS_REALTIME_ENABLE", raising=False)
     monkeypatch.delenv("HUB_REALTIME_ENABLE", raising=False)
 
-    assert realtime_sidecar_enabled(role="hub", os_name="nt") is False
-    assert realtime_sidecar_enabled(role="hub", os_name="posix") is False
+    assert realtime_sidecar_enabled(role="hub", os_name="nt") is True
+    assert realtime_sidecar_enabled(role="hub", os_name="posix") is True
     assert realtime_sidecar_enabled(role="member", os_name="nt") is False
     assert realtime_sidecar_enabled(role="root", os_name="nt") is False
 
@@ -125,23 +133,35 @@ def test_realtime_sidecar_enablement_policy_reports_default_and_env_override(mon
     policy = realtime_sidecar_enablement_policy(role="hub")
     assert policy == {
         "role": "hub",
-        "enabled": False,
-        "default_enabled": False,
+        "enabled": True,
+        "default_enabled": True,
         "explicit": False,
         "source": "role_default",
         "env_var": None,
         "env_value": None,
-        "reason": "hub runtimes keep sidecar disabled by default until explicitly enabled",
+        "reason": "hub runtimes use sidecar as the default realtime transport",
     }
 
     monkeypatch.setenv("HUB_REALTIME_ENABLE", "0")
     policy = realtime_sidecar_enablement_policy(role="hub")
     assert policy["enabled"] is False
-    assert policy["default_enabled"] is False
+    assert policy["default_enabled"] is True
     assert policy["explicit"] is True
     assert policy["source"] == "env_override"
     assert policy["env_var"] == "HUB_REALTIME_ENABLE"
     assert policy["env_value"] == "0"
+
+
+def test_realtime_sidecar_process_detection_accepts_module_launch() -> None:
+    assert realtime_sidecar_mod._process_looks_like_adaos_realtime(
+        _FakeProcess(["python", "-m", "adaos.services.realtime_sidecar"])
+    )
+    assert realtime_sidecar_mod._process_looks_like_adaos_realtime(
+        _FakeProcess(["adaos", "realtime", "serve", "--port", "7422"])
+    )
+    assert not realtime_sidecar_mod._process_looks_like_adaos_realtime(
+        _FakeProcess(["python", "-m", "adaos.apps.api.server"])
+    )
 
 
 def test_realtime_sidecar_local_url_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -391,12 +411,22 @@ def test_realtime_sidecar_yws_route_proxy_accepts_room_path(
     asyncio.run(_run())
 
 
+@pytest.mark.parametrize(
+    ("kind", "path"),
+    [
+        ("ws", "/ws?token=dev"),
+        ("yws", "/yws/default?token=dev"),
+    ],
+)
 def test_realtime_sidecar_route_proxy_keeps_browser_socket_across_upstream_restart(
     monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    path: str,
 ) -> None:
     runtime_port = _free_port()
     ws_proxy_port = _free_port()
     yws_proxy_port = _free_port()
+    proxy_port = ws_proxy_port if kind == "ws" else yws_proxy_port
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", str(runtime_port))
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(ws_proxy_port))
@@ -427,7 +457,7 @@ def test_realtime_sidecar_route_proxy_keeps_browser_socket_across_upstream_resta
         server = RealtimeSidecarServer(host="127.0.0.1", port=0)
         await server.start()
         try:
-            async with websockets.connect(f"ws://127.0.0.1:{ws_proxy_port}/ws?token=dev", max_size=None) as client:
+            async with websockets.connect(f"ws://127.0.0.1:{proxy_port}{path}", max_size=None) as client:
                 await client.send("subscribe:node.status")
                 assert await asyncio.wait_for(client.recv(), timeout=1.0) == "first:subscribe:node.status"
                 await asyncio.wait_for(first_seen.wait(), timeout=1.0)
@@ -446,14 +476,24 @@ def test_realtime_sidecar_route_proxy_keeps_browser_socket_across_upstream_resta
     asyncio.run(_run())
 
 
+@pytest.mark.parametrize(
+    ("kind", "path"),
+    [
+        ("ws", "/ws?token=dev"),
+        ("yws", "/yws/default?token=dev"),
+    ],
+)
 def test_realtime_sidecar_route_proxy_rediscovers_active_runtime_port(
     monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    path: str,
 ) -> None:
     old_runtime_port = _free_port()
     new_runtime_port = _free_port()
     current_runtime_port = old_runtime_port
     ws_proxy_port = _free_port()
     yws_proxy_port = _free_port()
+    proxy_port = ws_proxy_port if kind == "ws" else yws_proxy_port
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", str(old_runtime_port))
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(ws_proxy_port))
@@ -489,7 +529,7 @@ def test_realtime_sidecar_route_proxy_rediscovers_active_runtime_port(
         new_upstream = None
         await server.start()
         try:
-            async with websockets.connect(f"ws://127.0.0.1:{ws_proxy_port}/ws?token=dev", max_size=None) as client:
+            async with websockets.connect(f"ws://127.0.0.1:{proxy_port}{path}", max_size=None) as client:
                 await client.send("subscribe")
                 assert await asyncio.wait_for(client.recv(), timeout=1.0) == "old:subscribe"
                 old_upstream.close()

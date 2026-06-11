@@ -4440,6 +4440,8 @@ def sidecar_runtime_snapshot(
         enablement = dict(record.get("enablement_policy") or enablement or {})
     if isinstance(record, dict) and isinstance(record.get("route_tunnel_contract"), dict):
         route_tunnel_contract = dict(record.get("route_tunnel_contract") or route_tunnel_contract or {})
+    if isinstance(route_tunnel_contract, dict) and route_tunnel_contract:
+        process_snapshot["route_tunnel_contract"] = route_tunnel_contract
     ws_route_contract = _sidecar_route_tunnel_entry(route_tunnel_contract, "ws")
     yws_route_contract = _sidecar_route_tunnel_entry(route_tunnel_contract, "yws")
     route_ready = _sidecar_route_tunnel_state(enabled=enabled, entry=ws_route_contract)

@@ -57,7 +57,7 @@ a blocker for the next `[must]` gate unless the gate explicitly depends on it.
 | 0. Architecture freeze | Complete: channel semantics, authority, protocol, transport ownership docs. | None. | None. | None. |
 | 1. Observability | Complete for observability scope; readiness, incident, and provenance surfaces exist. | Open: keep routed/local diagnostics aligned during rollout. | None. | None. |
 | 2. Hub-root hardening | Complete for current `hub_root.*` inventory; Class A flows and route budgets are represented. | Open: broaden incident separation and policy switching evidence. | None. | None. |
-| 3. Sidecar transport boundary | Partial: code supports hub-root sidecar transport and local `/ws`/`/yws` proxy listeners, but default enablement and stand acceptance are not reconciled. | Open: rollout/soak and operator evidence. | None. | Open: full Yjs session authority and media continuity. |
+| 3. Sidecar transport boundary | Partial: code supports hub-root sidecar transport and local `/ws`/`/yws` proxy listeners, and hub role now enables sidecar by default; target-stand acceptance remains open. | Open: rollout/soak and operator evidence. | None. | Open: full Yjs session authority and media continuity. |
 | 3.5. Supervisor continuity | In progress: supervisor owns process/update authority and candidate runtime flow; warm-switch hardening remains. | Open: browser/root signaling polish and recovery soak. | None. | None. |
 | 4. Semantic channels | Complete for current browser/hub-member semantic ownership scope. | Open: live-session validation under churn. | None. | None. |
 | 5. Yjs as SyncChannel | Complete for current sync-channel scope. | Open: operational validation across A/B and routed browsers. | None. | Open: sidecar-owned Yjs room/session runtime. |
@@ -79,8 +79,8 @@ transport-only `/ws` and `/yws` handoff as ready.
 
 ### Repository checkpoint: current tree
 
-- Code and tests currently keep realtime sidecar disabled by default unless
-  `ADAOS_REALTIME_ENABLE=1` or `HUB_REALTIME_ENABLE=1` is set.
+- Code and tests now keep realtime sidecar enabled by default for hub runtimes;
+  `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` is the explicit opt-out.
 - The sidecar implementation can start local route proxy listeners for `/ws`
   and `/yws` and bootstrap route selection can prefer those listeners for
   matching paths.
@@ -94,9 +94,9 @@ transport-only `/ws` and `/yws` handoff as ready.
 - The route tunnel contract now clears stale blocker strings when `/ws` or
   `/yws` handoff is ready, and the sidecar proxy accepts browser-compatible
   `/yws/{room}` paths in addition to `/yws?ws=<room>`.
-- This repository state should be described as **implemented but not accepted
-  as default rollout behavior** until code, tests, runtime config, and live
-  reliability evidence agree.
+- This repository state should be described as **implemented with hub default
+  enabled, but not stand-accepted** until live reliability evidence confirms the
+  same behavior on the target stand.
 
 ### Stand checkpoint: 2026-06-07, `adaost1` / `91.98.89.76`
 
@@ -174,7 +174,7 @@ not as completed A/B survival evidence.
 - node API, CLI, canonical control-plane reliability projection, and browser/page runtime now share one explicit `event_model_phase0_communication` checkpoint for the current Event Model Phase 0 communication status
 - those same reliability surfaces now also share a bounded `supervisor_runtime` snapshot, so browser-safe transition mode, candidate runtime visibility, and warm-switch evidence are carried through one canonical runtime payload instead of being reconstructed separately per surface
 - those same reliability/checkpoint surfaces now also carry routed-browser active-runtime selection for root-routed `/ws`, so supervisor-aware browser continuity is explicit in node API, CLI, canonical control-plane projection, and browser diagnostics instead of living only inside bootstrap route-base selection
-- those same reliability/browser surfaces now also carry one explicit sidecar enablement policy (`role_default` vs explicit env override), so hub runtime sidecar adoption remains observable while the reliable default stays opt-in
+- those same reliability/browser surfaces now also carry one explicit sidecar enablement policy (`role_default` vs explicit env override), so hub runtime sidecar adoption remains observable while the hub role defaults to sidecar transport
 - `adaos-realtime` now boots dedicated local websocket listeners for `/ws` and `/yws`, root-routed browser ingress can prefer them for matching paths, and runtime diagnostics can report both transport handoffs as `ready` when sidecar is enabled and listeners are ready
 - supervisor-owned sidecar boot now has a narrow module entrypoint, and
   supervisor sidecar status/restart responses are locally derived from process
@@ -184,8 +184,8 @@ not as completed A/B survival evidence.
 - runtime now exposes `hub_root_transport_strategy` with current transport, candidate list, recent attempts, reconnect/failure history, and active hypothesis parameters
 - CLI and Infra State now surface the current hub-root transport strategy instead of only the last readiness bit
 - hub runtimes expose an explicit sidecar enablement policy; current code keeps
-  sidecar disabled by default unless explicitly enabled, so sidecar adoption is
-  still a rollout/config gate rather than accepted default behavior
+  sidecar enabled by default for the hub role and preserves explicit opt-out,
+  so acceptance is now a live rollout/soak gate rather than a local config gate
 - detailed channel trace is no longer a default console behavior; summary/incident output remains visible while deep console trace is explicit opt-in
 - channel stability is now assessed from incidents and transport churn, not only from the last connected snapshot
 - Yjs runtime diagnostics now expose explicit ownership boundaries for `ui.current_scenario`, effective `ui/data/registry` branches, compatibility caches, and `yws` transport/session lifecycle
@@ -375,8 +375,8 @@ Runtime now also exposes `hardening_coverage`, and for the current `hub_root.*` 
 
 ### Status
 
-Implemented for the current transport-only sidecar scope, but not accepted as
-default rollout behavior in the current repository state.
+Implemented for the current transport-only sidecar scope with hub default
+enablement in code/tests; target-stand rollout acceptance is still open.
 The sidecar now exposes a protocol-facing runtime surface with explicit ownership boundary, transport readiness, control readiness, reconnect counters, quarantine/supersede history, and transport provenance.
 Sidecar lifecycle is also independently observable and restartable through the local control API and CLI, and managed deployments now place that lifecycle under `adaos-supervisor` instead of the runtime lifespan.
 This implementation is intentionally transport-only: when enabled, the sidecar
@@ -402,7 +402,7 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   for the current transport-only scope.
 - [x] `[must]` Make bootstrap route-base selection able to prefer sidecar local
   websocket listeners for matching `/ws` and `/yws` paths.
-- [ ] `[must]` Reconcile sidecar default enablement across code, tests,
+- [x] `[must]` Reconcile sidecar default enablement across code, tests,
   deployment config, and docs.
 - [x] `[must]` Make sidecar launch independent from unrelated CLI imports and
   root-checkout drift; managed sidecar startup must use validated sidecar code

@@ -187,7 +187,7 @@ def _safe_realtime_relative_base() -> Path:
 
 def realtime_sidecar_enablement_policy(*, role: str | None = None) -> dict[str, Any]:
     role_norm = _default_realtime_sidecar_role(role)
-    default_enabled = False
+    default_enabled = role_norm == "hub"
     raw = os.getenv("ADAOS_REALTIME_ENABLE")
     env_var = "ADAOS_REALTIME_ENABLE"
     if raw is None:
@@ -209,13 +209,13 @@ def realtime_sidecar_enablement_policy(*, role: str | None = None) -> dict[str, 
     if role_norm == "hub":
         return {
             "role": role_norm,
-            "enabled": False,
-            "default_enabled": False,
+            "enabled": True,
+            "default_enabled": True,
             "explicit": False,
             "source": "role_default",
             "env_var": None,
             "env_value": None,
-            "reason": "hub runtimes keep sidecar disabled by default until explicitly enabled",
+            "reason": "hub runtimes use sidecar as the default realtime transport",
         }
     if role_norm:
         return {
@@ -657,6 +657,8 @@ def _process_looks_like_adaos_realtime(proc: Any) -> bool:
     except Exception:
         return False
     joined = " ".join(cmdline)
+    if "adaos.services.realtime_sidecar" in joined:
+        return True
     return "adaos" in joined and "realtime" in joined and "serve" in joined
 
 

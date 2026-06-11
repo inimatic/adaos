@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import sys
 import threading
 from types import SimpleNamespace
@@ -982,6 +983,95 @@ def test_sidecar_runtime_snapshot_marks_websocket_handoffs_ready_after_cutover(
     ]
 
 
+def test_sidecar_runtime_snapshot_keeps_process_route_contract_in_sync_with_diag(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    diag_path = tmp_path / "realtime_sidecar.jsonl"
+    ready_contract = {
+        "current_support": "ready",
+        "lifecycle_manager": "supervisor",
+        "ownership_boundary": "transport_only",
+        "ws": {
+            "current_owner": "sidecar",
+            "planned_owner": "sidecar",
+            "delegation_mode": "local_ws_proxy",
+            "listener_ready": True,
+            "handoff_ready": True,
+            "blockers": [],
+        },
+        "yws": {
+            "current_owner": "sidecar",
+            "planned_owner": "sidecar",
+            "delegation_mode": "local_ws_proxy",
+            "listener_ready": True,
+            "handoff_ready": True,
+            "blockers": [],
+        },
+    }
+    stale_contract = {
+        "current_support": "planned",
+        "lifecycle_manager": "supervisor",
+        "ownership_boundary": "transport_only",
+        "ws": {
+            "current_owner": "runtime",
+            "planned_owner": "sidecar",
+            "delegation_mode": "local_ws_proxy",
+            "listener_ready": False,
+            "handoff_ready": False,
+            "blockers": ["sidecar local websocket proxy listener is not running yet"],
+        },
+        "yws": {
+            "current_owner": "runtime",
+            "planned_owner": "sidecar",
+            "delegation_mode": "local_ws_proxy",
+            "listener_ready": False,
+            "handoff_ready": False,
+            "blockers": ["sidecar local websocket proxy listener is not running yet"],
+        },
+    }
+    diag_path.write_text(
+        json.dumps(
+            {
+                "ts": 100.0,
+                "remote_connected_ago_s": 0.5,
+                "active_session": True,
+                "route_tunnel_contract": ready_contract,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("adaos.services.reliability.time.time", lambda: 101.0)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.realtime_sidecar",
+        SimpleNamespace(
+            realtime_sidecar_diag_path=lambda: diag_path,
+            realtime_sidecar_enabled=lambda **kwargs: True,
+            realtime_sidecar_listener_snapshot=lambda proc=None, **kwargs: {
+                "listener_running": True,
+                "listener_pid": 88,
+                "route_tunnel_contract": stale_contract,
+            },
+            realtime_sidecar_local_url=lambda: "nats://127.0.0.1:7422",
+            realtime_sidecar_route_tunnel_contract=lambda **kwargs: stale_contract,
+        ),
+    )
+
+    snapshot = sidecar_runtime_snapshot(
+        role="hub",
+        readiness_tree={},
+        hub_root_protocol={},
+        transport_strategy={},
+        media_runtime={},
+    )
+
+    assert snapshot["route_tunnel_contract"]["ws"]["current_owner"] == "sidecar"
+    assert snapshot["process"]["route_tunnel_contract"]["ws"]["current_owner"] == "sidecar"
+    assert snapshot["process"]["route_tunnel_contract"]["yws"]["handoff_ready"] is True
+
+
 def test_yjs_sync_runtime_snapshot_exposes_transport_ownership(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
@@ -1956,7 +2046,7 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
                 "sidecar_runtime": {
                     "enablement": {
                         "enabled": True,
-                        "default_enabled": False,
+                        "default_enabled": True,
                         "explicit": True,
                         "source": "env_override",
                         "env_var": "ADAOS_REALTIME_ENABLE",
@@ -2137,7 +2227,7 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["source"] == "api.node.reliability.summary"
     assert payload["hubRootHardening"]["coveredFlows"] == 6
     assert payload["sidecarEnablement"]["enabled"] is True
-    assert payload["sidecarEnablement"]["defaultEnabled"] is False
+    assert payload["sidecarEnablement"]["defaultEnabled"] is True
     assert payload["sidecarEnablement"]["source"] == "env_override"
     assert payload["sidecarContinuity"]["currentSupport"] == "ready"
     assert payload["browserYwsHandoffReady"] is True
