@@ -179,6 +179,10 @@ Current client behavior:
 * `replace` means each incoming payload replaces the local receiver state
 * `append` means the client appends into a local collection, with optional
   `dedupeBy` and `maxItems`
+* replace-mode receivers may opt into structural patches by declaring
+  `patches`, `itemPath`, and `idField`; a producer can then publish an
+  `adaos.stream.patch.v1` envelope for one keyed item while full receiver
+  snapshots remain the reconnect and missed-patch recovery path
 * the receiver state is local to the current browser session and is not stored
   back into Yjs
 * `nodeId` scopes the receiver to one node-owned producer when the same
@@ -215,6 +219,28 @@ router also emits node-qualified topics:
 * `webio.stream.nodes.<node_id>.<receiver>`
 
 The browser runtime then reduces those events into the receiver's local state.
+
+For patchable replace-mode receivers, producers publish the patch envelope as
+the normal stream `data` value:
+
+```python
+stream_publish(
+    "infrastate.skills",
+    {
+        "schema": "adaos.stream.patch.v1",
+        "op": "upsert",
+        "path": "/items",
+        "key": "demo_skill",
+        "idField": "name",
+        "item": {"name": "demo_skill", "pending": False},
+        "rev": 42,
+    },
+    _meta={"webspace_id": "desktop"},
+)
+```
+
+The client applies `upsert`, `replace`, and `remove` to the selected local
+collection. A later full snapshot can still replace the whole receiver value.
 
 For node-aware member delivery, the browser and router may also use
 node-qualified topics:
