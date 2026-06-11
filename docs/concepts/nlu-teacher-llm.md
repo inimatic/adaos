@@ -1,6 +1,9 @@
 # NLU Teacher (LLM) MVP
 
 This document describes the minimal teacher-in-the-loop implementation for AdaOS NLU.
+Use [nlu-evolution-roadmap.md](./nlu-evolution-roadmap.md) as the delivery
+sequence: every Teacher implementation slice should close a replayable
+use-case gate before expanding the authoring surface.
 
 ## Target Architecture Update
 
@@ -52,6 +55,11 @@ The canonical architectural anchors, reference flows, and milestone gates live
 in [nlu-roadmap.md](./nlu-roadmap.md#architectural-detail-anchors). This
 document keeps the MVP/runtime contract details and should not duplicate that
 checklist.
+
+The canonical use-case gates live in
+[nlu-evolution-roadmap.md](./nlu-evolution-roadmap.md). This Teacher document
+answers "how the current loop works"; the evolution roadmap answers "which
+loop should be made useful and verifiable next".
 
 ## Priority Vocabulary
 
