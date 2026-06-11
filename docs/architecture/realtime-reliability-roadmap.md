@@ -410,23 +410,34 @@ Move transport ownership where it reduces blast radius, without moving protocol 
 - [x] `[must]` Make sidecar launch independent from unrelated CLI imports and
   root-checkout drift; managed sidecar startup must use validated sidecar code
   or a narrow entrypoint that does not import the full CLI surface.
-- [ ] `[must]` Capture target-stand acceptance showing sidecar enabled and
+- [x] `[must]` Capture target-stand acceptance showing sidecar enabled and
   `/ws` plus `/yws` diagnostics reporting `current_owner=sidecar` and
-  `handoff_ready=true`.
+  `handoff_ready=true`. 2026-06-11 on `91.98.89.76`, active slot
+  `A | 0.1.235+1.fce3706`: reliability and supervisor snapshots agree on
+  `role_default` enablement, route readiness, and sidecar ownership for both
+  route tunnels.
 - [x] `[must]` Remove stale route-tunnel blocker text from ready diagnostics so
   `handoff_ready=true` snapshots do not still claim listeners are missing or
   runtime owns the route.
-- [ ] `[must]` Stabilize hub-root sidecar NATS relay on the target stand; the
-  2026-06-07 run connected through `127.0.0.1:7422` but repeatedly hit
-  `UnexpectedEOF`, quarantine, and reconnect churn.
+- [ ] `[must]` Stabilize hub-root sidecar NATS relay on the target stand. The
+  2026-06-11 run no longer showed `UnexpectedEOF`, remote quarantine,
+  keepalive-pong failures, or connect-failure churn, but it still showed remote
+  session churn when the runtime NATS client was replaced. The remaining
+  blocker is architectural: the current sidecar NATS path is a byte relay tied
+  to the local runtime client lifetime. A stable root-visible hub session needs
+  a protocol-aware relay or sidecar-owned hub-root NATS session authority.
 - [x] `[must]` Add route-proxy runtime-reconnect support so an already-open
   browser `/ws` or `/yws` socket is not closed only because the current runtime
   upstream disappears.
 - [x] `[must]` Make route-proxy reconnect discover the active supervisor
   runtime URL instead of pinning sidecar to the original slot port.
-- [ ] `[must]` Add an A/B acceptance scenario with an already-open browser
-  `/ws` and `/yws` session that remains usable while the runtime switches
-  slots or restarts.
+- [x] `[must]` Add a runtime-restart acceptance scenario with already-open
+  `/ws` and `/yws` sidecar sessions that remain usable while the runtime
+  restarts. 2026-06-11 on `91.98.89.76`, both sockets survived
+  `POST /api/supervisor/runtime/restart` with 45 ping/pong cycles and the
+  sidecar pid stayed stable.
+- [ ] `[must]` Add the same acceptance scenario for a full A/B slot promotion
+  with real root-routed browser ingress.
 - [x] `[must]` Preserve `/yws/{room}` browser compatibility through sidecar
   route proxy, not only `/yws?ws=<room>`.
 - [x] `[must]` Keep sidecar status/control surfaces responsive while the main
@@ -447,8 +458,11 @@ Move transport ownership where it reduces blast radius, without moving protocol 
 - [x] `[must]` Transport failures are isolated from hub business logic for
   hub-root sidecar transport.
 - [x] `[must]` Sidecar does not become a hidden protocol authority.
-- [ ] `[must]` Target stand proves transport-only `/ws` and `/yws` handoff
-  without relying on runtime fallback as the success path.
+- [x] `[must]` Target stand proves transport-only `/ws` and `/yws` handoff
+  without relying on runtime fallback as the success path for local sidecar
+  listeners.
+- [ ] `[must]` Target stand proves the same handoff through real root-routed
+  browser ingress.
 - [ ] `[should]` Operator can see whether a browser path is served by sidecar
   listener, runtime fallback, root relay, or direct local runtime.
 
