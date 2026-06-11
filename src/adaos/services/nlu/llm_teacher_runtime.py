@@ -32,7 +32,7 @@ from adaos.services.reliability import (
     set_integration_readiness,
 )
 from adaos.services.scenarios import loader as scenarios_loader
-from adaos.services.root.client import RootHttpClient
+from adaos.services.root.client import RootHttpClient, RootHttpError
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
@@ -72,6 +72,12 @@ _LLM_TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_LLM_TEACHE
 _MODEL = os.getenv("ADAOS_NLU_LLM_MODEL") or os.getenv("OPENAI_RESPONSES_MODEL") or "gpt-4o-mini"
 _MAX_TOKENS = int(os.getenv("ADAOS_NLU_LLM_MAX_TOKENS", "500") or "500")
 _TIMEOUT_S = float(os.getenv("ADAOS_NLU_LLM_TIMEOUT_S", "20") or "20")
+_ROOT_LLM_BASE_URL = (
+    os.getenv("ADAOS_ROOT_LLM_BASE_URL")
+    or os.getenv("ADAOS_NLU_TEACHER_LLM_ROOT_BASE_URL")
+    or ""
+).strip()
+_ROOT_LLM_FALLBACK_BASE_URLS = _env_csv(os.getenv("ADAOS_ROOT_LLM_FALLBACK_BASE_URLS"))
 _MCP_EVIDENCE_TIMEOUT_S = float(os.getenv("ADAOS_NLU_MCP_EVIDENCE_TIMEOUT_S", "8") or "8")
 _MCP_EVIDENCE_CACHE_TTL_S = float(os.getenv("ADAOS_NLU_MCP_EVIDENCE_CACHE_TTL_S", "15") or "15")
 _MCP_EVIDENCE_CACHE_MAX_ENTRIES = max(1, int(os.getenv("ADAOS_NLU_MCP_EVIDENCE_CACHE_MAX_ENTRIES", "64") or "64"))
@@ -2510,6 +2516,64 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
     return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
 
 
+def _normalize_root_base_url(value: str | None) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def _root_llm_base_urls(primary: RootHttpClient) -> list[str]:
+    urls: list[str] = []
+
+    def add(value: str | None) -> None:
+        url = _normalize_root_base_url(value)
+        if url and url not in urls:
+            urls.append(url)
+
+    add(_ROOT_LLM_BASE_URL)
+    add(getattr(primary, "base_url", None))
+    for item in _ROOT_LLM_FALLBACK_BASE_URLS:
+        add(item)
+
+    primary_url = _normalize_root_base_url(getattr(primary, "base_url", None))
+    if (
+        primary_url
+        and primary_url != "https://api.inimatic.com"
+        and primary_url.endswith(".api.inimatic.com")
+    ):
+        # A zone root can be the right MCP/control endpoint while direct OpenAI
+        # egress from that host is unavailable. Keep MCP on the zone root and
+        # retry only the LLM proxy through the global root if root policy allows it.
+        add("https://api.inimatic.com")
+
+    return urls or ["https://api.inimatic.com"]
+
+
+def _root_http_error_code(exc: RootHttpError) -> str:
+    if exc.error_code:
+        return str(exc.error_code)
+    payload = exc.payload
+    if isinstance(payload, Mapping):
+        error = payload.get("error")
+        if isinstance(error, Mapping) and isinstance(error.get("code"), str):
+            return str(error.get("code") or "")
+        detail = payload.get("detail")
+        if isinstance(detail, Mapping) and isinstance(detail.get("code"), str):
+            return str(detail.get("code") or "")
+        for key in ("code", "error"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value
+    return ""
+
+
+def _should_retry_llm_proxy(exc: Exception) -> bool:
+    if not isinstance(exc, RootHttpError):
+        return False
+    code = _root_http_error_code(exc)
+    if code in {"openai_api_key_missing", "unsupported_country_region_territory"}:
+        return True
+    return "unsupported_country_region_territory" in str(exc) or "openai_api_key_missing" in str(exc)
+
+
 async def _llm_call(
     messages: list[dict[str, str]],
     *,
@@ -2519,7 +2583,7 @@ async def _llm_call(
     max_tool_calls: int | None = None,
 ) -> dict[str, Any]:
     ctx = get_ctx()
-    http = RootHttpClient.from_settings(ctx.settings)
+    primary_http = RootHttpClient.from_settings(ctx.settings)
     body = {"model": _MODEL, "messages": messages, "max_tokens": _MAX_TOKENS, "temperature": 0.2}
     if tools:
         body["tools"] = list(tools)
@@ -2527,7 +2591,11 @@ async def _llm_call(
         if max_tool_calls is not None and int(max_tool_calls) > 0:
             body["max_tool_calls"] = int(max_tool_calls)
     headers: dict[str, str] = {}
-    subnet_id = str(getattr(getattr(ctx, "config", None), "subnet_id", "") or "").strip()
+    subnet_id = str(
+        getattr(getattr(ctx, "config", None), "subnet_id", "")
+        or getattr(getattr(ctx, "settings", None), "subnet_id", "")
+        or ""
+    ).strip()
     node_id = str(getattr(getattr(ctx, "config", None), "node_id", "") or "").strip()
     if subnet_id:
         headers["X-AdaOS-Subnet-Id"] = subnet_id
@@ -2536,15 +2604,60 @@ async def _llm_call(
     req_id = str(request_id or "").strip()
     if req_id:
         body["request_id"] = req_id
+    attempts: list[dict[str, Any]] = []
+    base_urls = _root_llm_base_urls(primary_http)
     try:
-        result = await asyncio.to_thread(
-            http.request,
-            "POST",
-            "/v1/llm/response",
-            json=body,
-            headers=headers or None,
-            timeout=_TIMEOUT_S,
-        )
+        result: dict[str, Any] | None = None
+        primary_base_url = _normalize_root_base_url(getattr(primary_http, "base_url", None))
+        for index, base_url in enumerate(base_urls):
+            http = (
+                primary_http
+                if (primary_base_url and primary_base_url == base_url) or (not primary_base_url and index == 0)
+                else RootHttpClient(
+                    base_url=base_url,
+                    verify=getattr(primary_http, "verify", True),
+                    cert=getattr(primary_http, "cert", None),
+                )
+            )
+            try:
+                raw_result = await asyncio.to_thread(
+                    http.request,
+                    "POST",
+                    "/v1/llm/response",
+                    json=body,
+                    headers=headers or None,
+                    timeout=_TIMEOUT_S,
+                )
+                result = raw_result if isinstance(raw_result, dict) else {"result": raw_result}
+                protocol = result.setdefault("_protocol", {})
+                if isinstance(protocol, dict):
+                    protocol["llm_proxy"] = {
+                        "base_url": base_url,
+                        "fallback": index > 0,
+                        "attempts": list(attempts),
+                    }
+                break
+            except Exception as attempt_exc:
+                attempts.append(
+                    {
+                        "base_url": base_url,
+                        "error": (
+                            _root_http_error_code(attempt_exc)
+                            if isinstance(attempt_exc, RootHttpError)
+                            else type(attempt_exc).__name__
+                        ),
+                    }
+                )
+                if index + 1 < len(base_urls) and _should_retry_llm_proxy(attempt_exc):
+                    _log.warning(
+                        "llm proxy attempt failed; trying fallback base_url=%s error=%s",
+                        base_url,
+                        attempt_exc,
+                    )
+                    continue
+                raise
+        if result is None:
+            raise RuntimeError("root LLM proxy returned no result")
     except Exception as exc:
         try:
             observe_hub_root_integration_outbox(
@@ -2589,6 +2702,12 @@ async def _llm_call(
             details["request_id"] = req_id
         if cache_state:
             details["cache"] = cache_state
+        llm_proxy = protocol.get("llm_proxy") if isinstance(protocol.get("llm_proxy"), Mapping) else None
+        if isinstance(llm_proxy, Mapping):
+            details["llm_proxy"] = {
+                "base_url": llm_proxy.get("base_url"),
+                "fallback": bool(llm_proxy.get("fallback")),
+            }
         mcp_protocol = protocol.get("mcp") if isinstance(protocol.get("mcp"), Mapping) else None
         if isinstance(mcp_protocol, Mapping):
             details["mcp"] = {

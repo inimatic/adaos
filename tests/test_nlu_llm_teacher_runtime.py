@@ -227,6 +227,95 @@ async def test_llm_teacher_forwards_mcp_tools_to_root_llm_proxy(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_llm_call_falls_back_when_zone_proxy_cannot_reach_openai(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    monkeypatch.setattr(llm, "get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "_ROOT_LLM_BASE_URL", "")
+    monkeypatch.setattr(llm, "_ROOT_LLM_FALLBACK_BASE_URLS", ("https://api.inimatic.com",))
+
+    calls: list[dict] = []
+
+    class _FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+            self.default_headers = dict(default_headers or {})
+
+        @classmethod
+        def from_settings(cls, settings):
+            return cls(settings.api_base)
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if self.base_url == "https://ru.api.inimatic.com":
+                raise llm.RootHttpError(
+                    "unsupported country",
+                    status_code=403,
+                    payload={"error": {"code": "unsupported_country_region_territory"}},
+                )
+            return {"output": [{"content": [{"type": "output_text", "text": "{\"decision\":\"ignore\"}"}]}]}
+
+    monkeypatch.setattr(llm, "RootHttpClient", _FakeRootHttpClient)
+
+    result = await llm._llm_call([{"role": "user", "content": "Return JSON."}], request_id="req.fallback")
+
+    assert [call["base_url"] for call in calls] == ["https://ru.api.inimatic.com", "https://api.inimatic.com"]
+    assert calls[0]["kwargs"]["headers"]["X-AdaOS-Subnet-Id"] == "sn_test"
+    assert result["_protocol"]["llm_proxy"]["fallback"] is True
+    assert result["_protocol"]["llm_proxy"]["attempts"] == [
+        {"base_url": "https://ru.api.inimatic.com", "error": "unsupported_country_region_territory"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_llm_call_does_not_fall_back_on_subnet_policy_denial(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    monkeypatch.setattr(llm, "get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "_ROOT_LLM_BASE_URL", "")
+    monkeypatch.setattr(llm, "_ROOT_LLM_FALLBACK_BASE_URLS", ("https://ru.api.inimatic.com",))
+
+    calls: list[str] = []
+
+    class _FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+            self.default_headers = dict(default_headers or {})
+
+        @classmethod
+        def from_settings(cls, settings):
+            return cls(settings.api_base)
+
+        def request(self, method, path, **kwargs):
+            calls.append(self.base_url)
+            raise llm.RootHttpError(
+                "subnet_not_allowed",
+                status_code=403,
+                error_code="subnet_not_allowed",
+                payload={"ok": False, "error": "subnet_not_allowed"},
+            )
+
+    monkeypatch.setattr(llm, "RootHttpClient", _FakeRootHttpClient)
+
+    with pytest.raises(llm.RootHttpError):
+        await llm._llm_call([{"role": "user", "content": "Return JSON."}], request_id="req.denied")
+
+    assert calls == ["https://api.inimatic.com"]
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_uses_root_policy_when_env_unset(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
