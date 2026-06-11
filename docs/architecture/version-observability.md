@@ -14,7 +14,6 @@ Use these names consistently:
 | Served | Version advertised as available for rollout or download. This is a CI/release output, not live process state. | CI/CD for each subsystem |
 | Target | Version a policy or update attempt wants a node or endpoint to run. | Supervisor, Root policy, rollout controller |
 | Used | Version reported by a live runtime, browser session, endpoint agent, or active slot. | Runtime process or endpoint |
-| Registry | Version selected in a local registry for an artifact without its own runtime. | AdaOS registry and workspace sync |
 
 `served` and `used` can legitimately differ. The UI should show this as
 `ok`, `drift`, or `unknown`, not overwrite one value with the other.
@@ -66,7 +65,7 @@ explicit `--component`, `--version`, `--build-version`, `--commit`, and
 | Hosted client | client `package.json` | `hosted_client` in aggregate manifest and `https://inimatic.com/version.json` | Browser session `client_build_version` handshake | Browsers modal |
 | ReDevice Agent | Android `gradle.properties` | `redevice_agent` in aggregate manifest or endpoint policy target | `endpoint_manifest.agent_version`, `diagnostic_report.agent_version`, or agent build payload | ReDevice List and ReDevice Settings |
 | Skills | workspace `skill.yaml` | catalog JSON in the skill registry | active skill runtime slot/version | Infra State skills inventory |
-| Scenarios | workspace `scenario.json` | catalog JSON in the scenario registry | no separate runtime today; use active registry only | Infra State scenario registry |
+| Scenarios | workspace `scenario.json` | catalog JSON in the scenario registry | local materialized scenario version; SQL registry follows it automatically | Infra State scenarios inventory |
 
 ## UI Rules
 
@@ -74,8 +73,10 @@ Infra State and related modals must label version columns by plane:
 
 - Skills may show `Catalog`, `Workspace`, and `Runtime` because a skill can have
   an installed/active runtime.
-- Scenarios must show `Catalog`, `Local source`, and `Registry`. They do not
-  have a separate installed runtime slot today.
+- Scenarios must show `Catalog` and `Runtime`. They do not have a separate
+  runtime process today; `Runtime` is the local materialized scenario version
+  available on the node. The SQL scenario registry is an internal sync cache and
+  must be reconciled to that local state before display or subnet publication.
 - AdaOS core launched from a dev workspace must show `dev | <version> |
   <commit>`. Historical files under `state/core_slots` are diagnostics in that
   mode.
