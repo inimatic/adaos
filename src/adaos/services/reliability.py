@@ -4437,7 +4437,11 @@ def sidecar_runtime_snapshot(
     if not route_tunnel_contract and isinstance(process_snapshot.get("route_tunnel_contract"), dict):
         route_tunnel_contract = dict(process_snapshot.get("route_tunnel_contract") or {})
     if isinstance(record, dict) and isinstance(record.get("enablement_policy"), dict):
-        enablement = dict(record.get("enablement_policy") or enablement or {})
+        record_enablement = dict(record.get("enablement_policy") or {})
+        enablement_source = str(enablement.get("source") or "").strip().lower()
+        enablement_role = str(enablement.get("role") or "").strip().lower()
+        if not enablement or enablement_source in {"legacy_runtime", "unavailable"} or not enablement_role:
+            enablement = dict(record_enablement or enablement or {})
     if isinstance(record, dict) and isinstance(record.get("route_tunnel_contract"), dict):
         route_tunnel_contract = dict(record.get("route_tunnel_contract") or route_tunnel_contract or {})
     if isinstance(route_tunnel_contract, dict) and route_tunnel_contract:

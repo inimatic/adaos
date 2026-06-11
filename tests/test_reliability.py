@@ -1072,6 +1072,73 @@ def test_sidecar_runtime_snapshot_keeps_process_route_contract_in_sync_with_diag
     assert snapshot["process"]["route_tunnel_contract"]["yws"]["handoff_ready"] is True
 
 
+def test_sidecar_runtime_snapshot_keeps_runtime_enablement_policy_authoritative(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    diag_path = tmp_path / "realtime_sidecar.jsonl"
+    diag_path.write_text(
+        json.dumps(
+            {
+                "ts": 100.0,
+                "remote_connected_ago_s": 0.5,
+                "active_session": True,
+                "enablement_policy": {
+                    "role": None,
+                    "enabled": True,
+                    "default_enabled": False,
+                    "explicit": True,
+                    "source": "env_override",
+                    "env_var": "ADAOS_REALTIME_ENABLE",
+                    "env_value": "1",
+                    "reason": "ADAOS_REALTIME_ENABLE=1",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("adaos.services.reliability.time.time", lambda: 101.0)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.realtime_sidecar",
+        SimpleNamespace(
+            realtime_sidecar_diag_path=lambda: diag_path,
+            realtime_sidecar_enabled=lambda **kwargs: True,
+            realtime_sidecar_enablement_policy=lambda **kwargs: {
+                "role": "hub",
+                "enabled": True,
+                "default_enabled": True,
+                "explicit": False,
+                "source": "role_default",
+                "env_var": None,
+                "env_value": None,
+                "reason": "hub runtimes use sidecar as the default realtime transport",
+            },
+            realtime_sidecar_listener_snapshot=lambda proc=None, **kwargs: {
+                "listener_running": True,
+                "listener_pid": 88,
+            },
+            realtime_sidecar_local_url=lambda: "nats://127.0.0.1:7422",
+            realtime_sidecar_route_tunnel_contract=lambda **kwargs: {},
+        ),
+    )
+
+    snapshot = sidecar_runtime_snapshot(
+        role="hub",
+        readiness_tree={},
+        hub_root_protocol={},
+        transport_strategy={},
+        media_runtime={},
+    )
+
+    assert snapshot["enablement"]["role"] == "hub"
+    assert snapshot["enablement"]["default_enabled"] is True
+    assert snapshot["enablement"]["explicit"] is False
+    assert snapshot["enablement"]["source"] == "role_default"
+    assert snapshot["last_diag"]["enablement_policy"]["source"] == "env_override"
+
+
 def test_yjs_sync_runtime_snapshot_exposes_transport_ownership(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
