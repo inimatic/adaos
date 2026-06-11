@@ -177,7 +177,7 @@ class Settings:
         # читаем поля из node.yaml (могут отсутствовать)
         subnet_id = node_cfg.get("subnet_id")
         root_cfg = node_cfg.get("root") or {}
-        api_base = root_cfg.get("api_base") or "https://api.inimatic.com"
+        api_base = root_cfg.get("base_url") or root_cfg.get("api_base") or "https://api.inimatic.com"
         app_base = root_cfg.get("app_base") or "https://inimatic.com"
         owner_cfg = root_cfg.get("owner") or {}
         owner_id = owner_cfg.get("owner_id") or None

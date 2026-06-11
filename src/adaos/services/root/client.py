@@ -66,11 +66,20 @@ class RootHttpClient:
         Factory that extracts base_url, mTLS paths and composes default headers.
 
         Expected settings fields (optional):
-          - settings.api_base or settings.root.api_base
+          - settings.root_settings.base_url, settings.root.base_url, settings.root.api_base, or settings.api_base
           - settings.pki.ca, settings.pki.cert, settings.pki.key
         """
         # base_url resolution
-        base_url = getattr(settings, "api_base", None) or getattr(getattr(settings, "root", None), "api_base", None) or "https://api.inimatic.com"
+        root_settings = getattr(settings, "root_settings", None)
+        root = getattr(settings, "root", None)
+        base_url = (
+            getattr(root_settings, "base_url", None)
+            or getattr(root, "base_url", None)
+            or getattr(root, "api_base", None)
+            or getattr(settings, "root_base_url", None)
+            or getattr(settings, "api_base", None)
+            or "https://api.inimatic.com"
+        )
 
         # TLS verification (CA) & client cert
         ca_path = getattr(getattr(settings, "pki", None), "ca", None)
