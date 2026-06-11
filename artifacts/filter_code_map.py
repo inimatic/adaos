@@ -34,7 +34,7 @@ def match_any(path: str, globs: list[str]) -> bool:
 
 def main():
     if not SRC_MAP.exists():
-        print("code_map.yaml not found. Run repo_skim.py first.")
+        print("code_map.yaml not found. Run tools/repo_skim.py first.")
         sys.exit(2)
 
     data = load_yaml(SRC_MAP) or []

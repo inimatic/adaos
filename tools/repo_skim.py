@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# python repo_skim.py  --mode lite
+# python tools/repo_skim.py  --mode lite
 # Compact repo skimmer → artifacts/code_map.yaml
 # Focus: ONLY src/adaos/**; YAML output; TS endpoints/types/interfaces/exports
 # Omits empty keys, ignores empty __init__.py, sorted by path.
