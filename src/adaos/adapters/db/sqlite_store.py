@@ -11,6 +11,14 @@ from adaos.ports.paths import PathProvider
 _DB_FILE = "adaos.db"
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc, tb))
+        finally:
+            self.close()
+
+
 def _sqlite_timeout_s() -> float:
     try:
         timeout_s = float(os.getenv("ADAOS_SQLITE_TIMEOUT_S", "5.0") or "5.0")
@@ -36,7 +44,7 @@ class SQLite(SQL):
         self._db_path: Final[Path] = Path(paths.state_dir()) / _DB_FILE
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # ленивое создание файла
-        with sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s()) as con:
+        with sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s(), factory=_ClosingConnection) as con:
             _configure_connection(con, foreign_keys=False)
             try:
                 con.execute("PRAGMA journal_mode=WAL")
@@ -45,7 +53,7 @@ class SQLite(SQL):
                     raise
 
     def connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s())
+        con = sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s(), factory=_ClosingConnection)
         _configure_connection(con, foreign_keys=True)
         return con
 
