@@ -193,7 +193,10 @@ nav:
   - Skills: skills.md
   - Scenarios: scenarios.md
   - DevPortal: devportal.md
-  - Roadmap: roadmap.md
+  - Roadmap:
+      - Overview: roadmap.md
+      - LLM Skill Creation: llm-skill-creation-roadmap.md
+  - Changelog: changelog.md
   - Concepts:
       - Codebase: concepts/codeflow.md
       - Web Client: concepts/web-client.md
