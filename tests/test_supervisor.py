@@ -3534,6 +3534,16 @@ def test_supervisor_sidecar_status_does_not_query_runtime_reliability(monkeypatc
                 "remote_connected_ago_s": 0.2,
                 "session_id": "test-session",
                 "remote_url": "ws://root.test/ws",
+                "enablement_policy": {
+                    "role": None,
+                    "enabled": True,
+                    "default_enabled": False,
+                    "explicit": True,
+                    "source": "env_override",
+                    "env_var": "ADAOS_REALTIME_ENABLE",
+                    "env_value": "1",
+                    "reason": "ADAOS_REALTIME_ENABLE=1",
+                },
                 "route_tunnel_contract": route_tunnel_contract,
             }
         )
@@ -3552,7 +3562,12 @@ def test_supervisor_sidecar_status_does_not_query_runtime_reliability(monkeypatc
             "enablement_policy": {
                 "role": "hub",
                 "enabled": True,
-                "reason": "test",
+                "default_enabled": True,
+                "explicit": False,
+                "source": "role_default",
+                "env_var": None,
+                "env_value": None,
+                "reason": "hub runtimes use sidecar as the default realtime transport",
             },
             "route_tunnel_contract": {
                 "lifecycle_manager": "supervisor",
@@ -3586,6 +3601,11 @@ def test_supervisor_sidecar_status_does_not_query_runtime_reliability(monkeypatc
     assert payload["runtime"]["transport_provenance"]["session_id"] == "test-session"
     assert payload["runtime"]["route_tunnel_contract"]["ws"]["blockers"] == []
     assert payload["runtime"]["route_tunnel_contract"]["yws"]["blockers"] == []
+    assert payload["runtime"]["enablement"]["source"] == "role_default"
+    assert payload["runtime"]["enablement"]["default_enabled"] is True
+    assert payload["process"]["enablement_policy"]["source"] == "role_default"
+    assert payload["process"]["route_tunnel_contract"]["ws"]["current_owner"] == "sidecar"
+    assert payload["process"]["route_tunnel_contract"]["yws"]["handoff_ready"] is True
 
 
 def test_runtime_state_payload_surfaces_root_promotion_requirement(monkeypatch, tmp_path) -> None:
