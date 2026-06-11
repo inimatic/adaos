@@ -337,6 +337,41 @@ def test_connectivity_snapshot_keeps_unstable_browser_route_distinct_from_reconn
     assert route["planned_transition"] == {"active": False, "reason": "unstable"}
 
 
+def test_connectivity_snapshot_uses_channel_overview_when_supervisor_link_temporarily_missing() -> None:
+    snapshot = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+            "hub_root_browser": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+        },
+        supervisor_runtime={
+            "available": False,
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "unknown",
+                "blockers": [
+                    "supervisor.public_update_status.unavailable",
+                    "supervisor.hub_root.watchdog.hidden",
+                ],
+            },
+            "status": {},
+        },
+    )
+
+    required = snapshot["required_upstream_link"]
+    assert required["kind"] == "hub_root"
+    assert required["transport_state"] == "ready"
+    assert required["transition_state"] == "ready"
+    assert required["served_by"] == "runtime_channel_overview"
+    assert required["blockers"] == []
+
+
 def test_hub_reliability_snapshot_exposes_route_reset_runtime_details() -> None:
     _reset_state()
     observe_hub_root_route_runtime(

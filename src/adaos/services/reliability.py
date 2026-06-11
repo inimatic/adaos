@@ -5634,6 +5634,41 @@ def _connectivity_transition_state_for_browser_route(
     return "unknown", {"active": False, "reason": effective_state or None}
 
 
+def _required_upstream_link_fallback_from_channel_overview(
+    overview: dict[str, Any],
+) -> dict[str, Any]:
+    hub_root = overview.get("hub_root") if isinstance(overview.get("hub_root"), dict) else {}
+    hub_root_browser = (
+        overview.get("hub_root_browser")
+        if isinstance(overview.get("hub_root_browser"), dict)
+        else {}
+    )
+    root_state = _map_connectivity_transport_state(hub_root.get("effective_status"))
+    route_state = _map_connectivity_transport_state(hub_root_browser.get("effective_status"))
+    if root_state == "unknown" and route_state == "unknown":
+        return {}
+    if root_state == "disconnected" or route_state == "disconnected":
+        state = "down"
+    elif root_state == "degraded" or route_state == "degraded":
+        state = "degraded"
+    elif root_state == "ready" or route_state == "ready":
+        state = "ready"
+    elif root_state == "not_applicable" and route_state == "not_applicable":
+        state = "not_applicable"
+    else:
+        return {}
+    reason = str(hub_root.get("effective_state") or hub_root_browser.get("effective_state") or "").strip()
+    return {
+        "kind": "hub_root",
+        "state": state,
+        "reason": reason or "derived from runtime channel overview while supervisor link status is unavailable",
+        "ready": state == "ready",
+        "visible": True,
+        "served_by": "runtime_channel_overview",
+        "blockers": [],
+    }
+
+
 def _connectivity_snapshot(
     *,
     node_id: str | None,
@@ -5648,6 +5683,10 @@ def _connectivity_snapshot(
         if isinstance(supervisor.get("required_upstream_link"), dict)
         else {}
     )
+    if _map_connectivity_transport_state(required_link.get("state")) == "unknown":
+        fallback_link = _required_upstream_link_fallback_from_channel_overview(overview)
+        if fallback_link:
+            required_link = fallback_link
     browser_route = (
         overview.get("hub_root_browser")
         if isinstance(overview.get("hub_root_browser"), dict)
