@@ -827,11 +827,30 @@
         "kind": { "type": "string", "enum": ["y", "stream"] },
         "path": {
           "type": "string",
-          "description": "Yjs path for kind='y'."
+          "description": "Yjs path for kind='y' or JSON pointer/dot path into the stream value for kind='stream'."
         },
         "receiver": {
           "$ref": "#/$defs/id",
           "description": "Stream receiver for kind='stream'."
+        },
+        "key": {
+          "type": "string",
+          "description": "Expected item key for kind='stream' when path selects a collection. Supports runtime tokens such as $event.name."
+        },
+        "idField": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Item field used with key for kind='stream'. Defaults to name."
+        },
+        "id_field": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Legacy spelling accepted for existing _observe-style manifests."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["change", "patch", "snapshot"],
+          "description": "Observation mode hint. Patch waits for a structural stream patch or the resulting collection value."
         },
         "scope": {
           "type": "string",
@@ -1038,6 +1057,20 @@
           "type": "string",
           "minLength": 1,
           "description": "Optional item field used to replace an existing item instead of appending a duplicate."
+        },
+        "idField": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Collection item identity field used by structural stream patches. Defaults to dedupeBy or name."
+        },
+        "itemPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Collection path updated by structural stream patches. JSON pointer paths such as /items are supported."
+        },
+        "patches": {
+          "type": "boolean",
+          "description": "Whether the receiver may publish adaos.stream.patch.v1 envelopes in addition to full snapshots."
         },
         "maxItems": {
           "type": "integer",
