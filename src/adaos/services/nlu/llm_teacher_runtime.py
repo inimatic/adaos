@@ -2574,6 +2574,30 @@ def _should_retry_llm_proxy(exc: Exception) -> bool:
     return "unsupported_country_region_territory" in str(exc) or "openai_api_key_missing" in str(exc)
 
 
+_ROOT_LLM_POLICY_DENIAL_CODES = {
+    "llm_disabled",
+    "llm_denyall",
+    "model_not_allowed",
+    "subnet_blocked",
+    "subnet_frozen",
+    "subnet_identity_required",
+    "subnet_not_allowed",
+    "subnet_retired",
+}
+
+
+def _llm_deferred_reason(exc: Exception) -> str:
+    if isinstance(exc, RootHttpError) and _root_http_error_code(exc) in _ROOT_LLM_POLICY_DENIAL_CODES:
+        return "root_llm_policy_denied"
+    return "root_llm_unavailable"
+
+
+def _llm_deferred_error(exc: Exception) -> str:
+    code = _root_http_error_code(exc) if isinstance(exc, RootHttpError) else ""
+    text = str(exc)
+    return f"{code}: {text}" if code and code not in text else text
+
+
 async def _llm_call(
     messages: list[dict[str, str]],
     *,
@@ -3235,13 +3259,15 @@ async def _handle_teacher_request(evt: Any) -> None:
             res = await _llm_call(messages, **llm_kwargs)
         except Exception as exc:
             _log.warning("llm teacher call failed: %s", exc)
+            deferred_reason = _llm_deferred_reason(exc)
+            deferred_error = _llm_deferred_error(exc)
             try:
                 await _patch_llm_log(
                     webspace_id,
                     log_id=log_id,
                     patch={
                         "status": "error",
-                        "error": str(exc),
+                        "error": deferred_error,
                         "duration_s": max(0.0, time.time() - started_at),
                     },
                 )
@@ -3251,8 +3277,8 @@ async def _handle_teacher_request(evt: Any) -> None:
                 webspace_id,
                 request_id=request_id,
                 text=text,
-                reason="root_llm_unavailable",
-                error=str(exc),
+                reason=deferred_reason,
+                error=deferred_error,
                 log_id=log_id,
                 meta=req_meta,
             )
