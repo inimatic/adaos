@@ -1087,14 +1087,13 @@ class HubPeer:
             offer = RTCSessionDescription(sdp=sdp, type=type)
             await self.pc.setRemoteDescription(offer)
             answer = await self.pc.createAnswer()
-            self._local_desc_task = asyncio.ensure_future(
-                self._set_local_description(answer)
-            )
-        # Run setLocalDescription in background — avoids blocking on STUN
-        # resolution (2-5 s).  ICE candidates trickle via the on_ice callback.
+            await self.pc.setLocalDescription(answer)
+            local_description = getattr(self.pc, "localDescription", None)
+            answer_sdp = str(getattr(local_description, "sdp", "") or answer.sdp)
+            answer_type = str(getattr(local_description, "type", "") or answer.type)
         return {
-            "sdp": answer.sdp,
-            "type": answer.type,
+            "sdp": answer_sdp,
+            "type": answer_type,
         }
 
     async def _set_local_description(self, answer: RTCSessionDescription) -> None:

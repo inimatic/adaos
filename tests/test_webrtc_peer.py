@@ -14,12 +14,32 @@ def _load_peer_module(monkeypatch):
         def __init__(self, configuration=None):
             self.configuration = configuration
             self.connectionState = "new"
+            self.remoteDescription = None
+            self.localDescription = None
 
         def on(self, _event):
             def decorator(fn):
                 return fn
 
             return decorator
+
+        async def setRemoteDescription(self, description):
+            self.remoteDescription = description
+
+        async def createAnswer(self):
+            return DummyRTCSessionDescription(sdp="draft-answer-sdp", type="answer")
+
+        async def setLocalDescription(self, description):
+            self.localDescription = DummyRTCSessionDescription(
+                sdp="final-local-answer-sdp",
+                type=description.type,
+            )
+
+        async def addIceCandidate(self, candidate):
+            self.lastIceCandidate = candidate
+
+        async def close(self):
+            self.connectionState = "closed"
 
     class DummyRTCSessionDescription:
         def __init__(self, sdp: str, type: str):
@@ -156,6 +176,24 @@ def test_hub_peer_is_not_reusable_with_live_channels(monkeypatch) -> None:
 
     try:
         assert peer.is_reusable_for_offer() is False
+    finally:
+        asyncio.run(peer.close())
+
+
+def test_hub_peer_handle_offer_returns_final_local_description(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:
+        return None
+
+    peer = peer_mod.HubPeer("browser-answer", "desktop", send_ice_cb)
+
+    try:
+        answer = asyncio.run(peer.handle_offer("offer-sdp", "offer"))
+
+        assert answer == {"sdp": "final-local-answer-sdp", "type": "answer"}
+        assert peer.pc.remoteDescription.sdp == "offer-sdp"
+        assert peer.pc.localDescription.sdp == "final-local-answer-sdp"
     finally:
         asyncio.run(peer.close())
 
