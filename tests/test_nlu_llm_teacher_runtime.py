@@ -181,6 +181,61 @@ def test_llm_teacher_prepares_openai_mcp_tool_from_env_bearer(monkeypatch):
     llm._clear_llm_mcp_descriptor_cache()
 
 
+def test_llm_teacher_default_openai_mcp_tools_are_cached_readonly():
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    assert "nlu_authoring.get_context" in llm._DEFAULT_LLM_MCP_ALLOWED_TOOLS
+    assert "desktop.registry.lookup" in llm._DEFAULT_LLM_MCP_ALLOWED_TOOLS
+    assert "nlu_authoring.list_training_targets" in llm._DEFAULT_LLM_MCP_ALLOWED_TOOLS
+    assert "nlu_authoring.list_templates" in llm._DEFAULT_LLM_MCP_ALLOWED_TOOLS
+    assert "nlu_authoring.check_phrase" not in llm._DEFAULT_LLM_MCP_ALLOWED_TOOLS
+    assert "desktop.preview_action" not in llm._DEFAULT_LLM_MCP_ALLOWED_TOOLS
+    assert llm._LLM_MCP_MAX_TOOL_CALLS <= 3
+
+
+def test_llm_teacher_compacts_prompt_context_when_openai_mcp_is_ready():
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    context = {
+        "current_scenario": "web_desktop",
+        "catalog": {
+            "apps": [
+                {"id": f"app_{idx}", "title": f"App {idx}", "schema": {"raw": "x" * 10_000}}
+                for idx in range(80)
+            ],
+            "widgets": [
+                {"id": f"widget_{idx}", "title": f"Widget {idx}", "data": "x" * 10_000}
+                for idx in range(80)
+            ],
+        },
+        "skill_nlu": {"demo_skill": {"interpreter/intents.yml": "x" * 20_000}},
+        "skills_manifest": [
+            {"id": f"skill_{idx}", "title": f"Skill {idx}", "private": "x" * 1000}
+            for idx in range(50)
+        ],
+        "host_actions": [{"id": f"action_{idx}"} for idx in range(120)],
+        "root_mcp": {
+            "nlu_training_targets": {"targets": [{"id": f"target_{idx}"} for idx in range(90)]},
+            "nlu_templates": {"templates": [{"id": f"template_{idx}"} for idx in range(90)]},
+        },
+    }
+
+    compact = llm._compact_context_for_llm_prompt(context, mcp_tools_ready=True)
+
+    assert compact["skill_nlu"]["_omitted"] is True
+    assert compact["skill_nlu"]["skills"] == ["demo_skill"]
+    assert len(compact["skills_manifest"]) == 20
+    assert "private" not in compact["skills_manifest"][0]
+    assert len(compact["host_actions"]) == 40
+    assert len(compact["catalog"]["apps"]) == 25
+    assert "schema" not in compact["catalog"]["apps"][0]
+    assert compact["root_mcp"]["_omitted"] is True
+    assert compact["root_mcp"]["reason"] == "openai_mcp_tools_available"
+    assert "nlu_training_targets" in compact["root_mcp"]["available_inline_planes"]
+    assert llm._json_size_bytes(compact) < 50_000
+    assert llm._json_size_bytes(compact) < llm._json_size_bytes(context) / 10
+
+
 @pytest.mark.anyio
 async def test_llm_teacher_forwards_mcp_tools_to_root_llm_proxy(monkeypatch):
     from adaos.services.nlu import llm_teacher_runtime as llm
@@ -212,7 +267,7 @@ async def test_llm_teacher_forwards_mcp_tools_to_root_llm_proxy(monkeypatch):
         [{"role": "user", "content": "Return JSON."}],
         request_id="req.mcp.forward",
         tools=[tool],
-        tool_choice="auto",
+        tool_choice="required",
         max_tool_calls=3,
     )
 
@@ -222,8 +277,47 @@ async def test_llm_teacher_forwards_mcp_tools_to_root_llm_proxy(monkeypatch):
     body = captured["kwargs"]["json"]  # type: ignore[index]
     assert body["request_id"] == "req.mcp.forward"
     assert body["tools"] == [tool]
-    assert body["tool_choice"] == "auto"
+    assert body["tool_choice"] == "required"
     assert body["max_tool_calls"] == 3
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_falls_back_to_auto_tool_choice_when_required_is_unsupported(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    calls: list[dict[str, object]] = []
+
+    class _FakeRootHttp:
+        def request(self, method, path, **kwargs):
+            body = dict(kwargs.get("json") or {})
+            calls.append({"method": method, "path": path, "body": body})
+            if body.get("tool_choice") == "required":
+                raise llm.RootHttpError(
+                    "unsupported tool_choice",
+                    status_code=400,
+                    error_code="invalid_request",
+                )
+            return {
+                "output": [{"content": [{"type": "output_text", "text": "{\"decision\":\"ignore\"}"}]}],
+                "_protocol": {"mcp": {"used_mcp": True, "item_count": 2}},
+            }
+
+    fake_http = _FakeRootHttp()
+    monkeypatch.setattr(llm.RootHttpClient, "from_settings", classmethod(lambda cls, settings: fake_http))
+
+    result = await llm._llm_call(
+        [{"role": "user", "content": "Return JSON."}],
+        request_id="req.mcp.choice-fallback",
+        tools=[{"type": "mcp", "server_label": "adaos_nlu", "server_url": "https://mcp.example.test"}],
+        tool_choice="required",
+        max_tool_calls=1,
+    )
+
+    assert result["_protocol"]["mcp"]["used_mcp"] is True
+    assert [call["body"]["tool_choice"] for call in calls] == ["required", "auto"]  # type: ignore[index]
+    attempts = result["_protocol"]["llm_proxy"]["attempts"]
+    assert attempts[0]["tool_choice"] == "required"
+    assert attempts[0]["fallback_tool_choice"] == "auto"
 
 
 @pytest.mark.anyio
@@ -270,6 +364,48 @@ async def test_llm_call_falls_back_when_zone_proxy_cannot_reach_openai(monkeypat
     assert result["_protocol"]["llm_proxy"]["fallback"] is True
     assert result["_protocol"]["llm_proxy"]["attempts"] == [
         {"base_url": "https://ru.api.inimatic.com", "error": "unsupported_country_region_territory"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_llm_call_falls_back_when_zone_proxy_times_out(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+
+    fake_ctx = SimpleNamespace(
+        settings=SimpleNamespace(api_base="https://ru.api.inimatic.com"),
+        config=SimpleNamespace(subnet_id="sn_test", node_id="node_test"),
+    )
+    monkeypatch.setattr(llm, "get_ctx", lambda: fake_ctx)
+    monkeypatch.setattr(llm, "_ROOT_LLM_BASE_URL", "")
+    monkeypatch.setattr(llm, "_ROOT_LLM_FALLBACK_BASE_URLS", ("https://api.inimatic.com",))
+
+    calls: list[dict] = []
+
+    class _FakeRootHttpClient:
+        def __init__(self, base_url, verify=True, cert=None, default_headers=None):
+            self.base_url = base_url
+            self.verify = verify
+            self.cert = cert
+            self.default_headers = dict(default_headers or {})
+
+        @classmethod
+        def from_settings(cls, settings):
+            return cls(settings.api_base)
+
+        def request(self, method, path, **kwargs):
+            calls.append({"base_url": self.base_url, "method": method, "path": path, "kwargs": kwargs})
+            if self.base_url == "https://ru.api.inimatic.com":
+                raise llm.RootHttpError("gateway timeout", status_code=504, payload="<html>504</html>")
+            return {"output": [{"content": [{"type": "output_text", "text": "{\"decision\":\"ignore\"}"}]}]}
+
+    monkeypatch.setattr(llm, "RootHttpClient", _FakeRootHttpClient)
+
+    result = await llm._llm_call([{"role": "user", "content": "Return JSON."}], request_id="req.timeout")
+
+    assert [call["base_url"] for call in calls] == ["https://ru.api.inimatic.com", "https://api.inimatic.com"]
+    assert result["_protocol"]["llm_proxy"]["fallback"] is True
+    assert result["_protocol"]["llm_proxy"]["attempts"] == [
+        {"base_url": "https://ru.api.inimatic.com", "error": "http_504"}
     ]
 
 
@@ -1518,6 +1654,179 @@ async def test_llm_teacher_quarantines_overbroad_regex_as_example_strategy(monke
     assert candidate["training_strategy"]["source"] == "adaos.policy"
     assert candidate["training_strategy"]["primary"] == "rasa_example"
     assert candidate["strategy_candidate"]["regex_rejection"]["reason"] == "overbroad_regex"
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_rejects_install_toggle_for_read_only_inventory_request(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-readonly-inventory-toggle"
+    scenario_id = "test_llm_readonly_inventory_toggle"
+    request_text = (
+        "\u041f\u043e\u043a\u0430\u0436\u0438 "
+        "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044b\u0435 "
+        "\u043d\u0430\u0432\u044b\u043a\u0438"
+    )
+    intent_name = "desktop.toggle_app_install"
+
+    scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
+    scenario_root.mkdir(parents=True, exist_ok=True)
+    (scenario_root / "scenario.json").write_text(
+        json.dumps(
+            {"id": scenario_id, "version": "0.0.1", "nlu": {"intents": {intent_name: {"actions": []}}}},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "propose_regex_rule",
+                                    "intent": intent_name,
+                                    "regex_rule": {
+                                        "intent": intent_name,
+                                        "pattern": (
+                                            "\\b\\u043f\\u043e\\u043a\\u0430\\u0436\\u0438\\s+"
+                                            "\\u0443\\u0441\\u0442\\u0430\\u043d\\u043e\\u0432"
+                                            "\\u043b\\u0435\\u043d\\u043d\\u044b\\u0435\\s+"
+                                            "\\u043d\\u0430\\u0432\\u044b\\u043a\\u0438\\b"
+                                        ),
+                                    },
+                                    "target": {"type": "scenario", "id": scenario_id},
+                                    "examples": [request_text],
+                                    "slots": {},
+                                    "training_strategy": "regex",
+                                    "confidence": 0.86,
+                                    "notes": "Incorrectly mapped inventory listing to install toggle.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.readonly.inventory",
+                "request_id": "req.readonly.inventory",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["kind"] == "descriptor_fix"
+    assert "regex_rule" not in candidate
+    assert candidate["training_strategy"]["primary"] == "descriptor_fix"
+    assert candidate["strategy_candidate"]["regex_rejection"]["reason"] == (
+        "read_only_inventory_request_as_install_toggle"
+    )
+    assert candidate["rejected_regex_rule"]["regex_rule"]["intent"] == intent_name
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_turns_ignored_inventory_query_into_development_task(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-inventory-ignore-fallback"
+    request_text = (
+        "\u041f\u043e\u043a\u0430\u0436\u0438 "
+        "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044b\u0435 "
+        "\u043d\u0430\u0432\u044b\u043a\u0438"
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "events": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "ignore",
+                                    "intent": None,
+                                    "regex_rule": None,
+                                    "examples": [],
+                                    "slots": {},
+                                    "confidence": 0.0,
+                                    "notes": "No available capability.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.inventory.ignore",
+                "request_id": "req.inventory.ignore",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["kind"] == "development_task"
+    assert candidate["training_strategy"]["primary"] == "development_task"
+    assert candidate["training_strategy"]["source"] == "adaos.policy"
+    assert candidate["builder_task"]["artifact_hints"]["missing_surface"] == "voice_capability/action_surface"
+    assert "read-only inventory" in candidate["notes"]
 
 
 @pytest.mark.anyio

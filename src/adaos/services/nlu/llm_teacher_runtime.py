@@ -11,7 +11,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, MutableMapping, Optional
 
 import y_py as Y
 import yaml
@@ -71,7 +71,7 @@ _TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_TEACHER"))
 _LLM_TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_LLM_TEACHER"))
 _MODEL = os.getenv("ADAOS_NLU_LLM_MODEL") or os.getenv("OPENAI_RESPONSES_MODEL") or "gpt-4o-mini"
 _MAX_TOKENS = int(os.getenv("ADAOS_NLU_LLM_MAX_TOKENS", "500") or "500")
-_TIMEOUT_S = float(os.getenv("ADAOS_NLU_LLM_TIMEOUT_S", "20") or "20")
+_TIMEOUT_S = float(os.getenv("ADAOS_NLU_LLM_TIMEOUT_S", "90") or "90")
 _ROOT_LLM_BASE_URL = (
     os.getenv("ADAOS_ROOT_LLM_BASE_URL")
     or os.getenv("ADAOS_NLU_TEACHER_LLM_ROOT_BASE_URL")
@@ -164,6 +164,7 @@ _NON_REGEX_TRAINING_STRATEGIES = {
 _MCP_DESCRIPTOR_TOOL_IDS = {
     "nlu_authoring.get_context",
     "desktop.registry.lookup",
+    "nlu_authoring.get_recent_failures",
     "nlu_authoring.list_training_targets",
     "nlu_authoring.list_templates",
     "sdk.describe_surface",
@@ -171,15 +172,13 @@ _MCP_DESCRIPTOR_TOOL_IDS = {
 _MCP_DESCRIPTOR_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _MCP_DESCRIPTOR_CACHE_LOCK = threading.RLock()
 _DEFAULT_LLM_MCP_ALLOWED_TOOLS = (
-    "hub.get_subnet_info",
     "nlu_authoring.get_context",
     "desktop.registry.lookup",
-    "nlu_authoring.check_phrase",
     "nlu_authoring.get_dialog_context",
+    "nlu_authoring.get_recent_failures",
     "nlu_authoring.list_training_targets",
     "nlu_authoring.list_templates",
-    "sdk.describe_surface",
-    "desktop.preview_action",
+    "hub.get_subnet_info",
 )
 _LLM_MCP_MODE = (os.getenv("ADAOS_NLU_LLM_MCP_MODE") or "hybrid").strip().lower()
 _LLM_MCP_ALLOWED_TOOLS = _env_csv(os.getenv("ADAOS_NLU_LLM_MCP_ALLOWED_TOOLS")) or _DEFAULT_LLM_MCP_ALLOWED_TOOLS
@@ -189,7 +188,8 @@ _LLM_MCP_FAILURE_CACHE_TTL_S = max(0.0, float(os.getenv("ADAOS_NLU_LLM_MCP_FAILU
 _LLM_MCP_REQUIRE_APPROVAL = (os.getenv("ADAOS_NLU_LLM_MCP_REQUIRE_APPROVAL") or "never").strip() or "never"
 _LLM_MCP_SERVER_LABEL = (os.getenv("ADAOS_NLU_LLM_MCP_SERVER_LABEL") or "adaos_nlu").strip() or "adaos_nlu"
 _LLM_MCP_AUDIENCE = (os.getenv("ADAOS_NLU_LLM_MCP_AUDIENCE") or "openai-nlu-teacher").strip() or "openai-nlu-teacher"
-_LLM_MCP_MAX_TOOL_CALLS = max(0, int(os.getenv("ADAOS_NLU_LLM_MCP_MAX_TOOL_CALLS", "8") or "8"))
+_LLM_MCP_MAX_TOOL_CALLS = max(0, int(os.getenv("ADAOS_NLU_LLM_MCP_MAX_TOOL_CALLS", "3") or "3"))
+_LLM_MCP_TOOL_CHOICE = (os.getenv("ADAOS_NLU_LLM_MCP_TOOL_CHOICE") or "required").strip() or "required"
 _LLM_MCP_DESCRIPTOR_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _LLM_MCP_DESCRIPTOR_CACHE_LOCK = threading.RLock()
 
@@ -945,10 +945,87 @@ _OPEN_MODAL_REPAIR_INTENTS = {
     "desktop.open_scenario",
     "desktop.switch_scenario",
 }
+_READ_ONLY_INVENTORY_VERB_MARKERS = (
+    "show",
+    "list",
+    "which",
+    "what",
+    "available",
+    "installed",
+    "\u043f\u043e\u043a\u0430\u0436",
+    "\u043f\u0435\u0440\u0435\u0447\u0438\u0441\u043b",
+    "\u0441\u043f\u0438\u0441\u043e\u043a",
+    "\u043a\u0430\u043a\u0438\u0435",
+    "\u0447\u0442\u043e",
+    "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d",
+    "\u0434\u043e\u0441\u0442\u0443\u043f\u043d",
+)
+_INVENTORY_SUBJECT_MARKERS = (
+    "skill",
+    "app",
+    "application",
+    "scenario",
+    "capabilit",
+    "\u043d\u0430\u0432\u044b\u043a",
+    "\u043f\u0440\u0438\u043b\u043e\u0436",
+    "\u0441\u0446\u0435\u043d\u0430\u0440",
+    "\u0432\u043e\u0437\u043c\u043e\u0436\u043d",
+)
+_MUTATION_VERB_MARKERS = (
+    "install",
+    "uninstall",
+    "enable",
+    "disable",
+    "toggle",
+    "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438",
+    "\u043f\u043e\u0441\u0442\u0430\u0432\u044c",
+    "\u0443\u0434\u0430\u043b\u0438",
+    "\u0432\u043a\u043b\u044e\u0447\u0438",
+    "\u043e\u0442\u043a\u043b\u044e\u0447\u0438",
+    "\u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438",
+)
 
 
 def _lookup_key(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _contains_any_marker(text: str, markers: tuple[str, ...]) -> bool:
+    folded = _lookup_key(text)
+    return any(marker in folded for marker in markers)
+
+
+def _is_read_only_inventory_request(text: str) -> bool:
+    return (
+        _contains_any_marker(text, _READ_ONLY_INVENTORY_VERB_MARKERS)
+        and _contains_any_marker(text, _INVENTORY_SUBJECT_MARKERS)
+        and not _contains_any_marker(text, _MUTATION_VERB_MARKERS)
+    )
+
+
+def _mapping_has_any_slot(mapping: Mapping[str, Any] | None, slot_names: set[str]) -> bool:
+    if not isinstance(mapping, Mapping):
+        return False
+    for key, value in mapping.items():
+        if str(key) in slot_names and str(value or "").strip():
+            return True
+        if isinstance(value, Mapping) and _mapping_has_any_slot(value, slot_names):
+            return True
+    return False
+
+
+def _inventory_development_task_payload(text: str) -> dict[str, Any]:
+    return {
+        "name": "Publish voice capability for AdaOS inventory query",
+        "description": "The user asked for a read-only AdaOS inventory view, but no current voice capability/action surface satisfied it.",
+        "requested_behavior": (
+            "Expose a governed read-only voice capability for this inventory request and route it through AdaOS, "
+            "not through a direct SDK call."
+        ),
+        "source_text": text,
+        "target_type": "unknown",
+        "missing_surface": "voice_capability/action_surface",
+    }
 
 
 def _compact_lookup_key(value: Any) -> str:
@@ -1494,6 +1571,9 @@ def _regex_policy_rejection(
     *,
     pattern: str,
     intent: str,
+    text: str,
+    slots: Mapping[str, Any],
+    suggestion: Mapping[str, Any],
     training_strategy: Mapping[str, Any],
     confidence: float,
 ) -> dict[str, Any] | None:
@@ -1522,6 +1602,25 @@ def _regex_policy_rejection(
             "strategy": "clarification",
             "confidence": confidence,
         }
+    if intent == "desktop.toggle_app_install" and _is_read_only_inventory_request(text):
+        slot_names = {"app_id", "appId", "skill_id", "skillId", "target_app", "target_skill"}
+        action_candidate = (
+            suggestion.get("action_candidate") if isinstance(suggestion.get("action_candidate"), Mapping) else None
+        )
+        has_mutation_target = _mapping_has_any_slot(slots, slot_names) or _mapping_has_any_slot(
+            action_candidate,
+            slot_names,
+        )
+        if not has_mutation_target:
+            return {
+                "reason": "read_only_inventory_request_as_install_toggle",
+                "strategy": "descriptor_fix",
+                "why_not_regex": (
+                    "The utterance asks to inspect/list inventory, but the proposed intent mutates "
+                    "installation state and has no concrete app/skill target."
+                ),
+                "intent": intent,
+            }
     return None
 
 
@@ -1760,6 +1859,182 @@ def _redact_messages(messages: list[dict[str, str]]) -> list[dict[str, Any]]:
                 "content": _truncate(m.get("content"), 600),
             }
         )
+    return out
+
+
+def _json_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value).encode("utf-8", errors="ignore"))
+
+
+def _messages_size_bytes(messages: list[dict[str, str]]) -> int:
+    return _json_size_bytes(messages)
+
+
+def _trim_mapping_list(value: Any, limit: int) -> list[dict[str, Any]]:
+    rows = [dict(item) for item in iter_mappings(value)]
+    return rows[: max(0, int(limit))]
+
+
+def _compact_prompt_value(value: Any, *, depth: int = 0, list_limit: int = 12, string_limit: int = 500) -> Any:
+    if depth >= 5:
+        return {"_omitted": True, "reason": "max_prompt_depth"}
+    if isinstance(value, str):
+        return _truncate(value, string_limit)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            key_s = str(key)
+            if key_s in {"raw", "source", "schema", "content", "data", "snapshot", "html", "markdown"}:
+                out[key_s] = {"_omitted": True, "reason": "large_or_raw_field"}
+                continue
+            out[key_s] = _compact_prompt_value(
+                item,
+                depth=depth + 1,
+                list_limit=list_limit,
+                string_limit=string_limit,
+            )
+        return out
+    if isinstance(value, (list, tuple, set)):
+        rows = list(value)
+        compact = [
+            _compact_prompt_value(item, depth=depth + 1, list_limit=list_limit, string_limit=string_limit)
+            for item in rows[: max(0, int(list_limit))]
+        ]
+        if len(rows) > len(compact):
+            compact.append({"_omitted": len(rows) - len(compact), "reason": "list_limit"})
+        return compact
+    return _truncate(str(value), string_limit)
+
+
+def _compact_rows_for_prompt(value: Any, keys: tuple[str, ...], limit: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in iter_mappings(value):
+        row: dict[str, Any] = {}
+        for key in keys:
+            if key in item and item.get(key) is not None:
+                row[key] = _compact_prompt_value(item.get(key), string_limit=240)
+        if row:
+            out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _compact_context_for_llm_prompt(
+    context: Mapping[str, Any],
+    *,
+    mcp_tools_ready: bool,
+) -> dict[str, Any]:
+    """Keep the prompt bounded; MCP-aware mode can fetch detailed surfaces on demand."""
+
+    if not mcp_tools_ready:
+        return copy.deepcopy(dict(context))
+
+    out: dict[str, Any] = {
+        "_compact": True,
+        "_compact_reason": "mcp_tools_available",
+    }
+    for key in (
+        "webspace_id",
+        "current_scenario",
+        "current_route",
+        "host_actions_version",
+        "request_locale",
+        "preferred_locales",
+    ):
+        if key in context and context.get(key) is not None:
+            out[key] = _compact_prompt_value(context.get(key), list_limit=8)
+
+    for key in ("correction_thread", "confirmation_retry", "previous_request", "last_request"):
+        if isinstance(context.get(key), Mapping):
+            out[key] = _compact_prompt_value(context.get(key), list_limit=10, string_limit=500)
+
+    skill_nlu = context.get("skill_nlu")
+    if isinstance(skill_nlu, Mapping) and skill_nlu:
+        out["skill_nlu"] = {
+            "_omitted": True,
+            "reason": "mcp_tools_available",
+            "skills": sorted(str(key) for key in skill_nlu.keys())[:30],
+        }
+
+    if isinstance(context.get("skills_manifest"), list):
+        out["skills_manifest"] = _compact_rows_for_prompt(
+            context.get("skills_manifest"),
+            ("id", "name", "title", "description", "version"),
+            20,
+        )
+
+    if isinstance(context.get("host_actions"), list):
+        out["host_actions"] = _compact_rows_for_prompt(
+            context.get("host_actions"),
+            ("id", "event", "title", "description", "intent", "target"),
+            40,
+        )
+    if isinstance(context.get("intent_routes"), list):
+        out["intent_routes"] = _compact_rows_for_prompt(
+            context.get("intent_routes"),
+            ("intent", "action", "target", "skill_id", "scenario_id"),
+            40,
+        )
+    if isinstance(context.get("regex_rules"), list):
+        out["regex_rules"] = _compact_rows_for_prompt(
+            context.get("regex_rules"),
+            ("id", "intent", "pattern", "source", "status"),
+            30,
+        )
+    if isinstance(context.get("builtin_regex"), list):
+        out["builtin_regex"] = _compact_rows_for_prompt(
+            context.get("builtin_regex"),
+            ("id", "intent", "pattern", "source"),
+            20,
+        )
+    if isinstance(context.get("system_actions"), list):
+        out["system_actions"] = [str(item) for item in context.get("system_actions", [])[:40]]
+
+    catalog = context.get("catalog")
+    if isinstance(catalog, Mapping):
+        out["catalog"] = {
+            "apps": _compact_rows_for_prompt(
+                catalog.get("apps"),
+                ("id", "title", "launchModal", "scenario_id", "origin"),
+                25,
+            ),
+            "widgets": _compact_rows_for_prompt(
+                catalog.get("widgets"),
+                ("id", "title", "origin", "scenario_id", "widget_id"),
+                15,
+            ),
+        }
+
+    scenario_nlu = context.get("scenario_nlu")
+    if isinstance(scenario_nlu, Mapping):
+        intent_ids: list[str] = []
+        raw_intents = scenario_nlu.get("intents")
+        if isinstance(raw_intents, Mapping):
+            intent_ids = sorted(str(key) for key in raw_intents.keys())[:100]
+        elif isinstance(raw_intents, list):
+            intent_ids = sorted(str(item.get("name") or item.get("id") or "") for item in iter_mappings(raw_intents))
+            intent_ids = [item for item in intent_ids if item][:100]
+        out["scenario_nlu"] = {
+            "_omitted": True,
+            "reason": "mcp_tools_available",
+            "intent_ids": intent_ids,
+        }
+
+    root_mcp = context.get("root_mcp")
+    if isinstance(root_mcp, Mapping):
+        out["root_mcp"] = {
+            "_omitted": True,
+            "reason": "openai_mcp_tools_available",
+            "available_inline_planes": sorted(str(key) for key in root_mcp.keys())[:30],
+            "instruction": "Use the attached MCP tools for detailed AdaOS authoring context.",
+        }
+
     return out
 
 
@@ -2459,6 +2734,8 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Use provided context (scenario_nlu, intent_routes, system_actions, host_actions, skills_manifest, builtin_regex, regex_rules, catalog, skill_nlu) to reuse existing intents.\n"
         "- Treat context.root_mcp as governed AdaOS MCP evidence. It is read-only; you may use it to understand entities and phrase-check results, but you must not execute SDK/tool/UI actions.\n"
         "- If MCP tools are available to you, use them as read-only governed AdaOS context sources when you need fresher root/subnet facts than the prompt snapshot. Never use MCP to mutate state, dispatch UI actions, call SDK functions, or apply training.\n"
+        "- If context.root_mcp._omitted=true, call at least one read-only MCP tool before answering; the compact prompt may not contain enough action-surface detail.\n"
+        "- When calling MCP tools from this bearer-scoped session, omit target_id and subnet_id unless the prompt gives an exact value or the user explicitly provided one. Do not invent target_id/subnet_id values; the bearer scope already selects the subnet.\n"
         "- context.root_mcp.nlu_authoring_context.action_surface.available_actions is the primary governed action inventory. Prefer actions/intents from this surface and use runtime_state/process_state/developer_hints to resolve what is currently available.\n"
         "- context.root_mcp.nlu_authoring_context.action_surface.voice_capabilities and voice_affordances are the primary governed conversational surface for nested UI targets, queryable sections, and user-facing tools. Prefer a matching published capability/affordance over a generic modal regex.\n"
         "- For phrases like 'show installed skills' or 'which skills are installed', resolve the published capability/affordance (for example an inventory section) and describe the compound AdaOS action in action_candidate. Do not collapse such requests to only opening the parent modal when the published surface is more specific.\n"
@@ -2489,6 +2766,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
         "- Avoid proposing duplicate regex rules if builtin_regex or regex_rules already cover the utterance.\n"
         "- If user asks about weather/temperature but doesn't say the exact keyword, propose a regex rule for intent desktop.open_weather.\n"
+        "- Never use desktop.toggle_app_install for read-only inventory questions like 'show installed skills', 'list available apps', or 'which scenarios are installed'. That intent is only for changing install state of a concrete app target. If no published read/list capability exists, return descriptor_fix or development_task instead.\n"
         "- For lookup-backed slots such as scenario_id, modal_id, app_id, node_ref, webspace_id, and skill_id, capture the user text in a named group; AdaOS canonicalizes known values/labels before dispatch.\n"
         "- Use the exact slot names expected by the existing intent/action. For scenario switching use (?P<scenario_id>...), not (?P<scenario>...). For modal opening use (?P<modal_id>...), not (?P<modal>...).\n"
         "- The regex must match the exact user request text after normal case-insensitive Python regex matching.\n"
@@ -2568,6 +2846,8 @@ def _root_http_error_code(exc: RootHttpError) -> str:
 def _should_retry_llm_proxy(exc: Exception) -> bool:
     if not isinstance(exc, RootHttpError):
         return False
+    if int(getattr(exc, "status_code", 0) or 0) in {0, 502, 503, 504}:
+        return True
     code = _root_http_error_code(exc)
     if code in {"openai_api_key_missing", "unsupported_country_region_territory"}:
         return True
@@ -2644,14 +2924,42 @@ async def _llm_call(
                 )
             )
             try:
-                raw_result = await asyncio.to_thread(
-                    http.request,
-                    "POST",
-                    "/v1/llm/response",
-                    json=body,
-                    headers=headers or None,
-                    timeout=_TIMEOUT_S,
-                )
+                request_body = body
+                try:
+                    raw_result = await asyncio.to_thread(
+                        http.request,
+                        "POST",
+                        "/v1/llm/response",
+                        json=request_body,
+                        headers=headers or None,
+                        timeout=_TIMEOUT_S,
+                    )
+                except Exception as first_exc:
+                    status_code = (
+                        int(getattr(first_exc, "status_code", 0) or 0)
+                        if isinstance(first_exc, RootHttpError)
+                        else 0
+                    )
+                    if tools and body.get("tool_choice") == "required" and status_code in {400, 422}:
+                        attempts.append(
+                            {
+                                "base_url": base_url,
+                                "error": _root_http_error_code(first_exc) or f"http_{status_code}",
+                                "tool_choice": "required",
+                                "fallback_tool_choice": "auto",
+                            }
+                        )
+                        request_body = {**body, "tool_choice": "auto"}
+                        raw_result = await asyncio.to_thread(
+                            http.request,
+                            "POST",
+                            "/v1/llm/response",
+                            json=request_body,
+                            headers=headers or None,
+                            timeout=_TIMEOUT_S,
+                        )
+                    else:
+                        raise
                 result = raw_result if isinstance(raw_result, dict) else {"result": raw_result}
                 protocol = result.setdefault("_protocol", {})
                 if isinstance(protocol, dict):
@@ -2662,14 +2970,17 @@ async def _llm_call(
                     }
                 break
             except Exception as attempt_exc:
+                if isinstance(attempt_exc, RootHttpError):
+                    status_code = int(getattr(attempt_exc, "status_code", 0) or 0)
+                    error_label = _root_http_error_code(attempt_exc) or (
+                        f"http_{status_code}" if status_code else type(attempt_exc).__name__
+                    )
+                else:
+                    error_label = type(attempt_exc).__name__
                 attempts.append(
                     {
                         "base_url": base_url,
-                        "error": (
-                            _root_http_error_code(attempt_exc)
-                            if isinstance(attempt_exc, RootHttpError)
-                            else type(attempt_exc).__name__
-                        ),
+                        "error": error_label,
                     }
                 )
                 if index + 1 < len(base_urls) and _should_retry_llm_proxy(attempt_exc):
@@ -3166,13 +3477,31 @@ async def _handle_teacher_request(evt: Any) -> None:
         if mcp_evidence:
             context["root_mcp"] = mcp_evidence
 
-        messages = _build_prompt(request=dict(req), webspace_id=webspace_id, context=context)
         llm_mcp_plan = await _prepare_llm_mcp_plan_async(request_id=request_id)
         llm_mcp_tools = [dict(item) for item in iter_mappings(llm_mcp_plan.get("tools"))]
+        prompt_context = _compact_context_for_llm_prompt(
+            context,
+            mcp_tools_ready=bool(llm_mcp_tools) and str(llm_mcp_plan.get("status") or "").lower() == "ready",
+        )
+        if llm_mcp_tools and isinstance(prompt_context.get("root_mcp"), MutableMapping):
+            root_mcp_prompt = prompt_context["root_mcp"]
+            session_meta = llm_mcp_plan.get("session") if isinstance(llm_mcp_plan.get("session"), Mapping) else {}
+            root_mcp_prompt["bearer_scope"] = {
+                "target_id": llm_mcp_plan.get("target_id") or session_meta.get("target_id"),
+                "subnet_id": session_meta.get("subnet_id"),
+                "zone": llm_mcp_plan.get("zone"),
+                "instruction": "Prefer omitting target_id/subnet_id in MCP calls; the bearer already scopes the target.",
+            }
+        messages = _build_prompt(request=dict(req), webspace_id=webspace_id, context=prompt_context)
+        prompt_size_bytes = _messages_size_bytes(messages)
+        tools_size_bytes = _json_size_bytes(llm_mcp_tools) if llm_mcp_tools else 0
         prompt_audit = {
             "request_hash": _sha256_payload({"webspace_id": webspace_id, "request": dict(req)}),
-            "context_hash": _sha256_payload(context),
+            "context_hash": _sha256_payload(prompt_context),
+            "source_context_hash": _sha256_payload(context),
             "prompt_hash": _sha256_payload(messages),
+            "prompt_size_bytes": prompt_size_bytes,
+            "mcp_tools_size_bytes": tools_size_bytes,
             "mcp": {
                 "enabled": bool(llm_mcp_plan.get("enabled")),
                 "mode": llm_mcp_plan.get("mode"),
@@ -3180,6 +3509,17 @@ async def _handle_teacher_request(evt: Any) -> None:
                 "source": llm_mcp_plan.get("source"),
                 "cache": llm_mcp_plan.get("cache"),
                 "tool_count": len(llm_mcp_tools),
+                "max_tool_calls": _LLM_MCP_MAX_TOOL_CALLS,
+                "tool_choice": _LLM_MCP_TOOL_CHOICE if llm_mcp_tools else None,
+                "target_id": llm_mcp_plan.get("target_id"),
+                "zone": llm_mcp_plan.get("zone"),
+                "session": {
+                    key: value
+                    for key, value in dict(llm_mcp_plan.get("session") or {}).items()
+                    if key in {"session_id", "target_id", "subnet_id", "capability_profile", "expires_at"}
+                }
+                if isinstance(llm_mcp_plan.get("session"), Mapping)
+                else None,
                 "allowed_tools": list(llm_mcp_plan.get("allowed_tools") or [])[:30]
                 if isinstance(llm_mcp_plan.get("allowed_tools"), list)
                 else [],
@@ -3252,7 +3592,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                 llm_kwargs.update(
                     {
                         "tools": llm_mcp_tools,
-                        "tool_choice": "auto",
+                        "tool_choice": _LLM_MCP_TOOL_CHOICE,
                         "max_tool_calls": _LLM_MCP_MAX_TOOL_CALLS,
                     }
                 )
@@ -3351,6 +3691,22 @@ async def _handle_teacher_request(evt: Any) -> None:
             regex_rule=regex_rule,
         )
         strategy_primary = str(training_strategy.get("primary") or "").strip()
+        if decision == "ignore" and strategy_primary == "ignore" and _is_read_only_inventory_request(text):
+            decision = "ignore"
+            training_strategy = {
+                "primary": "development_task",
+                "source": "adaos.policy",
+                "why_not_regex": "No published read-only inventory voice capability/action surface matched this request.",
+                "rationale": "AdaOS inventory requests should become governed capability work items instead of being dropped.",
+            }
+            strategy_primary = "development_task"
+            if not isinstance(suggestion.get("candidate"), Mapping):
+                suggestion["candidate"] = _inventory_development_task_payload(text)
+            suggestion["training_strategy"] = dict(training_strategy)
+            suggestion["why_not_regex"] = training_strategy["why_not_regex"]
+            notes = (
+                (notes + "\n") if notes else ""
+            ) + "AdaOS converted an ignored read-only inventory request into a development_task candidate."
 
         llm_meta = {
             "model": _MODEL,
@@ -3530,6 +3886,9 @@ async def _handle_teacher_request(evt: Any) -> None:
                 regex_policy_rejection = _regex_policy_rejection(
                     pattern=rr_pattern,
                     intent=rr_intent,
+                    text=text,
+                    slots=slots,
+                    suggestion=suggestion,
                     training_strategy=training_strategy,
                     confidence=confidence_f,
                 )
