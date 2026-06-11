@@ -122,6 +122,8 @@ default realtime transport unless explicitly opted out with
   `GET /api/node/reliability`, CLI, and Infra State.
 - [x] `[must]` Reconcile default enablement across code, tests, deployment
   config, and docs before calling sidecar the accepted default hub transport.
+  The managed autostart wrapper no longer persists truthy hub sidecar flags as
+  exports; `=0` opt-outs remain explicit.
 - [x] `[must]` Make sidecar launch independent from unrelated CLI imports and
   root-checkout drift; the 2026-06-07 `adaost1` test showed supervisor-owned
   sidecar startup can fail when `/root/adaos` lacks a module already present in

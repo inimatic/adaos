@@ -81,6 +81,9 @@ transport-only `/ws` and `/yws` handoff as ready.
 
 - Code and tests now keep realtime sidecar enabled by default for hub runtimes;
   `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` is the explicit opt-out.
+- Managed autostart generation no longer writes truthy hub sidecar defaults
+  into the wrapper as env overrides; old stand wrappers should be refreshed
+  after removing legacy `ADAOS_REALTIME_ENABLE=1`/route-proxy exports.
 - The sidecar implementation can start local route proxy listeners for `/ws`
   and `/yws` and bootstrap route selection can prefer those listeners for
   matching paths.
