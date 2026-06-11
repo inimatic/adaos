@@ -29,7 +29,7 @@ The architecture contract is described in
 | Hosted client | Hosting build `version.json` | Browser session `client_build_version` reported during the YJS/client handshake | `https://inimatic.com/version.json`, Browsers modal |
 | ReDevice/member nodes | Target core update report, Root rollout intent, or `redevice_agent` in `adaos-versions.json` | Member snapshot build/runtime payload or endpoint `agent_version` report | Infra State node selector, ReDevice List, ReDevice Settings |
 | Skills | Registry catalog JSON / workspace source manifest | Active skill runtime version and slot | Infra State skills inventory |
-| Scenarios | Registry catalog JSON / workspace source manifest | Scenario registry/capacity entry; no separate runtime slot today | Infra State scenario registry, labeled `Registry` |
+| Scenarios | Registry catalog JSON / workspace source manifest | Local materialized scenario version; SQL registry/capacity entry auto-syncs to it | Infra State scenarios inventory, labeled `Runtime` |
 
 ## Aggregate served manifest
 
@@ -160,12 +160,15 @@ If both values are present and differ, ReDevice List and ReDevice Settings show
 ## Scenario versions
 
 Scenarios do not have a separate runtime slot today. Infra State must not label
-their third version plane as `Installed`. Use:
+them as `Installed`, or expose the SQL registry as a separate user-facing plane.
+Use:
 
 - `Catalog`: registry/catalog version available remotely.
-- `Local source`: local source version from the materialized workspace.
-- `Registry`: version selected in the scenario registry or member
-  capacity entry.
+- `Runtime`: local materialized scenario version available on the node.
+
+The SQL scenario registry and member capacity entry are internal propagation
+state. They must be reconciled to the local materialized scenario before Infra
+State renders scenario versions or publishes node inventory.
 
 ## Release sanity checklist
 

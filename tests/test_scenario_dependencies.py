@@ -22,6 +22,73 @@ if "ypy_websocket" not in sys.modules:
 from adaos.services.scenario import manager as scenario_manager
 
 
+def test_install_writes_materialized_scenario_version_to_registry(monkeypatch) -> None:
+    register_calls: list[dict[str, Any]] = []
+    unregister_calls: list[str] = []
+    side_effects: list[tuple[Any, ...]] = []
+
+    class _FakeScenarioRegistry:
+        def register(self, name: str, *, pin: str | None = None, active_version: str | None = None, **_kwargs: Any):
+            register_calls.append({"name": name, "pin": pin, "active_version": active_version})
+
+        def unregister(self, name: str) -> None:
+            unregister_calls.append(name)
+
+    class _FakeScenarioRepo:
+        def install(self, name: str, branch: str | None = None):
+            side_effects.append(("repo_install", name, branch))
+            return SimpleNamespace(
+                id=SimpleNamespace(value=name),
+                name=name,
+                version="2.3.4",
+                path=f"/scenarios/{name}",
+            )
+
+    monkeypatch.delenv("ADAOS_TESTING", raising=False)
+    monkeypatch.setattr(
+        scenario_manager,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            sql=object(),
+            scenarios_repo=_FakeScenarioRepo(),
+            skills_repo=object(),
+            git=object(),
+            paths=object(),
+            caps=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        scenario_manager,
+        "install_scenario_in_capacity",
+        lambda *args, **kwargs: side_effects.append(("capacity_install", *args, kwargs)),
+    )
+    monkeypatch.setattr(scenario_manager, "load_config", lambda: SimpleNamespace(role="member"))
+
+    registry = _FakeScenarioRegistry()
+    mgr = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=registry,
+        git=object(),
+        paths=object(),
+        bus=SimpleNamespace(publish=lambda evt: side_effects.append(("event", evt.type))),
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+
+    meta = mgr.install("demo_scene", pin="rev2026")
+
+    assert meta.version == "2.3.4"
+    assert register_calls == [
+        {"name": "demo_scene", "pin": "rev2026", "active_version": None},
+        {"name": "demo_scene", "pin": "rev2026", "active_version": "2.3.4"},
+    ]
+    assert unregister_calls == []
+    assert side_effects == [
+        ("repo_install", "demo_scene", None),
+        ("event", "scenario.installed"),
+        ("capacity_install", "demo_scene", "2.3.4", {"active": True}),
+    ]
+
+
 def test_bootstrap_dependencies_reports_structured_lifecycle_results(monkeypatch) -> None:
     calls: list[str] = []
     events: list[Any] = []
