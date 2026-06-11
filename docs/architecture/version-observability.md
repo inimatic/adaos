@@ -14,7 +14,7 @@ Use these names consistently:
 | Served | Version advertised as available for rollout or download. This is a CI/release output, not live process state. | CI/CD for each subsystem |
 | Target | Version a policy or update attempt wants a node or endpoint to run. | Supervisor, Root policy, rollout controller |
 | Used | Version reported by a live runtime, browser session, endpoint agent, or active slot. | Runtime process or endpoint |
-| Active registry | Version selected in a local registry for an artifact without its own runtime. | AdaOS registry and workspace sync |
+| Registry | Version selected in a local registry for an artifact without its own runtime. | AdaOS registry and workspace sync |
 
 `served` and `used` can legitimately differ. The UI should show this as
 `ok`, `drift`, or `unknown`, not overwrite one value with the other.
@@ -74,7 +74,7 @@ Infra State and related modals must label version columns by plane:
 
 - Skills may show `Catalog`, `Workspace`, and `Runtime` because a skill can have
   an installed/active runtime.
-- Scenarios must show `Catalog`, `Workspace`, and `Active registry`. They do not
+- Scenarios must show `Catalog`, `Local source`, and `Registry`. They do not
   have a separate installed runtime slot today.
 - AdaOS core launched from a dev workspace must show `dev | <version> |
   <commit>`. Historical files under `state/core_slots` are diagnostics in that
