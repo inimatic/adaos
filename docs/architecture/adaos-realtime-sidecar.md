@@ -110,8 +110,9 @@ Current status:
 
 ### Phase 1 - NATS transport sidecar
 
-Implemented, but current code and tests keep it disabled by default unless
-`ADAOS_REALTIME_ENABLE=1` or `HUB_REALTIME_ENABLE=1` is set.
+Implemented for the managed hub role. Hub runtimes now enable sidecar as the
+default realtime transport unless explicitly opted out with
+`ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0`.
 
 - [x] `[must]` Add `adaos realtime serve`.
 - [x] `[must]` Add local TCP NATS relay.
@@ -119,7 +120,7 @@ Implemented, but current code and tests keep it disabled by default unless
 - [x] `[must]` Disable direct hub WS transport when sidecar mode is on.
 - [x] `[must]` Expose sidecar runtime state in
   `GET /api/node/reliability`, CLI, and Infra State.
-- [ ] `[must]` Reconcile default enablement across code, tests, deployment
+- [x] `[must]` Reconcile default enablement across code, tests, deployment
   config, and docs before calling sidecar the accepted default hub transport.
 - [x] `[must]` Make sidecar launch independent from unrelated CLI imports and
   root-checkout drift; the 2026-06-07 `adaost1` test showed supervisor-owned
@@ -166,6 +167,8 @@ open.
   after reconnect.
 - [x] `[must]` Re-discover the active supervisor runtime URL on route-proxy
   reconnect so A/B slot ports do not pin sidecar to the old runtime.
+- [x] `[must]` Cover both `/ws` and `/yws/{room}` route-proxy continuity in
+  tests when the runtime upstream disappears or moves to another slot port.
 - [x] `[must]` Preserve browser-compatible `/yws/{room}` path routing through
   the sidecar proxy, not only `/yws?ws=<room>`.
 - [x] `[must]` Keep sidecar status/control APIs responsive during runtime
@@ -245,8 +248,7 @@ What this means for the current roadmap:
 
 ## Operational Notes
 
-- Current code keeps hub runtimes `sidecar off` by default unless
-  `ADAOS_REALTIME_ENABLE=1` or `HUB_REALTIME_ENABLE=1` is set.
+- Hub runtimes use sidecar as the default realtime transport.
 - `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` explicitly opts out and
   keeps direct runtime-owned hub-root transport.
 - Non-hub roles still stay `sidecar off` by default unless enabled explicitly.
