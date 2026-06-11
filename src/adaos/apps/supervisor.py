@@ -1794,6 +1794,7 @@ def _public_update_status_payload(payload: dict[str, Any] | None) -> dict[str, A
             "warm_switch_allowed": runtime.get("warm_switch_allowed"),
             "warm_switch_reason": str(runtime.get("warm_switch_reason") or "").strip() or None,
             "slot_ports": runtime.get("slot_ports") if isinstance(runtime.get("slot_ports"), dict) else {},
+            "required_upstream_link": _compact_watchdog_required_link(runtime.get("required_upstream_link")),
             "root_promotion_required": bool(runtime.get("root_promotion_required")),
             "sidecar": {
                 "enabled": bool(sidecar.get("enabled")),
