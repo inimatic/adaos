@@ -59,6 +59,24 @@ _AUTOSTART_PASSTHROUGH_ENV_KEYS = (
     "HUB_NATS_TRANSPORT",
     "HUB_NATS_PREFER_DEDICATED",
 )
+_HUB_DEFAULT_SIDECAR_ENV_KEYS = {
+    "ADAOS_REALTIME_ENABLE",
+    "HUB_REALTIME_ENABLE",
+    "ADAOS_REALTIME_ROUTE_PROXY_ENABLE",
+}
+
+
+def _truthy_env(value: str | None) -> bool:
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "on", "yes"}
+
+
+def _runtime_role() -> str | None:
+    try:
+        conf = load_config()
+    except Exception:
+        return None
+    return str(getattr(conf, "role", "") or "").strip().lower() or None
 
 
 def _home() -> Path:
@@ -164,9 +182,12 @@ def default_spec(
             env_file_vars = _parse_env_file(str(shared_dotenv))
         except Exception:
             env_file_vars = {}
+    role = _runtime_role()
     for key in _AUTOSTART_PASSTHROUGH_ENV_KEYS:
         value = str(os.getenv(key) or env_file_vars.get(key) or "").strip()
         if value:
+            if role == "hub" and key in _HUB_DEFAULT_SIDECAR_ENV_KEYS and _truthy_env(value):
+                continue
             env[key] = value
     if repo_root is not None:
         env["ADAOS_ROOT_REPO_ROOT"] = str(repo_root)
