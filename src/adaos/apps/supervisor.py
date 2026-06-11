@@ -3544,6 +3544,21 @@ class SupervisorManager:
                 },
             }
         )
+        record = _read_jsonl_tail(realtime_sidecar_diag_path(), limit=1)
+        last_diag = record[-1] if record else None
+        if isinstance(last_diag, dict):
+            if isinstance(last_diag.get("enablement_policy"), dict):
+                current_enablement = (
+                    process.get("enablement_policy")
+                    if isinstance(process.get("enablement_policy"), dict)
+                    else {}
+                )
+                current_source = str(current_enablement.get("source") or "").strip().lower()
+                current_role = str(current_enablement.get("role") or "").strip().lower()
+                if not current_enablement or current_source in {"legacy_runtime", "unavailable"} or not current_role:
+                    process["enablement_policy"] = dict(last_diag.get("enablement_policy") or current_enablement or {})
+            if isinstance(last_diag.get("route_tunnel_contract"), dict):
+                process["route_tunnel_contract"] = dict(last_diag.get("route_tunnel_contract") or {})
         return {
             "enabled": bool(realtime_sidecar_enabled(role=role)),
             "role": role,
@@ -3742,7 +3757,10 @@ class SupervisorManager:
             diag_age_s = round(max(0.0, now_ts - float(last_diag.get("ts"))), 3)
             diag_fresh = float(diag_age_s) <= 10.0
         if isinstance(last_diag, dict) and isinstance(last_diag.get("enablement_policy"), dict):
-            enablement = dict(last_diag.get("enablement_policy") or enablement or {})
+            enablement_source = str(enablement.get("source") or "").strip().lower()
+            enablement_role = str(enablement.get("role") or "").strip().lower()
+            if not enablement or enablement_source in {"legacy_runtime", "unavailable"} or not enablement_role:
+                enablement = dict(last_diag.get("enablement_policy") or enablement or {})
         if isinstance(last_diag, dict) and isinstance(last_diag.get("route_tunnel_contract"), dict):
             route_tunnel_contract = dict(last_diag.get("route_tunnel_contract") or route_tunnel_contract or {})
         listener_running = bool(process.get("listener_running"))
