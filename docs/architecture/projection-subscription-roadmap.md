@@ -52,6 +52,77 @@ Update this document instead of creating a second delivery track.
 - treat platform diagnostics, system messages, and browser/runtime errors as first-class emitted projections where appropriate
 - reuse the same contract across skills and scenarios
 
+## Stream Receiver Structural Subscriptions
+
+Current stream receivers are receiver-scoped: a browser subscribes to
+`infrastate.skills` or `infrastate.scenarios`, then actions normally invalidate
+and republish the whole receiver payload. This preserves correctness, but it is
+too coarse for inventory tables, operation rows, browser lists, and other
+structured payloads where one action changes one item.
+
+The target is an additive `stream.receiver.v2` contract:
+
+- existing receiver names remain the root compatibility and recovery unit
+- a subscription may include an optional structural selector:
+  `path`, `key`, `idField`, and `mode`
+- a receiver can publish either a full snapshot or a patch envelope
+- clients that do not understand patches continue to consume full snapshots
+- clients that do understand patches request an initial slice snapshot, then
+  apply keyed `upsert`, `remove`, or `replace` events
+- every patch carries `receiver`, `path`, `key`, `baseRev`, `rev`, and enough
+  metadata for the browser to detect missed patches and request a snapshot
+- root receiver snapshots remain the recovery path when a browser reconnects,
+  changes filters, misses a revision, or opens a view for the first time
+
+Example envelope:
+
+```json
+{
+  "schema": "adaos.stream.patch.v1",
+  "receiver": "infrastate.scenarios",
+  "webspace_id": "desktop",
+  "path": "/items",
+  "key": "new_face_vision",
+  "op": "upsert",
+  "baseRev": 41,
+  "rev": 42,
+  "item": { "name": "new_face_vision", "catalog_display": "0.2.15" }
+}
+```
+
+Browser behavior:
+
+- root subscriptions keep using `snapshotPolicy: on_subscribe`
+- structural subscriptions are registered as children of the same receiver
+- widget/table stores keep a local keyed cache by `receiver + path + key`
+- a stale `baseRev` or unknown path falls back to
+  `webio.stream.snapshot.requested`
+- action feedback can observe the affected selector instead of waiting for the
+  whole modal tree to republish
+
+Runtime behavior:
+
+- skills may keep computing full receiver snapshots for recovery
+- hot actions should publish targeted row patches when the affected key is
+  known
+- operation lifecycle events should patch the operation row and the affected
+  inventory row separately
+- full snapshot refresh after an action should become conditional: keep it for
+  legacy clients, recovery, and root-summary changes; skip it for patch-aware
+  clients when all affected selectors were acknowledged
+
+Migration order:
+
+1. Add the patch envelope schema, browser keyed store, and revision fallback
+   while still publishing full snapshots.
+2. Pilot Infrastate skills/scenarios and active operations with row-level
+   `upsert/remove` patches.
+3. Extend `webui.json` data sources with optional selectors, for example
+   `path: "/items"` and `idField: "name"`.
+4. Move action feedback from root snapshot observation to selector observation.
+5. After soak, reduce unconditional root snapshot refreshes for patch-aware
+   clients only; legacy root subscriptions keep working.
+
 ## Non-Goals for MVP
 
 - per-user payload forks inside the same webspace
