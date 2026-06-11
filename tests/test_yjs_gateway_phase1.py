@@ -1694,6 +1694,91 @@ def test_events_ws_treats_receive_before_accept_runtimeerror_as_disconnect() -> 
     assert websocket.accepted is True
 
 
+def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _handle_rtc_offer(**kwargs):
+        captured["offer"] = kwargs
+        return {"type": "answer", "sdp": "answer-sdp"}
+
+    async def _handle_remote_ice(device_id: str, candidate: object) -> None:
+        captured["ice"] = {"device_id": device_id, "candidate": candidate}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.webrtc.peer",
+        SimpleNamespace(handle_rtc_offer=_handle_rtc_offer, handle_remote_ice=_handle_remote_ice),
+    )
+
+    class _FakeEventsWebSocket:
+        query_params: dict[str, str] = {}
+        scope = {"client": ("127.0.0.1", 9348)}
+        accepted = False
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+            self._messages = [
+                json.dumps(
+                    {
+                        "ch": "events",
+                        "t": "cmd",
+                        "id": "rtc-offer-1",
+                        "kind": "rtc.offer",
+                        "payload": {
+                            "type": "offer",
+                            "sdp": "offer-sdp",
+                            "device_id": "dev-signal",
+                            "webspace_id": "ops",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ch": "events",
+                        "t": "cmd",
+                        "id": "rtc-ice-1",
+                        "kind": "rtc.ice",
+                        "payload": {
+                            "device_id": "dev-signal",
+                            "webspace_id": "ops",
+                            "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
+                        },
+                    }
+                ),
+            ]
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def receive_text(self) -> str:
+            if self._messages:
+                return self._messages.pop(0)
+            raise gateway_module.WebSocketDisconnect()
+
+        async def send_text(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    websocket = _FakeEventsWebSocket()
+
+    asyncio.run(gateway_module.events_ws(websocket))  # type: ignore[arg-type]
+
+    assert websocket.accepted is True
+    assert captured["offer"]["device_id"] == "dev-signal"  # type: ignore[index]
+    assert captured["offer"]["webspace_id"] == "ops"  # type: ignore[index]
+    assert captured["ice"] == {
+        "device_id": "dev-signal",
+        "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
+    }
+    assert websocket.sent[0] == {
+        "ch": "events",
+        "t": "ack",
+        "id": "rtc-offer-1",
+        "ok": True,
+        "data": {"type": "answer", "sdp": "answer-sdp"},
+    }
+    assert websocket.sent[1] == {"ch": "events", "t": "ack", "id": "rtc-ice-1", "ok": True}
+
+
 def test_active_browser_session_snapshot_tracks_yws_clients() -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()

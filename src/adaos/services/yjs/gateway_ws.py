@@ -164,6 +164,10 @@ def _clean_browser_metadata_value(value: Any, *, max_len: int = 256) -> str | No
     return token[:max_len]
 
 
+def _clean_signaling_device_id(value: Any) -> str | None:
+    return _clean_browser_metadata_value(value, max_len=128)
+
+
 def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     raw: dict[str, Any] = {
         "browser_family": params.get("browser_family") or params.get("browserFamily") or params.get("browser"),
@@ -6334,6 +6338,12 @@ async def events_ws(websocket: WebSocket):
                 try:
                     from adaos.services.webrtc.peer import handle_rtc_offer
 
+                    signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
+                    signal_webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id") or webspace_id)
+                    if device_id is None and signal_device_id != "unknown":
+                        device_id = signal_device_id
+                    webspace_id = signal_webspace_id
+
                     async def _send_ice_via_ws(candidate: dict[str, Any]) -> None:
                         try:
                             await websocket.send_text(
@@ -6353,8 +6363,8 @@ async def events_ws(websocket: WebSocket):
                     answer = await handle_rtc_offer(
                         offer_sdp=payload.get("sdp", ""),
                         offer_type=payload.get("type", "offer"),
-                        device_id=device_id or "unknown",
-                        webspace_id=webspace_id,
+                        device_id=signal_device_id,
+                        webspace_id=signal_webspace_id,
                         send_ice_cb=_send_ice_via_ws,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": answer})
@@ -6367,7 +6377,12 @@ async def events_ws(websocket: WebSocket):
                 try:
                     from adaos.services.webrtc.peer import handle_remote_ice
 
-                    await handle_remote_ice(device_id or "unknown", payload.get("candidate"))
+                    signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
+                    if device_id is None and signal_device_id != "unknown":
+                        device_id = signal_device_id
+                    if payload.get("webspace_id"):
+                        webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id"))
+                    await handle_remote_ice(signal_device_id, payload.get("candidate"))
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True})
                 except Exception as e:
                     _log.error(f"rtc.ice failed: {e!r}", exc_info=True)

@@ -357,9 +357,10 @@ def _coerce_peer_webspace_id(value: Any) -> str:
     try:
         from adaos.services.yjs.webspace import default_webspace_id
 
-        return str(default_webspace_id() or "").strip() or "default"
+        resolved = str(default_webspace_id() or "").strip() or "default"
     except Exception:
-        return "default"
+        resolved = "default"
+    return "desktop" if resolved == "default" else resolved
 
 
 def _parse_webio_yjs_projection_topic(topic: str) -> dict[str, Any] | None:
