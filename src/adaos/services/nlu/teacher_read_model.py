@@ -1210,6 +1210,181 @@ def _developer_hint_rows(*, limit: int = 120) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
+def _voice_label_map(value: Any) -> dict[str, list[str]]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, list[str]] = {}
+    for locale, items in value.items():
+        key = str(locale or "").strip() or "und"
+        labels = _as_text_list(items, limit=40)
+        if labels:
+            out[key] = labels
+    return out
+
+
+def _voice_activation_steps(value: Any) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    for item in iter_mappings(value):
+        step_type = str(item.get("type") or "").strip()
+        if not step_type:
+            continue
+        step = {"type": step_type}
+        params = item.get("params")
+        if isinstance(params, Mapping):
+            step["params"] = dict(params)
+        for key in ("description", "target", "id"):
+            if item.get(key) not in (None, "", [], {}):
+                step[key] = item.get(key)
+        steps.append(step)
+    return steps
+
+
+def _activation_modal_ids(activation: list[dict[str, Any]]) -> list[str]:
+    modal_ids: list[str] = []
+    for step in activation:
+        params = step.get("params") if isinstance(step.get("params"), Mapping) else {}
+        for key in ("modal_id", "modalId"):
+            token = str(params.get(key) or "").strip()
+            if token and not token.startswith("$"):
+                modal_ids.append(token)
+    return modal_ids
+
+
+def _voice_availability(
+    item: Mapping[str, Any],
+    *,
+    activation: list[dict[str, Any]],
+    runtime_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    available_modal_ids = {
+        str(value or "").strip()
+        for value in (runtime_state.get("available_modal_ids") if isinstance(runtime_state.get("available_modal_ids"), list) else [])
+        if str(value or "").strip()
+    }
+    parent = str(item.get("parent") or "").strip()
+    modal_ids = _activation_modal_ids(activation)
+    checked_ids = [value for value in [parent, *modal_ids] if value]
+    if not available_modal_ids:
+        return {"status": "descriptor_only", "reason": "runtime_modal_inventory_unavailable", "checked_ids": checked_ids}
+    if not checked_ids:
+        return {"status": "unknown", "reason": "no_container_reference"}
+    if any(value in available_modal_ids for value in checked_ids):
+        return {"status": "reachable", "checked_ids": checked_ids}
+    return {"status": "not_currently_reachable", "checked_ids": checked_ids}
+
+
+def _voice_item_row(
+    *,
+    item: Mapping[str, Any],
+    collection: str,
+    owner_type: str,
+    owner_id: str,
+    source_path: Path | None,
+    runtime_state: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    item_id = str(item.get("id") or "").strip()
+    if not item_id:
+        return None
+    activation = _voice_activation_steps(item.get("activation") or item.get("activation_plan"))
+    labels = _voice_label_map(item.get("labels"))
+    aliases = _as_text_list(item.get("aliases"), limit=80)
+    title = str(item.get("title") or "").strip()
+    if title and title not in aliases:
+        aliases = [title, *aliases]
+    owner = {"type": owner_type, "id": owner_id}
+    default_side_effect = "read_only" if collection == "voice_capabilities" else "ui_navigation"
+    side_effect_class = str(item.get("side_effect_class") or default_side_effect)
+    row: dict[str, Any] = {
+        "id": item_id,
+        "class": "voice_capability" if collection == "voice_capabilities" else "voice_affordance",
+        "kind": str(item.get("kind") or ("capability" if collection == "voice_capabilities" else "ui_affordance")),
+        "owner": owner,
+        "source_path": str(source_path) if source_path else None,
+        "labels": labels,
+        "aliases": aliases,
+        "side_effect_class": side_effect_class,
+        "activation": activation,
+        "availability": _voice_availability(item, activation=activation, runtime_state=runtime_state),
+        "fingerprint": _hash_payload({"owner": owner, "collection": collection, "item": item}),
+    }
+    for key in (
+        "parent",
+        "description",
+        "locale",
+        "visibility",
+        "parameters",
+        "result_modes",
+        "default_result_mode",
+        "query_contract",
+        "verify",
+    ):
+        if item.get(key) not in (None, "", [], {}):
+            row[key] = item.get(key)
+    return row
+
+
+def _voice_containers(payload: Mapping[str, Any]) -> list[tuple[str, list[Mapping[str, Any]]]]:
+    containers: list[tuple[str, list[Mapping[str, Any]]]] = []
+    nlu = payload.get("nlu") if isinstance(payload.get("nlu"), Mapping) else {}
+    for key, value in (
+        ("voice_capabilities", payload.get("voice_capabilities")),
+        ("voice_affordances", payload.get("voice_affordances")),
+        ("nlu.voice_capabilities", nlu.get("voice_capabilities")),
+        ("nlu.voice_affordances", nlu.get("voice_affordances")),
+    ):
+        rows = [dict(item) for item in iter_mappings(value)]
+        if rows:
+            containers.append((key, rows))
+    return containers
+
+
+def _voice_surface_rows(*, runtime_state: Mapping[str, Any], limit: int = 200) -> dict[str, Any]:
+    ctx = get_ctx()
+    capabilities: list[dict[str, Any]] = []
+    affordances: list[dict[str, Any]] = []
+
+    def _append(owner_type: str, owner_id: str, payload: Mapping[str, Any], path: Path | None) -> None:
+        for collection_key, items in _voice_containers(payload):
+            collection = "voice_capabilities" if collection_key.endswith("voice_capabilities") else "voice_affordances"
+            target = capabilities if collection == "voice_capabilities" else affordances
+            for item in items:
+                row = _voice_item_row(
+                    item=item,
+                    collection=collection,
+                    owner_type=owner_type,
+                    owner_id=owner_id,
+                    source_path=path,
+                    runtime_state=runtime_state,
+                )
+                if row:
+                    target.append(row)
+
+    for root in _skill_roots(ctx):
+        if not root.exists():
+            continue
+        for skill_dir in sorted(child for child in root.iterdir() if child.is_dir() and not child.name.startswith(".")):
+            payload, path = _read_skill_manifest(skill_dir.name, ctx=ctx)
+            if payload:
+                _append("skill", skill_dir.name, payload, path)
+            webui_path = skill_dir / "webui.json"
+            webui = _read_json(webui_path) if webui_path.exists() else None
+            if webui:
+                _append("skill", skill_dir.name, webui, webui_path)
+            if len(capabilities) + len(affordances) >= limit:
+                return {"voice_capabilities": capabilities[:limit], "voice_affordances": affordances[:limit]}
+
+    for root in _scenario_roots(ctx):
+        if not root.exists():
+            continue
+        for scenario_dir in sorted(child for child in root.iterdir() if child.is_dir() and not child.name.startswith(".")):
+            payload, path = _read_scenario_manifest(scenario_dir.name, ctx=ctx)
+            if payload:
+                _append("scenario", scenario_dir.name, payload, path)
+            if len(capabilities) + len(affordances) >= limit:
+                return {"voice_capabilities": capabilities[:limit], "voice_affordances": affordances[:limit]}
+    return {"voice_capabilities": capabilities[:limit], "voice_affordances": affordances[:limit]}
+
+
 def _runtime_state_from_snapshot(snapshot: Mapping[str, Any], *, lookup_payload: Mapping[str, Any]) -> dict[str, Any]:
     ui = coerce_dict(snapshot.get("ui"))
     data = coerce_dict(snapshot.get("data"))
@@ -1361,12 +1536,22 @@ def _build_contextual_action_surface(
     developer_hints = _developer_hint_rows(limit=120) if include_hints else []
     runtime_state = _runtime_state_from_snapshot(snapshot, lookup_payload=lookup_payload)
     process_state = _process_state_from_snapshot(snapshot)
+    voice_surface = _voice_surface_rows(runtime_state=runtime_state, limit=max(200, action_limit))
+    voice_capabilities = voice_surface.get("voice_capabilities") if isinstance(voice_surface.get("voice_capabilities"), list) else []
+    voice_affordances = voice_surface.get("voice_affordances") if isinstance(voice_surface.get("voice_affordances"), list) else []
     return {
         "ok": True,
         "surface_id": "adaos.nlu.contextual_action_surface.v1",
         "webspace_id": webspace_id,
         "runtime_state": runtime_state,
         "available_actions": available_actions,
+        "voice_capabilities": voice_capabilities,
+        "voice_affordances": voice_affordances,
+        "voice_surface": {
+            "surface_id": "adaos.nlu.voice_surface.v1",
+            "voice_capabilities_count": len(voice_capabilities),
+            "voice_affordances_count": len(voice_affordances),
+        },
         "process_state": process_state,
         "developer_hints": developer_hints,
         "lookup_summary": list(lookup_payload.get("summary") or []) if isinstance(lookup_payload.get("summary"), list) else [],
@@ -1375,6 +1560,8 @@ def _build_contextual_action_surface(
                 "lookup": lookup_payload.get("fingerprint"),
                 "runtime": runtime_state,
                 "actions": available_actions,
+                "voice_capabilities": voice_capabilities,
+                "voice_affordances": voice_affordances,
                 "hints": developer_hints,
             }
         ),

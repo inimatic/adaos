@@ -96,6 +96,9 @@ def test_root_mcp_exposes_nlu_authoring_context_with_named_entities(monkeypatch)
     assert context["named_entities"]["items"][0]["canonical_ref"] == "skill:weather_skill"
     assert context["action_surface"]["surface_id"] == "adaos.nlu.contextual_action_surface.v1"
     assert any(item.get("id") == "host.desktop.modal.open" for item in context["action_surface"]["available_actions"])
+    assert isinstance(context["action_surface"]["voice_capabilities"], list)
+    assert isinstance(context["action_surface"]["voice_affordances"], list)
+    assert isinstance(context["action_surface"]["voice_surface"], dict)
     assert isinstance(context["runtime_state"], dict)
     assert isinstance(context["process_state"], dict)
     assert isinstance(context["developer_hints"], list)
@@ -252,6 +255,9 @@ def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:
         *,
         webspace_id=None,
         use_rasa=True,
+        use_neuro_lite=False,
+        use_neural=False,
+        collect_all=False,
         emit_trace=True,
         request_locale=None,
         preferred_locales=None,
@@ -267,6 +273,9 @@ def test_root_mcp_exposes_nlu_authoring_phrase_check(monkeypatch) -> None:
             "request_locale": request_locale,
             "preferred_locales": preferred_locales,
             "use_rasa": use_rasa,
+            "use_neuro_lite": use_neuro_lite,
+            "use_neural": use_neural,
+            "collect_all": collect_all,
             "emit_trace": emit_trace,
         }
 

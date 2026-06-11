@@ -55,7 +55,6 @@ def test_nlu_teacher_read_model_lists_templates_and_targets():
         ),
         encoding="utf-8",
     )
-
     scenario_root = Path(ctx.paths.scenarios_dir()) / scenario_id
     scenario_root.mkdir(parents=True, exist_ok=True)
     (scenario_root / "scenario.json").write_text(
@@ -200,6 +199,44 @@ async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
         ),
         encoding="utf-8",
     )
+    (skill_root / "webui.json").write_text(
+        json.dumps(
+            {
+                "voice_capabilities": [
+                    {
+                        "id": "surface.demo.query",
+                        "kind": "queryable_ui_section",
+                        "title": "Surface demo section",
+                        "labels": {"en": ["surface demo section"], "ru": ["раздел демо"]},
+                        "result_modes": ["open_ui", "voice_summary"],
+                        "default_result_mode": "open_ui",
+                        "side_effect_class": "read_only",
+                        "activation": [
+                            {"type": "desktop.open_modal", "params": {"modal_id": "surface_modal"}},
+                            {"type": "ui.affordance.activate", "params": {"affordance_id": "surface.demo.section"}},
+                        ],
+                    }
+                ],
+                "voice_affordances": [
+                    {
+                        "id": "surface.demo.section",
+                        "kind": "ui_section",
+                        "parent": "surface_modal",
+                        "title": "Surface Demo",
+                        "labels": {"en": ["surface demo"], "ru": ["демо поверхность"]},
+                        "side_effect_class": "ui_navigation",
+                        "activation": [
+                            {"type": "desktop.open_modal", "params": {"modal_id": "surface_modal"}},
+                            {"type": "ui.focus_widget", "params": {"widget_id": "surface-demo-widget"}},
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     try:
         async with async_get_ydoc(webspace_id) as ydoc:
@@ -282,6 +319,14 @@ async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
         assert surface["process_state"]["process_rows"][0]["id"] == "job-1"
         assert any(item.get("id") == "host.desktop.modal.open" for item in surface["available_actions"])
         assert any(item.get("owner") == {"type": "skill", "id": skill_id} for item in surface["available_actions"])
+        voice_capability = next(item for item in surface["voice_capabilities"] if item.get("id") == "surface.demo.query")
+        voice_affordance = next(item for item in surface["voice_affordances"] if item.get("id") == "surface.demo.section")
+        assert voice_capability["owner"] == {"type": "skill", "id": skill_id}
+        assert voice_capability["result_modes"] == ["open_ui", "voice_summary"]
+        assert voice_capability["availability"]["status"] == "reachable"
+        assert voice_affordance["parent"] == "surface_modal"
+        assert voice_affordance["availability"]["status"] == "reachable"
+        assert surface["voice_surface"]["voice_affordances_count"] >= 1
         hint_rows = [item for item in surface["developer_hints"] if item.get("owner") == {"type": "skill", "id": skill_id}]
         assert hint_rows
         assert hint_rows[0]["hints"]["primary_actions"][0]["intent"] == "surface.demo"

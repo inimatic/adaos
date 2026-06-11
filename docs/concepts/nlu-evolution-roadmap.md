@@ -182,14 +182,15 @@ Required model:
 
 Acceptance checklist:
 
-- [ ] `[must]` Define minimal `voice_capabilities` / `voice_affordances`
+- [x] `[must]` Define minimal `voice_capabilities` / `voice_affordances`
   descriptor contract for skill, scenario, and core surfaces.
-- [ ] `[must]` Root MCP/API exposes the current available voice surface for the
+- [x] `[must]` Root MCP/API exposes the current available voice surface for the
   target webspace/subnet.
-- [ ] `[must]` Infrastate publishes affordances for installed skills,
-  installed scenarios, environment variables, and core status sections.
-- [ ] `[must]` NLU Teacher prefers a published capability/affordance candidate
-  over a guessed modal regex.
+- [x] `[must]` Infrastate publishes affordances for installed skills,
+  installed scenarios, and core status sections; `subnet_env` publishes the
+  subnet environment variables capability as its owning skill surface.
+- [x] `[must]` NLU Teacher prompt rails prefer a published
+  capability/affordance candidate over a guessed modal regex.
 - [ ] `[must]` Missing published affordance for an existing UI capability creates
   `descriptor_fix`, not an overfitted template.
 
