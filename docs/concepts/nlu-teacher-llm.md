@@ -192,6 +192,8 @@ LLM teacher receives a compact context snapshot (per webspace), including:
 - routing hints (`intent_routes`: scenario intent -> callSkill topic -> skill)
 - system actions visible in the current scenario (`system_actions`) and a published host action catalog (`host_actions`)
   with stable action ids, linked intents, slots, host event names, and training examples
+- `voice_capabilities`: user-facing command/query/tool capabilities with
+  result modes, side-effect class, activation, and verification hints
 - `voice_affordances`: nested UI targets such as modal tabs, sections,
   toolbar buttons, row actions, filters, and process controls with stable ids,
   parent target, labels/aliases, visibility condition, side-effect class, and
@@ -213,9 +215,10 @@ LLM teacher receives a compact context snapshot (per webspace), including:
   - `action_surface.available_actions`: governed system/interface actions and
     skill/scenario intent routes with owner, slots, examples, side-effect
     class, preview method, and fingerprint
-  - `action_surface.voice_affordances`: governed nested UI affordances that
-    may require compound activation, for example opening `infrastate_modal`
-    and selecting the Installed skills section
+  - `action_surface.voice_capabilities` / `action_surface.voice_affordances`:
+    governed user-facing command/query/tool capabilities and nested UI
+    affordances that may require compound activation, for example opening
+    `infrastate_modal` and selecting the Installed skills section
   - `process_state`: Teacher queue counters, workbench signals, recent Teacher
     events, and compact job/operation/process/task rows
   - `developer_hints`: compact `llm_hints` / `nlu_hints` from skill/scenario

@@ -302,6 +302,18 @@ def _compact_nlu_authoring_snapshot_uncached() -> dict[str, Any]:
                     (context_surface.get("available_actions") if isinstance(context_surface, Mapping) else []) or [],
                     list_limit=max_actions,
                 ),
+                "voice_capabilities": _compact_value(
+                    (context_surface.get("voice_capabilities") if isinstance(context_surface, Mapping) else []) or [],
+                    list_limit=max_actions,
+                ),
+                "voice_affordances": _compact_value(
+                    (context_surface.get("voice_affordances") if isinstance(context_surface, Mapping) else []) or [],
+                    list_limit=max_actions,
+                ),
+                "voice_surface": _compact_value(
+                    (context_surface.get("voice_surface") if isinstance(context_surface, Mapping) else {}) or {},
+                    list_limit=20,
+                ),
                 "lookup_summary": _compact_value(
                     (context_surface.get("lookup_summary") if isinstance(context_surface, Mapping) else []) or [],
                     list_limit=120,

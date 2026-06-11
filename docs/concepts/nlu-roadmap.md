@@ -271,11 +271,15 @@ below remain useful for tracking existing implementation work.
   `action_surface.available_actions` with system/interface actions,
   skill/scenario intent routes, required slots, examples, side-effect class,
   owner, preview method, and fingerprint.
-- [ ] `[must]` Publish `voice_affordances` for nested UI targets: modal tabs,
+- [x] `[must]` Publish `voice_affordances` for nested UI targets: modal tabs,
   sections, command buttons, list/table actions, filters, and process controls
   that are visible or contextually reachable. Each affordance needs a stable
   id, parent target, labels/aliases, locale, owner, visibility condition,
   side-effect class, and a previewable activation path.
+- [x] `[must]` Gate 2 implementation slice: `webui.json` can declare
+  `voice_capabilities` and `voice_affordances`; the NLU read model, Root MCP
+  live context, and root-cached NLU snapshot expose them. Infrastate Inventory
+  and Subnet Env publish the first concrete capability/affordance descriptors.
 - [ ] `[must]` Support compound interface candidates that combine a container
   action with an affordance activation, for example open `infrastate_modal`
   and select `infrastate.installed_skills`. Apply/dispatch must still go

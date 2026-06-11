@@ -1690,6 +1690,13 @@ def _handle_nlu_authoring_context(arguments: dict[str, Any], *, dry_run: bool) -
                 "available_actions": list(action_surface.get("available_actions") or [])[:200]
                 if isinstance(action_surface.get("available_actions"), list)
                 else [],
+                "voice_capabilities": list(action_surface.get("voice_capabilities") or [])[:200]
+                if isinstance(action_surface.get("voice_capabilities"), list)
+                else [],
+                "voice_affordances": list(action_surface.get("voice_affordances") or [])[:200]
+                if isinstance(action_surface.get("voice_affordances"), list)
+                else [],
+                "voice_surface": action_surface.get("voice_surface") if isinstance(action_surface.get("voice_surface"), Mapping) else {},
                 "lookup_summary": list(action_surface.get("lookup_summary") or [])
                 if isinstance(action_surface.get("lookup_summary"), list)
                 else [],
