@@ -37,3 +37,17 @@ def test_sqlite_connect_sets_foreign_keys(tmp_path: Path) -> None:
 
     assert row is not None
     assert row[0] == 1
+
+
+def test_sqlite_context_manager_closes_connection(tmp_path: Path) -> None:
+    sql = SQLite(_FakePaths(tmp_path))
+
+    with sql.connect() as con:
+        con.execute("SELECT 1").fetchone()
+
+    try:
+        con.execute("SELECT 1").fetchone()
+    except sqlite3.ProgrammingError as exc:
+        assert "closed" in str(exc).lower()
+    else:
+        raise AssertionError("SQLite connection remained usable after context exit")
