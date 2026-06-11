@@ -372,6 +372,36 @@ def test_connectivity_snapshot_uses_channel_overview_when_supervisor_link_tempor
     assert required["blockers"] == []
 
 
+def test_connectivity_snapshot_keeps_degraded_upstream_link_distinct_from_reconnect() -> None:
+    snapshot = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root_browser": {
+                "effective_status": "degraded",
+                "effective_state": "unstable",
+            }
+        },
+        supervisor_runtime={
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "degraded",
+                "reason": "browser route degraded; preserving active runtime-owned tunnels",
+                "served_by": "supervisor",
+                "blockers": [],
+            },
+            "status": {},
+        },
+    )
+
+    required = snapshot["required_upstream_link"]
+    assert required["transport_state"] == "degraded"
+    assert required["transition_state"] == "degraded"
+    assert required["planned_transition"] == {
+        "active": False,
+        "reason": "browser route degraded; preserving active runtime-owned tunnels",
+    }
+
+
 def test_hub_reliability_snapshot_exposes_route_reset_runtime_details() -> None:
     _reset_state()
     observe_hub_root_route_runtime(
