@@ -2,6 +2,11 @@
 
 This document describes the current production MVP direction for intent detection in AdaOS.
 
+For the controlled-evolution sequence of NLU Teacher, voice capabilities,
+Builder handoff, promotion, and regression gates, see
+[NLU Teacher Evolution Roadmap](./nlu-evolution-roadmap.md). The detailed
+technical checklist remains in [NLU Roadmap Checklist](./nlu-roadmap.md).
+
 ## MVP baseline
 
 - Pipeline: `regex` -> `neuro_lite (experimental weak-device service-skill, optional)` -> `neural (service-skill, optional when installed)` -> `rasa (service-skill, long-term fallback)` -> `teacher (LLM in the loop)`

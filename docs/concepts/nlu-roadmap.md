@@ -17,6 +17,11 @@ The roadmap is organized into working lanes:
 - Safety/evaluation lane: auth, audit, false-positive checks, regression, and
   promotion gates.
 
+The delivery order is use-case gated. [NLU Teacher Evolution Roadmap](./nlu-evolution-roadmap.md)
+is the master-detail entry point for controlled evolution: each implementation
+slice should close a replayable user loop before broadening the surface. This
+document remains the detailed technical checklist behind those gates.
+
 The existing API remains the implementation backend. Root MCP should wrap or
 proxy governed NLU authoring capabilities; it should not become a second source
 of truth for templates, candidates, or dispatch behavior.
@@ -108,6 +113,29 @@ clarification loop over a deterministic AdaOS runtime:
 
 Core invariant: AdaOS acts deterministically when understanding is sufficient,
 and uses LLM dialog only to reduce uncertainty or improve the domain model.
+
+## Use-Case-Gated Evolution Spine
+
+The target architecture is delivered through vertical gates rather than by
+finishing every technical lane in isolation. The canonical gate list lives in
+[nlu-evolution-roadmap.md](./nlu-evolution-roadmap.md).
+
+Each gate must prove a useful result:
+
+- a concrete user phrase reaches a terminal visible outcome;
+- uncertainty is reduced by a structured clarification or repair state;
+- any learned artifact is previewed, applied, verified, scoped, and
+  rollbackable;
+- the repeated request demonstrates deterministic behavior without another LLM
+  call when the target action is deterministic;
+- missing descriptors and missing capabilities become Builder handoff
+  candidates instead of fake intents.
+
+The detailed lanes below should be selected only when they advance the next
+gate. For example, `voice_affordances` are not an abstract descriptor project;
+they are the required contract for the `Show installed skills` nested
+affordance gate. Analytics is not a dashboard project; it first has to answer
+the QA questions defined by the gate evidence.
 
 ## Architectural Detail Anchors
 
