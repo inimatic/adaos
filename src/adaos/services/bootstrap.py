@@ -1172,6 +1172,8 @@ def _build_realtime_sidecar_fallback_candidates(
         if not candidate_text or candidate_text == local_candidate:
             continue
         if candidate_text.startswith("ws"):
+            if candidate_text not in fallback_candidates:
+                fallback_candidates.append(candidate_text)
             continue
         if not allow_tcp_fallback:
             continue

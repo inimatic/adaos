@@ -60,7 +60,7 @@ def test_realtime_sidecar_fallback_candidates_disable_tcp_fallback_by_default(mo
             ["nats://nats.inimatic.com:4222", "wss://nats.inimatic.com/nats"],
             local_candidate="nats://127.0.0.1:7422",
         )
-        == []
+        == ["wss://nats.inimatic.com/nats"]
     )
 
 
@@ -70,7 +70,7 @@ def test_realtime_sidecar_fallback_candidates_can_keep_raw_tcp_fallback(monkeypa
     assert bootstrap_mod._build_realtime_sidecar_fallback_candidates(
         ["nats://nats.inimatic.com:4222", "wss://nats.inimatic.com/nats"],
         local_candidate="nats://127.0.0.1:7422",
-    ) == ["nats://nats.inimatic.com:4222"]
+    ) == ["nats://nats.inimatic.com:4222", "wss://nats.inimatic.com/nats"]
 
 
 def test_resolve_nats_log_server_prefers_current_attempt() -> None:
