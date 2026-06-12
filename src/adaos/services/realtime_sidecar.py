@@ -854,6 +854,22 @@ def _ws_socket(ws: Any) -> Any | None:
         return None
 
 
+def _is_normal_ws_close(exc: BaseException) -> bool:
+    if type(exc).__name__ == "ConnectionClosedOK":
+        return True
+    code = getattr(exc, "code", None)
+    if code in {1000, 1001}:
+        return True
+    sent = getattr(exc, "sent", None)
+    rcvd = getattr(exc, "rcvd", None)
+    sent_code = getattr(sent, "code", None)
+    rcvd_code = getattr(rcvd, "code", None)
+    return bool(
+        sent_code in {1000, 1001}
+        and (rcvd_code is None or rcvd_code in {1000, 1001})
+    )
+
+
 def _sidecar_loop_mode() -> str:
     raw = os.getenv("ADAOS_REALTIME_WIN_LOOP")
     if raw is None:
@@ -1687,6 +1703,10 @@ class RealtimeSidecarServer:
                     if recv_task is not None and recv_task.done():
                         try:
                             raw = await recv_task
+                        except Exception as exc:
+                            if _is_normal_ws_close(exc):
+                                return
+                            raise
                         finally:
                             recv_task = None
                         if isinstance(raw, str):
@@ -1747,10 +1767,15 @@ class RealtimeSidecarServer:
                     if recv_task not in done:
                         continue
             finally:
+                cleanup_tasks: list[asyncio.Task[Any]] = []
                 if recv_task is not None and not recv_task.done():
                     recv_task.cancel()
+                    cleanup_tasks.append(recv_task)
                 if wake_task is not None and not wake_task.done():
                     wake_task.cancel()
+                    cleanup_tasks.append(wake_task)
+                if cleanup_tasks:
+                    await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
         async def _remote_reader_loop() -> None:
             while True:

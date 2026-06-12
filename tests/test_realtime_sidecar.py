@@ -43,6 +43,15 @@ class _FakeRemoteWS:
         return None
 
 
+class ConnectionClosedOK(Exception):
+    pass
+
+
+class _FakeNormalCloseRemoteWS(_FakeRemoteWS):
+    async def recv(self) -> bytes:
+        raise ConnectionClosedOK("normal close")
+
+
 class _FakeAuthRemoteWS(_FakeRemoteWS):
     def __init__(self) -> None:
         super().__init__()
@@ -717,6 +726,39 @@ async def test_realtime_sidecar_relays_bytes_between_local_nats_and_remote_ws(
         data = await asyncio.wait_for(reader.readexactly(len(b"INFO {}\r\n")), timeout=1.0)
 
         assert data == b"INFO {}\r\n"
+
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_treats_normal_remote_ws_close_as_session_close(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    fake_ws = _FakeNormalCloseRemoteWS()
+
+    async def _fake_connect(*args, **kwargs):
+        return fake_ws
+
+    import websockets  # type: ignore
+
+    monkeypatch.setattr(websockets, "connect", _fake_connect)
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        await asyncio.wait_for(reader.read(), timeout=1.0)
+
+        assert fake_ws.closed is True
+        assert server._stats.session_close_total == 1
+        assert server._stats.last_error is None
 
         writer.close()
         await writer.wait_closed()
