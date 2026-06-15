@@ -2865,10 +2865,51 @@ _ROOT_LLM_POLICY_DENIAL_CODES = {
     "subnet_retired",
 }
 
+_ROOT_LLM_QUOTA_CODES = {
+    "billing_hard_limit_reached",
+    "insufficient_quota",
+    "quota_exceeded",
+}
+
+_ROOT_LLM_RATE_LIMIT_CODES = {
+    "rate_limit_exceeded",
+    "requests_rate_limit_exceeded",
+    "tokens_rate_limit_exceeded",
+}
+
+_ROOT_LLM_TIMEOUT_CODES = {
+    "gateway_timeout",
+    "timeout",
+    "upstream_timeout",
+}
+
+_ROOT_LLM_UPSTREAM_CODES = {
+    "server_error",
+    "upstream_error",
+}
+
 
 def _llm_deferred_reason(exc: Exception) -> str:
-    if isinstance(exc, RootHttpError) and _root_http_error_code(exc) in _ROOT_LLM_POLICY_DENIAL_CODES:
-        return "root_llm_policy_denied"
+    text = str(exc).lower()
+    if isinstance(exc, RootHttpError):
+        status_code = int(getattr(exc, "status_code", 0) or 0)
+        code = _root_http_error_code(exc)
+        if code in _ROOT_LLM_POLICY_DENIAL_CODES:
+            return "root_llm_policy_denied"
+        if code in _ROOT_LLM_QUOTA_CODES:
+            return "root_llm_quota_exceeded"
+        if status_code == 429 or code in _ROOT_LLM_RATE_LIMIT_CODES:
+            return "root_llm_rate_limited"
+        if status_code == 504 or code in _ROOT_LLM_TIMEOUT_CODES:
+            return "root_llm_timeout"
+        if status_code in {502, 503}:
+            return "root_llm_proxy_unavailable"
+        if status_code >= 500 or code in _ROOT_LLM_UPSTREAM_CODES:
+            return "root_llm_upstream_error"
+        if status_code == 0 and ("timeout" in text or "timed out" in text):
+            return "root_llm_timeout"
+    if "timeout" in text or "timed out" in text:
+        return "root_llm_timeout"
     return "root_llm_unavailable"
 
 

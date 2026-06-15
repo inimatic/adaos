@@ -645,6 +645,53 @@ async def test_llm_teacher_reports_root_policy_denial_separately(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_reports_openai_upstream_error_separately(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-llm-deferred-upstream-error"
+
+    async def _upstream_error_llm_call(messages, *, request_id=None, **kwargs):
+        raise llm.RootHttpError(
+            "An error occurred while processing your request.",
+            status_code=500,
+            payload={"error": {"code": "server_error", "message": "An error occurred while processing your request."}},
+        )
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_llm_call", _upstream_error_llm_call)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.upstream",
+                "request_id": "req.upstream",
+                "text": "show transient upstream panel",
+                "reason": "rasa_low_confidence",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        queue = list(teacher.get("deferred_enrichment_queue") or [])
+        logs = list(teacher.get("llm_logs") or [])
+
+    assert queue[-1]["reason"] == "root_llm_upstream_error"
+    assert "server_error" in queue[-1]["error"]
+    assert logs[-1]["status"] == "error"
+    assert teacher["budget"]["by_reason"]["root_llm_upstream_error"] >= 1
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_suppresses_repeated_phrase_before_llm(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
