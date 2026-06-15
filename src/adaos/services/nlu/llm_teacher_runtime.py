@@ -72,6 +72,13 @@ _LLM_TEACHER_ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_LLM_TEACHE
 _MODEL = os.getenv("ADAOS_NLU_LLM_MODEL") or os.getenv("OPENAI_RESPONSES_MODEL") or "gpt-4o-mini"
 _MAX_TOKENS = int(os.getenv("ADAOS_NLU_LLM_MAX_TOKENS", "500") or "500")
 _TIMEOUT_S = float(os.getenv("ADAOS_NLU_LLM_TIMEOUT_S", "90") or "90")
+_LLM_RETRY_MAX_ATTEMPTS = max(1, int(os.getenv("ADAOS_NLU_LLM_RETRY_MAX_ATTEMPTS", "4") or "4"))
+_LLM_RETRY_BASE_DELAY_S = max(0.0, float(os.getenv("ADAOS_NLU_LLM_RETRY_BASE_DELAY_S", "0.75") or "0.75"))
+_LLM_RETRY_MAX_DELAY_S = max(0.0, float(os.getenv("ADAOS_NLU_LLM_RETRY_MAX_DELAY_S", "6") or "6"))
+_LLM_RETRY_NOTICE_AFTER_ATTEMPT = max(
+    1,
+    int(os.getenv("ADAOS_NLU_LLM_RETRY_NOTICE_AFTER_ATTEMPT", "2") or "2"),
+)
 _ROOT_LLM_BASE_URL = (
     os.getenv("ADAOS_ROOT_LLM_BASE_URL")
     or os.getenv("ADAOS_NLU_TEACHER_LLM_ROOT_BASE_URL")
@@ -2919,6 +2926,164 @@ def _llm_deferred_error(exc: Exception) -> str:
     return f"{code}: {text}" if code and code not in text else text
 
 
+_ROOT_LLM_RETRYABLE_REASONS = {
+    "root_llm_proxy_unavailable",
+    "root_llm_rate_limited",
+    "root_llm_timeout",
+    "root_llm_unavailable",
+    "root_llm_upstream_error",
+}
+
+
+def _llm_deferred_reason_retryable(reason: str) -> bool:
+    return str(reason or "").strip() in _ROOT_LLM_RETRYABLE_REASONS
+
+
+def _llm_retry_delay_s(failed_attempt: int) -> float:
+    if _LLM_RETRY_BASE_DELAY_S <= 0.0:
+        return 0.0
+    delay = _LLM_RETRY_BASE_DELAY_S * (2 ** max(0, int(failed_attempt) - 1))
+    return min(float(_LLM_RETRY_MAX_DELAY_S), float(delay)) if _LLM_RETRY_MAX_DELAY_S > 0.0 else float(delay)
+
+
+async def _record_llm_retrying(
+    webspace_id: str,
+    *,
+    request_id: str,
+    text: str,
+    reason: str,
+    error: str | None,
+    log_id: str | None,
+    attempt: int,
+    max_attempts: int,
+    next_delay_s: float,
+    meta: Mapping[str, Any],
+) -> None:
+    payload = {
+        "webspace_id": webspace_id,
+        "request_id": request_id,
+        "reason": reason,
+        "error": error,
+        "log_id": log_id,
+        "attempt": int(attempt),
+        "max_attempts": int(max_attempts),
+        "next_delay_s": float(next_delay_s),
+        "_meta": dict(meta),
+    }
+    try:
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=text,
+                kind="llm.retrying",
+                title="LLM enrichment retrying",
+                subtitle=f"{reason} attempt {attempt}/{max_attempts}",
+                raw=payload,
+                meta=meta,
+            ),
+        )
+    except Exception:
+        _log.debug("failed to append teacher event (llm.retrying) webspace=%s", webspace_id, exc_info=True)
+    try:
+        bus_emit(get_ctx().bus, "nlp.teacher.llm.retrying", payload, source="nlu.teacher.llm")
+    except Exception:
+        pass
+
+
+async def _llm_call_with_retries(
+    messages: list[dict[str, str]],
+    *,
+    webspace_id: str,
+    request_id: str,
+    request_text: str,
+    log_id: str,
+    meta: Mapping[str, Any],
+    llm_kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    max_attempts = max(1, int(_LLM_RETRY_MAX_ATTEMPTS))
+    retry_attempts: list[dict[str, Any]] = []
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await _llm_call(messages, **dict(llm_kwargs))
+            if retry_attempts:
+                try:
+                    await _patch_llm_log(
+                        webspace_id,
+                        log_id=log_id,
+                        patch={
+                            "retry": {
+                                "status": "succeeded",
+                                "attempt_count": attempt,
+                                "max_attempts": max_attempts,
+                                "attempts": list(retry_attempts),
+                            }
+                        },
+                    )
+                except Exception:
+                    _log.debug("failed to patch llm retry log webspace=%s", webspace_id, exc_info=True)
+            return result
+        except Exception as exc:
+            reason = _llm_deferred_reason(exc)
+            error = _llm_deferred_error(exc)
+            retryable = _llm_deferred_reason_retryable(reason)
+            will_retry = retryable and attempt < max_attempts
+            next_delay_s = _llm_retry_delay_s(attempt) if will_retry else 0.0
+            retry_attempts.append(
+                {
+                    "attempt": attempt,
+                    "ts": time.time(),
+                    "reason": reason,
+                    "error": error,
+                    "retryable": retryable,
+                    "will_retry": will_retry,
+                    "next_delay_s": next_delay_s,
+                }
+            )
+            try:
+                await _patch_llm_log(
+                    webspace_id,
+                    log_id=log_id,
+                    patch={
+                        "retry": {
+                            "status": "retrying" if will_retry else ("exhausted" if retryable else "not_retryable"),
+                            "attempt_count": attempt,
+                            "max_attempts": max_attempts,
+                            "attempts": list(retry_attempts),
+                        }
+                    },
+                )
+            except Exception:
+                _log.debug("failed to patch llm retry log webspace=%s", webspace_id, exc_info=True)
+            if not will_retry:
+                raise
+            if attempt == min(max_attempts - 1, int(_LLM_RETRY_NOTICE_AFTER_ATTEMPT)):
+                await _record_llm_retrying(
+                    webspace_id,
+                    request_id=request_id,
+                    text=request_text,
+                    reason=reason,
+                    error=error,
+                    log_id=log_id,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    next_delay_s=next_delay_s,
+                    meta=meta,
+                )
+            _log.warning(
+                "llm teacher call failed; retrying attempt=%s/%s reason=%s delay_s=%.3f error=%s",
+                attempt,
+                max_attempts,
+                reason,
+                next_delay_s,
+                error,
+            )
+            if next_delay_s > 0:
+                await asyncio.sleep(next_delay_s)
+    raise RuntimeError("root LLM retry loop exited without result")
+
+
 async def _llm_call(
     messages: list[dict[str, str]],
     *,
@@ -3637,7 +3802,15 @@ async def _handle_teacher_request(evt: Any) -> None:
                         "max_tool_calls": _LLM_MCP_MAX_TOOL_CALLS,
                     }
                 )
-            res = await _llm_call(messages, **llm_kwargs)
+            res = await _llm_call_with_retries(
+                messages,
+                webspace_id=webspace_id,
+                request_id=str(llm_kwargs.get("request_id") or request_id or log_id),
+                request_text=text,
+                log_id=log_id,
+                meta=req_meta,
+                llm_kwargs=llm_kwargs,
+            )
         except Exception as exc:
             _log.warning("llm teacher call failed: %s", exc)
             deferred_reason = _llm_deferred_reason(exc)

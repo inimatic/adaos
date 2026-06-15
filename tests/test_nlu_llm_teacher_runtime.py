@@ -692,6 +692,123 @@ async def test_llm_teacher_reports_openai_upstream_error_separately(monkeypatch)
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_retries_transient_llm_error_before_success(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-llm-retry-transient-success"
+    calls: list[str] = []
+    retrying: list[dict] = []
+
+    async def _flaky_llm_call(messages, *, request_id=None, **kwargs):
+        calls.append(str(request_id or ""))
+        if len(calls) <= 2:
+            raise llm.RootHttpError(
+                "An error occurred while processing your request.",
+                status_code=500,
+                payload={"error": {"code": "server_error", "message": "An error occurred while processing your request."}},
+            )
+        return {"output": [{"content": [{"type": "output_text", "text": json.dumps({"decision": "ignore", "confidence": 0.0})}]}]}
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_llm_call", _flaky_llm_call)
+    monkeypatch.setattr(llm, "_LLM_RETRY_MAX_ATTEMPTS", 4)
+    monkeypatch.setattr(llm, "_LLM_RETRY_BASE_DELAY_S", 0.0)
+    monkeypatch.setattr(llm, "_LLM_RETRY_NOTICE_AFTER_ATTEMPT", 2)
+
+    ctx.bus.subscribe("nlp.teacher.llm.retrying", lambda ev: retrying.append(dict(ev.payload or {})))
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.retry",
+                "request_id": "req.retry",
+                "text": "show transient retry panel",
+                "reason": "rasa_low_confidence",
+                "via": "rasa",
+                "_meta": {"route_id": "voice_chat"},
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        queue = list(teacher.get("deferred_enrichment_queue") or [])
+        logs = list(teacher.get("llm_logs") or [])
+        events = list(teacher.get("events") or [])
+
+    assert len(calls) == 3
+    assert retrying
+    assert retrying[-1]["reason"] == "root_llm_upstream_error"
+    assert retrying[-1]["attempt"] == 2
+    assert not queue
+    assert any(item.get("kind") == "llm.retrying" for item in events)
+    assert logs[-1]["retry"]["status"] == "succeeded"
+    assert logs[-1]["retry"]["attempt_count"] == 3
+
+
+@pytest.mark.anyio
+async def test_llm_teacher_does_not_retry_quota_error(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-llm-no-retry-quota"
+    calls: list[str] = []
+
+    async def _quota_llm_call(messages, *, request_id=None, **kwargs):
+        calls.append(str(request_id or ""))
+        raise llm.RootHttpError(
+            "insufficient_quota",
+            status_code=429,
+            error_code="insufficient_quota",
+            payload={"error": {"code": "insufficient_quota", "message": "quota exceeded"}},
+        )
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_llm_call", _quota_llm_call)
+    monkeypatch.setattr(llm, "_LLM_RETRY_MAX_ATTEMPTS", 4)
+    monkeypatch.setattr(llm, "_LLM_RETRY_BASE_DELAY_S", 0.0)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.quota",
+                "request_id": "req.quota",
+                "text": "show quota gated panel",
+                "reason": "rasa_low_confidence",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        queue = list(teacher.get("deferred_enrichment_queue") or [])
+        logs = list(teacher.get("llm_logs") or [])
+
+    assert len(calls) == 1
+    assert queue[-1]["reason"] == "root_llm_quota_exceeded"
+    assert logs[-1]["retry"]["status"] == "not_retryable"
+    assert logs[-1]["retry"]["attempt_count"] == 1
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_suppresses_repeated_phrase_before_llm(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm

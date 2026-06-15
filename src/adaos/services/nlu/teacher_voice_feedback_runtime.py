@@ -121,6 +121,28 @@ async def _on_llm_deferred(evt: Any) -> None:
     )
 
 
+@subscribe("nlp.teacher.llm.retrying")
+async def _on_llm_retrying(evt: Any) -> None:
+    payload = _payload(evt)
+    meta = _voice_meta(payload)
+    if meta is None:
+        return
+    webspace_id = _resolve_webspace_id(payload)
+    reason = str(payload.get("reason") or "llm_unavailable").strip()
+    attempt = int(payload.get("attempt") or 0)
+    max_attempts = int(payload.get("max_attempts") or 0)
+    suffix = f" ({attempt}/{max_attempts})" if attempt and max_attempts else ""
+    _emit_chat(
+        webspace_id,
+        (
+            "\u0410\u043d\u0430\u043b\u0438\u0437 \u0447\u0435\u0440\u0435\u0437 LLM/MCP \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e \u0437\u0430\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f"
+            f"{suffix}. \u042f \u0437\u0430\u043f\u0438\u0441\u0430\u043b \u0437\u0430\u043f\u0440\u043e\u0441 \u0438 \u043f\u0440\u043e\u0431\u0443\u044e \u0435\u0449\u0435 \u0440\u0430\u0437. "
+            f"\u041f\u0440\u0438\u0447\u0438\u043d\u0430: {reason}."
+        ),
+        meta,
+    )
+
+
 @subscribe("nlp.teacher.ignored")
 async def _on_llm_ignored(evt: Any) -> None:
     payload = _payload(evt)

@@ -135,6 +135,39 @@ async def test_voice_feedback_reports_deferred_llm():
     assert "root_llm_unavailable" in messages[-1]["text"]
 
 
+@pytest.mark.anyio
+async def test_voice_feedback_reports_llm_retrying():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_voice_feedback_runtime as feedback
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-voice-feedback-retrying"
+    messages: list[dict] = []
+
+    def _capture_chat(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            messages.append(dict(payload))
+
+    ctx.bus.subscribe("io.out.chat.append", _capture_chat)
+
+    await feedback._on_llm_retrying(
+        {
+            "webspace_id": webspace_id,
+            "request_id": "req.retrying",
+            "reason": "root_llm_upstream_error",
+            "attempt": 2,
+            "max_attempts": 4,
+            "_meta": {"route_id": "voice_chat", "webspace_id": webspace_id},
+        }
+    )
+
+    assert messages
+    assert "LLM/MCP" in messages[-1]["text"]
+    assert "2/4" in messages[-1]["text"]
+    assert "root_llm_upstream_error" in messages[-1]["text"]
+
+
 def test_open_modal_repair_matches_alias_inside_user_phrase():
     from adaos.services.nlu import llm_teacher_runtime as llm
 
