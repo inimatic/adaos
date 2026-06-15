@@ -1277,7 +1277,12 @@ class BootstrapService:
         self._hub_root_bridge_factory = coro_factory
         return self._start_boot_task_once(self._hub_root_bridge_task_name, coro_factory)
 
-    def _ensure_hub_root_bridge_task(self) -> dict[str, Any]:
+    def _ensure_hub_root_bridge_task(
+        self,
+        *,
+        force_rearm: bool = False,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
         factory = self._hub_root_bridge_factory
         task_name = self._hub_root_bridge_task_name
         if not callable(factory):
@@ -1289,12 +1294,39 @@ class BootstrapService:
             }
         existing = self._find_live_boot_task(task_name)
         if existing is not None:
-            return {
-                "attempted": True,
-                "started": False,
-                "task_name": task_name,
-                "state": "already_running",
-            }
+            if not force_rearm:
+                return {
+                    "attempted": True,
+                    "started": False,
+                    "task_name": task_name,
+                    "state": "already_running",
+                }
+            try:
+                existing.cancel()
+            except Exception:
+                pass
+            self._boot_tasks = [task for task in self._boot_tasks if task is not existing]
+            try:
+                task = asyncio.create_task(factory(), name=task_name)
+                self._boot_tasks.append(task)
+                return {
+                    "attempted": True,
+                    "started": True,
+                    "task_name": task_name,
+                    "state": "rearmed",
+                    "reason": str(reason or "forced_rearm"),
+                    "cancelled_previous": True,
+                }
+            except Exception as exc:
+                return {
+                    "attempted": True,
+                    "started": False,
+                    "task_name": task_name,
+                    "state": "failed",
+                    "reason": str(reason or "forced_rearm"),
+                    "cancelled_previous": True,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
         try:
             task = asyncio.create_task(factory(), name=task_name)
             self._boot_tasks.append(task)
@@ -1487,7 +1519,11 @@ class BootstrapService:
                 except Exception:
                     pass
             try:
-                bridge_diag = self._ensure_hub_root_bridge_task()
+                force_bridge_rearm = nc is None or bool(close_diag.get("timeout"))
+                bridge_diag = self._ensure_hub_root_bridge_task(
+                    force_rearm=force_bridge_rearm,
+                    reason="manual_reconnect_without_active_nats" if nc is None else "manual_reconnect_close_timeout",
+                )
                 if bridge_diag.get("started"):
                     try:
                         record_hub_root_transport_event(

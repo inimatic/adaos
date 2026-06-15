@@ -181,6 +181,48 @@ async def test_hub_root_reconnect_rearms_completed_bridge_task() -> None:
         await asyncio.gather(*service._boot_tasks, return_exceptions=True)
 
 
+@pytest.mark.asyncio
+async def test_hub_root_reconnect_rearms_running_bridge_without_active_connection() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    started = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        started.set()
+        await stop.wait()
+
+    old_task = asyncio.create_task(asyncio.sleep(3600), name=service._hub_root_bridge_task_name)
+    service._hub_root_bridge_factory = bridge
+    service._boot_tasks.append(old_task)
+
+    try:
+        result = await service.request_hub_root_reconnect()
+
+        assert result["ok"] is True
+        assert result["close"]["attempted"] is False
+        assert result["bridge"]["attempted"] is True
+        assert result["bridge"]["started"] is True
+        assert result["bridge"]["state"] == "rearmed"
+        assert result["bridge"]["reason"] == "manual_reconnect_without_active_nats"
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        live_task = service._find_live_boot_task(service._hub_root_bridge_task_name)
+        assert live_task is not None
+        assert live_task is not old_task
+        assert old_task.cancelled() or old_task.done()
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        old_task.cancel()
+        await asyncio.gather(*service._boot_tasks, old_task, return_exceptions=True)
+
+
 def test_hub_route_max_chunk_raw_accounts_for_base64_overhead(monkeypatch) -> None:
     monkeypatch.delenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", raising=False)
 
