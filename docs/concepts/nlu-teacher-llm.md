@@ -224,6 +224,32 @@ LLM teacher receives a compact context snapshot (per webspace), including:
   - `developer_hints`: compact `llm_hints` / `nlu_hints` from skill/scenario
     manifests and skill `webui.json`
 
+## Capability and affordance decision order
+
+When a user request is not understood, Teacher must resolve it in this order:
+
+1. Look for a matching published `voice_capability` or `voice_affordance` in
+   the live Root MCP context for the current webspace/subnet.
+2. If a matching published surface exists, create an action/binding candidate
+   for that surface. Do not create a `development_task` for behavior that is
+   already published.
+3. If the UI/runtime evidence suggests the behavior exists but the published
+   voice surface is missing or stale, create a `descriptor_fix` candidate with
+   owner, source descriptor path when known, expected replay phrase, and the
+   missing capability/affordance contract.
+4. Only when no current AdaOS surface can satisfy the request should Teacher
+   create a `development_task` for Builder.
+
+This rule is a hard gate for nested UI requests. For example,
+`Покажи установленные навыки` should bind to the Infrastate Inventory installed
+skills affordance when it is visible in MCP; it should not produce a new "show
+installed skills" skill/scenario draft.
+
+The Teacher log must make this decision inspectable: MCP mode, tool calls or
+snapshot fallback, surface fingerprint/freshness, matched or missing
+capability id, candidate kind, and rejection reason if a higher-priority
+published surface was not used.
+
 Goal: prefer improving existing intents (regex rule / dataset revision) over creating a new capability, when possible.
 
 For lookup-backed slots (`scenario_id`, `modal_id`, `app_id`, `node_ref`,

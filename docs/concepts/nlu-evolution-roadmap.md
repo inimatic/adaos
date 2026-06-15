@@ -193,6 +193,25 @@ Acceptance checklist:
   capability/affordance candidate over a guessed modal regex.
 - [ ] `[must]` Missing published affordance for an existing UI capability creates
   `descriptor_fix`, not an overfitted template.
+- [ ] `[must]` Live Root MCP evidence for a real request proves that the LLM saw
+  the matching `voice_capability` / `voice_affordance`, including owner,
+  freshness/fingerprint, and the MCP tool-call/evidence row in the Teacher log.
+- [ ] `[must]` If a matching published capability/affordance exists in live MCP
+  context, Teacher must not create a `development_task` for the same behavior.
+
+Live-trial blocker:
+
+- Phrase: `Покажи установленные навыки`.
+- Expected published surface:
+  `infrastate.inventory.installed_skills.query` and
+  `infrastate.inventory.installed_skills`.
+- Wrong observed outcome: Teacher proposed a new "Show Installed Skills"
+  development task instead of binding the phrase to the published Infrastate
+  inventory affordance.
+- Roadmap consequence: Gate 2 is not closed until this exact phrase produces
+  MCP evidence for the published surface and a capability/affordance candidate,
+  or a `descriptor_fix` if that surface is absent from the live Root MCP
+  snapshot.
 
 ## Gate 3: Nested UI Affordance Execution
 
@@ -221,6 +240,13 @@ Acceptance checklist:
   failed activation reason.
 - [ ] `[must]` Learned template or binding replays into the compound action
   without another LLM call.
+- [ ] `[must]` The first Gate 3 golden conversation is
+  `Покажи установленные навыки`: first run clarifies and applies the binding;
+  repeat run opens Infrastate Inventory / Installed skills through the
+  deterministic runtime path, without Root/OpenAI.
+- [ ] `[must]` Failure to activate a nested affordance creates actionable
+  `descriptor_fix` or runtime-ack evidence instead of falling through to a
+  generic Builder `development_task`.
 - [ ] `[should]` Affordance aliases are locale-aware and can include
   STT-correction variants.
 
@@ -468,8 +494,10 @@ Acceptance checklist:
 The recommended delivery order is:
 
 1. Finish Gate 0 and Gate 1 until the repeated-request proof is stable.
-2. Implement Gate 2 and Gate 3 with Infrastate Inventory as the first real
-   nested affordance.
+2. Re-close Gate 2 and Gate 3 with Infrastate Inventory as the first real
+   nested affordance. Do not broaden into Builder or new capability creation
+   for phrases that should be covered by published `voice_capabilities` /
+   `voice_affordances`.
 3. Add Gate 4 for query/result-mode learning, still using Infrastate Inventory.
 4. Harden Gate 5 and Gate 7 so STT variants and corrections do not corrupt
    templates.
