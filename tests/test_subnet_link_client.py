@@ -35,6 +35,37 @@ if "ypy_websocket" not in sys.modules:
 mod = importlib.import_module("adaos.services.subnet.link_client")
 
 
+def test_member_link_ws_compression_disabled_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SUBNET_LINK_WS_COMPRESSION", raising=False)
+
+    assert mod._member_link_ws_compression() is None
+
+
+def test_member_link_ws_compression_can_be_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUBNET_LINK_WS_COMPRESSION", "1")
+    assert mod._member_link_ws_compression() == "deflate"
+
+    monkeypatch.setenv("ADAOS_SUBNET_LINK_WS_COMPRESSION", "custom")
+    assert mod._member_link_ws_compression() == "custom"
+
+
+def test_member_link_allocator_trim_is_rate_limited(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    calls: list[int] = []
+    ticks = iter([100.0, 120.0, 161.0])
+
+    monkeypatch.setattr(mod.time, "time", lambda: next(ticks))
+    monkeypatch.setattr(mod, "_subnet_link_malloc_trim_min_interval_s", lambda: 60.0)
+    monkeypatch.setattr(mod, "_trim_allocator_after_member_link_cycle", lambda: calls.append(1) or True)
+    monkeypatch.setattr(mod._log, "info", lambda *_args, **_kwargs: None)
+
+    assert client._maybe_trim_allocator_after_link_cycle(reason="first") is True
+    assert client._maybe_trim_allocator_after_link_cycle(reason="second") is False
+    assert client._maybe_trim_allocator_after_link_cycle(reason="third") is True
+    assert len(calls) == 2
+    assert client._allocator_trim_total == 2
+
+
 def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     monkeypatch.setattr(mod, "BUILD_INFO", SimpleNamespace(version="0.1.0", build_date="2026-05-22T09:17:56+03:00"))

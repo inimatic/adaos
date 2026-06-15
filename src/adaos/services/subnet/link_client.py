@@ -57,6 +57,46 @@ def _to_ws_url(http_base: str, path: str) -> str:
     return urllib.parse.urlunparse((scheme, netloc, full_path, "", "", ""))
 
 
+def _env_flag_default_enabled(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off", "none", "disabled"}
+
+
+def _member_link_ws_compression() -> str | None:
+    raw = str(os.getenv("ADAOS_SUBNET_LINK_WS_COMPRESSION") or "").strip()
+    if not raw or raw.lower() in {"0", "false", "no", "off", "none", "disabled"}:
+        return None
+    if raw.lower() in {"1", "true", "yes", "on", "deflate"}:
+        return "deflate"
+    return raw
+
+
+def _subnet_link_malloc_trim_min_interval_s() -> float:
+    raw = str(os.getenv("ADAOS_SUBNET_LINK_MALLOC_TRIM_MIN_INTERVAL_S") or "").strip()
+    try:
+        value = float(raw or 5.0)
+    except Exception:
+        value = 5.0
+    return max(0.0, min(value, 3600.0))
+
+
+def _trim_allocator_after_member_link_cycle() -> bool:
+    if not _env_flag_default_enabled("ADAOS_SUBNET_LINK_MALLOC_TRIM"):
+        return False
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6")
+        trim = getattr(libc, "malloc_trim", None)
+        if not callable(trim):
+            return False
+        return bool(trim(0))
+    except Exception:
+        return False
+
+
 def _member_link_transition_snapshot() -> dict[str, Any]:
     update_status = read_core_update_status() or {}
     lifecycle = runtime_lifecycle_snapshot()
@@ -217,9 +257,14 @@ class MemberLinkClient:
         self._last_link_session_end_log_at = 0.0
         self._ws_control_ping_interval_s_last: float | None = None
         self._ws_control_ping_timeout_s_last: float | None = None
+        self._ws_compression_last: str | None = None
         self._last_ws_close_code: int | None = None
         self._last_ws_close_reason = ""
         self._last_ws_close_error = ""
+        self._last_allocator_trim_attempt_at = 0.0
+        self._last_allocator_trim_at = 0.0
+        self._last_allocator_trim_reason = ""
+        self._allocator_trim_total = 0
 
     @staticmethod
     def _pong_stale_after_s() -> float:
@@ -339,9 +384,24 @@ class MemberLinkClient:
             "last_hub_event_ago_s": round(max(0.0, now - self._last_hub_event_at), 3) if self._last_hub_event_at else None,
             "ws_control_ping_interval_s": self._ws_control_ping_interval_s_last,
             "ws_control_ping_timeout_s": self._ws_control_ping_timeout_s_last,
+            "ws_compression": self._ws_compression_last,
             "last_ws_close_code": self._last_ws_close_code,
             "last_ws_close_reason": self._last_ws_close_reason or None,
             "last_ws_close_error": self._last_ws_close_error or None,
+            "allocator_trim": {
+                "total": int(self._allocator_trim_total),
+                "last_attempt_ago_s": (
+                    round(max(0.0, now - self._last_allocator_trim_attempt_at), 3)
+                    if self._last_allocator_trim_attempt_at
+                    else None
+                ),
+                "last_success_ago_s": (
+                    round(max(0.0, now - self._last_allocator_trim_at), 3)
+                    if self._last_allocator_trim_at
+                    else None
+                ),
+                "last_reason": self._last_allocator_trim_reason or None,
+            },
             "last_hub_core_update": last_hub_core_update,
             "last_follow_key": self._last_follow_key or None,
             "last_follow_result": dict(self._last_follow_result) if isinstance(self._last_follow_result, dict) else {},
@@ -727,6 +787,7 @@ class MemberLinkClient:
                 self._remove_ystore_listener()
         except Exception:
             pass
+        self._maybe_trim_allocator_after_link_cycle(reason="client_stop")
 
     def _install_ystore_listener(self) -> None:
         if not self._yjs_enabled:
@@ -976,12 +1037,15 @@ class MemberLinkClient:
             sender_t: asyncio.Task | None = None
             receiver_t: asyncio.Task | None = None
             ping_t: asyncio.Task | None = None
+            status_t: asyncio.Task | None = None
             snapshot_t: asyncio.Task | None = None
             try:
                 ws_ping_interval_s = self._ws_control_ping_interval_s()
                 ws_ping_timeout_s = self._ws_control_ping_timeout_s(ws_ping_interval_s)
+                ws_compression = _member_link_ws_compression()
                 self._ws_control_ping_interval_s_last = ws_ping_interval_s
                 self._ws_control_ping_timeout_s_last = ws_ping_timeout_s
+                self._ws_compression_last = ws_compression
                 self._last_ws_close_code = None
                 self._last_ws_close_reason = ""
                 self._last_ws_close_error = ""
@@ -991,6 +1055,7 @@ class MemberLinkClient:
                     max_size=None,
                     ping_interval=ws_ping_interval_s,
                     ping_timeout=ws_ping_timeout_s,
+                    compression=ws_compression,
                 ) as ws:
                     self._connected.set()
                     self._connected_at = time.time()
@@ -1175,7 +1240,7 @@ class MemberLinkClient:
                         self._last_link_session_end_log_at = now
                         log_fn = _log.warning
                     log_fn(
-                        "subnet link session ended ws=%s done=%s connected_for_s=%.3f last_message_ago_s=%.3f last_pong_ago_s=%.3f queue=%d close_code=%s close_reason=%s close_error=%s ws_ping_interval=%s ws_ping_timeout=%s",
+                        "subnet link session ended ws=%s done=%s connected_for_s=%.3f last_message_ago_s=%.3f last_pong_ago_s=%.3f queue=%d close_code=%s close_reason=%s close_error=%s ws_ping_interval=%s ws_ping_timeout=%s ws_compression=%s",
                         ws_url,
                         ",".join(done_diag) or "-",
                         max(0.0, now - float(self._connected_at or 0.0)),
@@ -1187,24 +1252,53 @@ class MemberLinkClient:
                         self._last_ws_close_error or "-",
                         ws_ping_interval_s,
                         ws_ping_timeout_s,
+                        ws_compression or "disabled",
                     )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 _log.debug("subnet link connect failed ws=%s err=%s", ws_url, exc)
             finally:
-                for t in (sender_t, receiver_t, ping_t, snapshot_t):
+                had_session = self._connected_at > 0.0
+                for t in (sender_t, receiver_t, ping_t, status_t, snapshot_t):
                     if t and not t.done():
                         t.cancel()
                 try:
-                    await asyncio.gather(*(t for t in (sender_t, receiver_t, ping_t, snapshot_t) if t), return_exceptions=True)
+                    await asyncio.gather(
+                        *(t for t in (sender_t, receiver_t, ping_t, status_t, snapshot_t) if t),
+                        return_exceptions=True,
+                    )
                 except Exception:
                     pass
                 self._connected.clear()
                 self._connected_at = 0.0
+                if had_session:
+                    self._maybe_trim_allocator_after_link_cycle(reason="session_end")
 
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2.0, 15.0)
+
+    def _maybe_trim_allocator_after_link_cycle(self, *, reason: str) -> bool:
+        now = time.time()
+        min_interval_s = _subnet_link_malloc_trim_min_interval_s()
+        last_attempt = float(self._last_allocator_trim_attempt_at or 0.0)
+        if last_attempt > 0.0 and (now - last_attempt) < min_interval_s:
+            return False
+        self._last_allocator_trim_attempt_at = now
+        trimmed = _trim_allocator_after_member_link_cycle()
+        if trimmed:
+            self._last_allocator_trim_at = now
+            self._last_allocator_trim_reason = str(reason or "")
+            self._allocator_trim_total += 1
+            _log.info(
+                "subnet link allocator trim completed reason=%s total=%d min_interval_s=%.3f",
+                self._last_allocator_trim_reason or "-",
+                self._allocator_trim_total,
+                min_interval_s,
+            )
+        else:
+            _log.debug("subnet link allocator trim skipped reason=%s min_interval_s=%.3f", reason, min_interval_s)
+        return trimmed
 
     def _remember_ws_close(self, exc: BaseException) -> None:
         self._last_ws_close_error = type(exc).__name__
