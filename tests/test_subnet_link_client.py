@@ -115,6 +115,49 @@ def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> No
     assert snapshot["slots"]["active_manifest"]["build_version"] == "0.1.0+1.6ae4ddb"
 
 
+def test_member_snapshot_heartbeat_repairs_stale_default_manifest_version(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    monkeypatch.setattr(mod, "BUILD_INFO", SimpleNamespace(version="0.1.259", build_date="2026-06-15T15:39:36+03:00"))
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="member-1",
+                subnet_id="sn-1",
+                role="member",
+                node_settings=SimpleNamespace(node_names=["Mediapoint"]),
+                primary_node_name="Mediapoint",
+            )
+        ),
+    )
+    monkeypatch.setattr(mod, "runtime_lifecycle_snapshot", lambda: {"node_state": "ready", "reason": "", "draining": False})
+    monkeypatch.setattr(
+        mod,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "target_rev": "HEAD",
+            "target_version": "29cb4c250049a7e7bdbf675c97ded8e011b84999",
+            "base_version": "0.1.0",
+            "build_version": "0.1.0+1.29cb4c2",
+            "build_date": "2026-06-15T15:39:36+03:00",
+            "git_commit": "29cb4c250049a7e7bdbf675c97ded8e011b84999",
+            "git_short_commit": "29cb4c2",
+            "git_subject": "chore: update adaos client to 0.0.80",
+        },
+    )
+    monkeypatch.setattr(mod, "slot_status", lambda: {"active_slot": "B", "previous_slot": "A"})
+    monkeypatch.setattr(mod, "read_core_update_status", lambda: {"state": "succeeded", "phase": "validate", "target_slot": "B"})
+    monkeypatch.setattr(mod, "read_core_update_last_result", lambda: {})
+
+    snapshot = client._local_node_snapshot_heartbeat()
+
+    assert snapshot["build"]["runtime_version"] == "0.1.259+1.29cb4c2"
+    assert snapshot["build"]["runtime_build_version"] == "0.1.259+1.29cb4c2"
+    assert snapshot["slots"]["active_manifest"]["build_version"] == "0.1.0+1.29cb4c2"
+
+
 def test_member_link_client_does_not_forward_unqualified_node_webio_streams(monkeypatch) -> None:
     class _FakeBus:
         def __init__(self) -> None:

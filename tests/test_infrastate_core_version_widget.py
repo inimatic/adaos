@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 
@@ -108,3 +109,40 @@ def test_infrastate_core_slot_summary_infers_bumped_version_from_stale_manifest_
     )
 
     assert subtitle == "slot B | 0.1.217 | b10da50"
+
+
+def test_infrastate_build_meta_prefers_slot_repo_version_over_root_build(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_infrastate_module()
+    repo = tmp_path / "state" / "core_slots" / "slots" / "B" / "repo"
+    (repo / "src" / "adaos").mkdir(parents=True)
+    (repo / "src" / "adaos" / "build_info.py").write_text("", encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.259"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SLOT_REPO_ROOT", str(repo))
+    monkeypatch.setattr(mod, "BUILD_INFO", SimpleNamespace(version="0.0.80", build_date="2026-06-15T00:00:00Z"))
+    monkeypatch.setattr(mod, "current_repo_root", lambda: tmp_path / "root-checkout")
+    monkeypatch.setattr(
+        mod,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "base_version": "0.1.0",
+            "build_version": "0.1.0+1.29cb4c2",
+            "git_short_commit": "29cb4c2",
+            "git_subject": "chore: update adaos client to 0.0.80",
+        },
+    )
+
+    build = mod._build_meta()
+    subtitle = mod._core_slot_summary_subtitle(
+        {"active_slot": "B", "active_manifest": mod.active_slot_manifest()},
+        build,
+    )
+
+    assert build["version"] == "0.1.259"
+    assert build["runtime_build_version"] == "0.1.259+1.29cb4c2"
+    assert subtitle == "slot B | 0.1.259 | 29cb4c2"

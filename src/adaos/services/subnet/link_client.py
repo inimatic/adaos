@@ -73,6 +73,49 @@ def _member_link_ws_compression() -> str | None:
     return raw
 
 
+def _core_version_label(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    public, _sep, _local = text.partition("+")
+    return public.strip() or text
+
+
+def _core_version_label_is_semver(value: object) -> bool:
+    label = _core_version_label(value)
+    parts = label.split(".")
+    return len(parts) >= 3 and all(part.isdigit() for part in parts[:3])
+
+
+def _core_non_default_version_label(*values: object) -> str:
+    for value in values:
+        label = _core_version_label(value)
+        if label and label != "0.1.0" and _core_version_label_is_semver(label):
+            return label
+    return ""
+
+
+def _core_build_version_with_label(build_version: object, label: object) -> str:
+    build = str(build_version or "").strip()
+    public = _core_version_label(label)
+    if not build or not public:
+        return build
+    _old_public, sep, local = build.partition("+")
+    if not sep:
+        return public
+    return f"{public}+{local}" if local else public
+
+
+def _effective_core_build_version(manifest: dict[str, Any], build_version: object) -> str:
+    manifest_version = str(manifest.get("build_version") or "").strip()
+    runtime_version = str(build_version or "").strip()
+    if _core_version_label(manifest_version) == "0.1.0":
+        replacement = _core_non_default_version_label(manifest.get("base_version"), runtime_version)
+        if replacement:
+            return _core_build_version_with_label(manifest_version, replacement)
+    return manifest_version or runtime_version
+
+
 def _subnet_link_malloc_trim_min_interval_s() -> float:
     raw = str(os.getenv("ADAOS_SUBNET_LINK_MALLOC_TRIM_MIN_INTERVAL_S") or "").strip()
     try:
@@ -463,6 +506,8 @@ class MemberLinkClient:
         last_result = read_core_update_last_result() or {}
         slots = slot_status() or {}
         active_manifest = active_slot_manifest() or {}
+        runtime_build_version = _effective_core_build_version(active_manifest, BUILD_INFO.version)
+        runtime_base_version = str(active_manifest.get("base_version") or "")
         node_names = normalize_node_names(getattr(getattr(conf, "node_settings", None), "node_names", []))
         now = time.time()
         node_state = str(lifecycle.get("node_state") or "ready")
@@ -485,13 +530,13 @@ class MemberLinkClient:
                 "version": str(BUILD_INFO.version or ""),
                 "build_date": str(BUILD_INFO.build_date or ""),
                 "runtime_version": str(
-                    active_manifest.get("build_version")
-                    or active_manifest.get("base_version")
+                    runtime_build_version
+                    or runtime_base_version
                     or active_manifest.get("target_version")
                     or ""
                 ),
-                "runtime_base_version": str(active_manifest.get("base_version") or ""),
-                "runtime_build_version": str(active_manifest.get("build_version") or ""),
+                "runtime_base_version": runtime_base_version,
+                "runtime_build_version": runtime_build_version,
                 "runtime_target_version": str(active_manifest.get("target_version") or ""),
                 "runtime_git_commit": str(active_manifest.get("git_commit") or ""),
                 "runtime_git_short_commit": str(active_manifest.get("git_short_commit") or ""),
