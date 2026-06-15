@@ -38,6 +38,12 @@ from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
 
 from .ycoerce import coerce_dict, is_iterable_like, iter_mappings, iter_scalars
+from .voice_surface import (
+    VOICE_CAPABILITY_BINDING_INTENT,
+    encode_activation_plan,
+    exact_phrase_pattern,
+    find_voice_surface_match,
+)
 
 _log = logging.getLogger("adaos.nlu.teacher.llm")
 
@@ -134,6 +140,7 @@ _ALLOWED_TRAINING_STRATEGIES = {
     "entity_alias",
     "descriptor_fix",
     "development_task",
+    "voice_capability_binding",
     "clarification",
     "ignore",
 }
@@ -155,6 +162,10 @@ _TRAINING_STRATEGY_ALIASES = {
     "task": "development_task",
     "skill_task": "development_task",
     "scenario_task": "development_task",
+    "voice_capability": "voice_capability_binding",
+    "voice_affordance": "voice_capability_binding",
+    "voice_surface": "voice_capability_binding",
+    "capability_binding": "voice_capability_binding",
     "clarify": "clarification",
     "ask_user": "clarification",
 }
@@ -165,6 +176,7 @@ _NON_REGEX_TRAINING_STRATEGIES = {
     "entity_alias",
     "descriptor_fix",
     "development_task",
+    "voice_capability_binding",
     "clarification",
     "ignore",
 }
@@ -1035,6 +1047,93 @@ def _inventory_development_task_payload(text: str) -> dict[str, Any]:
     }
 
 
+def _voice_surface_display_label(match: Mapping[str, Any]) -> str:
+    surface = coerce_dict(match.get("surface"))
+    for key in ("title", "name", "id"):
+        value = surface.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    capability_id = str(match.get("capability_id") or match.get("affordance_id") or "").strip()
+    return capability_id or "published voice capability"
+
+
+def _voice_surface_owner(match: Mapping[str, Any]) -> dict[str, Any] | None:
+    surface = coerce_dict(match.get("surface"))
+    owner = surface.get("owner")
+    return _coerce_target(owner) if isinstance(owner, Mapping) else None
+
+
+def _voice_surface_binding_suggestion(
+    *,
+    text: str,
+    match: Mapping[str, Any],
+    current_scenario: Any,
+) -> dict[str, Any]:
+    activation_plan = match.get("activation_plan") if isinstance(match.get("activation_plan"), list) else []
+    label = _voice_surface_display_label(match)
+    capability_id = str(match.get("capability_id") or "").strip()
+    affordance_id = str(match.get("affordance_id") or "").strip()
+    slots = {
+        "voice_label": label,
+        "activation_plan": encode_activation_plan(activation_plan),
+    }
+    if capability_id:
+        slots["capability_id"] = capability_id
+    if affordance_id:
+        slots["affordance_id"] = affordance_id
+    fingerprint = str(match.get("fingerprint") or "").strip()
+    if fingerprint:
+        slots["surface_fingerprint"] = fingerprint
+    verify = match.get("verify") if isinstance(match.get("verify"), Mapping) else {}
+    if verify:
+        slots["verify"] = json.dumps(verify, ensure_ascii=False, separators=(",", ":"))
+
+    owner = _voice_surface_owner(match)
+    target = owner or (
+        {"type": "scenario", "id": current_scenario}
+        if isinstance(current_scenario, str) and current_scenario.strip()
+        else None
+    )
+    action_candidate = {
+        "class": "interface_action",
+        "intent": VOICE_CAPABILITY_BINDING_INTENT,
+        "action_id": "host.voice_capability.activate",
+        "host_action": "voice.capability.activate",
+        "text": text,
+        "slots": slots,
+        "owner": target,
+        "side_effect_class": str(match.get("side_effect_class") or "ui_navigation").strip() or "ui_navigation",
+        "activation_plan": list(activation_plan),
+        "voice_surface": {
+            "collection": match.get("collection"),
+            "capability_id": capability_id or None,
+            "affordance_id": affordance_id or None,
+            "match": dict(match.get("match") or {}) if isinstance(match.get("match"), Mapping) else {},
+        },
+        "status": "phrase_previewed",
+    }
+    return {
+        "decision": "propose_regex_rule",
+        "intent": VOICE_CAPABILITY_BINDING_INTENT,
+        "target": target,
+        "slots": slots,
+        "regex_rule": {
+            "intent": VOICE_CAPABILITY_BINDING_INTENT,
+            "pattern": exact_phrase_pattern(text),
+        },
+        "candidate": {
+            "name": f"Voice capability binding for {label}",
+            "description": "Bind the user utterance to a published AdaOS voice capability/affordance.",
+            "source_text": text,
+            "capability_id": capability_id or None,
+            "affordance_id": affordance_id or None,
+            "activation_steps": len(activation_plan),
+        },
+        "action_candidate": action_candidate,
+        "voice_surface_match": dict(match),
+    }
+
+
 def _compact_lookup_key(value: Any) -> str:
     return re.sub(r"[\s_\-:]+", "", str(value or "").strip()).casefold()
 
@@ -1641,6 +1740,8 @@ def _strategy_candidate_kind(primary: str) -> tuple[str, str, str]:
         return ("descriptor_fix", "descriptor_fix", "descriptor_fix")
     if primary == "development_task":
         return ("development_task", "development_task", "development_task")
+    if primary == "voice_capability_binding":
+        return ("voice_capability_binding", "voice_capability_binding", "voice_surface")
     if primary == "clarification":
         return ("clarification", "clarification", "clarification")
     return ("nlu_strategy", "nlu_strategy", primary or "ignore")
@@ -1841,6 +1942,38 @@ def _build_strategy_candidate_entry(
         "notes": notes,
         "status": status,
     }
+    if primary == "voice_capability_binding":
+        rr = suggestion.get("regex_rule") if isinstance(suggestion.get("regex_rule"), Mapping) else {}
+        rr_intent = str(rr.get("intent") or intent or VOICE_CAPABILITY_BINDING_INTENT).strip()
+        rr_pattern = str(rr.get("pattern") or exact_phrase_pattern(text)).strip()
+        entry["regex_rule"] = {"intent": rr_intent, "pattern": rr_pattern}
+        entry["slots"] = dict(slots or {})
+        entry["preview"] = {
+            "ok": True,
+            "status": "voice_capability_binding",
+            "matched_text": text,
+            "slots": dict(slots or {}),
+        }
+        entry["action_candidate"] = dict(action_candidate or {})
+        template_candidate = {
+            "id": f"tplcand.{candidate_id.removeprefix('cand.')}",
+            "candidate_id": candidate_id,
+            "request_id": request_id,
+            "class": "template_candidate",
+            "engine": "regex",
+            "training_strategy": dict(training_strategy),
+            "intent": rr_intent,
+            "owner": owner,
+            "operation": "add_regex_rule",
+            "patch": {"intent": rr_intent, "pattern": rr_pattern, "slots": dict(slots or {})},
+            "status": status,
+        }
+        entry["template_candidate"] = template_candidate
+        strategy_candidate["regex_rule"] = dict(entry["regex_rule"])
+        strategy_candidate["template_candidate"] = dict(template_candidate)
+        if isinstance(suggestion.get("voice_surface_match"), Mapping):
+            entry["voice_surface_match"] = dict(suggestion["voice_surface_match"])
+            strategy_candidate["voice_surface_match"] = dict(suggestion["voice_surface_match"])
     if regex_rejection:
         entry["rejected_regex_rule"] = dict(regex_rejection)
     return entry
@@ -3905,6 +4038,35 @@ async def _handle_teacher_request(evt: Any) -> None:
             regex_rule=regex_rule,
         )
         strategy_primary = str(training_strategy.get("primary") or "").strip()
+        voice_surface_match = find_voice_surface_match(context, text)
+        if voice_surface_match and (
+            decision in {"ignore", "create_skill_candidate", "create_scenario_candidate"}
+            or strategy_primary in {"ignore", "descriptor_fix", "development_task"}
+            or (decision == "propose_regex_rule" and _is_read_only_inventory_request(text))
+        ):
+            repaired = _voice_surface_binding_suggestion(
+                text=text,
+                match=voice_surface_match,
+                current_scenario=context.get("current_scenario"),
+            )
+            suggestion.update(repaired)
+            decision = str(repaired.get("decision") or decision)
+            intent = str(repaired.get("intent") or "") or intent
+            regex_rule = repaired.get("regex_rule") if isinstance(repaired.get("regex_rule"), Mapping) else regex_rule
+            target = repaired.get("target") if isinstance(repaired.get("target"), Mapping) else target
+            slots = repaired.get("slots") if isinstance(repaired.get("slots"), Mapping) else slots
+            confidence_f = max(confidence_f, 0.84)
+            training_strategy = {
+                "primary": "voice_capability_binding",
+                "source": "adaos.voice_surface_policy",
+                "rationale": "The utterance matches a published AdaOS voice capability/affordance in MCP action_surface.",
+            }
+            strategy_primary = "voice_capability_binding"
+            suggestion["training_strategy"] = dict(training_strategy)
+            notes = (
+                (notes + "\n") if notes else ""
+            ) + "AdaOS matched the utterance to a published voice capability/affordance surface."
+
         if decision == "ignore" and strategy_primary == "ignore" and _is_read_only_inventory_request(text):
             decision = "ignore"
             training_strategy = {
@@ -4000,7 +4162,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                 current_scenario=context.get("current_scenario"),
             )
 
-        if strategy_primary in {"entity_alias", "descriptor_fix", "development_task", "clarification"} or (
+        if strategy_primary in {"entity_alias", "descriptor_fix", "development_task", "voice_capability_binding", "clarification"} or (
             strategy_primary in _EXAMPLE_TRAINING_STRATEGIES and decision != "propose_regex_rule"
         ):
             candidate_id = f"cand.{int(time.time()*1000)}"

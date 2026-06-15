@@ -1994,6 +1994,121 @@ async def test_llm_teacher_turns_ignored_inventory_query_into_development_task(m
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_binds_inventory_query_to_published_voice_capability(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.nlu.voice_surface import VOICE_CAPABILITY_BINDING_INTENT
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-llm-inventory-voice-surface"
+    scenario_id = "web_desktop"
+    request_text = (
+        "\u041f\u043e\u043a\u0430\u0436\u0438 "
+        "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044b\u0435 "
+        "\u043d\u0430\u0432\u044b\u043a\u0438"
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", scenario_id)
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "events": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "ignore",
+                                    "intent": None,
+                                    "regex_rule": None,
+                                    "examples": [],
+                                    "slots": {},
+                                    "confidence": 0.0,
+                                    "notes": "No available capability.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    root_mcp = {
+        "nlu_authoring_context": {
+            "plane_id": "nlu_authoring",
+            "action_surface": {
+                "voice_capabilities": [
+                    {
+                        "id": "infrastate.inventory.installed_skills.query",
+                        "class": "voice_capability",
+                        "title": "Installed skills",
+                        "labels": {"ru": ["\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044b\u0435 \u043d\u0430\u0432\u044b\u043a\u0438"]},
+                        "side_effect_class": "read_only",
+                        "activation": [
+                            {"type": "desktop.open_modal", "params": {"modal_id": "infrastate_modal"}},
+                            {"type": "ui.state.set", "params": {"key": "infrastateTab", "value": "inventory"}},
+                            {
+                                "type": "ui.affordance.activate",
+                                "params": {"affordance_id": "infrastate.inventory.installed_skills"},
+                            },
+                        ],
+                    }
+                ],
+                "voice_affordances": [
+                    {
+                        "id": "infrastate.inventory.installed_skills",
+                        "class": "voice_affordance",
+                        "title": "Installed skills section",
+                        "labels": {"en": ["installed skills section"]},
+                        "side_effect_class": "ui_navigation",
+                        "activation": [
+                            {"type": "desktop.open_modal", "params": {"modal_id": "infrastate_modal"}},
+                            {"type": "ui.state.set", "params": {"key": "infrastateTab", "value": "inventory"}},
+                            {"type": "ui.focus_widget", "params": {"widget_id": "infrastate-skills"}},
+                        ],
+                    }
+                ],
+            },
+        },
+        "nlu_authoring_phrase_check": {"check": {"ok": True, "accepted": False, "text": request_text}},
+    }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: root_mcp)
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.inventory.voice_surface",
+                "request_id": "req.inventory.voice_surface",
+                "text": request_text,
+                "reason": "fallback",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["kind"] == "voice_capability_binding"
+    assert candidate["regex_rule"]["intent"] == VOICE_CAPABILITY_BINDING_INTENT
+    assert candidate["training_strategy"]["primary"] == "voice_capability_binding"
+    assert candidate["slots"]["capability_id"] == "infrastate.inventory.installed_skills.query"
+    assert "activation_plan" in candidate["slots"]
+    assert candidate["action_candidate"]["activation_plan"][-1]["type"] == "ui.focus_widget"
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("strategy", "expected_kind"),
     [

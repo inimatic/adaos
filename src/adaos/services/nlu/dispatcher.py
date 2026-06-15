@@ -13,6 +13,7 @@ from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.yjs.doc import async_read_ydoc
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.nlu.baseline_content import merge_default_desktop_nlu
+from adaos.services.nlu.voice_surface import decode_activation_plan
 
 _log = logging.getLogger("adaos.nlu.dispatcher")
 _CONFIDENCE_MIN = float(os.getenv("ADAOS_NLU_CONFIDENCE_MIN", "0.7") or "0.7")
@@ -310,6 +311,112 @@ def _emit_action_outcome(
         bus_emit(ctx.bus, event_type, out, source="nlu.dispatcher")
     except Exception:
         _log.debug("failed to emit %s", event_type, exc_info=True)
+
+
+def _parse_plan_payload(value: Any) -> list[dict[str, Any]]:
+    return decode_activation_plan(value)
+
+
+def _activation_event_type(step_type: str) -> str | None:
+    if step_type == "desktop.open_modal":
+        return "desktop.modal.open"
+    if step_type == "ui.state.set":
+        return "ui.state.set"
+    if step_type == "ui.focus_widget":
+        return "ui.focus_widget"
+    if step_type == "ui.affordance.activate":
+        return "ui.affordance.activate"
+    return None
+
+
+def _emit_voice_capability_ack(
+    ctx: AgentContext,
+    *,
+    payload: Mapping[str, Any],
+    webspace_id: str,
+) -> None:
+    if _route_id(payload) != "voice_chat":
+        return
+    label = _humanize_action_label(payload.get("voice_label") or payload.get("capability_id") or payload.get("affordance_id"))
+    text = f"Открываю {label}." if label else "Открываю запрошенный инструмент."
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    try:
+        bus_emit(
+            ctx.bus,
+            "io.out.chat.append",
+            {
+                "id": "",
+                "from": "hub",
+                "text": text,
+                "ts": None,
+                "_meta": {"webspace_id": webspace_id, **dict(meta), "route_id": "voice_chat"},
+            },
+            source="nlu.dispatcher",
+        )
+    except Exception:
+        _log.debug("failed to emit voice capability ack", exc_info=True)
+
+
+@subscribe("voice.capability.activate")
+def _on_voice_capability_activate(evt: Any) -> None:
+    payload = _payload(evt)
+    ctx = get_ctx()
+    webspace_id = _resolve_webspace_id(payload)
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    slots = payload.get("slots") if isinstance(payload.get("slots"), Mapping) else {}
+    plan = _parse_plan_payload(payload.get("activation_plan") or slots.get("activation_plan"))
+    scenario_id = str(meta.get("scenario_id") or payload.get("scenario_id") or "").strip()
+    emitted = 0
+    failures: list[dict[str, Any]] = []
+
+    for index, step in enumerate(plan):
+        step_type = str(step.get("type") or "").strip()
+        event_type = _activation_event_type(step_type)
+        params = step.get("params") if isinstance(step.get("params"), Mapping) else {}
+        if not event_type:
+            failures.append({"index": index, "type": step_type, "reason": "unsupported_activation_step"})
+            continue
+        step_payload = {
+            **dict(params),
+            "webspace_id": webspace_id,
+            "activation_step": index,
+            "activation_type": step_type,
+            "capability_id": payload.get("capability_id") or slots.get("capability_id"),
+            "affordance_id": payload.get("affordance_id") or slots.get("affordance_id"),
+            "_meta": {
+                **dict(meta),
+                "webspace_id": webspace_id,
+                "voice_capability_activation": True,
+                "activation_step": index,
+                "activation_type": step_type,
+            },
+        }
+        try:
+            bus_emit(ctx.bus, event_type, step_payload, source="nlu.dispatcher.voice_capability")
+            emitted += 1
+        except Exception:
+            failures.append({"index": index, "type": step_type, "reason": "bus_emit_failed"})
+            _log.warning("failed to emit voice capability step type=%s", step_type, exc_info=True)
+
+    _emit_voice_capability_ack(ctx, payload=payload, webspace_id=webspace_id)
+    _emit_action_outcome(
+        ctx,
+        event_type="nlu.action.dispatch_failed" if failures and not emitted else "nlu.action.dispatched",
+        intent="voice.capability.activate",
+        action_type="callHost",
+        target="voice.capability.activate",
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        payload={
+            "capability_id": payload.get("capability_id") or slots.get("capability_id"),
+            "affordance_id": payload.get("affordance_id") or slots.get("affordance_id"),
+            "activation_steps": len(plan),
+            "emitted_steps": emitted,
+            "failures": failures,
+        },
+        raw=payload,
+        reason="activation_step_failed" if failures and not emitted else None,
+    )
 
 
 def _execute_action(

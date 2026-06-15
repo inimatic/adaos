@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping
 
 from adaos.services.nlu.teacher_read_model import preview_interface_action, preview_interface_action_async, preview_template_patch
+from adaos.services.nlu.voice_surface import VOICE_CAPABILITY_BINDING_INTENT, validate_activation_plan
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 
 
@@ -18,6 +19,7 @@ _SYSTEM_ACTION_INTENTS = {
     "desktop.toggle_app_install": "host.desktop.toggle_install_app",
     "desktop.reload_webspace": "host.desktop.webspace.reload",
     "desktop.reset_webspace": "host.desktop.webspace.reset",
+    VOICE_CAPABILITY_BINDING_INTENT: "host.voice_capability.activate",
 }
 
 
@@ -118,7 +120,7 @@ def _candidate_side_effect(candidate: Mapping[str, Any], intent: str) -> str:
         return value
     if intent in {"desktop.open_weather"}:
         return "read_only"
-    if intent in {"desktop.open_modal", "desktop.open_node_modal", "desktop.switch_scenario"}:
+    if intent in {"desktop.open_modal", "desktop.open_node_modal", "desktop.switch_scenario", VOICE_CAPABILITY_BINDING_INTENT}:
         return "ui_navigation"
     if intent.startswith("desktop."):
         return "local_state_change"
@@ -353,7 +355,7 @@ def _template_preview(
     intent: str,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     kind = str(candidate.get("kind") or "").strip()
-    if kind == "regex_rule":
+    if kind in {"regex_rule", "voice_capability_binding"}:
         if not target:
             return None, [_check("template_preview", True, "target_deferred")]
         preview = preview_template_patch(
@@ -408,7 +410,7 @@ def validate_candidate_apply(
         _check("candidate_id", bool(candidate_id), "present" if candidate_id else "missing"),
         _check("candidate_status", candidate.get("status") != "quarantined", str(candidate.get("status") or "unknown")),
     ]
-    if kind in {"regex_rule", "training_example"}:
+    if kind in {"regex_rule", "training_example", "voice_capability_binding"}:
         checks.append(_check("intent", bool(intent), "present" if intent else "missing"))
     checks.extend(_conflict_checks(candidate, intent=intent, target=target))
 
@@ -427,7 +429,14 @@ def validate_candidate_apply(
     checks.extend(action_checks)
 
     abuse_checks: list[dict[str, Any]] = []
-    if kind == "regex_rule":
+    if kind == "voice_capability_binding":
+        action = candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+        plan = action.get("activation_plan")
+        if plan in (None, "", [], {}):
+            slots = action.get("slots") if isinstance(action.get("slots"), Mapping) else {}
+            plan = slots.get("activation_plan")
+        checks.extend(validate_activation_plan(plan))
+    if kind in {"regex_rule", "voice_capability_binding"}:
         pattern = _candidate_pattern(candidate)
         checks.append(_check("regex_pattern", bool(pattern), "present" if pattern else "missing"))
         abuse_checks.extend(_regex_abuse_checks(candidate=candidate, pattern=pattern, intent=intent))
@@ -472,7 +481,7 @@ async def validate_candidate_apply_async(
         _check("candidate_id", bool(candidate_id), "present" if candidate_id else "missing"),
         _check("candidate_status", candidate.get("status") != "quarantined", str(candidate.get("status") or "unknown")),
     ]
-    if kind in {"regex_rule", "training_example"}:
+    if kind in {"regex_rule", "training_example", "voice_capability_binding"}:
         checks.append(_check("intent", bool(intent), "present" if intent else "missing"))
     checks.extend(_conflict_checks(candidate, intent=intent, target=target))
 
@@ -491,7 +500,14 @@ async def validate_candidate_apply_async(
     checks.extend(action_checks)
 
     abuse_checks: list[dict[str, Any]] = []
-    if kind == "regex_rule":
+    if kind == "voice_capability_binding":
+        action = candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+        plan = action.get("activation_plan")
+        if plan in (None, "", [], {}):
+            slots = action.get("slots") if isinstance(action.get("slots"), Mapping) else {}
+            plan = slots.get("activation_plan")
+        checks.extend(validate_activation_plan(plan))
+    if kind in {"regex_rule", "voice_capability_binding"}:
         pattern = _candidate_pattern(candidate)
         checks.append(_check("regex_pattern", bool(pattern), "present" if pattern else "missing"))
         abuse_checks.extend(_regex_abuse_checks(candidate=candidate, pattern=pattern, intent=intent))

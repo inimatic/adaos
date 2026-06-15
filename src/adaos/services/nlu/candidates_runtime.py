@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -22,7 +23,20 @@ from adaos.services.yjs.webspace import default_webspace_id
 
 _log = logging.getLogger("adaos.nlu.teacher.candidates")
 
-_LOOKUP_SLOT_NAMES = {"modal_id", "scenario_id", "app_id", "node_ref", "skill_id", "webspace_id"}
+_LOOKUP_SLOT_NAMES = {
+    "modal_id",
+    "scenario_id",
+    "app_id",
+    "node_ref",
+    "skill_id",
+    "webspace_id",
+    "capability_id",
+    "affordance_id",
+    "activation_plan",
+    "verify",
+    "surface_fingerprint",
+    "voice_label",
+}
 
 
 def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
@@ -82,6 +96,8 @@ def _candidate_static_rule_slots(candidate: Mapping[str, Any]) -> dict[str, str]
         value = action_slots.get(key)
         if isinstance(value, str) and value.strip():
             out[key] = value.strip()
+    if "activation_plan" not in out and isinstance(action.get("activation_plan"), list):
+        out["activation_plan"] = json.dumps(action.get("activation_plan") or [], ensure_ascii=False, separators=(",", ":"))
     return out
 
 
@@ -414,7 +430,7 @@ async def _on_candidate_apply(evt: Any) -> None:
         )
         return
 
-    if candidate.get("kind") == "regex_rule":
+    if candidate.get("kind") in {"regex_rule", "voice_capability_binding"}:
         try:
             validation = await validate_candidate_apply_async(
                 webspace_id=webspace_id,

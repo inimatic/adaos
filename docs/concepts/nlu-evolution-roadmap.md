@@ -196,8 +196,11 @@ Acceptance checklist:
 - [ ] `[must]` Live Root MCP evidence for a real request proves that the LLM saw
   the matching `voice_capability` / `voice_affordance`, including owner,
   freshness/fingerprint, and the MCP tool-call/evidence row in the Teacher log.
-- [ ] `[must]` If a matching published capability/affordance exists in live MCP
+- [x] `[must]` If a matching published capability/affordance exists in live MCP
   context, Teacher must not create a `development_task` for the same behavior.
+  Runtime policy repair now converts ignored/development-task LLM output into a
+  `voice_capability_binding` candidate when MCP action surface contains a
+  matching published capability/affordance.
 
 Live-trial blocker:
 
@@ -208,10 +211,9 @@ Live-trial blocker:
 - Wrong observed outcome: Teacher proposed a new "Show Installed Skills"
   development task instead of binding the phrase to the published Infrastate
   inventory affordance.
-- Roadmap consequence: Gate 2 is not closed until this exact phrase produces
-  MCP evidence for the published surface and a capability/affordance candidate,
-  or a `descriptor_fix` if that surface is absent from the live Root MCP
-  snapshot.
+- Implementation status: backend policy repair and tests are in place for this
+  exact phrase shape. Gate 2 is still not fully closed until live Root MCP
+  evidence on a real node shows the matching surface row and Teacher log.
 
 ## Gate 3: Nested UI Affordance Execution
 
@@ -236,9 +238,9 @@ Acceptance checklist:
 
 - [ ] `[must]` Compound action preview validates container availability,
   affordance existence, side-effect class, and activation path.
-- [ ] `[must]` Client/runtime emits acknowledgement for the selected section or
+- [x] `[must]` Client/runtime emits acknowledgement for the selected section or
   failed activation reason.
-- [ ] `[must]` Learned template or binding replays into the compound action
+- [x] `[must]` Learned template or binding replays into the compound action
   without another LLM call.
 - [ ] `[must]` The first Gate 3 golden conversation is
   `Покажи установленные навыки`: first run clarifies and applies the binding;
@@ -249,6 +251,18 @@ Acceptance checklist:
   generic Builder `development_task`.
 - [ ] `[should]` Affordance aliases are locale-aware and can include
   STT-correction variants.
+
+Implementation note:
+
+- `voice_capability_binding` is now a first-class Teacher candidate. It stores a
+  deterministic regex anchor for the phrase, but the learned behavior is the
+  published capability/affordance activation plan, not a guessed modal regex.
+- The baseline dispatcher exposes `voice.capability.activate`; applying a
+  binding persists a normal Teacher regex rule with static slots containing the
+  capability id, affordance id, and JSON activation plan.
+- The web client subscribes to `desktop.modal.open`, `ui.state.set`, and
+  `ui.focus_widget`, and emits best-effort acknowledgement/failure events for
+  the UI activation steps.
 
 ## Gate 4: Queryable Capability and Result Mode Learning
 

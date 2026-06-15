@@ -141,7 +141,7 @@ def _candidate_matches_request_text(candidate: Mapping[str, Any], text: str) -> 
 def _is_reconfirmable_voice_regex_candidate(candidate: Mapping[str, Any], text: str) -> bool:
     status = str(candidate.get("status") or "").strip()
     return (
-        candidate.get("kind") == "regex_rule"
+        candidate.get("kind") in {"regex_rule", "voice_capability_binding"}
         and status in _RECONFIRMABLE_CANDIDATE_STATUSES
         and bool(_candidate_id(candidate))
         and _candidate_matches_request_text(candidate, text)
@@ -150,7 +150,7 @@ def _is_reconfirmable_voice_regex_candidate(candidate: Mapping[str, Any], text: 
 
 def _is_apply_requested_voice_regex_candidate(candidate: Mapping[str, Any], text: str) -> bool:
     return (
-        candidate.get("kind") == "regex_rule"
+        candidate.get("kind") in {"regex_rule", "voice_capability_binding"}
         and str(candidate.get("status") or "").strip() == "apply_requested"
         and bool(_candidate_id(candidate))
         and _candidate_matches_request_text(candidate, text)
@@ -246,7 +246,7 @@ def _upsert_clarification_session(teacher: dict[str, Any], confirmation: Mapping
 def _is_voice_regex_candidate(candidate: Mapping[str, Any], meta: Mapping[str, Any]) -> bool:
     return (
         _route_id(meta) == "voice_chat"
-        and candidate.get("kind") == "regex_rule"
+        and candidate.get("kind") in {"regex_rule", "voice_capability_binding"}
         and candidate.get("status") == "pending"
         and bool(_candidate_id(candidate))
     )
@@ -356,6 +356,13 @@ def _question_for_action(verb: str, label: str, fallback: str, candidate: Mappin
 
 
 def _confirmation_question(candidate: Mapping[str, Any]) -> str:
+    if candidate.get("kind") == "voice_capability_binding":
+        action = coerce_dict(candidate.get("action_candidate"))
+        slots = coerce_dict(action.get("slots"))
+        label = str(slots.get("voice_label") or "").strip()
+        if not label:
+            label = str(coerce_dict(candidate.get("candidate")).get("name") or "").strip()
+        return _question_for_action("Открыть", label, "опубликованный инструмент", candidate)
     rr = candidate.get("regex_rule") if isinstance(candidate.get("regex_rule"), Mapping) else {}
     intent = str(rr.get("intent") or "").strip()
     if intent in {"desktop.open_scenario", "desktop.switch_scenario"}:

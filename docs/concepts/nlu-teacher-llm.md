@@ -35,9 +35,11 @@ Target layers:
   gate, conflict checks, stale-write checks, and confirmation before durable
   mutation or dispatch.
 - **Multi-engine authoring plane**: Teacher chooses `regex`, `rasa_example`,
-  `neural_example`, `entity_alias`, `descriptor_fix`, `development_task`, or
-  `ignore`. Regex is only for deterministic command phrases and lookup-backed
-  slots; LLM should explicitly reject regex for broad semantic cases.
+  `neural_example`, `entity_alias`, `voice_capability_binding`,
+  `descriptor_fix`, `development_task`, or `ignore`. Regex is only for
+  deterministic command phrases and lookup-backed slots; `voice_capability_binding`
+  uses a regex anchor only to bind the phrase to an already published governed
+  capability/affordance activation plan.
 - **Persistence and promotion plane**: local learned overlays can be promoted
   to workspace artifacts and then to skill/scenario repositories only after
   ownership, audit, rollback, regression, and privacy gates.
@@ -92,7 +94,7 @@ promotes them to `[should]`.
      `nlp.teacher.skipped` instead and does not call Root/OpenAI
 6. Teacher runtimes store state for UI inspection (YJS, per webspace):
    - `data.nlu_teacher.events[]` (includes `llm.request` / `llm.response`)
-   - `data.nlu_teacher.candidates[]` (regex rules / skill candidates / scenario candidates)
+   - `data.nlu_teacher.candidates[]` (regex rules / voice capability bindings / skill candidates / scenario candidates)
    - `data.nlu_teacher.revisions[]` (proposed dataset revisions)
    - `data.nlu_teacher.llm_logs[]` (request/response logs; debugging)
 7. Teacher state is also persisted on disk so it survives YJS reload/reset:

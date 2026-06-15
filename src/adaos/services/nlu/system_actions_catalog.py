@@ -226,6 +226,43 @@ _SYSTEM_ACTIONS: tuple[dict[str, Any], ...] = (
         "slots": {},
         "nlu_intents": [],
     },
+    {
+        "id": "host.voice_capability.activate",
+        "kind": "host_action",
+        "status": "active",
+        "action": "voice.capability.activate",
+        "description": "Activate a published AdaOS voice capability or nested UI affordance through an activation plan.",
+        "params": {
+            "capability_id?": "string",
+            "affordance_id?": "string",
+            "activation_plan": "json-string",
+            "webspace_id": "string",
+        },
+        "slots": {
+            "capability_id": {"type": "string", "required": False},
+            "affordance_id": {"type": "string", "required": False},
+            "activation_plan": {"type": "json-string", "required": True},
+        },
+        "nlu_intents": [
+            {
+                "intent": "voice.capability.activate",
+                "description": "Activate a published voice capability/affordance binding.",
+                "examples": [
+                    "activate [infrastate.inventory.installed_skills.query](capability_id)",
+                    "show published tool [infrastate.inventory.installed_skills.query](capability_id)",
+                ],
+                "actions": _call_host(
+                    "voice.capability.activate",
+                    {
+                        "capability_id": "$slot.capability_id",
+                        "affordance_id": "$slot.affordance_id",
+                        "activation_plan": "$slot.activation_plan",
+                        "webspace_id": "$ctx.webspace_id",
+                    },
+                ),
+            }
+        ],
+    },
 )
 
 

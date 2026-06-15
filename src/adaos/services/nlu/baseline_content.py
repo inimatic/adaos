@@ -75,6 +75,29 @@ _DEFAULT_DESKTOP_NLU: dict[str, Any] = {
                 }
             ],
         },
+        "voice.capability.activate": {
+            "description": "Activate a published AdaOS voice capability or nested UI affordance through an activation plan.",
+            "scope": "scenario",
+            "examples": [
+                "activate [infrastate.inventory.installed_skills.query](capability_id)",
+                "show published tool [infrastate.inventory.installed_skills.query](capability_id)",
+            ],
+            "actions": [
+                {
+                    "type": "callHost",
+                    "target": "voice.capability.activate",
+                    "params": {
+                        "capability_id": "$slot.capability_id",
+                        "affordance_id": "$slot.affordance_id",
+                        "activation_plan": "$slot.activation_plan",
+                        "verify": "$slot.verify",
+                        "voice_label": "$slot.voice_label",
+                        "surface_fingerprint": "$slot.surface_fingerprint",
+                        "webspace_id": "$ctx.webspace_id",
+                    },
+                }
+            ],
+        },
         "weather.show": {
             "description": "Ask the weather skill for current weather in a city.",
             "scope": "skill",

@@ -1011,7 +1011,7 @@ def list_training_targets(*, webspace_id: str | None = None, include_system_acti
 
 def _side_effect_class_for_host_action(host_action: str) -> str:
     token = str(host_action or "").strip()
-    if token in {"desktop.modal.open", "desktop.scenario.set"}:
+    if token in {"desktop.modal.open", "desktop.scenario.set", "voice.capability.activate"}:
         return "ui_navigation"
     if token in {"desktop.webspace.reload", "desktop.webspace.reset", "desktop.toggleInstall"}:
         return "local_state_change"
