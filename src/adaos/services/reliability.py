@@ -1518,6 +1518,30 @@ def effective_channel_view(
     assessment = transport_assessment if isinstance(transport_assessment, dict) else {}
     transport_state = str(assessment.get("state") or "").strip().lower()
     if channel_id in {"root_control", "route"} and transport_state in {"down", "unstable", "flapping"}:
+        try:
+            stable_for_s = float(diag_item.get("stable_for_s") or 0.0)
+        except Exception:
+            stable_for_s = 0.0
+        try:
+            recent_non_ready_5m = int(diag_item.get("recent_non_ready_transitions_5m") or 0)
+        except Exception:
+            recent_non_ready_5m = 0
+        try:
+            recent_transitions_5m = int(diag_item.get("recent_transitions_5m") or 0)
+        except Exception:
+            recent_transitions_5m = 0
+        if (
+            status == ReadinessStatus.READY.value
+            and stable_for_s >= 300.0
+            and recent_non_ready_5m <= 0
+            and recent_transitions_5m <= 0
+        ):
+            effective_state = "stable"
+            return {
+                "status": status,
+                "state": effective_state,
+                "stability": stability,
+            }
         if status == ReadinessStatus.READY.value:
             status = ReadinessStatus.DEGRADED.value
         elif status == ReadinessStatus.UNKNOWN.value and transport_state == "down":
@@ -5686,10 +5710,24 @@ def _connectivity_snapshot(
         if isinstance(supervisor.get("required_upstream_link"), dict)
         else {}
     )
+    fallback_link = _required_upstream_link_fallback_from_channel_overview(overview)
     if _map_connectivity_transport_state(required_link.get("state")) == "unknown":
-        fallback_link = _required_upstream_link_fallback_from_channel_overview(overview)
         if fallback_link:
             required_link = fallback_link
+    elif (
+        _map_connectivity_transport_state(required_link.get("state")) == "degraded"
+        and _map_connectivity_transport_state(fallback_link.get("state")) == "ready"
+        and "browser route degraded" in str(required_link.get("reason") or "").lower()
+        and not list(required_link.get("blockers") or [])
+    ):
+        required_link = {
+            **required_link,
+            "state": "ready",
+            "ready": True,
+            "reason": "runtime channel overview recovered after stale supervisor browser-route degradation",
+            "served_by": "runtime_channel_overview",
+            "blockers": [],
+        }
     browser_route = (
         overview.get("hub_root_browser")
         if isinstance(overview.get("hub_root_browser"), dict)

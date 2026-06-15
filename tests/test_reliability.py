@@ -34,6 +34,7 @@ from adaos.services.reliability import (
     _request_yjs_replay_pressure_compaction,
     _state_sync_snapshot,
     assess_transport_diagnostics,
+    effective_channel_view,
     hub_member_connection_state_snapshot,
     hub_member_semantic_channels_snapshot,
     media_plane_runtime_snapshot,
@@ -266,6 +267,33 @@ def test_hub_reliability_recovers_ready_route_after_stable_probe_window(monkeypa
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
 
 
+def test_effective_channel_view_ignores_stale_transport_instability_after_ready_window() -> None:
+    view = effective_channel_view(
+        "route",
+        tree_item={
+            "status": "ready",
+            "summary": "hub route relay subscription installed",
+        },
+        diag_item={
+            "stable_for_s": 464.0,
+            "recent_non_ready_transitions_5m": 0,
+            "recent_transitions_5m": 0,
+            "stability": {
+                "state": "unstable",
+                "score": 85,
+                "reason": "8 non-ready transitions in the last 15 minutes",
+            },
+        },
+        transport_assessment={
+            "state": "unstable",
+            "reason": "recent reconnect attempts or failures indicate an unstable hub-root transport",
+        },
+    )
+
+    assert view["status"] == "ready"
+    assert view["state"] == "stable"
+
+
 def test_hub_reliability_recovers_route_after_fresh_lightweight_probe(monkeypatch) -> None:
     _reset_state()
     reliability = importlib.import_module("adaos.services.reliability")
@@ -369,6 +397,41 @@ def test_connectivity_snapshot_uses_channel_overview_when_supervisor_link_tempor
     assert required["transport_state"] == "ready"
     assert required["transition_state"] == "ready"
     assert required["served_by"] == "runtime_channel_overview"
+    assert required["blockers"] == []
+
+
+def test_connectivity_snapshot_overrides_stale_supervisor_browser_route_degradation() -> None:
+    snapshot = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+            "hub_root_browser": {
+                "effective_status": "ready",
+                "effective_state": "stable",
+            },
+        },
+        supervisor_runtime={
+            "available": True,
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "degraded",
+                "reason": "browser route degraded; preserving active runtime-owned tunnels",
+                "served_by": "supervisor",
+                "blockers": [],
+            },
+            "status": {},
+        },
+    )
+
+    required = snapshot["required_upstream_link"]
+    assert required["kind"] == "hub_root"
+    assert required["transport_state"] == "ready"
+    assert required["transition_state"] == "ready"
+    assert required["served_by"] == "runtime_channel_overview"
+    assert required["reason"] == "runtime channel overview recovered after stale supervisor browser-route degradation"
     assert required["blockers"] == []
 
 
