@@ -486,6 +486,24 @@ def _emit_stage(
         pass
 
 
+async def _should_consume_voice_confirmation_answer(
+    *,
+    webspace_id: str,
+    text: str,
+    meta: Mapping[str, Any],
+) -> bool:
+    route_id = str(meta.get("route_id") or meta.get("route") or "").strip()
+    if route_id != "voice_chat":
+        return False
+    try:
+        from adaos.services.nlu import teacher_confirmation_runtime as confirmation_runtime
+
+        return await confirmation_runtime.should_consume_voice_confirmation_answer(webspace_id, text)
+    except Exception:
+        _log.debug("failed to check NLU Teacher voice confirmation answer", exc_info=True)
+        return False
+
+
 async def _resolve_current_scenario_id(webspace_id: str) -> str | None:
     try:
         async with async_read_ydoc(webspace_id) as ydoc:
@@ -719,6 +737,19 @@ async def _on_detect_request(evt: Any) -> None:
     ctx = get_ctx()
     webspace_id = _resolve_webspace_id(payload)
     rid = _request_id(payload, text=text, webspace_id=webspace_id)
+    if await _should_consume_voice_confirmation_answer(webspace_id=webspace_id, text=text, meta=meta):
+        _emit_stage(
+            ctx,
+            stage="voice_confirmation",
+            status="consumed",
+            text=text,
+            webspace_id=webspace_id,
+            request_id=rid,
+            via="voice_chat",
+            reason="confirmation_answer_consumed",
+            meta=meta,
+        )
+        return
     if _seen_recent(rid):
         return
 

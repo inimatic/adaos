@@ -48,6 +48,19 @@ _SECOND_ANSWERS = {
     "вариант два",
 }
 _CONSUMED_CONFIRMATION_ANSWERS: dict[tuple[str, str], float] = {}
+_MUTATING_INTENTS_REQUIRING_MUTATION_TEXT = {"desktop.toggle_app_install"}
+_MUTATION_TEXT_MARKERS = (
+    "install",
+    "uninstall",
+    "enable",
+    "disable",
+    "toggle",
+    "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0438",
+    "\u0443\u0434\u0430\u043b\u0438",
+    "\u0432\u043a\u043b\u044e\u0447\u0438",
+    "\u043e\u0442\u043a\u043b\u044e\u0447\u0438",
+    "\u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0438",
+)
 
 
 def _float_env(name: str, default: float, *, min_value: float, max_value: float) -> float:
@@ -138,6 +151,40 @@ def _candidate_matches_request_text(candidate: Mapping[str, Any], text: str) -> 
     return False
 
 
+def _candidate_intent(candidate: Mapping[str, Any]) -> str:
+    rr = candidate.get("regex_rule") if isinstance(candidate.get("regex_rule"), Mapping) else {}
+    intent = str(rr.get("intent") or candidate.get("intent") or "").strip()
+    if intent:
+        return intent
+    action = candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+    return str(action.get("intent") or "").strip()
+
+
+def _looks_like_mutation_text(text: str) -> bool:
+    folded = _match_text_key(text)
+    for marker in _MUTATION_TEXT_MARKERS:
+        if re.fullmatch(r"[a-z]+", marker):
+            if re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", folded, re.IGNORECASE | re.UNICODE):
+                return True
+            continue
+        if marker in folded:
+            return True
+    return False
+
+
+def _is_unsafe_existing_confirmation_candidate(candidate: Mapping[str, Any], text: str) -> bool:
+    intent = _candidate_intent(candidate)
+    if intent in _MUTATING_INTENTS_REQUIRING_MUTATION_TEXT and not _looks_like_mutation_text(text):
+        return True
+    return False
+
+
+def _existing_candidate_rank(candidate: Mapping[str, Any]) -> tuple[int, float]:
+    kind = str(candidate.get("kind") or "").strip()
+    kind_rank = 10 if kind == "voice_capability_binding" else 0
+    return (kind_rank, _candidate_status_marker(candidate))
+
+
 def _is_reconfirmable_voice_regex_candidate(candidate: Mapping[str, Any], text: str) -> bool:
     status = str(candidate.get("status") or "").strip()
     return (
@@ -145,6 +192,7 @@ def _is_reconfirmable_voice_regex_candidate(candidate: Mapping[str, Any], text: 
         and status in _RECONFIRMABLE_CANDIDATE_STATUSES
         and bool(_candidate_id(candidate))
         and _candidate_matches_request_text(candidate, text)
+        and not _is_unsafe_existing_confirmation_candidate(candidate, text)
     )
 
 
@@ -154,6 +202,7 @@ def _is_apply_requested_voice_regex_candidate(candidate: Mapping[str, Any], text
         and str(candidate.get("status") or "").strip() == "apply_requested"
         and bool(_candidate_id(candidate))
         and _candidate_matches_request_text(candidate, text)
+        and not _is_unsafe_existing_confirmation_candidate(candidate, text)
     )
 
 
@@ -259,6 +308,7 @@ def _has_recent_related_confirmation(
     within_s: float = 20.0,
 ) -> bool:
     candidate_id = _candidate_id(candidate)
+    candidate_kind = str(candidate.get("kind") or "").strip()
     request_key = _match_text_key(candidate.get("text") or candidate.get("request_text"))
     if not candidate_id and not request_key:
         return False
@@ -276,6 +326,10 @@ def _has_recent_related_confirmation(
             continue
         if candidate_id and str(item.get("candidate_id") or "").strip() == candidate_id:
             return True
+        if candidate_kind == "voice_capability_binding" and candidate_id:
+            # A fresh published-surface binding is allowed to supersede a stale
+            # regex hypothesis for the same utterance.
+            continue
         if request_key and _match_text_key(item.get("request_text")) == request_key:
             return True
     return False
@@ -1032,7 +1086,7 @@ async def request_existing_candidate_confirmation(
         if _is_apply_requested_voice_regex_candidate(candidate, request_text)
     ]
     if apply_requested:
-        apply_requested.sort(key=lambda item: _candidate_status_marker(item), reverse=True)
+        apply_requested.sort(key=_existing_candidate_rank, reverse=True)
         candidate = apply_requested[0]
         marker = _candidate_status_marker(candidate)
         age_s = time.time() - marker if marker > 0 else _apply_requested_inflight_s() + 1.0
@@ -1067,7 +1121,7 @@ async def request_existing_candidate_confirmation(
     ]
     if not candidates:
         return False
-    candidates.sort(key=lambda item: float(item.get("updated_at") or item.get("ts") or 0.0), reverse=True)
+    candidates.sort(key=_existing_candidate_rank, reverse=True)
     candidate = candidates[0]
     try:
         attempt = int(merged_meta.get("nlu_teacher_confirmation_attempt") or 0)

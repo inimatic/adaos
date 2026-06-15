@@ -136,3 +136,38 @@ def test_voice_capability_dispatcher_emits_activation_steps():
     assert state_payload["value"] == "inventory"
     focus_payload = captured[2][1]
     assert focus_payload["widget_id"] == "infrastate-skills"
+
+
+def test_voice_capability_dispatcher_fails_empty_activation_plan_without_ack():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher
+
+    ctx = get_ctx()
+    captured: list[tuple[str, dict]] = []
+
+    def _capture(kind: str):
+        def _inner(ev):
+            payload = getattr(ev, "payload", None) or {}
+            if isinstance(payload, dict):
+                captured.append((kind, dict(payload)))
+
+        return _inner
+
+    for topic in ("io.out.chat.append", "nlu.action.dispatch_failed"):
+        ctx.bus.subscribe(topic, _capture(topic))
+
+    dispatcher._on_voice_capability_activate(
+        {
+            "webspace_id": "desktop",
+            "capability_id": "infrastate.inventory.installed_skills.query",
+            "activation_plan": "[]",
+            "_meta": {"webspace_id": "desktop", "route_id": "voice_chat"},
+        }
+    )
+
+    kinds = [kind for kind, _payload in captured]
+    assert "io.out.chat.append" not in kinds
+    assert "nlu.action.dispatch_failed" in kinds
+    failure = next(payload for kind, payload in captured if kind == "nlu.action.dispatch_failed")
+    assert failure["reason"] == "activation_plan_empty"
+    assert failure["action_payload"]["activation_steps"] == 0

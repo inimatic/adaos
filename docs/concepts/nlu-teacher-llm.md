@@ -468,9 +468,11 @@ confirmation answer, so short replies such as `да` and `нет` do not create
 extra Teacher misses. This suppression is race-safe: Teacher records a
 short-lived consumed-answer marker when it handles the confirmation, and the
 router also accepts recent active/answered confirmation state as a consume
-signal. The Voice chat widget treats messages loaded when the modal opens as
-already spoken, so opening Voice does not read the previous hub response aloud;
-new hub messages can still be spoken.
+signal. The NLU pipeline repeats the same consume check as a second guard, so
+confirmation answers do not become teachable misses when event ordering races
+past the router. The Voice chat widget treats messages loaded when the modal
+opens as already spoken, so opening Voice does not read the previous hub
+response aloud; new hub messages can still be spoken.
 
 If the same voice phrase arrives again while a matching regex candidate is
 still `pending` or `validation_failed`, the router asks the confirmation
@@ -478,6 +480,12 @@ question again before using the generic not-understood fallback. This keeps an
 unresolved hypothesis actionable when Root/OpenAI timed out, duplicate
 suppression skipped a new candidate, or descriptor aliases were fixed after an
 earlier Apply rejection.
+
+Existing-candidate reuse is ranked by candidate type. A
+`voice_capability_binding` supersedes older regex hypotheses for the same
+phrase, and read-only inventory phrases cannot reopen mutating candidates such
+as `desktop.toggle_app_install` unless the phrase explicitly contains a
+mutation verb.
 
 `apply_requested` is not reconfirmable. It means the user already accepted the
 hypothesis and AdaOS is applying it. While it is fresh, a repeated phrase gets

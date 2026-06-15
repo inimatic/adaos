@@ -209,6 +209,108 @@ async def test_voice_existing_candidate_reasks_confirmation():
 
 
 @pytest.mark.anyio
+async def test_voice_existing_candidate_skips_stale_mutating_hypothesis_for_read_only_request():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-existing-stale-toggle"
+    candidate = {
+        "id": "cand.confirm.stale-toggle",
+        "ts": time.time(),
+        "updated_at": time.time(),
+        "kind": "regex_rule",
+        "status": "validation_failed",
+        "text": "show installed skills",
+        "request_id": "req.confirm.stale-toggle",
+        "regex_rule": {"intent": "desktop.toggle_app_install", "pattern": r"\bshow installed skills\b"},
+        "preview": {"ok": True, "slots": {"app_id": "skills"}},
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [candidate], "events": []})
+
+    messages: list[dict] = []
+    ctx.bus.subscribe(
+        "io.out.chat.append",
+        lambda ev: messages.append(dict(getattr(ev, "payload", None) or {})),
+    )
+
+    handled = await conf.request_existing_candidate_confirmation(
+        webspace_id,
+        "show installed skills",
+        request_id="req.confirm.repeat",
+        meta={"route_id": "voice_chat", "webspace_id": webspace_id},
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        confirmations = list(teacher.get("pending_confirmations") or [])
+        events = list(teacher.get("events") or [])
+
+    assert handled is False
+    assert confirmations == []
+    assert events == []
+    assert messages == []
+
+
+@pytest.mark.anyio
+async def test_voice_existing_candidate_prefers_voice_surface_binding_over_regex_hypothesis():
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-teacher-existing-prefers-binding"
+    stale = {
+        "id": "cand.confirm.old-regex",
+        "ts": time.time() + 10,
+        "updated_at": time.time() + 10,
+        "kind": "regex_rule",
+        "status": "validation_failed",
+        "text": "show installed skills",
+        "request_id": "req.confirm.old-regex",
+        "regex_rule": {"intent": "desktop.open_modal", "pattern": r"\bshow installed skills\b"},
+        "preview": {"ok": True, "slots": {"modal_id": "infrastate_modal"}},
+    }
+    binding = {
+        "id": "cand.confirm.voice-binding",
+        "ts": time.time(),
+        "updated_at": time.time(),
+        "kind": "voice_capability_binding",
+        "status": "pending",
+        "text": "show installed skills",
+        "request_id": "req.confirm.voice-binding",
+        "regex_rule": {"intent": "voice.capability.activate", "pattern": r"\bshow installed skills\b"},
+        "action_candidate": {
+            "slots": {
+                "voice_label": "Installed skills",
+                "capability_id": "infrastate.inventory.installed_skills.query",
+                "activation_plan": '[{"type":"desktop.open_modal","params":{"modal_id":"infrastate_modal"}}]',
+            }
+        },
+    }
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [stale, binding], "events": []})
+
+    handled = await conf.request_existing_candidate_confirmation(
+        webspace_id,
+        "show installed skills",
+        request_id="req.confirm.repeat",
+        meta={"route_id": "voice_chat", "webspace_id": webspace_id},
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        confirmations = list(teacher.get("pending_confirmations") or [])
+
+    assert handled is True
+    assert confirmations[-1]["candidate_id"] == binding["id"]
+
+
+@pytest.mark.anyio
 async def test_voice_existing_apply_requested_candidate_is_not_reconfirmed():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf

@@ -1047,14 +1047,43 @@ def _inventory_development_task_payload(text: str) -> dict[str, Any]:
     }
 
 
+def _iter_hint_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        out: list[str] = []
+        for item in value.values():
+            out.extend(_iter_hint_values(item))
+        return out
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            out.extend(_iter_hint_values(item))
+        return out
+    return []
+
+
 def _voice_surface_display_label(match: Mapping[str, Any]) -> str:
     surface = coerce_dict(match.get("surface"))
-    for key in ("title", "name", "id"):
+    match_info = coerce_dict(match.get("match"))
+    term = match_info.get("term")
+    if isinstance(term, str) and term.strip():
+        normalized_term = _compact_lookup_key(term)
+        row_id = _compact_lookup_key(surface.get("id"))
+        if normalized_term and normalized_term != row_id:
+            return term.strip()
+    for key in ("title", "name"):
         value = surface.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    for key in ("labels", "aliases"):
+        for value in _iter_hint_values(surface.get(key)):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     capability_id = str(match.get("capability_id") or match.get("affordance_id") or "").strip()
-    return capability_id or "published voice capability"
+    if capability_id:
+        return capability_id.removesuffix(".query").replace(".", " ").replace("_", " ").strip()
+    return "published voice capability"
 
 
 def _voice_surface_owner(match: Mapping[str, Any]) -> dict[str, Any] | None:

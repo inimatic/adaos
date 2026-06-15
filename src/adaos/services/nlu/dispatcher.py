@@ -237,8 +237,9 @@ def _humanize_action_label(value: Any) -> str:
     token = str(value or "").strip()
     if not token:
         return ""
+    token = token.removesuffix(".query")
     token = token.removesuffix("_modal")
-    token = token.replace("_", " ").replace("-", " ")
+    token = token.replace(".", " ").replace("_", " ").replace("-", " ")
     return re.sub(r"\s+", " ", token).strip()
 
 
@@ -368,6 +369,8 @@ def _on_voice_capability_activate(evt: Any) -> None:
     scenario_id = str(meta.get("scenario_id") or payload.get("scenario_id") or "").strip()
     emitted = 0
     failures: list[dict[str, Any]] = []
+    if not plan:
+        failures.append({"reason": "activation_plan_empty"})
 
     for index, step in enumerate(plan):
         step_type = str(step.get("type") or "").strip()
@@ -398,7 +401,8 @@ def _on_voice_capability_activate(evt: Any) -> None:
             failures.append({"index": index, "type": step_type, "reason": "bus_emit_failed"})
             _log.warning("failed to emit voice capability step type=%s", step_type, exc_info=True)
 
-    _emit_voice_capability_ack(ctx, payload=payload, webspace_id=webspace_id)
+    if emitted > 0:
+        _emit_voice_capability_ack(ctx, payload=payload, webspace_id=webspace_id)
     _emit_action_outcome(
         ctx,
         event_type="nlu.action.dispatch_failed" if failures and not emitted else "nlu.action.dispatched",
@@ -415,7 +419,7 @@ def _on_voice_capability_activate(evt: Any) -> None:
             "failures": failures,
         },
         raw=payload,
-        reason="activation_step_failed" if failures and not emitted else None,
+        reason="activation_plan_empty" if failures and not plan else ("activation_step_failed" if failures and not emitted else None),
     )
 
 

@@ -201,6 +201,10 @@ Acceptance checklist:
   Runtime policy repair now converts ignored/development-task LLM output into a
   `voice_capability_binding` candidate when MCP action surface contains a
   matching published capability/affordance.
+- [x] `[must]` Stale pending regex hypotheses cannot outrank a matching
+  `voice_capability_binding`, and read-only inventory phrases cannot reopen
+  mutating candidates such as `desktop.toggle_app_install` unless the phrase
+  explicitly contains a mutation verb.
 
 Live-trial blocker:
 
@@ -214,6 +218,9 @@ Live-trial blocker:
 - Implementation status: backend policy repair and tests are in place for this
   exact phrase shape. Gate 2 is still not fully closed until live Root MCP
   evidence on a real node shows the matching surface row and Teacher log.
+- Runtime hardening: repeated attempts for the same phrase now prefer published
+  voice-surface bindings over stale regex hypotheses, so a bad earlier
+  candidate should no longer block the correct Infrastate inventory binding.
 
 ## Gate 3: Nested UI Affordance Execution
 
@@ -249,6 +256,9 @@ Acceptance checklist:
 - [ ] `[must]` Failure to activate a nested affordance creates actionable
   `descriptor_fix` or runtime-ack evidence instead of falling through to a
   generic Builder `development_task`.
+- [x] `[must]` Empty or missing activation plans are reported as
+  `nlu.action.dispatch_failed` with `activation_plan_empty` and do not emit a
+  false positive Voice acknowledgement.
 - [ ] `[should]` Affordance aliases are locale-aware and can include
   STT-correction variants.
 

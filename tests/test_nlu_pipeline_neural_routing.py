@@ -5,6 +5,54 @@ import pytest
 
 
 @pytest.mark.anyio
+async def test_pipeline_consumes_voice_confirmation_answer_before_nlu(monkeypatch):
+    from adaos.services.nlu import pipeline
+
+    module = importlib.reload(pipeline)
+    emitted = []
+
+    async def _consume_confirmation_answer(*, webspace_id: str, text: str, meta: dict) -> bool:
+        assert webspace_id == "desktop"
+        assert text == "yes"
+        assert meta["route_id"] == "voice_chat"
+        return True
+
+    async def _regex_should_not_run(_text: str, *, webspace_id: str):
+        raise AssertionError("confirmation answer leaked into regex NLU")
+
+    monkeypatch.setattr(module, "_should_consume_voice_confirmation_answer", _consume_confirmation_answer)
+    monkeypatch.setattr(module, "_try_regex_intent", _regex_should_not_run)
+    monkeypatch.setattr(module, "get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(module, "bus_emit", lambda _bus, et, payload, source=None: emitted.append((et, payload, source)))
+
+    await module._on_detect_request(
+        {
+            "text": "yes",
+            "webspace_id": "desktop",
+            "request_id": "rid-confirm-yes",
+            "_meta": {"route_id": "voice_chat", "webspace_id": "desktop"},
+        }
+    )
+
+    assert emitted == [
+        (
+            "nlu.trace.stage",
+            {
+                "stage": "voice_confirmation",
+                "status": "consumed",
+                "text": "yes",
+                "webspace_id": "desktop",
+                "request_id": "rid-confirm-yes",
+                "via": "voice_chat",
+                "reason": "confirmation_answer_consumed",
+                "_meta": {"route_id": "voice_chat", "webspace_id": "desktop"},
+            },
+            "nlu.pipeline",
+        )
+    ]
+
+
+@pytest.mark.anyio
 async def test_pipeline_routes_to_neural_when_flag_enabled(monkeypatch):
     monkeypatch.setenv("ADAOS_NLU_NEURO_LITE", "0")
     monkeypatch.setenv("ADAOS_NLU_NEURAL", "1")
