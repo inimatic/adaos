@@ -1965,6 +1965,89 @@ def test_yjs_sync_runtime_snapshot_marks_browser_ws_without_yws_as_degraded(monk
     assert snapshot["transport"]["active_yws_connections"] == 0
 
 
+def test_yjs_sync_runtime_snapshot_accepts_webrtc_yjs_without_active_yws(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.store",
+        SimpleNamespace(
+            ystore_runtime_snapshot=lambda **kwargs: {
+                "webspace_total": 1,
+                "active_webspace_total": 1,
+                "webspaces": {
+                    "default": {
+                        "log_mode": "snapshot_plus_diff",
+                        "update_log_entries": 1,
+                        "max_update_log_entries": 128,
+                        "replay_window_entries": 0,
+                        "replay_window_bytes": 0,
+                        "compact_total": 1,
+                        "runtime_compaction_eligible": False,
+                        "backup_fast_path_total": 0,
+                        "backup_skipped_total": 0,
+                    }
+                },
+            }
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway_ws",
+        SimpleNamespace(
+            gateway_transport_snapshot=lambda: {
+                "transports": {
+                    "ws": {
+                        "active_connections": 1,
+                        "send_queue": {"connection_total": 1},
+                    },
+                    "yws": {
+                        "active_connections": 0,
+                        "recent_open_10s": 1,
+                        "recent_open_60s": 1,
+                        "last_close_ago_s": 12.0,
+                        "storm_detected": False,
+                        "guard": {"last_short_session_recent": 1},
+                    },
+                },
+                "servers": {"yws": {"requested": True, "started_event": True, "task_running": True, "ready": True, "room_total": 1}},
+                "ownership": {"yws": {}},
+            }
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.webrtc.peer",
+        SimpleNamespace(
+            webrtc_peer_snapshot=lambda: {
+                "peer_total": 1,
+                "connected_peers": 1,
+                "open_events_channels": 1,
+                "open_yjs_channels": 1,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_selected_webspace_snapshot",
+        lambda webspace_id: {"webspace_id": webspace_id or "default"},
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_recovery_policy",
+        lambda selected_entry, selected_webspace: ({}, {}, {}),
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability._build_yjs_webspace_guidance",
+        lambda selected_webspace, action_overrides: {},
+    )
+
+    snapshot = yjs_sync_runtime_snapshot(role="hub", webspace_id="default")
+
+    assert snapshot["assessment"]["state"] == "nominal"
+    reason = str(snapshot["assessment"]["reason"] or "")
+    assert "browser_yjs_no_active_session_after_recent_activity" not in reason
+    assert "browser_yjs_no_active_session_with_browser_ws" not in reason
+    assert snapshot["transport"]["active_yws_connections"] == 0
+    assert snapshot["transport"]["webrtc_open_yjs_channels"] == 1
+
+
 def test_media_plane_runtime_snapshot_exposes_live_update_guard(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,

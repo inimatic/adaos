@@ -4791,6 +4791,8 @@ def yjs_sync_runtime_snapshot(
     ws_send_queue = ws_transport.get("send_queue") if isinstance(ws_transport.get("send_queue"), dict) else {}
     active_browser_event_connections = int(ws_send_queue.get("connection_total") or 0)
     active_browser_control_connections = max(active_ws_connections, active_browser_event_connections)
+    webrtc_open_yjs_channels = int(webrtc.get("open_yjs_channels") or 0)
+    live_browser_yjs_channel = active_yws_connections > 0 or webrtc_open_yjs_channels > 0
     recent_yws_open_60s = int(yws_transport.get("recent_open_60s") or 0)
     last_yws_close_ago_s = yws_transport.get("last_close_ago_s")
     fresh_yws_close = (
@@ -4804,7 +4806,7 @@ def yjs_sync_runtime_snapshot(
             assessment_state = "pressure"
         reasons.append("browser_yjs_reconnect_storm")
     if (
-        active_yws_connections <= 0
+        not live_browser_yjs_channel
         and bool(yws_server.get("ready"))
         and (fresh_yws_close or recent_yws_open_60s > 0 or recent_short_yws_sessions > 0)
     ):
@@ -4812,7 +4814,7 @@ def yjs_sync_runtime_snapshot(
             assessment_state = "degraded"
         reasons.append("browser_yjs_no_active_session_after_recent_activity")
     if (
-        active_yws_connections <= 0
+        not live_browser_yjs_channel
         and bool(yws_server.get("ready"))
         and active_browser_control_connections > 0
     ):
@@ -4954,7 +4956,7 @@ def yjs_sync_runtime_snapshot(
             "webrtc_peer_total": int(webrtc.get("peer_total") or 0),
             "webrtc_connected_peers": int(webrtc.get("connected_peers") or 0),
             "webrtc_open_events_channels": int(webrtc.get("open_events_channels") or 0),
-            "webrtc_open_yjs_channels": int(webrtc.get("open_yjs_channels") or 0),
+            "webrtc_open_yjs_channels": webrtc_open_yjs_channels,
             "webrtc_pruned_stale_peers": int(webrtc.get("pruned_stale_peers") or 0),
         },
         "ownership_boundaries": ownership_boundaries,
