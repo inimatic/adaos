@@ -103,6 +103,8 @@ def _snapshot_fingerprint(snapshot: dict[str, Any]) -> str:
         return ""
     capacity = snapshot.get("capacity") if isinstance(snapshot.get("capacity"), dict) else {}
     desktop_catalog = snapshot.get("desktop_catalog") if isinstance(snapshot.get("desktop_catalog"), dict) else {}
+    update_status = snapshot.get("update_status") if isinstance(snapshot.get("update_status"), dict) else {}
+    slots = snapshot.get("slots") if isinstance(snapshot.get("slots"), dict) else {}
     material = {
         "role": snapshot.get("role"),
         "ready": snapshot.get("ready"),
@@ -112,8 +114,16 @@ def _snapshot_fingerprint(snapshot: dict[str, Any]) -> str:
         "connected_to_hub": snapshot.get("connected_to_hub"),
         "node_names": snapshot.get("node_names") if isinstance(snapshot.get("node_names"), list) else [],
         "build": snapshot.get("build") if isinstance(snapshot.get("build"), dict) else {},
-        "update_status": snapshot.get("update_status") if isinstance(snapshot.get("update_status"), dict) else {},
-        "slots": snapshot.get("slots") if isinstance(snapshot.get("slots"), dict) else {},
+        "update_status": {
+            "state": str(update_status.get("state") or "").strip(),
+            "phase": str(update_status.get("phase") or "").strip(),
+            "action": str(update_status.get("action") or "").strip(),
+            "target_rev": str(update_status.get("target_rev") or "").strip(),
+            "target_version": str(update_status.get("target_version") or "").strip(),
+            "target_slot": str(update_status.get("target_slot") or "").strip(),
+            "scheduled_for": update_status.get("scheduled_for"),
+        },
+        "slots": _normalize_snapshot_material(slots),
         "capacity": _compact_snapshot_catalog(capacity, ("io", "skills", "scenarios")),
         "desktop_catalog": _compact_snapshot_catalog(
             desktop_catalog,
@@ -802,6 +812,8 @@ class HubLinkManager:
     def __init__(self) -> None:
         self._links: dict[str, HubMemberLink] = {}
         self._lock = asyncio.Lock()
+        self._member_snapshots: dict[str, dict[str, Any]] = {}
+        self._member_snapshot_fingerprints: dict[str, str] = {}
         self._hub_event_total = 0
         self._hub_core_update_broadcast_total = 0
         self._yjs_ingest_total = 0
@@ -1128,7 +1140,9 @@ class HubLinkManager:
         if not link:
             return {"ok": False, "error": "member_not_connected"}
         incoming = dict(status or {})
-        previous = link.node_snapshot if isinstance(link.node_snapshot, dict) else {}
+        previous = link.node_snapshot if isinstance(link.node_snapshot, dict) and link.node_snapshot else {}
+        if not previous:
+            previous = dict(self._member_snapshots.get(node_id) or {})
         snap = dict(previous)
         snap.update(incoming)
         if "capacity" not in incoming and isinstance(previous.get("capacity"), dict):
@@ -1141,13 +1155,22 @@ class HubLinkManager:
         elif isinstance(previous.get("desktop_catalog"), dict):
             snap["desktop_catalog"] = dict(previous.get("desktop_catalog") or {})
         snapshot_fingerprint = _snapshot_fingerprint(snap)
-        material_changed = not previous or snapshot_fingerprint != str(link.last_snapshot_fingerprint or "")
+        previous_fingerprint = str(
+            link.last_snapshot_fingerprint
+            or self._member_snapshot_fingerprints.get(node_id)
+            or ""
+        )
+        material_changed = not previous_fingerprint or snapshot_fingerprint != previous_fingerprint
         node_names = snap.get("node_names")
         if isinstance(node_names, list):
             link.node_names = [str(item or "").strip() for item in node_names if str(item or "").strip()]
         link.node_snapshot = snap
+        self._member_snapshots[node_id] = dict(snap)
         if material_changed:
             link.last_snapshot_fingerprint = snapshot_fingerprint
+            self._member_snapshot_fingerprints[node_id] = snapshot_fingerprint
+        elif not previous_fingerprint:
+            self._member_snapshot_fingerprints[node_id] = snapshot_fingerprint
         link.last_snapshot_at = time.time()
         link.last_message_at = link.last_snapshot_at
         update_status = snap.get("update_status")

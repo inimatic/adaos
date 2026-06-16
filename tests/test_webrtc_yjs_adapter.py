@@ -94,7 +94,7 @@ def test_datachannel_yjs_adapter_closes_oversized_inbound_messages(monkeypatch) 
     dc = _DummyDataChannel()
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
 
-    dc.emit("message", b"x" * (513 * 1024))
+    dc.emit("message", b"x" * (5 * 1024 * 1024))
 
     assert dc.close_called == 1
     asyncio.run(_expect_recv_closed(adapter))
@@ -106,7 +106,7 @@ def test_datachannel_yjs_adapter_closes_oversized_outbound_messages(monkeypatch)
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
 
     with pytest.raises(RuntimeError):
-        asyncio.run(adapter.send(b"x" * (513 * 1024)))
+        asyncio.run(adapter.send(b"x" * (5 * 1024 * 1024)))
 
     assert dc.close_called == 1
     assert dc.sent == []
@@ -115,7 +115,7 @@ def test_datachannel_yjs_adapter_closes_oversized_outbound_messages(monkeypatch)
 def test_datachannel_yjs_adapter_closes_high_outbound_buffer(monkeypatch) -> None:
     yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
     dc = _DummyDataChannel()
-    dc.bufferedAmount = 3 * 1024 * 1024
+    dc.bufferedAmount = 9 * 1024 * 1024
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
 
     with pytest.raises(RuntimeError):
@@ -128,7 +128,7 @@ def test_datachannel_yjs_adapter_closes_high_outbound_buffer(monkeypatch) -> Non
 def test_datachannel_yjs_adapter_waits_for_outbound_drain(monkeypatch) -> None:
     yjs_adapter, _called = _load_yjs_adapter(monkeypatch, drain_timeout_ms="50", drain_poll_ms="1")
     dc = _DummyDataChannel()
-    dc.bufferedAmount = 3 * 1024 * 1024
+    dc.bufferedAmount = 9 * 1024 * 1024
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
 
     async def _send_after_drain() -> None:
@@ -146,7 +146,7 @@ def test_datachannel_yjs_adapter_waits_for_outbound_drain(monkeypatch) -> None:
 def test_datachannel_yjs_adapter_rechecks_buffer_after_drain_timeout(monkeypatch) -> None:
     yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
     dc = _DummyDataChannel()
-    dc.bufferedAmount = 3 * 1024 * 1024
+    dc.bufferedAmount = 9 * 1024 * 1024
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
 
     async def _timeout_but_buffer_did_drain() -> bool:
@@ -164,7 +164,7 @@ def test_datachannel_yjs_adapter_rechecks_buffer_after_drain_timeout(monkeypatch
 def test_datachannel_yjs_adapter_coalesces_concurrent_outbound_drains(monkeypatch) -> None:
     yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
     dc = _DummyDataChannel()
-    dc.bufferedAmount = 3 * 1024 * 1024
+    dc.bufferedAmount = 9 * 1024 * 1024
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
     drain_calls = 0
 

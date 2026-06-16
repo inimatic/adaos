@@ -188,6 +188,106 @@ def test_update_member_snapshot_publishes_only_material_changes(monkeypatch) -> 
     assert payload["snapshot_update"]["state"] == "succeeded"
 
 
+def test_update_member_snapshot_ignores_update_status_volatile_fields(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    snapshot = {
+        "captured_at": 100.0,
+        "node_id": "member-1",
+        "subnet_id": "sn-1",
+        "role": "member",
+        "ready": True,
+        "node_state": "ready",
+        "route_mode": "ws",
+        "connected_to_hub": True,
+        "update_status": {
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "message": "core update target already active",
+            "reason": "hub.member_reconcile.snapshot",
+            "target_rev": "rev2026",
+            "target_version": "target-1",
+            "target_slot": "B",
+            "updated_at": 100.0,
+            "finished_at": 90.0,
+        },
+    }
+
+    first = asyncio.run(manager.update_member_snapshot("member-1", snapshot=snapshot))
+    second = asyncio.run(
+        manager.update_member_snapshot(
+            "member-1",
+            snapshot={
+                **snapshot,
+                "captured_at": 130.0,
+                "update_status": {
+                    **snapshot["update_status"],
+                    "message": "core update target already active; request deduplicated",
+                    "reason": "hub.member_reconcile.connect",
+                    "updated_at": 130.0,
+                    "finished_at": 125.0,
+                },
+            },
+        )
+    )
+
+    changed_events = [event for event in fake_bus.events if event.type == "subnet.member.snapshot.changed"]
+    assert first["changed"] is True
+    assert second["changed"] is False
+    assert len(changed_events) == 1
+    assert fake_directory.heartbeats == [("member-1", 130.0, "ready")]
+
+
+def test_update_member_snapshot_reconnect_reuses_cached_material_fingerprint(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    snapshot = {
+        "captured_at": 100.0,
+        "node_id": "member-1",
+        "node_names": ["Mediapoint"],
+        "role": "member",
+        "ready": True,
+        "node_state": "ready",
+        "route_mode": "ws",
+        "connected_to_hub": True,
+        "build": {"runtime_git_short_commit": "8b6e40e"},
+        "slots": {"active_slot": "B", "active_manifest": {"git_short_commit": "8b6e40e"}},
+        "desktop_catalog": {"apps": [{"id": "infrastate"}], "widgets": []},
+    }
+
+    first = asyncio.run(manager.update_member_snapshot("member-1", snapshot=snapshot))
+    asyncio.run(manager.unregister("member-1"))
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    status_after_reconnect = dict(snapshot)
+    status_after_reconnect["captured_at"] = 130.0
+    status_after_reconnect.pop("desktop_catalog", None)
+    second = asyncio.run(
+        manager.update_member_snapshot(
+            "member-1",
+            snapshot=status_after_reconnect,
+        )
+    )
+
+    changed_events = [event for event in fake_bus.events if event.type == "subnet.member.snapshot.changed"]
+    assert first["changed"] is True
+    assert second["changed"] is False
+    assert len(changed_events) == 1
+    assert manager._links["member-1"].node_snapshot["desktop_catalog"]["apps"][0]["id"] == "infrastate"
+    assert fake_directory.calls == [("member-1", snapshot)]
+    assert fake_directory.heartbeats == [("member-1", 130.0, "ready")]
+
+
 def test_update_member_snapshot_heartbeat_refreshes_runtime_snapshot(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
