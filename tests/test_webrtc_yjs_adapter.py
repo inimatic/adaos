@@ -41,7 +41,13 @@ class _DummyDataChannel:
                 handler(data)
 
 
-def _load_yjs_adapter(monkeypatch, *, enabled: str = "1"):
+def _load_yjs_adapter(
+    monkeypatch,
+    *,
+    enabled: str = "1",
+    drain_timeout_ms: str = "1",
+    drain_poll_ms: str = "1",
+):
     called = {"start": 0, "serve": 0}
 
     async def _start_y_server() -> None:
@@ -54,8 +60,17 @@ def _load_yjs_adapter(monkeypatch, *, enabled: str = "1"):
     fake_yjs = ModuleType("adaos.services.yjs")
     fake_yjs.gateway_ws = fake_gateway
     monkeypatch.setitem(sys.modules, "adaos.services.yjs", fake_yjs)
+    monkeypatch.setitem(sys.modules, "adaos.services.yjs.gateway_ws", fake_gateway)
     monkeypatch.delitem(sys.modules, "adaos.services.webrtc.yjs_adapter", raising=False)
+    try:
+        import adaos.services.webrtc as webrtc_pkg
+
+        monkeypatch.delattr(webrtc_pkg, "yjs_adapter", raising=False)
+    except Exception:
+        pass
     monkeypatch.setenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED", enabled)
+    monkeypatch.setenv("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_TIMEOUT_MS", drain_timeout_ms)
+    monkeypatch.setenv("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_POLL_MS", drain_poll_ms)
     return importlib.import_module("adaos.services.webrtc.yjs_adapter"), called
 
 
@@ -108,6 +123,24 @@ def test_datachannel_yjs_adapter_closes_high_outbound_buffer(monkeypatch) -> Non
 
     assert dc.close_called == 1
     assert dc.sent == []
+
+
+def test_datachannel_yjs_adapter_waits_for_outbound_drain(monkeypatch) -> None:
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch, drain_timeout_ms="50", drain_poll_ms="1")
+    dc = _DummyDataChannel()
+    dc.bufferedAmount = 3 * 1024 * 1024
+    adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
+
+    async def _send_after_drain() -> None:
+        task = asyncio.create_task(adapter.send(b"hello"))
+        await asyncio.sleep(0.01)
+        dc.bufferedAmount = 0
+        await task
+
+    asyncio.run(_send_after_drain())
+
+    assert dc.close_called == 0
+    assert dc.sent == [b"hello"]
 
 
 def test_datachannel_yjs_adapter_respects_disabled_env(monkeypatch) -> None:

@@ -31,6 +31,9 @@ def _env_int(name: str, default: int) -> int:
 _MAX_MESSAGE_BYTES = _env_int("ADAOS_WEBRTC_YJS_MAX_MESSAGE_BYTES", 512 * 1024)
 _MAX_QUEUE_BYTES = _env_int("ADAOS_WEBRTC_YJS_MAX_QUEUE_BYTES", 2 * 1024 * 1024)
 _MAX_QUEUE_MESSAGES = _env_int("ADAOS_WEBRTC_YJS_MAX_QUEUE_MESSAGES", 256)
+_OUTBOUND_DRAIN_TARGET_BYTES = _env_int("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_TARGET_BYTES", 1024 * 1024)
+_OUTBOUND_DRAIN_TIMEOUT_MS = _env_int("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_TIMEOUT_MS", 8000)
+_OUTBOUND_DRAIN_POLL_MS = _env_int("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_POLL_MS", 50)
 
 
 class DataChannelYjsAdapter:
@@ -81,12 +84,17 @@ class DataChannelYjsAdapter:
             raise RuntimeError("webrtc_yjs_outbound_message_too_large")
         buffered = self._buffered_amount()
         if buffered is not None and buffered > _MAX_QUEUE_BYTES:
-            self._close_for_pressure(
-                "outbound_buffered_amount_high",
-                buffered_amount=buffered,
-                limit=_MAX_QUEUE_BYTES,
-            )
-            raise RuntimeError("webrtc_yjs_outbound_buffered_amount_high")
+            if await self._wait_for_outbound_drain():
+                buffered = self._buffered_amount()
+            if buffered is not None and buffered > _MAX_QUEUE_BYTES:
+                self._close_for_pressure(
+                    "outbound_buffered_amount_high",
+                    buffered_amount=buffered,
+                    limit=_MAX_QUEUE_BYTES,
+                    drain_target=_OUTBOUND_DRAIN_TARGET_BYTES,
+                    drain_timeout_ms=_OUTBOUND_DRAIN_TIMEOUT_MS,
+                )
+                raise RuntimeError("webrtc_yjs_outbound_buffered_amount_high")
         try:
             self._dc.send(payload)
         except Exception:
@@ -120,6 +128,34 @@ class DataChannelYjsAdapter:
             return int(value) if value is not None else None
         except Exception:
             return None
+
+    async def _wait_for_outbound_drain(self) -> bool:
+        target = min(_OUTBOUND_DRAIN_TARGET_BYTES, _MAX_QUEUE_BYTES)
+        deadline = asyncio.get_running_loop().time() + (_OUTBOUND_DRAIN_TIMEOUT_MS / 1000.0)
+        last_buffered = self._buffered_amount()
+        _log.warning(
+            "waiting for yjs datachannel outbound drain webspace=%s buffered_amount=%s target=%s timeout_ms=%s",
+            self._path,
+            last_buffered,
+            target,
+            _OUTBOUND_DRAIN_TIMEOUT_MS,
+        )
+        while not self._closed:
+            buffered = self._buffered_amount()
+            if buffered is None or buffered <= target:
+                if last_buffered is not None:
+                    _log.info(
+                        "yjs datachannel outbound drain recovered webspace=%s buffered_amount=%s target=%s",
+                        self._path,
+                        buffered,
+                        target,
+                    )
+                return True
+            last_buffered = buffered
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(max(1, _OUTBOUND_DRAIN_POLL_MS) / 1000.0)
+        return False
 
     def _enqueue(self, payload: bytes) -> None:
         if self._closed:
