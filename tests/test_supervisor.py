@@ -1583,6 +1583,7 @@ def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_by_defaul
 
 def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fails(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", "0")
     monkeypatch.setattr(
         supervisor,
         "prepare_pending_update",
@@ -1646,6 +1647,82 @@ def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fa
     assert status["candidate_prewarm_state"] == "cutover_deferred"
     assert "candidate reconnect failed" in str(status["candidate_prewarm_message"] or "")
     assert cleanup_calls == [("supervisor.candidate.cutover_deferred", "B")]
+
+
+def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_by_default(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
+    monkeypatch.setattr(
+        supervisor,
+        "prepare_pending_update",
+        lambda plan: {
+            "state": "prepared",
+            "phase": "prepare",
+            "target_slot": "B",
+            "manifest": {"slot": "B"},
+            "plan": {"target_slot": "B"},
+            "finished_at": 222.0,
+        },
+    )
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    lifecycle_calls: list[str] = []
+    cleanup_calls: list[tuple[str, str | None]] = []
+    activated_slots: list[str] = []
+
+    async def _shutdown(**kwargs):
+        lifecycle_calls.append("shutdown")
+        return {"ok": True}
+
+    async def _ensure_stopped(**kwargs):
+        lifecycle_calls.append("stopped")
+        return {"ok": True, "forced": False}
+
+    async def _candidate_prewarm(*, target_slot: str | None):
+        return {
+            "attempted": True,
+            "state": "ready",
+            "message": "passive candidate runtime is ready on http://127.0.0.1:8778",
+            "ready_at": 223.0,
+        }
+
+    async def _cleanup_candidate_runtime(*, reason: str, slot: str | None = None):
+        cleanup_calls.append((reason, slot))
+        return {"ok": True, "stopped": True, "slot": slot}
+
+    async def _promote_candidate_runtime(*, slot: str, reason: str):
+        raise RuntimeError("candidate reconnect failed")
+
+    monkeypatch.setattr(manager, "_request_runtime_shutdown", _shutdown)
+    monkeypatch.setattr(manager, "_ensure_runtime_stopped_for_update", _ensure_stopped)
+    monkeypatch.setattr(manager, "_candidate_prewarm", _candidate_prewarm)
+    monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
+    monkeypatch.setattr(manager, "_promote_candidate_runtime", _promote_candidate_runtime)
+    monkeypatch.setattr(supervisor, "activate_slot", lambda slot: activated_slots.append(str(slot)))
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    asyncio.run(
+        manager._prepare_and_countdown_update_worker(
+            action="update",
+            target_rev="rev2026",
+            target_version="1.2.3",
+            reason="test.update",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    status = read_status()
+    assert status["state"] == "restarting"
+    assert status["phase"] == "launch"
+    assert status["target_slot"] == "B"
+    assert status["candidate_prewarm_state"] == "cutover_fallback"
+    assert "candidate reconnect failed" in str(status["candidate_prewarm_message"] or "")
+    assert lifecycle_calls == ["shutdown", "stopped"]
+    assert cleanup_calls == [("supervisor.candidate.cutover_fallback", "B")]
+    assert activated_slots == ["B"]
 
 
 def test_promote_candidate_runtime_adopts_candidate_process(monkeypatch, tmp_path) -> None:

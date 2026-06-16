@@ -7475,28 +7475,65 @@ class SupervisorManager:
                     )
                 except Exception as exc:
                     clear_core_update_plan()
+                    if not _warm_switch_cold_fallback_enabled():
+                        candidate_cleanup = await self._cleanup_candidate_runtime(
+                            reason="supervisor.candidate.cutover_deferred",
+                            slot=target_slot,
+                        )
+                        self._schedule_planned_transition(
+                            {
+                                "action": action,
+                                "target_rev": target_rev,
+                                "target_version": target_version,
+                                "reason": reason,
+                                "countdown_sec": countdown_sec,
+                                "drain_timeout_sec": drain_timeout_sec,
+                                "signal_delay_sec": signal_delay_sec,
+                            },
+                            scheduled_for=time.time() + _warm_switch_defer_sec(),
+                            planned_reason="candidate_cutover_failed",
+                            message=(
+                                f"core update deferred; candidate slot {target_slot} cutover failed before active shutdown"
+                                if target_slot
+                                else "core update deferred; candidate cutover failed before active shutdown"
+                            ),
+                            extra_status={
+                                "target_slot": target_slot,
+                                "prepared_at": float(prepare_result.get("finished_at") or time.time()),
+                                "prepare_elapsed_s": prepare_elapsed_s,
+                                "install_elapsed_s": install_elapsed_s,
+                                "install_installer": install_installer,
+                                "venv_seed_source": venv_seed_source,
+                                "venv_seeded": venv_seeded,
+                                "candidate_prewarm_state": "cutover_deferred",
+                                "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
+                                "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                                "candidate_cleanup": candidate_cleanup,
+                                "manifest": manifest,
+                            },
+                            extra_attempt={
+                                "target_slot": target_slot,
+                                "candidate_prewarm_state": "cutover_deferred",
+                                "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
+                                "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                            },
+                        )
+                        return
+
                     candidate_cleanup = await self._cleanup_candidate_runtime(
-                        reason="supervisor.candidate.cutover_deferred",
+                        reason="supervisor.candidate.cutover_fallback",
                         slot=target_slot,
                     )
-                    self._schedule_planned_transition(
+                    candidate_prewarm_state = "cutover_fallback"
+                    candidate_prewarm_message = f"{type(exc).__name__}: {exc}"
+                    write_core_update_status(
                         {
+                            "state": "restarting",
+                            "phase": "shutdown",
                             "action": action,
                             "target_rev": target_rev,
                             "target_version": target_version,
                             "reason": reason,
-                            "countdown_sec": countdown_sec,
-                            "drain_timeout_sec": drain_timeout_sec,
-                            "signal_delay_sec": signal_delay_sec,
-                        },
-                        scheduled_for=time.time() + _warm_switch_defer_sec(),
-                        planned_reason="candidate_cutover_failed",
-                        message=(
-                            f"core update deferred; candidate slot {target_slot} cutover failed before active shutdown"
-                            if target_slot
-                            else "core update deferred; candidate cutover failed before active shutdown"
-                        ),
-                        extra_status={
                             "target_slot": target_slot,
                             "prepared_at": float(prepare_result.get("finished_at") or time.time()),
                             "prepare_elapsed_s": prepare_elapsed_s,
@@ -7504,62 +7541,60 @@ class SupervisorManager:
                             "install_installer": install_installer,
                             "venv_seed_source": venv_seed_source,
                             "venv_seeded": venv_seeded,
-                            "candidate_prewarm_state": "cutover_deferred",
-                            "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
+                            "candidate_prewarm_state": candidate_prewarm_state,
+                            "candidate_prewarm_message": candidate_prewarm_message,
                             "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                             "candidate_cleanup": candidate_cleanup,
+                            "message": (
+                                f"candidate slot {target_slot} cutover failed; falling back to cold restart"
+                                if target_slot
+                                else "candidate cutover failed; falling back to cold restart"
+                            ),
                             "manifest": manifest,
-                        },
-                        extra_attempt={
+                        }
+                    )
+                else:
+                    activate_slot(target_slot)
+                    used_candidate_cutover = True
+                    candidate_launch_state = "promoted_to_active"
+                    candidate_launch_message = "passive candidate runtime promoted to active via warm-switch cutover"
+                    if old_active_proc is not None and old_active_proc.poll() is None:
+                        await self._terminate_proc_locked(
+                            proc=old_active_proc,
+                            base_url=old_active_url,
+                            graceful=True,
+                            reason="supervisor.fast_cutover.old_active_stop",
+                        )
+                    write_core_update_status(
+                        {
+                            "state": "restarting",
+                            "phase": "launch",
+                            "action": action,
+                            "target_rev": target_rev,
+                            "target_version": target_version,
+                            "reason": reason,
                             "target_slot": target_slot,
-                            "candidate_prewarm_state": "cutover_deferred",
-                            "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
+                            "prepared_at": float(prepare_result.get("finished_at") or time.time()),
+                            "prepare_elapsed_s": prepare_elapsed_s,
+                            "install_elapsed_s": install_elapsed_s,
+                            "install_installer": install_installer,
+                            "venv_seed_source": venv_seed_source,
+                            "venv_seeded": venv_seeded,
+                            "candidate_prewarm_state": candidate_launch_state,
+                            "candidate_prewarm_message": candidate_launch_message,
                             "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                        },
+                            "message": (
+                                f"prepared slot {target_slot} activated via warm-switch cutover; awaiting validation"
+                                if target_slot
+                                else "prepared slot activated via warm-switch cutover; awaiting validation"
+                            ),
+                            "manifest": manifest,
+                        }
                     )
+                    async with self._lock:
+                        self._desired_running = True
+                        self._persist_runtime_state()
                     return
-
-                activate_slot(target_slot)
-                used_candidate_cutover = True
-                candidate_launch_state = "promoted_to_active"
-                candidate_launch_message = "passive candidate runtime promoted to active via warm-switch cutover"
-                if old_active_proc is not None and old_active_proc.poll() is None:
-                    await self._terminate_proc_locked(
-                        proc=old_active_proc,
-                        base_url=old_active_url,
-                        graceful=True,
-                        reason="supervisor.fast_cutover.old_active_stop",
-                    )
-                write_core_update_status(
-                    {
-                        "state": "restarting",
-                        "phase": "launch",
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "target_slot": target_slot,
-                        "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                        "prepare_elapsed_s": prepare_elapsed_s,
-                        "install_elapsed_s": install_elapsed_s,
-                        "install_installer": install_installer,
-                        "venv_seed_source": venv_seed_source,
-                        "venv_seeded": venv_seeded,
-                        "candidate_prewarm_state": candidate_launch_state,
-                        "candidate_prewarm_message": candidate_launch_message,
-                        "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                        "message": (
-                            f"prepared slot {target_slot} activated via warm-switch cutover; awaiting validation"
-                            if target_slot
-                            else "prepared slot activated via warm-switch cutover; awaiting validation"
-                        ),
-                        "manifest": manifest,
-                    }
-                )
-                async with self._lock:
-                    self._desired_running = True
-                    self._persist_runtime_state()
-                return
 
             failure_phase = "shutdown"
             shutdown_request_error: Exception | None = None
@@ -7638,7 +7673,7 @@ class SupervisorManager:
                     candidate_launch_message = (
                         f"warm-switch cutover fallback: {type(exc).__name__}: {exc}"
                     )
-            elif candidate_prewarm_state != "skipped":
+            elif candidate_prewarm_state not in {"skipped", "cutover_fallback"}:
                 candidate_cleanup = await self._cleanup_candidate_runtime(
                     reason="supervisor.candidate.stop_before_active_launch",
                     slot=target_slot,
