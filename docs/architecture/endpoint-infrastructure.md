@@ -6,7 +6,9 @@ This document defines how AdaOS should model ReDevice agents, browser surfaces,
 and future device agents as managed endpoints. It complements
 [Device Access and Browsers](device-access-and-browsers.md), which describes
 access policy for browsers and members, and [Routing](../concepts/routing.md),
-which describes current IO and skill routing.
+which describes current IO and skill routing. Endpoint audio sessions,
+activation, STT routing, Bluetooth audio, dialog mode, and dictation are
+defined separately in [Endpoint Audio Service](endpoint-audio-service.md).
 
 ## Core Decision
 
@@ -42,6 +44,9 @@ services.
 - `EndpointStream`: active data stream from or to an endpoint service.
 - `ServiceState`: current state of each endpoint service.
 - `EndpointHealth`: heartbeat and health snapshot for the endpoint.
+- `EndpointAudioService`: subnet service that owns audio session lifecycle,
+  activation, STT routing, diagnostics, response routing, and retention policy
+  for audio-capable endpoints.
 - `ReDeviceAgent`: native-first agent running on an old or constrained device.
 
 Avoid using `Supervisor` for ReDevice state. Use `ACTIVE_ENDPOINT` for the
@@ -141,6 +146,8 @@ MVP ReDevice services:
 Future services:
 
 - `audio_input_endpoint`: microphone capture or low-rate audio stream.
+- `bluetooth_audio_endpoint`: assisted Bluetooth input/output route selection,
+  diagnostics, and best-effort reconnect actions.
 - `camera_snapshot_endpoint`: still image capture.
 - `sensor_endpoint`: GPS, accelerometer, gyroscope, orientation, ambient data.
 - `presence_endpoint`: simple motion/presence state.
@@ -732,6 +739,11 @@ as:
 
 The current MVP may keep scenario assignment in skill memory, but the target
 owner is `EndpointAssignment` in Endpoint Registry.
+
+Audio-specific user-facing controls should use the shared
+`EndpointAudioService` model. `redevice_voice` is a pilot/debug skill over that
+service, not the owner of microphone transport, STT policy, dialog routing, or
+dictation buffers.
 
 ## First Vertical Slice
 

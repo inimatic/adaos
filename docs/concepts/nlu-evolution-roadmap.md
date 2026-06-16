@@ -513,6 +513,59 @@ Acceptance checklist:
 - [ ] `[could]` Add dashboards after the event model answers concrete QA
   questions reliably.
 
+## Gate 13: Endpoint Audio and Dialog Sessions
+
+Goal: endpoint-originated voice becomes a governed audio session before it
+becomes text, intent, dialog, or dictation.
+
+Primary use cases:
+
+- "Tablet, next" from a ReDevice endpoint running push-to-talk or VAD.
+- "Ada, listen" followed by a long dictation segment, then "what do you think?"
+  or "add it to notes".
+- A Bluetooth headset connected to a ReDevice endpoint acts as the microphone
+  and speaker while STT and NLU run on a member node or trusted cloud provider.
+
+Required model:
+
+- `EndpointAudioService` owns audio session lifecycle, transport selection,
+  STT routing, activation events, diagnostics, and retention policy.
+- ReDevice, iOS native agent, browser endpoints, and future endpoints publish
+  capabilities through Endpoint Registry and receive policy from the hub.
+- Skills consume transcripts, dialog events, and text buffers through SDK
+  interfaces. Skills do not implement private microphone transport, cloud STT
+  routing, or retention rules.
+
+Acceptance checklist:
+
+- [ ] `[must]` Endpoint Registry exposes audio input/output capabilities,
+  Bluetooth route state, local STT benchmark state, and allowed activation
+  strategies per endpoint.
+- [ ] `[must]` `EndpointAudioService` can create, stop, recover, and audit
+  `command`, `dialog`, `dictation`, and `audio_debug` sessions.
+- [ ] `[must]` Push-to-talk and VAD work on legacy ReDevice without local STT;
+  audio is segmented, bounded, and routed to the member-hosted audio pipeline.
+- [ ] `[must]` Final transcript dispatch reuses the normal AdaOS Voice/NLU path,
+  including Teacher sessions, confirmations, action governance, and published
+  voice capability bindings.
+- [ ] `[must]` Dialog and dictation sessions produce durable text-buffer events
+  that can be reviewed, edited, sent to a skill, added to notes, or discarded.
+- [ ] `[must]` Cloud STT/LLM usage is policy-gated and visible in evidence:
+  provider, cost class, retention mode, fallback route, and terminal outcome.
+- [ ] `[must]` Audio/video/media payloads do not travel through Yjs; the client
+  receives only references, state summaries, and UI-safe events.
+- [ ] `[should]` Bluetooth speaker/headset setup is supported through assisted
+  native settings, route tests, profile diagnostics, and preferred route memory.
+- [ ] `[should]` Wake-word or endpoint-name activation is available only after
+  VAD/PTT reliability, false-positive rate, and battery impact are measured.
+- [ ] `[should]` Multi-endpoint arbitration suppresses duplicate commands and
+  prefers the active endpoint, nearest endpoint, or explicitly named endpoint.
+- [ ] `[could]` Add local lightweight keyword spotting for modern endpoints
+  while keeping legacy Android on VAD/PTT plus member-side STT.
+- [ ] `[deferred]` Always-on conversational listening, speaker verification,
+  diarization, and cross-device beamforming wait until the first command and
+  dictation loops are stable and observable.
+
 ## Implementation Order
 
 The recommended delivery order is:
@@ -525,9 +578,12 @@ The recommended delivery order is:
 3. Add Gate 4 for query/result-mode learning, still using Infrastate Inventory.
 4. Harden Gate 5 and Gate 7 so STT variants and corrections do not corrupt
    templates.
-5. Add Gate 8 and Gate 9 to route gaps into Builder.
-6. Add Gate 10 and Gate 11 before broad promotion or public reuse.
-7. Add Gate 12 metrics continuously, but keep dashboards secondary until the
+5. Add Gate 13 for endpoint audio sessions before broad dialog or dictation
+   UX. Keep the first slice bounded to ReDevice push-to-talk/VAD, member-side
+   STT, and normal Voice/NLU dispatch.
+6. Add Gate 8 and Gate 9 to route gaps into Builder.
+7. Add Gate 10 and Gate 11 before broad promotion or public reuse.
+8. Add Gate 12 metrics continuously, but keep dashboards secondary until the
    event questions are stable.
 
 This order intentionally forms a spiral. Each pass adds capability surface,

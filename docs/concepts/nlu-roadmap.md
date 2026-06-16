@@ -110,6 +110,12 @@ clarification loop over a deterministic AdaOS runtime:
 9. **Developer handoff plane**: when a capability or descriptor is missing,
    Teacher creates structured development candidates for skill/scenario
    authoring instead of inventing fake intents.
+10. **Endpoint audio session plane**: voice input from ReDevice, browser,
+    Android, iOS, Bluetooth headset, or future devices is normalized as
+    governed audio sessions before it becomes STT text. Activation, audio
+    transport, STT backend choice, dialog/dictation ownership, response
+    routing, and retention are owned by shared endpoint infrastructure, not by
+    NLU templates or ReDevice-specific skills.
 
 Core invariant: AdaOS acts deterministically when understanding is sufficient,
 and uses LLM dialog only to reduce uncertainty or improve the domain model.
@@ -172,6 +178,11 @@ implemented in smaller slices:
 - **Missing descriptors are not NLU failures.** If a skill/scenario can perform
   an action but has not published a conversational skeleton, the correct
   outcome is `descriptor_fix`, not a guessed template.
+- **Voice input is an audio session before it is text.** PTT, VAD, wake-word
+  detection, Bluetooth routing, STT, dialog mode, dictation buffers, and
+  response playback are separate policy-bound stages. NLU should consume final
+  transcripts with audio/session evidence, not raw microphone streams or
+  Yjs-carried media payloads.
 
 Reference flows that must stay representable:
 
@@ -194,6 +205,13 @@ Reference flows that must stay representable:
   resolves `infrastate.installed_skills` -> compound action preview
   (`desktop.open_modal(infrastate_modal)` + `ui.affordance.activate(...)`) ->
   dispatch/outcome verification.
+- **Endpoint audio command**: ReDevice VAD detects speech -> segment upload
+  creates an `audio-session.v1` utterance -> STT emits a final transcript ->
+  normal Voice/NLU dispatch handles "tablet next" as an endpoint command with
+  endpoint/session evidence.
+- **Dictation dialog**: "Ada, listen" starts a `dialog_session` or
+  `dictation_session`; final transcripts append to a text buffer until the
+  user asks for advice, summary, save, send, or discard.
 
 Minimal milestone gates:
 
@@ -662,7 +680,64 @@ below remain useful for tracking existing implementation work.
 - [ ] `[deferred]` Add full multi-locale model/profile management beyond
   RU/EN until usage statistics justify it.
 
-### L. Development Handoff and Recovery
+### L. Endpoint Audio, Voice Activation, and Dialog Sessions
+
+- [ ] `[must]` Define `EndpointAudioService` as shared subnet
+  infrastructure, not as ReDevice-specific skill code. ReDevice Voice should be
+  a debug/user-facing consumer of this service.
+- [ ] `[must]` Define endpoint audio contracts:
+  `endpoint-audio-profile.v1`, `audio-session.v1`, `audio-chunk.v1`,
+  `speech-event.v1`, `transcript.v1`, `dialog-session.v1`, and
+  `text-buffer.v1`.
+- [ ] `[must]` Extend Endpoint Registry and endpoint policy with
+  `audio_input_endpoint`, `audio_output_endpoint`, `bluetooth_audio_endpoint`,
+  activation strategies, local STT benchmark status, cloud STT allowance,
+  retention policy, and visible microphone state.
+- [ ] `[must]` Keep audio, video, and image payload streams outside Yjs. Route
+  media through Endpoint Router and EndpointAudioService with transport
+  evidence, bounded payloads, and explicit degradation reasons.
+- [ ] `[must]` Implement a legacy-safe ReDevice capture path with push-to-talk
+  and VAD: pre-roll buffer, maximum segment duration, silence stop, segment
+  upload, and retention of only the last debug clips when policy allows.
+- [ ] `[must]` Route final transcripts into the normal AdaOS Voice/NLU
+  dispatcher. Partial transcripts are UI/debug signals and must not dispatch
+  mutating actions.
+- [ ] `[must]` Model session modes explicitly: `command`, `dialog`,
+  `dictation`, and `audio_debug`. Each session has an owner
+  `node_id:skill_id`, policy scope, transport selection, terminal state, and
+  audit trail.
+- [ ] `[must]` Define STT routing policy: endpoint-local STT only when installed
+  and benchmarked, member-local STT when available, cloud Whisper or equivalent
+  only when policy allows, otherwise visible degraded failure.
+- [ ] `[must]` Add audio privacy and retention gates: cloud allowed or denied,
+  default no retention, bounded debug retention, delete/export hooks, and audit
+  evidence.
+- [ ] `[must]` Add response routing after NLU/LLM result: endpoint speaker,
+  endpoint display, browser, notification, or text buffer. The audio service
+  does not bypass normal AdaOS action governance.
+- [ ] `[should]` Add Bluetooth profile diagnostics and assisted management:
+  A2DP, HFP, SCO, built-in mic plus Bluetooth speaker, preferred route, native
+  settings launch, and speaker/microphone tests.
+- [ ] `[should]` Add audio front-end diagnostics: signal level, clipping, noise
+  floor, SNR estimate, gain profile, latency, echo risk, battery, and thermal
+  status.
+- [ ] `[should]` Add multi-endpoint arbitration and duplicate suppression when
+  several endpoints hear the same activation phrase.
+- [ ] `[should]` Feed named entities, endpoint aliases, skill names, scenario
+  names, and current active application into STT phrase hints or custom
+  vocabulary where the backend supports it.
+- [ ] `[should]` Support turn-taking, response interruption, and output ducking
+  for dialog sessions when the endpoint and transport can do it reliably.
+- [ ] `[could]` Add wake-word or endpoint-name activation after push-to-talk and
+  VAD are stable on legacy Android and native iOS agents.
+- [ ] `[could]` Add a ReDevice Voice debug UI over EndpointAudioService showing
+  sessions, STT route, transport, latency, VAD events, and retained debug
+  clips.
+- [ ] `[deferred]` Full always-on conversational mode, diarization, speaker
+  verification, and cross-device beamforming remain out of the first endpoint
+  audio milestone.
+
+### M. Development Handoff and Recovery
 
 - [ ] `[must]` Represent missing action descriptors as `descriptor_fix`
   candidates when a skill/scenario capability exists but is invisible or
@@ -676,7 +751,7 @@ below remain useful for tracking existing implementation work.
   the wrong UI/config/endpoint action, record the correction and restore state
   when the side-effect class supports it.
 
-### M. Quality and Analytics Plane
+### N. Quality and Analytics Plane
 
 - [ ] `[must]` Define the first QA questions before adding dashboards:
   "why did this phrase miss?", "why did it dispatch?", "what did it cost?",
