@@ -506,11 +506,13 @@ def test_member_infrastate_projection_skips_same_material_heartbeat(monkeypatch)
     class _FakeMap:
         def __init__(self) -> None:
             self.data: dict[str, object] = {}
+            self.set_total = 0
 
         def get(self, key: str) -> object:
             return self.data.get(key)
 
         def set(self, _txn: object, key: str, value: object) -> None:
+            self.set_total += 1
             self.data[key] = value
 
     class _FakeDoc:
@@ -584,6 +586,23 @@ def test_member_infrastate_projection_skips_same_material_heartbeat(monkeypatch)
 
     assert opened == ["desktop"]
     assert manager._member_infrastate_projection_total == 1
+    assert fake_doc.data_map.set_total == 1
+
+    manager_after_restart = mod.HubLinkManager()
+
+    async def _exercise_after_restart() -> None:
+        await manager_after_restart._publish_member_infrastate_projection(
+            "member-1",
+            node_names=["Mediapoint"],
+            snapshot={**snapshot, "captured_at": 300.0},
+            captured_at=300.0,
+        )
+
+    asyncio.run(_exercise_after_restart())
+
+    assert opened == ["desktop", "desktop"]
+    assert fake_doc.data_map.set_total == 1
+    assert manager_after_restart._member_infrastate_projection_total == 0
 
 
 def test_update_member_snapshot_ignores_nested_capacity_timestamps(monkeypatch) -> None:

@@ -143,6 +143,50 @@ def test_datachannel_yjs_adapter_waits_for_outbound_drain(monkeypatch) -> None:
     assert dc.sent == [b"hello"]
 
 
+def test_datachannel_yjs_adapter_rechecks_buffer_after_drain_timeout(monkeypatch) -> None:
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
+    dc = _DummyDataChannel()
+    dc.bufferedAmount = 3 * 1024 * 1024
+    adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
+
+    async def _timeout_but_buffer_did_drain() -> bool:
+        dc.bufferedAmount = 0
+        return False
+
+    adapter._wait_for_outbound_drain = _timeout_but_buffer_did_drain  # type: ignore[method-assign]
+
+    asyncio.run(adapter.send(b"hello"))
+
+    assert dc.close_called == 0
+    assert dc.sent == [b"hello"]
+
+
+def test_datachannel_yjs_adapter_coalesces_concurrent_outbound_drains(monkeypatch) -> None:
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
+    dc = _DummyDataChannel()
+    dc.bufferedAmount = 3 * 1024 * 1024
+    adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
+    drain_calls = 0
+
+    async def _drain_once() -> bool:
+        nonlocal drain_calls
+        drain_calls += 1
+        await asyncio.sleep(0.01)
+        dc.bufferedAmount = 0
+        return True
+
+    adapter._wait_for_outbound_drain_once = _drain_once  # type: ignore[method-assign]
+
+    async def _send_many() -> None:
+        await asyncio.gather(*(adapter.send(f"msg-{idx}".encode("utf-8")) for idx in range(5)))
+
+    asyncio.run(_send_many())
+
+    assert drain_calls == 1
+    assert dc.close_called == 0
+    assert dc.sent == [f"msg-{idx}".encode("utf-8") for idx in range(5)]
+
+
 def test_datachannel_yjs_adapter_respects_disabled_env(monkeypatch) -> None:
     yjs_adapter, called = _load_yjs_adapter(monkeypatch, enabled="0")
 

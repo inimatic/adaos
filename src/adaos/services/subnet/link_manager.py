@@ -552,6 +552,18 @@ def _member_infrastate_projection_fingerprint(projection: dict[str, Any]) -> str
     return json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def _member_infrastate_projection_material_matches(existing: Any, projection: dict[str, Any]) -> bool:
+    existing_projection = _coerce_json_dict(existing)
+    if not existing_projection or not isinstance(projection, dict):
+        return False
+    try:
+        return _member_infrastate_projection_fingerprint(existing_projection) == _member_infrastate_projection_fingerprint(
+            projection
+        )
+    except Exception:
+        return False
+
+
 def _is_member_infrastate_projection(value: Any) -> bool:
     infrastate = _coerce_json_dict(value)
     if not infrastate:
@@ -1040,7 +1052,11 @@ class HubLinkManager:
                 data_map = ydoc.get_map("data")
                 nodes = _coerce_json_dict(data_map.get("nodes"))
                 node_state = _coerce_json_dict(nodes.get(node_key))
-                if _coerce_json_dict(node_state.get("infrastate")) == projection_copy:
+                existing_projection = _coerce_json_dict(node_state.get("infrastate"))
+                if existing_projection == projection_copy or _member_infrastate_projection_material_matches(
+                    existing_projection,
+                    projection_copy,
+                ):
                     return
                 node_state["infrastate"] = projection_copy
                 nodes[node_key] = node_state
@@ -1068,7 +1084,11 @@ class HubLinkManager:
                             data_map = ydoc.get_map("data")
                             nodes = _coerce_json_dict(data_map.get("nodes"))
                             node_state = _coerce_json_dict(nodes.get(node_key))
-                            if _coerce_json_dict(node_state.get("infrastate")) == projection_copy:
+                            existing_projection = _coerce_json_dict(node_state.get("infrastate"))
+                            if existing_projection == projection_copy or _member_infrastate_projection_material_matches(
+                                existing_projection,
+                                projection_copy,
+                            ):
                                 self._member_infrastate_projection_fingerprints[cache_key] = fingerprint
                                 self._member_infrastate_projection_last_at[cache_key] = now
                                 continue

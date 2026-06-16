@@ -45,6 +45,7 @@ class DataChannelYjsAdapter:
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._queued_bytes = 0
         self._closed = False
+        self._outbound_drain_task: asyncio.Task[bool] | None = None
 
         @dc.on("message")
         def on_message(data: bytes | str) -> None:
@@ -84,8 +85,8 @@ class DataChannelYjsAdapter:
             raise RuntimeError("webrtc_yjs_outbound_message_too_large")
         buffered = self._buffered_amount()
         if buffered is not None and buffered > _MAX_QUEUE_BYTES:
-            if await self._wait_for_outbound_drain():
-                buffered = self._buffered_amount()
+            await self._wait_for_outbound_drain()
+            buffered = self._buffered_amount()
             if buffered is not None and buffered > _MAX_QUEUE_BYTES:
                 self._close_for_pressure(
                     "outbound_buffered_amount_high",
@@ -130,6 +131,18 @@ class DataChannelYjsAdapter:
             return None
 
     async def _wait_for_outbound_drain(self) -> bool:
+        task = self._outbound_drain_task
+        if task and not task.done():
+            return await task
+        task = asyncio.create_task(self._wait_for_outbound_drain_once())
+        self._outbound_drain_task = task
+        try:
+            return await task
+        finally:
+            if self._outbound_drain_task is task:
+                self._outbound_drain_task = None
+
+    async def _wait_for_outbound_drain_once(self) -> bool:
         target = min(_OUTBOUND_DRAIN_TARGET_BYTES, _MAX_QUEUE_BYTES)
         deadline = asyncio.get_running_loop().time() + (_OUTBOUND_DRAIN_TIMEOUT_MS / 1000.0)
         last_buffered = self._buffered_amount()
