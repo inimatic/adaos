@@ -80,7 +80,7 @@ def _normalize_snapshot_material(value: Any, *, path: tuple[str, ...] = ()) -> A
         normalized: dict[str, Any] = {}
         for key, item in value.items():
             key_str = str(key)
-            if key_str in {"captured_at", "updated_at", "last_seen"}:
+            if key_str in {"captured_at", "updated_at", "last_seen", "last_refresh_ts"}:
                 continue
             normalized[key_str] = _normalize_snapshot_material(item, path=(*path, key_str))
         return normalized
@@ -618,6 +618,17 @@ def _member_node_state_for_ingest(existing: Any, incoming: dict[str, Any], *, no
     else:
         state.pop("infrastate", None)
     return state
+
+
+def _member_node_state_material_matches(existing: Any, incoming: Any) -> bool:
+    existing_state = _coerce_json_dict(existing)
+    incoming_state = _coerce_json_dict(incoming)
+    if not existing_state or not incoming_state:
+        return False
+    try:
+        return _normalize_snapshot_material(existing_state) == _normalize_snapshot_material(incoming_state)
+    except Exception:
+        return False
 
 
 def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> str:
@@ -1615,8 +1626,9 @@ class HubLinkManager:
         def _merge_node_state(ydoc: Any, txn: Any) -> None:
             data_map = ydoc.get_map("data")
             nodes = _coerce_json_dict(data_map.get("nodes"))
-            merged_state = _member_node_state_for_ingest(nodes.get(node_key), state_copy)
-            if nodes.get(node_key) == merged_state:
+            existing_state = nodes.get(node_key)
+            merged_state = _member_node_state_for_ingest(existing_state, state_copy)
+            if existing_state == merged_state or _member_node_state_material_matches(existing_state, merged_state):
                 return
             nodes[node_key] = merged_state
             data_map.set(txn, "nodes", nodes)
@@ -1651,8 +1663,9 @@ class HubLinkManager:
                 async with async_get_ydoc(ws_id, load_mark_roots=["data"], governed=True) as ydoc:
                     data_map = ydoc.get_map("data")
                     nodes = _coerce_json_dict(data_map.get("nodes"))
-                    merged_state = _member_node_state_for_ingest(nodes.get(node_key), state_copy)
-                    if nodes.get(node_key) == merged_state:
+                    existing_state = nodes.get(node_key)
+                    merged_state = _member_node_state_for_ingest(existing_state, state_copy)
+                    if existing_state == merged_state or _member_node_state_material_matches(existing_state, merged_state):
                         return
                     nodes[node_key] = merged_state
                     with ydoc.begin_transaction() as txn:

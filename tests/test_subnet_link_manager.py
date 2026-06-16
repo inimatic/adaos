@@ -447,6 +447,33 @@ def test_member_node_state_ingest_drops_untrusted_infrastate_without_hub_project
     assert merged == {"desktop": {"theme": "light"}}
 
 
+def test_member_node_state_material_match_ignores_volatile_timestamps() -> None:
+    existing = {
+        "desktop": {"theme": "dark", "updated_at": 100.0},
+        "status": {"state": "ready", "last_seen": 100.0},
+        "infrastate": {
+            "summary": {"value": "ready", "updated_at": 100.0},
+            "last_refresh_ts": 100.0,
+            "projection_diag": {"captured_at": 100.0},
+        },
+    }
+    incoming = {
+        "desktop": {"theme": "dark", "updated_at": 200.0},
+        "status": {"state": "ready", "last_seen": 200.0},
+        "infrastate": {
+            "summary": {"value": "ready", "updated_at": 200.0},
+            "last_refresh_ts": 200.0,
+            "projection_diag": {"captured_at": 200.0},
+        },
+    }
+
+    assert mod._member_node_state_material_matches(existing, incoming)
+
+    incoming["desktop"]["theme"] = "light"
+
+    assert not mod._member_node_state_material_matches(existing, incoming)
+
+
 def test_update_member_snapshot_heartbeat_publishes_member_infrastate_projection(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
