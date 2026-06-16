@@ -574,6 +574,37 @@ def test_member_node_state_material_match_ignores_volatile_timestamps() -> None:
     assert not mod._member_node_state_material_matches(existing, incoming)
 
 
+def test_member_node_state_ingest_skips_cached_same_material_before_live_room(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    state = {
+        "desktop": {"theme": "dark", "updated_at": 100.0},
+        "status": {"state": "ready", "last_seen": 100.0},
+    }
+    manager._member_node_state_fingerprints[("member-1", "desktop")] = mod._member_node_state_fingerprint(state)
+    live_calls: list[tuple] = []
+
+    def _mutate_live_room(*args, **kwargs):
+        live_calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(mod, "mutate_live_room", _mutate_live_room)
+
+    asyncio.run(
+        manager.ingest_member_node_state(
+            node_id="member-1",
+            webspace_id="desktop",
+            state={
+                "desktop": {"theme": "dark", "updated_at": 200.0},
+                "status": {"state": "ready", "last_seen": 200.0},
+            },
+        )
+    )
+
+    assert live_calls == []
+    assert manager._yjs_ingest_total == 1
+    assert manager._yjs_live_apply_total == 0
+
+
 def test_update_member_snapshot_heartbeat_publishes_member_infrastate_projection(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()

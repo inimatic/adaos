@@ -641,6 +641,21 @@ def _member_node_state_material_matches(existing: Any, incoming: Any) -> bool:
         return False
 
 
+def _member_node_state_fingerprint(value: Any) -> str:
+    state = _coerce_json_dict(value)
+    if not state:
+        return ""
+    try:
+        return json.dumps(
+            _normalize_snapshot_material(state),
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    except Exception:
+        return ""
+
+
 def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -841,6 +856,7 @@ class HubLinkManager:
         self._last_member_infrastate_projection_at = 0.0
         self._last_member_infrastate_projection_node_id = ""
         self._last_member_infrastate_projection_webspace_id = ""
+        self._member_node_state_fingerprints: dict[tuple[str, str], str] = {}
 
     async def _push_node_display_assignment(self, node_id: str) -> None:
         link = await self._get_link(node_id)
@@ -1645,6 +1661,10 @@ class HubLinkManager:
         self._last_yjs_ingest_webspace_id = ws_id
         self._last_yjs_ingest_bytes = int(encoded_size)
         state_copy = json.loads(json.dumps(state))
+        state_fingerprint = _member_node_state_fingerprint(state_copy)
+        cache_key = (node_key, ws_id)
+        if state_fingerprint and self._member_node_state_fingerprints.get(cache_key) == state_fingerprint:
+            return
 
         def _merge_node_state(ydoc: Any, txn: Any) -> None:
             data_map = ydoc.get_map("data")
@@ -1652,9 +1672,13 @@ class HubLinkManager:
             existing_state = nodes.get(node_key)
             merged_state = _member_node_state_for_ingest(existing_state, state_copy)
             if existing_state == merged_state or _member_node_state_material_matches(existing_state, merged_state):
+                if state_fingerprint:
+                    self._member_node_state_fingerprints[cache_key] = state_fingerprint
                 return
             nodes[node_key] = merged_state
             data_map.set(txn, "nodes", nodes)
+            if state_fingerprint:
+                self._member_node_state_fingerprints[cache_key] = state_fingerprint
 
         live_scheduled = mutate_live_room(
             ws_id,
@@ -1689,10 +1713,14 @@ class HubLinkManager:
                     existing_state = nodes.get(node_key)
                     merged_state = _member_node_state_for_ingest(existing_state, state_copy)
                     if existing_state == merged_state or _member_node_state_material_matches(existing_state, merged_state):
+                        if state_fingerprint:
+                            self._member_node_state_fingerprints[cache_key] = state_fingerprint
                         return
                     nodes[node_key] = merged_state
                     with ydoc.begin_transaction() as txn:
                         data_map.set(txn, "nodes", nodes)
+                    if state_fingerprint:
+                        self._member_node_state_fingerprints[cache_key] = state_fingerprint
             self._yjs_live_apply_total += 1
             _log.info(
                 "ingested member node state via store node_id=%s webspace=%s bytes=%d",
