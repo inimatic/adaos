@@ -338,6 +338,25 @@ def test_request_webio_yjs_projection_snapshots_extracts_node_qualified_slot(mon
     ]
 
 
+def test_request_webio_yjs_projection_snapshots_dedupes_repeated_control_events(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+    published: list[tuple[str, dict[str, object], str]] = []
+
+    peer_mod._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+    peer_mod.get_ctx = lambda: SimpleNamespace(bus=object())
+    peer_mod.bus_emit = lambda bus, topic, payload, source: published.append((topic, payload, source))
+
+    for _ in range(2):
+        peer_mod._request_webio_yjs_projection_snapshots(
+            {"webio.yjs.default.nodes.member-01.infrastate.summary"},
+            transport="webrtc_data:events",
+        )
+
+    assert len(published) == 1
+    assert published[0][0] == "webio.yjs.snapshot.requested"
+    peer_mod._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+
+
 def test_webio_yjs_projection_subscription_tracks_active_demand(monkeypatch) -> None:
     from adaos.sdk.data.projections import clear_projection_demand, has_projection_demand
 

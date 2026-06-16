@@ -17,6 +17,7 @@ import asyncio
 from contextlib import suppress
 import json
 import logging
+import os
 import threading
 import time
 from typing import Any, Awaitable, Callable
@@ -61,6 +62,16 @@ _peers: dict[str, HubPeer] = {}
 _EVENT_CHANNEL_SUBSCRIPTIONS_LOCK = threading.RLock()
 _EVENT_CHANNEL_SUBSCRIBERS: dict[int, dict[str, Any]] = {}
 _EVENT_CHANNEL_FORWARDER_INSTALLED = False
+_WEBIO_CONTROL_DEDUPE_LOCK = threading.RLock()
+_WEBIO_CONTROL_DEDUPE_TTL_S = max(0.0, float(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_TTL_S", "1.5") or "1.5"))
+_WEBIO_CONTROL_DEDUPE_MAX = max(32, int(os.getenv("ADAOS_WEBIO_CONTROL_DEDUPE_MAX", "512") or "512"))
+_WEBIO_CONTROL_DEDUPE_RECENT: dict[str, float] = {}
+_WEBIO_CONTROL_EVENT_TYPES = {
+    "webio.stream.snapshot.requested",
+    "webio.stream.subscription.changed",
+    "webio.yjs.snapshot.requested",
+    "webio.yjs.subscription.changed",
+}
 
 
 def _ws_event_topic_matches(subscription: str, event_type: str) -> bool:
@@ -90,6 +101,63 @@ def _build_event_channel_message(
         "source": str(source or "webrtc.events").strip() or "webrtc.events",
         "ts": float(ts or time.time()),
     }
+
+
+def _stable_json_for_dedupe(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        return str(value)
+
+
+def _webio_control_dedupe_key(event_type: str, payload: dict[str, Any]) -> str:
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    params = payload.get("params")
+    if params is None and isinstance(meta, dict):
+        params = meta.get("params")
+    node_id = (
+        str(payload.get("target_node_id") or "").strip()
+        or str(payload.get("node_id") or "").strip()
+        or str(meta.get("target_node_id") or "").strip()
+        or str(meta.get("node_id") or "").strip()
+    )
+    return _stable_json_for_dedupe(
+        {
+            "type": str(event_type or "").strip(),
+            "webspace_id": str(payload.get("webspace_id") or meta.get("webspace_id") or "").strip(),
+            "receiver": str(payload.get("receiver") or "").strip(),
+            "topic": str(payload.get("topic") or "").strip(),
+            "node_id": node_id,
+            "params": params if isinstance(params, (dict, list, str, int, float, bool)) or params is None else str(params),
+            "action": str(payload.get("action") or "").strip(),
+        }
+    )
+
+
+def _should_drop_duplicate_webio_control_event(event_type: str, payload: Any) -> bool:
+    if event_type not in _WEBIO_CONTROL_EVENT_TYPES:
+        return False
+    if not isinstance(payload, dict) or _WEBIO_CONTROL_DEDUPE_TTL_S <= 0:
+        return False
+    now = time.monotonic()
+    key = _webio_control_dedupe_key(event_type, payload)
+    with _WEBIO_CONTROL_DEDUPE_LOCK:
+        last_at = float(_WEBIO_CONTROL_DEDUPE_RECENT.get(key) or 0.0)
+        if last_at > 0 and now - last_at < _WEBIO_CONTROL_DEDUPE_TTL_S:
+            _log.debug("deduped webio control event type=%s key=%s", event_type, key)
+            return True
+        _WEBIO_CONTROL_DEDUPE_RECENT[key] = now
+        if len(_WEBIO_CONTROL_DEDUPE_RECENT) > _WEBIO_CONTROL_DEDUPE_MAX:
+            cutoff = now - max(_WEBIO_CONTROL_DEDUPE_TTL_S, 1.0)
+            stale = [item_key for item_key, ts in _WEBIO_CONTROL_DEDUPE_RECENT.items() if ts < cutoff]
+            for item_key in stale:
+                _WEBIO_CONTROL_DEDUPE_RECENT.pop(item_key, None)
+            while len(_WEBIO_CONTROL_DEDUPE_RECENT) > _WEBIO_CONTROL_DEDUPE_MAX:
+                try:
+                    _WEBIO_CONTROL_DEDUPE_RECENT.pop(next(iter(_WEBIO_CONTROL_DEDUPE_RECENT)))
+                except StopIteration:
+                    break
+    return False
 
 
 def _ensure_event_channel_forwarder() -> None:
@@ -284,6 +352,8 @@ def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None
             }
             if node_id:
                 payload["node_id"] = node_id
+            if _should_drop_duplicate_webio_control_event("webio.stream.snapshot.requested", payload):
+                continue
             bus_emit(
                 ctx.bus,
                 "webio.stream.snapshot.requested",
@@ -340,6 +410,8 @@ def _publish_webio_stream_subscription_change(
                 payload["subscription_id"] = f"{transport}:{connection_id}:{token}"
             if node_id:
                 payload["node_id"] = node_id
+            if _should_drop_duplicate_webio_control_event("webio.stream.subscription.changed", payload):
+                continue
             bus_emit(
                 ctx.bus,
                 "webio.stream.subscription.changed",
@@ -408,6 +480,8 @@ def _request_webio_yjs_projection_snapshots(topics: set[str], *, transport: str)
             ctx = get_ctx()
             payload = dict(parsed)
             payload["transport"] = str(transport or "webrtc_data:events")
+            if _should_drop_duplicate_webio_control_event("webio.yjs.snapshot.requested", payload):
+                continue
             bus_emit(
                 ctx.bus,
                 "webio.yjs.snapshot.requested",
@@ -443,6 +517,8 @@ def _publish_webio_yjs_projection_subscription_change(
                 record_projection_subscription_change(payload)
             except Exception:
                 _log.debug("failed to record webio yjs projection demand topic=%s", topic, exc_info=True)
+            if _should_drop_duplicate_webio_control_event("webio.yjs.subscription.changed", payload):
+                continue
             bus_emit(
                 ctx.bus,
                 "webio.yjs.subscription.changed",
