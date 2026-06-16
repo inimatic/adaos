@@ -168,6 +168,57 @@ def pair_code(endpoint: Mapping[str, Any]) -> str:
     return _text(endpoint.get("code") or endpoint.get("pair_code"))
 
 
+def _endpoint_rank(endpoint: Mapping[str, Any]) -> tuple[int, int]:
+    state = online_state(endpoint.get("last_seen_at"))
+    state_rank = {"online": 0, "stale": 1, "unknown": 2, "offline": 3}.get(state, 4)
+    try:
+        last_seen = int(float(endpoint.get("last_seen_at") or 0))
+    except Exception:
+        last_seen = 0
+    return state_rank, -last_seen
+
+
+def choose_endpoint(endpoints: list[Mapping[str, Any]], code: str | None = None) -> Mapping[str, Any] | None:
+    """Choose a live ReDevice endpoint, healing stale pair-code selections.
+
+    Root admission can leave old pair codes for the same physical endpoint in
+    history. Skills should keep user selection stable by endpoint identity, but
+    commands still have to target the currently polling pair code.
+    """
+
+    admitted = [
+        item
+        for item in endpoints
+        if _text(item.get("state")) in {"approved", "consumed"} and pair_code(item)
+    ]
+    if not admitted:
+        return None
+
+    token = _text(code)
+    if token:
+        exact = [item for item in admitted if pair_code(item) == token]
+        if exact:
+            exact.sort(key=_endpoint_rank)
+            selected = exact[0]
+            selected_rank = _endpoint_rank(selected)[0]
+            selected_id = endpoint_id(selected)
+            if selected_rank <= 1:
+                return selected
+            if selected_id:
+                replacements = [
+                    item
+                    for item in admitted
+                    if endpoint_id(item) == selected_id and pair_code(item) != token
+                ]
+                replacements.sort(key=_endpoint_rank)
+                if replacements and _endpoint_rank(replacements[0])[0] < selected_rank:
+                    return replacements[0]
+            return selected
+
+    admitted.sort(key=_endpoint_rank)
+    return admitted[0]
+
+
 def default_transport_profile(endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
     endpoint = endpoint or {}
     return {

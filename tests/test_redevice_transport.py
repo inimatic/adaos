@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from adaos.sdk.redevice import select_transport
+from adaos.sdk.redevice import choose_endpoint, select_transport
 
 
 def test_redevice_audio_capture_transport_uses_audio_in_direction() -> None:
@@ -59,3 +59,25 @@ def test_redevice_audio_capture_falls_back_to_control_when_media_unavailable() -
     assert selected["selected_transport"] == "redevice_poll"
     assert selected["content"]["direction"] == "audio_in"
     assert selected["content"]["transport"] == "unavailable"
+
+
+def test_choose_endpoint_heals_stale_pair_code_for_same_endpoint() -> None:
+    endpoints = [
+        {
+            "state": "consumed",
+            "code": "OLD",
+            "endpoint_id": "redevice-1",
+            "last_seen_at": 1,
+        },
+        {
+            "state": "consumed",
+            "code": "NEW",
+            "endpoint_id": "redevice-1",
+            "last_seen_at": 1_000_000_000_000,
+        },
+    ]
+
+    selected = choose_endpoint(endpoints, "OLD")
+
+    assert selected is not None
+    assert selected["code"] == "NEW"
