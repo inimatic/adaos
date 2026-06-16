@@ -1354,6 +1354,61 @@ def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monke
     assert desired_running_states[-1] is True
 
 
+def test_candidate_prewarm_stops_memory_blocked_candidate(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    start_calls: list[tuple[str | None, str]] = []
+    cleanup_calls: list[tuple[str, str | None, bool]] = []
+
+    async def _start_candidate_runtime(*, slot: str | None = None, reason: str = ""):
+        start_calls.append((slot, reason))
+        return {"ok": True}
+
+    async def _cleanup_candidate_runtime(
+        *,
+        reason: str,
+        slot: str | None = None,
+        graceful: bool = True,
+    ):
+        cleanup_calls.append((reason, slot, graceful))
+        return {"ok": True, "stopped": True, "slot": slot}
+
+    def _status():
+        return {
+            "candidate_slot": "B",
+            "transition_mode": "warm_switch",
+            "warm_switch_allowed": True,
+            "candidate_managed_alive": True,
+            "candidate_managed_pid": 42424,
+            "candidate_runtime_api_ready": False,
+            "candidate_runtime_url": "http://127.0.0.1:8778",
+        }
+
+    guard = {
+        "allowed": False,
+        "reason": "candidate_rss_threshold",
+        "candidate_pid": 42424,
+        "candidate_process_rss_bytes": 1800 * 1024 * 1024,
+        "candidate_family_rss_bytes": 1800 * 1024 * 1024,
+        "available_memory_bytes": 900 * 1024 * 1024,
+        "max_candidate_rss_bytes": 1536 * 1024 * 1024,
+        "reserve_bytes": 256 * 1024 * 1024,
+    }
+
+    monkeypatch.setattr(manager, "start_candidate_runtime", _start_candidate_runtime)
+    monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
+    monkeypatch.setattr(manager, "status", _status)
+    monkeypatch.setattr(manager, "_candidate_memory_guard_snapshot", lambda snapshot=None: guard)
+
+    result = asyncio.run(manager._candidate_prewarm(target_slot="B"))
+
+    assert result["state"] == "memory_blocked"
+    assert result["candidate_memory_guard"] == guard
+    assert "candidate memory gate blocked warm switch" in result["message"]
+    assert start_calls == [("B", "supervisor.candidate.prewarm")]
+    assert cleanup_calls == [("supervisor.candidate.memory_blocked", "B", False)]
+
+
 def test_prepare_worker_rechecks_starting_candidate_before_shutdown(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setattr(
@@ -1782,6 +1837,45 @@ def test_promote_candidate_runtime_adopts_candidate_process(monkeypatch, tmp_pat
     assert manager._managed_runtime_instance_id == "rt-b-c-12345678"
     assert manager._managed_transition_role == "active"
     assert persisted
+
+
+def test_promote_candidate_runtime_rejects_memory_blocked_candidate(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _CandidateProc:
+        pid = 42424
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._candidate_proc = _CandidateProc()
+    manager._candidate_slot = "B"
+    manager._candidate_runtime_instance_id = "rt-b-c-12345678"
+    manager._candidate_transition_role = "candidate"
+
+    post_calls: list[str] = []
+    monkeypatch.setattr(supervisor.requests, "post", lambda *args, **kwargs: post_calls.append("post"))
+    monkeypatch.setattr(
+        manager,
+        "_candidate_memory_guard_snapshot",
+        lambda snapshot=None: {
+            "allowed": False,
+            "reason": "candidate_rss_threshold",
+            "candidate_pid": 42424,
+            "candidate_process_rss_bytes": 1800 * 1024 * 1024,
+            "candidate_family_rss_bytes": 1800 * 1024 * 1024,
+            "available_memory_bytes": 900 * 1024 * 1024,
+            "max_candidate_rss_bytes": 1536 * 1024 * 1024,
+            "reserve_bytes": 256 * 1024 * 1024,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="candidate memory gate blocked warm switch"):
+        asyncio.run(manager._promote_candidate_runtime(slot="B", reason="test.cutover"))
+
+    assert post_calls == []
 
 
 def test_supervisor_monitor_cleans_idle_candidate_runtime(monkeypatch, tmp_path) -> None:

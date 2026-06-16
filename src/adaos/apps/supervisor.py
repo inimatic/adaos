@@ -704,6 +704,19 @@ def _warm_switch_min_candidate_bytes() -> int:
         return 192 * 1024 * 1024
 
 
+def _warm_switch_max_candidate_rss_bytes() -> int:
+    raw = os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_CANDIDATE_RSS_MB")
+    if raw is not None:
+        try:
+            return max(0, int(float(str(raw).strip()) * 1024 * 1024))
+        except Exception:
+            return 1536 * 1024 * 1024
+    total = _total_memory_bytes()
+    if total and total > 0:
+        return max(512 * 1024 * 1024, min(1536 * 1024 * 1024, int(float(total) * 0.40)))
+    return 1536 * 1024 * 1024
+
+
 def _warm_switch_rss_multiplier() -> float:
     try:
         return max(1.0, float(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_RSS_MULTIPLIER") or "1.15").strip()))
@@ -4753,6 +4766,64 @@ class SupervisorManager:
             "slot_urls": self.slot_runtime_urls(),
         }
 
+    def _candidate_memory_guard_snapshot(self, runtime_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        snapshot = runtime_snapshot if isinstance(runtime_snapshot, dict) else {}
+        candidate_pid = snapshot.get("candidate_managed_pid")
+        candidate_alive = bool(snapshot.get("candidate_managed_alive"))
+        if not candidate_pid:
+            candidate_managed = _proc_details(self._candidate_proc, cwd_hint=self._candidate_runtime_cwd)
+            candidate_pid = candidate_managed.get("managed_pid")
+            candidate_alive = bool(candidate_managed.get("managed_alive"))
+        try:
+            normalized_pid = int(candidate_pid or 0)
+        except Exception:
+            normalized_pid = 0
+        process_rss_bytes = None
+        family_rss_bytes = None
+        if normalized_pid > 0:
+            process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(normalized_pid)
+        available_bytes = _available_memory_bytes()
+        max_candidate_rss_bytes = _warm_switch_max_candidate_rss_bytes()
+        reserve_bytes = _warm_switch_min_available_bytes()
+        allowed = True
+        reason = None
+        if not candidate_alive or normalized_pid <= 0:
+            reason = "candidate_not_running"
+        elif max_candidate_rss_bytes > 0 and (family_rss_bytes or process_rss_bytes or 0) >= max_candidate_rss_bytes:
+            allowed = False
+            reason = "candidate_rss_threshold"
+        elif available_bytes is not None and available_bytes < reserve_bytes:
+            allowed = False
+            reason = "available_memory_reserve"
+        return {
+            "allowed": allowed,
+            "reason": reason,
+            "candidate_pid": normalized_pid or None,
+            "candidate_process_rss_bytes": process_rss_bytes,
+            "candidate_family_rss_bytes": family_rss_bytes,
+            "available_memory_bytes": available_bytes,
+            "max_candidate_rss_bytes": max_candidate_rss_bytes,
+            "reserve_bytes": reserve_bytes,
+        }
+
+    @staticmethod
+    def _candidate_memory_guard_message(guard: dict[str, Any]) -> str:
+        reason = str(guard.get("reason") or "candidate_memory_guard").strip()
+        family = guard.get("candidate_family_rss_bytes")
+        process = guard.get("candidate_process_rss_bytes")
+        available = guard.get("available_memory_bytes")
+        limit = guard.get("max_candidate_rss_bytes")
+        reserve = guard.get("reserve_bytes")
+        return (
+            "candidate memory gate blocked warm switch"
+            f" reason={reason}"
+            f" family_rss_bytes={family}"
+            f" process_rss_bytes={process}"
+            f" max_candidate_rss_bytes={limit}"
+            f" available_memory_bytes={available}"
+            f" reserve_bytes={reserve}"
+        )
+
     def _runtime_env(
         self,
         *,
@@ -4970,6 +5041,12 @@ class SupervisorManager:
                 candidate_matches_candidate_slot = False
             if candidate_expected_cwd and str(candidate_managed_cwd or "").strip() != candidate_expected_cwd:
                 candidate_matches_candidate_slot = False
+        candidate_memory_guard = self._candidate_memory_guard_snapshot(
+            {
+                "candidate_managed_pid": candidate_managed_pid,
+                "candidate_managed_alive": candidate_managed_alive,
+            }
+        )
         return {
             "ok": True,
             "supervisor_pid": os.getpid(),
@@ -5021,6 +5098,7 @@ class SupervisorManager:
             "candidate_expected_managed_executable": candidate_expected_executable,
             "candidate_expected_managed_cwd": candidate_expected_cwd,
             "candidate_matches_candidate_slot": candidate_matches_candidate_slot,
+            "candidate_memory_guard": candidate_memory_guard,
             "active_manifest": active_manifest,
             "root_promotion_required": root_promotion_required,
             "bootstrap_update": bootstrap_update,
@@ -6074,6 +6152,21 @@ class SupervisorManager:
             snapshot = self.status()
             if str(snapshot.get("candidate_slot") or "").strip().upper() != resolved_target:
                 break
+            memory_guard = self._candidate_memory_guard_snapshot(snapshot)
+            if not bool(memory_guard.get("allowed")):
+                cleanup = await self._cleanup_candidate_runtime(
+                    reason="supervisor.candidate.memory_blocked",
+                    slot=resolved_target,
+                    graceful=False,
+                )
+                return {
+                    "attempted": True,
+                    "state": "memory_blocked",
+                    "message": self._candidate_memory_guard_message(memory_guard),
+                    "runtime": snapshot,
+                    "candidate_memory_guard": memory_guard,
+                    "candidate_cleanup": cleanup,
+                }
             if bool(snapshot.get("candidate_runtime_api_ready")):
                 return {
                     "attempted": True,
@@ -6087,6 +6180,21 @@ class SupervisorManager:
             await asyncio.sleep(0.25)
 
         snapshot = self.status()
+        memory_guard = self._candidate_memory_guard_snapshot(snapshot)
+        if not bool(memory_guard.get("allowed")):
+            cleanup = await self._cleanup_candidate_runtime(
+                reason="supervisor.candidate.memory_blocked",
+                slot=resolved_target,
+                graceful=False,
+            )
+            return {
+                "attempted": True,
+                "state": "memory_blocked",
+                "message": self._candidate_memory_guard_message(memory_guard),
+                "runtime": snapshot,
+                "candidate_memory_guard": memory_guard,
+                "candidate_cleanup": cleanup,
+            }
         candidate_alive = bool(snapshot.get("candidate_managed_alive"))
         candidate_ready = bool(snapshot.get("candidate_runtime_api_ready"))
         candidate_url = str(snapshot.get("candidate_runtime_url") or "").strip()
@@ -6137,6 +6245,20 @@ class SupervisorManager:
                     "message": "candidate prewarm refresh failed: candidate slot changed before shutdown",
                     "runtime": snapshot,
                 }
+            memory_guard = self._candidate_memory_guard_snapshot(snapshot)
+            if not bool(memory_guard.get("allowed")):
+                cleanup = await self._cleanup_candidate_runtime(
+                    reason="supervisor.candidate.memory_blocked",
+                    slot=resolved_target,
+                    graceful=False,
+                )
+                return {
+                    "state": "memory_blocked",
+                    "message": self._candidate_memory_guard_message(memory_guard),
+                    "runtime": snapshot,
+                    "candidate_memory_guard": memory_guard,
+                    "candidate_cleanup": cleanup,
+                }
             if candidate_ready:
                 return {
                     "state": "ready",
@@ -6158,7 +6280,13 @@ class SupervisorManager:
                 }
             await asyncio.sleep(0.25)
 
-    async def _cleanup_candidate_runtime(self, *, reason: str, slot: str | None = None) -> dict[str, Any]:
+    async def _cleanup_candidate_runtime(
+        self,
+        *,
+        reason: str,
+        slot: str | None = None,
+        graceful: bool = True,
+    ) -> dict[str, Any]:
         resolved_slot = str(slot or "").strip().upper() or None
         async with self._lock:
             current_slot = str(self._candidate_slot or "").strip().upper() or None
@@ -6169,7 +6297,7 @@ class SupervisorManager:
                     "stopped": False,
                     "slot": current_slot,
                 }
-            await self._terminate_candidate_proc_locked(graceful=True, reason=reason)
+            await self._terminate_candidate_proc_locked(graceful=graceful, reason=reason)
             self._persist_runtime_state()
             return {
                 "ok": True,
@@ -6187,6 +6315,9 @@ class SupervisorManager:
             raise RuntimeError("candidate runtime slot does not match the prepared target slot")
         if candidate_proc is None or candidate_proc.poll() is not None:
             raise RuntimeError("candidate runtime is not running for fast cutover")
+        memory_guard = self._candidate_memory_guard_snapshot()
+        if not bool(memory_guard.get("allowed")):
+            raise RuntimeError(self._candidate_memory_guard_message(memory_guard))
 
         headers = {"Content-Type": "application/json"}
         if self.token:
@@ -7217,6 +7348,7 @@ class SupervisorManager:
         candidate_prewarm_state = "skipped"
         candidate_prewarm_message = ""
         candidate_prewarm_ready_at = None
+        candidate_memory_guard: dict[str, Any] | None = None
         candidate_launch_state = "skipped"
         candidate_launch_message = ""
         used_candidate_cutover = False
@@ -7276,6 +7408,11 @@ class SupervisorManager:
             candidate_prewarm_state = str(candidate_prewarm.get("state") or "").strip().lower() or "skipped"
             candidate_prewarm_message = str(candidate_prewarm.get("message") or "").strip()
             candidate_prewarm_ready_at = candidate_prewarm.get("ready_at")
+            candidate_memory_guard = (
+                candidate_prewarm.get("candidate_memory_guard")
+                if isinstance(candidate_prewarm.get("candidate_memory_guard"), dict)
+                else None
+            )
             countdown_started_at = time.time()
             status = write_core_update_status(
                 {
@@ -7300,8 +7437,12 @@ class SupervisorManager:
                     "candidate_prewarm_state": candidate_prewarm_state,
                     "candidate_prewarm_message": candidate_prewarm_message or None,
                     "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                    "candidate_memory_guard": candidate_memory_guard,
                     "message": (
                         (
+                            f"slot {target_slot} prepared; passive candidate blocked by memory gate; countdown started"
+                            if candidate_prewarm_state == "memory_blocked"
+                            else
                             f"slot {target_slot} prepared; passive candidate ready; countdown started"
                             if candidate_prewarm_state == "ready"
                             else f"slot {target_slot} prepared; passive candidate warming; countdown started"
@@ -7346,16 +7487,26 @@ class SupervisorManager:
                     candidate_prewarm_message = refreshed_message
                 if candidate_refresh.get("ready_at") is not None:
                     candidate_prewarm_ready_at = candidate_refresh.get("ready_at")
+                if isinstance(candidate_refresh.get("candidate_memory_guard"), dict):
+                    candidate_memory_guard = candidate_refresh.get("candidate_memory_guard")
 
             if (
                 _warm_switch_strict_cutover_enabled()
                 and not _warm_switch_cold_fallback_enabled()
                 and candidate_prewarm_state != "ready"
             ):
-                candidate_cleanup = await self._cleanup_candidate_runtime(
-                    reason="supervisor.candidate.defer_not_ready",
-                    slot=target_slot,
-                )
+                blocked_by_memory = candidate_prewarm_state == "memory_blocked"
+                cleanup_kwargs: dict[str, Any] = {
+                    "reason": (
+                        "supervisor.candidate.defer_memory_blocked"
+                        if blocked_by_memory
+                        else "supervisor.candidate.defer_not_ready"
+                    ),
+                    "slot": target_slot,
+                }
+                if blocked_by_memory:
+                    cleanup_kwargs["graceful"] = False
+                candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
                 scheduled_for = time.time() + _warm_switch_defer_sec()
                 self._schedule_planned_transition(
                     {
@@ -7368,8 +7519,13 @@ class SupervisorManager:
                         "signal_delay_sec": signal_delay_sec,
                     },
                     scheduled_for=scheduled_for,
-                    planned_reason="candidate_not_ready",
+                    planned_reason="candidate_memory_blocked" if blocked_by_memory else "candidate_not_ready",
                     message=(
+                        f"core update deferred; candidate slot {target_slot} exceeded the warm-switch memory gate"
+                        if blocked_by_memory and target_slot
+                        else "core update deferred; candidate runtime exceeded the warm-switch memory gate"
+                        if blocked_by_memory
+                        else
                         f"core update deferred; candidate slot {target_slot} is not ready for warm-switch cutover"
                         if target_slot
                         else "core update deferred; candidate runtime is not ready for warm-switch cutover"
@@ -7385,6 +7541,7 @@ class SupervisorManager:
                         "candidate_prewarm_state": "deferred_not_ready",
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                        "candidate_memory_guard": candidate_memory_guard,
                         "candidate_cleanup": candidate_cleanup,
                         "manifest": manifest,
                     },
@@ -7393,6 +7550,7 @@ class SupervisorManager:
                         "candidate_prewarm_state": "deferred_not_ready",
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                        "candidate_memory_guard": candidate_memory_guard,
                     },
                 )
                 return
@@ -7434,6 +7592,7 @@ class SupervisorManager:
                     "candidate_prewarm_state": candidate_prewarm_state,
                     "candidate_prewarm_message": candidate_prewarm_message or None,
                     "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                    "candidate_memory_guard": candidate_memory_guard,
                     "message": "countdown completed; prepared restart written",
                     "manifest": manifest,
                 }
@@ -7460,6 +7619,7 @@ class SupervisorManager:
                         "candidate_prewarm_state": candidate_prewarm_state,
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                        "candidate_memory_guard": candidate_memory_guard,
                         "message": (
                             f"candidate slot {target_slot} is ready; promoting before stopping active runtime"
                             if target_slot
@@ -7475,11 +7635,22 @@ class SupervisorManager:
                     )
                 except Exception as exc:
                     clear_core_update_plan()
+                    latest_guard = self._candidate_memory_guard_snapshot()
+                    blocked_by_memory = not bool(latest_guard.get("allowed"))
+                    if blocked_by_memory:
+                        candidate_memory_guard = latest_guard
                     if not _warm_switch_cold_fallback_enabled():
-                        candidate_cleanup = await self._cleanup_candidate_runtime(
-                            reason="supervisor.candidate.cutover_deferred",
-                            slot=target_slot,
-                        )
+                        cleanup_kwargs = {
+                            "reason": (
+                                "supervisor.candidate.cutover_memory_blocked"
+                                if blocked_by_memory
+                                else "supervisor.candidate.cutover_deferred"
+                            ),
+                            "slot": target_slot,
+                        }
+                        if blocked_by_memory:
+                            cleanup_kwargs["graceful"] = False
+                        candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
                         self._schedule_planned_transition(
                             {
                                 "action": action,
@@ -7491,8 +7662,13 @@ class SupervisorManager:
                                 "signal_delay_sec": signal_delay_sec,
                             },
                             scheduled_for=time.time() + _warm_switch_defer_sec(),
-                            planned_reason="candidate_cutover_failed",
+                            planned_reason="candidate_memory_blocked" if blocked_by_memory else "candidate_cutover_failed",
                             message=(
+                                f"core update deferred; candidate slot {target_slot} exceeded the warm-switch memory gate before active shutdown"
+                                if blocked_by_memory and target_slot
+                                else "core update deferred; candidate runtime exceeded the warm-switch memory gate before active shutdown"
+                                if blocked_by_memory
+                                else
                                 f"core update deferred; candidate slot {target_slot} cutover failed before active shutdown"
                                 if target_slot
                                 else "core update deferred; candidate cutover failed before active shutdown"
@@ -7508,6 +7684,7 @@ class SupervisorManager:
                                 "candidate_prewarm_state": "cutover_deferred",
                                 "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
                                 "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                                "candidate_memory_guard": candidate_memory_guard,
                                 "candidate_cleanup": candidate_cleanup,
                                 "manifest": manifest,
                             },
@@ -7516,14 +7693,22 @@ class SupervisorManager:
                                 "candidate_prewarm_state": "cutover_deferred",
                                 "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
                                 "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                                "candidate_memory_guard": candidate_memory_guard,
                             },
                         )
                         return
 
-                    candidate_cleanup = await self._cleanup_candidate_runtime(
-                        reason="supervisor.candidate.cutover_fallback",
-                        slot=target_slot,
-                    )
+                    cleanup_kwargs = {
+                        "reason": (
+                            "supervisor.candidate.cutover_memory_fallback"
+                            if blocked_by_memory
+                            else "supervisor.candidate.cutover_fallback"
+                        ),
+                        "slot": target_slot,
+                    }
+                    if blocked_by_memory:
+                        cleanup_kwargs["graceful"] = False
+                    candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
                     candidate_prewarm_state = "cutover_fallback"
                     candidate_prewarm_message = f"{type(exc).__name__}: {exc}"
                     write_core_update_status(
@@ -7544,6 +7729,7 @@ class SupervisorManager:
                             "candidate_prewarm_state": candidate_prewarm_state,
                             "candidate_prewarm_message": candidate_prewarm_message,
                             "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                            "candidate_memory_guard": candidate_memory_guard,
                             "candidate_cleanup": candidate_cleanup,
                             "message": (
                                 f"candidate slot {target_slot} cutover failed; falling back to cold restart"
@@ -7583,6 +7769,7 @@ class SupervisorManager:
                             "candidate_prewarm_state": candidate_launch_state,
                             "candidate_prewarm_message": candidate_launch_message,
                             "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                            "candidate_memory_guard": candidate_memory_guard,
                             "message": (
                                 f"prepared slot {target_slot} activated via warm-switch cutover; awaiting validation"
                                 if target_slot
@@ -7634,6 +7821,7 @@ class SupervisorManager:
                         "candidate_prewarm_state": candidate_prewarm_state,
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                        "candidate_memory_guard": candidate_memory_guard,
                         "message": (
                             "runtime shutdown API was unavailable; supervisor continued with direct process stop"
                             if shutdown_request_error and bool(stop_result.get("forced"))
@@ -7665,22 +7853,48 @@ class SupervisorManager:
                         "passive candidate runtime promoted to active via warm-switch cutover"
                     )
                 except Exception as exc:
-                    candidate_cleanup = await self._cleanup_candidate_runtime(
-                        reason="supervisor.candidate.cutover_fallback",
-                        slot=target_slot,
-                    )
+                    latest_guard = self._candidate_memory_guard_snapshot()
+                    blocked_by_memory = not bool(latest_guard.get("allowed"))
+                    if blocked_by_memory:
+                        candidate_memory_guard = latest_guard
+                    cleanup_kwargs = {
+                        "reason": (
+                            "supervisor.candidate.cutover_memory_fallback"
+                            if blocked_by_memory
+                            else "supervisor.candidate.cutover_fallback"
+                        ),
+                        "slot": target_slot,
+                    }
+                    if blocked_by_memory:
+                        cleanup_kwargs["graceful"] = False
+                    candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
                     candidate_launch_state = "cutover_fallback"
                     candidate_launch_message = (
                         f"warm-switch cutover fallback: {type(exc).__name__}: {exc}"
                     )
             elif candidate_prewarm_state not in {"skipped", "cutover_fallback"}:
-                candidate_cleanup = await self._cleanup_candidate_runtime(
-                    reason="supervisor.candidate.stop_before_active_launch",
-                    slot=target_slot,
-                )
+                blocked_by_memory = candidate_prewarm_state == "memory_blocked"
+                cleanup_kwargs = {
+                    "reason": (
+                        "supervisor.candidate.stop_memory_blocked_before_active_launch"
+                        if blocked_by_memory
+                        else "supervisor.candidate.stop_before_active_launch"
+                    ),
+                    "slot": target_slot,
+                }
+                if blocked_by_memory:
+                    cleanup_kwargs["graceful"] = False
+                candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
                 if bool((candidate_cleanup or {}).get("stopped")):
-                    candidate_launch_state = "stopped_for_launch"
-                    candidate_launch_message = "passive candidate runtime stopped before active launch"
+                    if blocked_by_memory:
+                        candidate_launch_state = "memory_blocked"
+                        candidate_launch_message = (
+                            candidate_prewarm_message
+                            or "passive candidate runtime stopped by warm-switch memory gate before active launch"
+                        )
+                    else:
+                        candidate_launch_state = "stopped_for_launch"
+                        candidate_launch_message = "passive candidate runtime stopped before active launch"
             failure_phase = "launch"
             write_core_update_status(
                 {
@@ -7700,6 +7914,8 @@ class SupervisorManager:
                     "candidate_prewarm_state": candidate_launch_state,
                     "candidate_prewarm_message": candidate_launch_message or None,
                     "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                    "candidate_memory_guard": candidate_memory_guard,
+                    "candidate_cleanup": candidate_cleanup,
                     "message": (
                         f"prepared slot {target_slot} activated via warm-switch cutover; awaiting validation"
                         if used_candidate_cutover and target_slot
@@ -7737,6 +7953,7 @@ class SupervisorManager:
                         "candidate_prewarm_state": candidate_prewarm_state,
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                        "candidate_memory_guard": candidate_memory_guard,
                         "message": "core update cancelled",
                     }
                 )
@@ -7769,6 +7986,7 @@ class SupervisorManager:
                     "candidate_prewarm_state": candidate_prewarm_state,
                     "candidate_prewarm_message": candidate_prewarm_message or None,
                     "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                    "candidate_memory_guard": candidate_memory_guard,
                     "message": "prepared core update transition failed",
                     "error_type": type(exc).__name__,
                     "error": str(exc),
