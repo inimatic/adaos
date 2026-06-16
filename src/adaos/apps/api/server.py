@@ -1189,6 +1189,37 @@ class RuntimePromoteActiveRequest(BaseModel):
     reconnect_hub_root: bool = Field(default=True)
 
 
+async def _start_service_skills_after_promotion(reason: str) -> None:
+    try:
+        await get_service_supervisor().start_all()
+    except Exception:
+        logging.getLogger("adaos.runtime").warning(
+            "failed to start service skills after candidate promotion reason=%s",
+            reason,
+            exc_info=True,
+        )
+
+
+def _schedule_promoted_runtime_service_start(reason: str) -> dict[str, Any]:
+    try:
+        task = asyncio.create_task(
+            _start_service_skills_after_promotion(reason),
+            name="runtime-promote-service-start",
+        )
+    except RuntimeError as exc:
+        return {
+            "background": False,
+            "scheduled": False,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+    return {
+        "background": True,
+        "scheduled": True,
+        "task": task.get_name(),
+    }
+
+
 @app.post("/api/subnet/alias")
 async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
     try:
@@ -1574,19 +1605,13 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         }
 
     os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = "active"
-    try:
-        await get_service_supervisor().start_all()
-    except Exception:
-        logging.getLogger("adaos.runtime").warning(
-            "failed to start service skills after candidate promotion",
-            exc_info=True,
-        )
     reconnect_result: dict[str, Any] | None = None
     if bool(body.reconnect_hub_root):
         try:
             reconnect_result = await request_hub_root_reconnect()
         except Exception as exc:
             reconnect_result = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+    service_start = _schedule_promoted_runtime_service_start(body.reason)
     return {
         "ok": True,
         "accepted": True,
@@ -1594,6 +1619,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         "reason": body.reason,
         "runtime": _runtime_identity_public_payload(),
         "reconnect": reconnect_result,
+        "service_start": service_start,
     }
 
 

@@ -967,19 +967,20 @@ def _git_text(repo_dir: Path, *args: str) -> str:
 
 
 def _checkout_base_version(repo_dir: Path) -> str:
-    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
-    if explicit:
-        return explicit
     pyproject_path = repo_dir / "pyproject.toml"
     try:
         payload = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
     except Exception:
-        return "0.1.0"
+        payload = None
     project = payload.get("project") if isinstance(payload, dict) else None
-    if not isinstance(project, dict):
-        return "0.1.0"
-    version = str(project.get("version") or "").strip()
-    return version or "0.1.0"
+    if isinstance(project, dict):
+        version = str(project.get("version") or "").strip()
+        if version:
+            return version
+    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
+    if explicit:
+        return explicit
+    return "0.1.0"
 
 
 def _checkout_build_version(repo_dir: Path) -> str:

@@ -435,6 +435,18 @@ def test_checkout_build_version_uses_pyproject_and_git_metadata(monkeypatch, tmp
     assert mod._checkout_build_version(tmp_path) == "0.1.7+44.abc1234"
 
 
+def test_checkout_base_version_prefers_checkout_over_inherited_env(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "adaos"\nversion = "0.1.271"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_BASE_VERSION", "0.1.0")
+
+    assert mod._checkout_base_version(tmp_path) == "0.1.271"
+
+
 def test_checkout_build_version_env_override_wins(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

@@ -362,6 +362,7 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
 
     reconnect_calls: list[tuple[str | None, str | None]] = []
+    service_start_reasons: list[str] = []
     call_order: list[str] = []
 
     class _ServiceSupervisor:
@@ -375,6 +376,11 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
 
     monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
     monkeypatch.setattr(api_server, "request_hub_root_reconnect", _reconnect)
+    monkeypatch.setattr(
+        api_server,
+        "_schedule_promoted_runtime_service_start",
+        lambda reason: service_start_reasons.append(reason) or {"background": True, "scheduled": True},
+    )
 
     payload = asyncio.run(
         api_server.admin_runtime_promote_active(
@@ -388,8 +394,11 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     assert payload["runtime"]["runtime_instance_id"] == "rt-b-c-abcdef12"
     assert payload["runtime"]["admin_mutation_allowed"] is True
     assert payload["reconnect"]["ok"] is True
+    assert payload["service_start"]["background"] is True
+    assert payload["service_start"]["scheduled"] is True
     assert reconnect_calls == [(None, None)]
-    assert call_order == ["services", "reconnect"]
+    assert service_start_reasons == ["test.cutover"]
+    assert call_order == ["reconnect"]
 
 
 def test_promote_active_is_idempotent_for_active_runtime(monkeypatch) -> None:
