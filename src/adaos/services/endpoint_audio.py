@@ -24,6 +24,16 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _int_or_default(value: Any, default: int) -> int:
+    token = _text(value)
+    if not token or token.startswith("$"):
+        return default
+    try:
+        return int(token)
+    except (TypeError, ValueError):
+        return default
+
+
 def _now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -167,6 +177,42 @@ def _prune_debug_audio(limit: int = MAX_DEBUG_CLIPS) -> None:
             pass
 
 
+def _debug_audio_inventory(limit: int = MAX_DEBUG_CLIPS) -> list[dict[str, Any]]:
+    root = _debug_audio_dir()
+    clips = sorted(root.glob("*.wav"), key=lambda item: item.stat().st_mtime if item.exists() else 0.0, reverse=True)
+    result: list[dict[str, Any]] = []
+    for clip in clips[: max(1, int(limit or 1))]:
+        sidecar = clip.with_suffix(".json")
+        meta: dict[str, Any] = {}
+        try:
+            if sidecar.exists():
+                raw = json.loads(sidecar.read_text(encoding="utf-8"))
+                if isinstance(raw, Mapping):
+                    meta = dict(raw)
+        except Exception:
+            meta = {}
+        result.append(
+            {
+                "path": str(clip),
+                "event_id": _text(meta.get("event_id")) or clip.stem,
+                "bytes": meta.get("bytes") or clip.stat().st_size,
+                "duration_ms": meta.get("duration_ms"),
+                "endpoint_id": _text(meta.get("endpoint_id")),
+                "updated_at": _text(meta.get("updated_at")),
+            }
+        )
+    return result
+
+
+def retention_report() -> dict[str, Any]:
+    clips = _debug_audio_inventory(MAX_DEBUG_CLIPS)
+    return {
+        "debug_clip_limit": MAX_DEBUG_CLIPS,
+        "stored_debug_clips": len(clips),
+        "clips": clips,
+    }
+
+
 def save_audio_segment(event: Mapping[str, Any], *, retain_debug_clips: int = MAX_DEBUG_CLIPS) -> dict[str, Any]:
     audio = _mapping(event.get("audio"))
     data = _text(audio.get("data_b64"))
@@ -213,6 +259,35 @@ def policy_report(endpoint: Mapping[str, Any]) -> dict[str, Any]:
         "local_stt": False,
         "local_tts": False,
         "retention": {"debug_clip_limit": MAX_DEBUG_CLIPS},
+    }
+
+
+def diagnostics_snapshot(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    endpoint_data = endpoint or {}
+    transport: dict[str, Any] = {}
+    policy: dict[str, Any] = {}
+    if endpoint_data:
+        try:
+            from adaos.sdk.redevice import select_transport
+
+            transport = select_transport(endpoint_data, intent="audio.capture.vad", allow_root_relay=True)
+        except Exception:
+            transport = {}
+        policy = policy_report(endpoint_data)
+    stt = _mapping(state.get("stt"))
+    return {
+        "schema_version": "endpoint-audio-diagnostics.v1",
+        "mode": _text(_mapping(state.get("vad")).get("mode")) or "voice_activity",
+        "vad": _mapping(state.get("vad")) or {"state": "idle"},
+        "record_button": _mapping(state.get("record_button")),
+        "last_audio_event": _mapping(state.get("last_audio_event")),
+        "last_segment": _mapping(state.get("last_segment")),
+        "stt": stt or stt_status(),
+        "retention": _mapping(state.get("retention")) or retention_report(),
+        "transport": transport,
+        "policy": policy,
+        "events_count": len(list(state.get("events") or [])),
+        "updated_at": _text(state.get("updated_at")) or _now(),
     }
 
 
@@ -277,10 +352,48 @@ def process_endpoint_event(
         "updated_at": _now(),
     }
     result: dict[str, Any] = {"ok": True, "event": compact}
+    state["last_audio_event"] = compact
+    state["updated_at"] = compact["updated_at"]
+    if event_type == "endpoint.audio.record_button":
+        state["record_button"] = {
+            "state": "recording" if compact["action"].endswith(".down") else "idle",
+            "action": compact["action"],
+            "input": _text(event.get("input")),
+            "updated_at": compact["updated_at"],
+            "details": _mapping(event.get("details")),
+        }
+    elif event_type == "endpoint.audio.voice_activity":
+        action = compact["action"]
+        if action.endswith(".armed"):
+            vad_state = "listening"
+        elif action.endswith(".started"):
+            vad_state = "recording"
+        elif action.endswith(".ended"):
+            vad_state = "sent"
+        elif action.endswith(".rejected"):
+            vad_state = "rejected"
+        elif action.endswith(".stopped") or action.endswith(".idle"):
+            vad_state = "idle"
+        else:
+            vad_state = action or "unknown"
+        state["vad"] = {
+            **_mapping(event.get("vad")),
+            "state": vad_state,
+            "action": action,
+            "input": _text(event.get("input")),
+            "updated_at": compact["updated_at"],
+        }
     if event_type == "endpoint.audio.segment":
         segment = save_audio_segment(event)
         result["segment"] = segment
         state["last_segment"] = segment
+        state["vad"] = {
+            **_mapping(state.get("vad")),
+            **_mapping(event.get("vad")),
+            "state": "sent",
+            "action": compact["action"],
+            "updated_at": compact["updated_at"],
+        }
         if segment.get("ok"):
             stt = transcribe_wav(Path(str(segment["path"])), lang=_text(event.get("lang")) or "ru")
             result["stt"] = stt
@@ -304,6 +417,7 @@ def process_endpoint_event(
     events = list(state.get("events") or [])
     events.append({**compact, "result": {key: value for key, value in result.items() if key != "event"}})
     state["events"] = events[-24:]
+    state["retention"] = retention_report()
     return result
 
 
@@ -316,6 +430,7 @@ def build_capture_command(
     max_duration_ms: int = 8000,
     owner_node_id: str = "member",
     owner_skill_id: str = "redevice_voice",
+    activation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from adaos.sdk.redevice import select_transport
 
@@ -327,6 +442,11 @@ def build_capture_command(
     transport = select_transport(endpoint, intent=command_type, allow_root_relay=True)
     duration = max(1000, min(12000, int(max_duration_ms or 8000)))
     policy = policy_report(endpoint)
+    activation_input = _mapping(activation)
+    min_segment_ms = max(300, min(3000, _int_or_default(activation_input.get("min_segment_ms"), 700)))
+    silence_ms = max(300, min(3000, _int_or_default(activation_input.get("silence_ms"), 900)))
+    pre_roll_ms = max(0, min(1500, _int_or_default(activation_input.get("pre_roll_ms"), 700)))
+    min_rms = max(200, min(8000, _int_or_default(activation_input.get("min_rms"), 1200)))
     return {
         "command_id": command_id,
         "type": command_type,
@@ -351,10 +471,10 @@ def build_capture_command(
                 "capture": "voice_activity" if vad else "only_while_button_held",
                 "activation": {
                     "strategy": "vad" if vad else "ptt",
-                    "min_segment_ms": 700,
-                    "silence_ms": 900,
-                    "pre_roll_ms": 700,
-                    "min_rms": 650,
+                    "min_segment_ms": min_segment_ms,
+                    "silence_ms": silence_ms,
+                    "pre_roll_ms": pre_roll_ms,
+                    "min_rms": min_rms,
                 },
                 "local_stt": False,
                 "local_tts": False,
@@ -370,10 +490,12 @@ __all__ = [
     "MAX_DEBUG_CLIPS",
     "build_capture_command",
     "compact_endpoint",
+    "diagnostics_snapshot",
     "dispatch_transcript",
     "event_id",
     "policy_report",
     "process_endpoint_event",
+    "retention_report",
     "save_audio_segment",
     "state_dir",
     "stt_status",

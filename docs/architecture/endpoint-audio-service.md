@@ -282,6 +282,9 @@ Initial contracts:
   status, and quality metrics.
 - `audio-session.v1`: session id, owner, endpoint, mode, policy, state, and
   routing.
+- `endpoint-audio-events.v1`: current MVP wire schema for
+  `endpoint.audio.record_button`, `endpoint.audio.voice_activity`,
+  `endpoint.audio.segment`, and `endpoint.audio.transcript`.
 - `audio-chunk.v1`: bounded audio frame or segment metadata.
 - `speech-event.v1`: activation, speech start/end, silence, interruption, and
   diagnostics.
@@ -318,18 +321,60 @@ endpoint state, activation mode, current session, STT backend, last transcript,
 latency, and the last bounded debug clips. It should not own the general audio
 transport or STT architecture.
 
+## Current MVP Implementation
+
+The current implementation provides a stable base layer, not the full target
+transport stack:
+
+- `adaos.services.endpoint_audio` receives endpoint audio events, stores only
+  the last 10 debug WAV clips, runs member-side Vosk when a model is available,
+  and dispatches final transcripts into the normal Voice/NLU route.
+- `adaos.sdk.io.endpoint_audio` exposes reusable skill-facing helpers:
+  `build_capture_command`, `process_endpoint_audio_event`,
+  `endpoint_audio_diagnostics`, `endpoint_audio_policy`, and compact endpoint
+  projection.
+- Legacy Android ReDevice uses `audio.capture.vad` as the default path:
+  sound activation, pre-roll, silence cutoff, bounded segment upload, and no
+  required local STT/TTS.
+- Push-to-talk remains available as deterministic fallback through on-screen
+  and hardware controls.
+- `redevice_voice` is a diagnostic skill over the service. It can tune VAD
+  thresholds and shows VAD state, STT status, last segment, retention, and
+  transport.
+- `redevice_settings` surfaces the endpoint audio, Bluetooth, display, battery,
+  active app, subnet, and logout/reconnect controls through Endpoint Registry.
+
+The service state uses `endpoint-audio-diagnostics.v1` as a runtime snapshot:
+
+```json
+{
+  "schema_version": "endpoint-audio-diagnostics.v1",
+  "mode": "voice_activity",
+  "vad": {"state": "listening"},
+  "record_button": {},
+  "last_segment": {},
+  "stt": {"state": "model_missing"},
+  "retention": {"debug_clip_limit": 10, "stored_debug_clips": 0},
+  "transport": {"selected_transport": "segment_upload"},
+  "policy": {"microphone_allowed": true}
+}
+```
+
 ## MVP Slice
 
 Recommended MVP:
 
-1. Extend Endpoint Registry with `audio_input_endpoint`,
+1. `[done]` Extend Endpoint Registry with `audio_input_endpoint`,
    `audio_output_endpoint`, and `endpoint-audio-profile.v1`.
-2. Implement legacy ReDevice PTT/VAD capture with pre-roll and max duration.
-3. Store only the last 10 debug utterance files when policy allows.
-4. Upload short utterance segments to a hub/member endpoint audio service.
-5. Route final transcript to the existing Voice/NLU pipeline.
-6. Return optional response to display or speaker route.
-7. Show diagnostics in `redevice_voice` and `redevice_settings`.
+2. `[done]` Implement legacy ReDevice PTT/VAD capture with pre-roll and max
+   duration.
+3. `[done]` Store only the last 10 debug utterance files when policy allows.
+4. `[done]` Upload short utterance segments to a hub/member endpoint audio
+   service.
+5. `[done]` Route final transcript to the existing Voice/NLU pipeline when STT
+   produces text.
+6. `[next]` Return optional response to display or speaker route.
+7. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
 
 Do not make local STT mandatory for legacy Android 4.1. Treat Vosk and similar
 engines as optional `local_stt` profiles that must pass benchmark gates.

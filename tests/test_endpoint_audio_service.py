@@ -37,6 +37,29 @@ def test_build_capture_command_defaults_to_vad_without_local_stt() -> None:
     assert payload["transport"]["intent"] == "audio.capture.vad"
 
 
+def test_build_capture_command_accepts_vad_activation_overrides() -> None:
+    endpoint = {
+        "code": "ABC123",
+        "endpoint_manifest": {
+            "endpoint_id": "endpoint-1",
+            "services": {"audio_input_endpoint": {"enabled": True}},
+        },
+    }
+
+    command = endpoint_audio.build_capture_command(
+        endpoint,
+        code="ABC123",
+        mode="vad",
+        activation={"min_rms": "1200", "silence_ms": 1100, "pre_roll_ms": 500, "min_segment_ms": 900},
+    )
+
+    activation = command["payload"]["input_policy"]["activation"]
+    assert activation["min_rms"] == 1200
+    assert activation["silence_ms"] == 1100
+    assert activation["pre_roll_ms"] == 500
+    assert activation["min_segment_ms"] == 900
+
+
 def test_audio_segment_retention_keeps_latest_ten(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_ENDPOINT_AUDIO_STATE_DIR", str(tmp_path))
 
@@ -82,3 +105,21 @@ def test_process_voice_activity_event_records_without_audio(tmp_path, monkeypatc
     assert result["ok"] is True
     assert state["events"][0]["type"] == "endpoint.audio.voice_activity"
     assert state["last_event_id"]
+    assert state["vad"]["state"] == "listening"
+
+
+def test_diagnostics_snapshot_reports_vad_stt_and_retention(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_ENDPOINT_AUDIO_STATE_DIR", str(tmp_path))
+    state: dict[str, object] = {
+        "vad": {"state": "recording", "noise_floor_rms": 120, "threshold_rms": 650},
+        "stt": {"ok": True, "state": "recognized", "text": "test"},
+        "events": [{"id": "evt-1"}],
+    }
+
+    snapshot = endpoint_audio.diagnostics_snapshot(state, {"endpoint_manifest": {"trust_level": "limited"}})
+
+    assert snapshot["schema_version"] == "endpoint-audio-diagnostics.v1"
+    assert snapshot["vad"]["state"] == "recording"
+    assert snapshot["stt"]["text"] == "test"
+    assert snapshot["retention"]["debug_clip_limit"] == 10
+    assert snapshot["policy"]["trust_level"] == "limited"

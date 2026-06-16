@@ -22,6 +22,7 @@ __all__ = [
     "tts_speak",
     "build_capture_command",
     "compact_audio_endpoint",
+    "endpoint_audio_diagnostics",
     "endpoint_audio_policy",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from .endpoint_audio import (
         build_capture_command,
         compact_audio_endpoint,
+        endpoint_audio_diagnostics,
         endpoint_audio_policy,
         endpoint_audio_stt_status,
         process_endpoint_audio_event,
@@ -67,6 +69,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
     if name in (
         "build_capture_command",
         "compact_audio_endpoint",
+        "endpoint_audio_diagnostics",
         "endpoint_audio_policy",
         "endpoint_audio_stt_status",
         "process_endpoint_audio_event",
@@ -74,6 +77,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         from .endpoint_audio import (
             build_capture_command,
             compact_audio_endpoint,
+            endpoint_audio_diagnostics,
             endpoint_audio_policy,
             endpoint_audio_stt_status,
             process_endpoint_audio_event,
@@ -82,6 +86,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         return {
             "build_capture_command": build_capture_command,
             "compact_audio_endpoint": compact_audio_endpoint,
+            "endpoint_audio_diagnostics": endpoint_audio_diagnostics,
             "endpoint_audio_policy": endpoint_audio_policy,
             "endpoint_audio_stt_status": endpoint_audio_stt_status,
             "process_endpoint_audio_event": process_endpoint_audio_event,

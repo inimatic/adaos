@@ -14,6 +14,7 @@ def build_capture_command(
     max_duration_ms: int = 8000,
     owner_node_id: str = "member",
     owner_skill_id: str = "redevice_voice",
+    activation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _svc.build_capture_command(
         endpoint,
@@ -23,6 +24,7 @@ def build_capture_command(
         max_duration_ms=max_duration_ms,
         owner_node_id=owner_node_id,
         owner_skill_id=owner_skill_id,
+        activation=activation,
     )
 
 
@@ -32,6 +34,10 @@ def compact_audio_endpoint(endpoint: Mapping[str, Any], *, selected_code: str = 
 
 def endpoint_audio_policy(endpoint: Mapping[str, Any]) -> dict[str, Any]:
     return _svc.policy_report(endpoint)
+
+
+def endpoint_audio_diagnostics(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return _svc.diagnostics_snapshot(state, endpoint)
 
 
 def process_endpoint_audio_event(
@@ -58,6 +64,7 @@ def endpoint_audio_stt_status(lang: str | None = None) -> dict[str, Any]:
 __all__ = [
     "build_capture_command",
     "compact_audio_endpoint",
+    "endpoint_audio_diagnostics",
     "endpoint_audio_policy",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",

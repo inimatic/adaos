@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/endpoint-audio-events.v1.schema.json",
+  "title": "AdaOS Endpoint Audio Events v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["type", "endpoint_id", "action"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "endpoint.audio.record_button",
+        "endpoint.audio.voice_activity",
+        "endpoint.audio.segment",
+        "endpoint.audio.transcript"
+      ]
+    },
+    "endpoint_id": { "type": "string", "minLength": 1 },
+    "surface_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "command_id": { "type": "string" },
+    "action": { "type": "string" },
+    "lang": { "type": "string" },
+    "input": { "type": "string" },
+    "local_stt": { "type": "boolean" },
+    "local_tts": { "type": "boolean" },
+    "active_app": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "app_id": { "type": "string" },
+        "skill_id": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "active_surface": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "surface_id": { "type": "string" },
+        "surface_ref": { "type": "string" },
+        "state": { "type": "string" }
+      }
+    },
+    "record_button": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "down_at_ms": { "type": "number" },
+        "duration_ms": { "type": "number" },
+        "stop_reason": { "type": "string" }
+      }
+    },
+    "vad": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "type": "string" },
+        "noise_floor_rms": { "type": "number" },
+        "threshold_rms": { "type": "number" },
+        "peak_rms": { "type": "number" },
+        "duration_ms": { "type": "number" },
+        "min_segment_ms": { "type": "number" },
+        "silence_ms": { "type": "number" },
+        "pre_roll_ms": { "type": "number" },
+        "reason": { "type": "string" }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mime": { "type": "string" },
+        "encoding": { "type": "string", "enum": ["base64", "none"] },
+        "sample_rate": { "type": "integer" },
+        "channels": { "type": "integer" },
+        "sample_width_bits": { "type": "integer" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "data_b64": { "type": "string" }
+      }
+    },
+    "transcript": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "state": { "type": "string" },
+        "source": { "type": "string" },
+        "text": { "type": "string" },
+        "confidence": { "type": "number" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "endpoint.audio.segment" } } },
+      "then": { "required": ["audio"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "endpoint.audio.transcript" } } },
+      "then": { "required": ["transcript"] }
+    }
+  ]
+}

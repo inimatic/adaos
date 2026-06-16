@@ -13,6 +13,8 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   AI-assisted, and human-in-the-loop capability creation workflows
 - `builder.draft.v1.schema.json` - Builder draft workspace metadata before
   validation, preview, approval, and runtime apply
+- `endpoint-audio-events.v1.schema.json` - MVP endpoint audio event wire
+  contract for ReDevice and future endpoint agents
 - `nlu.teacher.v1.schema.json` - NLU Teacher request/thread, candidate,
   clarification, feedback, idempotency, scope, response policy, and MCP
   capability profile contracts
