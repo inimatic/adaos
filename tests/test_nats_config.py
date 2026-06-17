@@ -79,3 +79,7 @@ def test_public_nats_ws_candidates_can_drop_dedicated_fallback() -> None:
     assert public_nats_ws_candidates(prefer_dedicated="0", allow_dedicated_fallback=False) == [
         "wss://api.inimatic.com/nats"
     ]
+
+
+def test_public_nats_ws_candidates_defaults_to_api_only() -> None:
+    assert public_nats_ws_candidates(prefer_dedicated="1") == ["wss://api.inimatic.com/nats"]

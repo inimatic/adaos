@@ -899,7 +899,7 @@ def test_realtime_sidecar_prefers_api_by_default(monkeypatch: pytest.MonkeyPatch
 
     ordered = realtime_sidecar_mod.resolve_realtime_remote_candidates()
 
-    assert ordered == ["wss://api.inimatic.com/nats", "wss://nats.inimatic.com/nats"]
+    assert ordered == ["wss://api.inimatic.com/nats"]
 
 
 def test_realtime_sidecar_does_not_inherit_hub_prefer_dedicated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -910,10 +910,10 @@ def test_realtime_sidecar_does_not_inherit_hub_prefer_dedicated(monkeypatch: pyt
 
     ordered = realtime_sidecar_mod.resolve_realtime_remote_candidates()
 
-    assert ordered == ["wss://api.inimatic.com/nats", "wss://nats.inimatic.com/nats"]
+    assert ordered == ["wss://api.inimatic.com/nats"]
 
 
-def test_realtime_sidecar_can_disable_api_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_realtime_sidecar_keeps_api_ingress_when_no_custom_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HUB_NATS_PREFER_DEDICATED", raising=False)
     monkeypatch.delenv("ADAOS_REALTIME_PREFER_DEDICATED", raising=False)
     monkeypatch.setenv("ADAOS_REALTIME_ALLOW_API_FALLBACK", "0")
@@ -921,12 +921,13 @@ def test_realtime_sidecar_can_disable_api_fallback(monkeypatch: pytest.MonkeyPat
 
     ordered = realtime_sidecar_mod.resolve_realtime_remote_candidates()
 
-    assert ordered == ["wss://nats.inimatic.com/nats"]
+    assert ordered == ["wss://api.inimatic.com/nats"]
 
 
 def test_realtime_sidecar_can_explicitly_prefer_dedicated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HUB_NATS_PREFER_DEDICATED", "0")
     monkeypatch.setenv("ADAOS_REALTIME_PREFER_DEDICATED", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_ALT", "wss://nats.inimatic.com/nats")
     monkeypatch.delenv("ADAOS_REALTIME_ALLOW_API_FALLBACK", raising=False)
     monkeypatch.delenv("ADAOS_REALTIME_REMOTE_WS_URL", raising=False)
 
@@ -946,7 +947,7 @@ def test_realtime_sidecar_uses_ws_fallback_for_direct_tcp_node_url(monkeypatch: 
 
     ordered = realtime_sidecar_mod.resolve_realtime_remote_candidates()
 
-    assert ordered == ["wss://api.inimatic.com/nats", "wss://nats.inimatic.com/nats"]
+    assert ordered == ["wss://api.inimatic.com/nats"]
 
 
 def test_realtime_sidecar_can_append_tcp_fallback_for_direct_tcp_node_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -962,7 +963,6 @@ def test_realtime_sidecar_can_append_tcp_fallback_for_direct_tcp_node_url(monkey
 
     assert ordered == [
         "wss://api.inimatic.com/nats",
-        "wss://nats.inimatic.com/nats",
         "nats://nats.inimatic.com:4222",
     ]
 
@@ -1021,7 +1021,7 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     assert popen_args[:3] == [realtime_sidecar_mod.sys.executable, "-m", "adaos.services.realtime_sidecar"]
     assert "realtime" not in popen_args[:5]
     assert popen_env["ADAOS_REALTIME_PREFER_DEDICATED"] == "0"
-    assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "1"
+    assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "0"
     assert popen_env["ADAOS_REALTIME_WIN_LOOP"] == "proactor"
     assert popen_env["ADAOS_BASE_DIR"] == str(tmp_path / "base")
 
@@ -1065,7 +1065,7 @@ async def test_realtime_sidecar_subprocess_starts_for_direct_tcp_node_url(
 
     assert proc is not None
     assert popen_env["ADAOS_REALTIME_PREFER_DEDICATED"] == "0"
-    assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "1"
+    assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "0"
     assert popen_env["ADAOS_REALTIME_WIN_LOOP"] == "proactor"
 
 

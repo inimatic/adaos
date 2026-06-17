@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from string import Formatter
 from typing import Any
@@ -36,6 +37,7 @@ from adaos.apps.bootstrap import init_ctx
 from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
 from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS
+from adaos.services.bounded_io import bounded_jsonl_tail, bounded_text_tail_lines, path_size_snapshot
 from adaos.services.core_slots import (
     activate_slot,
     active_slot,
@@ -97,6 +99,7 @@ from adaos.services.supervisor_memory import (
     supervisor_memory_session_artifacts_dir,
     supervisor_memory_session_operations_path,
     supervisor_memory_sessions_index_path,
+    supervisor_memory_state_dir,
     supervisor_memory_telemetry_path,
     write_memory_session_index,
     write_memory_session_summary,
@@ -811,6 +814,51 @@ def _hub_root_watchdog_verify_interval_sec() -> float:
         return max(0.25, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_INTERVAL_SEC") or "1").strip()))
     except Exception:
         return 1.0
+
+
+def _hub_root_root_probe_enabled() -> bool:
+    raw = os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE")
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _hub_root_root_probe_interval_sec() -> float:
+    try:
+        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE_INTERVAL_SEC") or "30").strip()))
+    except Exception:
+        return 30.0
+
+
+def _hub_root_root_probe_timeout_sec() -> float:
+    try:
+        return max(0.1, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE_TIMEOUT_SEC") or "1.5").strip()))
+    except Exception:
+        return 1.5
+
+
+def _hub_root_root_probe_ttl_sec() -> float:
+    try:
+        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE_TTL_SEC") or "120").strip()))
+    except Exception:
+        return 120.0
+
+
+def _parse_root_probe_time(value: Any) -> float | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except Exception:
+        pass
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return float(parsed.timestamp())
+    except Exception:
+        return None
 
 
 def _member_hub_watchdog_enabled() -> bool:
@@ -2136,6 +2184,10 @@ class SupervisorManager:
         self._hub_root_watchdog_last_reason: str | None = None
         self._hub_root_watchdog_reconnect_total = 0
         self._hub_root_watchdog_last_result: dict[str, Any] | None = None
+        self._hub_root_root_probe_last_at: float | None = None
+        self._hub_root_root_probe_last_result: dict[str, Any] | None = None
+        self._hub_root_root_probe_last_state: str | None = None
+        self._hub_root_root_probe_last_reason: str | None = None
         self._member_hub_watchdog_last_reconnect_at: float | None = None
         self._member_hub_watchdog_last_state: str | None = None
         self._member_hub_watchdog_last_reason: str | None = None
@@ -3618,6 +3670,176 @@ class SupervisorManager:
             pass
         return None
 
+    def _hub_root_root_probe_config(self) -> dict[str, Any]:
+        try:
+            conf = load_config()
+        except Exception:
+            conf = None
+        subnet_id = str(getattr(conf, "subnet_id", "") or "").strip()
+        zone_id = str(getattr(conf, "zone_id", "") or "").strip().lower()
+        root_settings = getattr(conf, "root_settings", None)
+        root_base_url = str(
+            os.getenv("ROOT_BASE_URL")
+            or getattr(root_settings, "base_url", None)
+            or "https://api.inimatic.com"
+        ).strip().rstrip("/")
+        root_token = str(
+            os.getenv("ADAOS_ROOT_OWNER_TOKEN")
+            or os.getenv("ROOT_TOKEN")
+            or os.getenv("ADAOS_ROOT_TOKEN")
+            or ""
+        ).strip()
+        return {
+            "root_base_url": root_base_url,
+            "root_token_present": bool(root_token),
+            "root_token": root_token,
+            "target_id": f"hub:{subnet_id}" if subnet_id else None,
+            "subnet_id": subnet_id or None,
+            "zone_id": zone_id or None,
+        }
+
+    def _hub_root_root_probe_state_payload(self) -> dict[str, Any]:
+        return {
+            "enabled": _hub_root_root_probe_enabled(),
+            "interval_sec": _hub_root_root_probe_interval_sec(),
+            "timeout_sec": _hub_root_root_probe_timeout_sec(),
+            "ttl_sec": _hub_root_root_probe_ttl_sec(),
+            "last_at": self._hub_root_root_probe_last_at,
+            "last_state": self._hub_root_root_probe_last_state,
+            "last_reason": self._hub_root_root_probe_last_reason,
+            "last_result": dict(self._hub_root_root_probe_last_result or {}),
+        }
+
+    def _probe_hub_root_from_root_once(self, *, now: float | None = None) -> dict[str, Any]:
+        current_time = time.time() if now is None else float(now)
+        ttl_sec = _hub_root_root_probe_ttl_sec()
+        config = self._hub_root_root_probe_config()
+        root_base_url = str(config.get("root_base_url") or "").strip().rstrip("/")
+        target_id = str(config.get("target_id") or "").strip()
+        root_token = str(config.get("root_token") or "").strip()
+        base_result: dict[str, Any] = {
+            "ok": False,
+            "state": "unknown",
+            "checked_at": current_time,
+            "target_id": target_id or None,
+            "root_base_url": root_base_url or None,
+            "ttl_sec": ttl_sec,
+        }
+        if not root_base_url:
+            return {**base_result, "state": "not_configured", "reason": "root_base_url_missing"}
+        if not target_id:
+            return {**base_result, "state": "not_configured", "reason": "hub_target_id_missing"}
+        if not root_token:
+            return {**base_result, "state": "not_configured", "reason": "root_token_missing"}
+
+        headers = {"Accept": "application/json", "X-Root-Token": root_token}
+        if config.get("subnet_id"):
+            headers["X-AdaOS-Subnet-Id"] = str(config["subnet_id"])
+        if config.get("zone_id"):
+            headers["X-AdaOS-Zone"] = str(config["zone_id"])
+        session = requests.Session()
+        try:
+            try:
+                session.trust_env = False
+            except Exception:
+                pass
+            response = session.get(
+                f"{root_base_url}/v1/hubs/control/reports",
+                params={"hub_id": target_id},
+                headers=headers,
+                timeout=_hub_root_root_probe_timeout_sec(),
+            )
+            status_code = int(response.status_code or 0)
+            if status_code >= 400:
+                return {
+                    **base_result,
+                    "state": "http_error",
+                    "reason": f"http_{status_code}",
+                    "status_code": status_code,
+                }
+            payload = response.json()
+        except Exception as exc:
+            return {
+                **base_result,
+                "state": "request_failed",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        finally:
+            with contextlib.suppress(Exception):
+                session.close()
+
+        reports = payload.get("reports") if isinstance(payload, dict) else None
+        if not isinstance(reports, list) or not reports:
+            return {**base_result, "ok": True, "state": "no_report", "reason": "root returned no control report"}
+        report_item = reports[0] if isinstance(reports[0], dict) else {}
+        report = report_item.get("report") if isinstance(report_item.get("report"), dict) else {}
+        observed_raw = report_item.get("server_time_utc") or report.get("reported_at") or report_item.get("reported_at")
+        observed_at = _parse_root_probe_time(observed_raw)
+        age_sec = (current_time - observed_at) if observed_at is not None else None
+        state = "ready" if age_sec is not None and age_sec <= ttl_sec else "stale"
+        reason = (
+            f"root control report fresh age={age_sec:.1f}s"
+            if state == "ready" and age_sec is not None
+            else (
+                f"root control report stale age={age_sec:.1f}s"
+                if age_sec is not None
+                else "root control report has no parseable timestamp"
+            )
+        )
+        root_control = report.get("root_control") if isinstance(report.get("root_control"), dict) else {}
+        route = report.get("route") if isinstance(report.get("route"), dict) else {}
+        transport = report.get("transport") if isinstance(report.get("transport"), dict) else {}
+        return {
+            **base_result,
+            "ok": True,
+            "state": state,
+            "reason": reason,
+            "observed_at": observed_at,
+            "observed_at_raw": str(observed_raw or "").strip() or None,
+            "age_sec": age_sec,
+            "root_control_status": str(root_control.get("status") or "").strip().lower() or None,
+            "route_status": str(route.get("status") or "").strip().lower() or None,
+            "transport_assessment_state": str(transport.get("assessment_state") or "").strip().lower() or None,
+            "runtime_instance_id": str(
+                report.get("runtime_instance_id")
+                or ((report.get("runtime") or {}) if isinstance(report.get("runtime"), dict) else {}).get("runtime_instance_id")
+                or ""
+            ).strip() or None,
+            "transition_role": str(report.get("transition_role") or "").strip() or None,
+            "event_id": str(report_item.get("event_id") or "").strip() or None,
+        }
+
+    async def _maybe_probe_hub_root_from_root(self, *, force: bool = False) -> dict[str, Any] | None:
+        if not _hub_root_root_probe_enabled():
+            self._hub_root_root_probe_last_state = "disabled"
+            self._hub_root_root_probe_last_reason = "root perspective probe disabled"
+            return None
+        role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        if role != "hub":
+            self._hub_root_root_probe_last_state = "not_applicable"
+            self._hub_root_root_probe_last_reason = f"role={role or '-'}"
+            return None
+        now = time.time()
+        last_at = self._hub_root_root_probe_last_at
+        if not force and last_at is not None and (now - float(last_at)) < _hub_root_root_probe_interval_sec():
+            return self._hub_root_root_probe_last_result
+        previous_state = self._hub_root_root_probe_last_state
+        result = await asyncio.to_thread(self._probe_hub_root_from_root_once, now=now)
+        self._hub_root_root_probe_last_at = now
+        self._hub_root_root_probe_last_result = dict(result)
+        self._hub_root_root_probe_last_state = str(result.get("state") or "").strip().lower() or "unknown"
+        self._hub_root_root_probe_last_reason = str(result.get("reason") or "").strip() or None
+        if previous_state != self._hub_root_root_probe_last_state:
+            self._append_hub_root_watchdog_event(
+                {
+                    "event": "root_perspective_probe",
+                    "state": self._hub_root_root_probe_last_state,
+                    "reason": self._hub_root_root_probe_last_reason,
+                    "probe": dict(result),
+                }
+            )
+        return result
+
     def _sidecar_status_payload(self) -> dict[str, Any]:
         role = self._sidecar_role()
         try:
@@ -4149,6 +4371,7 @@ class SupervisorManager:
             "verify_timeout_sec": _hub_root_watchdog_verify_timeout_sec(),
             "log_path": str(log_path),
             "last_result": _compact_watchdog_last_result(self._hub_root_watchdog_last_result),
+            "root_perspective_probe": self._hub_root_root_probe_state_payload(),
         }
         if include_events:
             payload["recent_events"] = [
@@ -4185,7 +4408,9 @@ class SupervisorManager:
         return "member_hub" if role_norm == "member" else "hub_root"
 
     def _required_upstream_link_state_payload(self, *, role: str | None = None) -> dict[str, Any]:
-        role_norm = str(role or self._sidecar_role() or self._managed_transition_role or "").strip().lower() or None
+        transition_role = str(self._managed_transition_role or "").strip().lower()
+        managed_role = transition_role if transition_role in {"hub", "member"} else None
+        role_norm = str(role or managed_role or self._sidecar_role() or transition_role or "").strip().lower() or None
         kind = self._required_upstream_link_kind_for_role(role_norm)
         payload = (
             self._member_hub_watchdog_state_payload(include_events=False)
@@ -4391,11 +4616,26 @@ class SupervisorManager:
         root_down = self._hub_root_channel_down(channel_state)
         route_degraded = self._hub_root_route_degraded(channel_state)
         route_degraded_reset_enabled = _hub_root_watchdog_reset_degraded_route_enabled()
+        root_probe = (
+            self._hub_root_root_probe_last_result
+            if isinstance(self._hub_root_root_probe_last_result, dict)
+            else {}
+        )
+        root_probe_state = str(root_probe.get("state") or "").strip().lower()
         action = (
             "sidecar_restart"
             if transport_owner == "sidecar"
             else ("runtime_reconnect" if root_down else "runtime_route_reset")
         )
+
+        if root_down and root_probe_state == "ready":
+            age = root_probe.get("age_sec")
+            age_text = f"{float(age):.1f}s" if isinstance(age, (int, float)) else "-"
+            self._hub_root_watchdog_last_state = "root_perspective_ready"
+            self._hub_root_watchdog_last_reason = (
+                f"runtime reports hub-root down, but root has a fresh hub control report (age={age_text})"
+            )
+            return None
 
         if not root_down and not route_degraded:
             state = (
@@ -4445,6 +4685,7 @@ class SupervisorManager:
             "last_summary": channel_state.get("last_summary"),
             "channel_before": channel_state,
             "required_upstream_link": required_link,
+            "root_perspective_probe": dict(root_probe),
         }
 
     async def _verify_hub_root_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
@@ -4481,6 +4722,7 @@ class SupervisorManager:
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
+        await self._maybe_probe_hub_root_from_root()
         runtime = self._runtime_reliability_payload(timeout=1.5)
         if not runtime:
             return

@@ -745,6 +745,88 @@ def test_hub_root_watchdog_respects_reconnect_cooldown(monkeypatch) -> None:
     assert "cooldown" in str(manager._hub_root_watchdog_last_reason)
 
 
+def test_hub_root_watchdog_uses_fresh_root_perspective_probe(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    manager._hub_root_root_probe_last_result = {
+        "ok": True,
+        "state": "ready",
+        "age_sec": 3.0,
+        "target_id": "hub:sn_test",
+    }
+
+    decision = manager._hub_root_watchdog_decision(
+        {
+            "readiness_tree": {"root_control": {"status": "down"}},
+            "channel_overview": {"hub_root": {"effective_status": "down"}},
+        },
+        now=100.0,
+    )
+
+    assert decision is None
+    assert manager._hub_root_watchdog_last_state == "root_perspective_ready"
+    assert "fresh hub control report" in str(manager._hub_root_watchdog_last_reason)
+
+
+def test_hub_root_root_probe_reads_fresh_control_report(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Config:
+        subnet_id = "sn_test"
+        zone_id = "eu"
+
+        class root_settings:
+            base_url = "https://api.inimatic.com"
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "ok": True,
+                "reports": [
+                    {
+                        "event_id": "evt_1",
+                        "server_time_utc": "2026-06-17T10:00:05+00:00",
+                        "report": {
+                            "reported_at": "2026-06-17T10:00:00+00:00",
+                            "root_control": {"status": "ready"},
+                            "route": {"status": "ready"},
+                            "transport": {"assessment_state": "stable"},
+                            "runtime": {"runtime_instance_id": "rt-a"},
+                        },
+                    }
+                ],
+            }
+
+    requests_seen: list[dict[str, object]] = []
+
+    class _Session:
+        trust_env = True
+
+        def get(self, url, **kwargs):
+            requests_seen.append({"url": url, **kwargs})
+            return _Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "root-token")
+    monkeypatch.setattr(supervisor, "load_config", lambda: _Config())
+    monkeypatch.setattr(supervisor.requests, "Session", _Session)
+
+    result = manager._probe_hub_root_from_root_once(now=1781690410.0)
+
+    assert result["state"] == "ready"
+    assert result["target_id"] == "hub:sn_test"
+    assert result["age_sec"] == 5.0
+    assert result["root_control_status"] == "ready"
+    assert requests_seen[0]["url"] == "https://api.inimatic.com/v1/hubs/control/reports"
+    assert requests_seen[0]["params"] == {"hub_id": "hub:sn_test"}
+
+
 def test_hub_root_watchdog_invokes_runtime_reconnect(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_TIMEOUT_SEC", "0")

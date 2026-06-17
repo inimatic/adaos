@@ -969,19 +969,15 @@ def resolve_realtime_remote_candidates() -> list[str]:
                     candidates.append(normalized)
         allow_api_fallback = _truthy(os.getenv("ADAOS_REALTIME_ALLOW_API_FALLBACK"), default=False)
         if allow_api_fallback:
-            for item in [public_nats_ws_api(), "wss://nats.inimatic.com/nats"]:
+            for item in [public_nats_ws_api()]:
                 if item not in candidates:
                     candidates.append(item)
         return candidates
     target_url = explicit_url or node_url_raw
     if target_url and not nats_url_uses_websocket(target_url):
-        prefer_dedicated = os.getenv("ADAOS_REALTIME_PREFER_DEDICATED", "0")
         allow_api_fallback = _truthy(os.getenv("ADAOS_REALTIME_ALLOW_API_FALLBACK"), default=True)
         allow_tcp_fallback = _truthy(os.getenv("ADAOS_REALTIME_ALLOW_TCP_FALLBACK"), default=False)
-        ws_candidates = [public_nats_ws_api()]
-        if allow_api_fallback:
-            ws_candidates.append("wss://nats.inimatic.com/nats")
-        ordered = order_nats_ws_candidates(ws_candidates, explicit_url=None, prefer_dedicated=prefer_dedicated)
+        ordered = [public_nats_ws_api()] if allow_api_fallback else []
         base_tcp = str(target_url).strip()
         if allow_tcp_fallback and base_tcp.startswith("nats://") and base_tcp not in ordered:
             ordered.append(base_tcp)
@@ -989,7 +985,7 @@ def resolve_realtime_remote_candidates() -> list[str]:
     node_url = normalize_nats_ws_url(node_url_raw, fallback=None)
     base = normalize_nats_ws_url(explicit_url or node_url, fallback=None)
     candidates: list[str] = []
-    for item in [base, public_nats_ws_api(), "wss://nats.inimatic.com/nats"]:
+    for item in [base, public_nats_ws_api()]:
         if isinstance(item, str) and item.startswith("ws") and item not in candidates:
             candidates.append(item)
     extra = str(os.getenv("ADAOS_REALTIME_REMOTE_WS_ALT", "") or "").strip()
@@ -998,14 +994,13 @@ def resolve_realtime_remote_candidates() -> list[str]:
             normalized = normalize_nats_ws_url(item, fallback=None)
             if isinstance(normalized, str) and normalized.startswith("ws") and normalized not in candidates:
                 candidates.append(normalized)
-    # For long-lived sidecar sessions, the root ingress is the safer default and the dedicated hostname
-    # remains a fallback. Some environments observe abnormal closes on the dedicated endpoint after tens
-    # of seconds even with keepalives enabled.
+    # The api-domain ingress is the canonical public websocket endpoint for sidecar sessions. The
+    # dedicated hostname is a legacy alias and is only used when explicitly supplied through ALT.
     prefer_dedicated = os.getenv("ADAOS_REALTIME_PREFER_DEDICATED", "0")
     ordered = order_nats_ws_candidates(candidates, explicit_url=base, prefer_dedicated=prefer_dedicated)
     api_ingress = public_nats_ws_api()
     allow_api_fallback = _truthy(os.getenv("ADAOS_REALTIME_ALLOW_API_FALLBACK"), default=True)
-    if api_ingress in ordered and not allow_api_fallback:
+    if base and api_ingress in ordered and api_ingress != base and not allow_api_fallback:
         ordered = [item for item in ordered if item != api_ingress]
     return ordered
 
@@ -1073,7 +1068,7 @@ async def start_realtime_sidecar_subprocess(
     env["ADAOS_REALTIME_CHILD"] = "1"
     env["ADAOS_BASE_DIR"] = str(current_base_dir())
     env.setdefault("ADAOS_REALTIME_PREFER_DEDICATED", "0")
-    env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] = "1"
+    env.setdefault("ADAOS_REALTIME_ALLOW_API_FALLBACK", "0")
     env.setdefault("ADAOS_REALTIME_WIN_LOOP", "proactor")
     resolved_repo_root = (
         Path(repo_root).expanduser().resolve()

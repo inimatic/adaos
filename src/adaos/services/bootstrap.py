@@ -9324,10 +9324,21 @@ class BootstrapService:
                                 )
                             except Exception:
                                 pass
-                            skip_rx_watchdog = tick_gap > 5.0
+                            try:
+                                local_sidecar_url = realtime_sidecar_local_url()
+                                sidecar_rx_watchdog_not_applicable = bool(
+                                    isinstance(nats_last_server, str)
+                                    and isinstance(local_sidecar_url, str)
+                                    and str(nats_last_server).strip() == str(local_sidecar_url).strip()
+                                )
+                            except Exception:
+                                sidecar_rx_watchdog_not_applicable = False
+                            skip_rx_watchdog = tick_gap > 5.0 or sidecar_rx_watchdog_not_applicable
                             if skip_rx_watchdog:
                                 # If the event loop was stalled (e.g. a long sync handler), don't treat lack of RX
-                                # during that window as a dead connection; refresh the baseline instead.
+                                # during that window as a dead connection; refresh the baseline instead. When the
+                                # client is connected to the local realtime sidecar, root-facing RX is owned by the
+                                # sidecar process and is reflected in sidecar diagnostics, not this local transport.
                                 try:
                                     tr = getattr(nc, "_transport", None)
                                     if tr is not None:

@@ -95,11 +95,11 @@ def normalize_nats_ws_url(
 def public_nats_ws_candidates(
     *,
     prefer_dedicated: str | None = "0",
-    allow_dedicated_fallback: bool = True,
+    allow_dedicated_fallback: bool = False,
 ) -> list[str]:
     api_ws = public_nats_ws_api()
     pref = str(prefer_dedicated or "").strip()
-    if pref == "1":
+    if pref == "1" and allow_dedicated_fallback:
         return [PUBLIC_NATS_WS_DEDICATED, api_ws]
     if allow_dedicated_fallback:
         return [api_ws, PUBLIC_NATS_WS_DEDICATED]
