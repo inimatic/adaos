@@ -20,6 +20,7 @@ ystore.db-journal
 site
 .pytest-tmp
 artifacts/test_tmp/
+artifacts/client-debug/
 src/adaos/integrations/rasa-backup/
 tmp/
 example
