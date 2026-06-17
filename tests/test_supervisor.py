@@ -953,6 +953,22 @@ def test_watchdog_payloads_stay_light_when_previous_state_is_recursive(monkeypat
     assert "payload" not in compact["result"]
 
 
+def test_required_upstream_link_uses_node_role_before_transition_role(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._managed_transition_role = "active"
+    manager._hub_root_watchdog_last_state = "ready"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(supervisor, "realtime_sidecar_enabled", lambda *, role=None: role == "hub")
+
+    payload = manager._required_upstream_link_state_payload()
+
+    assert payload["kind"] == "hub_root"
+    assert payload["role"] == "hub"
+    assert payload["sidecar_enabled"] is True
+    assert payload["current_owner"] == "sidecar"
+
+
 def test_read_jsonl_tail_uses_bounded_tail_window(tmp_path) -> None:
     path = tmp_path / "watchdog.jsonl"
     lines = [{"i": i, "payload": "x" * 20} for i in range(10)]

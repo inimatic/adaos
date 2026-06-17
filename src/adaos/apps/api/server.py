@@ -216,6 +216,40 @@ from adaos.services.runtime_lifecycle import (
     reset_runtime_lifecycle,
     runtime_lifecycle_snapshot,
 )
+
+
+def _truthy_value(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _background_boot_enabled() -> bool:
+    raw = os.getenv("ADAOS_RUNTIME_BACKGROUND_BOOT")
+    if raw is not None:
+        return _truthy_value(raw)
+    return _truthy_value(os.getenv("ADAOS_SUPERVISOR_ENABLED")) or _truthy_value(os.getenv("ADAOS_AUTOSTART_MODE"))
+
+
+async def _run_boot_sequence_logged(app: FastAPI) -> None:
+    try:
+        with _StartupTimer("run_boot_sequence"):
+            await run_boot_sequence(app)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _startup_log.exception("runtime boot sequence failed")
+        raise
+
+
+async def _cancel_background_task(task: asyncio.Task[Any] | None, *, timeout: float = 5.0) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=max(0.1, float(timeout)))
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        _startup_log.warning("background startup task did not stop cleanly", exc_info=True)
 from adaos.services.runtime_memory_profile import finish_active_runtime_memory_profile
 from adaos.services.root_mcp.logs import aggregate_subnet_logs, list_local_logs, normalize_log_category
 from adaos.services.root_mcp.service import invoke_tool as invoke_root_mcp_tool
@@ -687,8 +721,13 @@ async def lifespan(app: FastAPI):
             app.state.realtime_sidecar_proc = await start_realtime_sidecar_subprocess(role=role)
     except Exception:
         logging.getLogger("adaos.realtime").warning("failed to start adaos-realtime sidecar", exc_info=True)
-    with _StartupTimer("run_boot_sequence"):
-        await run_boot_sequence(app)
+    boot_task: asyncio.Task[Any] | None = None
+    app.state.runtime_boot_task = None
+    if _background_boot_enabled():
+        boot_task = asyncio.create_task(_run_boot_sequence_logged(app), name="runtime-boot-sequence")
+        app.state.runtime_boot_task = boot_task
+    else:
+        await _run_boot_sequence_logged(app)
     # Keep the local capacity projection in sync with optional native deps
     # (vosk/pyttsx3), so other components can see IO availability without importing native libs.
     try:
@@ -948,6 +987,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        try:
+            await _cancel_background_task(getattr(app.state, "runtime_boot_task", None))
+        finally:
+            app.state.runtime_boot_task = None
         try:
             conf = get_ctx().config
             if not getattr(app.state, "shutdown_stopping_emitted", False):

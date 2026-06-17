@@ -50,6 +50,32 @@ def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
     assert payload["runtime"]["admin_mutation_allowed"] is False
 
 
+def test_background_boot_defaults_to_supervisor_or_autostart(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_RUNTIME_BACKGROUND_BOOT", raising=False)
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.delenv("ADAOS_AUTOSTART_MODE", raising=False)
+
+    assert api_server._background_boot_enabled() is False
+
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    assert api_server._background_boot_enabled() is True
+
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.setenv("ADAOS_AUTOSTART_MODE", "true")
+    assert api_server._background_boot_enabled() is True
+
+
+def test_background_boot_explicit_env_overrides_managed_mode(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    monkeypatch.setenv("ADAOS_AUTOSTART_MODE", "1")
+
+    monkeypatch.setenv("ADAOS_RUNTIME_BACKGROUND_BOOT", "0")
+    assert api_server._background_boot_enabled() is False
+
+    monkeypatch.setenv("ADAOS_RUNTIME_BACKGROUND_BOOT", "yes")
+    assert api_server._background_boot_enabled() is True
+
+
 def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
     monkeypatch.setenv("ENV_TYPE", "dev")
 

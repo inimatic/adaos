@@ -4093,7 +4093,7 @@ class SupervisorManager:
         return "member_hub" if role_norm == "member" else "hub_root"
 
     def _required_upstream_link_state_payload(self, *, role: str | None = None) -> dict[str, Any]:
-        role_norm = str(role or self._managed_transition_role or self._sidecar_role() or "").strip().lower() or None
+        role_norm = str(role or self._sidecar_role() or self._managed_transition_role or "").strip().lower() or None
         kind = self._required_upstream_link_kind_for_role(role_norm)
         payload = (
             self._member_hub_watchdog_state_payload(include_events=False)
