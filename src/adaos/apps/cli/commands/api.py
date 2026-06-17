@@ -1,5 +1,6 @@
 # src\adaos\apps\cli\commands\api.py
 import atexit
+import asyncio
 import json
 import os
 import subprocess
@@ -22,6 +23,18 @@ from adaos.apps.cli.active_control import resolve_control_token
 apply_runtime_dotenv_overrides()
 
 app = typer.Typer(help="HTTP API for AdaOS")
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = str(raw or "").strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _uvicorn_loop_mode() -> str:
@@ -682,15 +695,91 @@ def _request_graceful_shutdown(host: str, port: int, *, token: str | None, reaso
     return _wait_for_server_exit(host, port, timeout=20.0)
 
 
-@app.command("serve")
-def serve(
+def _is_managed_runtime_env() -> bool:
+    return (
+        _env_flag("ADAOS_AUTOSTART_MANAGED", default=False)
+        or _env_flag("ADAOS_SUPERVISOR_ENABLED", default=False)
+        or bool(str(os.getenv("ADAOS_AUTOSTART_MODE") or "").strip())
+    )
+
+
+async def _ensure_api_serve_dev_sidecar(conf, *, launch_mode: str) -> subprocess.Popen | None:
+    role = str(getattr(conf, "role", "") or "").strip().lower() if conf is not None else ""
+    if role != "hub":
+        return None
+    if _is_managed_runtime_env():
+        return None
+    if _env_flag("ADAOS_API_SERVE_SIDECAR_DISABLE", default=False):
+        return None
+    try:
+        from adaos.services.realtime_sidecar import (
+            realtime_sidecar_enabled,
+            realtime_sidecar_listener_snapshot,
+            realtime_sidecar_local_url,
+            resolve_realtime_remote_candidates,
+            start_realtime_sidecar_subprocess,
+            stop_realtime_sidecar_subprocess,
+        )
+    except Exception:
+        if _env_flag("ADAOS_CLI_DEBUG", default=False):
+            raise
+        return None
+    if not realtime_sidecar_enabled(role=role):
+        return None
+    remote_candidates = resolve_realtime_remote_candidates()
+    if not remote_candidates:
+        typer.secho(
+            "[AdaOS] realtime sidecar: skipped for dev runtime (no remote candidates)",
+            fg=typer.colors.YELLOW,
+        )
+        return None
+    snapshot = realtime_sidecar_listener_snapshot(None, role=role)
+    if snapshot.get("listener_running"):
+        typer.echo(
+            "[AdaOS] realtime sidecar: adopted existing listener "
+            f"pid={snapshot.get('listener_pid')} local={snapshot.get('local_url')}"
+        )
+        return None
+    proc = await start_realtime_sidecar_subprocess(role=role)
+    if proc is None:
+        snapshot = realtime_sidecar_listener_snapshot(None, role=role)
+        if snapshot.get("listener_running"):
+            typer.echo(
+                "[AdaOS] realtime sidecar: adopted existing listener "
+                f"pid={snapshot.get('listener_pid')} local={snapshot.get('local_url')}"
+            )
+        return None
+    typer.echo(
+        "[AdaOS] realtime sidecar: dev-managed child "
+        f"pid={getattr(proc, 'pid', None)} local={realtime_sidecar_local_url()} mode={launch_mode}"
+    )
+
+    async def _stop_child() -> None:
+        await stop_realtime_sidecar_subprocess(proc)
+
+    def _stop_child_at_exit() -> None:
+        try:
+            asyncio.run(_stop_child())
+        except RuntimeError:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    atexit.register(_stop_child_at_exit)
+    return proc
+
+
+def run_api_runtime(
     ctx: typer.Context,
-    host: str = typer.Option("127.0.0.1", "--host"),
-    port: int = typer.Option(8777, "--port"),
-    reload: bool = typer.Option(False, "--reload", help="Enable uvicorn autoreload"),
-    token: str | None = typer.Option(None, "--token", help="Override X-AdaOS-Token / ADAOS_TOKEN"),
-):
-    """Serve the AdaOS local HTTP API."""
+    *,
+    host: str,
+    port: int,
+    reload: bool,
+    token: str | None,
+    launch_mode: str,
+    pidfile_owner: str,
+) -> None:
     from adaos.apps.api.server import app as server_app
 
     conf = None
@@ -719,7 +808,7 @@ def serve(
     pidfile = _pidfile_path(host, port)
 
     _stop_previous_server(host, port)
-    _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner="api")
+    _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner=pidfile_owner)
     atexit.register(_cleanup_pidfile, pidfile)
 
     if conf is not None and str(getattr(conf, "role", "") or "").strip().lower() == "hub":
@@ -737,9 +826,16 @@ def serve(
     except Exception:
         pass
     try:
-        os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = "api_serve"
+        os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = launch_mode
     except Exception:
         pass
+    dev_sidecar_proc: subprocess.Popen | None = None
+    try:
+        dev_sidecar_proc = asyncio.run(_ensure_api_serve_dev_sidecar(conf, launch_mode=launch_mode))
+    except Exception as exc:
+        typer.secho(f"[AdaOS] realtime sidecar dev startup failed: {exc}", fg=typer.colors.RED)
+        _cleanup_pidfile(pidfile)
+        raise typer.Exit(code=1)
 
     try:
         loop_mode = _uvicorn_loop_mode()
@@ -761,7 +857,34 @@ def serve(
             ws_per_message_deflate=False,
         )
     finally:
+        if dev_sidecar_proc is not None:
+            try:
+                from adaos.services.realtime_sidecar import stop_realtime_sidecar_subprocess
+
+                asyncio.run(stop_realtime_sidecar_subprocess(dev_sidecar_proc))
+            except Exception:
+                pass
         _cleanup_pidfile(pidfile)
+
+
+@app.command("serve")
+def serve(
+    ctx: typer.Context,
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8777, "--port"),
+    reload: bool = typer.Option(False, "--reload", help="Enable uvicorn autoreload"),
+    token: str | None = typer.Option(None, "--token", help="Override X-AdaOS-Token / ADAOS_TOKEN"),
+):
+    """Serve the AdaOS local HTTP API for development."""
+    run_api_runtime(
+        ctx,
+        host=host,
+        port=port,
+        reload=reload,
+        token=token,
+        launch_mode="api_serve",
+        pidfile_owner="api",
+    )
 
 
 @app.command("stop")

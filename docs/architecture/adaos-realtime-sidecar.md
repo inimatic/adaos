@@ -284,5 +284,13 @@ What this means for the current roadmap:
 - Non-hub roles still stay `sidecar off` by default unless enabled explicitly.
 - Local endpoint defaults to `nats://127.0.0.1:7422`.
 - Remote candidate selection still uses existing node/root NATS configuration.
-- Managed process topology prefers `systemd -> adaos-supervisor -> {adaos-runtime, adaos-realtime}`.
+- Production and A/B slot lifecycle are entered through `adaos autostart ...`;
+  `adaos api serve` is a foreground development/runtime debugging path and does
+  not own production slot cutover semantics.
+- Development should use `adaos dev serve` as the normal foreground command. It
+  reuses the existing API runtime, adopts an already-running
+  `adaos realtime serve` listener when present, or starts `adaos-realtime` as a
+  dev-managed child when realtime sidecar mode is enabled.
+- Low-level sidecar diagnostics can still run `adaos realtime serve` directly.
+- Managed process topology prefers `systemd -> autostart runner -> {adaos-runtime, adaos-realtime}`.
 - Standalone runtime-owned sidecar lifecycle remains transitional compatibility only and is not the target long-term architecture.

@@ -1,8 +1,10 @@
+import asyncio
 import json
 import types
 
 from adaos.apps.cli.commands.api import (
     _advertise_base,
+    _ensure_api_serve_dev_sidecar,
     _find_matching_server_pids,
     _is_local_url,
     _process_matches_bind,
@@ -11,6 +13,7 @@ from adaos.apps.cli.commands.api import (
     _write_pidfile,
     app,
 )
+from adaos.apps.cli.commands import dev as dev_cmd
 from adaos.services.runtime_dotenv import merged_runtime_dotenv_env
 from adaos.services.node_config import NodeConfig
 from typer.testing import CliRunner
@@ -110,6 +113,112 @@ def test_process_matches_bind_defaults_to_loopback_and_8777():
 def test_process_matches_bind_for_autostart_runner():
     proc = types.SimpleNamespace(cmdline=lambda: ["python", "-m", "adaos.apps.autostart_runner", "--host", "127.0.0.1", "--port", "8778"])
     assert _process_matches_bind(proc, "127.0.0.1", 8778)
+
+
+def test_api_serve_uses_api_launch_mode(monkeypatch):
+    runner = CliRunner()
+    called: dict[str, object] = {}
+
+    def _run(ctx, **kwargs):
+        called.update(kwargs)
+
+    monkeypatch.setattr("adaos.apps.cli.commands.api.run_api_runtime", _run)
+
+    result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "8779"])
+
+    assert result.exit_code == 0
+    assert called["host"] == "127.0.0.1"
+    assert called["port"] == 8779
+    assert called["launch_mode"] == "api_serve"
+    assert called["pidfile_owner"] == "api"
+
+
+def test_dev_serve_uses_dev_launch_mode(monkeypatch):
+    runner = CliRunner()
+    called: dict[str, object] = {}
+
+    def _run(ctx, **kwargs):
+        called.update(kwargs)
+
+    monkeypatch.setattr("adaos.apps.cli.commands.api.run_api_runtime", _run)
+
+    result = runner.invoke(dev_cmd.app, ["serve", "--host", "127.0.0.1", "--port", "8779"])
+
+    assert result.exit_code == 0
+    assert called["host"] == "127.0.0.1"
+    assert called["port"] == 8779
+    assert called["launch_mode"] == "dev_serve"
+    assert called["pidfile_owner"] == "dev"
+
+
+def test_api_serve_dev_sidecar_adopts_existing_listener(monkeypatch):
+    conf = NodeConfig(
+        node_id="n1",
+        subnet_id="sn_1",
+        role="hub",
+        hub_url="http://127.0.0.1:8777",
+        token="t1",
+    )
+    monkeypatch.delenv("ADAOS_AUTOSTART_MANAGED", raising=False)
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.delenv("ADAOS_AUTOSTART_MODE", raising=False)
+    monkeypatch.setattr("adaos.services.realtime_sidecar.realtime_sidecar_enabled", lambda role=None: True)
+    monkeypatch.setattr("adaos.services.realtime_sidecar.resolve_realtime_remote_candidates", lambda: ["wss://root/nats"])
+    monkeypatch.setattr(
+        "adaos.services.realtime_sidecar.realtime_sidecar_listener_snapshot",
+        lambda proc=None, role=None: {
+            "listener_running": True,
+            "listener_pid": 1234,
+            "local_url": "nats://127.0.0.1:7422",
+        },
+    )
+
+    async def _unexpected_start(*_args, **_kwargs):
+        raise AssertionError("existing sidecar listener should be adopted, not replaced")
+
+    monkeypatch.setattr("adaos.services.realtime_sidecar.start_realtime_sidecar_subprocess", _unexpected_start)
+
+    assert asyncio.run(_ensure_api_serve_dev_sidecar(conf, launch_mode="dev_serve")) is None
+
+
+def test_api_serve_dev_sidecar_leaves_repo_root_to_context(monkeypatch):
+    conf = NodeConfig(
+        node_id="n1",
+        subnet_id="sn_1",
+        role="hub",
+        hub_url="http://127.0.0.1:8777",
+        token="t1",
+    )
+    monkeypatch.delenv("ADAOS_AUTOSTART_MANAGED", raising=False)
+    monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)
+    monkeypatch.delenv("ADAOS_AUTOSTART_MODE", raising=False)
+    monkeypatch.setattr("adaos.services.realtime_sidecar.realtime_sidecar_enabled", lambda role=None: True)
+    monkeypatch.setattr("adaos.services.realtime_sidecar.resolve_realtime_remote_candidates", lambda: ["wss://root/nats"])
+    monkeypatch.setattr(
+        "adaos.services.realtime_sidecar.realtime_sidecar_listener_snapshot",
+        lambda proc=None, role=None: {"listener_running": False},
+    )
+
+    class FakeProc:
+        pid = 4321
+
+        def terminate(self):
+            return None
+
+    calls: dict[str, object] = {}
+
+    async def _start(**kwargs):
+        calls["start_kwargs"] = dict(kwargs)
+        return FakeProc()
+
+    async def _stop(_proc):
+        calls["stopped"] = True
+
+    monkeypatch.setattr("adaos.services.realtime_sidecar.start_realtime_sidecar_subprocess", _start)
+    monkeypatch.setattr("adaos.services.realtime_sidecar.stop_realtime_sidecar_subprocess", _stop)
+
+    assert asyncio.run(_ensure_api_serve_dev_sidecar(conf, launch_mode="dev_serve")) is not None
+    assert calls["start_kwargs"] == {"role": "hub"}
 
 
 def test_find_matching_server_pids_skips_protected_wrappers(monkeypatch):

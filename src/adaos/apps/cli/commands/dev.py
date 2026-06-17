@@ -77,6 +77,32 @@ def _run_safe(func):
     return wrapper
 
 
+@app.command("serve")
+def serve(
+    ctx: typer.Context,
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8777, "--port"),
+    reload: bool = typer.Option(False, "--reload", help="Enable uvicorn autoreload"),
+    token: str | None = typer.Option(None, "--token", help="Override X-AdaOS-Token / ADAOS_TOKEN"),
+) -> None:
+    """Serve a local development AdaOS runtime.
+
+    This is the developer-facing foreground entrypoint. Production and A/B slot
+    lifecycle stay under ``adaos autostart``.
+    """
+    from adaos.apps.cli.commands.api import run_api_runtime
+
+    run_api_runtime(
+        ctx,
+        host=host,
+        port=port,
+        reload=reload,
+        token=token,
+        launch_mode="dev_serve",
+        pidfile_owner="dev",
+    )
+
+
 def _service() -> RootDeveloperService:
     return RootDeveloperService()
 
