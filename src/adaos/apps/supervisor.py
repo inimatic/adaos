@@ -3716,12 +3716,14 @@ class SupervisorManager:
         config = self._hub_root_root_probe_config()
         root_base_url = str(config.get("root_base_url") or "").strip().rstrip("/")
         target_id = str(config.get("target_id") or "").strip()
+        lookup_hub_id = target_id[len("hub:") :] if target_id.startswith("hub:") else target_id
         root_token = str(config.get("root_token") or "").strip()
         base_result: dict[str, Any] = {
             "ok": False,
             "state": "unknown",
             "checked_at": current_time,
             "target_id": target_id or None,
+            "lookup_hub_id": lookup_hub_id or None,
             "root_base_url": root_base_url or None,
             "ttl_sec": ttl_sec,
         }
@@ -3745,7 +3747,7 @@ class SupervisorManager:
                 pass
             response = session.get(
                 f"{root_base_url}/v1/hubs/control/reports",
-                params={"hub_id": target_id},
+                params={"hub_id": lookup_hub_id},
                 headers=headers,
                 timeout=_hub_root_root_probe_timeout_sec(),
             )
@@ -3769,11 +3771,18 @@ class SupervisorManager:
                 session.close()
 
         reports = payload.get("reports") if isinstance(payload, dict) else None
+        if not isinstance(reports, list):
+            reports = payload.get("items") if isinstance(payload, dict) else None
         if not isinstance(reports, list) or not reports:
             return {**base_result, "ok": True, "state": "no_report", "reason": "root returned no control report"}
         report_item = reports[0] if isinstance(reports[0], dict) else {}
         report = report_item.get("report") if isinstance(report_item.get("report"), dict) else {}
-        observed_raw = report_item.get("server_time_utc") or report.get("reported_at") or report_item.get("reported_at")
+        observed_raw = (
+            report_item.get("server_time_utc")
+            or report_item.get("reported_at")
+            or report.get("root_received_at")
+            or report.get("reported_at")
+        )
         observed_at = _parse_root_probe_time(observed_raw)
         age_sec = (current_time - observed_at) if observed_at is not None else None
         state = "ready" if age_sec is not None and age_sec <= ttl_sec else "stale"

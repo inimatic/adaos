@@ -824,7 +824,67 @@ def test_hub_root_root_probe_reads_fresh_control_report(monkeypatch) -> None:
     assert result["age_sec"] == 5.0
     assert result["root_control_status"] == "ready"
     assert requests_seen[0]["url"] == "https://api.inimatic.com/v1/hubs/control/reports"
-    assert requests_seen[0]["params"] == {"hub_id": "hub:sn_test"}
+    assert requests_seen[0]["params"] == {"hub_id": "sn_test"}
+
+
+def test_hub_root_root_probe_accepts_root_items_payload(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Config:
+        subnet_id = "sn_test"
+        zone_id = "eu"
+
+        class root_settings:
+            base_url = "https://api.inimatic.com"
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "ok": True,
+                "items": [
+                    {
+                        "hub_id": "sn_test",
+                        "report": {
+                            "target_id": "hub:sn_test",
+                            "root_received_at": "2026-06-17T10:00:05Z",
+                            "root_control": {"status": "ready"},
+                            "route": {"status": "ready"},
+                            "transport": {"assessment_state": "stable"},
+                            "runtime_instance_id": "rt-a",
+                            "transition_role": "active",
+                        },
+                    }
+                ],
+            }
+
+    requests_seen: list[dict[str, object]] = []
+
+    class _Session:
+        trust_env = True
+
+        def get(self, url, **kwargs):
+            requests_seen.append({"url": url, **kwargs})
+            return _Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "root-token")
+    monkeypatch.setattr(supervisor, "load_config", lambda: _Config())
+    monkeypatch.setattr(supervisor.requests, "Session", _Session)
+
+    result = manager._probe_hub_root_from_root_once(now=1781690410.0)
+
+    assert result["state"] == "ready"
+    assert result["target_id"] == "hub:sn_test"
+    assert result["lookup_hub_id"] == "sn_test"
+    assert result["age_sec"] == 5.0
+    assert result["runtime_instance_id"] == "rt-a"
+    assert result["transition_role"] == "active"
+    assert requests_seen[0]["params"] == {"hub_id": "sn_test"}
 
 
 def test_hub_root_root_probe_uses_node_role_when_transition_role_is_active(monkeypatch) -> None:
