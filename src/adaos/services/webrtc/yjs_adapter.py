@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import struct
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,24 +29,32 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-_MAX_MESSAGE_BYTES = _env_int("ADAOS_WEBRTC_YJS_MAX_MESSAGE_BYTES", 4 * 1024 * 1024)
+_MAX_MESSAGE_BYTES = _env_int("ADAOS_WEBRTC_YJS_MAX_MESSAGE_BYTES", 16 * 1024 * 1024)
 _MAX_QUEUE_BYTES = _env_int("ADAOS_WEBRTC_YJS_MAX_QUEUE_BYTES", 8 * 1024 * 1024)
 _MAX_QUEUE_MESSAGES = _env_int("ADAOS_WEBRTC_YJS_MAX_QUEUE_MESSAGES", 512)
 _OUTBOUND_DRAIN_TARGET_BYTES = _env_int("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_TARGET_BYTES", 2 * 1024 * 1024)
 _OUTBOUND_DRAIN_TIMEOUT_MS = _env_int("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_TIMEOUT_MS", 8000)
 _OUTBOUND_DRAIN_POLL_MS = _env_int("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_POLL_MS", 50)
+_CHUNK_PAYLOAD_BYTES = _env_int("ADAOS_WEBRTC_YJS_CHUNK_BYTES", 256 * 1024)
+_CHUNK_MAGIC = 0xFF
+_CHUNK_FRAME_TYPE = 1
+_CHUNK_HEADER = struct.Struct("!BBIII")
+_MAX_CHUNKS_PER_MESSAGE = (_MAX_MESSAGE_BYTES + max(1, _CHUNK_PAYLOAD_BYTES) - 1) // max(1, _CHUNK_PAYLOAD_BYTES) + 1
 
 
 class DataChannelYjsAdapter:
     """ypy-websocket ``Websocket`` interface backed by a WebRTC DataChannel."""
 
-    def __init__(self, dc: RTCDataChannel, webspace_id: str) -> None:
+    def __init__(self, dc: RTCDataChannel, webspace_id: str, *, device_id: str | None = None) -> None:
         self._dc = dc
         self._path = webspace_id
+        self._device_id = str(device_id or "").strip() or "webrtc"
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._queued_bytes = 0
         self._closed = False
         self._outbound_drain_task: asyncio.Task[bool] | None = None
+        self._next_chunk_id = 1
+        self._inbound_chunks: dict[int, dict[str, object]] = {}
 
         @dc.on("message")
         def on_message(data: bytes | str) -> None:
@@ -96,10 +105,57 @@ class DataChannelYjsAdapter:
                     drain_timeout_ms=_OUTBOUND_DRAIN_TIMEOUT_MS,
                 )
                 raise RuntimeError("webrtc_yjs_outbound_buffered_amount_high")
+        if len(payload) > _CHUNK_PAYLOAD_BYTES:
+            await self._send_chunked(payload)
+            return
+        await self._send_frame(payload)
+
+    async def _send_frame(self, payload: bytes) -> None:
         try:
             self._dc.send(payload)
         except Exception:
             return
+
+    async def _send_chunked(self, payload: bytes) -> None:
+        chunk_size = max(1, _CHUNK_PAYLOAD_BYTES)
+        total = (len(payload) + chunk_size - 1) // chunk_size
+        if total > _MAX_CHUNKS_PER_MESSAGE:
+            self._close_for_pressure(
+                "outbound_chunk_count_too_large",
+                bytes_len=len(payload),
+                chunks=total,
+                limit=_MAX_CHUNKS_PER_MESSAGE,
+            )
+            raise RuntimeError("webrtc_yjs_outbound_chunk_count_too_large")
+        chunk_id = self._next_chunk_id
+        self._next_chunk_id = 1 if self._next_chunk_id >= 0x7FFFFFFF else self._next_chunk_id + 1
+        _log.info(
+            "sending chunked yjs datachannel message webspace=%s bytes=%s chunks=%s chunk_bytes=%s",
+            self._path,
+            len(payload),
+            total,
+            chunk_size,
+        )
+        for index in range(total):
+            buffered = self._buffered_amount()
+            if buffered is not None and buffered > _MAX_QUEUE_BYTES:
+                await self._wait_for_outbound_drain()
+                buffered = self._buffered_amount()
+                if buffered is not None and buffered > _MAX_QUEUE_BYTES:
+                    self._close_for_pressure(
+                        "outbound_buffered_amount_high",
+                        buffered_amount=buffered,
+                        limit=_MAX_QUEUE_BYTES,
+                        drain_target=_OUTBOUND_DRAIN_TARGET_BYTES,
+                        drain_timeout_ms=_OUTBOUND_DRAIN_TIMEOUT_MS,
+                        chunk_index=index,
+                        chunks=total,
+                    )
+                    raise RuntimeError("webrtc_yjs_outbound_buffered_amount_high")
+            start = index * chunk_size
+            chunk = payload[start : start + chunk_size]
+            frame = _CHUNK_HEADER.pack(_CHUNK_MAGIC, _CHUNK_FRAME_TYPE, chunk_id, index, total) + chunk
+            await self._send_frame(frame)
 
     async def recv(self) -> bytes:
         if self._closed:
@@ -115,6 +171,7 @@ class DataChannelYjsAdapter:
 
     def close(self) -> None:
         self._closed = True
+        self._inbound_chunks.clear()
         self._wake_receiver()
 
     def _wake_receiver(self) -> None:
@@ -173,6 +230,10 @@ class DataChannelYjsAdapter:
     def _enqueue(self, payload: bytes) -> None:
         if self._closed:
             return
+        if payload[:1] == bytes([_CHUNK_MAGIC]):
+            payload = self._accept_chunk_frame(payload)
+            if payload is None:
+                return
         if len(payload) > _MAX_MESSAGE_BYTES:
             self._close_for_pressure(
                 "inbound_message_too_large",
@@ -198,6 +259,89 @@ class DataChannelYjsAdapter:
         self._queued_bytes += len(payload)
         self._recv_queue.put_nowait(payload)
 
+    def _accept_chunk_frame(self, frame: bytes) -> bytes | None:
+        if len(frame) < _CHUNK_HEADER.size:
+            self._close_for_pressure("inbound_chunk_header_invalid", bytes_len=len(frame))
+            return None
+        try:
+            magic, frame_type, chunk_id, index, total = _CHUNK_HEADER.unpack_from(frame, 0)
+        except Exception:
+            self._close_for_pressure("inbound_chunk_header_invalid", bytes_len=len(frame))
+            return None
+        if (
+            magic != _CHUNK_MAGIC
+            or frame_type != _CHUNK_FRAME_TYPE
+            or total <= 0
+            or total > _MAX_CHUNKS_PER_MESSAGE
+            or index >= total
+        ):
+            self._close_for_pressure(
+                "inbound_chunk_header_invalid",
+                frame_type=frame_type,
+                chunk_id=chunk_id,
+                index=index,
+                chunks=total,
+                limit=_MAX_CHUNKS_PER_MESSAGE,
+            )
+            return None
+        payload = frame[_CHUNK_HEADER.size :]
+        current = self._inbound_chunks.get(chunk_id)
+        if current is None:
+            current = {
+                "total": total,
+                "received": 0,
+                "bytes": 0,
+                "parts": [None] * total,
+            }
+            self._inbound_chunks[chunk_id] = current
+        elif int(current.get("total") or 0) != total:
+            self._inbound_chunks.pop(chunk_id, None)
+            self._close_for_pressure(
+                "inbound_chunk_header_invalid",
+                chunk_id=chunk_id,
+                chunks=total,
+                expected_chunks=current.get("total"),
+            )
+            return None
+        parts = current.get("parts")
+        if not isinstance(parts, list):
+            self._inbound_chunks.pop(chunk_id, None)
+            self._close_for_pressure("inbound_chunk_header_invalid", chunk_id=chunk_id)
+            return None
+        if parts[index] is None:
+            parts[index] = payload
+            current["received"] = int(current.get("received") or 0) + 1
+            current["bytes"] = int(current.get("bytes") or 0) + len(payload)
+        total_bytes = int(current.get("bytes") or 0)
+        if total_bytes > _MAX_MESSAGE_BYTES:
+            self._inbound_chunks.pop(chunk_id, None)
+            self._close_for_pressure(
+                "inbound_message_too_large",
+                bytes_len=total_bytes,
+                limit=_MAX_MESSAGE_BYTES,
+                chunked=True,
+            )
+            return None
+        if int(current.get("received") or 0) < total:
+            return None
+        self._inbound_chunks.pop(chunk_id, None)
+        try:
+            message = b"".join(part for part in parts if isinstance(part, bytes))
+        except Exception:
+            self._close_for_pressure("inbound_chunk_missing", chunk_id=chunk_id, chunks=total)
+            return None
+        if len(message) != total_bytes:
+            self._close_for_pressure("inbound_chunk_missing", chunk_id=chunk_id, chunks=total)
+            return None
+        _log.info(
+            "received chunked yjs datachannel message webspace=%s bytes=%s chunks=%s chunk_bytes=%s",
+            self._path,
+            len(message),
+            total,
+            _CHUNK_PAYLOAD_BYTES,
+        )
+        return message
+
     def _close_for_pressure(self, reason: str, **details: object) -> None:
         if self._closed:
             return
@@ -208,6 +352,7 @@ class DataChannelYjsAdapter:
             details,
         )
         self._closed = True
+        self._inbound_chunks.clear()
         try:
             close = getattr(self._dc, "close", None)
             if callable(close):
@@ -224,9 +369,19 @@ class DataChannelYjsAdapter:
             return
         await yjs_gateway.start_y_server()
         try:
-            await yjs_gateway.y_server.serve(self)  # type: ignore[arg-type]
+            acquire_room = getattr(yjs_gateway, "_acquire_yws_room", None)
+            if callable(acquire_room):
+                room = await acquire_room(
+                    self._path,
+                    self._device_id,
+                    yws_attempt_id=f"webrtc-yjs:{self._device_id}",
+                )
+                await room.serve(self)
+            else:  # pragma: no cover - compatibility with older gateway modules.
+                await yjs_gateway.y_server.serve(self)  # type: ignore[arg-type]
         except RuntimeError:
-            pass
+            if not self._closed:
+                _log.warning("yjs datachannel serve ended with runtime error webspace=%s", self._path, exc_info=True)
         except Exception:
             _log.debug("yjs datachannel serve ended with error webspace=%s", self._path, exc_info=True)
         finally:

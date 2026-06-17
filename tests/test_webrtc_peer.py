@@ -202,9 +202,10 @@ def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) ->
     peer_mod = _load_peer_module(monkeypatch)
 
     class TrackingAdapter:
-        def __init__(self, dc, webspace_id: str):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None):
             self.dc = dc
             self.webspace_id = webspace_id
+            self.device_id = device_id
             self.closed = False
 
         def close(self) -> None:
@@ -218,15 +219,20 @@ def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) ->
             self.label = label
             self.readyState = "open"
             self.close_called = 0
+            self.handlers = {}
 
-        def on(self, _event):
+        def on(self, event):
             def decorator(fn):
+                self.handlers[event] = fn
                 return fn
 
             return decorator
 
         def close(self) -> None:
             self.close_called += 1
+            handler = self.handlers.get("close")
+            if callable(handler):
+                handler()
 
     peer_mod.DataChannelYjsAdapter = TrackingAdapter
 
@@ -250,6 +256,8 @@ def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) ->
         assert old_adapter.closed is True
         assert first.close_called == 1
         assert old_task.cancelling() > 0 or old_task.cancelled() or old_task.done()
+        assert peer._yjs_channel is second
+        first.handlers["close"]()
         assert peer._yjs_channel is second
         await peer.close()
 

@@ -840,10 +840,11 @@ class HubPeer:
         from adaos.services.yjs.gateway_ws import process_events_command
 
         previous_channel = self._events_channel
-        if previous_channel is not None and previous_channel is not channel:
-            self._close_data_channel(previous_channel)
         self._events_channel = channel
         self._touch()
+        if previous_channel is not None and previous_channel is not channel:
+            _unregister_event_channel_subscriptions(self)
+            self._close_data_channel(previous_channel)
         state = {"webspace_id": self.webspace_id}
         self._emit_state_event(reason="events_channel:open")
 
@@ -905,6 +906,8 @@ class HubPeer:
 
         @channel.on("close")
         def on_close() -> None:  # type: ignore[no-untyped-def]
+            if self._events_channel is not channel:
+                return
             self._touch()
             _unregister_event_channel_subscriptions(self)
             self._events_channel = None
@@ -934,11 +937,11 @@ class HubPeer:
                 _log.debug("previous yjs adapter close failed device=%s", self.device_id, exc_info=True)
         if previous_task is not None:
             self._cancel_task(previous_task, label=f"webrtc-yjs-replaced:{self.device_id}")
-        if previous_channel is not None and previous_channel is not channel:
-            self._close_data_channel(previous_channel)
         self._yjs_channel = channel
         self._touch()
-        self._yjs_adapter = DataChannelYjsAdapter(channel, self.webspace_id)
+        if previous_channel is not None and previous_channel is not channel:
+            self._close_data_channel(previous_channel)
+        self._yjs_adapter = DataChannelYjsAdapter(channel, self.webspace_id, device_id=self.device_id)
         self._yjs_task = asyncio.ensure_future(
             self._yjs_adapter.serve(),
             # name kwarg is py3.11+ for asyncio.ensure_future but Task() accepts it.
@@ -950,6 +953,8 @@ class HubPeer:
 
         @channel.on("close")
         def on_close() -> None:  # type: ignore[no-untyped-def]
+            if self._yjs_channel is not channel:
+                return
             self._touch()
             self._yjs_channel = None
             self._emit_state_event(reason="yjs_channel:closed")
@@ -958,11 +963,11 @@ class HubPeer:
     def _setup_media_channel(self, channel) -> None:  # type: ignore[no-untyped-def]
         """Accept direct binary media upload chunks over a dedicated DataChannel."""
         previous_channel = self._media_channel
+        self._media_channel = channel
+        self._touch()
         if previous_channel is not None and previous_channel is not channel:
             self._cleanup_media_upload(remove_temp=True)
             self._close_data_channel(previous_channel)
-        self._media_channel = channel
-        self._touch()
 
         async def _send(msg: dict[str, Any]) -> None:
             try:
@@ -1099,6 +1104,8 @@ class HubPeer:
 
         @channel.on("close")
         def on_close() -> None:  # type: ignore[no-untyped-def]
+            if self._media_channel is not channel:
+                return
             self._touch()
             self._cleanup_media_upload(remove_temp=True)
             self._media_channel = None
