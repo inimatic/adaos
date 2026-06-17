@@ -3814,7 +3814,9 @@ class SupervisorManager:
             self._hub_root_root_probe_last_state = "disabled"
             self._hub_root_root_probe_last_reason = "root perspective probe disabled"
             return None
-        role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        transition_role = str(self._managed_transition_role or "").strip().lower()
+        managed_role = transition_role if transition_role in {"hub", "member"} else None
+        role = str(managed_role or self._sidecar_role() or transition_role or "").strip().lower()
         if role != "hub":
             self._hub_root_root_probe_last_state = "not_applicable"
             self._hub_root_root_probe_last_reason = f"role={role or '-'}"

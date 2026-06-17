@@ -827,6 +827,25 @@ def test_hub_root_root_probe_reads_fresh_control_report(monkeypatch) -> None:
     assert requests_seen[0]["params"] == {"hub_id": "hub:sn_test"}
 
 
+def test_hub_root_root_probe_uses_node_role_when_transition_role_is_active(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._managed_transition_role = "active"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    calls: list[dict[str, object]] = []
+
+    def _probe_once(**kwargs):
+        calls.append(dict(kwargs))
+        return {"ok": True, "state": "ready", "reason": "fresh"}
+
+    monkeypatch.setattr(manager, "_probe_hub_root_from_root_once", _probe_once)
+
+    result = asyncio.run(manager._maybe_probe_hub_root_from_root(force=True))
+
+    assert result == {"ok": True, "state": "ready", "reason": "fresh"}
+    assert len(calls) == 1
+    assert manager._hub_root_root_probe_last_state == "ready"
+
+
 def test_hub_root_watchdog_invokes_runtime_reconnect(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_TIMEOUT_SEC", "0")
