@@ -11,6 +11,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/apps/bootstrap.py",
     "src/adaos/apps/cli/commands/api.py",
     "src/adaos/services/agent_context.py",
+    "src/adaos/services/bounded_io.py",
     "src/adaos/services/core_slots.py",
     "src/adaos/services/core_update.py",
     "src/adaos/services/core_update_policy.py",
