@@ -111,12 +111,30 @@ from adaos.services.scenario import workflow_runtime as _scenario_workflow_runti
 from adaos.services import weather as _weather_services  # ensure weather observers
 from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscriptions
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
+from adaos.services.bounded_io import bounded_text_tail_lines
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
 from adaos.services.skill.service_supervisor import get_service_supervisor
 from adaos.services.zone_hosts import canonical_zone_id, zone_public_base_url
 from adaos.services.subnet_alias import save_subnet_alias
 from adaos.integrations.telegram.sender import TelegramSender
+
+
+def _read_sidecar_tail_lines(path: Path, *, lines: int) -> list[str]:
+    try:
+        max_read_bytes = int(os.getenv("HUB_SIDECAR_TAIL_READ_BYTES", "262144") or "262144")
+    except Exception:
+        max_read_bytes = 262144
+    try:
+        max_line_chars = int(os.getenv("HUB_SIDECAR_TAIL_MAX_LINE_CHARS", "4096") or "4096")
+    except Exception:
+        max_line_chars = 4096
+    return bounded_text_tail_lines(
+        path,
+        limit=max(0, int(lines or 0)),
+        max_bytes=max_read_bytes,
+        max_line_chars=max_line_chars,
+    )
 
 
 def _ensure_managed_nlu_service_skills(log: logging.Logger) -> None:
@@ -10011,44 +10029,7 @@ class BootstrapService:
                                 if using_sidecar:
                                     async def _print_sidecar_tail() -> None:
                                         def _tail(path: Path, lines: int) -> tuple[Path, list[str]]:
-                                            try:
-                                                max_read_bytes = int(os.getenv("HUB_SIDECAR_TAIL_READ_BYTES", "262144") or "262144")
-                                            except Exception:
-                                                max_read_bytes = 262144
-                                            if max_read_bytes < 4096:
-                                                max_read_bytes = 4096
-                                            try:
-                                                max_line_chars = int(os.getenv("HUB_SIDECAR_TAIL_MAX_LINE_CHARS", "4096") or "4096")
-                                            except Exception:
-                                                max_line_chars = 4096
-                                            if max_line_chars < 256:
-                                                max_line_chars = 256
-                                            try:
-                                                line_count = max(0, int(lines))
-                                            except Exception:
-                                                line_count = 0
-                                            if line_count <= 0:
-                                                return path, []
-                                            try:
-                                                size = path.stat().st_size
-                                                with path.open("rb") as fh:
-                                                    start = max(0, int(size) - max_read_bytes)
-                                                    fh.seek(start)
-                                                    if start:
-                                                        fh.readline()
-                                                    data = fh.read(max_read_bytes)
-                                                tail = data.decode("utf-8", errors="replace").splitlines()[-line_count:]
-                                            except Exception:
-                                                tail = []
-                                            clipped: list[str] = []
-                                            for line in tail:
-                                                if len(line) > max_line_chars:
-                                                    clipped.append(
-                                                        f"{line[:max_line_chars]}...<truncated chars={len(line)}>"
-                                                    )
-                                                else:
-                                                    clipped.append(line)
-                                            return path, clipped
+                                            return path, _read_sidecar_tail_lines(path, lines=lines)
 
                                         try:
                                             log_path, log_tail = await asyncio.to_thread(_tail, realtime_sidecar_log_path(), 40)

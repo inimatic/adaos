@@ -8,6 +8,7 @@ import time
 from typing import Any, Mapping
 import uuid
 
+from adaos.services.bounded_io import bounded_text_tail_lines
 from adaos.services.runtime_paths import current_state_dir
 
 
@@ -129,30 +130,12 @@ def _read_jsonl_tail_lines(path: Path, *, limit: int = 50) -> list[str]:
         JSONL_TAIL_CHUNK_BYTES,
         min(JSONL_TAIL_MAX_BYTES, normalized_limit * JSONL_TAIL_BYTES_PER_LINE),
     )
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, 2)
-            position = handle.tell()
-            chunks: list[bytes] = []
-            newline_count = 0
-            read_total = 0
-            while position > 0 and newline_count <= normalized_limit and read_total < max_bytes:
-                read_size = min(JSONL_TAIL_CHUNK_BYTES, position, max_bytes - read_total)
-                position -= read_size
-                handle.seek(position)
-                chunk = handle.read(read_size)
-                chunks.append(chunk)
-                newline_count += chunk.count(b"\n")
-                read_total += read_size
-    except Exception:
-        return []
-    data = b"".join(reversed(chunks))
-    if position > 0:
-        first_newline = data.find(b"\n")
-        if first_newline < 0:
-            return []
-        data = data[first_newline + 1 :]
-    return [line.decode("utf-8", errors="replace") for line in data.splitlines()[-normalized_limit:]]
+    return bounded_text_tail_lines(
+        path,
+        limit=normalized_limit,
+        max_bytes=max_bytes,
+        max_line_chars=max(4096, JSONL_TAIL_BYTES_PER_LINE * 8),
+    )
 
 
 def _memory_telemetry_max_bytes() -> int:
@@ -231,6 +214,12 @@ def supervisor_memory_session_operations_path(session_id: str) -> Path:
 
 def supervisor_memory_session_artifacts_dir(session_id: str) -> Path:
     path = (supervisor_memory_session_dir(session_id) / "artifacts").resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def supervisor_memory_evidence_dir() -> Path:
+    path = (supervisor_memory_state_dir() / "evidence").resolve()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -337,7 +326,14 @@ class MemoryTelemetrySample:
     suspicion_reason: str | None = None
     process_rss_bytes: int | None = None
     family_rss_bytes: int | None = None
+    cgroup_memory_current_bytes: int | None = None
+    cgroup_anon_bytes: int | None = None
+    cgroup_file_bytes: int | None = None
+    cgroup_kernel_bytes: int | None = None
+    cgroup_slab_bytes: int | None = None
+    cgroup_memory_stat: dict[str, int] = field(default_factory=dict)
     available_memory_bytes: int | None = None
+    available_memory_percent: float | None = None
     baseline_rss_bytes: int | None = None
     rss_growth_bytes: int | None = None
     rss_growth_bytes_per_min: float | None = None
@@ -357,7 +353,18 @@ class MemoryTelemetrySample:
             suspicion_reason=_optional_string(source.get("suspicion_reason")),
             process_rss_bytes=_int(source.get("process_rss_bytes")),
             family_rss_bytes=_int(source.get("family_rss_bytes")),
+            cgroup_memory_current_bytes=_int(source.get("cgroup_memory_current_bytes")),
+            cgroup_anon_bytes=_int(source.get("cgroup_anon_bytes")),
+            cgroup_file_bytes=_int(source.get("cgroup_file_bytes")),
+            cgroup_kernel_bytes=_int(source.get("cgroup_kernel_bytes")),
+            cgroup_slab_bytes=_int(source.get("cgroup_slab_bytes")),
+            cgroup_memory_stat={
+                str(key): int(value)
+                for key, value in _mapping(source.get("cgroup_memory_stat")).items()
+                if _int(value) is not None
+            },
             available_memory_bytes=_int(source.get("available_memory_bytes")),
+            available_memory_percent=_float(source.get("available_memory_percent")),
             baseline_rss_bytes=_positive_int(source.get("baseline_rss_bytes")),
             rss_growth_bytes=_int(source.get("rss_growth_bytes")),
             rss_growth_bytes_per_min=_float(source.get("rss_growth_bytes_per_min")),
@@ -376,7 +383,14 @@ class MemoryTelemetrySample:
             "suspicion_reason": self.suspicion_reason,
             "process_rss_bytes": self.process_rss_bytes,
             "family_rss_bytes": self.family_rss_bytes,
+            "cgroup_memory_current_bytes": self.cgroup_memory_current_bytes,
+            "cgroup_anon_bytes": self.cgroup_anon_bytes,
+            "cgroup_file_bytes": self.cgroup_file_bytes,
+            "cgroup_kernel_bytes": self.cgroup_kernel_bytes,
+            "cgroup_slab_bytes": self.cgroup_slab_bytes,
+            "cgroup_memory_stat": dict(self.cgroup_memory_stat),
             "available_memory_bytes": self.available_memory_bytes,
+            "available_memory_percent": self.available_memory_percent,
             "baseline_rss_bytes": self.baseline_rss_bytes,
             "rss_growth_bytes": self.rss_growth_bytes,
             "rss_growth_bytes_per_min": self.rss_growth_bytes_per_min,
@@ -573,7 +587,14 @@ class MemoryRuntimeState:
     managed_pid: int | None = None
     current_process_rss_bytes: int | None = None
     current_family_rss_bytes: int | None = None
+    current_cgroup_memory_current_bytes: int | None = None
+    current_cgroup_anon_bytes: int | None = None
+    current_cgroup_file_bytes: int | None = None
+    current_cgroup_kernel_bytes: int | None = None
+    current_cgroup_slab_bytes: int | None = None
+    current_cgroup_memory_stat: dict[str, int] = field(default_factory=dict)
     available_memory_bytes: int | None = None
+    available_memory_percent: float | None = None
     telemetry_interval_sec: float | None = None
     telemetry_window_sec: float | None = None
     telemetry_samples_total: int = 0
@@ -639,7 +660,18 @@ class MemoryRuntimeState:
             managed_pid=_int(source.get("managed_pid")),
             current_process_rss_bytes=_int(source.get("current_process_rss_bytes")),
             current_family_rss_bytes=_int(source.get("current_family_rss_bytes")),
+            current_cgroup_memory_current_bytes=_int(source.get("current_cgroup_memory_current_bytes")),
+            current_cgroup_anon_bytes=_int(source.get("current_cgroup_anon_bytes")),
+            current_cgroup_file_bytes=_int(source.get("current_cgroup_file_bytes")),
+            current_cgroup_kernel_bytes=_int(source.get("current_cgroup_kernel_bytes")),
+            current_cgroup_slab_bytes=_int(source.get("current_cgroup_slab_bytes")),
+            current_cgroup_memory_stat={
+                str(key): int(value)
+                for key, value in _mapping(source.get("current_cgroup_memory_stat")).items()
+                if _int(value) is not None
+            },
             available_memory_bytes=_int(source.get("available_memory_bytes")),
+            available_memory_percent=_float(source.get("available_memory_percent")),
             telemetry_interval_sec=_float(source.get("telemetry_interval_sec")),
             telemetry_window_sec=_float(source.get("telemetry_window_sec")),
             telemetry_samples_total=max(0, int(_int(source.get("telemetry_samples_total")) or 0)),
@@ -690,7 +722,14 @@ class MemoryRuntimeState:
             "managed_pid": self.managed_pid,
             "current_process_rss_bytes": self.current_process_rss_bytes,
             "current_family_rss_bytes": self.current_family_rss_bytes,
+            "current_cgroup_memory_current_bytes": self.current_cgroup_memory_current_bytes,
+            "current_cgroup_anon_bytes": self.current_cgroup_anon_bytes,
+            "current_cgroup_file_bytes": self.current_cgroup_file_bytes,
+            "current_cgroup_kernel_bytes": self.current_cgroup_kernel_bytes,
+            "current_cgroup_slab_bytes": self.current_cgroup_slab_bytes,
+            "current_cgroup_memory_stat": dict(self.current_cgroup_memory_stat),
             "available_memory_bytes": self.available_memory_bytes,
+            "available_memory_percent": self.available_memory_percent,
             "telemetry_interval_sec": self.telemetry_interval_sec,
             "telemetry_window_sec": self.telemetry_window_sec,
             "telemetry_samples_total": self.telemetry_samples_total,
@@ -832,6 +871,7 @@ __all__ = [
     "read_memory_runtime_state",
     "read_memory_session_index",
     "read_memory_session_summary",
+    "supervisor_memory_evidence_dir",
     "supervisor_memory_runtime_state_path",
     "supervisor_memory_session_artifacts_dir",
     "supervisor_memory_session_operations_path",

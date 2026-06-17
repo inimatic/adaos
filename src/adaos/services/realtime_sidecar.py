@@ -19,6 +19,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
+from adaos.services.bounded_io import env_int, rotate_file_if_needed
 from adaos.services.nats_config import (
     normalize_nats_ws_url,
     nats_url_uses_websocket,
@@ -616,43 +617,36 @@ def realtime_sidecar_diag_path() -> Path:
     return path
 
 
-def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
-    try:
-        value = int(str(os.getenv(name, str(default)) or str(default)).strip() or str(default))
-    except Exception:
-        value = default
-    if value < minimum:
-        value = minimum
-    return value
+def _realtime_sidecar_log_max_bytes() -> int:
+    return env_int("ADAOS_REALTIME_LOG_MAX_BYTES", 32 * 1024 * 1024, minimum=0)
 
 
-def _rotate_realtime_sidecar_diag_if_needed(path: Path) -> None:
-    max_bytes = _env_int("ADAOS_REALTIME_DIAG_MAX_BYTES", 32 * 1024 * 1024, minimum=0)
-    if max_bytes <= 0:
-        return
-    try:
-        if path.stat().st_size <= max_bytes:
-            return
-    except FileNotFoundError:
-        return
-    except Exception:
-        return
+def _realtime_sidecar_diag_max_bytes() -> int:
+    return env_int("ADAOS_REALTIME_DIAG_MAX_BYTES", 32 * 1024 * 1024, minimum=0)
 
-    backup_count = _env_int("ADAOS_REALTIME_DIAG_BACKUPS", 2, minimum=0)
-    try:
-        if backup_count <= 0:
-            path.unlink(missing_ok=True)
-            return
-        oldest = path.with_name(f"{path.name}.{backup_count}")
-        oldest.unlink(missing_ok=True)
-        for index in range(backup_count - 1, 0, -1):
-            src = path.with_name(f"{path.name}.{index}")
-            if not src.exists():
-                continue
-            src.replace(path.with_name(f"{path.name}.{index + 1}"))
-        path.replace(path.with_name(f"{path.name}.1"))
-    except Exception:
-        return
+
+def _realtime_sidecar_log_backups() -> int:
+    return env_int("ADAOS_REALTIME_LOG_BACKUPS", 5, minimum=0)
+
+
+def _realtime_sidecar_diag_backups() -> int:
+    return env_int("ADAOS_REALTIME_DIAG_BACKUPS", 5, minimum=0)
+
+
+def _rotate_realtime_sidecar_log_if_needed(path: Path) -> bool:
+    return rotate_file_if_needed(
+        path,
+        max_bytes=_realtime_sidecar_log_max_bytes(),
+        backup_count=_realtime_sidecar_log_backups(),
+    )
+
+
+def _rotate_realtime_sidecar_diag_if_needed(path: Path) -> bool:
+    return rotate_file_if_needed(
+        path,
+        max_bytes=_realtime_sidecar_diag_max_bytes(),
+        backup_count=_realtime_sidecar_diag_backups(),
+    )
 
 
 def _host_matches_listener(host: str, other: str | None) -> bool:
@@ -1094,6 +1088,7 @@ async def start_realtime_sidecar_subprocess(
     if resolved_repo_root is not None:
         env["ADAOS_ROOT_REPO_ROOT"] = str(resolved_repo_root)
     log_path = realtime_sidecar_log_path()
+    _rotate_realtime_sidecar_log_if_needed(log_path)
     stdout_handle = log_path.open("ab")
     args = [
         sys.executable,

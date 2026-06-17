@@ -23,6 +23,32 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def test_realtime_sidecar_rotates_diag_and_log_with_five_backups(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    diag_path = tmp_path / "realtime_sidecar.jsonl"
+    log_path = tmp_path / "realtime_sidecar.log"
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_MAX_BYTES", "4")
+    monkeypatch.setenv("ADAOS_REALTIME_LOG_MAX_BYTES", "4")
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_BACKUPS", "5")
+    monkeypatch.setenv("ADAOS_REALTIME_LOG_BACKUPS", "5")
+
+    for path in (diag_path, log_path):
+        path.write_text("active-too-large", encoding="utf-8")
+        for index in range(1, 7):
+            path.with_name(f"{path.name}.{index}").write_text(f"backup-{index}", encoding="utf-8")
+
+    assert realtime_sidecar_mod._rotate_realtime_sidecar_diag_if_needed(diag_path) is True
+    assert realtime_sidecar_mod._rotate_realtime_sidecar_log_if_needed(log_path) is True
+
+    for path in (diag_path, log_path):
+        assert not path.exists()
+        assert path.with_name(f"{path.name}.1").read_text(encoding="utf-8") == "active-too-large"
+        assert path.with_name(f"{path.name}.5").read_text(encoding="utf-8") == "backup-4"
+        assert not path.with_name(f"{path.name}.6").exists()
+
+
 class _FakeRemoteWS:
     def __init__(self) -> None:
         self.sent: list[bytes] = []

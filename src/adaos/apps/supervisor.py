@@ -65,6 +65,7 @@ from adaos.services.realtime_sidecar import (
     realtime_sidecar_diag_path,
     realtime_sidecar_enabled,
     realtime_sidecar_listener_snapshot,
+    realtime_sidecar_log_path,
     realtime_sidecar_local_url,
     restart_realtime_sidecar_subprocess,
     start_realtime_sidecar_subprocess,
@@ -91,6 +92,7 @@ from adaos.services.supervisor_memory import (
     read_memory_session_operations,
     read_memory_session_index,
     read_memory_session_summary,
+    supervisor_memory_evidence_dir,
     supervisor_memory_runtime_state_path,
     supervisor_memory_session_artifacts_dir,
     supervisor_memory_session_operations_path,
@@ -578,30 +580,7 @@ def _compact_watchdog_event(value: Any) -> dict[str, Any]:
 
 
 def _read_jsonl_tail(path: Path, *, limit: int = 20, max_bytes: int = 256 * 1024) -> list[dict[str, Any]]:
-    try:
-        if max_bytes > 0:
-            with path.open("rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-                start = max(0, size - max_bytes)
-                handle.seek(start)
-                text = handle.read().decode("utf-8", errors="ignore")
-            lines = text.splitlines()
-            if start > 0 and lines:
-                lines = lines[1:]
-        else:
-            lines = path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return []
-    items: list[dict[str, Any]] = []
-    for line in lines[-max(1, int(limit)):]:
-        try:
-            payload = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            items.append(payload)
-    return items
+    return bounded_jsonl_tail(path, limit=limit, max_bytes=max(4096, int(max_bytes or 0)))
 
 
 def _local_update_payload() -> dict[str, Any]:
@@ -2014,6 +1993,108 @@ def _process_family_rss_bytes(pid: int | None) -> tuple[int | None, int | None]:
     return root_rss, family_rss if family_rss > 0 else root_rss
 
 
+def _parse_linux_memory_stat(text: str) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for line in str(text or "").splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            result[str(parts[0])] = int(parts[1])
+        except Exception:
+            continue
+    return result
+
+
+def _linux_cgroup_memory_snapshot(pid: int | None) -> dict[str, Any]:
+    if not pid or not sys.platform.startswith("linux"):
+        return {"available": False, "reason": "linux_required"}
+    try:
+        cgroup_text = Path(f"/proc/{int(pid)}/cgroup").read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return {"available": False, "reason": f"cgroup_read_failed:{type(exc).__name__}"}
+    cgroup_rel = ""
+    for line in cgroup_text.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        controllers = parts[1]
+        if controllers == "" or "memory" in controllers.split(","):
+            cgroup_rel = parts[2].strip()
+            break
+    if not cgroup_rel:
+        return {"available": False, "reason": "memory_cgroup_not_found"}
+    cgroup_path = Path("/sys/fs/cgroup") / cgroup_rel.lstrip("/")
+    try:
+        current = int((cgroup_path / "memory.current").read_text(encoding="utf-8").strip())
+    except Exception:
+        current = None
+    try:
+        stat = _parse_linux_memory_stat((cgroup_path / "memory.stat").read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        stat = {}
+    return {
+        "available": bool(current is not None or stat),
+        "path": str(cgroup_path),
+        "current_bytes": current,
+        "stat": stat,
+        "anon_bytes": stat.get("anon"),
+        "file_bytes": stat.get("file"),
+        "kernel_bytes": stat.get("kernel"),
+        "slab_bytes": stat.get("slab"),
+    }
+
+
+def _linux_smaps_rollup_snapshot(pid: int | None) -> dict[str, Any]:
+    if not pid or not sys.platform.startswith("linux"):
+        return {"available": False, "reason": "linux_required"}
+    path = Path(f"/proc/{int(pid)}/smaps_rollup")
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return {"available": False, "reason": f"smaps_rollup_read_failed:{type(exc).__name__}"}
+    result: dict[str, Any] = {"available": True, "path": str(path)}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parts = value.strip().split()
+        if not parts:
+            continue
+        try:
+            amount = int(parts[0])
+        except Exception:
+            continue
+        unit = parts[1].lower() if len(parts) > 1 else ""
+        result[f"{key.strip().lower().replace(' ', '_')}_bytes"] = amount * 1024 if unit == "kb" else amount
+    return result
+
+
+def _runtime_memory_attribution_snapshot(
+    pid: int | None,
+    *,
+    process_rss_bytes: int | None = None,
+    family_rss_bytes: int | None = None,
+) -> dict[str, Any]:
+    cgroup = _linux_cgroup_memory_snapshot(pid)
+    return {
+        "process_rss_bytes": process_rss_bytes,
+        "family_rss_bytes": family_rss_bytes,
+        "cgroup_memory_current_bytes": cgroup.get("current_bytes"),
+        "cgroup_anon_bytes": cgroup.get("anon_bytes"),
+        "cgroup_file_bytes": cgroup.get("file_bytes"),
+        "cgroup_kernel_bytes": cgroup.get("kernel_bytes"),
+        "cgroup_slab_bytes": cgroup.get("slab_bytes"),
+        "cgroup_memory_stat": cgroup.get("stat") if isinstance(cgroup.get("stat"), dict) else {},
+        "cgroup": cgroup,
+    }
+
+
+def _safe_evidence_label(value: str | None) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip())
+    return text.strip("._-")[:80] or "runtime"
+
+
 def _positive_int_or_none(value: Any) -> int | None:
     try:
         item = int(value)
@@ -3153,6 +3234,11 @@ class SupervisorManager:
         process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
         if family_rss_bytes is None:
             return None
+        attribution = _runtime_memory_attribution_snapshot(
+            managed_pid,
+            process_rss_bytes=process_rss_bytes,
+            family_rss_bytes=family_rss_bytes,
+        )
         self._memory_last_telemetry_at = now
         self._memory_last_available_bytes = _available_memory_bytes()
         total_memory_bytes = _total_memory_bytes()
@@ -3219,6 +3305,12 @@ class SupervisorManager:
                 "suspicion_reason": suspicion_reason,
                 "process_rss_bytes": process_rss_bytes,
                 "family_rss_bytes": family_rss_bytes,
+                "cgroup_memory_current_bytes": attribution.get("cgroup_memory_current_bytes"),
+                "cgroup_anon_bytes": attribution.get("cgroup_anon_bytes"),
+                "cgroup_file_bytes": attribution.get("cgroup_file_bytes"),
+                "cgroup_kernel_bytes": attribution.get("cgroup_kernel_bytes"),
+                "cgroup_slab_bytes": attribution.get("cgroup_slab_bytes"),
+                "cgroup_memory_stat": attribution.get("cgroup_memory_stat") if isinstance(attribution.get("cgroup_memory_stat"), dict) else {},
                 "available_memory_bytes": self._memory_last_available_bytes,
                 "available_memory_percent": self._memory_last_available_percent,
                 "baseline_rss_bytes": self._memory_baseline_family_rss_bytes,
@@ -5149,6 +5241,11 @@ class SupervisorManager:
         managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
         managed_pid = managed.get("managed_pid")
         process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
+        attribution = _runtime_memory_attribution_snapshot(
+            managed_pid,
+            process_rss_bytes=process_rss_bytes,
+            family_rss_bytes=family_rss_bytes,
+        )
         telemetry_tail = read_memory_telemetry_tail(limit=5000)
         sessions_index = read_memory_session_index()
         session_items = sessions_index.get("sessions") if isinstance(sessions_index.get("sessions"), list) else []
@@ -5183,6 +5280,13 @@ class SupervisorManager:
             "managed_pid": managed_pid,
             "current_process_rss_bytes": process_rss_bytes,
             "current_family_rss_bytes": family_rss_bytes,
+            "current_cgroup_memory_current_bytes": attribution.get("cgroup_memory_current_bytes"),
+            "current_cgroup_anon_bytes": attribution.get("cgroup_anon_bytes"),
+            "current_cgroup_file_bytes": attribution.get("cgroup_file_bytes"),
+            "current_cgroup_kernel_bytes": attribution.get("cgroup_kernel_bytes"),
+            "current_cgroup_slab_bytes": attribution.get("cgroup_slab_bytes"),
+            "current_cgroup_memory_stat": attribution.get("cgroup_memory_stat") if isinstance(attribution.get("cgroup_memory_stat"), dict) else {},
+            "current_memory_attribution": attribution,
             "available_memory_bytes": self._memory_last_available_bytes,
             "available_memory_percent": self._memory_last_available_percent,
             "telemetry_interval_sec": _memory_telemetry_interval_sec(),
@@ -5214,6 +5318,127 @@ class SupervisorManager:
             "sessions_total": len(session_items),
             "updated_at": time.time(),
         }
+
+    def _runtime_memory_diagnostics_payload(self) -> dict[str, Any]:
+        try:
+            headers: dict[str, str] = {}
+            if self.token:
+                headers["X-AdaOS-Token"] = self.token
+                headers["Authorization"] = f"Bearer {self.token}"
+            response = requests.get(
+                self.runtime_base_url + "/api/node/memory/diagnostics",
+                headers=headers,
+                timeout=3.0,
+            )
+            payload = response.json()
+            if isinstance(payload, dict):
+                return {
+                    "ok": response.ok,
+                    "status_code": int(response.status_code),
+                    "payload": payload,
+                }
+            return {"ok": response.ok, "status_code": int(response.status_code), "payload_type": type(payload).__name__}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def _recent_reconnect_markers(self) -> dict[str, Any]:
+        log_lines = bounded_text_tail_lines(
+            realtime_sidecar_log_path(),
+            limit=200,
+            max_bytes=512 * 1024,
+            max_line_chars=2048,
+        )
+        marker_tokens = (
+            "session open",
+            "session close",
+            "remote connect",
+            "remote disconnect",
+            "unexpected eof",
+            "superseding previous local nats client",
+            "quarantine",
+            "serve start",
+        )
+        markers = [
+            line
+            for line in log_lines
+            if any(token in line.lower() for token in marker_tokens)
+        ][-40:]
+        diag_tail = bounded_jsonl_tail(
+            realtime_sidecar_diag_path(),
+            limit=20,
+            max_bytes=512 * 1024,
+            max_line_chars=64 * 1024,
+        )
+        return {
+            "sidecar_log_markers": markers,
+            "sidecar_diag_tail": diag_tail,
+        }
+
+    def _capture_runtime_stop_evidence(
+        self,
+        *,
+        reason: str,
+        stage: str,
+        proc: subprocess.Popen[Any] | None = None,
+        decision: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        target_proc = proc or self._proc
+        pid: int | None = None
+        try:
+            pid = int(getattr(target_proc, "pid", 0) or 0) or None
+        except Exception:
+            pid = None
+        process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(pid)
+        attribution = _runtime_memory_attribution_snapshot(
+            pid,
+            process_rss_bytes=process_rss_bytes,
+            family_rss_bytes=family_rss_bytes,
+        )
+        log_paths = [
+            realtime_sidecar_log_path(),
+            realtime_sidecar_diag_path(),
+            supervisor_memory_telemetry_path(),
+        ]
+        for suffix in range(1, 6):
+            log_paths.append(realtime_sidecar_log_path().with_name(f"{realtime_sidecar_log_path().name}.{suffix}"))
+            log_paths.append(realtime_sidecar_diag_path().with_name(f"{realtime_sidecar_diag_path().name}.{suffix}"))
+        payload = {
+            "captured_at": time.time(),
+            "reason": str(reason or ""),
+            "stage": str(stage or ""),
+            "pid": pid,
+            "runtime_instance_id": self._managed_runtime_instance_id,
+            "transition_role": self._managed_transition_role,
+            "memory": attribution,
+            "smaps_rollup": _linux_smaps_rollup_snapshot(pid),
+            "runtime_memory_diagnostics": self._runtime_memory_diagnostics_payload(),
+            "log_files": path_size_snapshot(log_paths),
+            "recent_reconnect_markers": self._recent_reconnect_markers(),
+            "telemetry_tail": read_memory_telemetry_tail(limit=50),
+            "decision": decision or {},
+        }
+        evidence_dir = supervisor_memory_evidence_dir()
+        file_name = (
+            f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+            f"-{_safe_evidence_label(stage)}"
+            f"-pid{pid or 'unknown'}"
+            f"-{_safe_evidence_label(reason)}.json"
+        )
+        path = evidence_dir / file_name
+        try:
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload["evidence_path"] = str(path)
+            _LOG.warning(
+                "captured runtime stop evidence stage=%s reason=%s pid=%s path=%s",
+                stage,
+                reason,
+                pid,
+                path,
+            )
+        except Exception as exc:
+            payload["evidence_error"] = f"{type(exc).__name__}: {exc}"
+            _LOG.warning("failed to capture runtime stop evidence", exc_info=True)
+        return payload
 
     def _memory_sessions_index_compact(self, *, limit: int = 10) -> dict[str, Any]:
         index = read_memory_session_index()
@@ -5981,6 +6206,11 @@ class SupervisorManager:
                     return
                 await asyncio.sleep(0.2)
         with contextlib.suppress(Exception):
+            self._capture_runtime_stop_evidence(
+                reason=reason,
+                stage="forced_terminate",
+                proc=proc,
+            )
             proc.terminate()
         deadline = time.time() + float(terminate_wait_sec)
         terminate_checks = max(1, int(float(terminate_wait_sec) / 0.1) + 2)
@@ -5990,6 +6220,11 @@ class SupervisorManager:
                 return
             await asyncio.sleep(0.1)
         with contextlib.suppress(Exception):
+            self._capture_runtime_stop_evidence(
+                reason=reason,
+                stage="forced_kill",
+                proc=proc,
+            )
             proc.kill()
 
     async def _terminate_candidate_proc_locked(self, *, graceful: bool, reason: str) -> None:
@@ -6486,6 +6721,12 @@ class SupervisorManager:
                     self._sample_memory_telemetry()
                 critical_memory_decision = self._memory_critical_restart_decision()
                 if critical_memory_decision is not None:
+                    with contextlib.suppress(Exception):
+                        critical_memory_decision["pre_restart_evidence"] = self._capture_runtime_stop_evidence(
+                            reason=str(critical_memory_decision.get("reason") or "supervisor.memory.critical_pressure"),
+                            stage="memory_critical_restart",
+                            decision=dict(critical_memory_decision),
+                        )
                     self._last_error = str(
                         critical_memory_decision.get("message") or "runtime restart requested due to critical memory pressure"
                     )

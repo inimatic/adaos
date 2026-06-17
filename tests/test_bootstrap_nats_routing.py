@@ -4,6 +4,7 @@ import asyncio
 import base64
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -221,6 +222,28 @@ async def test_hub_root_reconnect_rearms_running_bridge_without_active_connectio
                 task.cancel()
         old_task.cancel()
         await asyncio.gather(*service._boot_tasks, old_task, return_exceptions=True)
+
+
+def test_sidecar_error_tail_is_byte_bounded_for_large_diag_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    diag_path = tmp_path / "realtime_sidecar.jsonl"
+    large_prefix = "x" * (1024 * 1024)
+    diag_path.write_text(
+        "\n".join(
+            [
+                f'{{"ts": 1, "line": "{large_prefix}"}}',
+                '{"ts": 2, "line": "middle"}',
+                '{"ts": 3, "line": "tail"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HUB_SIDECAR_TAIL_READ_BYTES", "4096")
+    monkeypatch.setenv("HUB_SIDECAR_TAIL_MAX_LINE_CHARS", "256")
+
+    lines = bootstrap_mod._read_sidecar_tail_lines(diag_path, lines=2)
+
+    assert lines == ['{"ts": 2, "line": "middle"}', '{"ts": 3, "line": "tail"}']
 
 
 def test_hub_route_max_chunk_raw_accounts_for_base64_overhead(monkeypatch) -> None:
