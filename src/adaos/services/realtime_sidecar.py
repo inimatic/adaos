@@ -616,6 +616,45 @@ def realtime_sidecar_diag_path() -> Path:
     return path
 
 
+def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default)) or str(default)).strip() or str(default))
+    except Exception:
+        value = default
+    if value < minimum:
+        value = minimum
+    return value
+
+
+def _rotate_realtime_sidecar_diag_if_needed(path: Path) -> None:
+    max_bytes = _env_int("ADAOS_REALTIME_DIAG_MAX_BYTES", 32 * 1024 * 1024, minimum=0)
+    if max_bytes <= 0:
+        return
+    try:
+        if path.stat().st_size <= max_bytes:
+            return
+    except FileNotFoundError:
+        return
+    except Exception:
+        return
+
+    backup_count = _env_int("ADAOS_REALTIME_DIAG_BACKUPS", 2, minimum=0)
+    try:
+        if backup_count <= 0:
+            path.unlink(missing_ok=True)
+            return
+        oldest = path.with_name(f"{path.name}.{backup_count}")
+        oldest.unlink(missing_ok=True)
+        for index in range(backup_count - 1, 0, -1):
+            src = path.with_name(f"{path.name}.{index}")
+            if not src.exists():
+                continue
+            src.replace(path.with_name(f"{path.name}.{index + 1}"))
+        path.replace(path.with_name(f"{path.name}.1"))
+    except Exception:
+        return
+
+
 def _host_matches_listener(host: str, other: str | None) -> bool:
     target = str(host or "").strip().lower()
     current = str(other or "").strip().lower()
@@ -1341,6 +1380,7 @@ class RealtimeSidecarServer:
         path = realtime_sidecar_diag_path()
         while not self._stopped.is_set():
             try:
+                _rotate_realtime_sidecar_diag_if_needed(path)
                 with path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(self._diag_snapshot(), ensure_ascii=False) + "\n")
             except Exception:

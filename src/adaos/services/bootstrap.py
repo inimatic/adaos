@@ -10012,10 +10012,43 @@ class BootstrapService:
                                     async def _print_sidecar_tail() -> None:
                                         def _tail(path: Path, lines: int) -> tuple[Path, list[str]]:
                                             try:
-                                                data = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                                                max_read_bytes = int(os.getenv("HUB_SIDECAR_TAIL_READ_BYTES", "262144") or "262144")
                                             except Exception:
-                                                data = []
-                                            return path, data[-lines:]
+                                                max_read_bytes = 262144
+                                            if max_read_bytes < 4096:
+                                                max_read_bytes = 4096
+                                            try:
+                                                max_line_chars = int(os.getenv("HUB_SIDECAR_TAIL_MAX_LINE_CHARS", "4096") or "4096")
+                                            except Exception:
+                                                max_line_chars = 4096
+                                            if max_line_chars < 256:
+                                                max_line_chars = 256
+                                            try:
+                                                line_count = max(0, int(lines))
+                                            except Exception:
+                                                line_count = 0
+                                            if line_count <= 0:
+                                                return path, []
+                                            try:
+                                                size = path.stat().st_size
+                                                with path.open("rb") as fh:
+                                                    start = max(0, int(size) - max_read_bytes)
+                                                    fh.seek(start)
+                                                    if start:
+                                                        fh.readline()
+                                                    data = fh.read(max_read_bytes)
+                                                tail = data.decode("utf-8", errors="replace").splitlines()[-line_count:]
+                                            except Exception:
+                                                tail = []
+                                            clipped: list[str] = []
+                                            for line in tail:
+                                                if len(line) > max_line_chars:
+                                                    clipped.append(
+                                                        f"{line[:max_line_chars]}...<truncated chars={len(line)}>"
+                                                    )
+                                                else:
+                                                    clipped.append(line)
+                                            return path, clipped
 
                                         try:
                                             log_path, log_tail = await asyncio.to_thread(_tail, realtime_sidecar_log_path(), 40)
