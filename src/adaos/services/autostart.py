@@ -368,6 +368,43 @@ def _write_wrapper_sh(path: Path, *, argv: Sequence[str], env: Mapping[str, str]
         lines.append(f"export {k}={_sh_quote(str(v))}")
     lines.extend(
         [
+            f"repair_python={_sh_quote(str(argv[0]))}",
+            'root_repo="${ADAOS_ROOT_REPO_ROOT:-}"',
+            'base_dir="${ADAOS_BASE_DIR:-$HOME/.adaos}"',
+            'if [ -n "${root_repo}" ] && [ -d "${root_repo}/src/adaos" ]; then',
+            '  active_slot=""',
+            '  if [ -f "${base_dir}/state/core_slots/active" ]; then',
+            '    active_slot="$(tr -d \'[:space:]\' < "${base_dir}/state/core_slots/active" || true)"',
+            "  fi",
+            '  for slot in "${active_slot}" A B; do',
+            '    if [ "${slot}" != "A" ] && [ "${slot}" != "B" ]; then',
+            "      continue",
+            "    fi",
+            '    slot_repo="${base_dir}/state/core_slots/slots/${slot}/repo"',
+            '    if [ ! -f "${root_repo}/src/adaos/services/bounded_io.py" ] && [ -f "${slot_repo}/src/adaos/services/bounded_io.py" ]; then',
+            '      install -m 0644 "${slot_repo}/src/adaos/services/bounded_io.py" "${root_repo}/src/adaos/services/bounded_io.py" 2>/dev/null || true',
+            "    fi",
+            "  done",
+            '  supervisor_py="${root_repo}/src/adaos/apps/supervisor.py"',
+            '  if [ -f "${supervisor_py}" ] && [ -f "${root_repo}/src/adaos/services/bounded_io.py" ]; then',
+            '    if grep -q "bounded_jsonl_tail" "${supervisor_py}" 2>/dev/null && ! grep -q "from adaos.services.bounded_io import" "${supervisor_py}" 2>/dev/null; then',
+            '      "${repair_python}" - "${supervisor_py}" <<\'PY\' 2>/dev/null || true',
+            "from pathlib import Path",
+            "import sys",
+            "path = Path(sys.argv[1])",
+            "text = path.read_text()",
+            "line = 'from adaos.services.bounded_io import bounded_jsonl_tail, bounded_text_tail_lines, path_size_snapshot\\n'",
+            "anchor = 'from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS\\n'",
+            "if line not in text and anchor in text:",
+            "    path.write_text(text.replace(anchor, anchor + line, 1))",
+            "PY",
+            "    fi",
+            "  fi",
+            "fi",
+        ]
+    )
+    lines.extend(
+        [
             "max_nofile=$(ulimit -H -n 2>/dev/null || true)",
             "if [ -n \"${max_nofile}\" ] && [ \"${max_nofile}\" != \"unlimited\" ]; then",
             "  ulimit -n \"${max_nofile}\" 2>/dev/null || true",
