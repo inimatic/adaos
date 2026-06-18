@@ -1102,6 +1102,9 @@ def test_node_yjs_webspace_state_endpoint_returns_operational_snapshot(monkeypat
     assert result["webspace"]["source_mode"] == "dev"
     assert result["projection"]["active_scenario"] == "prompt_engineer_runtime"
     assert result["rebuild"]["status"] == "ready"
+    assert result["state"] == "ready"
+    assert result["degraded"] is False
+    assert result["seed_health"]["source"] == "disk_snapshot"
     assert result["materialization"]["ready"] is True
     assert result["materialization"]["catalog_counts"]["apps"] == 3
     assert result["runtime"]["webspace_id"] == "dev_prompt"
@@ -1290,7 +1293,7 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
     assert result["snapshot"]["registry"]["scenarios"]["hub-1"]["web_desktop"]["title"] == "Desktop"
     assert result["runtime"]["webspace_id"] == "desktop"
     assert describe_calls
-    assert all(call["verify_live"] is True for call in describe_calls)
+    assert all(call["verify_live"] is False for call in describe_calls)
 
     essential = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default"))
     assert essential["snapshot_scope"] == "essential"
@@ -1298,9 +1301,51 @@ def test_node_yjs_webspace_materialization_snapshot_returns_live_branches(monkey
     assert essential["snapshot"]["data"]["nodes"]["hub-1"]["weather"]["current"]["city"] == "Moscow"
     assert essential["snapshot"]["registry"] == {}
     assert len(describe_calls) == 2
-    assert all(call["verify_live"] is True for call in describe_calls)
+    assert all(call["verify_live"] is False for call in describe_calls)
     assert read_calls
-    assert all(call.get("prefer_live_room") is True for call in read_calls)
+    assert all(call.get("prefer_live_room") is False for call in read_calls)
+
+
+def test_node_yjs_webspace_materialization_snapshot_returns_degraded_on_timeout(monkeypatch) -> None:
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "describe_webspace_rebuild_state",
+        lambda webspace_id: {
+            "webspace_id": webspace_id,
+            "status": "idle",
+            "materialization": {
+                "ready": True,
+                "webspace_id": webspace_id,
+                "observed_at": 123.0,
+                "snapshot_source": "rebuild:ready",
+            },
+        },
+    )
+    monkeypatch.setattr(node_api_module, "_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S", 0.001)
+
+    async def _slow_snapshot(*_args, **_kwargs):
+        await asyncio.sleep(0.05)
+        return {"ui": {"application": {}}, "data": {}, "registry": {}}
+
+    monkeypatch.setattr(node_api_module, "_read_yjs_materialization_snapshot", _slow_snapshot)
+    monkeypatch.setattr(
+        node_api_module,
+        "yjs_sync_runtime_snapshot",
+        lambda **kwargs: {"webspace_id": kwargs.get("webspace_id")},
+    )
+
+    result = asyncio.run(node_api_module.node_yjs_webspace_materialization_snapshot("default"))
+
+    assert result["ok"] is True
+    assert result["degraded"] is True
+    assert result["state"] == "degraded"
+    assert result["reason"] == "ystore_read_timeout"
+    assert result["source"] == "rebuild_cache"
+    assert result["stale"] is True
+    assert result["seed_health"]["state"] == "degraded"
+    assert result["seed_health"]["reason"] == "ystore_read_timeout"
+    assert result["materialization"]["ready"] is False
 
 
 def test_node_yjs_webspace_rebuild_state_endpoint_includes_cached_materialization(monkeypatch) -> None:

@@ -314,6 +314,7 @@ _YWS_ROOM_READY_MAX_S = _env_float("ADAOS_YWS_ROOM_READY_MAX_S", 45.0, minimum=0
 _YWS_ROOM_READY_POLL_S = _env_float("ADAOS_YWS_ROOM_READY_POLL_S", 1.0, minimum=0.25)
 _YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_BOOTSTRAP_STEP_TIMEOUT_S", 20.0, minimum=0.0)
 _YWS_ROOM_STALE_RECOVERY_TIMEOUT_S = _env_float("ADAOS_YWS_ROOM_STALE_RECOVERY_TIMEOUT_S", 3.0, minimum=0.25)
+_YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS = _env_int("ADAOS_YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS", 3, minimum=1)
 _YWS_FIRST_MESSAGE_TIMEOUT_S = _env_float("ADAOS_YWS_FIRST_MESSAGE_TIMEOUT_S", 12.0, minimum=0.0)
 _YWS_MAX_ACTIVE_PER_WEBSPACE = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_WEBSPACE", 6, minimum=1)
 _YWS_MAX_ACTIVE_PER_CLIENT = _env_int("ADAOS_YWS_MAX_ACTIVE_PER_CLIENT", 2, minimum=1)
@@ -1391,6 +1392,12 @@ def _mark_room_bootstrap_started(webspace_id: str, *, yws_attempt_id: str | None
         entry["last_bootstrap_state"] = "starting"
         entry["last_bootstrap_step"] = None
         entry["last_bootstrap_error"] = None
+        entry["bootstrap_stuck"] = False
+        entry["stuck_step"] = None
+        entry["stuck_since"] = None
+        entry["stuck_reason"] = None
+        entry["stuck_attempt_id"] = None
+        entry["recommended_action"] = None
     return attempt_id
 
 
@@ -1433,10 +1440,49 @@ def _mark_room_bootstrap_finished(
         entry["last_bootstrap_error"] = str(error or "").strip()[:240] or None
         if state_token == "ready":
             entry["bootstrap_success_total"] = int(entry.get("bootstrap_success_total") or 0) + 1
+            entry["bootstrap_stuck"] = False
+            entry["stuck_step"] = None
+            entry["stuck_since"] = None
+            entry["stuck_reason"] = None
+            entry["stuck_attempt_id"] = None
+            entry["recommended_action"] = None
         else:
             entry["bootstrap_failure_total"] = int(entry.get("bootstrap_failure_total") or 0) + 1
             if state_token == "timeout":
                 entry["bootstrap_timeout_total"] = int(entry.get("bootstrap_timeout_total") or 0) + 1
+
+
+def _mark_room_bootstrap_stuck(
+    webspace_id: str,
+    bootstrap_attempt_id: str,
+    *,
+    step: str,
+    reason: str,
+) -> dict[str, Any]:
+    key = str(webspace_id or "").strip() or "default"
+    attempt_id = str(bootstrap_attempt_id or "").strip()
+    now = time.time()
+    with _YROOM_LIFECYCLE_LOCK:
+        entry = _YROOM_LIFECYCLE.setdefault(key, {})
+        if attempt_id and str(entry.get("last_bootstrap_attempt_id") or "") != attempt_id:
+            return {}
+        timeout_total = int(entry.get("bootstrap_timeout_total") or 0) + 1
+        action = "reset_runtime_room"
+        if timeout_total >= 2:
+            action = "evict_ystore_runtime"
+        if timeout_total >= int(_YWS_ROOM_RESTART_RECOMMEND_TIMEOUTS):
+            action = "controlled_runtime_restart"
+        entry["bootstrap_stuck"] = True
+        entry["stuck_step"] = str(step or "").strip() or "unknown"
+        entry["stuck_since"] = entry.get("stuck_since") or now
+        entry["stuck_reason"] = str(reason or "").strip()[:240] or "bootstrap_step_timeout"
+        entry["stuck_attempt_id"] = attempt_id or None
+        entry["recommended_action"] = action
+        entry["last_bootstrap_state"] = "stuck"
+        entry["last_bootstrap_step"] = entry["stuck_step"]
+        entry["last_bootstrap_error"] = entry["stuck_reason"]
+        entry["bootstrap_timeout_total"] = timeout_total
+        return dict(entry)
 
 
 def _mark_room_wait_timeout(
@@ -1572,6 +1618,13 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
         "last_bootstrap_state": str(meta.get("last_bootstrap_state") or "").strip() or None,
         "last_bootstrap_step": str(meta.get("last_bootstrap_step") or "").strip() or None,
         "last_bootstrap_error": str(meta.get("last_bootstrap_error") or "").strip() or None,
+        "bootstrap_stuck": bool(meta.get("bootstrap_stuck")),
+        "stuck_step": str(meta.get("stuck_step") or "").strip() or None,
+        "stuck_since": meta.get("stuck_since"),
+        "stuck_age_s": _seconds_ago(meta.get("stuck_since"), now),
+        "stuck_reason": str(meta.get("stuck_reason") or "").strip() or None,
+        "stuck_attempt_id": str(meta.get("stuck_attempt_id") or "").strip() or None,
+        "recommended_action": str(meta.get("recommended_action") or "").strip() or None,
         "last_wait_timeout_at": meta.get("last_wait_timeout_at"),
         "last_wait_timeout_ago_s": _seconds_ago(meta.get("last_wait_timeout_at"), now),
         "last_wait_timeout_s": meta.get("last_wait_timeout_s"),
@@ -4219,6 +4272,12 @@ class WorkspaceWebsocketServer(WebsocketServer):
                         try:
                             return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
                         except asyncio.TimeoutError:
+                            _mark_room_bootstrap_stuck(
+                                webspace_id,
+                                bootstrap_attempt_id,
+                                step=label,
+                                reason=f"{label}_slow_after_{timeout_s:.3f}s",
+                            )
                             _ylog.warning(
                                 "yws room bootstrap step slow; continuing without cancellation webspace=%s step=%s timeout_s=%.3f",
                                 webspace_id,
@@ -4229,11 +4288,18 @@ class WorkspaceWebsocketServer(WebsocketServer):
                     try:
                         return await asyncio.wait_for(awaitable, timeout=timeout_s)
                     except asyncio.TimeoutError:
+                        incident = _mark_room_bootstrap_stuck(
+                            webspace_id,
+                            bootstrap_attempt_id,
+                            step=label,
+                            reason=f"{label}_timeout_after_{timeout_s:.3f}s",
+                        )
                         _ylog.warning(
-                            "yws room bootstrap step timeout webspace=%s step=%s timeout_s=%.3f",
+                            "yws room bootstrap step timeout webspace=%s step=%s timeout_s=%.3f recommended_action=%s",
                             webspace_id,
                             label,
                             timeout_s,
+                            incident.get("recommended_action") if isinstance(incident, dict) else None,
                         )
                         raise
 
@@ -4283,7 +4349,6 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 space=space,
                                 ydoc=room.ydoc,
                             ),
-                            cancel_on_timeout=False,
                         )
                         await _await_bootstrap_step(
                             "effective_materialized",
@@ -4293,7 +4358,6 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 room,
                                 seed_result=seed_result,
                             ),
-                            cancel_on_timeout=False,
                         )
                         await _await_bootstrap_step(
                             "finalize_rebuild_status",
@@ -4302,7 +4366,6 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 seed_result=seed_result,
                                 room=room,
                             ),
-                            cancel_on_timeout=False,
                         )
                         self.rooms[name] = room
                         _mark_room_created(webspace_id, room)

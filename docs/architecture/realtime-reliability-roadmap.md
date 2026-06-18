@@ -81,6 +81,27 @@ transport-only `/ws` and `/yws` handoff as ready.
 
 - Code and tests now keep realtime sidecar enabled by default for hub runtimes;
   `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` is the explicit opt-out.
+- Yjs materialization fallback is now explicitly bounded and degraded-aware.
+  `/api/node/yjs/webspaces/{id}/materialization/snapshot` reads a detached
+  disk/cache snapshot by default instead of depending on the live YWS room. If
+  the seed cannot be read inside `ADAOS_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S`,
+  the endpoint returns a degraded seed contract (`state`, `reason`, `source`,
+  `stale`, `last_good_snapshot_at`) instead of hanging until a routed `502`.
+  This keeps the browser operable without marking sync healthy.
+- YWS room bootstrap timeout is a sticky semantic incident, not a hidden
+  reconnect detail. A timed out bootstrap records `bootstrap_stuck`,
+  `stuck_step`, `stuck_since`, `stuck_reason`, `stuck_attempt_id`, and
+  `recommended_action` in runtime diagnostics. Recovery starts by resetting the
+  runtime room/lock and evicting YStore runtime state; repeated timeouts
+  escalate the recommendation to controlled runtime restart.
+- State-sync health now separates process/route readiness from semantic Yjs
+  readiness. `/api/node/status` may remain process-ready while reliability
+  reports `semantic_health.yjs_room.state=stuck`,
+  `materialization_seed.state=degraded`, and
+  `supervisor_action_required=true`.
+- Browser diagnostics now surface degraded seed and stuck bootstrap reasons in
+  the YJS signal (`seed=...`, `sync-blocked=...`) so fallback preserves
+  manageability without masking the root problem.
 - Managed autostart generation no longer writes truthy hub sidecar defaults
   into the wrapper as env overrides; old stand wrappers should be refreshed
   after removing legacy `ADAOS_REALTIME_ENABLE=1`/route-proxy exports.

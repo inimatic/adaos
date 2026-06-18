@@ -5867,8 +5867,12 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
 
     gateway_effective_ready = bool(effective_branches.get("ready"))
     materialization_ready = bool(materialization.get("ready")) or gateway_effective_ready
+    bootstrap_stuck = bool(gateway_room.get("bootstrap_stuck"))
+    bootstrap_recommended_action = str(gateway_room.get("recommended_action") or "").strip() or None
     if transport_state == "not_applicable":
         semantic_state = "not_applicable"
+    elif bootstrap_stuck:
+        semantic_state = "stale"
     elif materialization_ready and (assessment_state in {"nominal", "idle"} or maintenance_pressure_only):
         semantic_state = "ready"
     elif materialization_ready and assessment_state in {"pressure", "degraded"}:
@@ -5909,6 +5913,12 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     bootstrap_state = str(gateway_room.get("last_bootstrap_state") or "").strip() or None
     bootstrap_attempt_id = str(gateway_room.get("last_bootstrap_attempt_id") or "").strip() or None
     bootstrap_yws_attempt_id = str(gateway_room.get("last_bootstrap_yws_attempt_id") or "").strip() or None
+    bootstrap_step = str(gateway_room.get("last_bootstrap_step") or "").strip() or None
+    if bootstrap_stuck:
+        blockers.append(
+            f"room_bootstrap_stuck:{bootstrap_step or 'unknown'}:"
+            f"{str(gateway_room.get('stuck_attempt_id') or bootstrap_attempt_id or 'unknown').strip()}"
+        )
     if bootstrap_state in {"timeout", "failed", "cancelled"}:
         blockers.append(
             f"room_bootstrap_{bootstrap_state}:"
@@ -5948,9 +5958,30 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
             "step": str(gateway_room.get("last_bootstrap_step") or "").strip() or None,
             "duration_ms": gateway_room.get("last_bootstrap_duration_ms"),
             "error": str(gateway_room.get("last_bootstrap_error") or "").strip() or None,
+            "stuck": bootstrap_stuck,
+            "stuck_step": str(gateway_room.get("stuck_step") or "").strip() or None,
+            "stuck_since": gateway_room.get("stuck_since"),
+            "stuck_age_s": gateway_room.get("stuck_age_s"),
+            "stuck_reason": str(gateway_room.get("stuck_reason") or "").strip() or None,
+            "recommended_action": bootstrap_recommended_action,
             "wait_timeout_total": int(gateway_room.get("room_wait_timeout_total") or 0),
             "last_wait_timeout_yws_attempt_id": str(gateway_room.get("last_wait_timeout_yws_attempt_id") or "").strip() or None,
             "last_wait_timeout_s": gateway_room.get("last_wait_timeout_s"),
+        },
+        "semantic_health": {
+            "process": {"state": "ready" if bool(runtime.get("available")) else "unavailable"},
+            "route": {"state": transport_state},
+            "yjs_room": {
+                "state": "stuck" if bootstrap_stuck else ("ready" if bool(gateway_room.get("ready")) else "degraded"),
+                "reason": str(gateway_room.get("stuck_reason") or gateway_room.get("last_bootstrap_error") or "").strip() or None,
+                "recommended_action": bootstrap_recommended_action,
+            },
+            "materialization_seed": {
+                "state": "ready" if materialization_ready and not bootstrap_stuck else "degraded",
+                "stale": not bool(materialization_ready) or bootstrap_stuck,
+                "reason": str(materialization.get("stale_reason") or materialization.get("readiness_state") or "").strip() or None,
+            },
+            "supervisor_action_required": bool(bootstrap_stuck and bootstrap_recommended_action),
         },
         "blockers": blockers,
     }

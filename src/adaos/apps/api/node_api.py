@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -159,6 +160,21 @@ _RELIABILITY_SUMMARY_METRICS: dict[str, Any] = {
     },
     "modes": {},
 }
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)) or str(default))
+    except Exception:
+        value = float(default)
+    return max(float(minimum), value)
+
+
+_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S = _env_float(
+    "ADAOS_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S",
+    2.5,
+    minimum=0.1,
+)
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -1943,10 +1959,15 @@ async def _describe_yjs_materialization(
         }
 
 
-async def _read_yjs_materialization_snapshot(webspace_id: str, *, scope: str = "essential") -> dict[str, Any]:
+async def _read_yjs_materialization_snapshot(
+    webspace_id: str,
+    *,
+    scope: str = "essential",
+    prefer_live_room: bool = False,
+) -> dict[str, Any]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     normalized_scope = str(scope or "").strip().lower() or "essential"
-    async with async_read_ydoc(target_webspace_id, prefer_live_room=True) as ydoc:
+    async with async_read_ydoc(target_webspace_id, prefer_live_room=prefer_live_room) as ydoc:
         ui_map = ydoc.get_map("ui")
         data_map = ydoc.get_map("data")
         registry_map = ydoc.get_map("registry")
@@ -1970,6 +1991,68 @@ async def _read_yjs_materialization_snapshot(webspace_id: str, *, scope: str = "
             "data": _coerce_dict(_clone_json_like(data_map)),
             "registry": _coerce_dict(_clone_json_like(registry_map)),
         }
+
+
+def _materialization_seed_health(
+    *,
+    state: str,
+    reason: str,
+    source: str,
+    stale: bool,
+    last_good_snapshot_at: Any = None,
+    timeout_s: float | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "state": str(state or "").strip() or "unknown",
+        "reason": str(reason or "").strip() or "unknown",
+        "source": str(source or "").strip() or "none",
+        "stale": bool(stale),
+        "last_good_snapshot_at": last_good_snapshot_at,
+        "timeout_s": round(float(timeout_s), 3) if timeout_s is not None else None,
+    }
+    if error:
+        payload["error"] = str(error).strip()[:240]
+    return payload
+
+
+def _fallback_materialization_snapshot_from_cache(
+    webspace_id: str,
+    *,
+    rebuild_state: Mapping[str, Any] | None,
+    reason: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    cached = _cached_materialization_from_rebuild(rebuild_state, max_age_sec=0.0)
+    materialization = cached or _missing_materialization_cache_snapshot(
+        webspace_id,
+        rebuild_state=rebuild_state,
+        stale_reason=reason,
+    )
+    materialization = dict(materialization)
+    materialization["ready"] = False
+    materialization["stale"] = True
+    materialization["stale_reason"] = reason
+    materialization["snapshot_source"] = materialization.get("snapshot_source") or "rebuild_cache"
+    source = "rebuild_cache" if cached else "none"
+    last_good = (
+        materialization.get("observed_at")
+        or (rebuild_state or {}).get("finished_at")
+        or (rebuild_state or {}).get("updated_at")
+    )
+    return {
+        "snapshot": {"ui": {}, "data": {}, "registry": {}},
+        "materialization": materialization,
+        "seed_health": _materialization_seed_health(
+            state="degraded",
+            reason=reason,
+            source=source,
+            stale=True,
+            last_good_snapshot_at=last_good,
+            timeout_s=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+            error=error,
+        ),
+    }
 
 
 async def _read_live_catalog_items(webspace_id: str, kind: str) -> list[dict[str, Any]]:
@@ -3789,19 +3872,74 @@ async def node_yjs_webspace_materialization_snapshot(
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     snapshot_scope = "full" if str(scope or "").strip().lower() == "full" else "essential"
     rebuild = describe_webspace_rebuild_state(target_webspace_id)
-    materialization = await _describe_yjs_materialization(
-        target_webspace_id,
-        rebuild_state=rebuild,
-        verify_live=True,
-    )
-    snapshot = await _read_yjs_materialization_snapshot(target_webspace_id, scope=snapshot_scope)
+    degraded = False
+    try:
+        snapshot = await asyncio.wait_for(
+            _read_yjs_materialization_snapshot(
+                target_webspace_id,
+                scope=snapshot_scope,
+                prefer_live_room=False,
+            ),
+            timeout=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+        )
+        materialization = await _describe_yjs_materialization(
+            target_webspace_id,
+            rebuild_state=rebuild,
+            verify_live=False,
+        )
+        seed_health = _materialization_seed_health(
+            state="ready" if bool(materialization.get("ready")) else "degraded",
+            reason=(
+                "disk_snapshot_read"
+                if bool(materialization.get("ready"))
+                else str(materialization.get("readiness_state") or "materialization_cache_missing")
+            ),
+            source="disk_snapshot",
+            stale=not bool(materialization.get("ready")),
+            last_good_snapshot_at=(
+                materialization.get("observed_at")
+                or rebuild.get("finished_at")
+                or rebuild.get("updated_at")
+            ),
+            timeout_s=_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S,
+        )
+        degraded = bool(seed_health.get("state") != "ready")
+    except asyncio.TimeoutError:
+        fallback = _fallback_materialization_snapshot_from_cache(
+            target_webspace_id,
+            rebuild_state=rebuild,
+            reason="ystore_read_timeout",
+            error=f"snapshot read exceeded {_YJS_MATERIALIZATION_SNAPSHOT_TIMEOUT_S:.3f}s",
+        )
+        snapshot = fallback["snapshot"]
+        materialization = fallback["materialization"]
+        seed_health = fallback["seed_health"]
+        degraded = True
+    except Exception as exc:
+        fallback = _fallback_materialization_snapshot_from_cache(
+            target_webspace_id,
+            rebuild_state=rebuild,
+            reason="materialization_cache_missing",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        snapshot = fallback["snapshot"]
+        materialization = fallback["materialization"]
+        seed_health = fallback["seed_health"]
+        degraded = True
     result = {
         "ok": True,
         "accepted": True,
+        "degraded": degraded,
+        "state": "degraded" if degraded else "ready",
+        "reason": seed_health.get("reason"),
+        "stale": bool(seed_health.get("stale")),
+        "source": seed_health.get("source"),
+        "last_good_snapshot_at": seed_health.get("last_good_snapshot_at"),
         "webspace_id": target_webspace_id,
         "snapshot_scope": snapshot_scope,
         "snapshot": snapshot,
         "materialization": materialization,
+        "seed_health": seed_health,
         "rebuild": rebuild,
     }
     if include_runtime:

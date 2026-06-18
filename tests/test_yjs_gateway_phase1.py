@@ -1132,6 +1132,7 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert room_info["last_bootstrap_yws_attempt_id"] == "yws-test-1"
     assert room_info["last_bootstrap_state"] == "ready"
     assert room_info["last_bootstrap_step"] == "seed_from_scenario"
+    assert room_info["bootstrap_stuck"] is False
     assert room_info["last_open_mode"] == "cold_open"
     assert room_info["last_open_bootstrap_mode"] == "scenario_projection"
     assert room_info["update_send_stream"]["current_buffer_used"] == 5
@@ -1147,6 +1148,42 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert transport["update_stream_buffer_used_total"] >= 5
 
     gateway_module.y_server.rooms.pop(key, None)
+    gateway_module._YROOM_LIFECYCLE.clear()
+
+
+def test_room_bootstrap_stuck_incident_is_sticky_until_ready() -> None:
+    key = "gateway-room-stuck"
+    gateway_module._YROOM_LIFECYCLE.clear()
+
+    attempt_id = gateway_module._mark_room_bootstrap_started(key, yws_attempt_id="yws-stuck-1")
+    incident = gateway_module._mark_room_bootstrap_stuck(
+        key,
+        attempt_id,
+        step="seed_from_scenario",
+        reason="seed_from_scenario_timeout_after_20.000s",
+    )
+    gateway_module._mark_room_bootstrap_finished(
+        key,
+        attempt_id,
+        state="timeout",
+        error="TimeoutError",
+    )
+
+    assert incident["bootstrap_stuck"] is True
+    snapshot = gateway_module.gateway_transport_snapshot()["rooms"][key]
+    assert snapshot["bootstrap_stuck"] is True
+    assert snapshot["stuck_step"] == "seed_from_scenario"
+    assert snapshot["stuck_attempt_id"] == attempt_id
+    assert snapshot["recommended_action"] == "reset_runtime_room"
+    assert snapshot["stuck_age_s"] is not None
+
+    ready_attempt = gateway_module._mark_room_bootstrap_started(key, yws_attempt_id="yws-ready-1")
+    gateway_module._mark_room_bootstrap_finished(key, ready_attempt, state="ready")
+    recovered = gateway_module.gateway_transport_snapshot()["rooms"][key]
+    assert recovered["bootstrap_stuck"] is False
+    assert recovered["stuck_step"] is None
+    assert recovered["recommended_action"] is None
+
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
