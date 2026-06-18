@@ -1193,6 +1193,11 @@
         "type": { "type": "string", "minLength": 1, "description": "Action type (e.g. 'callHost')." },
         "target": { "type": "string" },
         "params": { "type": "object", "additionalProperties": true },
+        "allowOffline": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow this action to run when the target or client transport is offline. Remote actions are blocked by default; local UI actions are unaffected."
+        },
         "feedback": { "$ref": "#/$defs/actionFeedback" }
       },
       "allOf": [
