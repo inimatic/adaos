@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -103,6 +104,81 @@ def test_vendor_and_venv_are_shared_inside_runtime_bucket() -> None:
     assert slot_a.venv_dir == slot_b.venv_dir
     assert slot_a.vendor_dir == env.version_root("2.3.0") / "vendor"
     assert slot_a.venv_dir == env.version_root("2.3.0") / "venv"
+
+
+def test_prepare_runtime_preserves_browser_contract_fields(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    workspace_root = Path(ctx.paths.skills_dir())
+    skill_name = "contract_skill"
+    skill_dir = workspace_root / skill_name
+    runtime_root = workspace_root / ".runtime" / skill_name
+    try:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+        (skill_dir / "handlers" / "main.py").write_text(
+            "from adaos.sdk.core.decorators import tool\n\n"
+            "@tool\n"
+            "def refresh(webspace_id=None):\n"
+            "    return {'ok': True, 'status': 'refreshed', 'receiver': 'contract.state'}\n",
+            encoding="utf-8",
+        )
+        (skill_dir / "skill.yaml").write_text(
+            "\n".join(
+                [
+                    "name: contract_skill",
+                    "version: 0.1.0",
+                    "entry: handlers/main.py",
+                    "webui:",
+                    "  file: webui.json",
+                    "activation:",
+                    "  mode: lazy",
+                    "tools:",
+                    "- name: refresh",
+                    "  entry: handlers.main:refresh",
+                    "  input_schema:",
+                    "    type: object",
+                    "  output_schema:",
+                    "    type: object",
+                    "    required: [ok, status, receiver]",
+                    "data_routes:",
+                    "- surface: modal:contract",
+                    "  route: stream",
+                    "  receiver: contract.state",
+                    "memory_budget:",
+                    "  expected_rss_mb: 32",
+                    "  caches:",
+                    "  - name: contract.snapshot",
+                    "    max_items: 1",
+                    "data_projections:",
+                    "- scope: subnet",
+                    "  slot: contract.snapshot",
+                    "  targets:",
+                    "  - backend: yjs",
+                    "    path: data/contract",
+                    "lifecycle:",
+                    "  dispose: dispose",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+        monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+
+        result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+        resolved = json.loads(Path(result.resolved_manifest).read_text(encoding="utf-8"))
+
+        assert resolved["webui"]["file"] == "webui.json"
+        assert resolved["activation"]["mode"] == "lazy"
+        assert resolved["data_routes"][0]["receiver"] == "contract.state"
+        assert resolved["data_projections"][0]["slot"] == "contract.snapshot"
+        assert resolved["memory_budget"]["expected_rss_mb"] == 32
+        assert resolved["lifecycle"]["dispose"] == "dispose"
+        assert resolved["tools"]["refresh"]["schema"]["output"]["required"] == ["ok", "status", "receiver"]
+    finally:
+        shutil.rmtree(skill_dir, ignore_errors=True)
+        shutil.rmtree(runtime_root, ignore_errors=True)
 
 
 def test_sync_skill_env_merges_template_legacy_and_store(tmp_path: Path, monkeypatch) -> None:

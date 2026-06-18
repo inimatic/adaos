@@ -552,6 +552,25 @@ Avoid returning:
 If the UI needs the data, publish it through the declared data plane and return
 only enough metadata for the user and logs to correlate the action.
 
+When an action publishes a stream or projection update, the action response must
+not also return that same snapshot. Use this shape instead:
+
+```json
+{
+  "ok": true,
+  "status": "refreshed",
+  "receiver": "redevice_settings.state",
+  "selected_ref": "redevice:endpoint-1",
+  "count": 1,
+  "updated_at": "..."
+}
+```
+
+This keeps the action channel as a command/ack channel and the declared data
+route as the only state delivery channel. Returning the full just-published
+stream snapshot duplicates bytes, confuses guard attribution, and can quarantine
+an otherwise correct skill under browser stream/action pressure.
+
 ## Member-aware skills
 
 Member skills do not own transport. The runtime, router, hub-member link, and
@@ -796,6 +815,8 @@ Before publishing:
   card budget
 - verify no action returns a large payload when a projection/stream is the
   real data path
+- verify actions that publish streams return only compact acks and do not
+  include `state`, `items`, `sections`, logs, diagnostics, or full snapshots
 - verify Yjs and stream guard errors are visible to the UI
 - import and smoke-validate handlers repeatedly with no import-time workers,
   model loads, bus mutations, or persistent writes

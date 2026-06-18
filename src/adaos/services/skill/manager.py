@@ -4335,6 +4335,12 @@ class SkillManager:
             "compatibility": manifest.get("compatibility") if isinstance(manifest.get("compatibility"), Mapping) else {},
             "secrets": self._preserve_secret_placeholders(manifest.get("secrets", [])),
             "events": manifest.get("events"),
+            "activation": manifest.get("activation"),
+            "webui": manifest.get("webui"),
+            "data_routes": manifest.get("data_routes") if isinstance(manifest.get("data_routes"), list) else [],
+            "data_projections": manifest.get("data_projections") if isinstance(manifest.get("data_projections"), list) else [],
+            "memory_budget": manifest.get("memory_budget") if isinstance(manifest.get("memory_budget"), Mapping) else {},
+            "lifecycle": manifest.get("lifecycle") if isinstance(manifest.get("lifecycle"), Mapping) else {},
             "models": manifest.get("models"),
             "slot_root": str(slot.root),
         }
