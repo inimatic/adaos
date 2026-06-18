@@ -174,7 +174,10 @@ def _send(
     token = os.getenv("ADAOS_EXTERNAL_API_PROXY_TOKEN", "").strip()
     if token:
         proxy_headers["Authorization"] = f"Bearer {token}"
-    return requests.post(proxy_url, json=payload, headers=proxy_headers, timeout=timeout)
+    response = requests.post(proxy_url, json=payload, headers=proxy_headers, timeout=timeout)
+    if response.status_code >= 400 and response.headers.get("x-adaos-external-api-proxy") != "1":
+        raise RuntimeError(f"{mode}_proxy_http_{response.status_code}")
+    return response
 
 
 def _proxy_url_for_mode(mode: str, *, zone_proxy_url: str | None, global_proxy_url: str | None) -> str:

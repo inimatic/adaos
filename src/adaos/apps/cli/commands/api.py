@@ -509,6 +509,39 @@ def _stop_autostart_service_for_takeover(current_base_dir: Path | None) -> None:
         _wait_for_pids_exit([service_main_pid], timeout=20.0)
 
 
+def _autostart_status_for_current_base_dir(current_base_dir: Path | None) -> dict | None:
+    try:
+        from adaos.services.autostart import status as autostart_status
+    except Exception:
+        return None
+    try:
+        info = autostart_status(get_ctx())
+    except Exception:
+        return None
+    if not isinstance(info, dict) or info.get("active") is not True:
+        return None
+    if current_base_dir is not None:
+        raw_base = str(info.get("base_dir") or "").strip()
+        if raw_base:
+            try:
+                if Path(raw_base).expanduser().resolve() != current_base_dir:
+                    return None
+            except Exception:
+                return None
+    return info
+
+
+def _restart_autostart_service_for_current_base_dir(current_base_dir: Path | None) -> dict[str, object] | None:
+    info = _autostart_status_for_current_base_dir(current_base_dir)
+    if info is None:
+        return None
+    try:
+        from adaos.services.autostart import restart_service
+    except Exception as exc:
+        raise RuntimeError(f"autostart is active but service restart API is unavailable: {exc}") from exc
+    return restart_service(get_ctx())
+
+
 def _find_owner_conflict_pids(
     host: str,
     port: int,
@@ -532,7 +565,11 @@ def _find_owner_conflict_pids(
             if new_owner == "autostart":
                 conflict = conflict or (kind == "api_serve" and same_base)
             elif new_owner == "api":
-                conflict = conflict or (kind in {"autostart_runner", "supervisor", "api_serve"} and same_base)
+                managed_takeover = _env_flag("ADAOS_API_TAKEOVER_AUTOSTART", default=False)
+                api_conflict_kinds = {"api_serve"}
+                if managed_takeover:
+                    api_conflict_kinds.update({"autostart_runner", "supervisor"})
+                conflict = conflict or (kind in api_conflict_kinds and same_base)
             if conflict and pid not in conflicts:
                 conflicts.append(pid)
     except Exception:
@@ -545,7 +582,7 @@ def _stop_previous_server(host: str, port: int) -> None:
     protected_pids = _current_process_family_pids()
     current_owner = _current_launch_owner()
     current_base_dir = _current_base_dir()
-    if current_owner == "api":
+    if current_owner == "api" and _env_flag("ADAOS_API_TAKEOVER_AUTOSTART", default=False):
         _stop_autostart_service_for_takeover(current_base_dir)
     candidate_pids: list[int] = []
     meta = _read_pidfile(pidfile)
@@ -570,6 +607,28 @@ def _stop_previous_server(host: str, port: int) -> None:
     ):
         if pid not in candidate_pids:
             candidate_pids.append(pid)
+
+    if current_owner == "api" and not _env_flag("ADAOS_API_TAKEOVER_AUTOSTART", default=False):
+        managed_conflicts: list[int] = []
+        filtered_pids: list[int] = []
+        for pid in candidate_pids:
+            try:
+                proc = psutil.Process(pid)
+            except psutil.Error:
+                continue
+            kind = _process_kind(proc)
+            if kind in {"autostart_runner", "supervisor"} and (
+                _process_matches_bind(proc, host, port) or _same_base_dir(proc, current_base_dir)
+            ):
+                managed_conflicts.append(pid)
+                continue
+            filtered_pids.append(pid)
+        if managed_conflicts:
+            raise RuntimeError(
+                "refusing to stop managed AdaOS autostart runtime "
+                f"pids={managed_conflicts}; use `adaos autostart restart` or set ADAOS_API_TAKEOVER_AUTOSTART=1"
+            )
+        candidate_pids = filtered_pids
 
     token = _resolved_shutdown_token()
     for pid in candidate_pids:
@@ -958,6 +1017,19 @@ def restart():
 
     host, port = bind
     token = getattr(conf, "token", None) or resolve_control_token()
+
+    try:
+        managed_restart = _restart_autostart_service_for_current_base_dir(_current_base_dir())
+    except Exception as exc:
+        typer.secho(f"[AdaOS] managed autostart restart failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if managed_restart is not None:
+        service = str(managed_restart.get("service") or "adaos.service")
+        scope = str(managed_restart.get("scope") or "").strip()
+        target = f" {scope}" if scope else ""
+        typer.echo(f"Restarted AdaOS autostart{target} service {service}")
+        return
+
     marker = _restart_marker_path(host, port)
     _write_restart_marker(marker, host=host, port=port, reason="cli.restart")
 

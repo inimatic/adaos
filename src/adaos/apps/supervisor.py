@@ -2265,6 +2265,9 @@ class SupervisorManager:
         self._update_task_cancel_mode: str | None = None
         self._managed_runtime_instance_id: str | None = None
         self._managed_transition_role: str | None = None
+        self._managed_slot: str | None = None
+        self._managed_runtime_port: int | None = None
+        self._managed_runtime_base_url: str | None = None
         self._managed_runtime_cwd: str | None = None
         self._managed_start_reason: str | None = None
         self._last_stop_reason: str | None = None
@@ -5293,6 +5296,18 @@ class SupervisorManager:
         ports = _slot_runtime_ports(self.runtime_port)
         return {slot_name: f"http://{self.runtime_host}:{port}" for slot_name, port in ports.items()}
 
+    def _managed_proc_base_url(self, proc: subprocess.Popen[Any] | None = None) -> str:
+        if proc is None or proc is self._proc:
+            base_url = str(self._managed_runtime_base_url or "").strip()
+            if base_url:
+                return base_url
+            if self._managed_runtime_port is not None:
+                return f"http://{self.runtime_host}:{int(self._managed_runtime_port)}"
+            managed_slot = str(self._managed_slot or "").strip().upper() or None
+            if managed_slot:
+                return self.slot_runtime_base_url(managed_slot)
+        return self.runtime_base_url
+
     def _candidate_transition_slot(
         self,
         *,
@@ -5611,6 +5626,7 @@ class SupervisorManager:
         managed_cmdline = managed["managed_cmdline"]
         managed_executable = managed["managed_executable"]
         managed_cwd = managed["managed_cwd"]
+        managed_runtime_url = self._managed_proc_base_url(proc)
         listener_running = bool(managed_alive) and _listener_running(self.runtime_host, active_runtime_port)
         api_ready = listener_running and _runtime_api_ready(
             active_runtime_url,
@@ -5696,6 +5712,9 @@ class SupervisorManager:
             "runtime_url": active_runtime_url,
             "runtime_host": self.runtime_host,
             "runtime_port": active_runtime_port,
+            "managed_slot": self._managed_slot,
+            "managed_runtime_url": managed_runtime_url,
+            "managed_runtime_port": self._managed_runtime_port,
             "runtime_instance_id": self._managed_runtime_instance_id,
             "transition_role": self._managed_transition_role if self._managed_runtime_instance_id else None,
             "active_slot": current_slot,
@@ -6550,8 +6569,16 @@ class SupervisorManager:
             creationflags=(int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0),
         )
         self._proc = proc
+        managed_slot = str(env.get("ADAOS_ACTIVE_CORE_SLOT") or active_slot() or "").strip().upper() or None
+        try:
+            managed_port = int(env.get("ADAOS_RUNTIME_PORT") or self.slot_runtime_port(managed_slot))
+        except Exception:
+            managed_port = self.slot_runtime_port(managed_slot)
         self._managed_runtime_instance_id = runtime_instance_id
         self._managed_transition_role = transition_role
+        self._managed_slot = managed_slot
+        self._managed_runtime_port = int(managed_port)
+        self._managed_runtime_base_url = f"http://{self.runtime_host}:{int(managed_port)}"
         self._managed_runtime_cwd = str(cwd or os.getcwd())
         self._managed_start_reason = str(reason or "supervisor.start")
         self._memory_profile_mode = profile_mode
@@ -6667,7 +6694,7 @@ class SupervisorManager:
         )
         if graceful:
             shutdown_requested = False
-            shutdown_url = str(base_url or self.runtime_base_url) + "/api/admin/shutdown"
+            shutdown_url = str(base_url or self._managed_proc_base_url(proc)) + "/api/admin/shutdown"
             shutdown_status_code: int | None = None
             shutdown_error: str | None = None
             try:
@@ -7129,6 +7156,9 @@ class SupervisorManager:
             self._proc = proc
             self._managed_runtime_instance_id = promoted_instance_id
             self._managed_transition_role = "active"
+            self._managed_slot = resolved_slot
+            self._managed_runtime_port = self.slot_runtime_port(resolved_slot)
+            self._managed_runtime_base_url = self.slot_runtime_base_url(resolved_slot)
             self._managed_runtime_cwd = self._candidate_runtime_cwd
             self._candidate_proc = None
             self._candidate_slot = None
@@ -7357,6 +7387,9 @@ class SupervisorManager:
             self._proc = None
             self._managed_runtime_instance_id = None
             self._managed_transition_role = None
+            self._managed_slot = None
+            self._managed_runtime_port = None
+            self._managed_runtime_base_url = None
             self._managed_runtime_cwd = None
             self._runtime_unhealthy_since = None
             self._runtime_unhealthy_kind = None
@@ -7539,8 +7572,9 @@ class SupervisorManager:
                 headers = {"Content-Type": "application/json"}
                 if self.token:
                     headers["X-AdaOS-Token"] = self.token
+                runtime_base_url = self._managed_proc_base_url(proc)
                 response = requests.post(
-                    self.runtime_base_url + "/api/admin/shutdown",
+                    runtime_base_url + "/api/admin/shutdown",
                     headers=headers,
                     json={
                         "reason": reason,

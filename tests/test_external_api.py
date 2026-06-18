@@ -6,9 +6,10 @@ from adaos.sdk.net import external_api
 
 
 class _Response:
-    def __init__(self, status_code: int = 200, payload: dict | None = None):
+    def __init__(self, status_code: int = 200, payload: dict | None = None, headers: dict | None = None):
         self.status_code = status_code
         self._payload = payload or {"ok": True}
+        self.headers = headers or {}
 
     def json(self):
         return dict(self._payload)
@@ -85,3 +86,29 @@ def test_external_api_rechecks_local_after_interval(monkeypatch):
 
     assert result.mode == "local"
     assert result.attempts[0]["mode"] == "local"
+
+
+def test_external_api_treats_proxy_auth_response_as_channel_failure(monkeypatch):
+    memory: dict[str, object] = {}
+
+    def _local_request(*_args, **_kwargs):
+        raise requests.exceptions.ConnectTimeout("local connect timed out")
+
+    def _proxy_post(*_args, **_kwargs):
+        return _Response(status_code=401, payload={"error": "client_certificate_required"})
+
+    monkeypatch.setattr(external_api, "memory_get", lambda key, default=None: memory.get(key, default))
+    monkeypatch.setattr(external_api, "memory_set", lambda key, value: memory.__setitem__(key, value))
+    monkeypatch.setattr(external_api.requests, "request", _local_request)
+    monkeypatch.setattr(external_api.requests, "post", _proxy_post)
+
+    result = external_api.get(
+        "https://api.open-meteo.com/v1/forecast",
+        service="weather.open_meteo.forecast",
+        global_proxy_url="https://api.inimatic.com/v1/external-api/proxy",
+    )
+
+    assert result.ok is False
+    assert result.response is None
+    assert result.error == "global_proxy_proxy_http_401"
+    assert [attempt["mode"] for attempt in result.attempts] == ["local", "zone_proxy", "global_proxy"]
