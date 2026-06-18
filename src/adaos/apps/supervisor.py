@@ -916,6 +916,25 @@ def _post_recovery_core_update_reconcile_countdown_sec() -> float:
         return 60.0
 
 
+def _periodic_core_update_reconcile_enabled() -> bool:
+    raw = os.getenv("ADAOS_SUPERVISOR_PERIODIC_CORE_UPDATE_RECONCILE")
+    if raw is None:
+        raw = os.getenv("ADAOS_SUPERVISOR_CORE_UPDATE_RECONCILE")
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _periodic_core_update_reconcile_interval_sec() -> float:
+    try:
+        return max(
+            30.0,
+            float(str(os.getenv("ADAOS_SUPERVISOR_CORE_UPDATE_RECONCILE_INTERVAL_SEC") or "120").strip()),
+        )
+    except Exception:
+        return 120.0
+
+
 def _post_recovery_member_hub_refresh_enabled() -> bool:
     raw = os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_MEMBER_HUB_REFRESH")
     if raw is None:
@@ -3762,9 +3781,11 @@ class SupervisorManager:
     def _post_recovery_core_update_reconcile_state_payload(self) -> dict[str, Any]:
         return {
             "enabled": _post_recovery_core_update_reconcile_enabled(),
+            "periodic_enabled": _periodic_core_update_reconcile_enabled(),
             "last_at": self._hub_root_post_recovery_reconcile_last_at,
             "last_key": self._hub_root_post_recovery_reconcile_last_key,
             "cooldown_sec": _post_recovery_core_update_reconcile_cooldown_sec(),
+            "periodic_interval_sec": _periodic_core_update_reconcile_interval_sec(),
             "countdown_sec": _post_recovery_core_update_reconcile_countdown_sec(),
             "last_result": _compact_watchdog_last_result(self._hub_root_post_recovery_reconcile_last_result),
         }
@@ -4678,7 +4699,7 @@ class SupervisorManager:
         parts = [part for part in (branch, head_sha, current_commit) if part]
         return ":".join(parts) if parts else None
 
-    async def _maybe_reconcile_hub_core_update_after_recovery(
+    async def _maybe_reconcile_hub_core_update(
         self,
         *,
         trigger: str,
@@ -4728,11 +4749,61 @@ class SupervisorManager:
                 "error": f"{type(exc).__name__}: {exc}",
                 "verification": verification if isinstance(verification, dict) else None,
             }
-            _LOG.warning("post-recovery core update reconcile failed: %s: %s", type(exc).__name__, exc)
+            _LOG.warning("core update reconcile failed: %s: %s", type(exc).__name__, exc)
         self._hub_root_post_recovery_reconcile_last_at = now
         self._hub_root_post_recovery_reconcile_last_result = _compact_watchdog_last_result(record)
         self._hub_root_post_recovery_reconcile_last_key = self._core_update_reconcile_key(record)
         return dict(self._hub_root_post_recovery_reconcile_last_result or record)
+
+    async def _maybe_reconcile_hub_core_update_after_recovery(
+        self,
+        *,
+        trigger: str,
+        verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return await self._maybe_reconcile_hub_core_update(trigger=trigger, verification=verification)
+
+    async def _maybe_reconcile_hub_core_update_periodic(self, runtime: dict[str, Any]) -> dict[str, Any] | None:
+        if not _periodic_core_update_reconcile_enabled():
+            return None
+        role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        if role != "hub":
+            return None
+        now = time.time()
+        last_at = self._hub_root_post_recovery_reconcile_last_at
+        interval = _periodic_core_update_reconcile_interval_sec()
+        if last_at is not None and (now - float(last_at)) < interval:
+            return None
+        channel_state = self._hub_root_channel_state(runtime)
+        channel_ready = self._hub_root_channel_ready(channel_state)
+        root_probe = (
+            self._hub_root_root_probe_last_result
+            if isinstance(self._hub_root_root_probe_last_result, dict)
+            else {}
+        )
+        root_probe_state = str(root_probe.get("state") or "").strip().lower()
+        if not channel_ready and root_probe_state != "ready":
+            return None
+        verification = {
+            "ok": True,
+            "state": "ready" if channel_ready else "root_perspective_ready",
+            "source": "supervisor.periodic_core_update_reconcile",
+            "channel": dict(channel_state),
+            "root_perspective_probe": dict(root_probe),
+        }
+        result = await self._maybe_reconcile_hub_core_update(
+            trigger="supervisor.hub_root.periodic_core_update_reconcile",
+            verification=verification,
+        )
+        if result is not None:
+            self._append_hub_root_watchdog_event(
+                {
+                    "event": "core_update_periodic_reconcile",
+                    "state": str(result.get("state") or result.get("reason") or "checked"),
+                    "result": result,
+                }
+            )
+        return result
 
     async def _maybe_refresh_member_hub_after_recovery(
         self,
@@ -4937,6 +5008,9 @@ class SupervisorManager:
                     trigger="supervisor.hub_root.self_recovered",
                     verification={"ok": True, "state": "ready", "source": "watchdog_ready_edge"},
                 )
+                self._persist_runtime_state()
+            periodic_reconcile = await self._maybe_reconcile_hub_core_update_periodic(runtime)
+            if periodic_reconcile is not None:
                 self._persist_runtime_state()
             return
         self._hub_root_watchdog_last_state = "reconnect_requested"
