@@ -444,6 +444,8 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
         "version_info": version_info,
         "active_app": active_app or None,
         "active_surface": active_surface or None,
+        "assignment": _text(endpoint.get("assignment")) or None,
+        "assignment_updated_at": endpoint.get("assignment_updated_at"),
         "service_state": _mapping(endpoint.get("service_state")) or None,
         "transport_profile": transport_profile(endpoint),
         "aliases": list(endpoint.get("aliases") or []),

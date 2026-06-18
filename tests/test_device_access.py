@@ -33,6 +33,33 @@ def test_command_profile_for_managed_member_enables_device_and_node_actions(monk
     assert profile["open_marketplace"] == {"enabled": True, "node_id": "member-1"}
 
 
+def test_sdk_device_access_resolves_redevice_by_alias_and_assignment(monkeypatch) -> None:
+    from adaos.sdk.data import device_access as sdk_device_access
+
+    devices = [
+        {
+            "ref": "redevice:endpoint-1",
+            "kind": "redevice",
+            "identity": {"endpoint_id": "endpoint-1", "pair_code": "ABCD1234"},
+            "policy": {
+                "effective_name": "Kitchen tablet",
+                "display_name": "Kitchen tablet",
+                "labels": [{"text": "Планшет", "role": "alias", "locale": "ru"}],
+            },
+            "observation": {"online": True},
+            "runtime": {"assignment": "slideshow"},
+        }
+    ]
+
+    monkeypatch.setattr(sdk_device_access, "list_endpoint_devices", lambda kind="redevice", sync_registry=True: devices)
+
+    resolved = sdk_device_access.resolve_endpoint_device(query="Планшет", assignment="slideshow")
+
+    assert resolved["ok"] is True
+    assert resolved["device_ref"] == "redevice:endpoint-1"
+    assert resolved["code"] == "ABCD1234"
+
+
 def test_command_profile_for_observed_only_member_disables_policy_commands(monkeypatch) -> None:
     device = {
         "ref": "member:member-2",

@@ -56,6 +56,8 @@ def _fallback_redevice_devices() -> list[dict[str, Any]]:
                     "version_status": compact.get("version_status") or "unknown",
                     "active_app": compact.get("active_app"),
                     "active_surface": compact.get("active_surface"),
+                    "assignment": compact.get("assignment"),
+                    "assignment_updated_at": compact.get("assignment_updated_at"),
                 },
                 "diagnostics": {
                     "policy_source": "root_snapshot",

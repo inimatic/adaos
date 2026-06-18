@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from adaos.services import access_links as _access_links
 from adaos.services import device_access as _service
 
 
@@ -11,6 +12,60 @@ def _text(value: Any) -> str:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _fold(value: Any) -> str:
+    return " ".join(_text(value).split()).casefold()
+
+
+def _device_names(device: Mapping[str, Any]) -> list[str]:
+    policy = _mapping(device.get("policy"))
+    identity = _mapping(device.get("identity"))
+    runtime = _mapping(device.get("runtime"))
+    names = [
+        device.get("ref"),
+        policy.get("effective_name"),
+        policy.get("display_name"),
+        identity.get("endpoint_id"),
+        identity.get("pair_code"),
+        runtime.get("assignment"),
+    ]
+    names.extend(_list(policy.get("aliases")))
+    for label in _list(policy.get("labels")):
+        if isinstance(label, Mapping):
+            names.append(label.get("text") or label.get("label") or label.get("value"))
+        else:
+            names.append(label)
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in names:
+        token = _text(item)
+        folded = _fold(token)
+        if not token or folded in seen:
+            continue
+        seen.add(folded)
+        out.append(token)
+    return out
+
+
+def _match_score(query: str, device: Mapping[str, Any]) -> int:
+    folded_query = _fold(query)
+    if not folded_query:
+        return 0
+    best = 0
+    for name in _device_names(device):
+        folded_name = _fold(name)
+        if not folded_name:
+            continue
+        if folded_query == folded_name:
+            best = max(best, 100)
+        elif folded_query in folded_name or folded_name in folded_query:
+            best = max(best, 80 + min(len(folded_query), len(folded_name)))
+    return best
 
 
 def _normalize_redevice_ref(device_ref: str | None = None, code: str | None = None) -> str:
@@ -56,6 +111,98 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
             pair_code = _text(compact.get("code")) or _text(raw.get("code")) or target
             return dict(raw), pair_code
     return None, target
+
+
+def resolve_endpoint_device(
+    device_ref: str | None = None,
+    *,
+    code: str | None = None,
+    query: str | None = None,
+    assignment: str | None = None,
+    kind: str = "redevice",
+    require_online: bool = False,
+) -> dict[str, Any]:
+    normalized_kind = _text(kind).lower() or "redevice"
+    if normalized_kind != "redevice":
+        return {"ok": False, "error": "unsupported_endpoint_kind", "kind": normalized_kind}
+    direct_ref = _text(device_ref)
+    direct_code = _text(code)
+    query_token = _text(query)
+    assignment_token = _text(assignment)
+    devices = list_endpoint_devices("redevice")
+    candidates: list[dict[str, Any]] = []
+    for item in devices:
+        device = dict(item)
+        identity = _mapping(device.get("identity"))
+        runtime = _mapping(device.get("runtime"))
+        policy = _mapping(device.get("policy"))
+        ref = _text(device.get("ref"))
+        endpoint_id = _text(identity.get("endpoint_id") or identity.get("node_id") or identity.get("link_id"))
+        pair_code = _text(identity.get("pair_code") or policy.get("pair_code") or device.get("code"))
+        if direct_ref and direct_ref not in {ref, endpoint_id, pair_code, f"redevice:{endpoint_id}"}:
+            continue
+        if direct_code and direct_code not in {pair_code, endpoint_id}:
+            continue
+        if assignment_token and _text(runtime.get("assignment")).casefold() != assignment_token.casefold():
+            continue
+        if require_online and not bool(_mapping(device.get("observation")).get("online")):
+            continue
+        candidates.append(device)
+    if query_token and not direct_ref and not direct_code:
+        score_source = candidates if assignment_token or require_online else (candidates or devices)
+        scored = [(item, _match_score(query_token, item)) for item in score_source]
+        scored = [(item, score) for item, score in scored if score > 0]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        candidates = [item for item, _score in scored]
+    if not candidates:
+        return {
+            "ok": False,
+            "error": "endpoint_not_found",
+            "device_ref": direct_ref,
+            "code": direct_code,
+            "query": query_token,
+            "assignment": assignment_token,
+        }
+    device = candidates[0]
+    identity = _mapping(device.get("identity"))
+    endpoint_id = _text(identity.get("endpoint_id") or identity.get("node_id") or identity.get("link_id"))
+    pair_code = _text(identity.get("pair_code") or device.get("code")) or endpoint_id
+    return {
+        "ok": True,
+        "device": device,
+        "device_ref": _text(device.get("ref")) or f"redevice:{endpoint_id}",
+        "endpoint_id": endpoint_id,
+        "code": pair_code,
+        "matched_names": _device_names(device),
+    }
+
+
+def assign_endpoint(
+    device_ref: str | None = None,
+    assignment: str | None = None,
+    *,
+    code: str | None = None,
+) -> dict[str, Any]:
+    resolved = resolve_endpoint_device(device_ref, code=code)
+    if not resolved.get("ok"):
+        return resolved
+    endpoint_id = _text(resolved.get("endpoint_id"))
+    if not endpoint_id:
+        return {"ok": False, "error": "endpoint_id_missing", "device_ref": resolved.get("device_ref")}
+    try:
+        entry = _access_links.set_redevice_assignment(endpoint_id, _text(assignment) or None)
+    except Exception as exc:
+        return {"ok": False, "error": "endpoint_assignment_failed", "detail": str(exc), "endpoint_id": endpoint_id}
+    if entry is None:
+        return {"ok": False, "error": "endpoint_not_found", "endpoint_id": endpoint_id}
+    return {
+        "ok": True,
+        "device_ref": f"redevice:{endpoint_id}",
+        "endpoint_id": endpoint_id,
+        "code": resolved.get("code"),
+        "assignment": _text(assignment) or None,
+        "entry": entry,
+    }
 
 
 def get_command_profile(device_ref: str) -> dict | None:
@@ -149,6 +296,21 @@ def list_endpoint_devices(kind: str | None = None, *, sync_registry: bool = True
         from adaos.sdk.data import devices as _devices
 
         return _devices.list_devices(kind=normalized)
+    if sync_registry:
+        try:
+            from adaos.sdk.redevice import list_endpoints
+
+            list_endpoints(sync_registry=True)
+        except Exception:
+            pass
+    try:
+        from adaos.sdk.data import devices as _devices
+
+        inventory_devices = _devices.list_devices(kind="redevice")
+        if inventory_devices:
+            return inventory_devices
+    except Exception:
+        pass
     try:
         from adaos.sdk.redevice import compact_endpoint, list_endpoints
 

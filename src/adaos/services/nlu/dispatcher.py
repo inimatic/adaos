@@ -327,6 +327,8 @@ def _activation_event_type(step_type: str) -> str | None:
         return "ui.focus_widget"
     if step_type == "ui.affordance.activate":
         return "ui.affordance.activate"
+    if step_type in {"callSkill", "callHost"}:
+        return "__nlu_call__"
     return None
 
 
@@ -394,8 +396,19 @@ def _on_voice_capability_activate(evt: Any) -> None:
                 "activation_type": step_type,
             },
         }
+        if payload.get("text") not in (None, ""):
+            step_payload.setdefault("text", payload.get("text"))
+        if slots:
+            step_payload.setdefault("slots", dict(slots))
         try:
-            bus_emit(ctx.bus, event_type, step_payload, source="nlu.dispatcher.voice_capability")
+            if event_type == "__nlu_call__":
+                target = str(step.get("target") or params.get("target") or "").strip()
+                if not target:
+                    failures.append({"index": index, "type": step_type, "reason": "missing_target"})
+                    continue
+                bus_emit(ctx.bus, target, step_payload, source="nlu.dispatcher.voice_capability")
+            else:
+                bus_emit(ctx.bus, event_type, step_payload, source="nlu.dispatcher.voice_capability")
             emitted += 1
         except Exception:
             failures.append({"index": index, "type": step_type, "reason": "bus_emit_failed"})

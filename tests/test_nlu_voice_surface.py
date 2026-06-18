@@ -171,3 +171,70 @@ def test_voice_capability_dispatcher_fails_empty_activation_plan_without_ack():
     failure = next(payload for kind, payload in captured if kind == "nlu.action.dispatch_failed")
     assert failure["reason"] == "activation_plan_empty"
     assert failure["action_payload"]["activation_steps"] == 0
+
+
+def test_voice_surface_callskill_activation_preserves_target_and_dispatches():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher
+    from adaos.services.nlu.voice_surface import find_voice_surface_match
+
+    context = {
+        "root_mcp": {
+            "nlu_authoring_context": {
+                "action_surface": {
+                    "voice_capabilities": [
+                        {
+                            "id": "slideshow.redevice.next",
+                            "title": "Next ReDevice slideshow photo",
+                            "labels": {"ru": ["следующая"]},
+                            "side_effect_class": "device_control",
+                            "activation": [
+                                {
+                                    "type": "callSkill",
+                                    "target": "slideshow_skill.voice_control_redevice_slideshow",
+                                    "params": {"action": "next"},
+                                }
+                            ],
+                        }
+                    ],
+                    "voice_affordances": [],
+                }
+            }
+        }
+    }
+
+    match = find_voice_surface_match(context, "Планшет следующая")
+
+    assert match is not None
+    assert match["activation_plan"] == [
+        {
+            "type": "callSkill",
+            "target": "slideshow_skill.voice_control_redevice_slideshow",
+            "params": {"action": "next"},
+        }
+    ]
+
+    ctx = get_ctx()
+    captured: list[dict] = []
+
+    def _capture(ev):
+        payload = getattr(ev, "payload", None) or {}
+        if isinstance(payload, dict):
+            captured.append(dict(payload))
+
+    ctx.bus.subscribe("slideshow_skill.voice_control_redevice_slideshow", _capture)
+
+    dispatcher._on_voice_capability_activate(
+        {
+            "webspace_id": "desktop",
+            "capability_id": "slideshow.redevice.next",
+            "activation_plan": json.dumps(match["activation_plan"]),
+            "text": "Планшет следующая",
+            "_meta": {"webspace_id": "desktop", "route_id": "voice_chat"},
+        }
+    )
+
+    assert captured
+    assert captured[0]["action"] == "next"
+    assert captured[0]["text"] == "Планшет следующая"
+    assert captured[0]["_meta"]["voice_capability_activation"] is True

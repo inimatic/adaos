@@ -411,6 +411,8 @@ class DeviceInventoryService:
                         "version_status": _text_or_none(version_info.get("version_status")),
                         "active_app": _mapping(entry.get("active_app")) or None,
                         "active_surface": _mapping(entry.get("active_surface")) or None,
+                        "assignment": _text_or_none(entry.get("assignment")),
+                        "assignment_updated_at": _float_or_none(entry.get("assignment_updated_at")),
                     },
                     "diagnostics": {
                         "policy_source": "access_links",

@@ -14,6 +14,8 @@ _ALLOWED_ACTIVATION_TYPES = {
     "ui.state.set",
     "ui.focus_widget",
     "ui.affordance.activate",
+    "callSkill",
+    "callHost",
 }
 
 
@@ -129,7 +131,7 @@ def _score_row(text_norm: str, row: Mapping[str, Any]) -> tuple[int, str]:
 
 def _step_key(step: Mapping[str, Any]) -> str:
     return json.dumps(
-        {"type": step.get("type"), "params": coerce_dict(step.get("params"))},
+        {"type": step.get("type"), "target": step.get("target"), "params": coerce_dict(step.get("params"))},
         ensure_ascii=True,
         sort_keys=True,
         separators=(",", ":"),
@@ -147,6 +149,9 @@ def expand_activation_plan(row: Mapping[str, Any], affordances: list[Mapping[str
         if not step_type:
             return
         normalized = {"type": step_type, "params": params}
+        target = str(step.get("target") or "").strip()
+        if target:
+            normalized["target"] = target
         key = _step_key(normalized)
         if key in seen:
             return
@@ -254,6 +259,14 @@ def validate_activation_plan(plan: Any) -> list[dict[str, Any]]:
                     "name": f"activation_step[{index}].widget_id",
                     "ok": bool(str(params.get("widget_id") or "").strip()),
                     "status": "present" if str(params.get("widget_id") or "").strip() else "missing",
+                }
+            )
+        if step_type in {"callSkill", "callHost"}:
+            checks.append(
+                {
+                    "name": f"activation_step[{index}].target",
+                    "ok": bool(str(step.get("target") or params.get("target") or "").strip()),
+                    "status": "present" if str(step.get("target") or params.get("target") or "").strip() else "missing",
                 }
             )
     return checks

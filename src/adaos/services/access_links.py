@@ -206,6 +206,8 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
                 "service_state": _mapping_or_none(data.get("service_state")),
                 "active_app": _mapping_or_none(data.get("active_app")),
                 "active_surface": _mapping_or_none(data.get("active_surface")),
+                "assignment": str(data.get("assignment") or "").strip() or None,
+                "assignment_updated_at": float(data.get("assignment_updated_at") or 0.0) or None,
             }
         )
     return entry
@@ -540,6 +542,7 @@ def touch_redevice_link(
     service_state: Mapping[str, Any] | None = None,
     active_app: Mapping[str, Any] | None = None,
     active_surface: Mapping[str, Any] | None = None,
+    assignment: str | None = None,
 ) -> dict[str, Any] | None:
     token = str(endpoint_id or "").strip()
     if not token:
@@ -580,11 +583,32 @@ def touch_redevice_link(
         entry["active_app"] = dict(active_app)
     if active_surface is not None:
         entry["active_surface"] = dict(active_surface)
+    if assignment is not None:
+        entry["assignment"] = str(assignment or "").strip() or None
+        entry["assignment_updated_at"] = _now_ts()
     entry["last_seen_at"] = _now_ts()
     entry = _updated(entry)
     saved = _put_entry(registry, "redevice", entry)
     _save_registry(registry)
     _emit_entity_registry_changed_if_needed("redevice", previous, saved, reason="redevice_link.changed")
+    return saved
+
+
+def set_redevice_assignment(endpoint_id: str, assignment: str | None) -> dict[str, Any] | None:
+    token = str(endpoint_id or "").strip()
+    if not token:
+        return None
+    registry = _load_registry()
+    entry = _get_entry(registry, "redevice", token)
+    if entry is None:
+        return None
+    previous = dict(entry)
+    entry["assignment"] = str(assignment or "").strip() or None
+    entry["assignment_updated_at"] = _now_ts()
+    entry = _updated(entry)
+    saved = _put_entry(registry, "redevice", entry)
+    _save_registry(registry)
+    _emit_entity_registry_changed_if_needed("redevice", previous, saved, reason="redevice_assignment.changed")
     return saved
 
 

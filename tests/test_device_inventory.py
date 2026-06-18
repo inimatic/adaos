@@ -267,6 +267,8 @@ def test_access_link_normalizer_preserves_redevice_version_payloads() -> None:
             "diagnostic_report": {"agent_version": "0.1.1"},
             "service_state": {"agent_version": "0.1.1"},
             "active_app": {"app_id": "demo"},
+            "assignment": "slideshow",
+            "assignment_updated_at": 123.0,
         },
     )
 
@@ -275,6 +277,8 @@ def test_access_link_normalizer_preserves_redevice_version_payloads() -> None:
     assert entry["diagnostic_report"] == {"agent_version": "0.1.1"}
     assert entry["service_state"] == {"agent_version": "0.1.1"}
     assert entry["active_app"] == {"app_id": "demo"}
+    assert entry["assignment"] == "slideshow"
+    assert entry["assignment_updated_at"] == 123.0
 
 
 def test_device_inventory_surfaces_redevice_agent_versions(monkeypatch) -> None:
@@ -309,6 +313,29 @@ def test_device_inventory_surfaces_redevice_agent_versions(monkeypatch) -> None:
     assert item["runtime"]["served_version"] == "0.1.2"
     assert item["runtime"]["version_status"] == "drift"
     assert item["diagnostics"]["version_info"]["served_version_code"] == "3"
+
+
+def test_device_inventory_surfaces_redevice_assignment(monkeypatch) -> None:
+    _patch_sources(
+        monkeypatch,
+        redevice_entries=[
+            {
+                "id": "endpoint-1",
+                "kind": "redevice",
+                "display_name": "Kitchen tablet",
+                "online": True,
+                "assignment": "slideshow",
+                "assignment_updated_at": 900.0,
+            }
+        ],
+        now=1000.0,
+    )
+
+    item = device_inventory.get_device("redevice:endpoint-1")
+
+    assert item is not None
+    assert item["runtime"]["assignment"] == "slideshow"
+    assert item["runtime"]["assignment_updated_at"] == 900.0
 
 
 def test_sdk_devices_inspect_device_separates_diagnostics(monkeypatch) -> None:
