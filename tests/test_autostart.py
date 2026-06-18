@@ -83,6 +83,27 @@ def test_shell_wrapper_sources_dotenv_before_managed_exports(tmp_path: Path) -> 
     assert text.index('. "${ADAOS_SHARED_DOTENV_PATH}"') < text.rindex("export ADAOS_SUPERVISOR_PORT='8776'")
 
 
+def test_shell_wrapper_repairs_legacy_bounded_io_before_exec(tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "adaos-autostart.sh"
+
+    autostart._write_wrapper_sh(
+        wrapper,
+        argv=["/venv/bin/python", "-m", "adaos.apps.supervisor"],
+        env={
+            "ADAOS_BASE_DIR": "/var/lib/adaos",
+            "ADAOS_ROOT_REPO_ROOT": "/srv/adaos",
+        },
+    )
+
+    text = wrapper.read_text(encoding="utf-8")
+
+    assert 'src/adaos/services/bounded_io.py' in text
+    assert 'from adaos.services.bounded_io import bounded_jsonl_tail' in text
+    assert text.index('src/adaos/services/bounded_io.py') < text.index("exec '/venv/bin/python'")
+
+
 def test_windows_disable_stops_live_autostart_wrapper_tree(monkeypatch, tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 
