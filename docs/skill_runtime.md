@@ -81,8 +81,22 @@ Important architectural note:
 
 - activation is a slot-pointer switch, not a generic live-memory migration
 - in-process skills typically pick up new code on the next invocation from the active slot
+- the first invocation after a slot switch must invalidate skill-scoped Python
+  modules for that skill before importing from the new active slot; requiring an
+  API restart to observe installed skill code is a runtime defect
+- API install/update/activate paths must refresh live handler subscriptions for
+  the installed skill so event handlers and tool entry points converge on the
+  same active slot
 - service skills are explicitly restarted by the runtime lifecycle
 - durable migration authority belongs to persisted bucket data under `v<major>.<minor>/data`, while derived caches/projections should be rebuilt after activation
+
+Operational signal:
+
+- If a tool call or subscription still executes old behavior after
+  `adaos skill install` or `adaos skill activate`, do not hide the symptom with
+  a manual API restart. Record the active slot, handler reload result,
+  `sys.modules` package name if available, and the skill source path, then fix
+  the reload boundary.
 
 For the target kernel-facing migration architecture, including rehydrate and rollback semantics for stateful skills, see [AdaOS Supervisor](architecture/adaos-supervisor.md#skill-runtime-migration-lifecycle).
 

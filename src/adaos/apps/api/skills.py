@@ -473,7 +473,7 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
 
 
 @router.post("/install")
-async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
+async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager), ctx: AgentContext = Depends(get_ctx)):
     webspace_id = body.webspace_id or default_webspace_id()
     if body.async_operation:
         operation = submit_install_operation(
@@ -488,6 +488,8 @@ async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager)):
             "operation": operation,
         }
     payload = await asyncio.to_thread(_install_skill_sync, body, mgr, webspace_id)
+    skill_name = str(((payload.get("skill") or {}).get("id")) or body.name)
+    payload["handler_reload"] = await _reload_live_skill_handlers(ctx, skill_name)
     try:
         await rebuild_webspace_projection(
             webspace_id=webspace_id,

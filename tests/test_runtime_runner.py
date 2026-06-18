@@ -95,6 +95,45 @@ def test_execute_tool_reloads_skill_modules_when_source_changes(tmp_path: Path) 
     assert second["marker"] == "two"
 
 
+def test_execute_tool_does_not_reuse_stale_skill_module_across_slot_paths(tmp_path: Path) -> None:
+    slot_a = tmp_path / "slots" / "A" / "src" / "skills"
+    slot_b = tmp_path / "slots" / "B" / "src" / "skills"
+    first_slot = _write_skill(slot_a, "redevice_settings", "old-slot")
+    second_slot = _write_skill(slot_b, "redevice_settings", "new-slot")
+
+    tracked_prefixes = ("skills.redevice_settings", "redevice_settings", "handlers")
+    before_modules = {
+        key: sys.modules[key]
+        for key in list(sys.modules.keys())
+        if key == "skills" or key.startswith(tracked_prefixes)
+    }
+    before_snapshots = dict(runtime_runner_module._SKILL_SOURCE_SNAPSHOTS)
+    try:
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.clear()
+        first = runtime_runner_module.execute_tool(
+            first_slot,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+        )
+        second = runtime_runner_module.execute_tool(
+            second_slot,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+        )
+    finally:
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.clear()
+        runtime_runner_module._SKILL_SOURCE_SNAPSHOTS.update(before_snapshots)
+        for key in list(sys.modules.keys()):
+            if key == "skills" or key.startswith(tracked_prefixes):
+                sys.modules.pop(key, None)
+        sys.modules.update(before_modules)
+
+    assert first["marker"] == "old-slot"
+    assert second["marker"] == "new-slot"
+
+
 def test_execute_tool_supports_bare_tool_decorator(tmp_path: Path) -> None:
     skill_dir = _write_bare_tool_skill(tmp_path, "gamma_skill")
 

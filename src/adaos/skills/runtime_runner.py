@@ -170,11 +170,17 @@ def _reload_skill_modules_if_sources_changed(skill_path: Path) -> None:
     current = _source_snapshot_mtime_ns(skill_path)
     previous = _SKILL_SOURCE_SNAPSHOTS.get(key)
     if previous is None:
+        # A/B activation changes the skill source path. The first invocation
+        # from a freshly activated slot must not reuse a module imported from
+        # the previous slot under the same ``skills.<name>`` package.
+        _purge_skill_source_modules(skill_path)
+        importlib.invalidate_caches()
         _SKILL_SOURCE_SNAPSHOTS[key] = current
         return
     if previous == current:
         return
     _purge_skill_source_modules(skill_path)
+    importlib.invalidate_caches()
     _SKILL_SOURCE_SNAPSHOTS[key] = current
 
 

@@ -165,10 +165,11 @@ def _make_client(skill_mgr: _FakeSkillManager, scenario_mgr: _FakeScenarioManage
     return TestClient(app)
 
 
-def test_skill_api_exposes_management_routes() -> None:
+def test_skill_api_exposes_management_routes(monkeypatch) -> None:
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()
     rebuilds: list[tuple[str, str, str, str | None]] = []
+    reloads: list[str] = []
     skills.submit_install_operation = lambda **kwargs: {
         "operation_id": "op-skill-demo",
         "target_id": kwargs["target_id"],
@@ -177,7 +178,11 @@ def test_skill_api_exposes_management_routes() -> None:
     }
     async def _rebuild(webspace_id: str, *, action: str = "rebuild", scenario_id: str | None = None, source_of_truth: str = "workspace"):
         rebuilds.append((webspace_id, action, source_of_truth, scenario_id))
+    async def _reload(_ctx, skill_name: str):
+        reloads.append(skill_name)
+        return {"ok": True, "skill": skill_name, "handlers": ["handlers/main.py"]}
     skills.rebuild_webspace_projection = _rebuild
+    monkeypatch.setattr(skills, "_reload_live_skill_handlers", _reload)
     client = _make_client(skill_mgr, scenario_mgr)
 
     resp = client.get("/api/skills/list")
@@ -192,6 +197,8 @@ def test_skill_api_exposes_management_routes() -> None:
     assert resp.status_code == 200
     assert resp.json()["skill"]["id"] == "demo"
     assert resp.json()["runtime"]["slot"] == "B"
+    assert resp.json()["handler_reload"]["ok"] is True
+    assert reloads == ["demo"]
     assert ("desktop", "skill_install_sync", "skill_runtime", None) in rebuilds
 
     resp = client.post("/api/skills/install", json={"name": "demo", "async_operation": True, "webspace_id": "default"})

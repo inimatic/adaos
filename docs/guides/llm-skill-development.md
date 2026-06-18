@@ -105,6 +105,14 @@ background work, or heavy resources:
 - Make reloads idempotent. Runtime-owned bus subscriptions are deduplicated by
   the core, but skill-owned threads, timers, executors, external callbacks, and
   resource handles still need an owner token, stop signal, and cleanup hook.
+- Verify slot-switch behavior without a process restart. After install or
+  activate, the next tool call and the next subscription callback must use code
+  from the active slot. If old behavior remains in memory until API restart,
+  treat it as a runtime reload defect and capture it in the repair evidence.
+- Expose a cheap version or fingerprint tool for service/debug skills when the
+  deployment path is under active development. It should report skill version,
+  active slot when provided by runtime metadata, and the loaded handler source
+  path without returning large state.
 - Bound every cache. Prefer `deque(maxlen=...)`, LRU/TTL caches, and explicit
   byte or item budgets over plain module-level `list` and `dict` accumulators.
   Per-webspace, per-receiver, and per-device state needs an eviction policy.
@@ -822,6 +830,8 @@ Before publishing:
   model loads, bus mutations, or persistent writes
 - reload/reactivate the same skill repeatedly and verify subscription counts,
   worker counts, cache sizes, and receiver state remain bounded
+- install/activate a changed slot and verify the next tool call uses the new
+  handler code without restarting the API process
 - run a short RSS soak for the hottest event and stream-subscribe paths
 
 ## Anti-patterns
