@@ -1227,6 +1227,11 @@ class CoreUpdateRollbackRequest(BaseModel):
     signal_delay_sec: float = Field(default=_DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC, ge=0.0, le=5.0)
 
 
+class CoreUpdateReconcileRequest(BaseModel):
+    reason: str = Field(default="core.reconcile", min_length=1, max_length=128)
+    countdown_sec: float = Field(default=60.0, ge=0.0, le=3600.0)
+
+
 class RuntimePromoteActiveRequest(BaseModel):
     reason: str = Field(default="supervisor.fast_cutover", min_length=1, max_length=128)
     reconnect_hub_root: bool = Field(default=True)
@@ -1631,6 +1636,65 @@ async def admin_update_rollback(body: CoreUpdateRollbackRequest):
     )
     app.state.core_update_task = task
     return {"ok": True, "accepted": True, "status": read_core_update_status()}
+
+
+@app.post("/api/admin/update/reconcile", dependencies=[Depends(require_token)])
+async def admin_update_reconcile(body: CoreUpdateReconcileRequest):
+    _ensure_runtime_admin_mutation_allowed("update.reconcile")
+    disabled_reason = core_update_reactions_disabled_reason()
+    if disabled_reason:
+        return {
+            "ok": True,
+            "accepted": False,
+            "skipped": True,
+            "reason": disabled_reason,
+            "status": read_core_update_status(),
+        }
+    existing = getattr(app.state, "core_update_task", None)
+    if existing is not None and not existing.done():
+        return {
+            "ok": True,
+            "accepted": False,
+            "skipped": True,
+            "reason": "update_task_in_progress",
+            "status": read_core_update_status(),
+        }
+    if getattr(app.state, "shutdown_requested", False):
+        return {
+            "ok": True,
+            "accepted": False,
+            "skipped": True,
+            "reason": "runtime_shutdown_requested",
+            "status": read_core_update_status(),
+        }
+    try:
+        from adaos.services.root.core_update_sync import reconcile_hub_core_update
+
+        result = await asyncio.to_thread(
+            reconcile_hub_core_update,
+            get_ctx().config,
+            countdown_sec=float(body.countdown_sec),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "error": "core_update_reconcile_failed",
+                "error_type": type(exc).__name__,
+                "message": str(exc)[:500],
+                "reason": body.reason,
+                "status": read_core_update_status(),
+            },
+        )
+    payload = result if isinstance(result, dict) else {"ok": bool(result)}
+    return {
+        "ok": True,
+        "accepted": bool(payload.get("needs_update") or payload.get("dispatch")),
+        "reason": body.reason,
+        "result": payload,
+        "status": read_core_update_status(),
+    }
 
 
 @app.post("/api/admin/runtime/promote-active", dependencies=[Depends(require_token)])

@@ -28,6 +28,7 @@ from adaos.services.bootstrap import (
     is_ready,
     load_config,
     request_hub_root_reconnect,
+    request_member_hub_refresh,
     request_member_hub_reconnect,
     request_hub_root_route_reset,
     switch_role,
@@ -2087,6 +2088,10 @@ class MemberHubReconnectRequest(BaseModel):
     force: bool = False
 
 
+class MemberHubRefreshRequest(BaseModel):
+    reason: str = Field(default="member_hub_refresh", min_length=1, max_length=128)
+
+
 class HubRootRouteResetRequest(BaseModel):
     reason: str | None = None
     notify_browser: bool = True
@@ -2884,6 +2889,11 @@ async def hub_root_reconnect(payload: HubRootReconnectRequest) -> dict[str, Any]
 @router.post("/member-hub/reconnect", dependencies=[Depends(require_token)])
 async def member_hub_reconnect(payload: MemberHubReconnectRequest) -> dict[str, Any]:
     return await request_member_hub_reconnect(force=bool(payload.force))
+
+
+@router.post("/member-hub/refresh", dependencies=[Depends(require_token)])
+async def member_hub_refresh(payload: MemberHubRefreshRequest) -> dict[str, Any]:
+    return await request_member_hub_refresh(reason=str(payload.reason or "member_hub_refresh"))
 
 
 @router.post("/hub-root/route-reset", dependencies=[Depends(require_token)])

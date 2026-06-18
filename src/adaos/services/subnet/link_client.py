@@ -665,6 +665,24 @@ class MemberLinkClient:
         except Exception:
             return
 
+    def request_refresh(self, *, reason: str = "member_link_refresh") -> dict[str, Any]:
+        snapshot = self.snapshot()
+        if not self.is_connected():
+            return {
+                "ok": True,
+                "accepted": False,
+                "reason": "member_hub_not_connected",
+                "link": snapshot,
+            }
+        self._queue_node_status(include_capacity=True)
+        self._queue_node_catalog_snapshot()
+        return {
+            "ok": True,
+            "accepted": True,
+            "reason": str(reason or "member_link_refresh"),
+            "link": self.snapshot(),
+        }
+
     @staticmethod
     def _yjs_write_needs_full_node_snapshot(meta: dict[str, Any] | None) -> bool:
         metadata = dict(meta or {})

@@ -1701,6 +1701,35 @@ class BootstrapService:
             },
         }
 
+    async def request_member_hub_refresh(self, *, reason: str = "member_hub_refresh") -> dict[str, Any]:
+        conf = load_config(ctx=self.ctx)
+        transition = self._member_hub_transition_snapshot()
+        if str(getattr(conf, "role", "") or "").strip().lower() != "member":
+            return {
+                "ok": False,
+                "accepted": False,
+                "error": "role_not_member",
+                "role": str(getattr(conf, "role", "") or "").strip().lower() or None,
+                "transition": transition,
+            }
+        if transition.get("recovery_blocked"):
+            return {
+                "ok": True,
+                "accepted": False,
+                "transition": transition,
+                "reason": "transition_in_progress",
+            }
+
+        from adaos.services.subnet.link_client import get_member_link_client
+
+        result = get_member_link_client().request_refresh(
+            reason=str(reason or "member_hub_refresh"),
+        )
+        if isinstance(result, dict):
+            result.setdefault("transition", transition)
+            return result
+        return {"ok": True, "accepted": False, "transition": transition}
+
     async def request_hub_root_route_reset(
         self,
         *,
@@ -10366,6 +10395,10 @@ async def request_hub_root_reconnect(*, transport: str | None = None, url_overri
 
 async def request_member_hub_reconnect(*, force: bool = False) -> dict[str, Any]:
     return await _svc().request_member_hub_reconnect(force=bool(force))
+
+
+async def request_member_hub_refresh(*, reason: str = "member_hub_refresh") -> dict[str, Any]:
+    return await _svc().request_member_hub_refresh(reason=str(reason or "member_hub_refresh"))
 
 
 async def request_hub_root_route_reset(*, reason: str, notify_browser: bool = True) -> dict[str, Any]:

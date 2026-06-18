@@ -889,6 +889,50 @@ def _member_hub_watchdog_verify_interval_sec() -> float:
         return 1.0
 
 
+def _post_recovery_core_update_reconcile_enabled() -> bool:
+    raw = os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_CORE_UPDATE_RECONCILE")
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _post_recovery_core_update_reconcile_cooldown_sec() -> float:
+    try:
+        return max(
+            10.0,
+            float(str(os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_CORE_UPDATE_RECONCILE_COOLDOWN_SEC") or "120").strip()),
+        )
+    except Exception:
+        return 120.0
+
+
+def _post_recovery_core_update_reconcile_countdown_sec() -> float:
+    try:
+        return max(
+            0.0,
+            float(str(os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_CORE_UPDATE_RECONCILE_COUNTDOWN_SEC") or "60").strip()),
+        )
+    except Exception:
+        return 60.0
+
+
+def _post_recovery_member_hub_refresh_enabled() -> bool:
+    raw = os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_MEMBER_HUB_REFRESH")
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _post_recovery_member_hub_refresh_cooldown_sec() -> float:
+    try:
+        return max(
+            10.0,
+            float(str(os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_MEMBER_HUB_REFRESH_COOLDOWN_SEC") or "60").strip()),
+        )
+    except Exception:
+        return 60.0
+
+
 def _terminal_update_states() -> set[str]:
     return {"failed", "validated", "succeeded", "rolled_back", "expired", "cancelled", "idle"}
 
@@ -2188,11 +2232,16 @@ class SupervisorManager:
         self._hub_root_root_probe_last_result: dict[str, Any] | None = None
         self._hub_root_root_probe_last_state: str | None = None
         self._hub_root_root_probe_last_reason: str | None = None
+        self._hub_root_post_recovery_reconcile_last_at: float | None = None
+        self._hub_root_post_recovery_reconcile_last_result: dict[str, Any] | None = None
+        self._hub_root_post_recovery_reconcile_last_key: str | None = None
         self._member_hub_watchdog_last_reconnect_at: float | None = None
         self._member_hub_watchdog_last_state: str | None = None
         self._member_hub_watchdog_last_reason: str | None = None
         self._member_hub_watchdog_reconnect_total = 0
         self._member_hub_watchdog_last_result: dict[str, Any] | None = None
+        self._member_hub_post_recovery_refresh_last_at: float | None = None
+        self._member_hub_post_recovery_refresh_last_result: dict[str, Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
         self._update_task_cancel_mode: str | None = None
         self._managed_runtime_instance_id: str | None = None
@@ -3710,6 +3759,24 @@ class SupervisorManager:
             "last_result": dict(self._hub_root_root_probe_last_result or {}),
         }
 
+    def _post_recovery_core_update_reconcile_state_payload(self) -> dict[str, Any]:
+        return {
+            "enabled": _post_recovery_core_update_reconcile_enabled(),
+            "last_at": self._hub_root_post_recovery_reconcile_last_at,
+            "last_key": self._hub_root_post_recovery_reconcile_last_key,
+            "cooldown_sec": _post_recovery_core_update_reconcile_cooldown_sec(),
+            "countdown_sec": _post_recovery_core_update_reconcile_countdown_sec(),
+            "last_result": _compact_watchdog_last_result(self._hub_root_post_recovery_reconcile_last_result),
+        }
+
+    def _post_recovery_member_hub_refresh_state_payload(self) -> dict[str, Any]:
+        return {
+            "enabled": _post_recovery_member_hub_refresh_enabled(),
+            "last_at": self._member_hub_post_recovery_refresh_last_at,
+            "cooldown_sec": _post_recovery_member_hub_refresh_cooldown_sec(),
+            "last_result": _compact_watchdog_last_result(self._member_hub_post_recovery_refresh_last_result),
+        }
+
     def _probe_hub_root_from_root_once(self, *, now: float | None = None) -> dict[str, Any]:
         current_time = time.time() if now is None else float(now)
         ttl_sec = _hub_root_root_probe_ttl_sec()
@@ -4383,6 +4450,7 @@ class SupervisorManager:
             "log_path": str(log_path),
             "last_result": _compact_watchdog_last_result(self._hub_root_watchdog_last_result),
             "root_perspective_probe": self._hub_root_root_probe_state_payload(),
+            "post_recovery_core_update_reconcile": self._post_recovery_core_update_reconcile_state_payload(),
         }
         if include_events:
             payload["recent_events"] = [
@@ -4404,6 +4472,7 @@ class SupervisorManager:
             "verify_timeout_sec": _member_hub_watchdog_verify_timeout_sec(),
             "log_path": str(log_path),
             "last_result": _compact_watchdog_last_result(self._member_hub_watchdog_last_result),
+            "post_recovery_refresh": self._post_recovery_member_hub_refresh_state_payload(),
         }
         if include_events:
             payload["recent_events"] = [
@@ -4594,6 +4663,129 @@ class SupervisorManager:
         except Exception:
             _LOG.debug("failed to append member-hub watchdog event", exc_info=True)
 
+    @staticmethod
+    def _core_update_reconcile_key(payload: dict[str, Any] | None) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+        if isinstance(result.get("result"), dict):
+            result = result.get("result") or result
+        release = result.get("release") if isinstance(result.get("release"), dict) else {}
+        subnet_state = result.get("subnet_state") if isinstance(result.get("subnet_state"), dict) else {}
+        branch = str(result.get("branch") or release.get("branch") or subnet_state.get("current_branch") or "").strip()
+        head_sha = str(release.get("head_sha") or "").strip()
+        current_commit = str(subnet_state.get("current_commit") or "").strip()
+        parts = [part for part in (branch, head_sha, current_commit) if part]
+        return ":".join(parts) if parts else None
+
+    async def _maybe_reconcile_hub_core_update_after_recovery(
+        self,
+        *,
+        trigger: str,
+        verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not _post_recovery_core_update_reconcile_enabled():
+            return None
+        role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        if role != "hub":
+            return None
+        now = time.time()
+        cooldown = _post_recovery_core_update_reconcile_cooldown_sec()
+        last_at = self._hub_root_post_recovery_reconcile_last_at
+        if last_at is not None and (now - float(last_at)) < cooldown:
+            return {
+                "ok": True,
+                "accepted": False,
+                "skipped": True,
+                "reason": "cooldown",
+                "cooldown_sec": cooldown,
+                "last_at": last_at,
+            }
+        payload = {
+            "reason": str(trigger or "supervisor.hub_root.recovered")[:128],
+            "countdown_sec": _post_recovery_core_update_reconcile_countdown_sec(),
+        }
+        record: dict[str, Any]
+        try:
+            result = self._runtime_request_json(
+                path="/api/admin/update/reconcile",
+                method="POST",
+                payload=payload,
+                timeout=30.0,
+            )
+            record = {
+                "ok": True,
+                "trigger": str(trigger or ""),
+                "requested_at": now,
+                "result": result,
+                "verification": verification if isinstance(verification, dict) else None,
+            }
+        except Exception as exc:
+            record = {
+                "ok": False,
+                "trigger": str(trigger or ""),
+                "requested_at": now,
+                "error": f"{type(exc).__name__}: {exc}",
+                "verification": verification if isinstance(verification, dict) else None,
+            }
+            _LOG.warning("post-recovery core update reconcile failed: %s: %s", type(exc).__name__, exc)
+        self._hub_root_post_recovery_reconcile_last_at = now
+        self._hub_root_post_recovery_reconcile_last_result = _compact_watchdog_last_result(record)
+        self._hub_root_post_recovery_reconcile_last_key = self._core_update_reconcile_key(record)
+        return dict(self._hub_root_post_recovery_reconcile_last_result or record)
+
+    async def _maybe_refresh_member_hub_after_recovery(
+        self,
+        *,
+        trigger: str,
+        verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not _post_recovery_member_hub_refresh_enabled():
+            return None
+        role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        if role != "member":
+            return None
+        now = time.time()
+        cooldown = _post_recovery_member_hub_refresh_cooldown_sec()
+        last_at = self._member_hub_post_recovery_refresh_last_at
+        if last_at is not None and (now - float(last_at)) < cooldown:
+            return {
+                "ok": True,
+                "accepted": False,
+                "skipped": True,
+                "reason": "cooldown",
+                "cooldown_sec": cooldown,
+                "last_at": last_at,
+            }
+        payload = {"reason": str(trigger or "supervisor.member_hub.recovered")[:128]}
+        record: dict[str, Any]
+        try:
+            result = self._runtime_request_json(
+                path="/api/node/member-hub/refresh",
+                method="POST",
+                payload=payload,
+                timeout=5.0,
+            )
+            record = {
+                "ok": True,
+                "trigger": str(trigger or ""),
+                "requested_at": now,
+                "result": result,
+                "verification": verification if isinstance(verification, dict) else None,
+            }
+        except Exception as exc:
+            record = {
+                "ok": False,
+                "trigger": str(trigger or ""),
+                "requested_at": now,
+                "error": f"{type(exc).__name__}: {exc}",
+                "verification": verification if isinstance(verification, dict) else None,
+            }
+            _LOG.warning("post-recovery member-hub refresh failed: %s: %s", type(exc).__name__, exc)
+        self._member_hub_post_recovery_refresh_last_at = now
+        self._member_hub_post_recovery_refresh_last_result = _compact_watchdog_last_result(record)
+        return dict(self._member_hub_post_recovery_refresh_last_result or record)
+
     def _hub_root_watchdog_decision(
         self,
         runtime: dict[str, Any],
@@ -4737,8 +4929,15 @@ class SupervisorManager:
         runtime = self._runtime_reliability_payload(timeout=1.5)
         if not runtime:
             return
+        previous_state = str(self._hub_root_watchdog_last_state or "").strip().lower()
         decision = self._hub_root_watchdog_decision(runtime, now=time.time())
         if decision is None:
+            if self._hub_root_watchdog_last_state == "ready" and previous_state not in {"", "ready", "not_applicable", "disabled"}:
+                await self._maybe_reconcile_hub_core_update_after_recovery(
+                    trigger="supervisor.hub_root.self_recovered",
+                    verification={"ok": True, "state": "ready", "source": "watchdog_ready_edge"},
+                )
+                self._persist_runtime_state()
             return
         self._hub_root_watchdog_last_state = "reconnect_requested"
         self._hub_root_watchdog_last_reason = str(decision.get("message") or decision.get("reason") or "")
@@ -4769,12 +4968,19 @@ class SupervisorManager:
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             _LOG.warning("hub-root watchdog reconnect request failed: %s: %s", type(exc).__name__, exc)
         verification = await self._verify_hub_root_watchdog_recovery()
+        post_recovery_reconcile = None
+        if bool(verification.get("ok")):
+            post_recovery_reconcile = await self._maybe_reconcile_hub_core_update_after_recovery(
+                trigger="supervisor.hub_root.recovered",
+                verification=verification,
+            )
         self._hub_root_watchdog_last_result = _compact_watchdog_last_result({
             "requested_at": self._hub_root_watchdog_last_reconnect_at,
             "action": action,
             "decision": decision,
             "result": result,
             "verification": verification,
+            "post_recovery_core_update_reconcile": post_recovery_reconcile,
         })
         self._hub_root_watchdog_last_state = "ready" if bool(verification.get("ok")) else "recovery_failed"
         self._hub_root_watchdog_last_reason = (
@@ -4790,6 +4996,7 @@ class SupervisorManager:
                 "decision": decision,
                 "result": result,
                 "verification": verification,
+                "post_recovery_core_update_reconcile": post_recovery_reconcile,
             }
         )
         self._persist_runtime_state()
@@ -4917,8 +5124,15 @@ class SupervisorManager:
         runtime = self._runtime_reliability_payload(timeout=1.5)
         if not runtime:
             return
+        previous_state = str(self._member_hub_watchdog_last_state or "").strip().lower()
         decision = self._member_hub_watchdog_decision(runtime, now=time.time())
         if decision is None:
+            if self._member_hub_watchdog_last_state == "ready" and previous_state not in {"", "ready", "not_applicable", "disabled"}:
+                await self._maybe_refresh_member_hub_after_recovery(
+                    trigger="supervisor.member_hub.self_recovered",
+                    verification={"ok": True, "state": "ready", "source": "watchdog_ready_edge"},
+                )
+                self._persist_runtime_state()
             return
         self._member_hub_watchdog_last_state = "reconnect_requested"
         self._member_hub_watchdog_last_reason = str(decision.get("message") or decision.get("reason") or "")
@@ -4935,12 +5149,19 @@ class SupervisorManager:
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             _LOG.warning("member-hub watchdog reconnect request failed: %s: %s", type(exc).__name__, exc)
         verification = await self._verify_member_hub_watchdog_recovery()
+        post_recovery_refresh = None
+        if bool(verification.get("ok")):
+            post_recovery_refresh = await self._maybe_refresh_member_hub_after_recovery(
+                trigger="supervisor.member_hub.recovered",
+                verification=verification,
+            )
         self._member_hub_watchdog_last_result = _compact_watchdog_last_result({
             "requested_at": self._member_hub_watchdog_last_reconnect_at,
             "action": "runtime_reconnect",
             "decision": decision,
             "result": result,
             "verification": verification,
+            "post_recovery_refresh": post_recovery_refresh,
         })
         self._member_hub_watchdog_last_state = "ready" if bool(verification.get("ok")) else "recovery_failed"
         self._member_hub_watchdog_last_reason = (
@@ -4956,6 +5177,7 @@ class SupervisorManager:
                 "decision": decision,
                 "result": result,
                 "verification": verification,
+                "post_recovery_refresh": post_recovery_refresh,
             }
         )
         self._persist_runtime_state()
