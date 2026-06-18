@@ -54,6 +54,37 @@ def test_redevice_root_list_is_filtered_by_local_subnet(monkeypatch) -> None:
     assert [item["code"] for item in synced] == ["LOCAL"]
 
 
+def test_redevice_root_scoped_list_overrides_legacy_embedded_scope(monkeypatch) -> None:
+    monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
+
+    def fake_request(self: redevice.ReDeviceBridge, method: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "devices": [
+                {
+                    "code": "READMITTED",
+                    "endpoint_id": "endpoint-readmitted",
+                    "state": "consumed",
+                    "endpoint_manifest": {"hub_id": "sn_old", "endpoint_id": "endpoint-readmitted"},
+                    "endpoint_policy": {"hub_id": "sn_old", "trust_level": "limited"},
+                    "last_seen_at": 1,
+                },
+                _endpoint("UNSCOPED", None),
+            ],
+        }
+
+    synced: list[dict[str, Any]] = []
+    monkeypatch.setattr(redevice.ReDeviceBridge, "request_json", fake_request)
+    monkeypatch.setattr(redevice.ReDeviceBridge, "sync_local_registry", lambda self, endpoints: synced.extend(dict(item) for item in endpoints))
+
+    endpoints = redevice.ReDeviceBridge(root_base="https://root.example").list_endpoints(sync_registry=True)
+
+    assert [item["code"] for item in endpoints] == ["READMITTED"]
+    assert endpoints[0]["hub_id"] == "sn_local"
+    assert endpoints[0]["owner_id"] == "sn_local"
+    assert [item["code"] for item in synced] == ["READMITTED"]
+
+
 def test_redevice_sync_local_registry_skips_foreign_subnet(monkeypatch) -> None:
     monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
 

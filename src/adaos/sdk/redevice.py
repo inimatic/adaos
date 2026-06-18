@@ -111,6 +111,39 @@ def endpoint_matches_scope(
     return True
 
 
+def _apply_root_scope(
+    endpoint: Mapping[str, Any],
+    *,
+    hub_id: str | None = None,
+    owner_id: str | None = None,
+) -> dict[str, Any]:
+    """Attach authoritative root query scope to legacy endpoint snapshots.
+
+    Older ReDevice agents can keep the original admission hub in their local
+    manifest/policy after the root record has been moved or re-admitted. If the
+    root API returned the row for an explicit hub scope, that top-level scope is
+    authoritative for inventory isolation. Fully unscoped rows are still left
+    untouched and filtered out by endpoint_matches_scope.
+    """
+
+    item = dict(endpoint)
+    expected_hub = _text(hub_id)
+    expected_owner = _text(owner_id)
+    if not expected_hub and not expected_owner:
+        return item
+
+    embedded_scope = endpoint_scope(item)
+    embedded_hub = _text(embedded_scope.get("hub_id"))
+    embedded_owner = _text(embedded_scope.get("owner_id"))
+
+    if expected_hub and embedded_hub and not _text(item.get("hub_id") or item.get("subnet_id")):
+        item["hub_id"] = expected_hub
+        item["subnet_id"] = expected_hub
+    if expected_owner and (embedded_owner or embedded_hub) and not _text(item.get("owner_id")):
+        item["owner_id"] = expected_owner
+    return item
+
+
 def _iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -511,6 +544,7 @@ class ReDeviceBridge:
         res = self.request_json("GET", path)
         devices = res.get("devices") if isinstance(res, Mapping) else None
         endpoints = [dict(item) for item in devices if isinstance(item, Mapping)] if isinstance(devices, list) else []
+        endpoints = [_apply_root_scope(item, hub_id=expected_hub, owner_id=expected_owner) for item in endpoints]
         endpoints = [
             item
             for item in endpoints
