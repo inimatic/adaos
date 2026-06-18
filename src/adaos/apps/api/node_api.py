@@ -958,6 +958,7 @@ def _thin_runtime_reliability_payload(
         "updatedAt": status_plane.get("updatedAt"),
         "statusPlane": status_plane,
         **sidecar_fields,
+        "webrtcYjs": _compact_webrtc_yjs_runtime({}),
         "detailsRef": {
             "summaryFull": "/api/node/reliability/summary?mode=full",
             "runtime": "/api/node/reliability",
@@ -967,6 +968,161 @@ def _thin_runtime_reliability_payload(
             "ifNoneMatch": True,
         },
     }
+
+
+def _webrtc_yjs_env_enabled() -> tuple[bool, str | None, str]:
+    raw = os.getenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED")
+    if raw is None:
+        return True, None, "default"
+    normalized = str(raw).strip().lower()
+    return normalized not in {"0", "false", "no", "off"}, str(raw), "env"
+
+
+def _compact_webrtc_yjs_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
+    sync_runtime = _coerce_dict(runtime.get("sync_runtime"))
+    transport = _coerce_dict(sync_runtime.get("transport"))
+    enabled, env_value, source = _webrtc_yjs_env_enabled()
+    peer_total = int(transport.get("webrtc_peer_total") or 0)
+    connected_peers = int(transport.get("webrtc_connected_peers") or 0)
+    open_channels = int(transport.get("webrtc_open_yjs_channels") or 0)
+    active_yws = int(transport.get("active_yws_connections") or 0)
+    active_ws = int(transport.get("active_ws_connections") or 0)
+    if not enabled:
+        state = "disabled"
+        reason = "env_disabled"
+        blockers = ["ADAOS_WEBRTC_YJS_CHANNEL_ENABLED disables WebRTC Yjs DataChannel serving"]
+    elif open_channels > 0:
+        state = "ready"
+        reason = "open_yjs_datachannel"
+        blockers = []
+    elif connected_peers > 0 or peer_total > 0:
+        state = "warming"
+        reason = "peer_without_open_yjs_channel"
+        blockers = []
+    elif active_yws > 0 or active_ws > 0:
+        state = "standby"
+        reason = "relay_active_no_yjs_datachannel"
+        blockers = []
+    else:
+        state = "unknown"
+        reason = "no_browser_transport_evidence"
+        blockers = []
+    return {
+        "enabled": enabled,
+        "state": state,
+        "reason": reason,
+        "source": source,
+        "envVar": "ADAOS_WEBRTC_YJS_CHANNEL_ENABLED",
+        "envValue": env_value,
+        "peerTotal": peer_total,
+        "connectedPeers": connected_peers,
+        "openYjsChannels": open_channels,
+        "activeYwsConnections": active_yws,
+        "activeWsConnections": active_ws,
+        "blockers": blockers,
+    }
+
+
+def _compact_member_availability(value: Any) -> dict[str, Any]:
+    payload = _coerce_dict(value)
+    role = str(payload.get("role") or "unknown").strip() or "unknown"
+    assessment = _coerce_dict(payload.get("assessment"))
+    result = {
+        "source": "hub_member_connection_state" if payload else "unavailable",
+        "role": role,
+        "state": str(assessment.get("state") or "unknown").strip() or "unknown",
+        "reason": str(assessment.get("reason") or "").strip() or None,
+        "total": 0,
+        "online": 0,
+        "stale": 0,
+        "offline": 0,
+        "updating": 0,
+        "unknown": 0,
+        "connectedTotal": 0,
+        "knownTotal": 0,
+        "linklessTotal": 0,
+        "mediaCapableReady": 0,
+        "mediaCapableTotal": 0,
+        "directCandidatesReady": 0,
+        "directCandidatesTotal": 0,
+        "blockingMembers": [],
+    }
+    if not payload:
+        return result
+
+    if role == "hub":
+        known_members = _coerce_list(payload.get("known_members"))
+        connected_members = _coerce_list(payload.get("members"))
+        members = known_members or connected_members
+        result["connectedTotal"] = int(payload.get("connected_total") or len(connected_members) or 0)
+        result["knownTotal"] = int(payload.get("known_total") or len(members) or result["connectedTotal"])
+        result["linklessTotal"] = int(payload.get("linkless_total") or 0)
+        result["total"] = max(result["knownTotal"], result["connectedTotal"], len(members))
+        for item in members:
+            if not isinstance(item, dict):
+                result["unknown"] += 1
+                continue
+            connected = bool(item.get("connected"))
+            online = bool(item.get("online"))
+            snapshot_state = str(item.get("snapshot_state") or "").strip().lower()
+            rollout_state = str(item.get("rollout_state") or "").strip().lower()
+            label = str(item.get("label") or item.get("node_label") or item.get("node_id") or "").strip()
+            node_id = str(item.get("node_id") or "").strip()
+            media_capable = bool(item.get("media_capable"))
+            if media_capable:
+                result["mediaCapableReady"] += 1
+                result["directCandidatesReady"] += 1
+            if item.get("media_capability") is not None or media_capable:
+                result["mediaCapableTotal"] += 1
+                result["directCandidatesTotal"] += 1
+            if rollout_state in {"in_progress", "transitioning"}:
+                state = "updating"
+            elif rollout_state in {"failed"}:
+                state = "offline"
+            elif connected:
+                state = "online"
+            elif online or snapshot_state in {"stale", "pending"}:
+                state = "stale"
+            elif not node_id and not label:
+                state = "unknown"
+            else:
+                state = "offline"
+            result[state] += 1
+            if state in {"stale", "offline", "updating"} and len(result["blockingMembers"]) < 8:
+                result["blockingMembers"].append(
+                    {
+                        "nodeId": node_id or None,
+                        "label": label or node_id or "member",
+                        "state": state,
+                        "reason": rollout_state or snapshot_state or ("link_missing" if not connected else None),
+                    }
+                )
+        return result
+
+    connected = bool(payload.get("connected_to_hub")) or bool(payload.get("connected_to_subnet"))
+    state = str(payload.get("state") or "").strip().lower()
+    result["total"] = 1
+    result["connectedTotal"] = 1 if connected else 0
+    result["knownTotal"] = 1
+    if connected or state == "connected":
+        result["online"] = 1
+    elif state in {"waiting_restart", "restarting", "paused_for_update"}:
+        result["updating"] = 1
+    elif state:
+        result["offline"] = 1
+    else:
+        result["unknown"] = 1
+    if result["offline"] or result["updating"]:
+        local_node = _coerce_dict(payload.get("local_node"))
+        result["blockingMembers"].append(
+            {
+                "nodeId": str(local_node.get("node_id") or "").strip() or None,
+                "label": str(local_node.get("label") or local_node.get("node_label") or "local member").strip(),
+                "state": "updating" if result["updating"] else "offline",
+                "reason": state or result["reason"],
+            }
+        )
+    return result
 
 
 def _compact_phase0_task(value: Any) -> dict[str, Any] | None:
@@ -1132,6 +1288,7 @@ def _compact_runtime_reliability_payload(
     browser_control_route = _coerce_dict(connectivity.get("browser_control_route"))
     state_sync = _coerce_dict(runtime.get("state_sync"))
     replay = _coerce_dict(state_sync.get("replay"))
+    hub_member_connection_state = _coerce_dict(runtime.get("hub_member_connection_state"))
     yjs_pressure = _coerce_dict(runtime.get("yjs_pressure"))
     webio_stream_guard = _coerce_dict(runtime.get("webio_stream_guard"))
     webio_stream_guard_totals = _coerce_dict(webio_stream_guard.get("totals"))
@@ -1200,6 +1357,8 @@ def _compact_runtime_reliability_payload(
             "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
             "blockers": _coerce_list(state_sync.get("blockers")),
         },
+        "memberAvailability": _compact_member_availability(hub_member_connection_state),
+        "webrtcYjs": _compact_webrtc_yjs_runtime(runtime),
         "yjsPressure": {
             "webspaceId": str(yjs_pressure.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
             "owner": str(yjs_pressure.get("owner") or "").strip() or None,

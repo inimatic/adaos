@@ -2335,6 +2335,7 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     from adaos.apps.api.node_api import require_token, router
     from adaos.services.status import StatusRegistry
 
+    monkeypatch.setenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED", "0")
     monkeypatch.setattr(
         "adaos.apps.api.node_api.current_reliability_payload",
         lambda webspace_id=None: {
@@ -2417,6 +2418,60 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
                     "replay": {"mode": "snapshot_plus_diff", "cursor": "3/32"},
                     "fallback_mode": "off",
                     "blockers": [],
+                },
+                "sync_runtime": {
+                    "transport": {
+                        "active_ws_connections": 1,
+                        "active_yws_connections": 1,
+                        "webrtc_peer_total": 1,
+                        "webrtc_connected_peers": 1,
+                        "webrtc_open_yjs_channels": 0,
+                    },
+                },
+                "hub_member_connection_state": {
+                    "role": "hub",
+                    "assessment": {
+                        "state": "pressure",
+                        "reason": "some_members_without_links",
+                    },
+                    "member_total": 1,
+                    "connected_total": 1,
+                    "known_total": 2,
+                    "linkless_total": 1,
+                    "members": [
+                        {
+                            "node_id": "member-1",
+                            "label": "Member 1",
+                            "connected": True,
+                            "online": True,
+                            "snapshot_state": "ready",
+                            "rollout_state": "ready",
+                            "media_capability": {"member_browser_direct": True},
+                            "media_capable": True,
+                        }
+                    ],
+                    "known_members": [
+                        {
+                            "node_id": "member-1",
+                            "label": "Member 1",
+                            "connected": True,
+                            "online": True,
+                            "snapshot_state": "ready",
+                            "rollout_state": "ready",
+                            "media_capability": {"member_browser_direct": True},
+                            "media_capable": True,
+                        },
+                        {
+                            "node_id": "member-2",
+                            "label": "Member 2",
+                            "connected": False,
+                            "online": True,
+                            "snapshot_state": "pending",
+                            "rollout_state": "stale",
+                            "media_capability": {"member_browser_direct": False},
+                            "media_capable": False,
+                        },
+                    ],
                 },
                 "yjs_pressure": {
                     "webspace_id": "desktop",
@@ -2537,6 +2592,14 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["browserYwsHandoffReady"] is True
     assert payload["connectivity"]["requiredUpstreamLink"]["transitionState"] == "waiting_restart"
     assert payload["stateSync"]["replay"]["cursor"] == "3/32"
+    assert payload["memberAvailability"]["total"] == 2
+    assert payload["memberAvailability"]["online"] == 1
+    assert payload["memberAvailability"]["stale"] == 1
+    assert payload["memberAvailability"]["linklessTotal"] == 1
+    assert payload["memberAvailability"]["blockingMembers"][0]["label"] == "Member 2"
+    assert payload["webrtcYjs"]["enabled"] is False
+    assert payload["webrtcYjs"]["state"] == "disabled"
+    assert payload["webrtcYjs"]["envValue"] == "0"
     assert payload["yjsPressure"]["policyState"] == "warn"
     assert payload["webioStreamGuard"]["totals"]["attempted"] == 4
     assert payload["webioStreamGuard"]["top"]["receiver"] == "infrastate.realtime"

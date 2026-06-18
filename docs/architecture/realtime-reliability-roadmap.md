@@ -32,6 +32,8 @@ The project must not start with sidecar or transport adapters as if they alone s
   ready through the same node API, CLI, and browser/runtime surfaces.
 - `docs/architecture/adaos-realtime-sidecar.md` owns the narrow sidecar
   contract. This roadmap owns cross-phase sequencing and acceptance gates.
+- `docs/architecture/client-availability-status.md` owns the browser-facing
+  availability projection over these lower-level reliability contracts.
 
 ## Status Labels
 
