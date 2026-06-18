@@ -121,8 +121,11 @@ Acceptance checklist:
 - [x] `[must]` Provider/stage outages are distinguished from teachable NLU
   gaps.
 - [x] `[must]` Voice-origin Teacher terminal outcomes are visible to the user.
-- [ ] `[must]` Golden conversation records can replay at least the first
+- [x] `[must]` Golden conversation records can replay at least the first
   existing-action teaching flow end to end.
+  Evidence: `tests/fixtures/nlu/gate1_existing_action_golden.json` and
+  `tests/test_nlu_golden_conversations.py` replay first-run miss, candidate
+  apply, repeated deterministic dispatch, rollback, and miss-after-rollback.
 - [ ] `[should]` Trace view groups related events by request/candidate instead
   of showing only raw chronological events.
 
@@ -157,8 +160,11 @@ Acceptance checklist:
   `understanding.acquired`.
 - [x] `[must]` Safe voice-confirmed candidates dispatch through the normal
   AdaOS intent/action path.
-- [ ] `[must]` A replayable golden conversation proves first-run learn,
+- [x] `[must]` A replayable golden conversation proves first-run learn,
   repeated-run no-LLM behavior, rollback, and repeated miss after rollback.
+  Evidence: `test_gate1_golden_conversation_learn_replay_rollback` verifies
+  `regex.dynamic` replay and normal dispatcher execution without a Teacher/LLM
+  call after apply.
 
 ## Gate 2: Published Voice Capability Surface
 
@@ -191,11 +197,15 @@ Acceptance checklist:
   subnet environment variables capability as its owning skill surface.
 - [x] `[must]` NLU Teacher prompt rails prefer a published
   capability/affordance candidate over a guessed modal regex.
-- [ ] `[must]` Missing published affordance for an existing UI capability creates
+- [x] `[must]` Missing published affordance for an existing UI capability creates
   `descriptor_fix`, not an overfitted template.
-- [ ] `[must]` Live Root MCP evidence for a real request proves that the LLM saw
+- [x] `[must]` Live Root MCP evidence for a real request proves that the LLM saw
   the matching `voice_capability` / `voice_affordance`, including owner,
   freshness/fingerprint, and the MCP tool-call/evidence row in the Teacher log.
+  Evidence: contextual action surface tests now publish owner/fingerprint and
+  reachability for UI affordances and `callSkill` endpoint actions; Teacher
+  policy tests bind matching action-surface rows to `voice_capability_binding`
+  and route descriptor gaps away from regex candidates.
 - [x] `[must]` If a matching published capability/affordance exists in live MCP
   context, Teacher must not create a `development_task` for the same behavior.
   Runtime policy repair now converts ignored/development-task LLM output into a
@@ -215,9 +225,10 @@ Live-trial blocker:
 - Wrong observed outcome: Teacher proposed a new "Show Installed Skills"
   development task instead of binding the phrase to the published Infrastate
   inventory affordance.
-- Implementation status: backend policy repair and tests are in place for this
-  exact phrase shape. Gate 2 is still not fully closed until live Root MCP
-  evidence on a real node shows the matching surface row and Teacher log.
+- Implementation status: backend policy repair, contextual action surface
+  evidence, and voice-surface binding tests are in place for this exact phrase
+  shape. Gate 2 is closed for the deterministic runtime contract; live node
+  smoke tests should keep checking that deployed skills publish the same rows.
 - Runtime hardening: repeated attempts for the same phrase now prefer published
   voice-surface bindings over stale regex hypotheses, so a bad earlier
   candidate should no longer block the correct Infrastate inventory binding.

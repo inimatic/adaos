@@ -298,6 +298,10 @@ below remain useful for tracking existing implementation work.
   `voice_capabilities` and `voice_affordances`; the NLU read model, Root MCP
   live context, and root-cached NLU snapshot expose them. Infrastate Inventory
   and Subnet Env publish the first concrete capability/affordance descriptors.
+- [x] `[must]` Gate 2 endpoint-action slice: published `voice_capabilities`
+  can route to `callSkill` / `callHost` activation targets, and the contextual
+  action surface marks target-backed endpoint actions as reachable even when
+  they do not have a UI container.
 - [ ] `[must]` Support compound interface candidates that combine a container
   action with an affordance activation, for example open `infrastate_modal`
   and select `infrastate.installed_skills`. Apply/dispatch must still go
@@ -507,6 +511,9 @@ below remain useful for tracking existing implementation work.
   when the proposed regex preview already matches the source phrase. Duplicate
   LLM proposals that fail preview are kept as quarantined anomaly evidence and
   produce Voice/UI feedback instead of ending the workflow silently.
+- [x] `[must]` Gate 1 regression slice: the first replayable golden
+  conversation fixture proves first-run miss, candidate apply, replay without
+  LLM, normal dispatcher execution, rollback, and miss-after-rollback.
 - [ ] `[should]` Add golden positive/negative phrase suites, ambiguity
   fixtures, STT-noise fixtures, and per-skill regression reports.
 - [ ] `[should]` Add cost accounting metrics for Teacher: LLM calls, retries,

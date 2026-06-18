@@ -215,6 +215,20 @@ async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
                             {"type": "desktop.open_modal", "params": {"modal_id": "surface_modal"}},
                             {"type": "ui.affordance.activate", "params": {"affordance_id": "surface.demo.section"}},
                         ],
+                    },
+                    {
+                        "id": "surface.demo.redevice.next",
+                        "kind": "endpoint_action",
+                        "title": "Next ReDevice photo",
+                        "labels": {"en": ["next photo"], "ru": ["следующая фотография"]},
+                        "side_effect_class": "device_control",
+                        "activation": [
+                            {
+                                "type": "callSkill",
+                                "target": "slideshow_skill.voice_control_redevice_slideshow",
+                                "params": {"action": "next"},
+                            }
+                        ],
                     }
                 ],
                 "voice_affordances": [
@@ -320,10 +334,18 @@ async def test_nlu_teacher_contextual_action_surface_exposes_m2_context():
         assert any(item.get("id") == "host.desktop.modal.open" for item in surface["available_actions"])
         assert any(item.get("owner") == {"type": "skill", "id": skill_id} for item in surface["available_actions"])
         voice_capability = next(item for item in surface["voice_capabilities"] if item.get("id") == "surface.demo.query")
+        endpoint_capability = next(
+            item for item in surface["voice_capabilities"] if item.get("id") == "surface.demo.redevice.next"
+        )
         voice_affordance = next(item for item in surface["voice_affordances"] if item.get("id") == "surface.demo.section")
         assert voice_capability["owner"] == {"type": "skill", "id": skill_id}
         assert voice_capability["result_modes"] == ["open_ui", "voice_summary"]
         assert voice_capability["availability"]["status"] == "reachable"
+        assert endpoint_capability["owner"] == {"type": "skill", "id": skill_id}
+        assert endpoint_capability["side_effect_class"] == "device_control"
+        assert endpoint_capability["activation"][0]["type"] == "callSkill"
+        assert endpoint_capability["activation"][0]["target"] == "slideshow_skill.voice_control_redevice_slideshow"
+        assert endpoint_capability["availability"]["status"] == "reachable"
         assert voice_affordance["parent"] == "surface_modal"
         assert voice_affordance["availability"]["status"] == "reachable"
         assert surface["voice_surface"]["voice_affordances_count"] >= 1

@@ -1264,6 +1264,13 @@ def _voice_availability(
     parent = str(item.get("parent") or "").strip()
     modal_ids = _activation_modal_ids(activation)
     checked_ids = [value for value in [parent, *modal_ids] if value]
+    call_targets = [
+        str(step.get("target") or "").strip()
+        for step in activation
+        if str(step.get("type") or "").strip() in {"callSkill", "callHost"} and str(step.get("target") or "").strip()
+    ]
+    if call_targets and not checked_ids:
+        return {"status": "reachable", "checked_targets": call_targets}
     if not available_modal_ids:
         return {"status": "descriptor_only", "reason": "runtime_modal_inventory_unavailable", "checked_ids": checked_ids}
     if not checked_ids:

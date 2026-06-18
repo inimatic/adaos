@@ -1,0 +1,34 @@
+{
+  "schema_version": "adaos.nlu.golden_conversation.v1",
+  "gate": "nlu.gate1.existing_action",
+  "title": "Teach an existing deterministic UI action",
+  "locale": "en",
+  "utterance": "show golden infrastructure state",
+  "expected_intent": "desktop.open_modal",
+  "expected_target": "desktop.modal.open",
+  "expected_slots": {
+    "modal_id": "infra_state_modal"
+  },
+  "steps": [
+    {
+      "id": "first_run_miss",
+      "expect": "no deterministic regex match before learning"
+    },
+    {
+      "id": "apply_candidate",
+      "expect": "candidate is persisted as a local regex rule and verified by replay"
+    },
+    {
+      "id": "repeat_without_llm",
+      "expect": "same phrase matches through regex.dynamic and dispatches normally"
+    },
+    {
+      "id": "rollback",
+      "expect": "learned artifact is removed through rollback pointer"
+    },
+    {
+      "id": "miss_after_rollback",
+      "expect": "same phrase no longer matches after rollback"
+    }
+  ]
+}
