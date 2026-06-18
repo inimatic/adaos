@@ -57,7 +57,7 @@ a blocker for the next `[must]` gate unless the gate explicitly depends on it.
 | 0. Architecture freeze | Complete: channel semantics, authority, protocol, transport ownership docs. | None. | None. | None. |
 | 1. Observability | Complete for observability scope; readiness, incident, and provenance surfaces exist. | Open: keep routed/local diagnostics aligned during rollout. | None. | None. |
 | 2. Hub-root hardening | Complete for current `hub_root.*` inventory; Class A flows and route budgets are represented. | Open: broaden incident separation and policy switching evidence. | None. | None. |
-| 3. Sidecar transport boundary | Partial: code supports hub-root sidecar transport and local `/ws`/`/yws` proxy listeners, and hub role now enables sidecar by default; target-stand acceptance remains open. | Open: rollout/soak and operator evidence. | None. | Open: full Yjs session authority and media continuity. |
+| 3. Sidecar transport boundary | Partial: code supports hub-root sidecar transport and local `/ws`/`/yws` proxy listeners, and hub role now enables sidecar by default; local transport-only stand evidence exists, while full A/B/root-routed acceptance remains open. | Open: rollout/soak and operator evidence. | None. | Open: full Yjs session authority and media continuity. |
 | 3.5. Supervisor continuity | In progress: supervisor owns process/update authority and candidate runtime flow; warm-switch hardening remains. | Open: browser/root signaling polish and recovery soak. | None. | None. |
 | 4. Semantic channels | Complete for current browser/hub-member semantic ownership scope. | Open: live-session validation under churn. | None. | None. |
 | 5. Yjs as SyncChannel | Complete for current sync-channel scope. | Open: operational validation across A/B and routed browsers. | None. | Open: sidecar-owned Yjs room/session runtime. |
@@ -98,8 +98,9 @@ transport-only `/ws` and `/yws` handoff as ready.
   `/yws` handoff is ready, and the sidecar proxy accepts browser-compatible
   `/yws/{room}` paths in addition to `/yws?ws=<room>`.
 - This repository state should be described as **implemented with hub default
-  enabled, but not stand-accepted** until live reliability evidence confirms the
-  same behavior on the target stand.
+  enabled and partially stand-accepted for local transport-only handoff**.
+  Full acceptance still requires A/B/root-routed browser survival and
+  WebRTC/Yjs auto-upgrade evidence with server-side opt-outs verified.
 
 ### Stand checkpoint: 2026-06-07, `adaost1` / `91.98.89.76`
 
@@ -168,6 +169,27 @@ then the managed runtime repeatedly logged `NATS connect failed (no
 candidates)` and shut down. Treat this as an acceptance-environment blocker,
 not as completed A/B survival evidence.
 
+### Stand checkpoint: 2026-06-18, `.30` / `192.168.0.30`
+
+The `.30` stand now validates the current transport-only sidecar shape on an
+active autostart slot, but it also exposed a WebRTC/Yjs configuration
+observability gap.
+
+- Active slot was `B | 0.1.318+1.7035698`; `adaos autostart update-status`
+  reported a successful transition.
+- Sidecar owned `7422`, `7423`, and `7424`; diagnostics reported NATS
+  connected, route tunnel support ready, `/ws` and `/yws` current owner
+  `sidecar`, `handoff_ready=true`, and upstream runtime discovery through the
+  active slot port.
+- Runtime WebRTC reached connected state and opened datachannels, but logs
+  showed `yjs datachannel disabled by ADAOS_WEBRTC_YJS_CHANNEL_ENABLED`.
+- The cause was stale `/root/adaos/.env` with
+  `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0`. After changing it to `1` and restarting
+  autostart, the runtime opened `events`, `yjs`, and `media` datachannels.
+- Treat this as a cutover gate: browser `webrtc_data:yjs` acceptance is invalid
+  unless server-side Yjs datachannel enablement is visible in diagnostics and
+  browser-side direct-path cooldown has been cleared or expired.
+
 ### Done
 
 - architecture documents for channel semantics, authority, hub-root protocol, and transport ownership are in place
@@ -202,6 +224,9 @@ not as completed A/B survival evidence.
 - route and root-control incident classes still need clearer separation
 - transport strategy is now visible, but automatic policy-driven transport switching is not yet the default runtime behavior
 - sidecar can own the current `hub_root` transport boundary and transport-only `/ws`/`/yws` routed-browser ingress when enabled and accepted, but full Yjs session authority and media transport are still outside sidecar scope
+- WebRTC physical connectivity and WebRTC/Yjs sync promotion are now separate
+  acceptance facts: `rtc=connected` is insufficient when the server has disabled
+  the Yjs datachannel or browser policy is in cooldown
 - media/runtime diagnostics now also expose a planned continuity contract for live member media: member update should defer, while future hub restart behavior is expected to preserve an independent sidecar path
 - supervisor now enforces the first conservative continuity gate on top of that model: live-media-sensitive update transitions are deferred and unsafe manual runtime restart is refused until sidecar continuity becomes a real capability instead of only a declared target
 - local process/update supervision now has a separate supervisor authority in managed deployments, and default plus root-routed browser surfaces now read one shared supervisor transition/routed-base story, but warm-switch recovery soak, cleanup, and constrained-topology hardening are still in progress
@@ -249,8 +274,9 @@ evidence.
 ### Confirmed gaps
 
 - transport/resource isolation is still weaker than subject naming suggests
-- `.30` rollout/config can still run with sidecar disabled, leaving the
-  transport-only `/ws` and `/yws` handoff unaccepted on that stand
+- `.30` rollout/config can still carry stale realtime opt-outs; the latest
+  example was `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0`, which blocked browser sync
+  promotion to `webrtc_data:yjs` while sidecar route handoff itself was healthy
 - target-stand evidence for policy-driven transport switching is still incomplete
 - route/session incident coverage still needs broader target-stand evidence
 - routed topology coverage for update-state visibility while the main runtime is intentionally down remains open
@@ -379,9 +405,14 @@ Runtime now also exposes `hardening_coverage`, and for the current `hub_root.*` 
 ### Status
 
 Implemented for the current transport-only sidecar scope with hub default
-enablement in code/tests; target-stand rollout acceptance is still open.
+enablement in code/tests. Local target-stand handoff evidence exists for
+`/ws` and `/yws`; full root-routed browser and A/B slot-promotion acceptance
+is still open.
 The sidecar now exposes a protocol-facing runtime surface with explicit ownership boundary, transport readiness, control readiness, reconnect counters, quarantine/supersede history, and transport provenance.
-Sidecar lifecycle is also independently observable and restartable through the local control API and CLI, and managed deployments now place that lifecycle under `adaos-supervisor` instead of the runtime lifespan.
+Sidecar lifecycle is also independently observable and restartable through the
+local control API and CLI, and managed deployments now place that lifecycle
+under the existing autostart-managed control process instead of the runtime
+lifespan.
 This implementation is intentionally transport-only: when enabled, the sidecar
 can own the `hub_root` NATS transport lifecycle plus the current routed-browser
 `/ws` and `/yws` ingress handoff, but it does not yet own Yjs room/session
@@ -416,6 +447,10 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   `A | 0.1.235+1.fce3706`: reliability and supervisor snapshots agree on
   `role_default` enablement, route readiness, and sidecar ownership for both
   route tunnels.
+- [x] `[must]` Revalidate local route handoff on `.30`. 2026-06-18 on
+  `192.168.0.30`, active slot `B | 0.1.318+1.7035698`: sidecar owned
+  `7422`/`7423`/`7424`, `/ws` and `/yws` handoff were ready, and active-slot
+  upstream discovery was working.
 - [x] `[must]` Remove stale route-tunnel blocker text from ready diagnostics so
   `handoff_ready=true` snapshots do not still claim listeners are missing or
   runtime owns the route.
@@ -442,8 +477,14 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   route proxy, not only `/yws?ws=<room>`.
 - [x] `[must]` Keep sidecar status/control surfaces responsive while the main
   runtime event loop is stalled.
+- [ ] `[must]` Expose server-side WebRTC/Yjs datachannel enablement in
+  reliability and browser diagnostics. The `.30` auto-upgrade failure was
+  caused by `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0`, but the browser symptom was
+  only `first_sync_timeout` / `runtime=connected:yws`.
 - [ ] `[should]` Add sidecar soak coverage for root reconnect, local listener
   restart, remote candidate quarantine, and runtime event-loop lag.
+- [ ] `[should]` Add a target-stand realtime preflight that rejects stale
+  sidecar/WebRTC opt-outs before network or TURN hypotheses are investigated.
 - [ ] `[deferred]` Move Yjs room/session authority into sidecar.
 - [ ] `[deferred]` Move WebRTC signaling/media continuity into sidecar.
 
@@ -474,7 +515,8 @@ In progress.
 
 The next reliability gap after transport isolation is local process/update supervision.
 AdaOS currently loses its primary local admin/update surface exactly when the runtime is stopped for update or restart.
-This phase introduces a dedicated `adaos-supervisor` that remains available while the main runtime is down.
+This phase uses the existing autostart-managed local control process so a
+management surface remains available while the main runtime is down.
 Production runtime remains slot-only; root promotion becomes a separate post-validation step for bootstrap-managed code.
 Current MVP coverage now includes slot-first validation, explicit root-promotion states, an explicit `root restart in progress` attempt stage after root promotion, forced shutdown recovery for hung runtime restarts, one queued subsequent transition after an in-flight transition, minimum-interval scheduling for normal update requests, operator-driven defer for planned/countdown updates, a browser-shell transition badge, pushed browser-safe supervisor transition delivery over the control `/ws` channel with `/hubs/<id>/api/supervisor/public/update-status` fallback polling when that control path is unavailable, a canonical supervisor runtime object in the control-plane model so Infrascope/overview surfaces can project transition state as an operator runtime instead of only a transport outage, browser-safe and canonical operator surfaces that both carry the current transition `action` plus passive-candidate prewarm stage, formal safe supervisor actions in that canonical object for `cancel`, `defer`, and `promote_root` where the transition state allows them, routed root-facing subnet snapshots that retain transition action/scheduling/passive-candidate metadata for non-default browser topologies, a slot-bound runtime-port model with an explicit supervisor-side warm-switch admission decision (`warm_switch` vs `stop_and_switch`) based on reserved A/B ports and local memory headroom, per-runtime identity (`runtime_instance_id`, `transition_role`) threaded into supervisor/root-facing reports so parallel runtimes no longer collapse into one opaque `hub_id`, runtime self-identification/guardrails so candidate runtimes are skipped by local fallback control discovery and reject mutating local update commands until cutover, early inactive-slot preparation with deferred skill-runtime commit so heavy slot build work moves before shutdown without mutating live skill runtime selection during countdown, and real candidate-runtime fast cutover where supervisor promotes/adopts a prewarmed passive candidate and falls back to stop-and-switch if that authority handoff fails.
 That MVP now also includes a first live-media continuity gate: supervisor consults runtime reliability before restart/update, defers transitions that would violate the declared continuity contract, and keeps that reason visible through planned update state.
@@ -491,11 +533,12 @@ Separate:
 - local process/update supervision ownership
 
 The sidecar remains transport-only.
-The supervisor becomes the authority for local runtime lifecycle and update attempt state.
+The managed local control process becomes the authority for local runtime
+lifecycle and update attempt state.
 
 ### Work items
 
-- [x] `[must]` Define `adaos-supervisor` local authority boundary.
+- [x] `[must]` Define the managed local control authority boundary.
 - [x] `[must]` Persist explicit local update attempt state independent of
   runtime bind state.
 - [x] `[must]` Add restart/apply/validate deadlines and stale-attempt recovery.
@@ -1301,15 +1344,20 @@ The next coding steps should follow this order:
    idempotency where required.
 4. [x] `[must]` Separate root-control and route/session incidents in readiness
    and diagnostics.
-5. [ ] `[must]` Reconcile sidecar rollout/config and capture target-stand
-   acceptance for hub-root plus `/ws` / `/yws` transport-only handoff.
-6. [ ] `[must]` Validate browser channel survival across A/B runtime switch
+5. [x] `[must]` Reconcile sidecar rollout/config and capture target-stand
+   acceptance for local `/ws` / `/yws` transport-only handoff.
+6. [ ] `[must]` Surface WebRTC/Yjs server-side opt-out state in diagnostics
+   and preflight checks so `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0` cannot masquerade
+   as generic `first_sync_timeout` or browser cooldown.
+7. [ ] `[must]` Stabilize hub-root sidecar NATS session authority so root sees
+   one stable hub session across runtime NATS-client replacement.
+8. [ ] `[must]` Validate browser channel survival across A/B runtime switch
    with sidecar enabled and runtime fallback treated as fallback, not success.
-7. [ ] `[should]` Harden supervisor warm-switch authority handoff and recovery
+9. [ ] `[should]` Harden supervisor warm-switch authority handoff and recovery
    soak.
-8. [ ] `[should]` Validate hub-member, Yjs, and media semantics under the same
+10. [ ] `[should]` Validate hub-member, Yjs, and media semantics under the same
    reconnect/A-B/load scenarios.
-9. [ ] `[must]` After communication acceptance, harden skills and scenarios
+11. [ ] `[must]` After communication acceptance, harden skills and scenarios
    lifecycle and scenario UX.
 
 ## Non-goals for the first iteration

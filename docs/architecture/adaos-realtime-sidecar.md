@@ -12,13 +12,21 @@ Read this together with:
 - [Authority And Degraded Mode](authority-and-degraded-mode.md)
 - [Hub-Root Protocol](hub-root-protocol.md)
 - [Transport Ownership](transport-ownership.md)
-- [AdaOS Supervisor](adaos-supervisor.md)
+- [Local Supervisor / Autostart](adaos-supervisor.md)
 
-For the first rollout, `adaos-realtime` owns the remote hub<->root WebSocket and exposes a local `nats://127.0.0.1:<port>` endpoint to the hub. The existing hub NATS bridge stays in place and connects to the local sidecar instead of the remote `wss://.../nats` endpoint when sidecar mode is enabled.
+The rollout started with `adaos-realtime` owning the remote hub<->root
+WebSocket and exposing a local `nats://127.0.0.1:<port>` endpoint to the hub.
+The existing hub NATS bridge stays in place and connects to the local sidecar
+instead of the remote `wss://.../nats` endpoint when sidecar mode is enabled.
+The current implementation also has transport-only local websocket proxy
+listeners for browser `/ws` and `/yws`.
 
 This is intentionally minimal:
 
-- no route/Yjs/WebRTC rewrite yet
+- route proxying is transport-only and still forwards session semantics to the
+  runtime
+- no Yjs room/session authority move yet
+- no WebRTC signaling/media authority move yet
 - no protocol change between hub bridge and root
 - no hub business-logic move
 - only transport ownership moves out of the main process
@@ -49,9 +57,10 @@ Checklist items use the same four-level MoSCoW-style priority vocabulary as
   - current scope, lifecycle manager, and next planned boundaries
 - can be inspected and restarted independently through the local control API / CLI without restarting the hub process
 
-Supervisor / runtime boundary:
+Managed autostart / runtime boundary:
 
-- in managed topology, `adaos-supervisor` starts, restarts, and observes the sidecar
+- in managed topology, the existing autostart-managed control process starts,
+  restarts, and observes the sidecar
 - standalone runtime keeps a temporary fallback and may still start the sidecar itself when supervisor is absent
 - hub runtime connects its existing NATS client to local `nats://127.0.0.1:7422`
 - hub runtime does not install the internal WebSocket NATS transport patch while sidecar mode is enabled
@@ -60,6 +69,9 @@ Supervisor / runtime boundary:
   enabled and listeners are ready
 - browser `/ws` and `/yws` session semantics still terminate in the runtime;
   full Yjs room/session authority is not part of the current sidecar contract
+- WebRTC direct channels are still negotiated by the runtime/browser transport
+  layer; a server-side Yjs datachannel opt-out prevents browser sync promotion
+  to `webrtc_data:yjs` even when the peer and other datachannels are connected
 
 ## Why this split
 
@@ -81,7 +93,8 @@ What this split does not solve by itself:
 
 Those remain protocol and system responsibilities.
 
-In the target local architecture, those process/update responsibilities belong to `adaos-supervisor`, not to `adaos-realtime`.
+In the target local architecture, those process/update responsibilities belong
+to the managed autostart control process, not to `adaos-realtime`.
 
 ## Live Media Continuity Target
 
@@ -102,7 +115,9 @@ Current status:
 
 - this is a target contract, not a completed capability
 - reliability/runtime diagnostics now expose this as planned continuity behavior rather than silently assuming restart safety
-- `adaos-supervisor` now also consumes that continuity guard and conservatively defers unsafe update/start paths instead of pretending hub restart continuity already exists
+- the managed control plane now also consumes that continuity guard and
+  conservatively defers unsafe update/start paths instead of pretending hub
+  restart continuity already exists
 - the current sidecar owns only transport boundaries and does not yet preserve
   live WebRTC continuity during hub runtime restart
 
@@ -120,6 +135,17 @@ runtime is behind supervisor on `8777`. Reliability and supervisor status both
 report authoritative hub enablement as `role_default`, and both `/ws` and
 `/yws` route contracts report `current_owner=sidecar` with
 `handoff_ready=true`.
+
+2026-06-18 `.30` status (`192.168.0.30`): active slot
+`B | 0.1.318+1.7035698`, sidecar process owns `7422`, `7423`, and `7424`;
+diagnostics report local `/ws` and `/yws` handoff ready and upstream runtime
+discovery through the active slot port. The same stand exposed a config
+acceptance gap: stale `/root/adaos/.env` had
+`ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0`, so the server logged
+`yjs datachannel disabled ...` and the browser could not promote sync from
+`yws` to `webrtc_data:yjs` even though WebRTC reached connected state. After
+switching the flag to `1` and restarting autostart, the runtime opened
+`events`, `yjs`, and `media` datachannels.
 
 - [x] `[must]` Add `adaos realtime serve`.
 - [x] `[must]` Add local TCP NATS relay.
@@ -178,6 +204,10 @@ open.
   are active and report `current_owner=sidecar` plus `handoff_ready=true`.
   2026-06-11 `91.98.89.76`: supervisor and reliability snapshots agree for
   both `/ws` and `/yws`, and `ss` shows sidecar pid owning `7423` and `7424`.
+- [x] `[must]` Capture target-stand evidence on `.30` that route handoff stays
+  sidecar-owned on the current autostart slot. 2026-06-18 `192.168.0.30`:
+  sidecar diagnostics report `/ws` and `/yws` handoff ready with runtime
+  upstream discovery through the active slot.
 - [x] `[must]` Prove an already-open `/ws` and `/yws` session remains usable
   across runtime restart with sidecar enabled. 2026-06-11 synthetic
   browser-equivalent clients held both sidecar websocket connections open for
@@ -208,6 +238,14 @@ open.
 - [ ] `[should]` Treat normal websocket `Close(1000)` relay shutdown as an
   expected session close in diagnostics instead of emitting traceback noise;
   keep exceptional close codes visible as errors.
+- [ ] `[must]` Surface server-side WebRTC/Yjs capability and opt-out state in
+  reliability/browser diagnostics. `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0` must be
+  reported as a concrete blocker for `webrtc_data:yjs`, not hidden behind
+  `first_sync_timeout`, cooldown, or generic degraded transport text.
+- [ ] `[should]` Add a stand preflight that flags stale realtime opt-outs such
+  as `ADAOS_REALTIME_ENABLE=0`, `HUB_REALTIME_ENABLE=0`, and
+  `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0` before network, TURN, or browser
+  cooldown hypotheses are investigated.
 
 Success criteria:
 
@@ -284,6 +322,11 @@ What this means for the current roadmap:
 - Non-hub roles still stay `sidecar off` by default unless enabled explicitly.
 - Local endpoint defaults to `nats://127.0.0.1:7422`.
 - Remote candidate selection still uses existing node/root NATS configuration.
+- `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0` explicitly disables server-side
+  Yjs-over-WebRTC. It does not necessarily disable `events` or `media`
+  datachannels, so operators can see `rtc=connected` while sync remains on
+  `yws`. The default is enabled; target-stand WebRTC/Yjs acceptance must verify
+  that stale env opt-outs are absent.
 - Production and A/B slot lifecycle are entered through `adaos autostart ...`;
   `adaos api serve` is a foreground development/runtime debugging path and does
   not own production slot cutover semantics.
