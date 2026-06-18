@@ -296,13 +296,16 @@ def list_endpoint_devices(kind: str | None = None, *, sync_registry: bool = True
         from adaos.sdk.data import devices as _devices
 
         return _devices.list_devices(kind=normalized)
+    root_devices: list[dict[str, Any]] = []
     if sync_registry:
         try:
-            from adaos.sdk.redevice import list_endpoints
+            from adaos.sdk.redevice import compact_endpoint, list_endpoints
 
-            list_endpoints(sync_registry=True)
+            root_devices = [compact_endpoint(item) for item in list_endpoints(sync_registry=True)]
         except Exception:
-            pass
+            root_devices = []
+    if root_devices:
+        return root_devices
     try:
         from adaos.sdk.data import devices as _devices
 

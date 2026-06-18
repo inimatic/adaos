@@ -60,6 +60,48 @@ def test_sdk_device_access_resolves_redevice_by_alias_and_assignment(monkeypatch
     assert resolved["code"] == "ABCD1234"
 
 
+def test_sdk_device_access_prefers_live_root_redevice_snapshot(monkeypatch) -> None:
+    from adaos.sdk import redevice as sdk_redevice
+    from adaos.sdk.data import device_access as sdk_device_access
+    from adaos.sdk.data import devices as sdk_devices
+
+    monkeypatch.setattr(
+        sdk_redevice,
+        "list_endpoints",
+        lambda sync_registry=True: [
+            {
+                "code": "SNX68P2A",
+                "endpoint_id": "endpoint-1",
+                "device_label": "Kitchen tablet",
+                "state": "consumed",
+                "last_seen_at": 1_900_000_000,
+                "hub_id": "sn_92ffc943",
+                "owner_id": "sn_92ffc943",
+                "endpoint_policy": {"trust_level": "limited"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sdk_devices,
+        "list_devices",
+        lambda kind=None: [
+            {
+                "ref": "redevice:endpoint-1",
+                "kind": "redevice",
+                "identity": {"endpoint_id": "endpoint-1", "pair_code": "FMRS7WTB"},
+                "policy": {"effective_name": "Kitchen tablet"},
+                "observation": {"online": False, "connection_state": "offline", "last_seen_at": 1},
+            }
+        ],
+    )
+
+    devices = sdk_device_access.list_endpoint_devices("redevice", sync_registry=True)
+
+    assert len(devices) == 1
+    assert devices[0]["code"] == "SNX68P2A"
+    assert devices[0]["online_state"] in {"online", "stale"}
+
+
 def test_command_profile_for_observed_only_member_disables_policy_commands(monkeypatch) -> None:
     device = {
         "ref": "member:member-2",
