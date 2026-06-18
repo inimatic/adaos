@@ -3356,7 +3356,7 @@ async def node_infrastate_snapshot(webspace_id: str | None = None) -> dict[str, 
             result = mgr.run_tool(
                 "infrastate_skill",
                 "get_snapshot",
-                {"webspace_id": target_webspace_id, "project": False},
+                {"webspace_id": target_webspace_id, "project": True},
             )
             return result if isinstance(result, dict) else {"summary": {}, "raw": result}
         except Exception as exc:
