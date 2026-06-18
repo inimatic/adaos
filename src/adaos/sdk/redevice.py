@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 from adaos.services.redevice_versions import endpoint_version_info
@@ -32,6 +33,36 @@ def _text(value: Any) -> str:
 
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _scope_from_node_yaml() -> tuple[str, str]:
+    candidates: list[Path] = []
+    raw_home = _text(os.environ.get("ADAOS_HOME") or os.environ.get("ADAOS_BASE_DIR"))
+    if raw_home:
+        candidates.append(Path(raw_home) / "node.yaml")
+        candidates.append(Path(raw_home) / ".adaos" / "node.yaml")
+    cwd = Path.cwd()
+    for base in (cwd, *cwd.parents):
+        candidates.append(base / ".adaos" / "node.yaml")
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            import yaml
+
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue
+        if not isinstance(data, Mapping):
+            continue
+        root = _mapping(data.get("root"))
+        owner = _mapping(root.get("owner"))
+        subnet = _mapping(data.get("subnet"))
+        hub_id = _text(data.get("subnet_id") or subnet.get("id") or subnet.get("bootstrap_id"))
+        owner_id = _text(data.get("owner_id") or owner.get("owner_id") or hub_id)
+        if hub_id or owner_id:
+            return hub_id, owner_id
+    return "", ""
 
 
 def _local_scope() -> tuple[str, str]:
@@ -61,6 +92,10 @@ def _local_scope() -> tuple[str, str]:
             owner_id = owner_id or _text(getattr(owner, "owner_id", ""))
         except Exception:
             pass
+    if not hub_id:
+        yaml_hub, yaml_owner = _scope_from_node_yaml()
+        hub_id = hub_id or yaml_hub
+        owner_id = owner_id or yaml_owner
     return hub_id, owner_id
 
 
