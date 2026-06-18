@@ -414,7 +414,7 @@ def test_node_yjs_toggle_install_endpoint_uses_desktop_service(monkeypatch) -> N
     assert result["runtime"]["webspace_id"] == "desktop"
 
 
-def test_node_infrastate_snapshot_endpoint_runs_skill_tool(monkeypatch) -> None:
+def test_node_infrastate_snapshot_endpoint_returns_sectioned_stub(monkeypatch) -> None:
     captured: list[tuple[str, str, dict[str, object]]] = []
 
     class _FakeSkillManager:
@@ -436,17 +436,22 @@ def test_node_infrastate_snapshot_endpoint_runs_skill_tool(monkeypatch) -> None:
 
     result = asyncio.run(node_api_module.node_infrastate_snapshot("default"))
 
-    assert captured == [("infrastate_skill", "get_snapshot", {"webspace_id": "desktop", "project": False})]
+    assert captured == []
     assert result["ok"] is True
-    assert result["snapshot"]["summary"]["value"] == "idle"
+    assert result["snapshot"]["full_snapshot_removed"] is True
+    assert result["snapshot"]["projection"] == "lightweight_control"
+    assert result["snapshot"]["summary"]["value"] == "ready"
 
 
-def test_node_infrastate_snapshot_endpoint_returns_fallback_on_tool_error(monkeypatch) -> None:
+def test_node_infrastate_snapshot_endpoint_does_not_call_tool_fallback(monkeypatch) -> None:
+    captured: list[tuple[str, str, dict[str, object]]] = []
+
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
             return None
 
         def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object]) -> dict[str, object]:
+            captured.append((skill_name, tool_name, dict(payload)))
             raise RuntimeError(f"boom:{skill_name}:{tool_name}:{payload.get('webspace_id')}")
 
     async def _fake_run_sync(func, *args, **kwargs):
@@ -462,14 +467,15 @@ def test_node_infrastate_snapshot_endpoint_returns_fallback_on_tool_error(monkey
 
     result = asyncio.run(node_api_module.node_infrastate_snapshot("default"))
 
+    assert captured == []
     assert result["ok"] is True
-    assert result["degraded"] is True
-    assert "RuntimeError" in str(result["error"])
-    assert result["snapshot"]["fallback"] is True
+    assert result["degraded"] is False
+    assert result["error"] is None
+    assert result["snapshot"]["full_snapshot_removed"] is True
     assert result["snapshot"]["summary"]["label"] == "Infra State"
 
 
-def test_node_infrastate_action_endpoint_publishes_event_and_returns_snapshot(monkeypatch) -> None:
+def test_node_infrastate_action_endpoint_publishes_event_and_returns_fast_ack(monkeypatch) -> None:
     published: list[object] = []
     wait_calls: list[float] = []
     captured: list[tuple[str, str, dict[str, object]]] = []
@@ -527,14 +533,67 @@ def test_node_infrastate_action_endpoint_publishes_event_and_returns_snapshot(mo
     assert getattr(published[0], "type", "") == "infrastate.action"
     assert getattr(published[0], "payload", {})["node_id"] == "member-1"
     assert wait_calls == [2.5]
-    assert captured == [
-        ("infrastate_skill", "get_snapshot", {"webspace_id": "desktop", "project": False, "force_refresh": True})
-    ]
+    assert captured == []
     assert result["ok"] is True
     assert result["action"] == "select_node"
-    assert result["operation_id"] == "op-node-select"
-    assert result["result"]["operation_id"] == "op-node-select"
-    assert result["snapshot"]["summary"]["value"] == "ready"
+    assert result["operation_id"] is None
+    assert result["result"]["deferred_snapshot"] is True
+    assert result["result"]["full_snapshot_removed"] is True
+    assert result["snapshot"] == {}
+
+
+def test_node_infrastate_action_scenario_hard_pull_returns_fast_ack(monkeypatch) -> None:
+    published: list[object] = []
+    wait_calls: list[float] = []
+
+    class _FakeBus:
+        def publish(self, event) -> None:
+            published.append(event)
+
+        async def wait_for_idle(self, timeout: float = 0.0) -> bool:
+            wait_calls.append(timeout)
+            return True
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, *_args, **_kwargs) -> dict[str, object]:
+            raise AssertionError("scenario hard pull fallback must not force a full infrastate snapshot")
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "get_ctx",
+        lambda: SimpleNamespace(skills_repo=None, sql=None, git=None, paths=None, bus=_FakeBus(), caps=None, settings=None),
+    )
+    monkeypatch.setattr(node_api_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(node_api_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+
+    result = asyncio.run(
+        node_api_module.node_infrastate_action(
+            node_api_module.InfrastateActionRequest(
+                id="scenario_hard_pull",
+                name="new_face_vision",
+                request_id="req-123",
+                webspace_id="default",
+            )
+        )
+    )
+
+    assert len(published) == 1
+    assert getattr(published[0], "type", "") == "infrastate.action"
+    event_payload = getattr(published[0], "payload", {})
+    assert event_payload["name"] == "new_face_vision"
+    assert event_payload["request_id"] == "req-123"
+    assert wait_calls == [2.5]
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["action"] == "scenario_hard_pull"
+    assert result["name"] == "new_face_vision"
+    assert result["request_id"] == "req-123"
+    assert result["result"]["deferred_snapshot"] is True
+    assert result["snapshot"] == {}
 
 
 def test_node_skill_event_publish_endpoint_publishes_generic_event(monkeypatch) -> None:

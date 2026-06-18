@@ -2164,6 +2164,8 @@ class WebspaceDesktopUpdateRequest(BaseModel):
 
 class InfrastateActionRequest(BaseModel):
     id: str = Field(..., min_length=1)
+    name: str | None = None
+    request_id: str | None = None
     webspace_id: str | None = None
     node_id: str | None = None
     target_node_id: str | None = None
@@ -3281,95 +3283,32 @@ async def node_infrastate_snapshot(webspace_id: str | None = None) -> dict[str, 
             "webspace_id": target_webspace_id,
             "error": "hub_role_required",
         }
-    ctx = get_ctx()
-    mgr = SkillManager(
-        repo=ctx.skills_repo,
-        registry=SqliteSkillRegistry(ctx.sql),
-        git=ctx.git,
-        paths=ctx.paths,
-        bus=getattr(ctx, "bus", None),
-        caps=ctx.caps,
-        settings=ctx.settings,
+    lifecycle = runtime_lifecycle_snapshot()
+    yjs_runtime = yjs_sync_runtime_snapshot(
+        role=str(getattr(conf, "role", "") or ""),
+        webspace_id=target_webspace_id,
     )
-
-    def _fallback_snapshot(exc: Exception) -> dict[str, Any]:
-        lifecycle = runtime_lifecycle_snapshot()
-        yjs_runtime = yjs_sync_runtime_snapshot(
-            role=str(getattr(conf, "role", "") or ""),
-            webspace_id=target_webspace_id,
-        )
-        error_text = f"{type(exc).__name__}: {exc}"
-        return {
-            "summary": {
-                "label": "Infra State",
-                "value": str(lifecycle.get("node_state") or "degraded"),
-                "subtitle": f"webspace {target_webspace_id}",
-                "description": f"fallback snapshot: {error_text}",
-                "updated_at": time.time(),
-            },
-            "actions": [],
-            "update_actions": [],
-            "nodes": [],
-            "yjs_webspaces": [],
-            "node_editor": {"names_csv": "", "editable": False, "scope": "fallback"},
-            "build": [],
-            "steps": [
-                {
-                    "id": "lifecycle",
-                    "title": "Lifecycle",
-                    "status": str(lifecycle.get("node_state") or "degraded"),
-                    "description": str(lifecycle.get("reason") or "runtime fallback snapshot"),
-                },
-                {
-                    "id": "yjs_runtime",
-                    "title": "Yjs runtime",
-                    "status": "ok" if yjs_runtime else "idle",
-                    "description": str(
-                        (yjs_runtime.get("assessment") or {}).get("state")
-                        if isinstance(yjs_runtime, dict)
-                        else "unknown"
-                    ),
-                },
-            ],
-            "realtime": [],
-            "slots": [],
-            "skills": [],
-            "logs": [
-                {
-                    "id": "snapshot-error",
-                    "title": "snapshot-error",
-                    "status": "warn",
-                    "preview": error_text,
-                    "content": error_text,
-                }
-            ],
-            "events": [],
-            "lifecycle": lifecycle,
-            "yjs_runtime": yjs_runtime,
-            "last_refresh_ts": time.time(),
-            "fallback": True,
-            "errors": [error_text],
-        }
-
-    def _load_snapshot() -> dict[str, Any]:
-        try:
-            result = mgr.run_tool(
-                "infrastate_skill",
-                "get_snapshot",
-                {"webspace_id": target_webspace_id, "project": True},
-            )
-            return result if isinstance(result, dict) else {"summary": {}, "raw": result}
-        except Exception as exc:
-            _log.warning("node infrastate snapshot fallback webspace=%s", target_webspace_id, exc_info=True)
-            return _fallback_snapshot(exc)
-
-    snapshot = await anyio.to_thread.run_sync(_load_snapshot)
+    snapshot = {
+        "summary": {
+            "label": "Infra State",
+            "value": str(lifecycle.get("node_state") or "ready"),
+            "subtitle": f"webspace {target_webspace_id}",
+            "description": "Full Infra State snapshot is disabled; use YJS control projection and webio streams.",
+            "updated_at": time.time(),
+        },
+        "lifecycle": lifecycle,
+        "yjs_runtime": yjs_runtime,
+        "last_refresh_ts": time.time(),
+        "full_snapshot_removed": True,
+        "projection": "lightweight_control",
+        "details": {"delivery": "streams"},
+    }
     return {
         "ok": True,
         "accepted": True,
         "webspace_id": target_webspace_id,
-        "degraded": bool(snapshot.get("fallback")) if isinstance(snapshot, dict) else False,
-        "error": (snapshot.get("errors") or [None])[0] if isinstance(snapshot, dict) else None,
+        "degraded": False,
+        "error": None,
         "snapshot": snapshot,
     }
 
@@ -3526,22 +3465,19 @@ async def node_infrastate_action(payload: InfrastateActionRequest) -> dict[str, 
             },
             "snapshot": {},
         }
-    mgr = SkillManager(
-        repo=ctx.skills_repo,
-        registry=SqliteSkillRegistry(ctx.sql),
-        git=ctx.git,
-        paths=ctx.paths,
-        bus=getattr(ctx, "bus", None),
-        caps=ctx.caps,
-        settings=ctx.settings,
-    )
     event_payload: dict[str, Any] = {
         "id": action_id,
         "webspace_id": target_webspace_id,
     }
+    name = str(payload.name or "").strip()
+    request_id = str(payload.request_id or "").strip()
     node_id = str(payload.node_id or payload.target_node_id or "").strip()
     target_node_id = str(payload.target_node_id or payload.node_id or "").strip()
     value = payload.value
+    if name:
+        event_payload["name"] = name
+    if request_id:
+        event_payload["request_id"] = request_id
     if node_id:
         event_payload["node_id"] = node_id
     if target_node_id:
@@ -3556,38 +3492,24 @@ async def node_infrastate_action(payload: InfrastateActionRequest) -> dict[str, 
         except Exception:
             _log.debug("wait_for_idle failed after infrastate.action", exc_info=True)
 
-    def _load_snapshot() -> dict[str, Any]:
-        snapshot_args: dict[str, Any] = {
-            "webspace_id": target_webspace_id,
-            "project": False,
-            "force_refresh": True,
-        }
-        if target_node_id:
-            snapshot_args["target_node_id"] = target_node_id
-        result = mgr.run_tool(
-            "infrastate_skill",
-            "get_snapshot",
-            snapshot_args,
-        )
-        return result if isinstance(result, dict) else {"summary": {}, "raw": result}
-
-    snapshot = await anyio.to_thread.run_sync(_load_snapshot)
-    ui_state = snapshot.get("ui_state") if isinstance(snapshot.get("ui_state"), dict) else {}
-    action_result = ui_state.get("last_result") if isinstance(ui_state.get("last_result"), dict) else {}
-    if str(ui_state.get("last_action") or "").strip() != event_payload["id"]:
-        action_result = {}
-    action_operation = action_result.get("operation") if isinstance(action_result.get("operation"), dict) else {}
-    operation_id = (
-        str(action_result.get("operation_id") or action_operation.get("operation_id") or "").strip() or None
-    )
     return {
         "ok": True,
         "accepted": True,
         "webspace_id": target_webspace_id,
         "action": event_payload["id"],
-        "operation_id": operation_id,
-        "result": action_result,
-        "snapshot": snapshot,
+        "name": name or None,
+        "request_id": request_id or None,
+        "operation_id": None,
+        "result": {
+            "ok": True,
+            "accepted": True,
+            "action": event_payload["id"],
+            "name": name or None,
+            "request_id": request_id or None,
+            "deferred_snapshot": True,
+            "full_snapshot_removed": True,
+        },
+        "snapshot": {},
     }
 
 
