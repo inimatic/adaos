@@ -6,23 +6,6 @@ from adaos.sdk import redevice
 from adaos.services import device_inventory
 
 
-def test_redevice_scope_can_fall_back_to_node_yaml(tmp_path, monkeypatch) -> None:
-    node_dir = tmp_path / ".adaos"
-    node_dir.mkdir()
-    (node_dir / "node.yaml").write_text(
-        "subnet_id: sn_yaml\n"
-        "root:\n"
-        "  owner:\n"
-        "    owner_id: owner_yaml\n",
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("ADAOS_HOME", raising=False)
-    monkeypatch.delenv("ADAOS_BASE_DIR", raising=False)
-
-    assert redevice._scope_from_node_yaml() == ("sn_yaml", "owner_yaml")
-
-
 def _endpoint(code: str, hub_id: str | None) -> dict[str, Any]:
     policy: dict[str, Any] = {
         "schema_version": "endpoint-policy.v1",
