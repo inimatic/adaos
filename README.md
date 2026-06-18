@@ -66,9 +66,9 @@ curl -i http://127.0.0.1:8777/health/live
 curl -i http://127.0.0.1:8777/health/ready
 ```
 
-`adaos api serve` remains available as the lower-level foreground API command,
-but it is a development-only path. Production and A/B slot lifecycle use
-`adaos autostart ...`, not a repository-root `api serve` process.
+Use `adaos api serve` only for lower-level foreground API debugging. It is a
+development-only path and does not manage production or A/B slot lifecycle;
+production runtimes use `adaos autostart ...`.
 
 Use port `8777` or `8778` when you want the browser client to auto-discover a
 local runtime. Use a different port, such as `8779`, when the hosted client
@@ -108,8 +108,8 @@ Details: [bootstrap variants and checkout maintenance](docs/operations/common-co
 
 ## Deployment modes
 
-- **Development**: `tools/bootstrap.* --dev` plus `adaos dev serve` (or the
-  lower-level `adaos api serve`).
+- **Development**: `tools/bootstrap.* --dev` plus `adaos dev serve`; use
+  `adaos api serve` for lower-level HTTP API debugging.
 - **Production**: init/bootstrap scripts plus `adaos autostart enable` or
   `--install-service auto`, with autostart-managed runtime slots.
 - **Colab/lab**: repository bootstrap in a notebook, usually as a temporary
