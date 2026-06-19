@@ -689,7 +689,7 @@ def test_skill_status_refreshes_default_registry_ref(tmp_base_dir, monkeypatch):
     monkeypatch.setattr(
         skill_cmd,
         "fetch_remote",
-        lambda _workdir, *, remote="origin": fetched.append(remote) or None,
+        lambda _workdir, *, remote="origin", timeout_s=60.0: fetched.append(f"{remote}:{timeout_s}") or None,
     )
     monkeypatch.setattr(skill_cmd, "resolve_base_ref", lambda *args, **kwargs: "registry/main")
     monkeypatch.setattr(skill_cmd, "ref_exists", lambda *args, **kwargs: True)
@@ -703,7 +703,7 @@ def test_skill_status_refreshes_default_registry_ref(tmp_base_dir, monkeypatch):
     result = CliRunner().invoke(skill_cmd.app, ["status", "demo_skill"])
 
     assert result.exit_code == 0
-    assert fetched == ["registry"]
+    assert fetched == ["registry:10.0"]
 
 
 def test_scenario_status_reports_empty_when_registry_and_workspace_are_empty(tmp_path, monkeypatch):
@@ -814,7 +814,7 @@ def test_scenario_status_refreshes_default_registry_ref(tmp_path, monkeypatch):
     monkeypatch.setattr(
         scenario_cmd,
         "fetch_remote",
-        lambda _workdir, *, remote="origin": fetched.append(remote) or None,
+        lambda _workdir, *, remote="origin", timeout_s=60.0: fetched.append(f"{remote}:{timeout_s}") or None,
     )
     monkeypatch.setattr(scenario_cmd, "resolve_base_ref", lambda *args, **kwargs: "registry/main")
     monkeypatch.setattr(
@@ -831,7 +831,7 @@ def test_scenario_status_refreshes_default_registry_ref(tmp_path, monkeypatch):
     result = CliRunner().invoke(scenario_cmd.app, ["status", "welcome_scene"])
 
     assert result.exit_code == 0
-    assert fetched == ["registry"]
+    assert fetched == ["registry:10.0"]
 
 
 def test_scenario_list_falls_back_to_workspace_when_registry_empty(tmp_path, monkeypatch):

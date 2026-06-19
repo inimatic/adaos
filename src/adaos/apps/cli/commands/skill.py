@@ -1791,7 +1791,8 @@ def status(
             ref = f"{REGISTRY_REMOTE}/{REGISTRY_BRANCH}"
             using_default_registry_ref = True
         if fetch or using_default_registry_ref:
-            err = fetch_remote(workspace_root, remote=remote)
+            timeout_s = 60.0 if fetch else 10.0
+            err = fetch_remote(workspace_root, remote=remote, timeout_s=timeout_s)
             if err and fetch:
                 typer.secho(f"git fetch failed: {err}", fg=typer.colors.YELLOW)
 

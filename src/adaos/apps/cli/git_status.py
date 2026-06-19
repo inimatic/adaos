@@ -157,8 +157,8 @@ def ensure_repo_at(path: Path, *, url: str, remote: str = "origin") -> Optional[
     return None
 
 
-def fetch_remote(workdir: Path, *, remote: str = "origin") -> Optional[str]:
-    proc = _run_git(workdir, ["fetch", "--prune", remote], timeout_s=60.0)
+def fetch_remote(workdir: Path, *, remote: str = "origin", timeout_s: float = 60.0) -> Optional[str]:
+    proc = _run_git(workdir, ["fetch", "--prune", remote], timeout_s=timeout_s)
     if _git_ok(proc):
         return None
     err = (proc.stderr or proc.stdout or "").strip()
