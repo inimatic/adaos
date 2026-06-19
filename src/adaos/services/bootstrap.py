@@ -267,10 +267,10 @@ def _hub_route_should_shed_sync_frame(
 def _hub_route_sync_frame_force_flush_enabled(raw: Any = None) -> bool:
     if raw is None:
         raw = os.getenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH")
-    token = str(raw if raw is not None else "1").strip().lower()
+    token = str(raw if raw is not None else "0").strip().lower()
     if not token:
-        return True
-    return token not in {"0", "false", "no", "off"}
+        return False
+    return token in {"1", "true", "yes", "on"}
 
 
 def _hub_route_should_force_flush_reply(
