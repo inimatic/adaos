@@ -83,6 +83,11 @@ async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
             ),
             paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
             skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
         ),
     )
     monkeypatch.delenv("ADAOS_VOICE_CHAT_INTENT_DEMO", raising=False)
@@ -90,9 +95,15 @@ async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     monkeypatch.setattr(
         router_service_module,
-        "execute_tool",
-        lambda *_args, **kwargs: calls.append((kwargs["payload"]["text"], dict(kwargs["payload"].get("_meta") or {}))) or {"ok": True, "reply": "ok"},
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(
+            run_tool=lambda _skill, _tool, payload, **_opts: calls.append(
+                (payload["text"], dict(payload.get("_meta") or {}))
+            )
+            or {"ok": True, "reply": "ok"}
+        ),
     )
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
 
@@ -150,6 +161,11 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(mon
             ),
             paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
             skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
         ),
     )
     monkeypatch.delenv("ADAOS_VOICE_CHAT_INTENT_DEMO", raising=False)
@@ -157,9 +173,12 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(mon
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     monkeypatch.setattr(
         router_service_module,
-        "execute_tool",
-        lambda *_args, **kwargs: calls.append(dict(kwargs["payload"])) or {"ok": True, "reply": "ok"},
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(
+            run_tool=lambda _skill, _tool, payload, **_opts: calls.append(dict(payload)) or {"ok": True, "reply": "ok"}
+        ),
     )
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
 
@@ -206,8 +225,8 @@ async def test_voice_chat_not_obtained_skips_skill_fallback_during_intent_demo(m
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     monkeypatch.setattr(
         router_service_module,
-        "execute_tool",
-        lambda *_args, **_kwargs: calls.append(object()) or {"ok": True},
+        "SkillManager",
+        lambda **_kwargs: calls.append(object()) or SimpleNamespace(run_tool=lambda *_args, **_opts: {"ok": True}),
     )
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()

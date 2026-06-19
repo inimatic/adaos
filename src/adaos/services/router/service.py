@@ -31,7 +31,8 @@ from adaos.services.yjs.doc import async_get_ydoc, async_read_ydoc, mutate_live_
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.scenario.node_data_scope import node_scope_data_path
 from adaos.services.scenario.projection_service import _merge_nested_path
-from adaos.skills.runtime_runner import execute_tool
+from adaos.adapters.db import SqliteSkillRegistry
+from adaos.services.skill.manager import SkillManager
 from adaos.sdk.io.context import io_meta
 
 
@@ -2189,12 +2190,17 @@ class RouterService:
 
         def _call_voice_chat_tool(text: str, meta: dict) -> Any:
             ctx = get_ctx()
-            skills_root = ctx.paths.skills_workspace_dir()
-            skills_root = skills_root() if callable(skills_root) else skills_root
-            skill_dir = Path(skills_root) / "voice_chat_skill"
             prev = ctx.skill_ctx.get()
+            mgr = SkillManager(
+                repo=ctx.skills_repo,
+                registry=SqliteSkillRegistry(ctx.sql),
+                git=ctx.git,
+                paths=ctx.paths,
+                bus=getattr(ctx, "bus", None),
+                caps=ctx.caps,
+                settings=ctx.settings,
+            )
             try:
-                ctx.skill_ctx.set("voice_chat_skill", skill_dir)
                 # Ensure SDK io.out helpers (chat_append/say) include routing meta.
                 payload: dict[str, Any] = {"text": text, "_meta": meta}
                 webspace_id = str(meta.get("webspace_id") or "").strip()
@@ -2204,12 +2210,7 @@ class RouterService:
                 if target_node_id:
                     payload["target_node_id"] = target_node_id
                 with io_meta(meta):
-                    return execute_tool(
-                        skill_dir,
-                        module="handlers.main",
-                        attr="handle_text",
-                        payload=payload,
-                    )
+                    return mgr.run_tool("voice_chat_skill", "handle_text", payload)
             finally:
                 if prev is None:
                     try:
