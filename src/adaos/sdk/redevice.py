@@ -337,6 +337,7 @@ def transport_profile(endpoint: Mapping[str, Any] | None = None) -> dict[str, An
     policy = _mapping(endpoint.get("endpoint_policy"))
     manifest = _mapping(endpoint.get("endpoint_manifest"))
     candidates = (
+        endpoint.get("command_transport_profile"),
         policy.get("transport_profile"),
         policy.get("transport_policy"),
         manifest.get("transport_profile"),
@@ -397,7 +398,7 @@ def with_local_content_route(
         order.insert(insert_at, "local_http")
     profile["routes"] = routes
     profile["preferred_order"] = order
-    item["transport_profile"] = profile
+    item["command_transport_profile"] = profile
     return item
 
 

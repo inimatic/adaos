@@ -76,6 +76,39 @@ def test_redevice_display_transport_prefers_command_local_content_route() -> Non
     assert selected["degraded"] is False
 
 
+def test_redevice_display_transport_command_route_overrides_policy_for_command() -> None:
+    endpoint = {
+        "code": "ABC123",
+        "endpoint_manifest": {"endpoint_id": "endpoint-1"},
+        "endpoint_policy": {
+            "transport_profile": {
+                "schema_version": "transport-profile.v1",
+                "preferred_order": ["redevice_poll", "root_relay_inline"],
+                "routes": {
+                    "redevice_poll": {
+                        "available": True,
+                        "state": "ready",
+                        "directions": ["control", "events"],
+                    },
+                    "root_relay_inline": {
+                        "available": True,
+                        "state": "degraded",
+                        "directions": ["content_in"],
+                        "requires_root_relay": True,
+                    },
+                },
+            }
+        },
+    }
+
+    selected = select_transport(with_local_content_route(endpoint), intent="display.slideshow", content_bytes=20_000)
+
+    assert selected["selected_transport"] == "local_http"
+    assert selected["content"]["transport"] == "local_http"
+    assert selected["requires_root_relay"] is False
+    assert selected["degraded"] is False
+
+
 def test_choose_endpoint_heals_stale_pair_code_for_same_endpoint() -> None:
     endpoints = [
         {
