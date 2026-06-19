@@ -133,43 +133,58 @@ def direct_media_base_urls() -> list[str]:
     """Return endpoint-reachable hub media bases, preferring explicit config.
 
     ReDevice endpoints cannot use browser-only media paths. They need a concrete
-    hub HTTP base. Runtime-managed slots export ADAOS_SELF_BASE_URL; development
-    and supervisor runtimes persist local_api_url. If that URL is loopback, we
-    expand it to LAN IPv4 candidates so legacy endpoints can try direct hub
-    access before falling back to inline/root relay content.
+    hub HTTP base. Explicit ``ADAOS_REDEVICE_MEDIA_BASES`` /
+    ``ADAOS_MEDIA_DIRECT_BASES`` values are treated as operator-provided
+    endpoint routes. Runtime-managed loopback URLs are not expanded to LAN
+    addresses by default: a process bound to 127.0.0.1 is not reachable from a
+    legacy tablet even if the host has a LAN IP. Set
+    ``ADAOS_MEDIA_DIRECT_EXPAND_LOOPBACK=1`` only when a matching LAN listener or
+    port-forward is known to exist.
     """
 
-    bases: list[str] = []
+    bases: list[tuple[str, bool]] = []
 
-    def add(value: str | None) -> None:
+    def add(value: str | None, *, implicit: bool) -> None:
         base = _normalized_base_url(value)
-        if base and base not in bases:
-            bases.append(base)
+        if base and (base, implicit) not in bases:
+            bases.append((base, implicit))
 
     for value in _split_csv(os.getenv("ADAOS_REDEVICE_MEDIA_BASES") or os.getenv("ADAOS_MEDIA_DIRECT_BASES")):
-        add(value)
-    add(os.getenv("ADAOS_SELF_BASE_URL"))
+        add(value, implicit=False)
+    add(os.getenv("ADAOS_SELF_BASE_URL"), implicit=True)
 
     configured = ""
     try:
         configured = str(getattr(get_ctx().config, "local_api_url", "") or "").strip()
     except Exception:
         configured = ""
-    add(configured)
+    add(configured, implicit=True)
 
     expanded: list[str] = []
-    for base in bases:
+    expand_loopback = str(os.getenv("ADAOS_MEDIA_DIRECT_EXPAND_LOOPBACK") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    for base, implicit in bases:
         parsed = urlparse(base)
         host = parsed.hostname or ""
         if not _is_loopback_host(host):
             if base not in expanded:
                 expanded.append(base)
             continue
-        if parsed.port:
+        if expand_loopback and parsed.port:
             for address in _local_ipv4_addresses():
                 candidate = urlunparse((parsed.scheme, f"{address}:{parsed.port}", parsed.path.rstrip("/"), "", "", ""))
                 if candidate not in expanded:
                     expanded.append(candidate)
+        elif not implicit:
+            # Explicit loopback values are preserved only for local development
+            # diagnostics. They are not useful for remote endpoints, but keeping
+            # the operator-provided value makes the configuration observable.
+            if base not in expanded:
+                expanded.append(base)
     return expanded
 
 

@@ -69,6 +69,33 @@ def test_sdk_io_media_advertises_endpoint_direct_urls(monkeypatch, tmp_path):
     assert descriptor["delivery"]["preferred_route"] == "hub_direct_http"
 
 
+def test_sdk_io_media_does_not_expand_implicit_loopback_base(monkeypatch, tmp_path):
+    from adaos.sdk.io import media as sdk_media
+
+    source = tmp_path / "source.jpg"
+    Image.new("RGB", (320, 180), color=(64, 128, 192)).save(source, "JPEG", quality=82)
+    media_store = tmp_path / "media"
+    media_store.mkdir()
+    monkeypatch.setattr(sdk_media, "media_file_path", lambda filename: media_store / filename)
+    monkeypatch.setenv("ADAOS_SELF_BASE_URL", "http://127.0.0.1:8777")
+    monkeypatch.delenv("ADAOS_REDEVICE_MEDIA_BASES", raising=False)
+    monkeypatch.delenv("ADAOS_MEDIA_DIRECT_BASES", raising=False)
+    monkeypatch.delenv("ADAOS_MEDIA_DIRECT_EXPAND_LOOPBACK", raising=False)
+    monkeypatch.setattr(sdk_media, "_local_ipv4_addresses", lambda: ["192.168.0.30"])
+
+    descriptor = sdk_media.publish_media_file(
+        source,
+        content_ref="content:loopback",
+        namespace="demo",
+        variant="endpoint",
+        api_token="token",
+    )
+
+    assert descriptor["direct_urls"] == []
+    assert all("192.168.0.30" not in item for item in descriptor["content_url_candidates"])
+    assert descriptor["delivery"]["preferred_route"] == "node_media_file"
+
+
 def test_sdk_io_media_can_check_cached_variant_without_creating(tmp_path):
     from adaos.sdk.io import media as sdk_media
 
