@@ -356,6 +356,9 @@ stream_publish(
 Stream rules:
 
 - keep payloads bounded
+- size streams against `payload_bytes * subscriber fanout`, not only against a
+  single payload. A stream that is safe at one subscriber can hit guard pressure
+  when multiple browsers or node-scoped mirrors are active.
 - dedupe events with stable ids
 - provide snapshot-on-subscribe for widgets that should not open empty
 - coalesce repeated snapshot requests per receiver/webspace/node
@@ -374,6 +377,10 @@ Stream rules:
   already reading from Yjs; use streams for separate high-churn state or
   snapshot-on-subscribe recovery
 - do not copy stream tails back into Yjs just to make them visible
+- for table/list inventory streams, publish a compact row shape containing only
+  rendered columns, button predicates, stable ids, and action-feedback fields.
+  Keep catalog metadata, dependency lists, diagnostics, and full version
+  records behind details/tools unless the table renders them directly.
 
 Stream variables should be demand-aware. A stream receiver that is not
 subscribed should not keep rebuilding full snapshots just in case a browser
@@ -805,6 +812,8 @@ Before publishing:
   diagnostic surfaces
 - verify `data_projections` exist for Yjs state
 - verify stream receivers have bounded modes and snapshot-on-subscribe behavior
+- verify stream payloads stay within budget after multiplying by expected
+  browser/node fanout
 - verify stream receivers have `initialState`, freshness metadata, and a
   recovery path after resubscribe
 - verify `webui.json` declares shared interaction behavior for first focus,
