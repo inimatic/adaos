@@ -194,6 +194,18 @@ Current client behavior:
   `auto` subscribes to both node-aware and hub-routed topics,
   `member` prefers member-originated delivery only,
   `hub` listens only to the hub-routed aggregate topic
+* `scope` controls ownership of the data represented by the receiver:
+  `shared` is webspace/global data, `local` is local-runtime data, `node`
+  requires a `node_id`, and `optional-node` uses `node_id` when present
+
+`transport` and `scope` are intentionally separate. A node-scoped receiver may
+still use `transport: "hub"` when the hub is the delivery channel for member
+data. In that case the browser must include `node_id` / `target_node_id` in the
+`webio.stream.subscription.changed` and `webio.stream.snapshot.requested`
+control payloads, and the publisher should echo the same node metadata in
+`_meta`. A `scope: "node"` receiver without a node id must not silently fall
+back to hub-local data; the browser surfaces a missing-node diagnostic state
+instead of subscribing.
 
 ## Publishing Stream Data
 

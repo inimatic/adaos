@@ -32,9 +32,9 @@ changing runtime behavior.
 | `infrastate-realtime` | `infrastate.realtime` | Stream replace + detail stream | <= 16 KiB | Realtime summary rows; detail receiver per row. |
 | `infrastate-slots` | `infrastate.slots` | Stream replace | <= 16 KiB | Slot manifest rows. |
 | `infrastate-operations` | `infrastate.operations.active` | Stream replace + detail stream | <= 16 KiB, <= 2 Hz | Active operations should never require broad Yjs. |
-| Installed skills | `infrastate.skills` | Stream replace | <= 64 KiB, snapshot-on-subscribe | Direct inventory builder; guard-visible first-paint. |
-| Installed scenarios | `infrastate.scenarios` | Stream replace | <= 64 KiB, snapshot-on-subscribe | Direct inventory builder; guard-visible first-paint. |
-| Marketplace skills/scenarios | `infrastate.marketplace.*` | Stream replace | <= 64 KiB, on demand | Marketplace rows stay out of Yjs. |
+| Installed skills | `infrastate.skills` | Stream replace, `scope: node` | <= 64 KiB, snapshot-on-subscribe | Direct inventory builder; guard-visible first-paint. |
+| Installed scenarios | `infrastate.scenarios` | Stream replace, `scope: node` | <= 64 KiB, snapshot-on-subscribe | Direct inventory builder; guard-visible first-paint. |
+| Marketplace skills/scenarios | `infrastate.marketplace.*` | Stream replace, `scope: node` | <= 64 KiB, on demand | Marketplace rows stay out of Yjs; installable rows are filtered against the selected node inventory. |
 | Recent logs | `infrastate.logs.recent` | Stream replace + detail stream | <= 32 KiB | Bounded current log cards; raw log remains external. |
 | Event history | `infrastate.events.recent` | Stream replace + detail stream | <= 32 KiB | Bounded recent events; raw evidence stays in logs/eventbus. |
 | Yjs load mark | `infrastate.yjs.load_mark` | Stream replace | <= 24 KiB, throttled | Diagnostic table only. |
@@ -46,6 +46,8 @@ changing runtime behavior.
 - [x] Declare the route plan in architecture docs.
 - [x] Add manifest `data_routes` for the current browser-facing surfaces.
 - [x] Add stream receiver budget/guard/route metadata in `webui.json`.
+- [x] Declare node-owned inventory and marketplace streams with `scope: node`
+  so hub-routed delivery still carries `target_node_id`.
 - [x] Preserve pressure semantics while validating: Yjs `block` stops
   projection, Yjs `throttle` stretches the projection interval, and stream
   snapshots continue through stream guard.
