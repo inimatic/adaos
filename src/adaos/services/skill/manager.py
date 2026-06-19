@@ -181,6 +181,16 @@ def _admit_skill_tool_yjs_work(
         return {"allowed": True, "governed": False, "reason": "owner_guard_unavailable"}
 
 
+def _resolve_runtime_tool_name(requested_tool: str | None, default_tool: str | None, tools: Mapping[str, Any]) -> str:
+    target_tool = str(requested_tool or default_tool or "").strip()
+    if target_tool in tools:
+        return target_tool
+    fallback_tool = str(default_tool or "").strip()
+    if target_tool == "get_snapshot" and fallback_tool and fallback_tool in tools:
+        return fallback_tool
+    return target_tool
+
+
 def _skill_tool_yjs_denied_result(
     *,
     name: str,
@@ -2640,10 +2650,7 @@ class SkillManager:
 
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         tools = data.get("tools") or {}
-        if tool:
-            target_tool = tool
-        else:
-            target_tool = data.get("default_tool")
+        target_tool = _resolve_runtime_tool_name(tool, data.get("default_tool"), tools)
         if not target_tool:
             raise KeyError("tool name not provided and no default tool defined")
         tool_spec = tools.get(target_tool)
