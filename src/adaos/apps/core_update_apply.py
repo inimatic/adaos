@@ -65,6 +65,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--source-repo-root", default="")
     parser.add_argument("--shared-dotenv-path", default="")
     parser.add_argument("--repo-url", default=os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/inimatic/adaos.git"))
+    parser.add_argument("--prepare-lease-path", default="")
+    parser.add_argument("--prepare-lease-token", default="")
     return parser.parse_args()
 
 
@@ -99,6 +101,27 @@ def _run_json(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | 
     if not isinstance(payload, dict):
         raise RuntimeError(f"command returned non-object JSON: {' '.join(cmd)}")
     return payload
+
+
+def _verify_prepare_lease(path: str | os.PathLike[str] = "", token: str = "") -> None:
+    lease_path_raw = str(path or "").strip()
+    lease_token = str(token or "").strip()
+    if not lease_path_raw and not lease_token:
+        return
+    if not lease_path_raw or not lease_token:
+        raise RuntimeError("core update prepare lease is incomplete")
+    lease_path = Path(lease_path_raw).expanduser().resolve()
+    try:
+        payload = json.loads(lease_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"core update prepare lease is not active: {lease_path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("core update prepare lease payload is invalid")
+    if str(payload.get("token") or "").strip() != lease_token:
+        raise RuntimeError("core update prepare lease token mismatch")
+    if str(payload.get("state") or "").strip().lower() != "active":
+        reason = str(payload.get("reason") or payload.get("revoked_reason") or "revoked").strip()
+        raise RuntimeError(f"core update prepare lease revoked: {reason}")
 
 
 def _git_worktree_has_changes(repo_dir: Path) -> bool:
@@ -1067,6 +1090,8 @@ def prepare_slot(
     target_version: str = "",
     repo_url: str | None = None,
     migrate_skill_runtimes: bool = True,
+    prepare_lease_path: str | os.PathLike[str] = "",
+    prepare_lease_token: str = "",
 ) -> dict[str, object]:
     slot_name = str(slot).strip().upper()
     slot_dir = Path(slot_dir_path).expanduser().resolve()
@@ -1134,6 +1159,7 @@ def prepare_slot(
         build_date = _checkout_build_date(checkout_tmp)
         bootstrap_update = _detect_bootstrap_promotion_requirement(checkout_tmp, repo_root_dir)
         _strip_repo_vcs_metadata(checkout_tmp)
+        _verify_prepare_lease(prepare_lease_path, prepare_lease_token)
         manifest = {
             "slot": slot_name,
             "created_at": time.time(),
@@ -1244,6 +1270,8 @@ def _prepare_slot(args: argparse.Namespace) -> dict[str, object]:
         target_rev=args.target_rev,
         target_version=args.target_version,
         repo_url=args.repo_url,
+        prepare_lease_path=args.prepare_lease_path,
+        prepare_lease_token=args.prepare_lease_token,
     )
 
 

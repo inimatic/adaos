@@ -167,6 +167,31 @@ def _supervisor_update_attempt_path() -> Path:
     return (_supervisor_state_dir() / "update_attempt.json").resolve()
 
 
+def _supervisor_prepare_leases_dir() -> Path:
+    path = (_supervisor_state_dir() / "prepare_leases").resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _prepare_lease_path(token: str) -> Path:
+    safe_token = "".join(ch for ch in str(token or "").strip() if ch.isalnum() or ch in {"-", "_"})
+    if not safe_token:
+        safe_token = uuid.uuid4().hex
+    return (_supervisor_prepare_leases_dir() / f"{safe_token}.json").resolve()
+
+
+def _write_prepare_lease(path: Path, *, token: str, state: str, reason: str, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "token": str(token or "").strip(),
+        "state": str(state or "").strip().lower() or "unknown",
+        "reason": str(reason or "").strip() or None,
+        "updated_at": time.time(),
+    }
+    payload.update(extra)
+    _write_json(path, payload)
+    return payload
+
+
 def _memory_profiler_adapter() -> str:
     token = str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILER") or "").strip().lower()
     return token or DEFAULT_PROFILER_ADAPTER
@@ -605,6 +630,25 @@ def _update_attempt_timeout_sec() -> float:
         return 180.0
 
 
+def _update_prepare_timeout_sec() -> float:
+    try:
+        return max(
+            _update_attempt_timeout_sec(),
+            float(str(os.getenv("ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC") or "900").strip()),
+        )
+    except Exception:
+        return max(_update_attempt_timeout_sec(), 900.0)
+
+
+def _update_status_timeout_sec(status: dict[str, Any] | None) -> float:
+    payload = status if isinstance(status, dict) else {}
+    state = str(payload.get("state") or "").strip().lower()
+    phase = str(payload.get("phase") or "").strip().lower()
+    if state == "preparing" or phase == "prepare":
+        return _update_prepare_timeout_sec()
+    return _update_attempt_timeout_sec()
+
+
 def _min_update_period_sec() -> float:
     try:
         return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC") or "300").strip()))
@@ -1000,6 +1044,9 @@ def _normalize_update_attempt(payload: dict[str, Any] | None) -> dict[str, Any] 
         "candidate_prewarm_state": str(source.get("candidate_prewarm_state") or "").strip() or None,
         "candidate_prewarm_message": str(source.get("candidate_prewarm_message") or "").strip() or None,
         "candidate_prewarm_ready_at": _epoch(source.get("candidate_prewarm_ready_at")) or None,
+        "prepare_lease_path": str(source.get("prepare_lease_path") or "").strip() or None,
+        "prepare_lease_token": str(source.get("prepare_lease_token") or "").strip() or None,
+        "prepare_timeout_sec": _epoch(source.get("prepare_timeout_sec")) or None,
         "subsequent_transition_request": dict(source.get("subsequent_transition_request") or {})
         if isinstance(source.get("subsequent_transition_request"), dict)
         else None,
@@ -1057,6 +1104,57 @@ def _update_transition_timed_out(*, status_age: float, transition_age: float, ti
     if not ages:
         return False
     return min(ages) >= float(timeout_sec)
+
+
+def _prepare_lease_ref_from_payloads(*payloads: dict[str, Any] | None) -> tuple[str, str]:
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        path = str(payload.get("prepare_lease_path") or "").strip()
+        token = str(payload.get("prepare_lease_token") or "").strip()
+        if path or token:
+            return path, token
+        previous = payload.get("supervisor_previous_status")
+        if isinstance(previous, dict):
+            path = str(previous.get("prepare_lease_path") or "").strip()
+            token = str(previous.get("prepare_lease_token") or "").strip()
+            if path or token:
+                return path, token
+        last_status = payload.get("last_status")
+        if isinstance(last_status, dict):
+            path = str(last_status.get("prepare_lease_path") or "").strip()
+            token = str(last_status.get("prepare_lease_token") or "").strip()
+            if path or token:
+                return path, token
+    return "", ""
+
+
+def _revoke_prepare_lease(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+    reason: str,
+) -> dict[str, Any] | None:
+    path_raw, token = _prepare_lease_ref_from_payloads(status, attempt)
+    if not path_raw:
+        return None
+    path = Path(path_raw).expanduser().resolve()
+    payload = {
+        "token": token,
+        "state": "revoked",
+        "reason": str(reason or "revoked").strip() or "revoked",
+        "revoked_reason": str(reason or "revoked").strip() or "revoked",
+        "revoked_at": time.time(),
+    }
+    try:
+        existing = _read_json(path) or {}
+        if token and str(existing.get("token") or "").strip() not in {"", token}:
+            payload["token_mismatch"] = True
+            payload["previous_token"] = str(existing.get("token") or "").strip()
+        _write_json(path, {**existing, **payload, "updated_at": time.time()})
+        return {"ok": True, "path": str(path), "token_present": bool(token)}
+    except Exception as exc:
+        return {"ok": False, "path": str(path), "error_type": type(exc).__name__, "error": str(exc)}
 
 
 def _is_terminal_update_status(payload: dict[str, Any] | None) -> bool:
@@ -1713,7 +1811,7 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     now = time.time()
-    timeout_sec = _update_attempt_timeout_sec()
+    timeout_sec = _update_status_timeout_sec(status)
     status_age = max(0.0, now - _status_updated_at(status)) if _status_updated_at(status) > 0.0 else 0.0
     transition_age = max(0.0, now - _attempt_transition_at(attempt)) if _attempt_transition_at(attempt) > 0.0 else 0.0
     if bool(status.get("active_slot_target_mismatch")):
@@ -1790,6 +1888,11 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
     action = str(status.get("action") or attempt.get("action") or "update")
+    prepare_lease_revocation = _revoke_prepare_lease(
+        status=status,
+        attempt=attempt,
+        reason="supervisor.timeout_recovery",
+    )
     failed_payload: dict[str, Any] = {
         "state": "failed",
         "phase": str(status.get("phase") or "restart_timeout"),
@@ -1802,6 +1905,8 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         "supervisor_timeout_at": now,
         "supervisor_previous_status": status,
     }
+    if prepare_lease_revocation is not None:
+        failed_payload["prepare_lease_revocation"] = prepare_lease_revocation
     if action == "update":
         target_slot = str(status.get("target_slot") or attempt.get("target_slot") or "").strip().upper()
         restored = rollback_to_previous_slot()
@@ -7680,6 +7785,20 @@ class SupervisorManager:
 
     def _begin_prepare_transition(self, request: dict[str, Any]) -> dict[str, Any]:
         started_at = time.time()
+        prepare_lease_token = uuid.uuid4().hex
+        prepare_lease_path = _prepare_lease_path(prepare_lease_token)
+        prepare_timeout_sec = _update_prepare_timeout_sec()
+        _write_prepare_lease(
+            prepare_lease_path,
+            token=prepare_lease_token,
+            state="active",
+            reason=str(request.get("reason") or "core_update.prepare"),
+            action=str(request.get("action") or "update"),
+            target_rev=str(request.get("target_rev") or ""),
+            target_version=str(request.get("target_version") or ""),
+            created_at=started_at,
+            timeout_sec=prepare_timeout_sec,
+        )
         status = write_core_update_status(
             {
                 "state": "preparing",
@@ -7693,6 +7812,9 @@ class SupervisorManager:
                 "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
                 "started_at": started_at,
                 "message": "preparing inactive slot before restart",
+                "prepare_timeout_sec": prepare_timeout_sec,
+                "prepare_lease_path": str(prepare_lease_path),
+                "prepare_lease_token": prepare_lease_token,
             }
         )
         attempt_payload = dict(request)
@@ -7702,6 +7824,9 @@ class SupervisorManager:
                 "accepted": True,
                 "requested_at": _epoch(request.get("requested_at")) or started_at,
                 "prepare_started_at": started_at,
+                "prepare_timeout_sec": prepare_timeout_sec,
+                "prepare_lease_path": str(prepare_lease_path),
+                "prepare_lease_token": prepare_lease_token,
                 "last_status": status,
                 "updated_at": started_at,
             }
@@ -7717,6 +7842,9 @@ class SupervisorManager:
                 countdown_sec=float(request.get("countdown_sec") or 0.0),
                 drain_timeout_sec=float(request.get("drain_timeout_sec") or 10.0),
                 signal_delay_sec=float(request.get("signal_delay_sec") or 0.25),
+                prepare_lease_path=str(prepare_lease_path),
+                prepare_lease_token=prepare_lease_token,
+                prepare_timeout_sec=prepare_timeout_sec,
             ),
             name=f"adaos-supervisor-core-update-prepare-{request.get('action') or 'update'}",
         )
@@ -8027,6 +8155,9 @@ class SupervisorManager:
         countdown_sec: float,
         drain_timeout_sec: float,
         signal_delay_sec: float,
+        prepare_lease_path: str = "",
+        prepare_lease_token: str = "",
+        prepare_timeout_sec: float | None = None,
     ) -> None:
         started_at = time.time()
         write_core_update_status(
@@ -8166,6 +8297,9 @@ class SupervisorManager:
         countdown_sec: float,
         drain_timeout_sec: float,
         signal_delay_sec: float,
+        prepare_lease_path: str = "",
+        prepare_lease_token: str = "",
+        prepare_timeout_sec: float | None = None,
     ) -> None:
         cancel_phase = "prepare"
         failure_phase = "prepare"
@@ -8191,6 +8325,8 @@ class SupervisorManager:
                     "target_rev": target_rev,
                     "target_version": target_version,
                     "reason": reason,
+                    "prepare_lease_path": prepare_lease_path,
+                    "prepare_lease_token": prepare_lease_token,
                 },
             )
             if str(prepare_result.get("state") or "").strip().lower() != "prepared":
@@ -8201,6 +8337,9 @@ class SupervisorManager:
                         "target_rev": target_rev,
                         "target_version": target_version,
                         "reason": reason,
+                        "prepare_lease_path": prepare_lease_path or None,
+                        "prepare_lease_token": prepare_lease_token or None,
+                        "prepare_timeout_sec": prepare_timeout_sec,
                     }
                 )
                 _complete_update_attempt(
@@ -8217,6 +8356,19 @@ class SupervisorManager:
                 or choose_inactive_slot()
                 or ""
             ).strip().upper()
+            if prepare_lease_path:
+                with contextlib.suppress(Exception):
+                    _write_prepare_lease(
+                        Path(prepare_lease_path),
+                        token=prepare_lease_token,
+                        state="completed",
+                        reason="prepared",
+                        action=action,
+                        target_rev=target_rev,
+                        target_version=target_version,
+                        target_slot=target_slot or None,
+                        completed_at=float(prepare_result.get("finished_at") or time.time()),
+                    )
             manifest = prepare_result.get("manifest") if isinstance(prepare_result.get("manifest"), dict) else None
             prepare_elapsed_s = prepare_result.get("prepare_elapsed_s")
             install_elapsed_s = prepare_result.get("install_elapsed_s")
@@ -8759,6 +8911,14 @@ class SupervisorManager:
                 self._persist_runtime_state()
         except asyncio.CancelledError:
             clear_core_update_plan()
+            prepare_lease_revocation = _revoke_prepare_lease(
+                status={
+                    "prepare_lease_path": prepare_lease_path,
+                    "prepare_lease_token": prepare_lease_token,
+                },
+                attempt=None,
+                reason="supervisor.cancelled_transition",
+            )
             await self._cleanup_candidate_runtime(
                 reason="supervisor.candidate.cancelled_transition",
                 slot=target_slot or None,
@@ -8781,12 +8941,21 @@ class SupervisorManager:
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                         "candidate_memory_guard": candidate_memory_guard,
                         "message": "core update cancelled",
+                        "prepare_lease_revocation": prepare_lease_revocation,
                     }
                 )
                 _complete_update_attempt(state="cancelled", status=status, reason=reason)
             raise
         except Exception as exc:
             clear_core_update_plan()
+            prepare_lease_revocation = _revoke_prepare_lease(
+                status={
+                    "prepare_lease_path": prepare_lease_path,
+                    "prepare_lease_token": prepare_lease_token,
+                },
+                attempt=None,
+                reason=f"supervisor.failed_transition:{type(exc).__name__}",
+            )
             await self._cleanup_candidate_runtime(
                 reason="supervisor.candidate.failed_transition",
                 slot=target_slot or None,
@@ -8818,6 +8987,7 @@ class SupervisorManager:
                     "error": str(exc),
                     "updated_at": time.time(),
                     "slot_cleanup": slot_cleanup,
+                    "prepare_lease_revocation": prepare_lease_revocation,
                 }
             )
             _complete_update_attempt(

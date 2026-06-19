@@ -61,6 +61,29 @@ def test_checkout_target_version_fetches_then_retries(monkeypatch, tmp_path: Pat
     ]
 
 
+def test_prepare_lease_rejects_revoked_token(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    lease = tmp_path / "lease.json"
+    lease.write_text(json.dumps({"token": "abc", "state": "revoked", "reason": "timeout"}), encoding="utf-8")
+
+    try:
+        mod._verify_prepare_lease(lease, "abc")
+    except RuntimeError as exc:
+        assert "lease revoked" in str(exc)
+    else:
+        raise AssertionError("revoked prepare lease must fail")
+
+
+def test_prepare_lease_accepts_active_token(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    lease = tmp_path / "lease.json"
+    lease.write_text(json.dumps({"token": "abc", "state": "active"}), encoding="utf-8")
+
+    mod._verify_prepare_lease(lease, "abc")
+
+
 def test_repair_moved_venv_rewrites_script_paths(tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

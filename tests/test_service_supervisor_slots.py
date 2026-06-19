@@ -98,6 +98,33 @@ def test_service_supervisor_refresh_discovery_does_not_block_event_loop():
     assert asyncio.run(_run()) >= 3
 
 
+def test_service_supervisor_shutdown_prevents_late_service_restart():
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    ensure_calls: list[tuple[str, bool]] = []
+
+    async def _refresh_discovered(*, force: bool = False) -> None:  # noqa: ARG001
+        return None
+
+    async def _ensure_started(name, spec, *, force: bool) -> None:  # noqa: ANN001, ARG001
+        ensure_calls.append((name, force))
+
+    supervisor._specs["slot_service"] = object()  # type: ignore[assignment]
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    supervisor.ensure_started = _ensure_started  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        await supervisor.shutdown()
+        await supervisor.start_all()
+
+    asyncio.run(_run())
+
+    assert ensure_calls == []
+    assert supervisor._task is None
+    assert supervisor._health_task is None
+
+
 def test_service_supervisor_defaults_dependency_service_to_bucket_venv(tmp_path):
     from adaos.services.skill import service_supervisor as mod
 

@@ -953,6 +953,8 @@ def _default_update_command_template() -> str:
         ' --repo-root "{repo_root}"'
         ' --source-repo-root "{source_repo_root}"'
         ' --shared-dotenv-path "{shared_dotenv_path}"'
+        ' --prepare-lease-path "{prepare_lease_path}"'
+        ' --prepare-lease-token "{prepare_lease_token}"'
     )
 
 
@@ -973,6 +975,8 @@ def _plan_with_slot_context(plan: dict[str, Any]) -> dict[str, Any]:
     payload["target_slot"] = str(plan.get("target_slot") or choose_inactive_slot())
     payload["inactive_slot"] = payload["target_slot"]
     payload["inactive_slot_dir"] = str(slot_dir(payload["target_slot"]))
+    payload.setdefault("prepare_lease_path", "")
+    payload.setdefault("prepare_lease_token", "")
     if payload["active_slot"]:
         payload["active_slot_dir"] = str(slot_dir(payload["active_slot"]))
     else:
@@ -1017,6 +1021,8 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             target_rev=str(slot_plan.get("target_rev") or ""),
             target_version=str(slot_plan.get("target_version") or ""),
             migrate_skill_runtimes=False,
+            prepare_lease_path=str(slot_plan.get("prepare_lease_path") or ""),
+            prepare_lease_token=str(slot_plan.get("prepare_lease_token") or ""),
         )
     except Exception as exc:
         finished_at = time.time()

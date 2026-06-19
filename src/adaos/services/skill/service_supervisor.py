@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -485,6 +486,7 @@ class ServiceSkillSupervisor:
         self._discover_executor: ThreadPoolExecutor | None = None
         self._discover_last_at = 0.0
         self._manifest_state: dict[str, tuple[Any, ...]] = {}
+        self._shutdown_requested = False
 
     # ------------------------------------------------------------------ public
     def ensure_discovered(self, *, force: bool = False) -> None:
@@ -633,6 +635,8 @@ class ServiceSkillSupervisor:
         return payload
 
     async def start(self, name: str) -> None:
+        if self._shutdown_requested:
+            raise RuntimeError("service supervisor is shutting down")
         await self.refresh_discovered()
         spec = self._specs.get(name)
         if not spec:
@@ -668,12 +672,18 @@ class ServiceSkillSupervisor:
         emit(self._ctx.bus, "skill.service.stopped", {"skill": name, "pid": proc.pid}, source="skill.service")
 
     async def restart(self, name: str) -> None:
+        if self._shutdown_requested:
+            return
         await self.stop(name)
         await self.start(name)
 
     async def start_all(self) -> None:
+        if self._shutdown_requested:
+            return
         await self.refresh_discovered(force=True)
         for name, spec in list(self._specs.items()):
+            if self._shutdown_requested:
+                return
             try:
                 await self.ensure_started(name, spec, force=False)
             except Exception as exc:
@@ -720,6 +730,8 @@ class ServiceSkillSupervisor:
         return await self._run_hook(spec, spec.hook_on_self_heal, payload={"reason": reason, "issue": issue})
 
     async def ensure_started(self, name: str, spec: ServiceSpec, *, force: bool) -> None:
+        if self._shutdown_requested:
+            return
         proc = self._procs.get(name)
         spec_key = self._spec_key(spec)
         if proc and proc.poll() is None:
@@ -859,6 +871,8 @@ class ServiceSkillSupervisor:
         log_path_fn = getattr(self._ctx.paths, "skill_service_log_path", None)
         log_path = Path(log_path_fn(name)) if callable(log_path_fn) else logs_dir / f"service.{name}.log"
 
+        if self._shutdown_requested:
+            return
         _log.info("starting service skill=%s cmd=%s cwd=%s", name, cmd, spec.workdir)
         with open(log_path, "a", encoding="utf-8") as logf:
             proc = subprocess.Popen(
@@ -910,15 +924,7 @@ class ServiceSkillSupervisor:
         )
 
     async def shutdown(self) -> None:
-        for name, proc in list(self._procs.items()):
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-            self._procs.pop(name, None)
-            self._proc_specs.pop(name, None)
-            self._external_ready_specs.pop(name, None)
-            self._external_ready_at.pop(name, None)
+        self._shutdown_requested = True
         if self._task:
             try:
                 self._task.cancel()
@@ -931,6 +937,18 @@ class ServiceSkillSupervisor:
             except Exception:
                 pass
             self._health_task = None
+        for name in list(self._procs):
+            try:
+                await self.stop(name)
+            except Exception:
+                _log.warning("failed to stop service during supervisor shutdown skill=%s", name, exc_info=True)
+                proc = self._procs.pop(name, None)
+                self._proc_specs.pop(name, None)
+                self._external_ready_specs.pop(name, None)
+                self._external_ready_at.pop(name, None)
+                if proc and proc.poll() is None:
+                    with contextlib.suppress(Exception):
+                        proc.kill()
         if self._discover_executor:
             self._discover_executor.shutdown(wait=False, cancel_futures=True)
             self._discover_executor = None
@@ -939,6 +957,8 @@ class ServiceSkillSupervisor:
 
     # ------------------------------------------------------------------ internals
     def _ensure_background_tasks(self) -> None:
+        if self._shutdown_requested:
+            return
         if self._task is None:
             self._task = asyncio.create_task(self._watchdog_loop(), name="adaos-skill-service-watchdog")
         if self._health_task is None:
@@ -1293,11 +1313,15 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
     async def _watchdog_loop(self) -> None:
         while True:
             await asyncio.sleep(2.0)
+            if self._shutdown_requested:
+                return
             now = time.time()
 
             # Ensure all discovered services are up (unless in crash cooloff).
             await self.refresh_discovered()
             for name, spec in list(self._specs.items()):
+                if self._shutdown_requested:
+                    return
                 proc = self._procs.get(name)
                 if proc and proc.poll() is None:
                     continue
@@ -1311,6 +1335,8 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                     _log.warning("failed to ensure service running skill=%s", name, exc_info=True)
 
             for name, proc in list(self._procs.items()):
+                if self._shutdown_requested:
+                    return
                 code = proc.poll()
                 if code is None:
                     continue
@@ -1353,10 +1379,14 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
     async def _health_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0)
+            if self._shutdown_requested:
+                return
             now = time.time()
             await self.refresh_discovered()
 
             for name, spec in list(self._specs.items()):
+                if self._shutdown_requested:
+                    return
                 if not spec.self_managed_enabled:
                     continue
 

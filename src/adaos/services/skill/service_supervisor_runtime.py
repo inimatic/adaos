@@ -40,6 +40,14 @@ async def _stop_if_service(skill_name: str | None, *, reason: str) -> None:
 async def _stop_all_services(*, reason: str) -> None:
     supervisor = get_service_supervisor()
     supervisor.ensure_discovered()
+    shutdown = getattr(supervisor, "shutdown", None)
+    if callable(shutdown):
+        try:
+            await shutdown()
+            _log.info("service supervisor shutdown reason=%s", reason)
+            return
+        except Exception:
+            _log.warning("failed to shutdown service supervisor reason=%s", reason, exc_info=True)
     for skill_name in supervisor.list():
         try:
             await supervisor.stop(skill_name)

@@ -21,6 +21,9 @@ class _FakeSupervisor:
     async def stop(self, name: str) -> None:
         self.events.append(("stop", name))
 
+    async def shutdown(self) -> None:
+        self.events.append(("shutdown", None))
+
 
 def test_service_supervisor_runtime_stops_service_on_skill_deactivated(monkeypatch) -> None:
     fake = _FakeSupervisor()
@@ -37,4 +40,4 @@ def test_service_supervisor_runtime_stops_all_services_on_subnet_stopping(monkey
 
     asyncio.run(runtime_module._on_subnet_stopping({"reason": "admin_shutdown"}))
 
-    assert fake.events == [("stop", "service_skill"), ("stop", "voice_service")]
+    assert fake.events == [("shutdown", None)]

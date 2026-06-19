@@ -236,6 +236,7 @@ Current behavior:
 - `before_deactivate` runs before explicit deactivate or rollback of the current slot
 - global runtime drain now reuses the same contract:
   `subnet.draining` triggers active-skill `drain`, and `subnet.stopping` triggers `dispose` then `before_deactivate` as best-effort shutdown hooks for active installed runtimes
+- service-skill supervision is also quiesced on `subnet.stopping`: the service watchdog and health loops stop before child service processes are terminated, so service skills are not auto-respawned while a runtime update or restart is waiting for shutdown completion
 
 Lifecycle diagnostics are persisted into slot metadata and surfaced by `adaos skill status --json` through `runtime_status().lifecycle`.
 

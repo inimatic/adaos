@@ -64,6 +64,7 @@ In service mode the authoritative update surface is the supervisor, not the tran
 - `update-status` should remain inspectable through supervisor-backed state even while `:8777` is restarting
 - root/bootstrap code may be promoted after a successful slot validation, but the restarted production runtime still comes from slot `A|B`
 - `update-status` may also include the compact Phase 1 supervisor memory summary so operators can see profiling intent/session state during the same rollout window
+- `prepare` has its own deadline (`ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC`, default 900s) because slot build/pip work is heavier than restart/apply; if prepare times out or is cancelled, update status should include prepare lease revocation evidence so a late worker cannot replace an A/B slot after rollback
 
 Current autostart-managed flow for bootstrap/self-update:
 
