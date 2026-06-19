@@ -592,8 +592,10 @@ Recommended order:
    browser endpoints. Root is used for signaling only.
 2. `local_ws`: direct outbound WebSocket from ReDevice to the hub/member for
    commands, events, low-rate streams, and content references.
-3. `local_http`: direct HTTP fetch/upload against the hub/member for static
-   content and progressive media.
+3. `sidecar_media_http` or `local_http`: explicit endpoint-reachable HTTP
+   fetch/upload for static content and progressive media. For ReDevice file
+   delivery this should normally be the read-only sidecar media proxy, not the
+   full runtime API.
 4. `http_chunked`, `mjpeg`, or `segment_upload`: legacy-compatible streaming
    modes for old Android and constrained devices.
 5. `redevice_poll`: legacy command/event polling through the root API.
@@ -607,7 +609,7 @@ describes what the agent supports and what the hub currently allows. Example:
 {
   "schema_version": "transport-profile.v1",
   "endpoint_id": "endpoint:redevice:tf201-01",
-  "preferred_order": ["webrtc_p2p", "local_ws", "local_http", "redevice_poll", "root_relay_inline"],
+  "preferred_order": ["webrtc_p2p", "local_ws", "sidecar_media_http", "local_http", "redevice_poll", "root_relay_inline"],
   "routes": {
     "webrtc_p2p": {
       "available": false,
@@ -643,6 +645,8 @@ Initial adapters can be simple:
 
 - `redevice_poll`: legacy-friendly Android agent polls the hub for pending
   commands and posts events/results.
+- `sidecar_media_http`: endpoint fetches bounded content from a read-only
+  sidecar media proxy.
 - `http_callback`: endpoint reachable through direct HTTP.
 - `browser_channel`: browser endpoint receives commands through its existing
   live session.
@@ -660,18 +664,20 @@ roles, services, commands, events, and streams.
 Skills should receive transport evidence in command results, but they should
 not branch on Android, iOS, or browser-specific transport code. For example,
 `slideshow_skill` can request `display.slideshow`; the router may send a
-single inline frame over `root_relay_inline`, a content URL over `local_http`,
-or a realtime stream over `webrtc_p2p` depending on policy and live health.
+single inline frame over `root_relay_inline`, a content URL over
+`sidecar_media_http`/`local_http`, or a realtime stream over `webrtc_p2p`
+depending on policy and live health.
 
 The current bounded-content implementation publishes direct media candidates as
-command metadata before falling back to inline relay:
+command metadata before falling back to inline relay. Direct candidates must be
+explicitly endpoint-reachable, typically through the sidecar media proxy:
 
 ```json
 {
   "schema_version": "media-delivery.v1",
-  "preferred_route": "hub_direct_http",
+  "preferred_route": "sidecar_media_http",
   "content_url_candidates": [
-    "http://192.168.0.30:8778/api/node/media/files/content/frame.jpg?token=..."
+    "http://192.168.0.30:7425/api/node/media/files/content/frame.jpg?token=..."
   ],
   "fallback_route": "root_relay_inline"
 }
@@ -679,8 +685,10 @@ command metadata before falling back to inline relay:
 
 Legacy ReDevice agents should try these candidates first and keep inline bytes
 only as placeholder or emergency fallback. The advertised direct URLs must come
-from slot-aware runtime state or explicit environment override, not from a
-hard-coded `localhost` browser URL.
+from explicit environment override such as `ADAOS_REDEVICE_MEDIA_BASES` or from
+slot-aware sidecar runtime state, not from a hard-coded `localhost` browser URL.
+The sidecar media proxy is deliberately read-only and path-bounded to published
+media file content; it is not a LAN exposure of the full hub API.
 
 ## Policy And Trust
 

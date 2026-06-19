@@ -67,11 +67,17 @@ Managed autostart / runtime boundary:
 - browser `/ws` and `/yws` transport can be proxied through sidecar local
   websocket listeners for the current transport-only scope when sidecar mode is
   enabled and listeners are ready
+- endpoint media content can be proxied through an explicitly enabled,
+  read-only sidecar HTTP listener for `/api/node/media/files/content/{filename}`
+  and `/media/files/content/{filename}`
 - browser `/ws` and `/yws` session semantics still terminate in the runtime;
   full Yjs room/session authority is not part of the current sidecar contract
 - WebRTC direct channels are still negotiated by the runtime/browser transport
   layer; a server-side Yjs datachannel opt-out prevents browser sync promotion
   to `webrtc_data:yjs` even when the peer and other datachannels are connected
+- the media proxy does not expose the full hub API to the LAN; it serves only
+  token-protected, already-published media files from AdaOS media storage and
+  supports `GET`, `HEAD`, and byte `Range` requests
 
 ## Why this split
 
@@ -231,6 +237,7 @@ open.
   status/restart surface now builds the sidecar runtime block from local
   process snapshots and sidecar diagnostics instead of querying runtime
   reliability.
+
 - [x] `[should]` Clear stale blocker strings from ready route tunnel
   diagnostics when `listener_ready=true` and `handoff_ready=true`.
 - [ ] `[should]` Add soak coverage for sidecar listener restart, runtime event
@@ -261,7 +268,46 @@ Success criteria:
 - [ ] `[should]` Operators can distinguish accepted sidecar path, runtime
   fallback path, and root relay path in one reliability snapshot.
 
-### Phase 3 - Full realtime runtime
+### Phase 3 - Endpoint media proxy
+
+Implemented as an opt-in sidecar listener for endpoint-reachable file media.
+This phase is intentionally narrower than general WebRTC media authority.
+
+Enablement:
+
+```text
+ADAOS_REALTIME_MEDIA_PROXY_ENABLE=1
+ADAOS_REALTIME_MEDIA_PROXY_HOST=0.0.0.0
+ADAOS_REALTIME_MEDIA_PROXY_PORT=7425
+ADAOS_REDEVICE_MEDIA_BASES=http://<hub-lan-ip>:7425
+```
+
+Contract:
+
+- [x] `[must]` Keep the listener read-only and path-bounded to published media
+  file content routes.
+- [x] `[must]` Require the same token forms as the runtime media endpoint:
+  `?token=`, `X-AdaOS-Token`, or `Authorization: Bearer`.
+- [x] `[must]` Publish `media_proxy_contract` in sidecar listener snapshots and
+  diagnostics with `current_owner`, `planned_owner`, `handoff_ready`,
+  `public_bases`, route paths, and blockers.
+- [x] `[must]` Support `GET`, `HEAD`, and byte `Range` requests so the same
+  narrow listener can serve slideshow images now and larger audio/video
+  artifacts later.
+- [x] `[must]` Keep endpoint direct URLs explicit. The SDK must not turn a
+  loopback runtime URL into a LAN URL unless the operator publishes a real
+  endpoint-reachable base such as `ADAOS_REDEVICE_MEDIA_BASES`.
+- [ ] `[must]` Capture stand evidence that a legacy ReDevice receives slideshow
+  content through `local_http`/sidecar media proxy instead of
+  `root_relay_inline`.
+- [ ] `[should]` Promote this route into transport selection diagnostics as a
+  distinct `sidecar_media_http` path instead of only `local_http`.
+- [ ] `[should]` Add expiry and revocation-friendly signed media URLs so query
+  tokens do not need to be embedded in long-lived endpoint commands.
+- [deferred] General live audio/video streaming remains a later WebRTC or
+  chunked-media authority problem; this phase only solves file-content delivery.
+
+### Phase 4 - Full realtime runtime
 
 Later.
 

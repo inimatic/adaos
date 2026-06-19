@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
@@ -58,6 +58,14 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "upstream_port": None,
         "upstream_url": None,
     },
+}
+_MEDIA_PROXY_RUNTIME_STATE: dict[str, Any] = {
+    "listener_ready": False,
+    "listener_host": None,
+    "listener_port": None,
+    "listener_url": None,
+    "public_bases": [],
+    "last_error": None,
 }
 
 
@@ -309,6 +317,72 @@ def _route_tunnel_proxy_enabled(*, role: str | None = None) -> bool:
     return bool(realtime_sidecar_enabled(role=role))
 
 
+def _media_proxy_enabled(*, role: str | None = None) -> bool:
+    raw = os.getenv("ADAOS_REALTIME_MEDIA_PROXY_ENABLE")
+    if raw is not None:
+        return _truthy(raw, default=False)
+    return _truthy(os.getenv("ADAOS_REALTIME_MEDIA_PROXY_DEFAULT_ENABLE"), default=False) and bool(
+        realtime_sidecar_enabled(role=role)
+    )
+
+
+def _media_proxy_listener_host() -> str:
+    raw = str(os.getenv("ADAOS_REALTIME_MEDIA_PROXY_HOST") or "").strip()
+    return raw or realtime_sidecar_host()
+
+
+def _media_proxy_listener_port() -> int:
+    default_port = int(realtime_sidecar_port()) + 3
+    raw = os.getenv("ADAOS_REALTIME_MEDIA_PROXY_PORT")
+    try:
+        port = int(str(raw or default_port).strip() or str(default_port))
+    except Exception:
+        port = default_port
+    if port <= 0:
+        port = default_port
+    return port
+
+
+def _split_csv(value: str | None) -> list[str]:
+    return [item.strip() for item in str(value or "").replace(";", ",").split(",") if item.strip()]
+
+
+def _media_proxy_normalized_base_url(value: str | None) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
+def _media_proxy_public_bases(*, host: str | None = None, port: int | None = None) -> list[str]:
+    bases: list[str] = []
+    for raw in (
+        os.getenv("ADAOS_REALTIME_MEDIA_PUBLIC_BASES"),
+        os.getenv("ADAOS_REDEVICE_MEDIA_BASES"),
+        os.getenv("ADAOS_MEDIA_DIRECT_BASES"),
+    ):
+        for value in _split_csv(raw):
+            base = _media_proxy_normalized_base_url(value)
+            if base and base not in bases:
+                bases.append(base)
+    if bases:
+        return bases
+    host_token = str(host or "").strip()
+    if not host_token or host_token in {"0.0.0.0", "::", "[::]", "127.0.0.1", "localhost", "::1", "[::1]"}:
+        return []
+    listener_port = int(port or 0)
+    if listener_port <= 0:
+        return []
+    return [f"http://{host_token}:{listener_port}"]
+
+
+def _media_proxy_listener_url(*, host: str, port: int) -> str:
+    return f"http://{str(host or '').strip() or '127.0.0.1'}:{int(port)}"
+
+
 def _route_tunnel_upstream_host() -> str:
     dynamic = _route_tunnel_supervisor_runtime_endpoint()
     if dynamic is not None:
@@ -447,6 +521,30 @@ def _route_tunnel_runtime_state(kind: str) -> dict[str, Any]:
     key = str(kind or "").strip().lower()
     payload = _ROUTE_TUNNEL_RUNTIME_STATE.get(key)
     return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _reset_media_proxy_runtime_state() -> None:
+    listener_host = _media_proxy_listener_host()
+    listener_port = _media_proxy_listener_port()
+    _MEDIA_PROXY_RUNTIME_STATE.clear()
+    _MEDIA_PROXY_RUNTIME_STATE.update(
+        {
+            "listener_ready": False,
+            "listener_host": listener_host,
+            "listener_port": listener_port,
+            "listener_url": _media_proxy_listener_url(host=listener_host, port=listener_port),
+            "public_bases": _media_proxy_public_bases(host=listener_host, port=listener_port),
+            "last_error": None,
+        }
+    )
+
+
+def _set_media_proxy_runtime_state(**values: Any) -> None:
+    _MEDIA_PROXY_RUNTIME_STATE.update(values)
+
+
+def _media_proxy_runtime_state() -> dict[str, Any]:
+    return dict(_MEDIA_PROXY_RUNTIME_STATE)
 
 
 def realtime_sidecar_route_tunnel_listeners(*, role: str | None = None) -> dict[str, Any]:
@@ -591,6 +689,100 @@ def realtime_sidecar_route_tunnel_contract(*, role: str | None = None) -> dict[s
         "ws": ws_entry,
         "yws": yws_entry,
     }
+
+
+def realtime_sidecar_media_proxy_contract(*, role: str | None = None) -> dict[str, Any]:
+    enabled = bool(_media_proxy_enabled(role=role))
+    lifecycle_manager = _realtime_sidecar_lifecycle_manager()
+    listener_host = _media_proxy_listener_host()
+    listener_port = _media_proxy_listener_port()
+    runtime_state = _media_proxy_runtime_state()
+    listener_ready = bool(runtime_state.get("listener_ready"))
+    host = str(runtime_state.get("listener_host") or listener_host).strip() or listener_host
+    port = int(runtime_state.get("listener_port") or listener_port)
+    listener_url = str(runtime_state.get("listener_url") or "").strip() or _media_proxy_listener_url(host=host, port=port)
+    raw_public_bases = runtime_state.get("public_bases")
+    if not isinstance(raw_public_bases, list) or not raw_public_bases:
+        raw_public_bases = _media_proxy_public_bases(host=host, port=port)
+    public_bases = [str(item).strip().rstrip("/") for item in raw_public_bases if str(item or "").strip()]
+    handoff_ready = enabled and listener_ready
+    blockers: list[str] = []
+    if not enabled:
+        blockers.append("sidecar media proxy is disabled")
+    elif not listener_ready:
+        blockers.append("sidecar media proxy listener is not running yet")
+    if enabled and listener_ready and not public_bases:
+        blockers.append("no endpoint-reachable media base is published")
+    current_support = "disabled" if not enabled else ("ready" if handoff_ready else "planned")
+    return {
+        "current_support": current_support,
+        "lifecycle_manager": lifecycle_manager,
+        "current_owner": "sidecar" if handoff_ready else "runtime",
+        "planned_owner": "sidecar",
+        "migration_phase": "phase_3_endpoint_media_http_proxy",
+        "ownership_boundary": "media_content_read_only",
+        "delegation_mode": "local_http_media_proxy",
+        "listener_ready": listener_ready,
+        "handoff_ready": handoff_ready,
+        "listener": {
+            "host": host,
+            "port": port,
+            "url": listener_url,
+        },
+        "public_bases": public_bases,
+        "route_paths": [
+            "/api/node/media/files/content/{filename}",
+            "/media/files/content/{filename}",
+        ],
+        "auth": {
+            "query_token": True,
+            "x_adaos_token": True,
+            "authorization_bearer": True,
+        },
+        "cache_policy": "private_max_age_3600",
+        "range_requests": True,
+        "blockers": blockers,
+        "last_error": runtime_state.get("last_error"),
+    }
+
+
+def _media_proxy_expected_token() -> str:
+    raw = str(os.getenv("ADAOS_TOKEN") or "").strip()
+    if raw:
+        return raw
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        return str(get_ctx().config.token or "dev-local-token").strip() or "dev-local-token"
+    except Exception:
+        return "dev-local-token"
+
+
+def _media_proxy_presented_token(*, headers: dict[str, str], query: dict[str, str]) -> str | None:
+    authorization = str(headers.get("authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    header_token = str(headers.get("x-adaos-token") or "").strip()
+    if header_token:
+        return header_token
+    query_token = str(query.get("token") or "").strip()
+    return query_token or None
+
+
+def _media_proxy_token_ok(*, headers: dict[str, str], query: dict[str, str]) -> bool:
+    return _media_proxy_presented_token(headers=headers, query=query) == _media_proxy_expected_token()
+
+
+def _media_proxy_file_path(filename: str) -> Path:
+    from adaos.services.media_library import media_file_path
+
+    return media_file_path(filename)
+
+
+def _media_proxy_guess_media_type(filename: str) -> str:
+    from adaos.services.media_library import guess_media_type
+
+    return guess_media_type(filename)
 
 
 def realtime_sidecar_log_path() -> Path:
@@ -1181,6 +1373,7 @@ def realtime_sidecar_listener_snapshot(
         "adopted_listener": adopted_listener,
         "enablement_policy": enablement_policy,
         "route_tunnel_contract": realtime_sidecar_route_tunnel_contract(role=role),
+        "media_proxy_contract": realtime_sidecar_media_proxy_contract(role=role),
     }
 
 
@@ -1259,12 +1452,14 @@ class RealtimeSidecarServer:
         self._port = int(port)
         self._server: asyncio.AbstractServer | None = None
         self._route_servers: dict[str, Any] = {}
+        self._media_server: asyncio.AbstractServer | None = None
         self._active_task: asyncio.Task[Any] | None = None
         self._diag_task: asyncio.Task[Any] | None = None
         self._stopped = asyncio.Event()
         self._stats = _RelayStats()
         self._pending_ping_sources: deque[str] = deque()
         _reset_route_tunnel_runtime_state()
+        _reset_media_proxy_runtime_state()
 
     def _begin_session_stats(self, *, session_id: str) -> None:
         previous = self._stats
@@ -1322,6 +1517,7 @@ class RealtimeSidecarServer:
             "ownership_boundary": "transport_only",
             "enablement_policy": realtime_sidecar_enablement_policy(),
             "route_tunnel_contract": realtime_sidecar_route_tunnel_contract(),
+            "media_proxy_contract": realtime_sidecar_media_proxy_contract(),
             "remote_url": self._stats.remote_url,
             "ws_ping_interval_s": self._stats.ws_ping_interval_s,
             "sidecar_nats_ping_interval_s": self._stats.sidecar_nats_ping_interval_s,
@@ -1383,6 +1579,7 @@ class RealtimeSidecarServer:
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_client, self._host, self._port)
         await self._start_route_tunnel_listeners()
+        await self._start_media_proxy_listener()
         self._diag_task = asyncio.create_task(self._diag_loop(), name="adaos-realtime-diag")
         self._log(
             f"serve start listen=nats://{self.listen_host}:{self.listen_port} remote_candidates={resolve_realtime_remote_candidates()} "
@@ -1409,6 +1606,12 @@ class RealtimeSidecarServer:
                 await server.wait_closed()
         self._route_servers.clear()
         _reset_route_tunnel_runtime_state()
+        if self._media_server is not None:
+            self._media_server.close()
+            with contextlib.suppress(BaseException):
+                await self._media_server.wait_closed()
+            self._media_server = None
+        _reset_media_proxy_runtime_state()
         if self._server is not None:
             self._server.close()
             with contextlib.suppress(BaseException):
@@ -1447,6 +1650,267 @@ class RealtimeSidecarServer:
             self._log(
                 f"{kind} proxy ready listen={listener.get('listener_url')} upstream={listener.get('upstream_url')}"
             )
+
+    async def _start_media_proxy_listener(self) -> None:
+        contract = realtime_sidecar_media_proxy_contract()
+        if not bool(_media_proxy_enabled()):
+            return
+        listener = contract.get("listener") if isinstance(contract.get("listener"), dict) else {}
+        host = str(listener.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+        port = int(listener.get("port") or 0)
+        if port <= 0:
+            return
+        try:
+            self._media_server = await asyncio.start_server(self._handle_media_proxy_http, host, port)
+        except Exception as exc:
+            details = f"{type(exc).__name__}: {exc}"
+            _set_media_proxy_runtime_state(last_error=details, listener_ready=False)
+            self._log(f"media proxy bind failed listen={host}:{port} err={details}")
+            return
+        _set_media_proxy_runtime_state(
+            listener_ready=True,
+            listener_host=host,
+            listener_port=port,
+            listener_url=_media_proxy_listener_url(host=host, port=port),
+            public_bases=_media_proxy_public_bases(host=host, port=port),
+            last_error=None,
+        )
+        self._log(
+            f"media proxy ready listen={_media_proxy_listener_url(host=host, port=port)} "
+            f"public_bases={_media_proxy_public_bases(host=host, port=port)}"
+        )
+
+    async def _read_media_proxy_request(self, reader: asyncio.StreamReader) -> bytes:
+        limit = 16384
+        try:
+            limit = max(1024, int(os.getenv("ADAOS_REALTIME_MEDIA_PROXY_HEADER_LIMIT", "16384") or "16384"))
+        except Exception:
+            limit = 16384
+        data = bytearray()
+        deadline_s = 5.0
+        try:
+            deadline_s = max(0.5, float(os.getenv("ADAOS_REALTIME_MEDIA_PROXY_HEADER_TIMEOUT_S", "5") or "5"))
+        except Exception:
+            deadline_s = 5.0
+        end_at = time.monotonic() + deadline_s
+        while b"\r\n\r\n" not in data:
+            remaining = end_at - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("request_header_timeout")
+            chunk = await asyncio.wait_for(reader.read(1024), timeout=remaining)
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > limit:
+                raise ValueError("request_header_too_large")
+        return bytes(data)
+
+    async def _media_proxy_response(
+        self,
+        writer: asyncio.StreamWriter,
+        *,
+        status: int,
+        reason: str,
+        headers: dict[str, str] | None = None,
+        body: bytes = b"",
+        method: str = "GET",
+    ) -> None:
+        header_map = {
+            "Connection": "close",
+            "X-AdaOS-Route": "realtime-sidecar-media-proxy",
+            "Content-Length": str(len(body)),
+            "Content-Type": "text/plain; charset=utf-8",
+            **(headers or {}),
+        }
+        writer.write(f"HTTP/1.1 {int(status)} {reason}\r\n".encode("ascii", errors="replace"))
+        for key, value in header_map.items():
+            writer.write(f"{key}: {value}\r\n".encode("latin-1", errors="replace"))
+        writer.write(b"\r\n")
+        if method.upper() != "HEAD" and body:
+            writer.write(body)
+        await writer.drain()
+
+    def _media_proxy_parse_range(self, raw: str | None, *, size: int) -> tuple[int, int] | None:
+        value = str(raw or "").strip().lower()
+        if not value:
+            return None
+        if not value.startswith("bytes=") or "," in value:
+            raise ValueError("unsupported_range")
+        spec = value[6:].strip()
+        if "-" not in spec:
+            raise ValueError("invalid_range")
+        start_raw, end_raw = spec.split("-", 1)
+        if start_raw == "":
+            suffix = int(end_raw)
+            if suffix <= 0:
+                raise ValueError("invalid_range")
+            start = max(0, size - suffix)
+            end = size - 1
+        else:
+            start = int(start_raw)
+            end = int(end_raw) if end_raw else size - 1
+        if size <= 0 or start < 0 or end < start or start >= size:
+            raise ValueError("invalid_range")
+        return start, min(end, size - 1)
+
+    async def _stream_media_proxy_file(
+        self,
+        writer: asyncio.StreamWriter,
+        *,
+        target: Path,
+        mime_type: str,
+        method: str,
+        byte_range: tuple[int, int] | None,
+    ) -> None:
+        size = int(target.stat().st_size)
+        start = 0
+        end = max(0, size - 1)
+        status = 200
+        reason = "OK"
+        headers: dict[str, str] = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=3600",
+            "Content-Type": mime_type,
+        }
+        if byte_range is not None:
+            start, end = byte_range
+            status = 206
+            reason = "Partial Content"
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        length = max(0, end - start + 1) if size > 0 else 0
+        headers["Content-Length"] = str(length)
+        writer.write(f"HTTP/1.1 {status} {reason}\r\n".encode("ascii", errors="replace"))
+        for key, value in {
+            "Connection": "close",
+            "X-AdaOS-Route": "realtime-sidecar-media-proxy",
+            **headers,
+        }.items():
+            writer.write(f"{key}: {value}\r\n".encode("latin-1", errors="replace"))
+        writer.write(b"\r\n")
+        if method.upper() == "HEAD" or length <= 0:
+            await writer.drain()
+            return
+        remaining = length
+        with target.open("rb") as fh:
+            fh.seek(start)
+            while remaining > 0:
+                chunk = fh.read(min(262144, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                writer.write(chunk)
+                await writer.drain()
+
+    async def _handle_media_proxy_http(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        try:
+            raw = await self._read_media_proxy_request(reader)
+            if not raw:
+                return
+            text = raw.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1", errors="replace")
+            lines = text.split("\r\n")
+            request_line = lines[0] if lines else ""
+            parts = request_line.split()
+            if len(parts) < 3:
+                await self._media_proxy_response(writer, status=400, reason="Bad Request", body=b"bad_request")
+                return
+            method = parts[0].upper()
+            target_raw = parts[1]
+            headers: dict[str, str] = {}
+            for line in lines[1:]:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                headers[key.strip().lower()] = value.strip()
+            if method not in {"GET", "HEAD"}:
+                await self._media_proxy_response(
+                    writer,
+                    status=405,
+                    reason="Method Not Allowed",
+                    headers={"Allow": "GET, HEAD"},
+                    body=b"method_not_allowed",
+                    method=method,
+                )
+                return
+            parsed = urlparse(target_raw)
+            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            if not _media_proxy_token_ok(headers=headers, query=query):
+                await self._media_proxy_response(
+                    writer,
+                    status=401,
+                    reason="Unauthorized",
+                    body=b"invalid_or_missing_token",
+                    method=method,
+                )
+                return
+            path = unquote(str(parsed.path or ""))
+            prefixes = (
+                "/api/node/media/files/content/",
+                "/media/files/content/",
+            )
+            filename = ""
+            for prefix in prefixes:
+                if path.startswith(prefix):
+                    filename = path[len(prefix):]
+                    break
+            if not filename:
+                await self._media_proxy_response(writer, status=404, reason="Not Found", body=b"not_found", method=method)
+                return
+            try:
+                target = _media_proxy_file_path(filename)
+            except ValueError:
+                await self._media_proxy_response(
+                    writer,
+                    status=400,
+                    reason="Bad Request",
+                    body=b"invalid_filename",
+                    method=method,
+                )
+                return
+            if not target.exists() or not target.is_file():
+                await self._media_proxy_response(
+                    writer,
+                    status=404,
+                    reason="Not Found",
+                    body=b"media_file_not_found",
+                    method=method,
+                )
+                return
+            try:
+                byte_range = self._media_proxy_parse_range(headers.get("range"), size=int(target.stat().st_size))
+            except Exception:
+                await self._media_proxy_response(
+                    writer,
+                    status=416,
+                    reason="Range Not Satisfiable",
+                    headers={"Content-Range": f"bytes */{int(target.stat().st_size)}"},
+                    body=b"range_not_satisfiable",
+                    method=method,
+                )
+                return
+            await self._stream_media_proxy_file(
+                writer,
+                target=target,
+                mime_type=_media_proxy_guess_media_type(target.name),
+                method=method,
+                byte_range=byte_range,
+            )
+        except Exception as exc:
+            _set_media_proxy_runtime_state(last_error=f"{type(exc).__name__}: {exc}")
+            with contextlib.suppress(Exception):
+                await self._media_proxy_response(
+                    writer,
+                    status=500,
+                    reason="Internal Server Error",
+                    body=b"media_proxy_error",
+                )
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
 
     async def _serve_route_tunnel_websocket(self, *, kind: str, host: str, port: int) -> Any:
         import websockets  # type: ignore

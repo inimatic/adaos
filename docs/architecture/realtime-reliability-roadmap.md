@@ -63,7 +63,7 @@ a blocker for the next `[must]` gate unless the gate explicitly depends on it.
 | 3.5. Supervisor continuity | In progress: supervisor owns process/update authority and candidate runtime flow; warm-switch hardening remains. | Open: browser/root signaling polish and recovery soak. | None. | None. |
 | 4. Semantic channels | Complete for current browser/hub-member semantic ownership scope. | Open: live-session validation under churn. | None. | None. |
 | 5. Yjs as SyncChannel | Complete for current sync-channel scope. | Open: operational validation across A/B and routed browsers. | None. | Open: sidecar-owned Yjs room/session runtime. |
-| 6. Media plane | Partial: bounded file media and hub loopback validation exist; general media continuity remains open. | Open: direct browser-member admission/signaling validation. | Open: multi-source expansion. | None. |
+| 6. Media plane | Partial: bounded file media, hub loopback validation, and opt-in sidecar endpoint media proxy exist; general media continuity remains open. | Open: direct ReDevice stand acceptance, direct browser-member admission/signaling validation. | Open: multi-source expansion. | None. |
 | 7. Skill/scenario lifecycle | Open: communication model must feed lifecycle and artifact hardening. | Open: provenance UX and operator clarity. | None. | None. |
 
 ## Current Status
@@ -120,6 +120,10 @@ transport-only `/ws` and `/yws` handoff as ready.
 - The route tunnel contract now clears stale blocker strings when `/ws` or
   `/yws` handoff is ready, and the sidecar proxy accepts browser-compatible
   `/yws/{room}` paths in addition to `/yws?ws=<room>`.
+- The sidecar can expose an explicitly enabled read-only HTTP media proxy for
+  endpoint file delivery. This is the preferred legacy ReDevice slideshow path
+  when `ADAOS_REDEVICE_MEDIA_BASES` points to the listener; `root_relay_inline`
+  remains the emergency fallback when no endpoint-reachable base is published.
 - This repository state should be described as **implemented with hub default
   enabled and partially stand-accepted for local transport-only handoff**.
   Full acceptance still requires A/B/root-routed browser survival and
