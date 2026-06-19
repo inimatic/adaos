@@ -973,10 +973,17 @@ def _thin_runtime_reliability_payload(
             "transport": {},
         }
     state_sync = _state_sync_snapshot(sync_runtime)
+    sidecar_enablement = _coerce_dict(sidecar_fields.get("sidecarEnablement"))
+    sidecar_enabled = bool(sidecar_enablement.get("enabled"))
     ws_handoff_ready = bool(sidecar_fields.get("browserWsHandoffReady"))
     yws_handoff_ready = bool(sidecar_fields.get("browserYwsHandoffReady"))
     ws_handoff_state = str(sidecar_fields.get("browserWsHandoffState") or "unknown").strip().lower()
-    if ws_handoff_ready:
+    if not sidecar_enabled:
+        browser_transport = "ready"
+        browser_transition = "ready"
+        browser_reason = "runtime_browser_route_sidecar_disabled"
+        browser_blockers = []
+    elif ws_handoff_ready:
         browser_transport = "ready"
         browser_transition = "ready"
         browser_reason = "sidecar_browser_route_ready"
@@ -991,7 +998,15 @@ def _thin_runtime_reliability_payload(
         browser_transition = "degraded"
         browser_reason = "browser_events_ws_handoff_not_ready"
         browser_blockers = ["browser_events_ws_handoff_not_ready"]
-    required_ready = ws_handoff_ready and yws_handoff_ready
+    required_ready = (not sidecar_enabled) or (ws_handoff_ready and yws_handoff_ready)
+    required_reason = (
+        "runtime_browser_route_sidecar_disabled"
+        if not sidecar_enabled
+        else "sidecar_browser_route_ready"
+        if required_ready
+        else "sidecar_browser_route_starting"
+    )
+    required_served_by = "runtime" if not sidecar_enabled else "supervisor_sidecar"
     connectivity = {
         "requiredUpstreamLink": {
             "kind": "hub_root",
@@ -999,9 +1014,9 @@ def _thin_runtime_reliability_payload(
             "transportState": "ready" if required_ready else "degraded",
             "transitionState": "ready" if required_ready else "link_starting",
             "plannedTransition": {"active": False, "reason": None},
-            "reason": "sidecar_browser_route_ready" if required_ready else "sidecar_browser_route_starting",
+            "reason": required_reason,
             "blockers": [] if required_ready else ["browser_yjs_ws_handoff_not_ready"],
-            "servedBy": "supervisor_sidecar",
+            "servedBy": required_served_by,
         },
         "browserControlRoute": {
             "kind": "browser_control_route",
@@ -1011,7 +1026,7 @@ def _thin_runtime_reliability_payload(
             "plannedTransition": {"active": False, "reason": None},
             "reason": browser_reason,
             "blockers": browser_blockers,
-            "servedBy": "supervisor_sidecar",
+            "servedBy": "runtime" if not sidecar_enabled else "supervisor_sidecar",
         },
     }
     return {
@@ -1059,6 +1074,8 @@ def _webrtc_yjs_env_enabled() -> tuple[bool, str | None, str]:
 
 def _compact_webrtc_yjs_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
     sync_runtime = _coerce_dict(runtime.get("sync_runtime"))
+    if not sync_runtime and isinstance(runtime.get("transport"), dict):
+        sync_runtime = runtime
     transport = _coerce_dict(sync_runtime.get("transport"))
     enabled, env_value, source = _webrtc_yjs_env_enabled()
     peer_total = int(transport.get("webrtc_peer_total") or 0)

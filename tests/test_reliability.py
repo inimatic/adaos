@@ -2784,6 +2784,84 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     assert thin_metrics["last_body_bytes"] == 0
 
 
+def test_node_reliability_summary_thin_mode_keeps_member_runtime_route_ready(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.services.status import StatusRegistry
+
+    registry = StatusRegistry()
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(status_registry=registry, paths=SimpleNamespace()))
+    monkeypatch.setattr(
+        node_api,
+        "load_config",
+        lambda: SimpleNamespace(role="member"),
+    )
+    monkeypatch.setattr(
+        node_api,
+        "_thin_sidecar_runtime_fields",
+        lambda: {
+            "sidecarEnablement": {
+                "enabled": False,
+                "defaultEnabled": False,
+                "explicit": False,
+                "source": "role_default",
+                "role": "member",
+                "envVar": None,
+                "envValue": None,
+                "reason": "non-hub runtimes keep sidecar disabled by default",
+            },
+            "sidecarContinuity": {
+                "currentSupport": "not_applicable",
+                "hubRuntimeUpdate": "allow",
+                "required": False,
+                "pendingBoundaries": [],
+                "readyBoundaries": [],
+                "blockers": [],
+            },
+            "sidecarProgress": {
+                "state": "in_progress",
+                "percent": 50.0,
+                "completedMilestones": 2,
+                "milestoneTotal": 4,
+                "currentMilestone": "browser_events_ws_handoff",
+                "nextBlocker": "browser route websocket still terminates in the runtime FastAPI app",
+            },
+            "routeTunnel": {
+                "currentSupport": "disabled",
+                "ws": {"current_support": "disabled"},
+                "yws": {"current_support": "disabled"},
+            },
+            "browserWsHandoffReady": False,
+            "browserYwsHandoffReady": False,
+            "browserWsHandoffState": "planned",
+            "browserYwsHandoffState": "planned",
+            "browserWsHandoffBlocker": "browser route websocket still terminates in the runtime FastAPI app",
+            "browserYwsHandoffBlocker": "Yjs websocket/session ownership still lives in the runtime gateway",
+        },
+    )
+    monkeypatch.setattr(
+        node_api,
+        "yjs_sync_runtime_snapshot",
+        lambda **_: {
+            "available": False,
+            "assessment": {
+                "state": "not_applicable",
+                "reason": "local Yjs store runtime is observed on the hub only",
+            },
+            "transport": {},
+        },
+    )
+
+    payload = node_api._thin_runtime_reliability_payload(registry.snapshot(), webspace_id="desktop")
+
+    assert payload["connectivity"]["browserControlRoute"]["transportState"] == "ready"
+    assert payload["connectivity"]["browserControlRoute"]["transitionState"] == "ready"
+    assert payload["connectivity"]["browserControlRoute"]["reason"] == "runtime_browser_route_sidecar_disabled"
+    assert payload["connectivity"]["requiredUpstreamLink"]["transportState"] == "ready"
+    assert payload["connectivity"]["requiredUpstreamLink"]["servedBy"] == "runtime"
+    assert payload["stateSync"]["transportState"] == "not_applicable"
+    assert payload["stateSync"]["firstSyncState"] == "not_applicable"
+
+
 def test_node_reliability_summary_metrics_exposes_acceptance_diagnostics(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router
