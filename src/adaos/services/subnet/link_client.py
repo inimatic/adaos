@@ -248,6 +248,9 @@ class MemberLinkClient:
         self._connected_at = 0.0
         self._last_message_at = 0.0
         self._last_pong_at = 0.0
+        self._hello_ack_ok = False
+        self._hello_ack_at = 0.0
+        self._last_hello_ack_error = ""
         self._ws_url = ""
         self._hub_node_id = ""
         self._last_hub_event_type = ""
@@ -394,10 +397,12 @@ class MemberLinkClient:
     def is_connected(self) -> bool:
         if not self._connected.is_set():
             return False
+        if not self._hello_ack_ok or self._hello_ack_at <= 0.0:
+            return False
         last_activity_at = max(
             float(self._last_pong_at or 0.0),
             float(self._last_message_at or 0.0),
-            float(self._connected_at or 0.0),
+            float(self._hello_ack_at or 0.0),
         )
         if last_activity_at <= 0.0:
             return False
@@ -406,6 +411,11 @@ class MemberLinkClient:
         except Exception:
             stale_after_s = 35.0
         return (time.time() - last_activity_at) <= max(15.0, stale_after_s)
+
+    @staticmethod
+    def _hello_ack_failure_reason(exc: BaseException, *, fallback: str = "") -> str:
+        reason = str(getattr(exc, "reason", "") or fallback or type(exc).__name__).strip()
+        return reason or type(exc).__name__
 
     def snapshot(self) -> dict[str, Any]:
         now = time.time()
@@ -421,6 +431,9 @@ class MemberLinkClient:
             "ws_url": self._ws_url,
             "hub_node_id": self._hub_node_id,
             "connected_ago_s": round(max(0.0, now - self._connected_at), 3) if self._connected_at else None,
+            "hello_ack_ok": bool(self._hello_ack_ok),
+            "hello_ack_ago_s": round(max(0.0, now - self._hello_ack_at), 3) if self._hello_ack_at else None,
+            "last_hello_ack_error": self._last_hello_ack_error or None,
             "last_message_ago_s": round(max(0.0, now - self._last_message_at), 3) if self._last_message_at else None,
             "last_pong_ago_s": round(max(0.0, now - self._last_pong_at), 3) if self._last_pong_at else None,
             "last_hub_event_type": self._last_hub_event_type,
@@ -825,6 +838,8 @@ class MemberLinkClient:
         self._task = None
         self._connected.clear()
         self._connected_at = 0.0
+        self._hello_ack_ok = False
+        self._hello_ack_at = 0.0
         self._loop = None
         if self._snapshot_task and not self._snapshot_task.done():
             self._snapshot_task.cancel()
@@ -1112,6 +1127,9 @@ class MemberLinkClient:
                 self._last_ws_close_code = None
                 self._last_ws_close_reason = ""
                 self._last_ws_close_error = ""
+                self._hello_ack_ok = False
+                self._hello_ack_at = 0.0
+                self._hub_node_id = ""
                 async with websockets.connect(
                     ws_url,
                     additional_headers=headers,
@@ -1120,12 +1138,6 @@ class MemberLinkClient:
                     ping_timeout=ws_ping_timeout_s,
                     compression=ws_compression,
                 ) as ws:
-                    self._connected.set()
-                    self._connected_at = time.time()
-                    self._last_message_at = self._connected_at
-                    self._last_pong_at = self._connected_at
-                    backoff = 1.0
-
                     hello = {
                         "t": "hello",
                         "node_id": conf.node_id,
@@ -1143,11 +1155,38 @@ class MemberLinkClient:
                             ack = json.loads(raw_ack)
                         except Exception:
                             ack = {}
+                    except asyncio.TimeoutError:
+                        self._last_hello_ack_error = "hello_ack_timeout"
+                        self._last_ws_close_reason = self._last_hello_ack_error
+                        with contextlib.suppress(Exception):
+                            await ws.close(code=1011, reason=self._last_hello_ack_error)
+                        raise RuntimeError(self._last_hello_ack_error)
+                    except Exception as exc:
+                        self._remember_ws_close(exc)
+                        reason = self._hello_ack_failure_reason(exc, fallback=self._last_ws_close_reason)
+                        self._last_hello_ack_error = reason
+                        self._last_ws_close_error = type(exc).__name__
+                        self._last_ws_close_reason = reason
+                        with contextlib.suppress(Exception):
+                            await ws.close(code=1011, reason=reason[:120])
+                        raise RuntimeError(reason)
+                    if not isinstance(ack, dict) or ack.get("t") != "hello.ack" or ack.get("ok") is not True:
+                        error = "hello_ack_rejected"
                         if isinstance(ack, dict):
-                            self._hub_node_id = str(ack.get("hub_node_id") or "").strip()
-                            self._last_message_at = time.time()
-                    except Exception:
-                        pass
+                            error = str(ack.get("error") or error).strip() or error
+                        self._last_hello_ack_error = error
+                        self._last_ws_close_reason = error
+                        with contextlib.suppress(Exception):
+                            await ws.close(code=1011, reason=error[:120])
+                        raise RuntimeError(error)
+                    self._hub_node_id = str(ack.get("hub_node_id") or "").strip()
+                    self._hello_ack_ok = True
+                    self._hello_ack_at = time.time()
+                    self._last_hello_ack_error = ""
+                    self._connected.set()
+                    self._connected_at = self._hello_ack_at
+                    self._last_message_at = self._hello_ack_at
+                    backoff = 1.0
                     try:
                         now = time.time()
                         await ws.send(
@@ -1335,6 +1374,8 @@ class MemberLinkClient:
                     pass
                 self._connected.clear()
                 self._connected_at = 0.0
+                self._hello_ack_ok = False
+                self._hello_ack_at = 0.0
                 if had_session:
                     self._maybe_trim_allocator_after_link_cycle(reason="session_end")
 
@@ -1380,7 +1421,7 @@ class MemberLinkClient:
             last_activity_at = max(
                 float(self._last_pong_at or 0.0),
                 float(self._last_message_at or 0.0),
-                float(self._connected_at or 0.0),
+                float(self._hello_ack_at or 0.0),
             )
             if last_activity_at > 0.0 and (now - last_activity_at) > pong_stale_after_s:
                 _log.warning(

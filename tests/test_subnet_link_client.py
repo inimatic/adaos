@@ -49,6 +49,47 @@ def test_member_link_ws_compression_can_be_enabled(monkeypatch) -> None:
     assert mod._member_link_ws_compression() == "custom"
 
 
+def test_member_link_requires_hello_ack_before_connected(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    client._connected.set()
+    client._connected_at = 100.0
+    client._last_message_at = 100.0
+    client._last_pong_at = 100.0
+    monkeypatch.setattr(mod.time, "time", lambda: 110.0)
+    monkeypatch.setattr(client, "_pong_stale_after_s", lambda: 35.0)
+
+    assert client.is_connected() is False
+    snapshot = client.snapshot()
+    assert snapshot["connected"] is False
+    assert snapshot["hello_ack_ok"] is False
+
+
+def test_member_link_accepts_recent_hello_ack_as_initial_hub_activity(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    client._connected.set()
+    client._connected_at = 100.0
+    client._hello_ack_ok = True
+    client._hello_ack_at = 100.0
+    client._last_message_at = 100.0
+    monkeypatch.setattr(mod.time, "time", lambda: 110.0)
+    monkeypatch.setattr(client, "_pong_stale_after_s", lambda: 35.0)
+
+    assert client.is_connected() is True
+    snapshot = client.snapshot()
+    assert snapshot["connected"] is True
+    assert snapshot["hello_ack_ok"] is True
+    assert snapshot["hello_ack_ago_s"] == 10.0
+
+
+def test_member_link_hello_ack_failure_preserves_relay_close_reason() -> None:
+    class _ClosedBeforeAck(Exception):
+        reason = "no_upstream"
+
+    assert mod.MemberLinkClient._hello_ack_failure_reason(_ClosedBeforeAck()) == "no_upstream"
+    assert mod.MemberLinkClient._hello_ack_failure_reason(RuntimeError("boom"), fallback="hub_open_ack_timeout") == "hub_open_ack_timeout"
+    assert mod.MemberLinkClient._hello_ack_failure_reason(RuntimeError("boom")) == "RuntimeError"
+
+
 def test_member_link_allocator_trim_is_rate_limited(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     calls: list[int] = []

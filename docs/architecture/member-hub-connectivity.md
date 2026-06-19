@@ -74,6 +74,13 @@ As of the current implementation increment:
 - member-owned runtime data is replicated through `yjs.node_state` semantic
   merge for `data.nodes/<member_node_id>`; the hub is the replica/materializer,
   not the source of truth for that branch
+- member link health is handshake-gated: an opened WebSocket or root relay route
+  is not enough for `connected_to_hub`. The member reports the link connected
+  only after `hello.ack ok=true` from the active hub runtime and recent hub
+  activity. Relay failures such as `no_upstream`, `hello_ack_timeout`, or
+  `hub_open_ack_timeout` remain disconnected evidence so the supervisor
+  watchdog can recover the member-hub session instead of treating the node as
+  healthy.
 
 This closes the biggest developer-experience gap, but it is still not the final
 production model because sidecar-aware ownership and deeper recovery policy are not implemented yet.
