@@ -2196,12 +2196,19 @@ class RouterService:
             try:
                 ctx.skill_ctx.set("voice_chat_skill", skill_dir)
                 # Ensure SDK io.out helpers (chat_append/say) include routing meta.
+                payload: dict[str, Any] = {"text": text, "_meta": meta}
+                webspace_id = str(meta.get("webspace_id") or "").strip()
+                if webspace_id:
+                    payload["webspace_id"] = webspace_id
+                target_node_id = str(meta.get("target_node_id") or "").strip()
+                if target_node_id:
+                    payload["target_node_id"] = target_node_id
                 with io_meta(meta):
                     return execute_tool(
                         skill_dir,
                         module="handlers.main",
                         attr="handle_text",
-                        payload={"text": text, "_meta": meta},
+                        payload=payload,
                     )
             finally:
                 if prev is None:

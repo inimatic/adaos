@@ -115,7 +115,7 @@ async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
 
 async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(monkeypatch) -> None:
     bus = LocalEventBus()
-    calls: list[tuple[str, dict[str, object]]] = []
+    calls: list[dict[str, object]] = []
     teacher_calls: list[object] = []
 
     class _SkillCtx:
@@ -158,7 +158,7 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(mon
     monkeypatch.setattr(
         router_service_module,
         "execute_tool",
-        lambda *_args, **kwargs: calls.append((kwargs["payload"]["text"], dict(kwargs["payload"].get("_meta") or {}))) or {"ok": True, "reply": "ok"},
+        lambda *_args, **kwargs: calls.append(dict(kwargs["payload"])) or {"ok": True, "reply": "ok"},
     )
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
@@ -177,7 +177,13 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(mon
     )
 
     await bus.wait_for_idle(timeout=1.0)
-    assert calls == [("weather in Berlin", {"route_id": "voice_chat", "webspace_id": "desktop"})]
+    assert calls == [
+        {
+            "text": "weather in Berlin",
+            "webspace_id": "desktop",
+            "_meta": {"route_id": "voice_chat", "webspace_id": "desktop"},
+        }
+    ]
     assert teacher_calls == []
 
 
