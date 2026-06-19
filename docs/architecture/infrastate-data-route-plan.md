@@ -48,6 +48,9 @@ changing runtime behavior.
 - [x] Add stream receiver budget/guard/route metadata in `webui.json`.
 - [x] Declare node-owned inventory and marketplace streams with `scope: node`
   so hub-routed delivery still carries `target_node_id`.
+- [x] Carry `scope: node` on inventory and marketplace stream data sources too,
+  so modal materialization and stale receiver caches cannot drop the selected
+  member node.
 - [x] Preserve pressure semantics while validating: Yjs `block` stops
   projection, Yjs `throttle` stretches the projection interval, and stream
   snapshots continue through stream guard.

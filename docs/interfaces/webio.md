@@ -207,6 +207,13 @@ control payloads, and the publisher should echo the same node metadata in
 back to hub-local data; the browser surfaces a missing-node diagnostic state
 instead of subscribing.
 
+Node ownership must also survive widget/materialization boundaries. When a
+modal or desktop schema binds a stream `dataSource` to a concrete node, the
+enriched data source should carry both `nodeId` and `scope: "node"`. The client
+passes that scope into `WebIoStreamService.observe`, so an explicit widget node
+can override a stale receiver cache that still has `transport: "hub"` but no
+receiver-level scope.
+
 ## Publishing Stream Data
 
 Skills publish browser stream data via `io.out.stream.publish`:
