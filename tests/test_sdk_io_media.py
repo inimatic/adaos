@@ -69,6 +69,38 @@ def test_sdk_io_media_advertises_endpoint_direct_urls(monkeypatch, tmp_path):
     assert descriptor["delivery"]["preferred_route"] == "hub_direct_http"
 
 
+def test_sdk_io_media_publishes_without_agent_context(monkeypatch, tmp_path):
+    from adaos.sdk.io import media as sdk_media
+
+    source = tmp_path / "source.jpg"
+    Image.new("RGB", (320, 180), color=(64, 128, 192)).save(source, "JPEG", quality=82)
+    base_dir = tmp_path / ".adaos"
+    media_runtime = base_dir / "workspace" / "skills" / ".runtime" / "mediaserver"
+    media_runtime.mkdir(parents=True)
+    (media_runtime / "current_version").write_text("0.8.0", encoding="utf-8")
+    monkeypatch.setattr(sdk_media, "current_base_dir", lambda: base_dir)
+    monkeypatch.setenv("ADAOS_REDEVICE_MEDIA_BASES", "http://192.168.0.30:7425")
+
+    def no_agent_context(_filename: str):
+        raise RuntimeError("AgentContext is not initialized. Call set_ctx(...) during app bootstrap.")
+
+    monkeypatch.setattr(sdk_media, "media_file_path", no_agent_context)
+
+    descriptor = sdk_media.publish_media_file(
+        source,
+        content_ref="content:no-agent",
+        namespace="demo",
+        variant="endpoint",
+        api_token="token",
+    )
+
+    assert descriptor["ok"] is True
+    assert descriptor["direct_urls"][0].startswith("http://192.168.0.30:7425/api/node/media/files/content/")
+    assert Path(descriptor["path"]).is_file()
+    assert ".runtime" in descriptor["path"]
+    assert "mediaserver" in descriptor["path"]
+
+
 def test_sdk_io_media_does_not_expand_implicit_loopback_base(monkeypatch, tmp_path):
     from adaos.sdk.io import media as sdk_media
 

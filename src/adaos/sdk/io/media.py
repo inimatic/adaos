@@ -11,7 +11,9 @@ from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
 from adaos.services.agent_context import get_ctx
-from adaos.services.media_library import media_file_path
+from adaos.services.media_library import MEDIA_SKILL_NAME, media_file_path, sanitize_media_filename
+from adaos.services.runtime_paths import current_base_dir
+from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
 def image_fingerprint(path: str | Path) -> str:
@@ -193,6 +195,26 @@ def direct_media_content_urls(filename: str, *, api_token: str | None = None) ->
     return [base.rstrip("/") + path for base in direct_media_base_urls()]
 
 
+def _media_file_path_for_publish(filename: str) -> Path:
+    try:
+        return media_file_path(filename)
+    except RuntimeError as exc:
+        if "AgentContext is not initialized" not in str(exc):
+            raise
+    name = sanitize_media_filename(filename)
+    env = SkillRuntimeEnvironment(
+        skills_root=current_base_dir() / "workspace" / "skills",
+        skill_name=MEDIA_SKILL_NAME,
+    )
+    env.ensure_base()
+    active_version = env.resolve_active_version()
+    if active_version:
+        env.ensure_data_dirs(active_version)
+        return env.files_dir(active_version) / name
+    env.ensure_data_dirs()
+    return env.files_dir() / name
+
+
 def publish_media_file(
     path: str | Path,
     *,
@@ -207,7 +229,7 @@ def publish_media_file(
     safe_variant = _safe_token(variant) or "media"
     suffix = source.suffix.lower() if source.suffix else ".jpg"
     filename = f"{safe_namespace}-{hashlib.sha256(str(content_ref or source).encode('utf-8')).hexdigest()[:24]}-{safe_variant}{suffix}"
-    target = media_file_path(filename)
+    target = _media_file_path_for_publish(filename)
     if not target.exists() or target.stat().st_size != source.stat().st_size:
         shutil.copyfile(source, target)
     direct_urls = direct_media_content_urls(target.name, api_token=api_token)
