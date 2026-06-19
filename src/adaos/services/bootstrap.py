@@ -413,6 +413,25 @@ def _should_forward_node_status_to_members(payload: object) -> bool:
     return not bool(meta.get("subnet_origin_node_id"))
 
 
+def _webio_control_target_node_id(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    return str(
+        payload.get("target_node_id")
+        or payload.get("node_target_id")
+        or payload.get("node_id")
+        or meta.get("target_node_id")
+        or meta.get("node_target_id")
+        or meta.get("node_id")
+        or ""
+    ).strip()
+
+
+def _should_forward_webio_control_to_members(payload: object) -> bool:
+    return bool(_webio_control_target_node_id(payload))
+
+
 def _node_status_dedupe_window_s() -> float:
     raw = os.getenv("ADAOS_NODE_STATUS_DEDUPE_WINDOW_S", "30") or "30"
     return _bounded_interval_seconds(raw, default=30.0, minimum=1.0)
@@ -2225,6 +2244,8 @@ class BootstrapService:
 
                 def _forward_webio_stream_control_to_members(ev: Event) -> None:
                     payload = ev.payload if isinstance(ev.payload, dict) else {}
+                    if not _should_forward_webio_control_to_members(payload):
+                        return
                     try:
                         asyncio.get_running_loop().create_task(
                             _get_hub_link_manager().broadcast_event(

@@ -802,6 +802,26 @@ def test_should_forward_node_status_to_members_skips_member_originated_payloads(
     )
 
 
+def test_should_forward_webio_control_to_members_requires_node_target() -> None:
+    assert bootstrap_mod._should_forward_webio_control_to_members(
+        {"receiver": "infrastate.skills", "webspace_id": "desktop"}
+    ) is False
+    assert bootstrap_mod._should_forward_webio_control_to_members(
+        {
+            "receiver": "infrastate.skills",
+            "webspace_id": "desktop",
+            "target_node_id": "member-1",
+        }
+    ) is True
+    assert bootstrap_mod._should_forward_webio_control_to_members(
+        {
+            "receiver": "infrastate.skills",
+            "webspace_id": "desktop",
+            "_meta": {"node_id": "member-2"},
+        }
+    ) is True
+
+
 def test_should_emit_node_status_suppresses_duplicate_fingerprint_within_window() -> None:
     payload = {
         "node_id": "hub-1",
