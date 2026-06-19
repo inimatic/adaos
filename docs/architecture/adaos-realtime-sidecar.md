@@ -297,6 +297,10 @@ Contract:
 - [x] `[must]` Keep endpoint direct URLs explicit. The SDK must not turn a
   loopback runtime URL into a LAN URL unless the operator publishes a real
   endpoint-reachable base such as `ADAOS_REDEVICE_MEDIA_BASES`.
+- [x] `[must]` Keep the media proxy independent from runtime `AgentContext`.
+  The sidecar resolves media storage from `ADAOS_BASE_DIR` and the skill
+  runtime layout so endpoint file delivery can continue while the main runtime
+  context is unavailable.
 - [ ] `[must]` Capture stand evidence that a legacy ReDevice receives slideshow
   content through `local_http`/sidecar media proxy instead of
   `root_relay_inline`.

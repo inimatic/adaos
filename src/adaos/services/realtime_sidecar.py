@@ -774,9 +774,32 @@ def _media_proxy_token_ok(*, headers: dict[str, str], query: dict[str, str]) -> 
 
 
 def _media_proxy_file_path(filename: str) -> Path:
-    from adaos.services.media_library import media_file_path
+    from adaos.services.media_library import MEDIA_SKILL_NAME, media_file_path, sanitize_media_filename
+    from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
-    return media_file_path(filename)
+    try:
+        return media_file_path(filename)
+    except RuntimeError as exc:
+        if "AgentContext is not initialized" not in str(exc):
+            raise
+    name = sanitize_media_filename(filename)
+    env = SkillRuntimeEnvironment(
+        skills_root=current_base_dir() / "workspace" / "skills",
+        skill_name=MEDIA_SKILL_NAME,
+    )
+    active_version = env.resolve_active_version()
+    candidates: list[Path] = []
+    if active_version:
+        candidates.append(env.files_dir(active_version) / name)
+    candidates.append(env.runtime_root / "data" / "files" / name)
+    for version in env.list_versions():
+        candidate = env.files_dir(version) / name
+        if candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else env.runtime_root / "data" / "files" / name
 
 
 def _media_proxy_guess_media_type(filename: str) -> str:

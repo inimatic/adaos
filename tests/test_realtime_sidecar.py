@@ -333,6 +333,27 @@ def test_realtime_sidecar_media_proxy_contract_reflects_explicit_listener(
     assert contract["range_requests"] is True
 
 
+def test_realtime_sidecar_media_proxy_resolves_runtime_media_without_agent_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    base_dir = tmp_path / "base"
+    files_dir = base_dir / "workspace" / "skills" / ".runtime" / "mediaserver" / "v0.8" / "data" / "files"
+    files_dir.mkdir(parents=True)
+    media_file = files_dir / "frame.jpg"
+    media_file.write_bytes(b"frame")
+    current_version = base_dir / "workspace" / "skills" / ".runtime" / "mediaserver" / "current_version"
+    current_version.write_text("0.8.0", encoding="utf-8")
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(base_dir))
+
+    def _missing_ctx(_filename: str) -> Path:
+        raise RuntimeError("AgentContext is not initialized. Call set_ctx(...) during app bootstrap.")
+
+    monkeypatch.setattr("adaos.services.media_library.media_file_path", _missing_ctx)
+
+    assert realtime_sidecar_mod._media_proxy_file_path("frame.jpg") == media_file
+
+
 def test_realtime_sidecar_media_proxy_serves_token_protected_content(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
