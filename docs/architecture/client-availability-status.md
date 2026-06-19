@@ -128,6 +128,13 @@ device-policy lifecycle states such as `revoked`, `expired`, `disabled`,
 keep the hub in `Limited`. `knownTotal` can still expose the raw inventory size
 for diagnostics.
 
+Canonical `memberAvailability` is volatile runtime evidence, not a stable
+status-plane card. A browser may use the thin reliability summary ETag to avoid
+unneeded downloads, but it must periodically refresh the compact full summary
+even when the thin ETag returns `304 Not Modified`; otherwise one browser can
+keep an old `members=0` view while another browser has already fetched the
+current hub `member_total=1` state.
+
 ## Update Integration
 
 Update state is availability-affecting:
