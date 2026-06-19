@@ -47,8 +47,11 @@ markers for workspace skills:
 - `runtime-different`: the workspace and active runtime versions differ, but
   the CLI could not order the versions.
 
-Use `adaos skill status <name> --fetch --diff` before publishing when you need
-the exact comparison against the registry base.
+By default, workspace status compares against the registry remote
+(`adaos-registry.git` main) and best-effort refreshes that remote-tracking ref
+before computing path divergence. Use `adaos skill status <name> --fetch --diff`
+when you also want an explicit fetch warning and the exact diff against the
+registry base.
 
 For browser-facing or Builder-authored skills, follow
 [Builder-Safe Skill Development Guide](guides/llm-skill-development.md) and

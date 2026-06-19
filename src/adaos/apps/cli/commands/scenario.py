@@ -209,9 +209,12 @@ def status(
             ensure_remote(workspace_root, name=REGISTRY_REMOTE, url=REGISTRY_URL)
             remote = REGISTRY_REMOTE
             ref = f"{REGISTRY_REMOTE}/{REGISTRY_BRANCH}"
-        if fetch:
+            using_default_registry_ref = True
+        else:
+            using_default_registry_ref = False
+        if fetch or using_default_registry_ref:
             err = fetch_remote(workspace_root, remote=remote)
-            if err:
+            if err and fetch:
                 typer.secho(f"git fetch failed: {err}", fg=typer.colors.YELLOW)
         base_ref = (ref or "").strip() or resolve_base_ref(workspace_root, remote=remote)
     else:

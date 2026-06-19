@@ -11,6 +11,15 @@ The goal is not to hide overload. The goal is to keep the node alive while
 preserving enough evidence to identify and fix the component that caused the
 overload.
 
+Current Yjs load-mark handling keeps that distinction explicit. Skill and SDK
+owners are still evaluated against peak and sustained byte/write thresholds,
+because those owners can create write amplification. Core webspace semantic
+rebuilds are different: a skill/scenario activation can legitimately publish a
+single bulk snapshot from `webspace_runtime.rebuild_async` or
+`webspace_runtime.rebuild_sync`. Those core rebuild buckets are alert-classified
+by sustained window pressure by default, while their per-second peaks remain
+visible in load-mark snapshots and history.
+
 ## Problem statement
 
 AdaOS skills can evolve quickly, including code produced or edited by LLMs.

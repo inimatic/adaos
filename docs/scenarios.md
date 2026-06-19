@@ -30,6 +30,11 @@ adaos scenario status my_scenario --fetch --diff
 adaos scenario status --space dev
 ```
 
+By default, workspace status compares against the registry remote
+(`adaos-registry.git` main) and best-effort refreshes that remote-tracking ref
+before computing path divergence. Use `--fetch --diff` when you also want an
+explicit fetch warning and the exact path diff.
+
 ## Relation to webspaces
 
 Scenarios are also used by the Yjs webspace runtime:

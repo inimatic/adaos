@@ -281,7 +281,8 @@ adaos secrets import dump.json --skill weather_skill
 
 Every install/test/activate/run operation logs under `slots/<slot>/logs/`. `adaos skill status --json` surfaces runtime state (active version/slot/readiness/tests). For progress checks:
 
-- Workspace: `adaos skill status <NAME> --fetch --diff` compares `skills/<NAME>` against the workspace registry remote (`adaos-registry.git` main).
+- Workspace: `adaos skill status <NAME>` compares `skills/<NAME>` against the workspace registry remote (`adaos-registry.git` main) and best-effort refreshes that remote-tracking ref before computing path divergence.
+- Workspace with operator diagnostics: `adaos skill status <NAME> --fetch --diff` additionally prints fetch warnings and renders the exact path diff.
 - Dev: `adaos skill status --space dev <NAME> --fetch --diff` compares the dev folder against the hub draft state via Root API (requires hub mTLS keys from the bootstrap `node.yaml`).
 
 Workspace markers are split by state plane. `git-dirty` means local filesystem
@@ -300,6 +301,16 @@ changes, or an explicit manifest-vs-registry version drift, then runs the same
 version bump, registry update, commit, and push flow used by
 `adaos skill push <name> -m ...`. Batch release commits use the standard message
 `chore(<skill>): release workspace changes`.
+
+Yjs owner-flow warnings are load-mark diagnostics, not install/activation
+failures. Skill and SDK owners still use the normal peak and sustained
+thresholds because they can create write amplification. Core webspace semantic
+rebuilds (`webspace_runtime.rebuild_async` / `webspace_runtime.rebuild_sync`)
+publish normal bulk snapshots after skill or scenario activation; those core
+rebuild buckets are classified by sustained window pressure by default. Their
+per-second peaks remain visible in snapshots and history. Set
+`ADAOS_YJS_LOAD_MARK_CORE_REBUILD_PEAK_ALERTS=1` only when debugging core
+rebuild bursts themselves.
 
 ## Weather skill reference
 

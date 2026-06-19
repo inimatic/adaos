@@ -46,12 +46,34 @@ _GATEWAY_CRITICAL_WPS = max(
 _OWNER_ALERT_MIN_INTERVAL_SEC = max(0.0, float(os.getenv("ADAOS_YJS_LOAD_MARK_OWNER_ALERT_MIN_INTERVAL_SEC") or "60"))
 _OWNER_ALERT_QUEUE_MAX = max(1, int(os.getenv("ADAOS_YJS_LOAD_MARK_OWNER_ALERT_QUEUE_MAX") or "256"))
 _GATEWAY_OWNER_BUCKET = f"{_OWNER_PREFIX}gateway_ws"
+_CORE_REBUILD_OWNER_BUCKETS = frozenset(
+    {
+        f"{_OWNER_PREFIX}core",
+        f"{_OWNER_PREFIX}core_webspace_runtime",
+    }
+)
+_CORE_REBUILD_SOURCES = frozenset(
+    {
+        "webspace_runtime.rebuild_async",
+        "webspace_runtime.rebuild_sync",
+    }
+)
+_CORE_REBUILD_CHANNEL_PREFIX = "core.webspace_runtime"
 _GATEWAY_PEAK_ALERTS = str(os.getenv("ADAOS_YJS_LOAD_MARK_GATEWAY_PEAK_ALERTS") or "0").strip().lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
+_CORE_REBUILD_PEAK_ALERTS = (
+    str(os.getenv("ADAOS_YJS_LOAD_MARK_CORE_REBUILD_PEAK_ALERTS") or "0").strip().lower()
+    in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+)
 
 _LOCK = threading.RLock()
 _WEBSPACE_STATE: dict[str, dict[str, Any]] = {}
@@ -643,18 +665,41 @@ def _maybe_log_owner_pressure(
     avg_wps = round(float(owner_state.get("recent_write_total") or 0) / float(_WINDOW_SEC), 3)
     peak_wps = round(float(peak_bucket_writes) / float(_BUCKET_SEC), 3)
     severity = None
-    if owner_bucket == _GATEWAY_OWNER_BUCKET and not _GATEWAY_PEAK_ALERTS:
+    sustained_only = (
+        _is_gateway_flow_bucket(owner_bucket, key_name="owner", bucket_state=owner_state)
+        and not _GATEWAY_PEAK_ALERTS
+    )
+    core_rebuild_flow = _is_core_rebuild_flow_bucket(owner_bucket, key_name="owner", bucket_state=owner_state)
+    if core_rebuild_flow and not _CORE_REBUILD_PEAK_ALERTS:
+        sustained_only = True
+    if sustained_only:
         # Browser attach can legitimately produce a short burst of tiny Yjs
-        # gateway writes. Alert here only when the flow is sustained across the
-        # load-mark window; keep per-second peaks visible in snapshots/history.
-        if avg_bps >= float(_CRITICAL_BPS) or avg_wps >= float(_GATEWAY_CRITICAL_WPS):
+        # gateway writes. Core semantic rebuild can similarly publish a normal
+        # bulk snapshot after skill/scenario activation. Alert here only when
+        # flow is sustained across the load-mark window; keep per-second peaks
+        # visible in snapshots/history.
+        high_wps = _GATEWAY_HIGH_WPS if owner_bucket == _GATEWAY_OWNER_BUCKET else _HIGH_WPS
+        critical_wps = (
+            _GATEWAY_CRITICAL_WPS if owner_bucket == _GATEWAY_OWNER_BUCKET else _CRITICAL_WPS
+        )
+        if avg_bps >= float(_CRITICAL_BPS) or avg_wps >= float(critical_wps):
             severity = "critical"
-        elif avg_bps >= float(_HIGH_BPS) or avg_wps >= float(_GATEWAY_HIGH_WPS):
+        elif avg_bps >= float(_HIGH_BPS) or avg_wps >= float(high_wps):
             severity = "high"
     else:
-        if peak_bps >= float(_CRITICAL_BPS) or avg_bps >= float(_CRITICAL_BPS) or peak_wps >= float(_CRITICAL_WPS) or avg_wps >= float(_CRITICAL_WPS):
+        if (
+            peak_bps >= float(_CRITICAL_BPS)
+            or avg_bps >= float(_CRITICAL_BPS)
+            or peak_wps >= float(_CRITICAL_WPS)
+            or avg_wps >= float(_CRITICAL_WPS)
+        ):
             severity = "critical"
-        elif peak_bps >= float(_HIGH_BPS) or avg_bps >= float(_HIGH_BPS) or peak_wps >= float(_HIGH_WPS) or avg_wps >= float(_HIGH_WPS):
+        elif (
+            peak_bps >= float(_HIGH_BPS)
+            or avg_bps >= float(_HIGH_BPS)
+            or peak_wps >= float(_HIGH_WPS)
+            or avg_wps >= float(_HIGH_WPS)
+        ):
             severity = "high"
     if not severity:
         return
@@ -1045,6 +1090,26 @@ def _gateway_status_for_write_rate(avg_wps: float, peak_wps: float) -> str:
     return "idle"
 
 
+def _sustained_status_for_rate(avg_bps: float, peak_bps: float) -> str:
+    if avg_bps >= float(_CRITICAL_BPS):
+        return "critical"
+    if avg_bps >= float(_HIGH_BPS):
+        return "high"
+    if peak_bps > 0.0 or avg_bps > 0.0:
+        return "nominal"
+    return "idle"
+
+
+def _sustained_status_for_write_rate(avg_wps: float, peak_wps: float) -> str:
+    if avg_wps >= float(_CRITICAL_WPS):
+        return "critical"
+    if avg_wps >= float(_HIGH_WPS):
+        return "high"
+    if peak_wps > 0.0 or avg_wps > 0.0:
+        return "nominal"
+    return "idle"
+
+
 def _is_gateway_flow_bucket(bucket_name: str, *, key_name: str, bucket_state: Mapping[str, Any] | None = None) -> bool:
     token = str(bucket_name or "").strip().lower()
     key = str(key_name or "").strip().lower()
@@ -1060,6 +1125,29 @@ def _is_gateway_flow_bucket(bucket_name: str, *, key_name: str, bucket_state: Ma
     if isinstance(bucket_state, Mapping):
         source = str(bucket_state.get("last_source") or "").strip().lower()
     return source == "gateway_ws" or source.startswith("yjs.gateway")
+
+
+def _is_core_rebuild_flow_bucket(
+    bucket_name: str,
+    *,
+    key_name: str,
+    bucket_state: Mapping[str, Any] | None = None,
+) -> bool:
+    key = str(key_name or "").strip().lower()
+    token = str(bucket_name or "").strip().lower()
+    if key == "owner":
+        if token not in _CORE_REBUILD_OWNER_BUCKETS:
+            return False
+    elif key != "root":
+        return False
+    source = ""
+    channel = ""
+    if isinstance(bucket_state, Mapping):
+        source = str(bucket_state.get("last_source") or "").strip().lower()
+        channel = str(bucket_state.get("last_channel") or "").strip().lower()
+    if source not in _CORE_REBUILD_SOURCES:
+        return False
+    return not channel or channel.startswith(_CORE_REBUILD_CHANNEL_PREFIX)
 
 
 def _snapshot_bucket_collection_locked(collection: dict[str, Any], *, key_name: str, now_ts: float) -> tuple[list[dict[str, Any]], str]:
@@ -1084,10 +1172,24 @@ def _snapshot_bucket_collection_locked(collection: dict[str, Any], *, key_name: 
         if _is_gateway_flow_bucket(str(bucket_name), key_name=key_name, bucket_state=bucket_state):
             byte_status = _gateway_status_for_rate(avg_bps, peak_bps)
             write_status = _gateway_status_for_write_rate(avg_wps, peak_wps)
+        elif (
+            _is_core_rebuild_flow_bucket(str(bucket_name), key_name=key_name, bucket_state=bucket_state)
+            and not _CORE_REBUILD_PEAK_ALERTS
+        ):
+            byte_status = _sustained_status_for_rate(avg_bps, peak_bps)
+            write_status = _sustained_status_for_write_rate(avg_wps, peak_wps)
         else:
             byte_status = _status_for_rate(avg_bps, peak_bps)
             write_status = _status_for_write_rate(avg_wps, peak_wps)
-        status = "critical" if "critical" in {byte_status, write_status} else "high" if "high" in {byte_status, write_status} else "nominal" if "nominal" in {byte_status, write_status} else "idle"
+        status = (
+            "critical"
+            if "critical" in {byte_status, write_status}
+            else "high"
+            if "high" in {byte_status, write_status}
+            else "nominal"
+            if "nominal" in {byte_status, write_status}
+            else "idle"
+        )
         if status == "critical":
             overall_state = "critical"
         elif status == "high" and overall_state != "critical":

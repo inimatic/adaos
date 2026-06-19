@@ -278,6 +278,30 @@ def test_load_mark_gateway_owner_peak_only_burst_does_not_warn(monkeypatch) -> N
     assert not calls
 
 
+def test_load_mark_core_rebuild_peak_only_burst_does_not_warn(monkeypatch) -> None:
+    _reset_load_mark_state()
+    calls = []
+    monkeypatch.setattr(load_mark_module, "_enqueue_owner_pressure_log", lambda *args: calls.append(args))
+
+    load_mark_module.record_write_update(
+        "desktop",
+        total_bytes=180 * 1024,
+        root_names=["ui", "data"],
+        now_ts=51.0,
+        source="webspace_runtime.rebuild_async",
+        owner="core:webspace_runtime",
+        channel="core.webspace_runtime.async",
+    )
+
+    snapshot = load_mark_module.yjs_load_mark_snapshot(webspace_id="desktop", now_ts=52.0)
+    owner_item = snapshot["selected_webspace"]["owners"]["_by_owner/core_webspace_runtime"]
+
+    assert owner_item["peak_bps"] >= float(load_mark_module._CRITICAL_BPS)
+    assert owner_item["status"] == "nominal"
+    assert snapshot["selected_webspace"]["assessment"]["state"] == "nominal"
+    assert not calls
+
+
 def test_load_mark_gateway_sustained_write_rate_still_warns(monkeypatch) -> None:
     _reset_load_mark_state()
     calls = []
