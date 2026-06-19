@@ -213,6 +213,63 @@ def retention_report() -> dict[str, Any]:
     }
 
 
+def verify_audio_input_content(
+    state: Mapping[str, Any],
+    endpoint: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    endpoint_data = endpoint or {}
+    segment = _mapping(state.get("last_segment"))
+    path_text = _text(segment.get("path"))
+    result: dict[str, Any] = {
+        "schema_version": "endpoint-audio-content-check.v1",
+        "ok": False,
+        "state": "missing_segment",
+        "path": path_text,
+        "segment": segment,
+        "policy": policy_report(endpoint_data) if endpoint_data else {},
+        "transport": {},
+        "retention": retention_report(),
+        "updated_at": _now(),
+    }
+    if endpoint_data:
+        try:
+            from adaos.sdk.redevice import select_transport
+
+            result["transport"] = select_transport(endpoint_data, intent="audio.capture.vad", allow_root_relay=True)
+        except Exception:
+            result["transport"] = {}
+    if not path_text:
+        return result
+    path = Path(path_text)
+    if not path.exists() or not path.is_file():
+        result["state"] = "segment_file_missing"
+        return result
+    try:
+        size = path.stat().st_size
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+        duration_ms = int((frames / float(rate or 1)) * 1000)
+        valid = size > 44 and frames > 0 and rate > 0 and channels > 0 and sample_width > 0
+        result.update(
+            {
+                "ok": valid,
+                "state": "ready" if valid else "invalid_wav",
+                "bytes": size,
+                "frames": frames,
+                "sample_rate": rate,
+                "channels": channels,
+                "sample_width_bytes": sample_width,
+                "duration_ms": duration_ms,
+            }
+        )
+    except Exception as exc:
+        result.update({"ok": False, "state": "wav_parse_failed", "detail": str(exc)})
+    return result
+
+
 def save_audio_segment(event: Mapping[str, Any], *, retain_debug_clips: int = MAX_DEBUG_CLIPS) -> dict[str, Any]:
     audio = _mapping(event.get("audio"))
     data = _text(audio.get("data_b64"))
@@ -500,4 +557,5 @@ __all__ = [
     "state_dir",
     "stt_status",
     "transcribe_wav",
+    "verify_audio_input_content",
 ]

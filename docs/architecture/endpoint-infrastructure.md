@@ -122,6 +122,14 @@ The registry should store facts and current state. UI-specific grouping,
 operator action availability, and dashboard cards are projections over this
 model.
 
+Endpoint identity must be separated from admission/session rows. A revoked,
+expired, or superseded pairing code is historical evidence, not a second live
+device. Runtime projections should group rows by `endpoint_id`, expose one
+current active endpoint, and keep previous admission codes only in
+`admission_history`. SDK helpers may resolve an old pair code to the current
+endpoint for operator convenience, but commands must be sent to the current
+`pair_code` and current policy.
+
 ## Endpoint Services
 
 Endpoint services expose capabilities; they do not grant permissions by
@@ -654,6 +662,25 @@ not branch on Android, iOS, or browser-specific transport code. For example,
 `slideshow_skill` can request `display.slideshow`; the router may send a
 single inline frame over `root_relay_inline`, a content URL over `local_http`,
 or a realtime stream over `webrtc_p2p` depending on policy and live health.
+
+The current bounded-content implementation publishes direct media candidates as
+command metadata before falling back to inline relay:
+
+```json
+{
+  "schema_version": "media-delivery.v1",
+  "preferred_route": "hub_direct_http",
+  "content_url_candidates": [
+    "http://192.168.0.30:8778/api/node/media/files/content/frame.jpg?token=..."
+  ],
+  "fallback_route": "root_relay_inline"
+}
+```
+
+Legacy ReDevice agents should try these candidates first and keep inline bytes
+only as placeholder or emergency fallback. The advertised direct URLs must come
+from slot-aware runtime state or explicit environment override, not from a
+hard-coded `localhost` browser URL.
 
 ## Policy And Trust
 

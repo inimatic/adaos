@@ -61,6 +61,10 @@ def endpoint_audio_stt_status(lang: str | None = None) -> dict[str, Any]:
     return _svc.stt_status(lang)
 
 
+def verify_audio_input_content(state: Mapping[str, Any], endpoint: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return _svc.verify_audio_input_content(state, endpoint)
+
+
 __all__ = [
     "build_capture_command",
     "compact_audio_endpoint",
@@ -68,4 +72,5 @@ __all__ = [
     "endpoint_audio_policy",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",
+    "verify_audio_input_content",
 ]

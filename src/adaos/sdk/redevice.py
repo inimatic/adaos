@@ -247,6 +247,14 @@ def choose_endpoint(endpoints: list[Mapping[str, Any]], code: str | None = None)
                 if replacements and _endpoint_rank(replacements[0])[0] < selected_rank:
                     return replacements[0]
             return selected
+        history_matches = [
+            item
+            for item in admitted
+            if any(_text(hist.get("code")) == token for hist in list(item.get("admission_history") or []))
+        ]
+        if history_matches:
+            history_matches.sort(key=_endpoint_rank)
+            return history_matches[0]
 
     admitted.sort(key=_endpoint_rank)
     return admitted[0]
@@ -355,6 +363,44 @@ def transport_profile(endpoint: Mapping[str, Any] | None = None) -> dict[str, An
     return default_transport_profile(endpoint)
 
 
+def with_local_content_route(
+    endpoint: Mapping[str, Any] | None,
+    *,
+    reason: str = "command_media_candidates",
+) -> dict[str, Any]:
+    """Return an endpoint snapshot with a command-scoped direct content route.
+
+    This does not mutate admission policy. It lets a skill state that the
+    current command carries endpoint-reachable media URLs, so transport
+    selection can prefer local HTTP over inline root relay for this command.
+    """
+
+    item = dict(endpoint or {})
+    profile = transport_profile(item)
+    routes = dict(_mapping(profile.get("routes")))
+    local_http = dict(_mapping(routes.get("local_http")))
+    directions = set(_text(value) for value in list(local_http.get("directions") or []))
+    directions.add("content_in")
+    local_http.update(
+        {
+            "available": True,
+            "state": "ready",
+            "directions": sorted(value for value in directions if value),
+            "legacy_safe": True,
+            "reason": reason,
+        }
+    )
+    routes["local_http"] = local_http
+    order = [_text(value) for value in list(profile.get("preferred_order") or TRANSPORT_LADDER) if _text(value)]
+    if "local_http" not in order:
+        insert_at = order.index("root_relay_inline") if "root_relay_inline" in order else len(order)
+        order.insert(insert_at, "local_http")
+    profile["routes"] = routes
+    profile["preferred_order"] = order
+    item["transport_profile"] = profile
+    return item
+
+
 def _route_ready(route: Mapping[str, Any]) -> bool:
     state = _text(route.get("state")) or "unknown"
     return bool(route.get("available")) and state not in {"failed", "disabled"}
@@ -452,6 +498,11 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
     return {
         "id": code or eid,
         "code": code,
+        "admission_code": code,
+        "admission_state": state,
+        "admission_session_id": _text(endpoint.get("admission_session_id"))
+        or _text(_mapping(endpoint.get("admission_session")).get("session_id")),
+        "admission_history_count": len(list(endpoint.get("admission_history") or [])),
         "endpoint_id": eid,
         "hub_id": _text(scope.get("hub_id")),
         "subnet_id": _text(scope.get("hub_id")),
@@ -486,6 +537,56 @@ def compact_endpoint(endpoint: Mapping[str, Any], *, selected_codes: set[str] | 
         "selectable": bool(code and state in {"approved", "consumed"}),
         "raw": dict(endpoint),
     }
+
+
+def current_endpoint_records(endpoints: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse admission/session history into current endpoint identities.
+
+    Root can keep old pair-code rows after revoke/re-admission. Skills should
+    operate on the current endpoint identity and keep previous admissions as
+    history, otherwise a revoked session can appear beside a live endpoint and
+    confuse selection/online state.
+    """
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    anonymous: list[dict[str, Any]] = []
+    for endpoint in endpoints:
+        item = dict(endpoint)
+        key = endpoint_id(item)
+        if not key:
+            anonymous.append(item)
+            continue
+        groups.setdefault(key, []).append(item)
+
+    result: list[dict[str, Any]] = []
+    for _eid, items in groups.items():
+        active = [item for item in items if _text(item.get("state")) in {"approved", "consumed"}]
+        pool = active or items
+        pool.sort(key=_endpoint_rank)
+        current_source = pool[0]
+        current = dict(current_source)
+        current_code = pair_code(current)
+        history: list[dict[str, Any]] = []
+        for item in sorted(items, key=_endpoint_rank):
+            if item is current_source:
+                continue
+            history.append(
+                {
+                    "code": pair_code(item),
+                    "state": _text(item.get("state")),
+                    "last_seen_at": item.get("last_seen_at"),
+                    "online_state": online_state(item.get("last_seen_at")),
+                    "admission_session_id": _text(item.get("admission_session_id"))
+                    or _text(_mapping(item.get("admission_session")).get("session_id")),
+                }
+            )
+        if history:
+            current["admission_history"] = history
+        if current_code:
+            result.append(current)
+    result.extend(anonymous)
+    result.sort(key=_endpoint_rank)
+    return result
 
 
 @dataclass(frozen=True)
@@ -550,6 +651,7 @@ class ReDeviceBridge:
             for item in endpoints
             if endpoint_matches_scope(item, hub_id=expected_hub, owner_id=expected_owner)
         ]
+        endpoints = current_endpoint_records(endpoints)
         if sync_registry:
             self.sync_local_registry(endpoints)
         return endpoints

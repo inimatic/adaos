@@ -102,6 +102,29 @@ def test_sdk_device_access_prefers_live_root_redevice_snapshot(monkeypatch) -> N
     assert devices[0]["online_state"] in {"online", "stale"}
 
 
+def test_sdk_device_access_resolves_old_pair_code_from_admission_history(monkeypatch) -> None:
+    from adaos.sdk import redevice as sdk_redevice
+    from adaos.sdk.data import device_access as sdk_device_access
+
+    monkeypatch.setattr(
+        sdk_redevice,
+        "list_endpoints",
+        lambda sync_registry=True: [
+            {
+                "code": "SNX68P2A",
+                "endpoint_id": "endpoint-1",
+                "state": "consumed",
+                "last_seen_at": 1_900_000_000,
+                "admission_history": [{"code": "FMRS7WTB", "state": "revoked"}],
+            }
+        ],
+    )
+
+    _endpoint, pair_code = sdk_device_access._resolve_redevice_endpoint(code="FMRS7WTB")
+
+    assert pair_code == "SNX68P2A"
+
+
 def test_command_profile_for_observed_only_member_disables_policy_commands(monkeypatch) -> None:
     device = {
         "ref": "member:member-2",

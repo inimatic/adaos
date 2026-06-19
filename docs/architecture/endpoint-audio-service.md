@@ -340,7 +340,8 @@ transport stack:
   and hardware controls.
 - `redevice_voice` is a diagnostic skill over the service. It can tune VAD
   thresholds and shows VAD state, STT status, last segment, retention, and
-  transport.
+  transport. It can also verify that the latest audio segment is an actual
+  readable content artifact, including WAV metadata.
 - `redevice_settings` surfaces the endpoint audio, Bluetooth, display, battery,
   active app, subnet, and logout/reconnect controls through Endpoint Registry.
 
@@ -360,6 +361,29 @@ The service state uses `endpoint-audio-diagnostics.v1` as a runtime snapshot:
 }
 ```
 
+`endpoint-audio-content-check.v1` is the first diagnostic content-verification
+contract. It does not transcribe or dispatch by itself. It verifies the current
+policy projection, selected audio transport, retention settings, and the latest
+segment artifact:
+
+```json
+{
+  "schema_version": "endpoint-audio-content-check.v1",
+  "state": "ready",
+  "bytes": 32768,
+  "sample_rate": 16000,
+  "channels": 1,
+  "duration_ms": 1024,
+  "policy": {"microphone_allowed": true},
+  "transport": {"selected_transport": "segment_upload"}
+}
+```
+
+The debug skill may expose this check, but the reusable owner is
+`EndpointAudioService` / SDK. Failed checks should produce actionable states
+such as `missing_segment`, `segment_file_missing`, `invalid_wav`, or
+`wav_parse_failed`.
+
 ## MVP Slice
 
 Recommended MVP:
@@ -373,8 +397,10 @@ Recommended MVP:
    service.
 5. `[done]` Route final transcript to the existing Voice/NLU pipeline when STT
    produces text.
-6. `[next]` Return optional response to display or speaker route.
-7. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
+6. `[done]` Verify latest audio-in segment content from a diagnostic skill
+   through SDK, without giving the skill ownership of raw transport.
+7. `[next]` Return optional response to display or speaker route.
+8. `[done]` Show diagnostics in `redevice_voice` and `redevice_settings`.
 
 Do not make local STT mandatory for legacy Android 4.1. Treat Vosk and similar
 engines as optional `local_stt` profiles that must pass benchmark gates.

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import socket
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, urlunparse
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.media_library import media_file_path
@@ -79,6 +81,103 @@ def media_content_path(filename: str, *, browser: bool = True) -> str:
     return f"{prefix}/files/content/{quote(filename)}"
 
 
+def _split_csv(value: str | None) -> list[str]:
+    return [item.strip() for item in str(value or "").replace(";", ",").split(",") if item.strip()]
+
+
+def _normalized_base_url(value: str | None) -> str:
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    token = str(host or "").strip().lower()
+    return token in {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+
+def _local_ipv4_addresses() -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        token = str(value or "").strip()
+        if not token or token.startswith("127.") or token.startswith("169.254."):
+            return
+        if ":" in token:
+            return
+        if token not in candidates:
+            candidates.append(token)
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            add(sock.getsockname()[0])
+        finally:
+            sock.close()
+    except Exception:
+        pass
+    try:
+        for item in socket.gethostbyname_ex(socket.gethostname())[2]:
+            add(item)
+    except Exception:
+        pass
+    return candidates
+
+
+def direct_media_base_urls() -> list[str]:
+    """Return endpoint-reachable hub media bases, preferring explicit config.
+
+    ReDevice endpoints cannot use browser-only media paths. They need a concrete
+    hub HTTP base. Runtime-managed slots export ADAOS_SELF_BASE_URL; development
+    and supervisor runtimes persist local_api_url. If that URL is loopback, we
+    expand it to LAN IPv4 candidates so legacy endpoints can try direct hub
+    access before falling back to inline/root relay content.
+    """
+
+    bases: list[str] = []
+
+    def add(value: str | None) -> None:
+        base = _normalized_base_url(value)
+        if base and base not in bases:
+            bases.append(base)
+
+    for value in _split_csv(os.getenv("ADAOS_REDEVICE_MEDIA_BASES") or os.getenv("ADAOS_MEDIA_DIRECT_BASES")):
+        add(value)
+    add(os.getenv("ADAOS_SELF_BASE_URL"))
+
+    configured = ""
+    try:
+        configured = str(getattr(get_ctx().config, "local_api_url", "") or "").strip()
+    except Exception:
+        configured = ""
+    add(configured)
+
+    expanded: list[str] = []
+    for base in bases:
+        parsed = urlparse(base)
+        host = parsed.hostname or ""
+        if not _is_loopback_host(host):
+            if base not in expanded:
+                expanded.append(base)
+            continue
+        if parsed.port:
+            for address in _local_ipv4_addresses():
+                candidate = urlunparse((parsed.scheme, f"{address}:{parsed.port}", parsed.path.rstrip("/"), "", "", ""))
+                if candidate not in expanded:
+                    expanded.append(candidate)
+    return expanded
+
+
+def direct_media_content_urls(filename: str, *, api_token: str | None = None) -> list[str]:
+    path = media_content_url(filename, api_token=api_token, browser=False)
+    return [base.rstrip("/") + path for base in direct_media_base_urls()]
+
+
 def publish_media_file(
     path: str | Path,
     *,
@@ -96,6 +195,7 @@ def publish_media_file(
     target = media_file_path(filename)
     if not target.exists() or target.stat().st_size != source.stat().st_size:
         shutil.copyfile(source, target)
+    direct_urls = direct_media_content_urls(target.name, api_token=api_token)
     return {
         "ok": True,
         "filename": target.name,
@@ -105,11 +205,19 @@ def publish_media_file(
         "browser_url": media_content_url(target.name, api_token=api_token, browser=True),
         "content_path": media_content_path(target.name, browser=False),
         "browser_path": media_content_path(target.name, browser=True),
+        "direct_urls": direct_urls,
+        "content_url_candidates": [*direct_urls, media_content_url(target.name, api_token=api_token)],
         "mime": mime,
         "size_bytes": int(target.stat().st_size),
         "content_ref": content_ref,
         "route": "node_media_file",
         "browser_route": "hub_browser_media",
+        "delivery": {
+            "schema_version": "media-delivery.v1",
+            "preferred_route": "hub_direct_http" if direct_urls else "node_media_file",
+            "fallback_route": "root_relay_inline",
+            "direct_candidate_count": len(direct_urls),
+        },
     }
 
 
@@ -138,6 +246,8 @@ def _safe_token(value: str) -> str:
 __all__ = [
     "browser_media_descriptor",
     "cached_image_variant",
+    "direct_media_base_urls",
+    "direct_media_content_urls",
     "image_fingerprint",
     "media_content_path",
     "media_content_url",

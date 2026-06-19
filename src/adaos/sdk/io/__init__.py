@@ -26,6 +26,7 @@ __all__ = [
     "endpoint_audio_policy",
     "endpoint_audio_stt_status",
     "process_endpoint_audio_event",
+    "verify_audio_input_content",
 ]
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         endpoint_audio_policy,
         endpoint_audio_stt_status,
         process_endpoint_audio_event,
+        verify_audio_input_content,
     )
 
 
@@ -73,6 +75,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         "endpoint_audio_policy",
         "endpoint_audio_stt_status",
         "process_endpoint_audio_event",
+        "verify_audio_input_content",
     ):
         from .endpoint_audio import (
             build_capture_command,
@@ -81,6 +84,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
             endpoint_audio_policy,
             endpoint_audio_stt_status,
             process_endpoint_audio_event,
+            verify_audio_input_content,
         )
 
         return {
@@ -90,6 +94,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
             "endpoint_audio_policy": endpoint_audio_policy,
             "endpoint_audio_stt_status": endpoint_audio_stt_status,
             "process_endpoint_audio_event": process_endpoint_audio_event,
+            "verify_audio_input_content": verify_audio_input_content,
         }[name]
     raise AttributeError(name)
 

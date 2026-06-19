@@ -98,6 +98,7 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
         if not isinstance(raw, Mapping):
             continue
         compact = compact_endpoint(raw)
+        history_codes = {_text(item.get("code")) for item in list(raw.get("admission_history") or []) if isinstance(item, Mapping)}
         candidates = {
             _text(raw.get("code")),
             _text(raw.get("pair_code")),
@@ -107,6 +108,7 @@ def _resolve_redevice_endpoint(device_ref: str | None = None, code: str | None =
             _text(compact.get("endpoint_id")),
             _text(compact.get("id")),
         }
+        candidates.update(history_codes)
         if target in candidates:
             pair_code = _text(compact.get("code")) or _text(raw.get("code")) or target
             return dict(raw), pair_code

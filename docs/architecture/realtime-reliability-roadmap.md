@@ -1287,8 +1287,16 @@ For `browser <-> member` direct media, the signaling contract will also need:
 - [x] `[must]` Define direct vs relay policy for bounded file media and current
   A/V validation.
 - [x] `[must]` Keep media readiness outside core control readiness.
+- [x] `[must]` Advertise slot-aware direct hub media candidates for endpoint
+  content commands, with root inline relay kept only as bounded fallback.
+- [x] `[must]` Validate the first endpoint audio-in content artifact from SDK
+  and diagnostics instead of treating a successful command as proof that audio
+  bytes are usable.
 - [ ] `[must]` Validate browser-member direct media admission and signaling
   beyond the current hub-loopback route.
+- [ ] `[must]` Promote ReDevice media from command-scoped `local_http`
+  candidates to a router-owned direct session contract once live LAN/WebRTC
+  evidence is stable.
 - [ ] `[must]` Define sidecar continuity requirements for live media during hub
   runtime restart before allowing orchestration to rely on it.
 - [ ] `[should]` Add soak evidence for peer rebuild, ICE restart, full
@@ -1305,6 +1313,8 @@ For `browser <-> member` direct media, the signaling contract will also need:
   on a live hub.
 - [x] `[must]` Operator UI exposes media runtime, relay state, and live
   loopback status clearly enough for incident/debug use.
+- [x] `[must]` Revoked or superseded ReDevice admission rows do not become
+  independent current endpoint identities in SDK projections.
 - [ ] `[must]` A live media session has an explicit update/restart policy:
   defer member update, preserve or reject hub runtime restart based on real
   sidecar continuity evidence.

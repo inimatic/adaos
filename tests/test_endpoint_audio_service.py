@@ -86,6 +86,36 @@ def test_audio_segment_retention_keeps_latest_ten(tmp_path, monkeypatch) -> None
     assert len(sidecars) == 10
 
 
+def test_verify_audio_input_content_parses_latest_segment(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_ENDPOINT_AUDIO_STATE_DIR", str(tmp_path))
+    event = {
+        "type": "endpoint.audio.segment",
+        "endpoint_id": "endpoint-1",
+        "session_id": "audio-session",
+        "command_id": "cmd:1",
+        "action": "voice_activity.ended",
+        "audio": {
+            "mime": "audio/wav",
+            "data_b64": base64.b64encode(_wav_bytes(7)).decode("ascii"),
+            "bytes": len(_wav_bytes(7)),
+        },
+        "vad": {"duration_ms": 1000},
+    }
+    segment = endpoint_audio.save_audio_segment(event)
+    state = {"last_segment": segment}
+
+    check = endpoint_audio.verify_audio_input_content(
+        state,
+        {"endpoint_manifest": {"services": {"audio_input_endpoint": {"enabled": True}}}},
+    )
+
+    assert check["ok"] is True
+    assert check["state"] == "ready"
+    assert check["sample_rate"] == 16000
+    assert check["channels"] == 1
+    assert check["policy"]["microphone_allowed"] is True
+
+
 def test_process_voice_activity_event_records_without_audio(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_ENDPOINT_AUDIO_STATE_DIR", str(tmp_path))
     state: dict[str, object] = {}
