@@ -1038,6 +1038,7 @@ def _compact_member_availability(value: Any) -> dict[str, Any]:
         "offline": 0,
         "updating": 0,
         "unknown": 0,
+        "excluded": 0,
         "connectedTotal": 0,
         "knownTotal": 0,
         "linklessTotal": 0,
@@ -1057,11 +1058,19 @@ def _compact_member_availability(value: Any) -> dict[str, Any]:
         result["connectedTotal"] = int(payload.get("connected_total") or len(connected_members) or 0)
         result["knownTotal"] = int(payload.get("known_total") or len(members) or result["connectedTotal"])
         result["linklessTotal"] = int(payload.get("linkless_total") or 0)
-        result["total"] = max(result["knownTotal"], result["connectedTotal"], len(members))
+        active_total = 0
         for item in members:
             if not isinstance(item, dict):
                 result["unknown"] += 1
+                active_total += 1
                 continue
+            managed_state = str(item.get("managed_state") or item.get("policy_state") or "").strip().lower()
+            revoked = bool(item.get("revoked"))
+            expired = bool(item.get("expired"))
+            if revoked or expired or managed_state in {"revoked", "expired", "disabled", "ignored", "retired", "deleted"}:
+                result["excluded"] += 1
+                continue
+            active_total += 1
             connected = bool(item.get("connected"))
             online = bool(item.get("online"))
             snapshot_state = str(item.get("snapshot_state") or "").strip().lower()
@@ -1097,6 +1106,7 @@ def _compact_member_availability(value: Any) -> dict[str, Any]:
                         "reason": rollout_state or snapshot_state or ("link_missing" if not connected else None),
                     }
                 )
+        result["total"] = max(active_total, result["connectedTotal"] - result["excluded"], 0)
         return result
 
     connected = bool(payload.get("connected_to_hub")) or bool(payload.get("connected_to_subnet"))
