@@ -75,6 +75,41 @@ def test_browser_session_metadata_updates_emit_named_entity_invalidation(monkeyp
     assert events[0]["current"]["browser_family"] == "Firefox"
 
 
+def test_browser_snapshot_includes_active_yws_scoped_clients(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        gateway_ws,
+        "active_browser_session_snapshot",
+        lambda: {
+            "peers": [
+                {
+                    "device_id": "dev-browser",
+                    "client_limit_id": "tab-1",
+                    "webspace_id": "desktop",
+                    "connection_state": "connected",
+                    "session_count": 1,
+                }
+            ]
+        },
+    )
+
+    access_links.touch_browser_session(
+        "dev-browser",
+        webspace_id="desktop",
+        online=True,
+        browser_family="Chrome",
+    )
+
+    snapshot = access_links.browser_snapshot()
+
+    by_id = {item["id"]: item for item in snapshot}
+    assert by_id["dev-browser"]["access_class"] == "device"
+    assert by_id["dev-browser::tab-1"]["access_class"] == "client"
+    assert by_id["dev-browser::tab-1"]["online"] is True
+    assert by_id["dev-browser::tab-1"]["last_webspace_id"] == "desktop"
+
+
 def test_yws_browser_session_metadata_accepts_client_handshake_fields() -> None:
     metadata = gateway_ws._browser_session_metadata(
         {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,10 @@ from adaos.services.node_display import node_color_palette
 
 def _now() -> float:
     return time.time()
+
+
+def _sqlite_locked(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
 
 
 def _normalize_runtime_projection_payload(payload: Any) -> dict[str, Any]:
@@ -314,28 +319,35 @@ class SubnetRepo:
         node_state: str | None = None,
         base_url: str | None = None,
     ) -> None:
-        with self.sql.connect() as con:
-            if node_state is not None and base_url is not None:
-                con.execute(
-                    "UPDATE subnet_nodes SET last_seen=?, node_state=?, base_url=?, updated_at=? WHERE node_id=?",
-                    (float(last_seen), str(node_state or "ready"), str(base_url or "").strip() or None, _now(), node_id),
-                )
-            elif node_state is not None:
-                con.execute(
-                    "UPDATE subnet_nodes SET last_seen=?, node_state=?, updated_at=? WHERE node_id=?",
-                    (float(last_seen), str(node_state or "ready"), _now(), node_id),
-                )
-            elif base_url is not None:
-                con.execute(
-                    "UPDATE subnet_nodes SET last_seen=?, base_url=?, updated_at=? WHERE node_id=?",
-                    (float(last_seen), str(base_url or "").strip() or None, _now(), node_id),
-                )
-            else:
-                con.execute(
-                    "UPDATE subnet_nodes SET last_seen=?, updated_at=? WHERE node_id=?",
-                    (float(last_seen), _now(), node_id),
-                )
-            con.commit()
+        for attempt in range(4):
+            try:
+                with self.sql.connect() as con:
+                    if node_state is not None and base_url is not None:
+                        con.execute(
+                            "UPDATE subnet_nodes SET last_seen=?, node_state=?, base_url=?, updated_at=? WHERE node_id=?",
+                            (float(last_seen), str(node_state or "ready"), str(base_url or "").strip() or None, _now(), node_id),
+                        )
+                    elif node_state is not None:
+                        con.execute(
+                            "UPDATE subnet_nodes SET last_seen=?, node_state=?, updated_at=? WHERE node_id=?",
+                            (float(last_seen), str(node_state or "ready"), _now(), node_id),
+                        )
+                    elif base_url is not None:
+                        con.execute(
+                            "UPDATE subnet_nodes SET last_seen=?, base_url=?, updated_at=? WHERE node_id=?",
+                            (float(last_seen), str(base_url or "").strip() or None, _now(), node_id),
+                        )
+                    else:
+                        con.execute(
+                            "UPDATE subnet_nodes SET last_seen=?, updated_at=? WHERE node_id=?",
+                            (float(last_seen), _now(), node_id),
+                        )
+                    con.commit()
+                break
+            except sqlite3.OperationalError as exc:
+                if not _sqlite_locked(exc) or attempt >= 3:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
         if capacity:
             incoming = _normalize_capacity_snapshot(capacity)
             current = _normalize_capacity_snapshot(

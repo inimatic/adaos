@@ -992,7 +992,50 @@ def detach_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
 
 
 def browser_snapshot() -> list[dict[str, Any]]:
-    return [entry for entry in list_links("browser") if entry.get("last_seen_at")]
+    entries = [entry for entry in list_links("browser") if entry.get("last_seen_at")]
+    by_id = {
+        str(entry.get("id") or "").strip(): dict(entry)
+        for entry in entries
+        if str(entry.get("id") or "").strip()
+    }
+    try:
+        from adaos.services.yjs.gateway_ws import active_browser_session_snapshot
+
+        active = active_browser_session_snapshot()
+    except Exception:
+        active = {}
+    now = _now_ts()
+    for peer in list(active.get("peers") or []):
+        if not isinstance(peer, Mapping):
+            continue
+        device_id = str(peer.get("device_id") or peer.get("id") or "").strip()
+        client_id = str(peer.get("client_limit_id") or "").strip()
+        if not device_id or not client_id:
+            continue
+        entry_id = f"{device_id}::{client_id}"
+        if entry_id in by_id:
+            continue
+        parent = by_id.get(device_id) or {}
+        by_id[entry_id] = _normalize_entry(
+            "browser",
+            entry_id,
+            {
+                **parent,
+                "id": entry_id,
+                "display_name": str(parent.get("display_name") or "").strip(),
+                "access_class": "client",
+                "lifetime_mode": "fixed",
+                "expires_at": None,
+                "online": True,
+                "connection_state": str(peer.get("connection_state") or "connected").strip() or "connected",
+                "last_seen_at": now,
+                "last_webspace_id": str(peer.get("webspace_id") or parent.get("last_webspace_id") or "").strip() or None,
+                "browser_client_id": client_id,
+                "parent_browser_device_id": device_id,
+                "session_count": int(peer.get("session_count") or 0),
+            },
+        )
+    return list(by_id.values())
 
 
 def member_snapshot() -> list[dict[str, Any]]:
