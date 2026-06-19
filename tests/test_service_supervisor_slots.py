@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 import time
@@ -68,6 +69,44 @@ def test_service_supervisor_discovers_active_runtime_slot_instead_of_workspace_s
     assert status is not None
     assert status["port"] == 1113
     assert status["venv_dir"].endswith(str(Path("v0.1") / "venv"))
+
+
+def test_service_supervisor_skips_deactivated_runtime_service():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill.service_supervisor import ServiceSkillSupervisor
+
+    ctx = get_ctx()
+    skills_root = Path(ctx.paths.skills_dir())
+    workspace_skill = skills_root / "slot_service"
+    _write_service_skill(workspace_skill, port=1112)
+
+    runtime_root = skills_root / ".runtime" / "slot_service"
+    version_root = runtime_root / "v0.1"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "current_version").write_text("0.1.0", encoding="utf-8")
+    version_root.mkdir(parents=True, exist_ok=True)
+    (version_root / "active").write_text("A", encoding="utf-8")
+    (runtime_root / "deactivated.json").write_text(
+        json.dumps(
+            {
+                "name": "slot_service",
+                "version": "0.1.0",
+                "slot": "A",
+                "deactivated": True,
+                "reason": "startup_dependency_install_failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    slot_a = version_root / "slots" / "A" / "src" / "skills" / "slot_service"
+    _write_service_skill(slot_a, port=1111)
+
+    supervisor = ServiceSkillSupervisor()
+    supervisor.ensure_discovered(force=True)
+
+    assert supervisor.status("slot_service") is None
+    assert "slot_service" not in supervisor.list()
 
 
 def test_service_supervisor_refresh_discovery_does_not_block_event_loop():

@@ -107,7 +107,7 @@ def dependency_args_contain_heavy_packages(args: Iterable[str]) -> bool:
 def dependency_disk_budget_bytes(args: Iterable[str], *, has_requirements_file: bool = False) -> int:
     specs = _install_specs(args)
     if dependency_args_contain_heavy_packages(specs):
-        return _env_bytes("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", 5.0)
+        return _env_bytes("ADAOS_SKILL_DEP_DISK_HEAVY_FREE_GIB", 12.0)
 
     base = _env_bytes("ADAOS_SKILL_DEP_DISK_BASE_FREE_GIB", 2.0)
     per_spec = _env_bytes("ADAOS_SKILL_DEP_DISK_PER_SPEC_GIB", 1.0)

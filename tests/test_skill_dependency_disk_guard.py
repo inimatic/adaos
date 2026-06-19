@@ -34,7 +34,7 @@ def test_dependency_disk_guard_uses_fixed_default_budget_for_heavy_installs(monk
         ]
     )
 
-    assert required == 5 * 1024 * 1024 * 1024
+    assert required == 12 * 1024 * 1024 * 1024
 
 
 def test_dependency_disk_guard_can_be_disabled(monkeypatch, tmp_path):

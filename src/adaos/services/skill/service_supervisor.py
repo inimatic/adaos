@@ -109,6 +109,18 @@ def _active_runtime_skill_root(skills_root: Path, skill_name: str) -> Path | Non
     return root if (root / "skill.yaml").exists() else None
 
 
+def _runtime_deactivation(skills_root: Path, skill_name: str) -> dict[str, Any]:
+    try:
+        payload = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name).read_deactivation()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _runtime_is_deactivated(skills_root: Path, skill_name: str) -> bool:
+    return bool(_runtime_deactivation(skills_root, skill_name).get("deactivated"))
+
+
 def _infer_runtime_slot_root(skill_root: Path, skill_name: str) -> Path | None:
     try:
         root = skill_root.expanduser().resolve()
@@ -508,6 +520,9 @@ class ServiceSkillSupervisor:
             for workspace_skill_dir in skills_root.iterdir():
                 skill_dir = workspace_skill_dir
                 if not skill_dir.is_dir() or skill_dir.name.startswith((".", "_")):
+                    continue
+                if _runtime_is_deactivated(skills_root, skill_dir.name):
+                    _log.info("skipping deactivated service skill=%s during discovery", skill_dir.name)
                     continue
                 runtime_skill_dir = _active_runtime_skill_root(skills_root, skill_dir.name)
                 if runtime_skill_dir is not None:
