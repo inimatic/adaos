@@ -58,8 +58,17 @@ RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     "src/adaos/interpreter_data/rasa_nlu_service_skill/skill.yaml",
     "src/adaos/services/eventbus.py",
     "src/adaos/services/nlu/rasa_skill_installer.py",
+    # Installed skill runtimes import SDK/service surfaces from the root
+    # environment. If these paths drift from the active slot, skill tools can
+    # pass core validation and still fail later with ImportError.
     "src/adaos/sdk/core/decorators.py",
     "src/adaos/sdk/data/bus.py",
+    "src/adaos/sdk/data/device_access.py",
+    "src/adaos/sdk/io/__init__.py",
+    "src/adaos/sdk/io/endpoint_audio.py",
+    "src/adaos/sdk/io/media.py",
+    "src/adaos/sdk/redevice.py",
+    "src/adaos/services/endpoint_audio.py",
     "src/adaos/services/skills_loader_importlib.py",
     "src/adaos/services/skill/manager.py",
     "src/adaos/services/models/__init__.py",
