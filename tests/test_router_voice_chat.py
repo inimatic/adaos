@@ -111,6 +111,76 @@ async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
 
     await bus.wait_for_idle(timeout=1.0)
     assert calls == [("какая погода в москве", {"route_id": "voice_chat", "webspace_id": "default"})]
+
+
+async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(monkeypatch) -> None:
+    bus = LocalEventBus()
+    calls: list[tuple[str, dict[str, object]]] = []
+    teacher_calls: list[object] = []
+
+    class _SkillCtx:
+        def get(self):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return None
+
+        def clear(self):
+            return None
+
+    async def _request_existing_candidate_confirmation(*_args, **_kwargs):
+        teacher_calls.append(object())
+        return True
+
+    teacher_module = types.SimpleNamespace(
+        request_existing_candidate_confirmation=_request_existing_candidate_confirmation,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.nlu.teacher_confirmation_runtime",
+        teacher_module,
+    )
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="member-local",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+        ),
+    )
+    monkeypatch.delenv("ADAOS_VOICE_CHAT_INTENT_DEMO", raising=False)
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(
+        router_service_module,
+        "execute_tool",
+        lambda *_args, **kwargs: calls.append((kwargs["payload"]["text"], dict(kwargs["payload"].get("_meta") or {}))) or {"ok": True, "reply": "ok"},
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="nlp.intent.not_obtained",
+            source="test",
+            ts=1.0,
+            payload={
+                "text": "weather in Berlin",
+                "reason": "no_intent_mapping",
+                "_meta": {"route_id": "voice_chat", "webspace_id": "desktop"},
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert calls == [("weather in Berlin", {"route_id": "voice_chat", "webspace_id": "desktop"})]
+    assert teacher_calls == []
+
+
 async def test_voice_chat_not_obtained_skips_skill_fallback_during_intent_demo(monkeypatch) -> None:
     bus = LocalEventBus()
     calls: list[object] = []
