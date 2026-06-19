@@ -2362,17 +2362,16 @@ class RouterService:
             if not isinstance(text, str) or not text.strip():
                 text = ""
             if route_id.strip() == "voice_chat" and text:
-                if not _voice_intent_demo_enabled():
-                    try:
-                        result = await asyncio.to_thread(_call_voice_chat_tool, text, meta)
-                    except Exception:
-                        logging.getLogger("adaos.router.voice_chat").warning(
-                            "voice.chat fallback tool failed",
-                            exc_info=True,
-                        )
-                    else:
-                        if isinstance(result, dict) and bool(result.get("ok")):
-                            return
+                try:
+                    result = await asyncio.to_thread(_call_voice_chat_tool, text, meta)
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").warning(
+                        "voice.chat fallback tool failed",
+                        exc_info=True,
+                    )
+                else:
+                    if isinstance(result, dict) and bool(result.get("ok")):
+                        return
                 if allow_teacher:
                     try:
                         from adaos.services.nlu.teacher_confirmation_runtime import (

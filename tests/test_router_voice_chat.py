@@ -206,9 +206,19 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(mon
     assert teacher_calls == []
 
 
-async def test_voice_chat_not_obtained_skips_skill_fallback_during_intent_demo(monkeypatch) -> None:
+async def test_voice_chat_not_obtained_prefers_skill_fallback_during_intent_demo(monkeypatch) -> None:
     bus = LocalEventBus()
-    calls: list[object] = []
+    calls: list[dict] = []
+
+    class _SkillCtx:
+        def get(self):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return None
+
+        def clear(self):
+            return None
 
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "1")
     monkeypatch.setattr(
@@ -219,6 +229,13 @@ async def test_voice_chat_not_obtained_skips_skill_fallback_during_intent_demo(m
                 node_id="member-local",
                 root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
             ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
         ),
     )
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
@@ -226,8 +243,11 @@ async def test_voice_chat_not_obtained_skips_skill_fallback_during_intent_demo(m
     monkeypatch.setattr(
         router_service_module,
         "SkillManager",
-        lambda **_kwargs: calls.append(object()) or SimpleNamespace(run_tool=lambda *_args, **_opts: {"ok": True}),
+        lambda **_kwargs: SimpleNamespace(
+            run_tool=lambda _skill, _tool, payload, **_opts: calls.append(dict(payload)) or {"ok": True}
+        ),
     )
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
 
@@ -245,7 +265,13 @@ async def test_voice_chat_not_obtained_skips_skill_fallback_during_intent_demo(m
     )
 
     await bus.wait_for_idle(timeout=1.0)
-    assert calls == []
+    assert calls == [
+        {
+            "text": "weather in Moscow",
+            "webspace_id": "default",
+            "_meta": {"route_id": "voice_chat", "webspace_id": "default"},
+        }
+    ]
 
 
 def test_voice_chat_data_path_is_node_scoped() -> None:
