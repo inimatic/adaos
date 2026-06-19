@@ -4,7 +4,7 @@ requires-python = ">=3.11.9, <3.12"
 
 [[package]]
 name = "adaos"
-version = "0.1.358"
+version = "0.1.359"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
