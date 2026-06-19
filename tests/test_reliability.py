@@ -408,6 +408,42 @@ def test_connectivity_snapshot_keeps_unstable_browser_route_distinct_from_reconn
     assert route["planned_transition"] == {"active": False, "reason": "unstable"}
 
 
+def test_connectivity_snapshot_recovers_stale_browser_route_degradation_when_sidecar_ready() -> None:
+    snapshot = _connectivity_snapshot(
+        node_id="node-1",
+        channel_overview={
+            "hub_root_browser": {
+                "effective_status": "degraded",
+                "effective_state": "flapping",
+                "diagnostics": {"blockers": ["route.flapping"]},
+            }
+        },
+        supervisor_runtime={
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "degraded",
+                "reason": "browser route degraded; preserving active runtime-owned tunnels",
+                "handoff_ready": True,
+                "blockers": [],
+            },
+            "runtime": {
+                "runtime_api_ready": True,
+                "listener_running": True,
+                "sidecar": {"listener_running": True},
+            },
+            "status": {},
+        },
+    )
+
+    assert snapshot["required_upstream_link"]["transport_state"] == "ready"
+    assert snapshot["required_upstream_link"]["served_by"] == "supervisor_sidecar"
+    route = snapshot["browser_control_route"]
+    assert route["transport_state"] == "ready"
+    assert route["transition_state"] == "ready"
+    assert route["reason"] == "sidecar_browser_route_ready"
+    assert route["blockers"] == []
+
+
 def test_connectivity_snapshot_uses_channel_overview_when_supervisor_link_temporarily_missing() -> None:
     snapshot = _connectivity_snapshot(
         node_id="node-1",

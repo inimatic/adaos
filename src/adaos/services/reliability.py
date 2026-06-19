@@ -5642,6 +5642,7 @@ def _connectivity_transition_state_for_browser_route(
     route_item: dict[str, Any] | None,
     *,
     supervisor_status: dict[str, Any] | None,
+    sidecar_route_ready: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     item = route_item if isinstance(route_item, dict) else {}
     derived_state, planned = _planned_transition_snapshot_from_supervisor_status(supervisor_status)
@@ -5658,7 +5659,7 @@ def _connectivity_transition_state_for_browser_route(
     if (
         transport_state == "ready"
         and str(readiness_details.get("incident_recovery") or "").strip()
-        == "fresh_lightweight_route_probe"
+        in {"fresh_lightweight_route_probe", "fresh_http_route_reply", "fresh_app_route_reply"}
     ):
         try:
             probe_age_s = float(readiness_details.get("incident_recovery_probe_age_s") or 0.0)
@@ -5670,6 +5671,8 @@ def _connectivity_transition_state_for_browser_route(
             probe_fresh_s = 30.0
         if probe_age_s <= max(1.0, probe_fresh_s):
             return "ready", {"active": False, "reason": None}
+    if sidecar_route_ready and effective_state in {"flapping", "unstable"}:
+        return "ready", {"active": False, "reason": "sidecar_browser_route_ready"}
     if effective_state in {"flapping", "unstable"}:
         return effective_state, {"active": False, "reason": effective_state}
     if transport_state == "ready":
@@ -5679,6 +5682,27 @@ def _connectivity_transition_state_for_browser_route(
     if transport_state == "not_applicable":
         return "disabled", {"active": False, "reason": "not_applicable"}
     return "unknown", {"active": False, "reason": effective_state or None}
+
+
+def _supervisor_sidecar_browser_route_ready(supervisor: dict[str, Any]) -> bool:
+    runtime = supervisor.get("runtime") if isinstance(supervisor.get("runtime"), dict) else {}
+    required_link = (
+        supervisor.get("required_upstream_link")
+        if isinstance(supervisor.get("required_upstream_link"), dict)
+        else {}
+    )
+    sidecar = runtime.get("sidecar") if isinstance(runtime.get("sidecar"), dict) else {}
+    if not bool(runtime.get("runtime_api_ready")):
+        return False
+    if not bool(runtime.get("listener_running")):
+        return False
+    if not bool(sidecar.get("listener_running")):
+        return False
+    if not bool(required_link.get("handoff_ready")):
+        return False
+    if list(required_link.get("blockers") or []):
+        return False
+    return True
 
 
 def _required_upstream_link_fallback_from_channel_overview(
@@ -5730,6 +5754,7 @@ def _connectivity_snapshot(
         if isinstance(supervisor.get("required_upstream_link"), dict)
         else {}
     )
+    sidecar_route_ready = _supervisor_sidecar_browser_route_ready(supervisor)
     fallback_link = _required_upstream_link_fallback_from_channel_overview(overview)
     if _map_connectivity_transport_state(required_link.get("state")) == "unknown":
         if fallback_link:
@@ -5748,6 +5773,20 @@ def _connectivity_snapshot(
             "served_by": "runtime_channel_overview",
             "blockers": [],
         }
+    elif (
+        _map_connectivity_transport_state(required_link.get("state")) == "degraded"
+        and sidecar_route_ready
+        and "browser route degraded" in str(required_link.get("reason") or "").lower()
+        and not list(required_link.get("blockers") or [])
+    ):
+        required_link = {
+            **required_link,
+            "state": "ready",
+            "ready": True,
+            "reason": "sidecar browser route handoff is ready after stale aggregate degradation",
+            "served_by": "supervisor_sidecar",
+            "blockers": [],
+        }
     browser_route = (
         overview.get("hub_root_browser")
         if isinstance(overview.get("hub_root_browser"), dict)
@@ -5760,7 +5799,22 @@ def _connectivity_snapshot(
     route_transition_state, route_planned = _connectivity_transition_state_for_browser_route(
         browser_route,
         supervisor_status=status,
+        sidecar_route_ready=sidecar_route_ready,
     )
+    route_transport_state = _map_connectivity_transport_state(browser_route.get("effective_status"))
+    route_reason = str(browser_route.get("effective_state") or "").strip() or None
+    route_blockers = list(
+        (
+            browser_route.get("diagnostics")
+            if isinstance(browser_route.get("diagnostics"), dict)
+            else {}
+        ).get("blockers")
+        or []
+    )
+    if sidecar_route_ready and route_transition_state == "ready" and route_transport_state == "degraded":
+        route_transport_state = "ready"
+        route_reason = "sidecar_browser_route_ready"
+        route_blockers = []
     return {
         "required_upstream_link": {
             "kind": str(required_link.get("kind") or "").strip() or "unknown",
@@ -5775,18 +5829,11 @@ def _connectivity_snapshot(
         "browser_control_route": {
             "kind": "browser_control_route",
             "scope_id": str(node_id or "").strip() or None,
-            "transport_state": _map_connectivity_transport_state(browser_route.get("effective_status")),
+            "transport_state": route_transport_state,
             "transition_state": route_transition_state,
             "planned_transition": route_planned,
-            "reason": str(browser_route.get("effective_state") or "").strip() or None,
-            "blockers": list(
-                (
-                    browser_route.get("diagnostics")
-                    if isinstance(browser_route.get("diagnostics"), dict)
-                    else {}
-                ).get("blockers")
-                or []
-            ),
+            "reason": route_reason,
+            "blockers": route_blockers,
             "served_by": "runtime",
         },
     }
