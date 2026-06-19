@@ -1429,6 +1429,10 @@ class StreamRuntime:
         effective_meta = dict(meta or {})
         if isinstance(build_context.params, Mapping):
             effective_meta.setdefault("params", dict(build_context.params))
+        context_node_id = str(build_context.node_id or "").strip()
+        if context_node_id:
+            effective_meta.setdefault("target_node_id", context_node_id)
+            effective_meta.setdefault("node_id", context_node_id)
         return self.publish_snapshot(receiver_name, data, webspace_id=ws_id, force=force, meta=effective_meta)
 
     def handle_snapshot_requested(

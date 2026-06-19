@@ -513,6 +513,8 @@ def test_stream_runtime_handles_snapshot_requested_event() -> None:
             {
                 "webspace_id": "desktop",
                 "params": {"online_only": True},
+                "target_node_id": "member-1",
+                "node_id": "member-1",
                 "owner": "skill:browsers_skill",
                 "skill_id": "browsers_skill",
                 "skill_name": "browsers_skill",
@@ -579,6 +581,8 @@ def test_stream_runtime_passes_target_node_to_subscription_builders() -> None:
             },
             {
                 "webspace_id": "homepoint",
+                "target_node_id": "member-42",
+                "node_id": "member-42",
                 "owner": "skill:infrastate_skill",
                 "skill_id": "infrastate_skill",
                 "skill_name": "infrastate_skill",
