@@ -2009,13 +2009,30 @@ def _route_semantic_probe_recovery(
     now_ts: float,
 ) -> dict[str, Any] | None:
     details = node.get("details") if isinstance(node.get("details"), dict) else {}
-    probe_reply_at = _float_or_none(details.get("last_http_probe_reply_at"))
+    activity_candidates = [
+        ("fresh_lightweight_route_probe", _float_or_none(details.get("last_http_probe_reply_at"))),
+        ("fresh_http_route_reply", _float_or_none(details.get("last_http_reply_at"))),
+        ("fresh_app_route_reply", _float_or_none(details.get("last_http_app_reply_at"))),
+    ]
+    probe_reply_at = None
+    recovery_kind = ""
+    for kind, value in activity_candidates:
+        if value is None:
+            continue
+        if probe_reply_at is None or value > probe_reply_at:
+            probe_reply_at = value
+            recovery_kind = kind
     if probe_reply_at is None:
         return None
     if now_ts - probe_reply_at > _ROUTE_SEMANTIC_PROBE_FRESH_S:
         return None
 
-    probe_rx_at = _float_or_none(details.get("last_http_probe_rx_at"))
+    if recovery_kind == "fresh_lightweight_route_probe":
+        probe_rx_at = _float_or_none(details.get("last_http_probe_rx_at"))
+    elif recovery_kind == "fresh_http_route_reply":
+        probe_rx_at = _float_or_none(details.get("last_http_rx_at"))
+    else:
+        probe_rx_at = _float_or_none(details.get("last_http_app_rx_at"))
     if probe_rx_at is not None and probe_reply_at + 0.001 < probe_rx_at:
         return None
 
@@ -2036,7 +2053,7 @@ def _route_semantic_probe_recovery(
     recovered_details = dict(details)
     recovered_details.update(
         {
-            "incident_recovery": "fresh_lightweight_route_probe",
+            "incident_recovery": recovery_kind,
             "incident_recovery_probe_reply_at": probe_reply_at,
             "incident_recovery_last_incident_at": last_incident_at,
             "incident_recovery_probe_age_s": round(max(0.0, now_ts - probe_reply_at), 3),
