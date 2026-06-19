@@ -407,6 +407,43 @@ def test_reconcile_update_status_completes_awaiting_root_restart_attempt(monkeyp
     assert attempt["last_status"]["root_restart_completed_at"] == 499.0
 
 
+def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "b5cbb1d5",
+            "requested_at": 450.0,
+            "transitioned_at": 460.0,
+            "updated_at": 460.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": {
+                "state": "validated",
+                "phase": "root_promotion_pending",
+                "target_rev": "rev2026",
+                "target_version": "b5cbb1d5",
+                "target_slot": "A",
+                "updated_at": 499.0,
+            },
+            "_served_by": "runtime",
+        }
+    )
+
+    attempt = payload.get("attempt")
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "active"
+    assert not attempt.get("completed_at")
+    assert attempt.get("completion_reason") in {None, ""}
+
+
 def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")

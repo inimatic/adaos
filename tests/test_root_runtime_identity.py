@@ -236,3 +236,69 @@ def test_core_update_reconcile_skips_when_node_config_disables_updates(monkeypat
         "skipped": True,
         "reason": "node_core_update_disabled",
     }
+
+
+def test_core_update_reconcile_dispatches_via_supervisor_when_managed(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
+    monkeypatch.delenv("ENV_TYPE", raising=False)
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_URL", "http://127.0.0.1:8776")
+    monkeypatch.setenv("ADAOS_RUNTIME_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
+    monkeypatch.setattr(core_update_sync, "core_update_reactions_disabled_reason", lambda: None)
+    monkeypatch.setattr(core_update_sync, "report_hub_core_update_state", lambda _conf: {"ok": True})
+    monkeypatch.setattr(
+        core_update_sync,
+        "active_slot_manifest",
+        lambda: {"slot": "B", "git_commit": "f97ae29e", "target_rev": "rev2026"},
+    )
+    monkeypatch.setattr(
+        core_update_sync,
+        "get_ctx",
+        lambda: SimpleNamespace(settings=SimpleNamespace(host="127.0.0.1", port=8777)),
+    )
+
+    class FakeRootClient:
+        def hub_core_update_release(self, *, branch, current_commit):
+            return {
+                "ok": True,
+                "needs_update": True,
+                "release": {
+                    "branch": branch,
+                    "head_sha": "64a6e03cbe8fae54ecfd395d0ae501bbba71e963",
+                },
+            }
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"ok": True, "accepted": True}
+
+    calls: list[tuple[str, dict]] = []
+
+    def fake_post(url: str, *, json: dict, headers: dict, timeout: float) -> FakeResponse:
+        calls.append((url, dict(json)))
+        return FakeResponse()
+
+    monkeypatch.setattr(core_update_sync, "_root_client", lambda _conf: FakeRootClient())
+    monkeypatch.setattr(core_update_sync.requests, "post", fake_post)
+
+    conf = SimpleNamespace(
+        subnet_id="sn-test",
+        node_id="node-1",
+        role="hub",
+        token="local-token",
+        core_update_enabled=True,
+        local_api_url="http://127.0.0.1:8777",
+    )
+
+    result = core_update_sync.reconcile_hub_core_update(conf, countdown_sec=5.0)
+
+    assert calls
+    assert calls[0][0] == "http://127.0.0.1:8776/api/supervisor/update/start"
+    assert calls[0][1]["target_rev"] == "rev2026"
+    assert calls[0][1]["target_version"] == "64a6e03cbe8fae54ecfd395d0ae501bbba71e963"
+    assert result["dispatch_url"] == "http://127.0.0.1:8776/api/supervisor/update/start"
+    assert result["dispatch"]["accepted"] is True

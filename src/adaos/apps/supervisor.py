@@ -1062,6 +1062,8 @@ def _update_transition_timed_out(*, status_age: float, transition_age: float, ti
 def _is_terminal_update_status(payload: dict[str, Any] | None) -> bool:
     if not isinstance(payload, dict):
         return False
+    if _is_root_promotion_pending_status(payload) or _is_root_restart_pending_status(payload):
+        return False
     return str(payload.get("state") or "").strip().lower() in _terminal_update_states()
 
 

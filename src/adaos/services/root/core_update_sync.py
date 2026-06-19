@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -57,6 +58,84 @@ def _root_client(conf) -> RootHttpClient | None:
         return None
     verify: str | bool = str(ca_path) if ca_path.exists() else True
     return RootHttpClient(base_url=base_url, verify=verify, cert=(str(cert_path), str(key_path)))
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _append_local_update_candidate(
+    candidates: list[tuple[str, str]],
+    seen: set[tuple[str, str]],
+    base_url: str | None,
+    path: str,
+) -> None:
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        return
+    try:
+        parsed = urlparse(base)
+    except Exception:
+        return
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return
+    normalized = (base, str(path or "").strip() or "/api/admin/update/start")
+    if normalized in seen:
+        return
+    seen.add(normalized)
+    candidates.append(normalized)
+
+
+def _local_update_start_candidates(conf: Any) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    supervisor_enabled = (
+        _truthy_env("ADAOS_SUPERVISOR_ENABLED")
+        or _truthy_env("ADAOS_AUTOSTART_MANAGED")
+        or bool(str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip())
+        or bool(str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip())
+    )
+    supervisor_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
+    if supervisor_url:
+        _append_local_update_candidate(candidates, seen, supervisor_url, "/api/supervisor/update/start")
+    if supervisor_enabled:
+        supervisor_host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+        supervisor_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
+        _append_local_update_candidate(
+            candidates,
+            seen,
+            f"http://{supervisor_host}:{supervisor_port}",
+            "/api/supervisor/update/start",
+        )
+
+    runtime_host = str(os.getenv("ADAOS_RUNTIME_HOST") or "").strip()
+    runtime_port = str(os.getenv("ADAOS_RUNTIME_PORT") or "").strip()
+    if runtime_port:
+        _append_local_update_candidate(
+            candidates,
+            seen,
+            f"http://{runtime_host or '127.0.0.1'}:{runtime_port}",
+            "/api/admin/update/start",
+        )
+
+    self_base_url = str(os.getenv("ADAOS_SELF_BASE_URL") or "").strip()
+    if self_base_url:
+        _append_local_update_candidate(candidates, seen, self_base_url, "/api/admin/update/start")
+
+    local_api_url = str(getattr(conf, "local_api_url", "") or "").strip()
+    if local_api_url:
+        _append_local_update_candidate(candidates, seen, local_api_url, "/api/admin/update/start")
+
+    try:
+        ctx = get_ctx()
+        host = str(getattr(ctx.settings, "host", None) or "127.0.0.1").strip() or "127.0.0.1"
+        port = int(getattr(ctx.settings, "port", None) or 8777)
+        _append_local_update_candidate(candidates, seen, f"http://{host}:{port}", "/api/admin/update/start")
+    except Exception:
+        pass
+
+    return candidates
 
 
 def build_core_update_report(conf) -> dict[str, Any]:
@@ -145,27 +224,44 @@ def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str,
     local_token = str(getattr(conf, "token", "") or os.getenv("ADAOS_TOKEN") or "").strip()
     if not local_token:
         raise RuntimeError("missing local ADAOS token for self-update reconcile")
-    ctx = get_ctx()
-    host = str(getattr(ctx.settings, "host", None) or "127.0.0.1").strip() or "127.0.0.1"
-    port = int(getattr(ctx.settings, "port", None) or 8777)
-    response = requests.post(
-        f"http://{host}:{port}/api/admin/update/start",
-        json={
-            "target_rev": target_rev,
-            "target_version": head_sha if head_sha else "",
-            "reason": f"root.release:{target_rev}{(':' + head_sha[:12]) if head_sha else ''}",
-            "countdown_sec": float(release_info.get("countdown_sec") or countdown_sec),
-            "drain_timeout_sec": 10,
-            "signal_delay_sec": 0.25,
-        },
-        headers={"X-AdaOS-Token": local_token},
-        timeout=15,
-    )
-    response.raise_for_status()
-    payload = response.json()
+    body = {
+        "target_rev": target_rev,
+        "target_version": head_sha if head_sha else "",
+        "reason": f"root.release:{target_rev}{(':' + head_sha[:12]) if head_sha else ''}",
+        "countdown_sec": float(release_info.get("countdown_sec") or countdown_sec),
+        "drain_timeout_sec": 10,
+        "signal_delay_sec": 0.25,
+    }
+    dispatch_errors: list[dict[str, str]] = []
+    payload: dict[str, Any] | None = None
+    dispatch_url = ""
+    for base_url, path in _local_update_start_candidates(conf):
+        url = f"{base_url}{path}"
+        try:
+            response = requests.post(
+                url,
+                json=body,
+                headers={"X-AdaOS-Token": local_token},
+                timeout=15,
+            )
+            response.raise_for_status()
+            raw_payload = response.json()
+            payload = raw_payload if isinstance(raw_payload, dict) else {"ok": True, "response": raw_payload}
+            dispatch_url = url
+            break
+        except Exception as exc:
+            dispatch_errors.append(
+                {
+                    "url": url,
+                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                }
+            )
+    if payload is None:
+        raise RuntimeError(f"local update start dispatch failed: {dispatch_errors}")
     return {
         **release,
         "dispatch": payload,
+        "dispatch_url": dispatch_url,
     }
 
 
