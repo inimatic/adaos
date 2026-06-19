@@ -2210,7 +2210,7 @@ class RouterService:
                 if target_node_id:
                     payload["target_node_id"] = target_node_id
                 with io_meta(meta):
-                    return mgr.run_tool("voice_chat_skill", "handle_text", payload)
+                    return mgr.run_tool("voice_chat_skill", "handle_text", payload, bypass_yjs_guard=True)
             finally:
                 if prev is None:
                     try:
@@ -2324,7 +2324,7 @@ class RouterService:
                             "text": text,
                             "webspace_id": ws,
                             "request_id": meta.get("message_id") or meta.get("id") or _make_id("nlu"),
-                            "_meta": {**meta, "route_id": "voice_chat"},
+                            "_meta": {**meta, "route_id": "voice_chat", "suppress_teacher_bridge": True},
                         },
                     )
                 )
@@ -2372,6 +2372,10 @@ class RouterService:
                 else:
                     if isinstance(result, dict) and bool(result.get("ok")):
                         return
+                    logging.getLogger("adaos.router.voice_chat").warning(
+                        "voice.chat fallback tool returned non-ok result=%r",
+                        result,
+                    )
                 if allow_teacher:
                     try:
                         from adaos.services.nlu.teacher_confirmation_runtime import (

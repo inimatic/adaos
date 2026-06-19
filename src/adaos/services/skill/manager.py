@@ -2598,6 +2598,7 @@ class SkillManager:
         timeout: float | None = None,
         allow_inactive: bool = False,
         slot: str | None = None,
+        bypass_yjs_guard: bool = False,
     ) -> Any:
         status = self.runtime_status(name)
         env = self._runtime_env(name)
@@ -2667,7 +2668,11 @@ class SkillManager:
         prev_memory = os.environ.get("ADAOS_SKILL_MEMORY_PATH")
         prev_secrets = ctx.secrets
         execution_timeout = timeout or tool_spec.get("timeout_seconds")
-        admission = _admit_skill_tool_yjs_work(name, target_tool, payload, tool_spec)
+        admission = (
+            {"allowed": True, "governed": False, "reason": "bypassed_by_trusted_runtime"}
+            if bypass_yjs_guard
+            else _admit_skill_tool_yjs_work(name, target_tool, payload, tool_spec)
+        )
         if not bool(admission.get("allowed", True)):
             event = _skill_quarantine_event(name=name, tool=target_tool, payload=payload, admission=admission)
             _append_skill_quarantine_log(skill_memory_path, event)

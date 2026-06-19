@@ -3,6 +3,31 @@ from types import SimpleNamespace
 
 
 @pytest.mark.anyio
+async def test_teacher_bridge_skips_explicitly_suppressed_voice_fallback(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_bridge
+
+    ctx = get_ctx()
+    monkeypatch.setattr(teacher_bridge, "_ENABLED", True)
+
+    requests: list[dict] = []
+    ctx.bus.subscribe("nlp.teacher.request", lambda ev: requests.append(dict(getattr(ev, "payload", None) or {})))
+
+    await teacher_bridge._on_not_obtained(
+        {
+            "text": "weather in Berlin",
+            "webspace_id": "desktop",
+            "request_id": "req.voice.suppressed",
+            "via": "neuro_lite",
+            "reason": "below_margin_threshold",
+            "_meta": {"route_id": "voice_chat", "webspace_id": "desktop", "suppress_teacher_bridge": True},
+        }
+    )
+
+    assert requests == []
+
+
+@pytest.mark.anyio
 async def test_teacher_bridge_uses_root_policy_when_env_unset(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_bridge

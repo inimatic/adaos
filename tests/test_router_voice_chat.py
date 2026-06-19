@@ -175,7 +175,8 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(mon
         router_service_module,
         "SkillManager",
         lambda **_kwargs: SimpleNamespace(
-            run_tool=lambda _skill, _tool, payload, **_opts: calls.append(dict(payload)) or {"ok": True, "reply": "ok"}
+            run_tool=lambda _skill, _tool, payload, **opts: calls.append((dict(payload), dict(opts)))
+            or {"ok": True, "reply": "ok"}
         ),
     )
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
@@ -197,11 +198,14 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(mon
 
     await bus.wait_for_idle(timeout=1.0)
     assert calls == [
-        {
-            "text": "weather in Berlin",
-            "webspace_id": "desktop",
-            "_meta": {"route_id": "voice_chat", "webspace_id": "desktop"},
-        }
+        (
+            {
+                "text": "weather in Berlin",
+                "webspace_id": "desktop",
+                "_meta": {"route_id": "voice_chat", "webspace_id": "desktop"},
+            },
+            {"bypass_yjs_guard": True},
+        )
     ]
     assert teacher_calls == []
 
@@ -244,7 +248,7 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_during_intent_demo
         router_service_module,
         "SkillManager",
         lambda **_kwargs: SimpleNamespace(
-            run_tool=lambda _skill, _tool, payload, **_opts: calls.append(dict(payload)) or {"ok": True}
+            run_tool=lambda _skill, _tool, payload, **opts: calls.append((dict(payload), dict(opts))) or {"ok": True}
         ),
     )
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
@@ -266,11 +270,14 @@ async def test_voice_chat_not_obtained_prefers_skill_fallback_during_intent_demo
 
     await bus.wait_for_idle(timeout=1.0)
     assert calls == [
-        {
-            "text": "weather in Moscow",
-            "webspace_id": "default",
-            "_meta": {"route_id": "voice_chat", "webspace_id": "default"},
-        }
+        (
+            {
+                "text": "weather in Moscow",
+                "webspace_id": "default",
+                "_meta": {"route_id": "voice_chat", "webspace_id": "default"},
+            },
+            {"bypass_yjs_guard": True},
+        )
     ]
 
 

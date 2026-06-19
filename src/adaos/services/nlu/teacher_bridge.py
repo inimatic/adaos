@@ -250,6 +250,8 @@ async def _on_not_obtained(evt: Any) -> None:
     reason = payload.get("reason") if isinstance(payload.get("reason"), str) else "unknown"
     via = payload.get("via") if isinstance(payload.get("via"), str) else None
     meta = coerce_dict(payload.get("_meta"))
+    if meta.get("suppress_teacher_bridge") is True:
+        return
     classification = _classify_not_obtained_for_teacher(reason=reason, via=via, meta=meta)
 
     item = {
