@@ -47,6 +47,7 @@ from adaos.services.media_library import (
 )
 from adaos.services.node_config import set_node_names as save_node_names_config
 from adaos.services.reliability import (
+    _state_sync_snapshot,
     media_plane_runtime_snapshot,
     reliability_snapshot,
     yjs_sync_runtime_snapshot,
@@ -436,7 +437,10 @@ def _strip_summary_etag_volatiles(value: Any) -> Any:
                 "updated_at",
                 "updatedAt",
                 "changedAt",
+                "lastGoodSyncAt",
+                "lastMaterializationAt",
                 "lastPublishLatencyMs",
+                "maxCardBytesObserved",
             }
         }
     if isinstance(value, list):
@@ -948,6 +952,68 @@ def _thin_runtime_reliability_payload(
         "lastChangedAt": diagnostics.get("lastChangedAt"),
     }
     sidecar_fields = _thin_sidecar_runtime_fields()
+    sync_runtime: dict[str, Any] = {}
+    try:
+        ctx = get_ctx()
+        if not hasattr(ctx, "paths"):
+            raise RuntimeError("AgentContext runtime paths are not initialized")
+        conf = load_config()
+        sync_runtime = yjs_sync_runtime_snapshot(
+            role=str(getattr(conf, "role", "") or ""),
+            webspace_id=resolved_webspace_id,
+        )
+    except Exception as exc:
+        sync_runtime = {
+            "available": False,
+            "selected_webspace_id": resolved_webspace_id,
+            "assessment": {
+                "state": "unavailable",
+                "reason": f"{type(exc).__name__}: {exc}",
+            },
+            "transport": {},
+        }
+    state_sync = _state_sync_snapshot(sync_runtime)
+    ws_handoff_ready = bool(sidecar_fields.get("browserWsHandoffReady"))
+    yws_handoff_ready = bool(sidecar_fields.get("browserYwsHandoffReady"))
+    ws_handoff_state = str(sidecar_fields.get("browserWsHandoffState") or "unknown").strip().lower()
+    if ws_handoff_ready:
+        browser_transport = "ready"
+        browser_transition = "ready"
+        browser_reason = "sidecar_browser_route_ready"
+        browser_blockers: list[str] = []
+    elif ws_handoff_state in {"starting", "planned", "proxy_ready"}:
+        browser_transport = "degraded"
+        browser_transition = "link_starting"
+        browser_reason = "sidecar_browser_route_starting"
+        browser_blockers = ["browser_events_ws_handoff_not_ready"]
+    else:
+        browser_transport = "degraded"
+        browser_transition = "degraded"
+        browser_reason = "browser_events_ws_handoff_not_ready"
+        browser_blockers = ["browser_events_ws_handoff_not_ready"]
+    required_ready = ws_handoff_ready and yws_handoff_ready
+    connectivity = {
+        "requiredUpstreamLink": {
+            "kind": "hub_root",
+            "scopeId": None,
+            "transportState": "ready" if required_ready else "degraded",
+            "transitionState": "ready" if required_ready else "link_starting",
+            "plannedTransition": {"active": False, "reason": None},
+            "reason": "sidecar_browser_route_ready" if required_ready else "sidecar_browser_route_starting",
+            "blockers": [] if required_ready else ["browser_yjs_ws_handoff_not_ready"],
+            "servedBy": "supervisor_sidecar",
+        },
+        "browserControlRoute": {
+            "kind": "browser_control_route",
+            "scopeId": None,
+            "transportState": browser_transport,
+            "transitionState": browser_transition,
+            "plannedTransition": {"active": False, "reason": None},
+            "reason": browser_reason,
+            "blockers": browser_blockers,
+            "servedBy": "supervisor_sidecar",
+        },
+    }
     return {
         "ok": True,
         "available": bool(status_plane.get("available", True)),
@@ -958,7 +1024,20 @@ def _thin_runtime_reliability_payload(
         "updatedAt": status_plane.get("updatedAt"),
         "statusPlane": status_plane,
         **sidecar_fields,
-        "webrtcYjs": _compact_webrtc_yjs_runtime({}),
+        "connectivity": connectivity,
+        "stateSync": {
+            "webspaceId": str(state_sync.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
+            "transportState": str(state_sync.get("transport_state") or "unknown").strip() or "unknown",
+            "firstSyncState": str(state_sync.get("first_sync_state") or "unknown").strip() or "unknown",
+            "semanticState": str(state_sync.get("semantic_state") or "unknown").strip() or "unknown",
+            "freshnessState": str(state_sync.get("freshness_state") or "unknown").strip() or "unknown",
+            "lastGoodSyncAt": state_sync.get("last_good_sync_at"),
+            "lastMaterializationAt": state_sync.get("last_materialization_at"),
+            "replay": _coerce_dict(state_sync.get("replay")),
+            "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
+            "blockers": _coerce_list(state_sync.get("blockers")),
+        },
+        "webrtcYjs": _compact_webrtc_yjs_runtime(sync_runtime),
         "detailsRef": {
             "summaryFull": "/api/node/reliability/summary?mode=full",
             "runtime": "/api/node/reliability",
