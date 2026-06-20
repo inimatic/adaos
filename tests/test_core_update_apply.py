@@ -61,6 +61,28 @@ def test_checkout_target_version_fetches_then_retries(monkeypatch, tmp_path: Pat
     ]
 
 
+def test_resolve_branch_head_reads_remote_head(monkeypatch) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    head_sha = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **_kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            f"{head_sha}\trefs/heads/rev2026\n",
+            "",
+        )
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    assert mod._resolve_branch_head("https://github.com/inimatic/adaos.git", "rev2026") == head_sha
+    assert calls == [["git", "ls-remote", "--heads", "https://github.com/inimatic/adaos.git", "rev2026"]]
+
+
 def test_prepare_lease_rejects_revoked_token(tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
@@ -655,6 +677,64 @@ def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: P
     assert manifest["slot"] == "A"
     assert captured["repo_url"] == ""
     assert cleanup_calls == [(str(slot_dir.parent.resolve()), 300.0)]
+
+
+def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    stale_sha = "d7d79d5d08eb12446a4f7bf6069246368df6d4d0"
+    head_sha = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    captured: dict[str, object] = {}
+
+    def _fake_prepare_checkout_repo(**kwargs):
+        captured.update(kwargs)
+        checkout_dir = Path(kwargs["checkout_dir"])
+        apps_dir = checkout_dir / "src" / "adaos" / "apps"
+        apps_dir.mkdir(parents=True, exist_ok=True)
+        (apps_dir / "__init__.py").write_text("", encoding="utf-8")
+        return "remote_git_clone"
+
+    def _fake_git_text(_repo_dir, *args):
+        joined = " ".join(args)
+        if "rev-parse HEAD" in joined:
+            return head_sha
+        if "rev-parse --short HEAD" in joined:
+            return head_sha[:7]
+        if "rev-parse --abbrev-ref HEAD" in joined:
+            return "rev2026"
+        return "value"
+
+    monkeypatch.setattr(mod, "_resolve_branch_head", lambda repo_url, target_rev: head_sha)
+    monkeypatch.setattr(mod, "_prepare_checkout_repo", _fake_prepare_checkout_repo)
+    monkeypatch.setattr(mod, "_prepare_seed_venv", lambda **_kwargs: {"ok": True, "seeded": False})
+    monkeypatch.setattr(mod, "_install_slot_project", lambda **_kwargs: {"ok": True, "installer": "test", "elapsed_s": 0.0})
+    monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
+    monkeypatch.setattr(mod, "_replace_slot_dir", lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)))
+    monkeypatch.setattr(mod, "_repair_moved_venv", lambda _venv_dir, **_kwargs: {"ok": True, "repaired_files": []})
+    monkeypatch.setattr(mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True, "modules": []})
+    monkeypatch.setattr(mod, "_migrate_installed_skill_runtimes", lambda *args, **kwargs: {"ok": True, "skills": []})
+    monkeypatch.setattr(mod, "_git_text", _fake_git_text)
+    monkeypatch.setattr(mod, "_detect_bootstrap_promotion_requirement", lambda *_args, **_kwargs: {"required": False, "changed_paths": []})
+    monkeypatch.setattr(mod, "_cleanup_stale_temp_slot_dirs", lambda *_args, **_kwargs: {"ok": True, "removed_total": 0})
+
+    manifest = mod.prepare_slot(
+        slot="B",
+        slot_dir_path=str(tmp_path / "slots" / "B"),
+        base_dir=str(tmp_path / "base"),
+        repo_root=str(tmp_path / "repo-root"),
+        source_repo_root=str(tmp_path / "source"),
+        target_rev="rev2026",
+        target_version=stale_sha,
+        repo_url="https://github.com/inimatic/adaos.git",
+        migrate_skill_runtimes=False,
+    )
+
+    assert captured["target_version"] == head_sha
+    assert manifest["target_version"] == head_sha
+    assert manifest["requested_target_version"] == stale_sha
+    assert manifest["resolved_target_version"] == head_sha
+    assert manifest["target_resolution"] == "remote_branch_head"
+    assert manifest["git_commit"] == head_sha
 
 
 def test_detect_bootstrap_promotion_requirement_reports_changed_paths(tmp_path: Path) -> None:

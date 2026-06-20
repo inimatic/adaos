@@ -8,6 +8,7 @@ adaos.egg-info/
 .ruff_cache/
 .coverage
 coverage.xml
+.codex-tmp/
 /.adaos/
 /.adaos_*/
 .adaos_1

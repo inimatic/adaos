@@ -54,6 +54,33 @@ def _checkout_target_version(repo_dir: Path, *, target_rev: str, target_version:
         _run([git, "checkout", target_version], cwd=repo_dir)
 
 
+def _resolve_branch_head(repo_url: str, target_rev: str) -> str:
+    repo_url = str(repo_url or "").strip()
+    target_rev = str(target_rev or "").strip()
+    if not repo_url or not target_rev:
+        return ""
+    git = shutil.which("git")
+    if not git:
+        raise RuntimeError("git is required for core update branch head resolution but is not installed")
+    completed = subprocess.run(
+        [git, "ls-remote", "--heads", repo_url, target_rev],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"failed to resolve remote branch head for {target_rev}: git ls-remote rc={completed.returncode}\n"
+            f"stdout:\n{completed.stdout[-4000:]}\n"
+            f"stderr:\n{completed.stderr[-4000:]}"
+        )
+    for line in (completed.stdout or "").splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1] == f"refs/heads/{target_rev}" and _is_probably_git_sha(parts[0]):
+            return parts[0]
+    raise RuntimeError(f"remote branch {target_rev!r} was not found in {repo_url}")
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare inactive AdaOS core slot")
     parser.add_argument("--target-rev", default="")
@@ -1119,6 +1146,12 @@ def prepare_slot(
         repo_url = str(os.getenv("ADAOS_CORE_UPDATE_REPO_URL", "https://github.com/inimatic/adaos.git")).strip()
     else:
         repo_url = str(repo_url).strip()
+    requested_target_version = target_version
+    resolved_target_version = ""
+    if target_rev and repo_url:
+        resolved_target_version = _resolve_branch_head(repo_url, target_rev)
+        if resolved_target_version:
+            target_version = resolved_target_version
     source_repo_dir = Path(str(source_repo_root or "")).expanduser().resolve() if str(source_repo_root or "").strip() else None
     shared_dotenv = str(shared_dotenv_path or "").strip()
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"adaos-core-{slot_name.lower()}-", dir=str(slot_dir.parent)))
@@ -1165,6 +1198,9 @@ def prepare_slot(
             "created_at": time.time(),
             "target_rev": target_rev,
             "target_version": str(target_version or "").strip(),
+            "requested_target_version": str(requested_target_version or "").strip(),
+            "resolved_target_version": str(resolved_target_version or "").strip(),
+            "target_resolution": "remote_branch_head" if resolved_target_version else "request",
             "root_repo_root": str(repo_root_dir) if repo_root_dir is not None else "",
             "source_kind": source_kind,
             "source_repo_root": str(source_repo_dir) if source_repo_dir is not None else "",

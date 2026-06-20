@@ -8356,6 +8356,20 @@ class SupervisorManager:
                 or choose_inactive_slot()
                 or ""
             ).strip().upper()
+            manifest = prepare_result.get("manifest") if isinstance(prepare_result.get("manifest"), dict) else None
+            requested_target_version = target_version
+            if isinstance(manifest, dict):
+                resolved_target_rev = str(manifest.get("target_rev") or "").strip()
+                resolved_target_version = str(
+                    manifest.get("target_version")
+                    or manifest.get("resolved_target_version")
+                    or manifest.get("git_commit")
+                    or ""
+                ).strip()
+                if resolved_target_rev:
+                    target_rev = resolved_target_rev
+                if resolved_target_version:
+                    target_version = resolved_target_version
             if prepare_lease_path:
                 with contextlib.suppress(Exception):
                     _write_prepare_lease(
@@ -8369,7 +8383,6 @@ class SupervisorManager:
                         target_slot=target_slot or None,
                         completed_at=float(prepare_result.get("finished_at") or time.time()),
                     )
-            manifest = prepare_result.get("manifest") if isinstance(prepare_result.get("manifest"), dict) else None
             prepare_elapsed_s = prepare_result.get("prepare_elapsed_s")
             install_elapsed_s = prepare_result.get("install_elapsed_s")
             install_installer = str(prepare_result.get("install_installer") or "").strip() or None
@@ -8399,6 +8412,7 @@ class SupervisorManager:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "requested_target_version": requested_target_version,
                     "reason": reason,
                     "countdown_sec": countdown_sec,
                     "drain_timeout_sec": drain_timeout_sec,
