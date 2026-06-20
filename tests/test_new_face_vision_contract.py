@@ -613,6 +613,8 @@ def test_new_face_vision_declares_yjs_stream_route_balance() -> None:
         for dep in skill.get("dependencies") or []
     }
     assert {"pillow", "numpy", "torch", "torchvision"} <= dependencies
+    runtime_env = (skill.get("runtime") or {}).get("env") or {}
+    assert runtime_env.get("allow_heavy_dependencies") is True
 
     routes = skill.get("data_routes") or []
 
