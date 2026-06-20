@@ -1402,6 +1402,7 @@ def _preserve_live_remote_catalog_entries(
     *,
     current_items: Any,
     active_remote_node_ids: set[str],
+    detached_remote_node_ids: set[str] | None = None,
 ) -> List[Dict[str, Any]]:
     if not isinstance(current_items, list):
         return merged
@@ -1418,6 +1419,8 @@ def _preserve_live_remote_catalog_entries(
         if not item_id or item_id in seen_ids:
             continue
         node_id = _node_scoped_entry_node_id(item_id)
+        if node_id and detached_remote_node_ids and node_id in detached_remote_node_ids:
+            continue
         if not node_id or node_id in active_remote_node_ids:
             continue
         preserved.append(dict(item))
@@ -1430,6 +1433,7 @@ def _preserve_live_remote_modals(
     *,
     current_modals: Any,
     active_remote_node_ids: set[str],
+    detached_remote_node_ids: set[str] | None = None,
 ) -> Dict[str, Any]:
     if not isinstance(current_modals, Mapping):
         return merged_modals_map
@@ -1439,6 +1443,8 @@ def _preserve_live_remote_modals(
         if not modal_id or modal_id in preserved:
             continue
         node_id = _node_scoped_entry_node_id(modal_id)
+        if node_id and detached_remote_node_ids and node_id in detached_remote_node_ids:
+            continue
         if not node_id or node_id in active_remote_node_ids:
             continue
         preserved[modal_id] = _clone_json_like(value)
@@ -1450,6 +1456,7 @@ def _preserve_live_remote_registry_tokens(
     *,
     current_tokens: Any,
     active_remote_node_ids: set[str],
+    detached_remote_node_ids: set[str] | None = None,
 ) -> List[str]:
     tokens = [str(token or "").strip() for token in merged_tokens if str(token or "").strip()]
     seen = set(tokens)
@@ -1460,11 +1467,36 @@ def _preserve_live_remote_registry_tokens(
         if not token or token in seen:
             continue
         node_id = _node_scoped_entry_node_id(token)
+        if node_id and detached_remote_node_ids and node_id in detached_remote_node_ids:
+            continue
         if not node_id or node_id in active_remote_node_ids:
             continue
         tokens.append(token)
         seen.add(token)
     return tokens
+
+
+def _detached_member_node_ids() -> set[str]:
+    try:
+        from adaos.services.device_inventory import list_devices
+    except Exception:
+        return set()
+    out: set[str] = set()
+    try:
+        devices = list_devices(kind="member", include_detached=True)
+    except Exception:
+        return out
+    for item in list(devices or []):
+        if not isinstance(item, Mapping):
+            continue
+        policy = item.get("policy") if isinstance(item.get("policy"), Mapping) else {}
+        if not bool(policy.get("revoked")) and str(policy.get("managed_state") or "").strip().lower() != "revoked":
+            continue
+        identity = item.get("identity") if isinstance(item.get("identity"), Mapping) else {}
+        node_id = str(identity.get("node_id") or "").strip()
+        if node_id:
+            out.add(node_id)
+    return out
 
 
 def _scope_remote_catalog_entry_id(entry: Dict[str, Any], *, node_id: str) -> Dict[str, Any]:
@@ -3370,12 +3402,15 @@ class WebspaceScenarioRuntime:
         except Exception:
             nodes = []
         local_node_id = _local_node_id()
+        detached_node_ids = _detached_member_node_ids()
         decls: List[Dict[str, Any]] = []
         for node in nodes:
             if not isinstance(node, Mapping):
                 continue
             node_id = str(node.get("node_id") or "").strip()
             if not node_id or node_id == local_node_id:
+                continue
+            if node_id in detached_node_ids:
                 continue
             runtime_projection = (
                 node.get("runtime_projection")
@@ -3780,6 +3815,7 @@ class WebspaceScenarioRuntime:
         auto_widget_ids: set[str] = set()
         auto_app_ids: set[str] = set()
         active_remote_node_ids: set[str] = set()
+        detached_remote_node_ids = _detached_member_node_ids()
         local_display = node_display_from_config(load_config())
 
         for decl in skill_decls:
@@ -3893,11 +3929,13 @@ class WebspaceScenarioRuntime:
             merged_apps,
             current_items=live_catalog.get("apps"),
             active_remote_node_ids=active_remote_node_ids,
+            detached_remote_node_ids=detached_remote_node_ids,
         )
         merged_widgets = _preserve_live_remote_catalog_entries(
             merged_widgets,
             current_items=live_catalog.get("widgets"),
             active_remote_node_ids=active_remote_node_ids,
+            detached_remote_node_ids=detached_remote_node_ids,
         )
         supports_catalog_controls = _scenario_supports_catalog_controls(
             scenario_id,
@@ -4046,6 +4084,7 @@ class WebspaceScenarioRuntime:
             merged_modals_map,
             current_modals=live_application.get("modals"),
             active_remote_node_ids=active_remote_node_ids,
+            detached_remote_node_ids=detached_remote_node_ids,
         )
 
         live_registry = _coerce_dict((inputs.live_state or {}).get("registry") or {})
@@ -4053,11 +4092,13 @@ class WebspaceScenarioRuntime:
             list(merged_registry.get("modals") or []),
             current_tokens=live_registry.get("modals"),
             active_remote_node_ids=active_remote_node_ids,
+            detached_remote_node_ids=detached_remote_node_ids,
         )
         merged_registry["widgets"] = _preserve_live_remote_registry_tokens(
             list(merged_registry.get("widgets") or []),
             current_tokens=live_registry.get("widgets"),
             active_remote_node_ids=active_remote_node_ids,
+            detached_remote_node_ids=detached_remote_node_ids,
         )
 
         app_with_modals: Dict[str, Any] = dict(scenario_application)

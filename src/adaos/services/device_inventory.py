@@ -349,7 +349,12 @@ def _get_hub_link_manager():
 
 
 class DeviceInventoryService:
-    def list_devices(self, *, kind: DeviceKind | None = None) -> list[dict[str, Any]]:
+    def list_devices(
+        self,
+        *,
+        kind: DeviceKind | None = None,
+        include_detached: bool = False,
+    ) -> list[dict[str, Any]]:
         now = _now_ts()
         items: list[dict[str, Any]] = []
         if kind in {None, "browser"}:
@@ -358,6 +363,13 @@ class DeviceInventoryService:
             items.extend(self._list_member_devices(now=now))
         if kind in {None, "redevice"}:
             items.extend(self._list_redevice_devices(now=now))
+        if not include_detached:
+            items = [
+                item
+                for item in items
+                if not bool(_mapping(item.get("policy")).get("revoked"))
+                and _text(_mapping(item.get("policy")).get("managed_state")) != "revoked"
+            ]
         items.sort(
             key=lambda item: (
                 0 if item.get("kind") == "browser" else 1 if item.get("kind") == "member" else 2,
@@ -793,8 +805,12 @@ def get_device_inventory_service() -> DeviceInventoryService:
     return _SERVICE
 
 
-def list_devices(*, kind: DeviceKind | None = None) -> list[dict[str, Any]]:
-    return get_device_inventory_service().list_devices(kind=kind)
+def list_devices(
+    *,
+    kind: DeviceKind | None = None,
+    include_detached: bool = False,
+) -> list[dict[str, Any]]:
+    return get_device_inventory_service().list_devices(kind=kind, include_detached=include_detached)
 
 
 def get_device(device_ref: str) -> dict[str, Any] | None:

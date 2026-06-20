@@ -90,6 +90,32 @@ def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
     assert item["runtime"]["connected_to_subnet"] is None
 
 
+def test_device_inventory_hides_detached_devices_by_default(monkeypatch) -> None:
+    _patch_sources(
+        monkeypatch,
+        member_entries=[
+            {
+                "id": "member-1",
+                "display_name": "Old member",
+                "revoked": True,
+                "revoked_at": 990.0,
+            },
+            {
+                "id": "member-2",
+                "display_name": "Mediapoint",
+                "revoked": False,
+            },
+        ],
+    )
+
+    visible = device_inventory.list_devices(kind="member")
+    with_detached = device_inventory.list_devices(kind="member", include_detached=True)
+
+    assert [item["ref"] for item in visible] == ["member:member-2"]
+    assert [item["ref"] for item in with_detached] == ["member:member-2", "member:member-1"]
+    assert device_inventory.get_device("member:member-1") is None
+
+
 def test_device_inventory_merges_member_policy_directory_and_live_presence(monkeypatch) -> None:
     _patch_sources(
         monkeypatch,

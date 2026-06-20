@@ -3476,7 +3476,7 @@ def _member_device_inventory_map() -> dict[str, dict[str, Any]]:
         return {}
     result: dict[str, dict[str, Any]] = {}
     try:
-        items = list_devices(kind="member")
+        items = list_devices(kind="member", include_detached=True)
     except Exception:
         return {}
     for item in list(items or []):
@@ -3506,6 +3506,12 @@ def _member_inventory_overlay(item: dict[str, Any] | None) -> dict[str, Any]:
         "lifetime_mode": str(policy.get("lifetime_mode") or "").strip() or None,
         "connected_to_subnet": runtime.get("connected_to_subnet"),
     }
+
+
+def _member_inventory_is_detached(item: dict[str, Any] | None) -> bool:
+    payload = item if isinstance(item, dict) else {}
+    policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+    return bool(policy.get("revoked")) or str(policy.get("managed_state") or "").strip().lower() == "revoked"
 
 
 def _connection_local_node_display(*, role: str, node_id: str, node_names: list[str]) -> dict[str, Any]:
@@ -3609,6 +3615,8 @@ def hub_member_connection_state_snapshot(
             member_id = str(item.get("node_id") or "").strip()
             if not member_id:
                 continue
+            if _member_inventory_is_detached(inventory_by_id.get(member_id)):
+                continue
             connected_ids.add(member_id)
             directory_item = directory_by_id.get(member_id) if isinstance(directory_by_id.get(member_id), dict) else {}
             runtime_projection = (
@@ -3702,6 +3710,8 @@ def hub_member_connection_state_snapshot(
         linkless_online_total = 0
         for known_id, node in directory_by_id.items():
             if known_id in connected_ids:
+                continue
+            if _member_inventory_is_detached(inventory_by_id.get(known_id)):
                 continue
             roles = node.get("roles") if isinstance(node.get("roles"), list) else []
             if roles and "member" not in [str(item or "").strip().lower() for item in roles]:
