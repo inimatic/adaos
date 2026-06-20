@@ -4247,6 +4247,8 @@ class SkillManager:
         policy_overrides: Mapping[str, Any],
         skill_dir: Path,
     ) -> Dict[str, Any]:
+        runtime_manifest = manifest.get("runtime") if isinstance(manifest.get("runtime"), Mapping) else {}
+        service_manifest = manifest.get("service") if isinstance(manifest.get("service"), Mapping) else None
         tools: Dict[str, Dict[str, Any]] = {}
         tool_entries = manifest.get("tools", []) or []
         default_tool = manifest.get("default_tool")
@@ -4310,28 +4312,32 @@ class SkillManager:
                 "callable": "migrate",
             }
 
+        resolved_runtime = {
+            **dict(runtime_manifest),
+            "type": runtime_manifest.get("type", "python"),
+            "bucket": slot.root.parent.parent.name,
+            "interpreter": str(interpreter),
+            "src": str(slot.src_dir),
+            "vendor": str(slot.vendor_dir),
+            "venv": str(slot.venv_dir),
+            "runtime_dir": str(slot.runtime_dir),
+            "logs": str(slot.logs_dir),
+            "tmp": str(slot.tmp_dir),
+            "tests": str(slot.tests_dir),
+            "python_paths": list(python_paths),
+            "skill_env": str(slot.skill_env_path),
+            "skill_memory": str(slot.skill_memory_path),
+            "internal_data": str(slot.internal_data_dir),
+        }
+
         return {
             "name": manifest.get("name", slot.skill_name),
             "version": manifest.get("version"),
             "runtime_bucket": slot.root.parent.parent.name,
             "slot": slot.slot,
             "source": str(skill_dir.resolve()),
-            "runtime": {
-                "type": (manifest.get("runtime") or {}).get("type", "python"),
-                "bucket": slot.root.parent.parent.name,
-                "interpreter": str(interpreter),
-                "src": str(slot.src_dir),
-                "vendor": str(slot.vendor_dir),
-                "venv": str(slot.venv_dir),
-                "runtime_dir": str(slot.runtime_dir),
-                "logs": str(slot.logs_dir),
-                "tmp": str(slot.tmp_dir),
-                "tests": str(slot.tests_dir),
-                "python_paths": list(python_paths),
-                "skill_env": str(slot.skill_env_path),
-                "skill_memory": str(slot.skill_memory_path),
-                "internal_data": str(slot.internal_data_dir),
-            },
+            "runtime": resolved_runtime,
+            "service": dict(service_manifest) if service_manifest is not None else None,
             "tools": tools,
             "default_tool": default_tool,
             "data_migration_tool": data_migration_tool,

@@ -181,6 +181,58 @@ def test_prepare_runtime_preserves_browser_contract_fields(tmp_path: Path, monke
         shutil.rmtree(runtime_root, ignore_errors=True)
 
 
+def test_prepare_runtime_preserves_service_contract_fields(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    workspace_root = Path(ctx.paths.skills_dir())
+    skill_name = "service_contract_skill"
+    skill_dir = workspace_root / skill_name
+    runtime_root = workspace_root / ".runtime" / skill_name
+    try:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+        (skill_dir / "handlers" / "main.py").write_text("def handle(topic, payload):\n    return {'ok': True}\n", encoding="utf-8")
+        (skill_dir / "skill.yaml").write_text(
+            "\n".join(
+                [
+                    "name: service_contract_skill",
+                    "version: 0.1.0",
+                    "runtime:",
+                    "  kind: service",
+                    "  env:",
+                    "    mode: venv",
+                    "    python: '3.11'",
+                    "service:",
+                    "  host: 127.0.0.1",
+                    "  port: 19091",
+                    "  command:",
+                    "  - -m",
+                    "  - handlers.main",
+                    "  dependencies:",
+                    "  - demo-heavy==1.0.0",
+                    "tools: []",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+        monkeypatch.setattr(mgr, "_prepare_runtime_environment", lambda **kwargs: (Path("python"), []))
+
+        result = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+        resolved = json.loads(Path(result.resolved_manifest).read_text(encoding="utf-8"))
+
+        assert resolved["runtime"]["kind"] == "service"
+        assert resolved["runtime"]["env"] == {"mode": "venv", "python": "3.11"}
+        assert resolved["runtime"]["src"].replace("\\", "/").endswith("/slots/A/src")
+        assert resolved["service"]["port"] == 19091
+        assert resolved["service"]["dependencies"] == ["demo-heavy==1.0.0"]
+        assert "dependencies" not in resolved
+    finally:
+        shutil.rmtree(skill_dir, ignore_errors=True)
+        shutil.rmtree(runtime_root, ignore_errors=True)
+
+
 def test_sync_skill_env_merges_template_legacy_and_store(tmp_path: Path, monkeypatch) -> None:
     ctx = get_ctx()
     workspace_root = Path(ctx.paths.skills_dir())
