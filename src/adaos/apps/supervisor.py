@@ -2125,6 +2125,23 @@ def _runtime_profile_graceful_shutdown_timeout_sec(profile_mode: str) -> tuple[f
     return drain_timeout, signal_delay, graceful_wait, terminate_wait
 
 
+def _signal_process_family(proc: subprocess.Popen[Any], sig: int) -> None:
+    if os.name != "nt":
+        pid = getattr(proc, "pid", None)
+        if pid:
+            try:
+                os.killpg(int(pid), int(sig))
+                return
+            except ProcessLookupError:
+                pass
+            except Exception:
+                pass
+    if sig == getattr(signal, "SIGKILL", 9):
+        proc.kill()
+    else:
+        proc.terminate()
+
+
 def _runtime_profile_finalize_wait_sec() -> float:
     try:
         return max(
@@ -6894,7 +6911,8 @@ class SupervisorManager:
                 stage="forced_terminate",
                 proc=proc,
             )
-            proc.terminate()
+        with contextlib.suppress(Exception):
+            _signal_process_family(proc, signal.SIGTERM)
         deadline = time.time() + float(terminate_wait_sec)
         terminate_checks = max(1, int(float(terminate_wait_sec) / 0.1) + 2)
         while time.time() < deadline and terminate_checks > 0:
@@ -6908,7 +6926,18 @@ class SupervisorManager:
                 stage="forced_kill",
                 proc=proc,
             )
-            proc.kill()
+        with contextlib.suppress(Exception):
+            _signal_process_family(proc, getattr(signal, "SIGKILL", 9))
+        kill_deadline = time.time() + float(terminate_wait_sec)
+        kill_checks = max(1, int(float(terminate_wait_sec) / 0.1) + 2)
+        while time.time() < kill_deadline and kill_checks > 0:
+            kill_checks -= 1
+            if proc.poll() is not None:
+                return
+            await asyncio.sleep(0.1)
+        self._last_error = f"runtime process did not exit after forced kill: {reason}"
+        self._persist_runtime_state()
+        raise RuntimeError(self._last_error)
 
     async def _terminate_candidate_proc_locked(self, *, graceful: bool, reason: str) -> None:
         candidate_slot = str(self._candidate_slot or "").strip().upper() or None

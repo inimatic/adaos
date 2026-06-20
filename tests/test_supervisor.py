@@ -3557,6 +3557,59 @@ def test_ensure_runtime_stopped_for_update_forces_hung_process(monkeypatch, tmp_
     assert proc.poll() == 0
 
 
+def test_terminate_proc_locked_waits_after_process_group_kill(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    timeline = {"now": 0.0}
+
+    class _Proc:
+        pid = 42424
+
+        def __init__(self) -> None:
+            self.alive = True
+            self.terminate_calls = 0
+            self.kill_calls = 0
+
+        def poll(self):
+            return None if self.alive else 0
+
+        def terminate(self) -> None:
+            self.terminate_calls += 1
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+            self.alive = False
+
+    proc = _Proc()
+    signals: list[tuple[int, int]] = []
+
+    def _fake_killpg(pid: int, sig: int) -> None:
+        signals.append((pid, sig))
+        if sig == getattr(supervisor.signal, "SIGKILL", 9):
+            proc.alive = False
+
+    async def _fake_sleep(value: float) -> None:
+        timeline["now"] += max(0.5, float(value))
+
+    if supervisor.os.name != "nt":
+        monkeypatch.setattr(supervisor.os, "killpg", _fake_killpg, raising=False)
+    monkeypatch.setattr(supervisor.time, "time", lambda: timeline["now"])
+    monkeypatch.setattr(supervisor.asyncio, "sleep", _fake_sleep)
+
+    asyncio.run(manager._terminate_proc_locked(proc=proc, graceful=False, reason="test.process_group_stop"))
+
+    if supervisor.os.name != "nt":
+        assert signals[0] == (42424, supervisor.signal.SIGTERM)
+        assert signals[-1] == (42424, getattr(supervisor.signal, "SIGKILL", 9))
+        assert proc.terminate_calls == 0
+        assert proc.kill_calls == 0
+    else:
+        assert signals == []
+        assert proc.terminate_calls >= 1
+        assert proc.kill_calls == 1
+    assert proc.poll() == 0
+
+
 def test_runtime_state_payload_reports_listener_and_api_readiness(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
