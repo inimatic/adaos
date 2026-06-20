@@ -183,7 +183,8 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
     workdir = (skill_root / workdir_raw).resolve() if isinstance(workdir_raw, str) and workdir_raw else skill_root
 
     deps: list[str] = []
-    dep_list = manifest.get("dependencies") or []
+    service_deps = service.get("dependencies")
+    dep_list = service_deps if isinstance(service_deps, list) else (manifest.get("dependencies") or [])
     if isinstance(dep_list, list):
         deps = [str(d) for d in dep_list if isinstance(d, str) and d.strip()]
 

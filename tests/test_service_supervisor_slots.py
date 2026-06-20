@@ -191,6 +191,35 @@ def test_service_supervisor_defaults_dependency_service_to_bucket_venv(tmp_path)
     assert spec.venv_dir == runtime_root / "venv"
 
 
+def test_service_supervisor_prefers_service_dependencies_for_venv(tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    runtime_root = tmp_path / ".runtime" / "svc" / "v1.0"
+    skill_root = runtime_root / "slots" / "A" / "src" / "skills" / "svc"
+    skill_root.mkdir(parents=True)
+
+    spec = mod._resolve_service_spec(
+        "svc",
+        skill_root,
+        {
+            "name": "svc",
+            "runtime": {"kind": "service", "env": {"mode": "venv"}},
+            "dependencies": ["requests==2.31.0"],
+            "service": {
+                "host": "127.0.0.1",
+                "port": 18105,
+                "command": ["-m", "handlers.service"],
+                "dependencies": ["torch==2.10.0", "faiss-cpu==1.13.2"],
+            },
+        },
+    )
+
+    assert spec is not None
+    assert spec.env_mode == "venv"
+    assert spec.venv_dir == runtime_root / "venv"
+    assert spec.dependencies == ["torch==2.10.0", "faiss-cpu==1.13.2"]
+
+
 def test_service_supervisor_pythonpath_includes_package_root(tmp_path):
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod
