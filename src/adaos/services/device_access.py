@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 import socket
 from typing import Any, Mapping
 
@@ -9,7 +7,6 @@ from adaos.services import access_links as _access_links
 from adaos.services import device_inventory as _device_inventory
 from adaos.services import device_reconciler as _device_reconciler
 
-_log = logging.getLogger("adaos.device_access")
 _LIFETIME_PRESETS = ["permanent", "1h", "1d", "7d", "30d"]
 _LIFETIME_PRESET_LABELS = {
     "permanent": "Permanent",
@@ -111,24 +108,6 @@ def _lifetime_options(meta: Mapping[str, Any]) -> list[dict[str, Any]]:
             option["reason"] = reason
         options.append(option)
     return options
-
-
-def _run_coro(coro: Any) -> Any:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    loop.create_task(coro)
-    return None
-
-
-def _get_hub_link_manager():
-    try:
-        from adaos.services.subnet.link_manager import get_hub_link_manager
-
-        return get_hub_link_manager()
-    except Exception:
-        return None
 
 
 def _device_or_error(device_ref: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -560,33 +539,7 @@ def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
             "device": _hub_device_settings(f"hub:{subnet_id or _hub_ref_id(hub_ref) or 'local'}"),
             "runtime_update": {"attempted": False, "applied": True},
         }
-    device, error = _device_or_error(device_ref)
-    if error is not None:
-        return error
-    assert device is not None
-    if not _policy_present(device):
-        return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
-    kind, link_id = _kind_and_link_id(_text(device_ref))
-    names = _name_list(display_name)
-    primary_name = names[0] if names else ""
-    entry = _access_links.rename_link(kind, link_id, primary_name, node_names=names)
-    runtime_update = {"attempted": False, "applied": False}
-    if kind == "member":
-        mgr = _get_hub_link_manager()
-        if mgr is not None:
-            try:
-                if mgr.is_connected(link_id) and names:
-                    runtime_update = {"attempted": True, "applied": True}
-                    _run_coro(mgr.set_member_node_names(link_id, node_names=names))
-            except Exception:
-                _log.debug("rename_device runtime update failed device_ref=%s", device_ref, exc_info=True)
-    return {
-        "ok": True,
-        "device_ref": _text(device_ref),
-        "entry": entry,
-        "device": _device_inventory.get_device(_text(device_ref)),
-        "runtime_update": runtime_update,
-    }
+    return _device_inventory.get_device_inventory_service().rename_device(_text(device_ref), display_name)
 
 
 def add_device_alias(
@@ -694,58 +647,13 @@ def deprecate_device_alias(
 def set_device_lifetime(device_ref: str, preset: str) -> dict[str, Any]:
     if _hub_ref_for_device_ref(device_ref):
         return {"ok": False, "error": "hub_lifetime_not_applicable", "device_ref": _text(device_ref)}
-    device, error = _device_or_error(device_ref)
-    if error is not None:
-        return error
-    assert device is not None
-    if not _policy_present(device):
-        return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
-    kind, link_id = _kind_and_link_id(_text(device_ref))
-    entry = _access_links.set_link_lifetime(kind, link_id, _text(preset) or "permanent")
-    return {
-        "ok": True,
-        "device_ref": _text(device_ref),
-        "entry": entry,
-        "device": _device_inventory.get_device(_text(device_ref)),
-    }
+    return _device_inventory.get_device_inventory_service().set_device_lifetime(_text(device_ref), preset)
 
 
 def detach_device(device_ref: str) -> dict[str, Any]:
     if _hub_ref_for_device_ref(device_ref):
         return {"ok": False, "error": "hub_detach_not_applicable", "device_ref": _text(device_ref)}
-    device, error = _device_or_error(device_ref)
-    if error is not None:
-        return error
-    assert device is not None
-    if not _policy_present(device):
-        return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
-    profile = get_command_profile(_text(device_ref)) or {}
-    detach_meta = _mapping(profile.get("detach"))
-    if not bool(detach_meta.get("enabled")):
-        return {
-            "ok": False,
-            "error": _text(detach_meta.get("reason")) or "device_detach_not_allowed",
-            "device_ref": _text(device_ref),
-        }
-    kind, link_id = _kind_and_link_id(_text(device_ref))
-    entry = _access_links.detach_link(kind, link_id)
-    runtime_update = {"attempted": False, "applied": False}
-    if kind == "member":
-        mgr = _get_hub_link_manager()
-        if mgr is not None:
-            try:
-                if mgr.is_connected(link_id):
-                    runtime_update = {"attempted": True, "applied": True}
-                    _run_coro(mgr.unregister(link_id))
-            except Exception:
-                _log.debug("detach_device runtime unregister failed device_ref=%s", device_ref, exc_info=True)
-    return {
-        "ok": True,
-        "device_ref": _text(device_ref),
-        "entry": entry,
-        "device": _device_inventory.get_device(_text(device_ref)),
-        "runtime_update": runtime_update,
-    }
+    return _device_inventory.get_device_inventory_service().detach_device(_text(device_ref))
 
 
 def adopt_device(device_ref: str, display_name: str | None = None, preset: str = "permanent") -> dict[str, Any]:

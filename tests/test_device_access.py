@@ -490,7 +490,7 @@ def test_rename_device_updates_live_member_when_connected(monkeypatch) -> None:
             "node_names": list(node_names or []),
         },
     )
-    monkeypatch.setattr(device_access, "_get_hub_link_manager", lambda: _FakeManager())
+    monkeypatch.setattr(device_access._device_inventory, "_get_hub_link_manager", lambda: _FakeManager())
 
     result = device_access.rename_device("member:member-1", "Kitchen tablet, Kitchen screen, kitchen tablet")
 
@@ -617,7 +617,7 @@ def test_detach_device_unregisters_live_member_when_connected(monkeypatch) -> No
         "detach_link",
         lambda kind, link_id: {"kind": kind, "id": link_id, "revoked": True},
     )
-    monkeypatch.setattr(device_access, "_get_hub_link_manager", lambda: _FakeManager())
+    monkeypatch.setattr(device_access._device_inventory, "_get_hub_link_manager", lambda: _FakeManager())
 
     result = device_access.detach_device("member:member-1")
 
