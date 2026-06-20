@@ -76,6 +76,8 @@ def refresh_skill_runtime(
     migrate_runtime: bool = True,
     ensure_installed: bool = False,
     require_active_version: bool = False,
+    disable_during_migration: bool = False,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
     expected_version = str(source_version or "").strip()
@@ -117,6 +119,22 @@ def refresh_skill_runtime(
     if isinstance(runtime_result, dict) and not bool(runtime_result.get("ok", True)):
         should_prepare = True
     if migrate_runtime and should_prepare:
+        if disable_during_migration:
+            try:
+                payload["deactivation"] = mgr.deactivate_runtime(
+                    skill_name,
+                    reason="runtime_migration_in_progress",
+                    failure_kind="migration",
+                    failed_stage="prepare",
+                    source="runtime_refresh",
+                    committed_core_switch=False,
+                    status="disabled",
+                    comment="Skill runtime is disabled while AdaOS prepares and activates its updated runtime slot.",
+                    operation_id=str(operation_id or ""),
+                    transient=True,
+                )
+            except Exception as exc:
+                payload["deactivation_error"] = str(exc)
         if ensure_installed:
             mgr.install(skill_name, validate=False)
         try:

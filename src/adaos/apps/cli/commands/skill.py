@@ -2188,64 +2188,28 @@ def migrate(
     if not local and _hub_api_ready(timeout_s=3.0):
         if dry_run:
             typer.secho("dry-run is not supported in hub api mode; ignoring", fg=typer.colors.YELLOW)
-        if name:
-            result = _hub_post(
-                "/api/skills/update",
-                body={
-                    "name": name,
-                    "dry_run": False,
-                    "webspace_id": default_webspace_id(),
-                    **({"force": True} if force else {}),
-                },
-                timeout_s=120,
-            )
+        result = _hub_post(
+            "/api/skills/runtime/migration/start",
+            body={
+                "name": name,
+                "webspace_id": default_webspace_id(),
+                "force": bool(force),
+                "run_tests": True,
+                "sync_workspace": True,
+                "reason": "cli.skill.migrate",
+            },
+            timeout_s=10,
+        )
+        status_payload = result.get("status") if isinstance(result, dict) else {}
+        status = status_payload if isinstance(status_payload, dict) else {}
+        accepted = bool(result.get("accepted")) if isinstance(result, dict) else False
+        if accepted:
             typer.echo(
-                f"{name}: {'updated' if result.get('updated') else 'up-to-date'}"
-                + (f" (version {result.get('version')})" if result.get("version") else "")
+                "skill runtime migration scheduled"
+                + (f" operation={status.get('operation_id')}" if status.get("operation_id") else "")
             )
-            return
-        _hub_post("/api/skills/sync", body={"force": True} if force else None)
-        listing = _hub_get("/api/skills/list")
-        items = listing.get("items") if isinstance(listing, dict) else []
-        if not isinstance(items, list):
-            items = []
-        updated_any = False
-        failed = False
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            skill_name = str(item.get("name") or item.get("id") or "").strip()
-            if not skill_name:
-                continue
-            try:
-                result = _hub_post(
-                    "/api/skills/update",
-                    body={
-                        "name": skill_name,
-                        "dry_run": False,
-                        "webspace_id": default_webspace_id(),
-                        "defer_webspace_rebuild": True,
-                        **({"force": True} if force else {}),
-                    },
-                    timeout_s=120,
-                )
-            except Exception as exc:
-                failed = True
-                typer.secho(f"{skill_name}: {exc}", fg=typer.colors.RED)
-                continue
-            updated_any = True
-            typer.echo(
-                f"{skill_name}: {'updated' if result.get('updated') else 'up-to-date'}"
-                + (f" (version {result.get('version')})" if result.get("version") else "")
-            )
-        if updated_any:
-            try:
-                _rebuild_hub_webspace(webspace_id=default_webspace_id())
-            except Exception as exc:
-                failed = True
-                typer.secho(f"webspace rebuild failed: {exc}", fg=typer.colors.RED)
-        if failed:
-            raise typer.Exit(1)
+        else:
+            typer.echo(str(result.get("reason") or "skill runtime migration already running"))
         return
     ctx = get_ctx()
     service = SkillUpdateService(ctx)

@@ -561,14 +561,6 @@ def test_autostart_runner_prepared_restart_preserves_plan_until_validation(monke
         "active_slot_manifest",
         lambda: (_ for _ in ()).throw(AssertionError("prepared restart must read the target slot manifest")),
     )
-    monkeypatch.setattr(
-        autostart_runner,
-        "_run_prepared_restart_skill_migration",
-        lambda slot, manifest: (
-            {"ok": True, "total": 1, "failed_total": 0, "rollback_total": 0, "deferred": False, "skills": []},
-            {**dict(manifest), "skill_runtime_migration": {"ok": True, "deferred": False}},
-        ),
-    )
     monkeypatch.setattr(autostart_runner, "clear_plan", lambda: calls.append("clear_plan"))
     monkeypatch.setattr(autostart_runner, "write_status", lambda payload: calls.append(("write_status", dict(payload))))
     monkeypatch.setattr(autostart_runner, "_resolve_bind", lambda conf, host, port: (host, port))
@@ -596,6 +588,8 @@ def test_autostart_runner_prepared_restart_preserves_plan_until_validation(monke
     assert payload["target_slot"] == "B"
     assert payload["manifest"]["target_version"] == "target-sha"
     assert payload["skill_runtime_migration"]["ok"] is True
+    assert payload["skill_runtime_migration"]["deferred"] is True
+    assert payload["skill_runtime_migration"]["background_required"] is True
     assert payload["prepared_restart_manifest_wait"]["found"] is True
 
 
@@ -632,14 +626,6 @@ def test_autostart_runner_prepared_restart_waits_for_manifest(monkeypatch, tmp_p
     monkeypatch.setattr(autostart_runner, "_prepared_restart_manifest_wait_timeout_sec", lambda: 1.0)
     monkeypatch.setattr(autostart_runner, "_prepared_restart_manifest_poll_sec", lambda: 0.05)
     monkeypatch.setattr(autostart_runner, "read_slot_manifest", lambda slot: manifests.pop(0))
-    monkeypatch.setattr(
-        autostart_runner,
-        "_run_prepared_restart_skill_migration",
-        lambda slot, manifest: (
-            {"ok": True, "total": 1, "failed_total": 0, "rollback_total": 0, "deferred": False, "skills": []},
-            dict(manifest),
-        ),
-    )
     monkeypatch.setattr(autostart_runner, "clear_plan", lambda: calls.append("clear_plan"))
     monkeypatch.setattr(autostart_runner, "write_status", lambda payload: calls.append(("write_status", dict(payload))))
     monkeypatch.setattr(autostart_runner, "_resolve_bind", lambda conf, host, port: (host, port))
@@ -710,9 +696,8 @@ def test_autostart_runner_prepared_restart_manifest_timeout_clears_plan(monkeypa
     assert payload["plan"]["target_version"] == "target-sha"
 
 
-def test_prepared_restart_skill_migration_timeout_is_safe_for_core_update(monkeypatch, tmp_path: Path) -> None:
+def test_prepared_restart_skill_migration_is_deferred_to_post_boot(monkeypatch, tmp_path: Path) -> None:
     written: list[tuple[str, dict]] = []
-    target_python = tmp_path / "target-slot-python"
     manifest = {
         "slot": "B",
         "env": {},
@@ -720,23 +705,20 @@ def test_prepared_restart_skill_migration_timeout_is_safe_for_core_update(monkey
         "skill_runtime_migration": {"deferred": True},
     }
 
-    def _timeout(command, *, env, cwd, timeout_sec):
-        assert command[:3] == [str(target_python), "-m", "adaos.apps.skill_runtime_migrate"]
-        raise subprocess.TimeoutExpired(command, timeout_sec, output="partial stdout", stderr="partial stderr")
-
-    monkeypatch.setattr(autostart_runner, "_skill_runtime_migration_timeout_sec", lambda: 12.0)
-    monkeypatch.setattr(autostart_runner, "_slot_python_executable", lambda slot: target_python)
-    monkeypatch.setattr(autostart_runner, "_run_skill_runtime_migration_subprocess", _timeout)
+    monkeypatch.setattr(
+        autostart_runner,
+        "_run_skill_runtime_migration_subprocess",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prepared restart must not run skill migration")),
+    )
     monkeypatch.setattr(autostart_runner, "write_slot_manifest", lambda slot, payload: written.append((slot, dict(payload))))
 
     payload, updated_manifest = autostart_runner._run_prepared_restart_skill_migration("B", manifest)
 
-    assert payload["ok"] is False
-    assert payload["timeout"] is True
+    assert payload["ok"] is True
     assert payload["safe_for_core_update"] is True
-    assert payload["deferred"] is False
-    assert payload["timeout_sec"] == 12.0
-    assert "timed out" in payload["error"]
+    assert payload["deferred"] is True
+    assert payload["background_required"] is True
+    assert payload["reason"] == "deferred_until_runtime_api_ready"
     assert updated_manifest["skill_runtime_migration"] == payload
     assert written[-1] == ("B", updated_manifest)
 

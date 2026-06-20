@@ -22,6 +22,10 @@ from adaos.services.skill.update import SkillUpdateService
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_refresh import RuntimeRefreshError, rebuild_webspace_projection, refresh_skill_runtime
+from adaos.services.skill.runtime_migration_worker import (
+    read_status as read_skill_runtime_migration_status,
+    start_background_migration,
+)
 from adaos.services.scenario.webspace_runtime import invalidate_webspace_materialization_cache
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 from adaos.services.workspace_registry import build_registry_entry, find_workspace_registry_entry, list_workspace_registry_entries
@@ -138,6 +142,15 @@ class UninstallReq(BaseModel):
 
 class SyncReq(BaseModel):
     force: bool | None = None
+
+
+class RuntimeMigrationStartReq(BaseModel):
+    name: str | None = None
+    webspace_id: str | None = None
+    force: bool = False
+    run_tests: bool = True
+    sync_workspace: bool = True
+    reason: str = "api"
 
 
 def _safe_version(v: Any) -> Version | None:
@@ -751,6 +764,8 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
                 migrate_runtime=True,
                 ensure_installed=False,
                 require_active_version=True,
+                disable_during_migration=True,
+                operation_id=f"skill-update:{body.name}",
             )
         except RuntimeRefreshError as exc:
             log.exception("runtime refresh failed after skill update: %s", body.name)
@@ -810,3 +825,21 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
         "materialization_cache": materialization_cache if not body.dry_run else {},
         "webspace_rebuild": webspace_rebuild,
     }
+
+
+@router.post("/runtime/migration/start")
+async def runtime_migration_start(body: RuntimeMigrationStartReq, ctx: AgentContext = Depends(get_ctx)):
+    return await start_background_migration(
+        ctx,
+        reason=body.reason or "api",
+        webspace_id=body.webspace_id or default_webspace_id(),
+        name=body.name,
+        force=bool(body.force),
+        run_tests=bool(body.run_tests),
+        sync_workspace=bool(body.sync_workspace),
+    )
+
+
+@router.get("/runtime/migration/status")
+async def runtime_migration_status(ctx: AgentContext = Depends(get_ctx)):
+    return {"ok": True, "status": read_skill_runtime_migration_status(ctx)}

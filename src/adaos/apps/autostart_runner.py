@@ -649,47 +649,20 @@ def _run_prepared_restart_skill_migration(slot: str, manifest: dict[str, Any]) -
     current_migration = manifest.get("skill_runtime_migration") if isinstance(manifest.get("skill_runtime_migration"), dict) else {}
     if current_migration and not bool(current_migration.get("deferred")):
         return dict(current_migration), dict(manifest)
-
-    env = dict(os.environ)
-    manifest_env = manifest.get("env")
-    if isinstance(manifest_env, dict):
-        for key, value in manifest_env.items():
-            env[str(key)] = str(value)
-    env["ADAOS_ACTIVE_CORE_SLOT"] = slot_name
-    env["ADAOS_ACTIVE_CORE_SLOT_DIR"] = str(slot_dir(slot_name))
-    cwd_raw = str(manifest.get("cwd") or "").strip()
-    cwd = Path(cwd_raw).expanduser().resolve() if cwd_raw else None
-    command = [str(_slot_python_executable(slot_name)), "-m", "adaos.apps.skill_runtime_migrate", "--json"]
-    timeout_sec = _skill_runtime_migration_timeout_sec()
-    try:
-        completed = _run_skill_runtime_migration_subprocess(
-            command,
-            env=env,
-            cwd=cwd,
-            timeout_sec=timeout_sec,
-        )
-    except subprocess.TimeoutExpired as exc:
-        payload = _skill_runtime_migration_timeout_payload(timeout_sec, exc)
-        updated_manifest = dict(manifest)
-        updated_manifest["skill_runtime_migration"] = payload
-        write_slot_manifest(slot_name, updated_manifest)
-        return payload, updated_manifest
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"deferred skill runtime migration failed rc={completed.returncode}: "
-            f"{(completed.stderr or completed.stdout or '').strip()[-4000:]}"
-        )
-    try:
-        payload = json.loads(completed.stdout or "{}")
-    except Exception as exc:
-        raise RuntimeError(
-            f"deferred skill runtime migration returned invalid JSON: {(completed.stdout or '')[-4000:]}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("deferred skill runtime migration returned non-object payload")
-    safe_for_core_update = bool(payload.get("safe_for_core_update"))
-    if not bool(payload.get("ok")) and not safe_for_core_update:
-        raise RuntimeError(f"deferred skill runtime migration failed: {json.dumps(payload, ensure_ascii=False)}")
+    payload = {
+        "ok": True,
+        "total": 0,
+        "failed_total": 0,
+        "rollback_total": 0,
+        "deactivated_total": 0,
+        "run_tests": False,
+        "safe_for_core_update": True,
+        "deferred": True,
+        "background_required": True,
+        "stage": "post_boot",
+        "reason": "deferred_until_runtime_api_ready",
+        "skills": [],
+    }
     updated_manifest = dict(manifest)
     updated_manifest["skill_runtime_migration"] = payload
     write_slot_manifest(slot_name, updated_manifest)

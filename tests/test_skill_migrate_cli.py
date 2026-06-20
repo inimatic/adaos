@@ -167,7 +167,7 @@ def test_list_migratable_workspace_skills_detects_version_drift(monkeypatch, tmp
     assert names == ["infrastate_skill"]
 
 
-def test_skill_migrate_uses_longer_hub_timeout_for_remote_updates(monkeypatch) -> None:
+def test_skill_migrate_schedules_remote_background_migration(monkeypatch) -> None:
     runner = CliRunner()
     calls: list[tuple[str, dict | None, float]] = []
 
@@ -176,7 +176,7 @@ def test_skill_migrate_uses_longer_hub_timeout_for_remote_updates(monkeypatch) -
 
     def _fake_hub_post(path: str, *, body: dict | None = None, timeout_s: float = 30) -> dict:
         calls.append((path, body, timeout_s))
-        return {"updated": True, "version": "2.0.0"}
+        return {"accepted": True, "status": {"operation_id": "op-1"}}
 
     monkeypatch.setattr(skill_cmd, "_hub_post", _fake_hub_post)
 
@@ -185,16 +185,19 @@ def test_skill_migrate_uses_longer_hub_timeout_for_remote_updates(monkeypatch) -
     assert result.exit_code == 0, result.output
     assert calls == [
         (
-            "/api/skills/update",
+            "/api/skills/runtime/migration/start",
             {
                 "name": "weather_skill",
-                "dry_run": False,
                 "webspace_id": "default",
+                "force": False,
+                "run_tests": True,
+                "sync_workspace": True,
+                "reason": "cli.skill.migrate",
             },
-            120,
+            10,
         )
     ]
-    assert "weather_skill: updated (version 2.0.0)" in result.output
+    assert "skill runtime migration scheduled operation=op-1" in result.output
 
 
 def test_skill_migrate_passes_force_flag_when_requested(monkeypatch) -> None:
@@ -206,7 +209,7 @@ def test_skill_migrate_passes_force_flag_when_requested(monkeypatch) -> None:
 
     def _fake_hub_post(path: str, *, body: dict | None = None, timeout_s: float = 30) -> dict:
         calls.append((path, body, timeout_s))
-        return {"updated": True, "version": "2.0.0"}
+        return {"accepted": True, "status": {"operation_id": "op-1"}}
 
     monkeypatch.setattr(skill_cmd, "_hub_post", _fake_hub_post)
 
@@ -230,7 +233,7 @@ def test_skill_migrate_batches_remote_rebuild_until_the_end(monkeypatch) -> None
 
     def _fake_hub_post(path: str, *, body: dict | None = None, timeout_s: float = 30) -> dict:
         calls.append((path, body, timeout_s))
-        return {"updated": True, "version": "2.0.0"}
+        return {"accepted": True, "status": {"operation_id": "op-2"}}
 
     monkeypatch.setattr(skill_cmd, "_hub_post", _fake_hub_post)
 
@@ -238,31 +241,17 @@ def test_skill_migrate_batches_remote_rebuild_until_the_end(monkeypatch) -> None
 
     assert result.exit_code == 0, result.output
     assert calls == [
-        ("/api/skills/sync", None, 30),
         (
-            "/api/skills/update",
+            "/api/skills/runtime/migration/start",
             {
-                "name": "alpha",
-                "dry_run": False,
+                "name": None,
                 "webspace_id": "default",
-                "defer_webspace_rebuild": True,
+                "force": False,
+                "run_tests": True,
+                "sync_workspace": True,
+                "reason": "cli.skill.migrate",
             },
-            120,
-        ),
-        (
-            "/api/skills/update",
-            {
-                "name": "beta",
-                "dry_run": False,
-                "webspace_id": "default",
-                "defer_webspace_rebuild": True,
-            },
-            120,
-        ),
-        (
-            "/api/skills/runtime/rebuild-webspace",
-            {"webspace_id": "default"},
-            120,
+            10,
         ),
     ]
 
@@ -281,7 +270,7 @@ def test_skill_migrate_passes_force_flag_to_remote_sync_when_requested(monkeypat
 
     def _fake_hub_post(path: str, *, body: dict | None = None, timeout_s: float = 30) -> dict:
         calls.append((path, body, timeout_s))
-        return {"ok": True}
+        return {"accepted": True, "status": {"operation_id": "op-3"}}
 
     monkeypatch.setattr(skill_cmd, "_hub_post", _fake_hub_post)
 
@@ -289,7 +278,18 @@ def test_skill_migrate_passes_force_flag_to_remote_sync_when_requested(monkeypat
 
     assert result.exit_code == 0, result.output
     assert calls == [
-        ("/api/skills/sync", {"force": True}, 30),
+        (
+            "/api/skills/runtime/migration/start",
+            {
+                "name": None,
+                "webspace_id": "default",
+                "force": True,
+                "run_tests": True,
+                "sync_workspace": True,
+                "reason": "cli.skill.migrate",
+            },
+            10,
+        ),
     ]
 
 

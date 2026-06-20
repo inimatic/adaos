@@ -10,6 +10,7 @@ from adaos.adapters.db import SqliteSkillRegistry
 from adaos.apps.bootstrap import init_ctx
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.runtime_migration_worker import migration_candidates
 
 
 def _parse_args() -> argparse.Namespace:
@@ -92,20 +93,20 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
     init_ctx()
     ctx = get_ctx()
     mgr = _manager()
-    reg = SqliteSkillRegistry(ctx.sql)
     items: list[dict[str, Any]] = []
-    rows = reg.list()
-    for row in rows:
-        name = getattr(row, "name", None) or getattr(row, "id", None)
-        if not name or not bool(getattr(row, "installed", True)):
+    candidates = migration_candidates(ctx, mgr, force=False)
+    operation_id = "skill-runtime-migrate-cli"
+    for candidate in candidates:
+        skill_name = str(candidate.get("skill") or "").strip()
+        if not skill_name:
             continue
-        skill_name = str(name)
         before = _runtime_status_safe(mgr, skill_name)
         entry: dict[str, Any] = {
             "skill": skill_name,
             "ok": True,
             "failure_kind": "",
             "failed_stage": "",
+            "workspace_version": str(candidate.get("workspace_version") or ""),
             "prepared_version": None,
             "prepared_slot": None,
             "active_version_before": str(before.get("version") or ""),
@@ -118,6 +119,25 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
         }
         activated = False
         try:
+            entry["stage"] = "disable"
+            try:
+                entry["deactivation"] = mgr.deactivate_runtime(
+                    skill_name,
+                    reason="runtime_migration_in_progress",
+                    failure_kind="migration",
+                    failed_stage="prepare",
+                    source="skill_runtime_migrate",
+                    committed_core_switch=False,
+                    status="disabled",
+                    comment="Skill runtime is disabled while AdaOS prepares and activates its updated runtime slot.",
+                    operation_id=operation_id,
+                    transient=True,
+                )
+                entry["disabled_for_migration"] = True
+                entry["transient_deactivation"] = entry["deactivation"]
+                entry["deactivated"] = False
+            except Exception as exc:
+                entry["disable_error"] = str(exc)
             entry["stage"] = "prepare"
             runtime = mgr.prepare_runtime(skill_name, run_tests=False)
             entry["prepared_version"] = getattr(runtime, "version", None)
@@ -160,6 +180,22 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
                     entry["rollback_slot"] = str(restored_slot or "")
                 except Exception as rollback_exc:
                     entry["rollback_error"] = str(rollback_exc)
+            try:
+                entry["deactivation"] = mgr.deactivate_runtime(
+                    skill_name,
+                    reason="runtime_migration_failed",
+                    failure_kind=str(entry["failure_kind"] or "migration"),
+                    failed_stage=str(entry["failed_stage"] or stage),
+                    source="skill_runtime_migrate",
+                    committed_core_switch=False,
+                    status="quarantined",
+                    comment=str(exc),
+                    operation_id=operation_id,
+                    transient=False,
+                )
+                entry["deactivated"] = True
+            except Exception as deactivate_exc:
+                entry["deactivate_error"] = str(deactivate_exc)
             entry["stage"] = "failed"
         items.append(entry)
 

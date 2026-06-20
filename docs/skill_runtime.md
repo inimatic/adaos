@@ -100,6 +100,37 @@ Operational signal:
 
 For the target kernel-facing migration architecture, including rehydrate and rollback semantics for stateful skills, see [AdaOS Supervisor](architecture/adaos-supervisor.md#skill-runtime-migration-lifecycle).
 
+## Background runtime migration
+
+Skill runtime migration is a normal background process, not a core handoff
+precondition. Core A/B switch validation must bring the runtime API up first;
+only after that may AdaOS migrate skill runtimes. This keeps the subnet
+available while individual skills install dependencies, prepare slots, run
+tests, or restart service processes.
+
+The core-update prepare path marks skill migration as deferred in the target
+slot manifest. During post-boot runtime startup, AdaOS schedules the migration
+worker through the live API process. The worker persists observable status under
+`state/skill_runtime_migration/status.json` and exposes it through
+`/api/skills/runtime/migration/status`.
+
+Migration selection is bounded:
+
+- only installed workspace skills whose runtime version is behind the current
+  workspace/GitHub version are selected by default
+- `force` may be used for operator/debug repair, but normal background runs do
+  not reinstall every skill
+- successful migration clears transient process state during activation and
+  should not leave persistent UI noise
+
+During prepare/activate, the affected skill is temporarily deactivated with
+`status=disabled`, `reason=runtime_migration_in_progress`, and an operation id.
+If migration fails, AdaOS leaves the skill deactivated with
+`status=quarantined`, `reason=runtime_migration_failed`, failure stage, source,
+and human-readable comment. This is the same kernel-level disabled/quarantine
+contract that service supervision and tool dispatch already respect; web
+desktop should only present this state.
+
 ## Deactivate lifecycle
 
 AdaOS may keep the core switch committed while quarantining a subset of skills.
@@ -113,6 +144,9 @@ For that case the runtime lifecycle now includes explicit deactivation:
 This is intended for post-commit checks where rolling back the whole core is unnecessary, but continuing to serve a broken skill would be unsafe.
 Core-update orchestration may trigger this automatically after a successful runtime switch if post-commit skill checks fail.
 When that happens, the deactivation record now persists the failure contract itself, including `failure_kind`, `failed_stage`, `source`, and whether the core switch was already committed.
+The same record can carry process-state fields: `status` (`disabled` or
+`quarantined`), `comment`, `operation_id`, and `transient`. A successful
+activation clears the marker; failed migration keeps it for operator action.
 
 ## Optional internal data migration
 

@@ -985,8 +985,35 @@ async def lifespan(app: FastAPI):
         pass
 
     try:
+        from adaos.services.core_slots import active_slot_manifest
+        from adaos.services.skill.runtime_migration_worker import start_background_migration
+        from adaos.services.yjs.webspace import default_webspace_id
+
+        manifest = active_slot_manifest()
+        migration = manifest.get("skill_runtime_migration") if isinstance(manifest, dict) and isinstance(manifest.get("skill_runtime_migration"), dict) else {}
+        if bool(migration.get("background_required")) or bool(migration.get("deferred")):
+            await start_background_migration(
+                get_ctx(),
+                reason="core_update_post_boot",
+                webspace_id=default_webspace_id(),
+                force=False,
+                run_tests=True,
+            )
+    except Exception:
+        logging.getLogger("adaos.skill.runtime_migration").warning(
+            "failed to schedule post-boot skill runtime migration",
+            exc_info=True,
+        )
+
+    try:
         yield
     finally:
+        try:
+            from adaos.services.skill.runtime_migration_worker import cancel_background_migration
+
+            await cancel_background_migration()
+        except Exception:
+            pass
         try:
             await _cancel_background_task(getattr(app.state, "runtime_boot_task", None))
         finally:

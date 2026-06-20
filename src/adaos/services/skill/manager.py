@@ -2263,6 +2263,10 @@ class SkillManager:
         failed_stage: str = "",
         source: str = "",
         committed_core_switch: bool | None = None,
+        status: str = "",
+        comment: str = "",
+        operation_id: str = "",
+        transient: bool | None = None,
     ) -> dict[str, Any]:
         env = self._runtime_env(name)
         version = env.resolve_active_version()
@@ -2304,6 +2308,10 @@ class SkillManager:
             "slot": active_slot,
             "reason": deactivation_reason,
             "deactivated": True,
+            "status": str(status or "").strip() or "quarantined",
+            "comment": str(comment or "").strip(),
+            "operation_id": str(operation_id or "").strip(),
+            "transient": bool(transient),
             "failure_kind": deactivation_failure_kind,
             "failed_stage": deactivation_failed_stage,
             "source": deactivation_source,
@@ -2329,6 +2337,10 @@ class SkillManager:
         failed_stage: str = "",
         source: str = "",
         committed_core_switch: bool | None = None,
+        status: str = "",
+        comment: str = "",
+        operation_id: str = "",
+        transient: bool | None = None,
     ) -> dict[str, Any]:
         if space == "dev":
             return self.deactivate_dev_runtime(
@@ -2338,6 +2350,10 @@ class SkillManager:
                 failed_stage=failed_stage,
                 source=source,
                 committed_core_switch=committed_core_switch,
+                status=status,
+                comment=comment,
+                operation_id=operation_id,
+                transient=transient,
             )
         else:
             return self.deactivate_runtime(
@@ -2347,6 +2363,10 @@ class SkillManager:
                 failed_stage=failed_stage,
                 source=source,
                 committed_core_switch=committed_core_switch,
+                status=status,
+                comment=comment,
+                operation_id=operation_id,
+                transient=transient,
             )
 
     def runtime_status(self, name: str) -> Dict[str, Any]:
@@ -2460,6 +2480,10 @@ class SkillManager:
         failed_stage: str = "",
         source: str = "",
         committed_core_switch: bool | None = None,
+        status: str = "",
+        comment: str = "",
+        operation_id: str = "",
+        transient: bool | None = None,
     ) -> dict[str, Any]:
         env = self._runtime_env_dev(name)
         version = env.resolve_active_version()
@@ -2473,6 +2497,10 @@ class SkillManager:
             "slot": active_slot,
             "reason": str(reason or "post_commit_checks_failed"),
             "deactivated": True,
+            "status": str(status or "").strip() or "quarantined",
+            "comment": str(comment or "").strip(),
+            "operation_id": str(operation_id or "").strip(),
+            "transient": bool(transient),
             "failure_kind": str(failure_kind or "").strip(),
             "failed_stage": str(failed_stage or "").strip(),
             "source": str(source or "").strip(),
