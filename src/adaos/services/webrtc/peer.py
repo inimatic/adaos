@@ -961,7 +961,7 @@ class HubPeer:
             self._schedule_close_if_orphaned(reason="yjs_channel:closed")
 
     def _setup_media_channel(self, channel) -> None:  # type: ignore[no-untyped-def]
-        """Accept direct binary media upload chunks over a dedicated DataChannel."""
+        """Accept direct media upload chunks and serve playback chunks."""
         previous_channel = self._media_channel
         self._media_channel = channel
         self._touch()
@@ -975,20 +975,105 @@ class HubPeer:
             except Exception:
                 _log.warning("media dc send failed device=%s", self.device_id, exc_info=True)
 
-        async def _fail(upload_id: str, detail: str, *, code: str = "media_upload_failed") -> None:
-            await _send({
+        async def _fail(
+            upload_id: str = "",
+            detail: str = "media_failed",
+            *,
+            code: str = "media_upload_failed",
+            request_id: str = "",
+        ) -> None:
+            msg = {
                 "ch": "media",
                 "t": "error",
-                "uploadId": upload_id,
                 "error": code,
                 "detail": detail,
+            }
+            if upload_id:
+                msg["uploadId"] = upload_id
+            if request_id:
+                msg["requestId"] = request_id
+            await _send(msg)
+
+        async def _stream_download(request_id: str, target: Path) -> None:
+            size_bytes = int(target.stat().st_size)
+            mime_type = guess_media_type(target.name)
+            await _send({
+                "ch": "media",
+                "t": "download_ready",
+                "requestId": request_id,
+                "filename": target.name,
+                "sizeBytes": size_bytes,
+                "mimeType": mime_type,
             })
+            sent = 0
+            try:
+                with target.open("rb") as handle:
+                    while True:
+                        chunk = handle.read(64 * 1024)
+                        if not chunk:
+                            break
+                        channel.send(chunk)
+                        sent += len(chunk)
+                        await _send({
+                            "ch": "media",
+                            "t": "download_progress",
+                            "requestId": request_id,
+                            "receivedBytes": sent,
+                            "sizeBytes": size_bytes,
+                            "mimeType": mime_type,
+                        })
+                        await asyncio.sleep(0)
+                await _send({
+                    "ch": "media",
+                    "t": "download_done",
+                    "requestId": request_id,
+                    "filename": target.name,
+                    "sizeBytes": sent,
+                    "mimeType": mime_type,
+                })
+            except Exception as exc:
+                await _fail(
+                    detail=str(exc),
+                    code="media_playback_stream_failed",
+                    request_id=request_id,
+                )
 
         async def _handle_json(msg: dict[str, Any]) -> None:
+            kind = str(msg.get("t") or "").strip().lower()
+            if kind == "download_start":
+                request_id = str(msg.get("requestId") or "").strip()
+                if not request_id:
+                    return
+                try:
+                    target = media_file_path(str(msg.get("filename") or ""))
+                except ValueError as exc:
+                    await _fail(
+                        detail=str(exc),
+                        code="media_playback_bad_request",
+                        request_id=request_id,
+                    )
+                    return
+                if not target.exists() or not target.is_file():
+                    await _fail(
+                        detail="media_file_not_found",
+                        code="media_file_not_found",
+                        request_id=request_id,
+                    )
+                    return
+                if int(target.stat().st_size) > int(ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES):
+                    await _fail(
+                        detail="media_file_too_large",
+                        code="media_file_too_large",
+                        request_id=request_id,
+                    )
+                    return
+                await _stream_download(request_id, target)
+                return
+            if kind == "download_abort":
+                return
             upload_id = str(msg.get("uploadId") or "").strip()
             if not upload_id:
                 return
-            kind = str(msg.get("t") or "").strip().lower()
             if kind == "start":
                 if self._media_upload is not None:
                     await _fail(upload_id, "media_upload_busy", code="media_upload_busy")
