@@ -222,6 +222,12 @@ def media_capabilities() -> dict[str, Any]:
                 "mode": "http_raw_put",
                 "note": "Raw PUT upload is available when the browser talks to the local hub API directly.",
             },
+            "webrtc_datachannel": {
+                "ready": bool(webrtc_supported),
+                "mode": "webrtc_media_datachannel",
+                "note": "Browser-hub WebRTC media DataChannel supports direct bounded upload when the peer is connected.",
+                "max_upload_bytes_hint": ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
+            },
             "root_routed": {
                 "ready": True,
                 "mode": "bounded_media_relay",
@@ -234,6 +240,13 @@ def media_capabilities() -> dict[str, Any]:
                 "ready": True,
                 "mode": "http_file_response",
                 "note": "Progressive file playback is available on the direct local hub API path.",
+            },
+            "webrtc_datachannel": {
+                "ready": bool(webrtc_supported),
+                "mode": "webrtc_media_datachannel",
+                "note": "Browser-hub WebRTC media DataChannel supports direct bounded file playback as a Blob source.",
+                "range_requests": False,
+                "chunk_bytes_hint": 64 * 1024,
             },
             "root_routed": {
                 "ready": True,
@@ -263,6 +276,7 @@ def media_capabilities() -> dict[str, Any]:
         "route_profiles": route_profiles,
         "notes": [
             "Direct local hub API remains the preferred path for operator-grade upload and playback validation.",
+            "WebRTC media DataChannel is available for direct browser-hub upload and bounded Blob playback when the peer is connected.",
             "Root-routed media now uses a dedicated bounded relay path instead of the generic buffered JSON /api proxy.",
             "WebRTC audio/video loopback is available for live end-to-end media channel validation.",
             "Member-browser direct media is now represented as an explicit route contract foundation, even before admission policy is enabled.",
@@ -302,7 +316,7 @@ def media_runtime_snapshot(items: list[dict[str, Any]] | None = None) -> dict[st
         "assessment": {
             "state": "relay_and_webrtc_media_available" if webrtc_supported else "bounded_relay_available",
             "reason": (
-                "media plane supports direct-local authority, bounded root relay authority, and live WebRTC audio/video loopback"
+                "media plane supports direct-local authority, bounded root relay authority, WebRTC media DataChannel upload/playback, and live WebRTC audio/video loopback"
                 if webrtc_supported
                 else "media plane supports direct-local authority and bounded root relay authority on a dedicated path"
             ),
@@ -324,6 +338,18 @@ def media_runtime_snapshot(items: list[dict[str, Any]] | None = None) -> dict[st
                 "reason": "root_media_relay_streams_upload_and_playback_on_a_dedicated_path",
                 "max_upload_bytes_hint": ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
                 "chunk_bytes_hint": ROOT_MEDIA_RELAY_CHUNK_BYTES,
+            },
+            "webrtc_datachannel": {
+                "ready": bool(webrtc_supported),
+                "upload": True,
+                "playback": "full_blob",
+                "authority": "hub_webrtc_peer_datachannel" if webrtc_supported else "none",
+                "mode": "webrtc_media_datachannel" if webrtc_supported else "not_implemented",
+                "reason": "hub_webrtc_media_datachannel" if webrtc_supported else "webrtc_media_datachannel_unavailable",
+                "range_requests": False,
+                "chunk_bytes_hint": 64 * 1024,
+                "peer_total": int(live_webrtc.get("peer_total") or 0),
+                "connected_peers": int(live_webrtc.get("connected_peers") or 0),
             },
             "webrtc_tracks": {
                 "ready": bool(webrtc_supported),
@@ -381,6 +407,7 @@ def media_runtime_snapshot(items: list[dict[str, Any]] | None = None) -> dict[st
         },
         "notes": [
             "Direct local hub API remains the preferred path for real upload and playback validation.",
+            "WebRTC media DataChannel provides direct browser-hub upload and bounded Blob playback when the peer is connected.",
             "Root-routed media now uses a dedicated bounded relay path instead of the generic buffered /api proxy.",
             "WebRTC audio/video loopback is available for live end-to-end media validation against the hub.",
             "Member-browser direct media is represented as an explicit route contract foundation and can be admitted later without changing the media runtime shape.",
