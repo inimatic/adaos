@@ -4,6 +4,9 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import time
+from pathlib import Path
 from typing import Any, Dict, Mapping
 from urllib.request import Request, urlopen
 
@@ -72,6 +75,122 @@ def _http_post_json(url: str, payload: dict, *, timeout_ms: int) -> dict:
     with urlopen(req, timeout=timeout_ms / 1000.0) as resp:
         raw = resp.read().decode("utf-8", errors="ignore")
         return json.loads(raw)
+
+
+def _neuro_lite_artifact_root() -> Path:
+    explicit = os.getenv("ADAOS_NEURO_LITE_ARTIFACT_ROOT", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    try:
+        ctx = get_ctx()
+        try:
+            from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+            skills_root = Path(ctx.paths.skills_dir()).expanduser().resolve()
+            env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=_SERVICE_NAME)
+            version = env.resolve_active_version()
+            if version:
+                return (env.files_dir(version) / "nlu" / "neuro_lite").resolve()
+        except Exception:
+            pass
+        state_dir = Path(ctx.paths.state_dir()).expanduser().resolve()
+        return state_dir / "nlu" / "neuro_lite"
+    except Exception:
+        base_dir = os.getenv("ADAOS_BASE_DIR", "").strip()
+        if base_dir:
+            return Path(base_dir).expanduser().resolve() / "state" / "nlu" / "neuro_lite"
+        return Path.home() / ".adaos" / "state" / "nlu" / "neuro_lite"
+
+
+def sync_curated_examples(examples_path: str | Path) -> dict[str, Any]:
+    source = Path(examples_path).expanduser().resolve()
+    root = _neuro_lite_artifact_root()
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / "examples_manifest.jsonl"
+    if not source.exists():
+        return {
+            "ok": False,
+            "reason": "curated_examples_missing",
+            "source_examples_path": str(source),
+            "artifact_root": str(root),
+        }
+
+    backup_path: Path | None = None
+    if target.exists():
+        rollback_dir = root / "rollback"
+        rollback_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = rollback_dir / f"examples_manifest.{int(time.time() * 1000)}.jsonl"
+        shutil.copy2(target, backup_path)
+
+    tmp = target.with_suffix(".jsonl.tmp")
+    shutil.copy2(source, tmp)
+    os.replace(tmp, target)
+    return {
+        "ok": True,
+        "source_examples_path": str(source),
+        "active_examples_path": str(target),
+        "backup_examples_path": str(backup_path) if backup_path else None,
+        "artifact_root": str(root),
+    }
+
+
+async def rebuild_active_model(
+    *,
+    start_service: bool = True,
+    stop_after: bool = False,
+) -> Dict[str, Any]:
+    supervisor = get_service_supervisor()
+    service: dict[str, Any] = {
+        "name": _SERVICE_NAME,
+        "installed": False,
+        "base_url": None,
+        "started": False,
+    }
+    warnings: list[str] = []
+    result: dict[str, Any] | None = None
+    try:
+        await supervisor.refresh_discovered(force=True)
+        base_url = supervisor.resolve_base_url(_SERVICE_NAME)
+    except Exception as exc:
+        base_url = None
+        warnings.append(f"service_discovery_failed:{type(exc).__name__}")
+
+    if base_url:
+        service["installed"] = True
+        service["base_url"] = base_url
+        if start_service:
+            try:
+                await supervisor.start(_SERVICE_NAME)
+                service["started"] = True
+                service["base_url"] = supervisor.resolve_base_url(_SERVICE_NAME) or base_url
+            except Exception as exc:
+                warnings.append(f"service_start_failed:{type(exc).__name__}")
+        try:
+            async with _SEMAPHORE:
+                future = asyncio.to_thread(
+                    _http_post_json,
+                    f"{service['base_url']}/rebuild",
+                    {},
+                    timeout_ms=30_000,
+                )
+                result = await asyncio.wait_for(future, timeout=30.0)
+        except Exception as exc:
+            warnings.append(f"service_rebuild_failed:{type(exc).__name__}")
+    else:
+        warnings.append("service_base_url_unresolved")
+
+    if stop_after and start_service:
+        try:
+            await supervisor.stop(_SERVICE_NAME)
+        except Exception as exc:
+            warnings.append(f"service_stop_failed:{type(exc).__name__}")
+
+    return {
+        "ok": bool(service.get("installed")) and bool(result and result.get("ok")),
+        "service": service,
+        "rebuild": result,
+        "warnings": warnings,
+    }
 
 
 async def _ensure_service_base_url(supervisor: Any) -> str | None:
