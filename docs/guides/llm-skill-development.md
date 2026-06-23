@@ -716,6 +716,40 @@ Rules:
 - keep hints compact and stable; runtime observations and user-confirmed
   aliases belong in the governed entity registry, not in ad-hoc prompt text
 
+## Pending Actions
+
+Use the core Pending Actions plane when a skill needs a human response that may
+change runtime behavior later. Do not model this as a notification-only toast or
+as a chat-local "yes/no" prompt.
+
+Implementation-sensitive rules for generated skills:
+
+- identify the publisher and response handler with `node_id` plus skill or
+  system actor identity; `skill_id` alone is not unique
+- omit `ttl_s` or pass `None` when the action should not expire
+  automatically; do not pass `0`, `""`, or `"0"` for "no TTL"
+- publish stable action ids such as `approve`, `refuse`, `test`, and
+  `postpone`; labels are presentation only
+- provide `label_i18n`, `title_i18n`, or `summary_i18n` plus fallback text for
+  system-authored strings
+- keep human-confirmed names and device labels as params or display values, not
+  translation keys or storage ids
+- make response handlers idempotent; a repeated or late response must not apply
+  the same mutation twice
+- use explicit `response_route` for cross-skill handling; delegated
+  subscription negotiation is deferred architecture work
+- use `test` or `preview` for non-mutating checks when an approval would change
+  durable state
+- emit notifications only as pointers or outcome summaries; the Pending Action
+  remains the source of truth for response state and audit
+
+System-level producers include NLU Teacher confirmations, Builder review,
+pairing/admission, runtime operation recovery, capability elevation,
+destructive or external-IO actions, ambiguous routing, and guard/quarantine
+recovery.
+
+See [Pending Actions](../architecture/pending-actions.md).
+
 ## Guarding and quarantine
 
 The runtime may warn, throttle, block, or quarantine a skill owner when either

@@ -289,6 +289,20 @@ The runtime must provide:
 - lifecycle diagnostics and quarantine summaries
 - status/notification projections that explain failure without hiding it
 
+## Relationship To Pending Actions
+
+Builder review, reject/redirect feedback, and high-risk apply decisions should
+use the core Pending Actions mechanism rather than ad-hoc chat prompts or
+notification-only UI.
+
+Pending Actions are the durable human-in-the-loop surface for choices that may
+change runtime state or future behavior. Notifications may point to those
+choices, but notifications must not become the source of truth for approval.
+
+Relevant document:
+
+- [Pending Actions](pending-actions.md)
+
 Relevant documents:
 
 - [AdaOS Supervisor](adaos-supervisor.md)

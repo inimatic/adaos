@@ -51,7 +51,7 @@ gate easy to read by priority.
 | 2. Task Model | Complete: task schema, Teacher candidate links, descriptor-fix materialization, lifecycle states. | None. | None. | Open: backlink from completed Builder task to originating candidate/idea. |
 | 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, CTX dev artifact roots, Builder-aware scaffolds, template quality gates, dev lifecycle CLI facade. | Complete: scenario-specific Builder guidance and artifact listing ergonomics. | None. | None. |
 | 4. Validation/Preview | Complete: preview bundle, static checks, route-budget validation, Builder validation facade. | Complete: blast radius, webui preview, scenario dependency bootstrap, Forge push facade. | None. | None. |
-| 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; applied-change evidence remains open. | Open: review workbench and reject/redirect feedback. | None. | None. |
+| 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; applied-change evidence and Pending Actions core are open. | Open: review workbench, Pending Actions SDK guidance, and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
 | 8. Product Experience | Open: first entrypoint, phrase-level build flow, non-specialist preview language. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
@@ -263,15 +263,31 @@ Open work:
 - [x] `[must]` Define which changes always require human approval: secrets, new
   permissions, external IO, destructive actions, endpoint control, high-rate
   streams, broad NLU patterns, and service processes.
+- [ ] `[must]` Add core Pending Actions plane for durable human responses across
+  Builder, NLU Teacher, pairing, runtime operations, and guarded skill actions.
+- [ ] `[must]` Make Pending Actions node-aware: producer and response handler
+  identity must include `node_id` plus skill/scenario/system actor identity.
+- [ ] `[must]` Define Pending Actions localization contract: every system title,
+  summary, action label, and short outcome supports `*_i18n` plus fallback text.
+- [ ] `[must]` Keep Pending Actions separate from notifications. Notifications
+  may deep-link to an action, but the pending action remains the source of truth
+  for response state and audit.
+- [ ] `[should]` Add SDK helpers for publishing Pending Actions, resolving
+  expiration, declaring explicit response routes, and handling responses
+  idempotently.
 - [ ] `[should]` Add review UI/workbench for Builder tasks and previews.
 - [ ] `[must]` Attach policy evidence and approval identity to every applied Builder
   change.
 - [ ] `[should]` Support reject/redirect feedback that becomes new Builder context instead
   of being lost as chat history.
+- [ ] `[deferred]` Support delegated Pending Actions subscription handshake where
+  one skill asks another skill to become the response handler. The first
+  implementation should use explicit `response_route`.
 
 Primary references:
 
 - [Authority and Degraded Mode](authority-and-degraded-mode.md)
+- [Pending Actions](pending-actions.md)
 - [Root MCP Foundation](root-mcp-foundation.md)
 - [Infrascope](infrascope.md)
 
