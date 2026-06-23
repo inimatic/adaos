@@ -112,6 +112,8 @@ Implemented:
 - [x] Browser semantic channels declare transport priorities for command, event,
       presence, sync, and route traffic.
 - [x] Browser has a Yjs DataChannel provider for direct WebRTC sync experiments.
+- [x] Browser arms a routed YWS idle recovery watchdog when an initialized
+      root-routed session has no live sync provider.
 
 Required for a reliable hub-browser quality bar:
 
