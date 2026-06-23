@@ -207,6 +207,55 @@ async def _append_dataset_item(webspace_id: str, item: dict[str, Any]) -> None:
                 data_map.set(txn, "nlu_teacher", teacher)
 
 
+async def _patch_candidate_after_example_save(
+    *,
+    webspace_id: str,
+    candidate_id: str | None,
+    result: Mapping[str, Any],
+    artifact_meta: Mapping[str, Any],
+    accepted_at: float,
+) -> dict[str, Any] | None:
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        return None
+    candidate_id = candidate_id.strip()
+    async with _nlu_teacher_write_meta():
+        async with async_get_ydoc(webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+            data_map = ydoc.get_map("data")
+            teacher = _read_teacher_obj(data_map)
+            next_candidates: list[dict[str, Any]] = []
+            updated: dict[str, Any] | None = None
+            for item in iter_mappings(teacher.get("candidates")):
+                d = dict(item)
+                if d.get("id") == candidate_id:
+                    if result.get("ok"):
+                        d["status"] = "applied"
+                        d["applied_at"] = accepted_at
+                        d["applied"] = {
+                            "type": "example",
+                            "intent": result.get("intent"),
+                            "example": result.get("example"),
+                            "target": result.get("target") if isinstance(result.get("target"), Mapping) else {},
+                        }
+                        if isinstance(result.get("action"), Mapping):
+                            d["applied"]["action"] = dict(result["action"])
+                        d["promotion"] = dict(artifact_meta.get("promotion") or {})
+                        d["provenance"] = dict(artifact_meta.get("provenance") or {})
+                        d["privacy"] = dict(artifact_meta.get("privacy") or {})
+                    else:
+                        d["status"] = "apply_failed"
+                        d["apply_failed_at"] = accepted_at
+                        d["status_reason"] = str(result.get("reason") or "example_save_failed")
+                    updated = d
+                next_candidates.append(d)
+            if updated is None:
+                return None
+            teacher["candidates"] = next_candidates
+            rebuild_events_by_candidate(teacher)
+            with ydoc.begin_transaction() as txn:
+                data_map.set(txn, "nlu_teacher", teacher)
+            return updated
+
+
 @subscribe("nlp.teacher.example.save")
 async def _on_example_save(evt: Any) -> None:
     """
@@ -310,6 +359,18 @@ async def _on_example_save(evt: Any) -> None:
     except Exception:
         _log.debug("failed to append saved example dataset item webspace=%s", webspace_id, exc_info=True)
 
+    updated_candidate: dict[str, Any] | None = None
+    try:
+        updated_candidate = await _patch_candidate_after_example_save(
+            webspace_id=webspace_id,
+            candidate_id=candidate_id,
+            result=result,
+            artifact_meta=artifact_meta,
+            accepted_at=accepted_at,
+        )
+    except Exception:
+        _log.debug("failed to patch candidate after example save webspace=%s", webspace_id, exc_info=True)
+
     try:
         await append_event(
             webspace_id,
@@ -334,6 +395,13 @@ async def _on_example_save(evt: Any) -> None:
         {"webspace_id": webspace_id, "dataset_item": dataset_item, "result": result, "_meta": dict(meta)},
         source="nlu.teacher.runtime",
     )
+    if result.get("ok") and updated_candidate is not None:
+        bus_emit(
+            ctx.bus,
+            "nlp.teacher.candidate.applied",
+            {"webspace_id": webspace_id, "candidate": updated_candidate, "_meta": dict(meta)},
+            source="nlu.teacher.runtime",
+        )
 
 
 @subscribe("nlp.teacher.request")

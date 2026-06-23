@@ -465,7 +465,9 @@ async def test_training_example_apply_persists_skill_tool_action():
         encoding="utf-8",
     )
 
+    applied_events: list[dict] = []
     ctx.bus.subscribe("nlp.teacher.example.save", _on_example_save)
+    ctx.bus.subscribe("nlp.teacher.candidate.applied", lambda ev: applied_events.append(dict(ev.payload or {})))
 
     async with async_get_ydoc(webspace_id) as ydoc:
         with ydoc.begin_transaction() as txn:
@@ -514,3 +516,11 @@ async def test_training_example_apply_persists_skill_tool_action():
             "params": {},
         }
     ]
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidate = next(item for item in teacher.get("candidates", []) if item.get("id") == candidate_id)
+    assert candidate["status"] == "applied"
+    assert candidate["applied"]["action"]["target"] == f"{skill_name}.create_note"
+    assert applied_events
+    assert applied_events[-1]["candidate"]["id"] == candidate_id

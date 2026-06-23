@@ -198,6 +198,16 @@ async def _on_revision_applied(evt: Any) -> None:
     _schedule_persist(_resolve_webspace_id(_payload(evt)))
 
 
+@subscribe("nlp.teacher.example.saved")
+async def _on_example_saved(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
+@subscribe("nlp.teacher.example.save.failed")
+async def _on_example_save_failed(evt: Any) -> None:
+    _schedule_persist(_resolve_webspace_id(_payload(evt)))
+
+
 @subscribe("nlp.teacher.candidate.proposed")
 async def _on_candidate_proposed(evt: Any) -> None:
     _schedule_persist(_resolve_webspace_id(_payload(evt)))
