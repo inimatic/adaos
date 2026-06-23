@@ -68,6 +68,14 @@ def _candidate_intent(candidate: Mapping[str, Any]) -> str:
     return ""
 
 
+def _candidate_action_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    action = candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+    if not action:
+        strategy = candidate.get("strategy_candidate") if isinstance(candidate.get("strategy_candidate"), Mapping) else {}
+        action = strategy.get("action_candidate") if isinstance(strategy.get("action_candidate"), Mapping) else {}
+    return dict(action) if action else {}
+
+
 def _verification_probe(payload: Mapping[str, Any]) -> dict[str, Any]:
     verification = payload.get("verification") if isinstance(payload.get("verification"), Mapping) else {}
     probe = verification.get("probe") if isinstance(verification.get("probe"), Mapping) else {}
@@ -302,6 +310,9 @@ async def _on_understanding_acquired(evt: Any) -> None:
             "nlu_teacher_original_request_id": request_id,
         },
     }
+    action_candidate = _candidate_action_candidate(candidate)
+    if action_candidate:
+        detected_payload["action_candidate"] = action_candidate
     patch = {
         "dispatch_status": "requested",
         "dispatched_at": now,
@@ -412,6 +423,9 @@ async def _on_candidate_test(evt: Any) -> None:
             "nlu_teacher_original_request_id": request_id,
         },
     }
+    action_candidate = _candidate_action_candidate(candidate)
+    if action_candidate:
+        detected_payload["action_candidate"] = action_candidate
     patch = {
         "dispatch_status": "requested",
         "dispatched_at": now,
@@ -462,6 +476,26 @@ async def _on_action_dispatched(evt: Any) -> None:
 async def _on_action_dispatch_failed(evt: Any) -> None:
     await _record_dispatch_outcome(
         payload=_payload(evt),
+        status="failed",
+        event_kind="dispatch.failed",
+        title="Teacher dispatch failed",
+    )
+
+
+@subscribe("nlp.intent.not_obtained")
+async def _on_intent_not_obtained(evt: Any) -> None:
+    payload = _payload(evt)
+    candidate_id, _dispatch_id = _teacher_dispatch_identity(payload)
+    if not candidate_id:
+        return
+    reason = str(payload.get("reason") or "intent_not_obtained").strip() or "intent_not_obtained"
+    await _record_dispatch_outcome(
+        payload={
+            **payload,
+            "target": "nlp.intent.detected",
+            "action_type": "nlu.dispatcher",
+            "reason": reason,
+        },
         status="failed",
         event_kind="dispatch.failed",
         title="Teacher dispatch failed",

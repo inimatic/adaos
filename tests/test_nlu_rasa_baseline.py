@@ -349,3 +349,73 @@ async def test_default_desktop_nlu_dispatches_system_webspace_reload() -> None:
             "_meta": {"webspace_id": "desktop", "scenario_id": "web_desktop"},
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_teacher_skill_action_candidate_dispatches_tool_without_scenario_mapping(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    calls: list[tuple[str, str, dict]] = []
+    outcomes: list[dict] = []
+    missed: list[dict] = []
+    ctx.bus.subscribe("nlu.action.dispatched", lambda ev: outcomes.append(dict(ev.payload or {})))
+    ctx.bus.subscribe("nlp.intent.not_obtained", lambda ev: missed.append(dict(ev.payload or {})))
+
+    async def _scenario_id(_ctx, _webspace_id: str) -> str:
+        return "web_desktop"
+
+    def _run_skill_tool(_ctx, skill: str, tool: str, payload: dict) -> dict:
+        calls.append((skill, tool, dict(payload)))
+        return {"ok": True, "note": {"id": "note-test"}}
+
+    monkeypatch.setattr(dispatcher_module, "_resolve_scenario_id", _scenario_id)
+    monkeypatch.setattr(dispatcher_module, "_run_skill_tool", _run_skill_tool)
+
+    await dispatcher_module._on_nlp_intent_detected(
+        {
+            "intent": "notebook.create_note",
+            "confidence": 1.0,
+            "slots": {},
+            "text": "Напишем заметку",
+            "webspace_id": "desktop",
+            "via": "nlu_teacher.test",
+            "request_id": "req.teacher.skill-action",
+            "action_candidate": {
+                "class": "skill_action",
+                "side_effect_class": "skill_action",
+                "id": "notebook.create_note",
+                "intent": "notebook.create_note",
+                "owner": {"type": "skill", "id": "notebook_skill"},
+            },
+            "_meta": {
+                "webspace_id": "desktop",
+                "nlu_teacher_dispatch": True,
+                "nlu_teacher_candidate_id": "cand.teacher.skill-action",
+                "nlu_teacher_dispatch_id": "tdispatch.teacher.skill-action",
+            },
+        }
+    )
+
+    assert calls == [
+        (
+            "notebook_skill",
+            "create_note",
+            {
+                "text": "Напишем заметку",
+                "webspace_id": "desktop",
+                "_meta": {
+                    "webspace_id": "desktop",
+                    "nlu_teacher_dispatch": True,
+                    "nlu_teacher_candidate_id": "cand.teacher.skill-action",
+                    "nlu_teacher_dispatch_id": "tdispatch.teacher.skill-action",
+                    "scenario_id": "web_desktop",
+                },
+            },
+        )
+    ]
+    assert missed == []
+    assert outcomes
+    assert outcomes[-1]["target"] == "notebook_skill.create_note"
+    assert outcomes[-1]["action_type"] == "callSkill"

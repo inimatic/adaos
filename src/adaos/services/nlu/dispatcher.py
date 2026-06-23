@@ -233,6 +233,50 @@ def _route_id(raw: Mapping[str, Any]) -> str:
     return str(meta.get("route_id") or meta.get("route") or "").strip()
 
 
+def _trusted_teacher_dispatch(raw: Mapping[str, Any]) -> bool:
+    meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    return bool(meta.get("nlu_teacher_dispatch"))
+
+
+def _teacher_skill_action(raw: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not _trusted_teacher_dispatch(raw):
+        return None
+    action = raw.get("action_candidate") if isinstance(raw.get("action_candidate"), Mapping) else {}
+    if not action:
+        return None
+    action_class = str(action.get("class") or "").strip()
+    side_effect = str(action.get("side_effect_class") or "").strip()
+    if action_class != "skill_action" and side_effect != "skill_action":
+        return None
+
+    owner = action.get("owner") if isinstance(action.get("owner"), Mapping) else {}
+    owner_type = str(owner.get("type") or action.get("owner_type") or "").strip()
+    skill = str(
+        owner.get("id")
+        if owner_type == "skill"
+        else action.get("skill") or action.get("skill_id") or action.get("skill_name") or ""
+    ).strip()
+    explicit_target = str(action.get("target") or "").strip()
+    action_id = str(action.get("id") or raw.get("intent") or "").strip()
+    tool = str(action.get("tool") or action.get("tool_name") or action.get("method") or "").strip()
+    if not tool:
+        token = explicit_target or action_id
+        tool = token.rsplit(".", 1)[-1].strip() if token else ""
+    if not skill or not tool:
+        return None
+
+    params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+    if not params:
+        params = action.get("payload") if isinstance(action.get("payload"), Mapping) else {}
+    return {
+        "type": "callSkill",
+        "skill": skill,
+        "tool": tool,
+        "target": f"{skill}.{tool}",
+        "params": dict(params),
+    }
+
+
 def _humanize_action_label(value: Any) -> str:
     token = str(value or "").strip()
     if not token:
@@ -525,6 +569,132 @@ def _execute_action(
         )
 
 
+def _run_skill_tool(ctx: AgentContext, skill: str, tool: str, payload: Mapping[str, Any]) -> Any:
+    from adaos.adapters.db import SqliteSkillRegistry
+    from adaos.services.skill.manager import SkillManager
+
+    mgr = SkillManager(
+        repo=ctx.skills_repo,
+        registry=SqliteSkillRegistry(ctx.sql),
+        git=ctx.git,
+        paths=ctx.paths,
+        bus=getattr(ctx, "bus", None),
+        caps=ctx.caps,
+        settings=ctx.settings,
+    )
+    return mgr.run_tool(skill, tool, dict(payload))
+
+
+def _execute_skill_tool_action(
+    ctx: AgentContext,
+    *,
+    action: Mapping[str, Any],
+    intent: str,
+    scenario_id: str,
+    webspace_id: str,
+    slots: Mapping[str, Any],
+    raw: Mapping[str, Any],
+) -> None:
+    skill = str(action.get("skill") or "").strip()
+    tool = str(action.get("tool") or "").strip()
+    target = str(action.get("target") or f"{skill}.{tool}").strip()
+    params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+    payload = _build_event_payload(
+        base_params=params,
+        slots=slots,
+        ctx_vars={"webspace_id": webspace_id, "scenario_id": scenario_id},
+        raw=raw,
+    )
+    payload.setdefault("webspace_id", webspace_id)
+    try:
+        result = _run_skill_tool(ctx, skill, tool, payload)
+    except Exception as exc:
+        _emit_action_outcome(
+            ctx,
+            event_type="nlu.action.dispatch_failed",
+            intent=intent,
+            action_type="callSkill",
+            target=target,
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=payload,
+            raw=raw,
+            reason=f"tool_run_failed:{type(exc).__name__}",
+        )
+        _log.warning(
+            "failed to execute NLU teacher skill action intent=%s target=%s webspace=%s scenario=%s",
+            intent,
+            target,
+            webspace_id,
+            scenario_id,
+            exc_info=True,
+        )
+        return
+
+    if isinstance(result, Mapping) and result.get("ok") is False:
+        reason = str(result.get("error") or result.get("reason") or "tool_returned_not_ok").strip()
+        _emit_action_outcome(
+            ctx,
+            event_type="nlu.action.dispatch_failed",
+            intent=intent,
+            action_type="callSkill",
+            target=target,
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=payload,
+            raw=raw,
+            reason=reason or "tool_returned_not_ok",
+        )
+        return
+
+    _emit_action_outcome(
+        ctx,
+        event_type="nlu.action.dispatched",
+        intent=intent,
+        action_type="callSkill",
+        target=target,
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        payload=payload,
+        raw=raw,
+    )
+
+
+def _dispatch_teacher_skill_action_if_available(
+    ctx: AgentContext,
+    *,
+    intent: str,
+    scenario_id: str,
+    webspace_id: str,
+    slots: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> bool:
+    action = _teacher_skill_action(payload)
+    if not action:
+        return False
+    target = str(action.get("target") or "").strip()
+    _emit_stage(
+        ctx,
+        stage="dispatcher",
+        status="action",
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        payload=payload,
+        reason="nlu_teacher_skill_action",
+        action_target=target or None,
+    )
+    _execute_skill_tool_action(
+        ctx,
+        action=action,
+        intent=intent,
+        scenario_id=scenario_id,
+        webspace_id=webspace_id,
+        slots=slots,
+        raw=payload,
+    )
+    return True
+
+
 @subscribe("nlp.intent.detected")
 async def _on_nlp_intent_detected(evt: Any) -> None:
     """
@@ -573,6 +743,15 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     intents_cfg = nlu_cfg.get("intents") if isinstance(nlu_cfg, dict) else None
     if not isinstance(intents_cfg, dict):
         _log.debug("nlu.intent %s: scenario=%s has no nlu.intents section", intent, scenario_id)
+        if _dispatch_teacher_skill_action_if_available(
+            ctx,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            payload=payload,
+        ):
+            return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intents_config")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intents_config")
         return
@@ -580,6 +759,15 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     intent_cfg = intents_cfg.get(intent)
     if not isinstance(intent_cfg, Mapping):
         _log.debug("nlu.intent %s: no mapping in scenario=%s", intent, scenario_id)
+        if _dispatch_teacher_skill_action_if_available(
+            ctx,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            payload=payload,
+        ):
+            return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intent_mapping")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intent_mapping")
         return
@@ -587,6 +775,15 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     actions_cfg = intent_cfg.get("actions") or []
     if not isinstance(actions_cfg, list) or not actions_cfg:
         _log.debug("nlu.intent %s: scenario=%s has no actions", intent, scenario_id)
+        if _dispatch_teacher_skill_action_if_available(
+            ctx,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            payload=payload,
+        ):
+            return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_actions")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_actions")
         return

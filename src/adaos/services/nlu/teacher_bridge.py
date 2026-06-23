@@ -320,6 +320,8 @@ async def _on_not_obtained(evt: Any) -> None:
     meta = coerce_dict(payload.get("_meta"))
     if meta.get("suppress_teacher_bridge") is True:
         return
+    if meta.get("nlu_teacher_dispatch") is True:
+        return
     status = _effective_not_obtained_status(reason=raw_reason, via=raw_via, meta=meta)
     reason = str(status.get("reason") or raw_reason or "unknown")
     via = status.get("via") if isinstance(status.get("via"), str) else None

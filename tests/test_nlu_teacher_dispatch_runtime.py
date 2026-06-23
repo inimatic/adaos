@@ -179,6 +179,46 @@ async def test_action_dispatch_failed_marks_teacher_dispatch_failed() -> None:
 
 
 @pytest.mark.anyio
+async def test_intent_not_obtained_marks_teacher_dispatch_failed() -> None:
+    from adaos.services.nlu import teacher_dispatch_runtime as dispatch
+
+    webspace_id = "ws-test-teacher-dispatch-not-obtained"
+    candidate = _safe_modal_candidate("cand.teacher.dispatch.not-obtained")
+    candidate["dispatch_status"] = "requested"
+    candidate["dispatch"] = {
+        "id": "tdispatch.test.not-obtained",
+        "status": "requested",
+        "path": "nlp.intent.detected",
+        "intent": "notebook.create_note",
+    }
+    await _seed_teacher(webspace_id, candidate)
+
+    await dispatch._on_intent_not_obtained(
+        {
+            "webspace_id": webspace_id,
+            "intent": "notebook.create_note",
+            "reason": "no_intent_mapping",
+            "request_id": "req.teacher.dispatch.teacher_test",
+            "text": "Напишем заметку",
+            "_meta": {
+                "webspace_id": webspace_id,
+                "route_id": "api",
+                "nlu_teacher_dispatch": True,
+                "nlu_teacher_candidate_id": candidate["id"],
+                "nlu_teacher_dispatch_id": "tdispatch.test.not-obtained",
+            },
+        }
+    )
+
+    teacher = await _read_teacher(webspace_id)
+    saved = list(teacher.get("candidates") or [])[0]
+    assert saved["dispatch_status"] == "failed"
+    assert saved["dispatch"]["status"] == "failed"
+    assert saved["dispatch"]["outcome"]["reason"] == "no_intent_mapping"
+    assert any(item.get("kind") == "dispatch.failed" for item in teacher.get("events") or [])
+
+
+@pytest.mark.anyio
 async def test_modal_opened_ack_marks_teacher_dispatch_succeeded() -> None:
     from adaos.services.nlu import teacher_dispatch_runtime as dispatch
 
@@ -352,6 +392,7 @@ async def test_candidate_test_uses_action_candidate_policy_before_validation() -
 
     assert detected
     assert detected[-1]["via"] == "nlu_teacher.test"
+    assert detected[-1]["action_candidate"]["side_effect_class"] == "skill_action"
 
     teacher = await _read_teacher(webspace_id)
     saved = list(teacher.get("candidates") or [])[0]
