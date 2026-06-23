@@ -358,6 +358,7 @@ async def test_voice_chat_user_defaults_history_to_local_node_when_target_missin
     assert messages[0]["text"] == "weather in Moscow"
     assert seen_nlu
     assert seen_nlu[0].payload["_meta"]["target_node_id"] == "hub-node"
+    assert "suppress_teacher_bridge" not in seen_nlu[0].payload["_meta"]
 
 
 async def test_voice_chat_confirmation_answer_is_not_routed_to_nlu(monkeypatch) -> None:
@@ -519,6 +520,7 @@ async def test_voice_chat_user_shared_scope_uses_shared_history(monkeypatch) -> 
     assert seen_nlu
     assert "target_node_id" not in seen_nlu[0].payload["_meta"]
     assert seen_nlu[0].payload["_meta"]["voice_chat_scope"] == "shared"
+    assert "suppress_teacher_bridge" not in seen_nlu[0].payload["_meta"]
     assert seen_stream
     assert seen_stream[0].payload["receiver"] == "voice_chat.messages"
     assert seen_stream[0].payload["data"]["messages"][0]["text"] == "weather in Moscow"

@@ -2324,7 +2324,7 @@ class RouterService:
                             "text": text,
                             "webspace_id": ws,
                             "request_id": meta.get("message_id") or meta.get("id") or _make_id("nlu"),
-                            "_meta": {**meta, "route_id": "voice_chat", "suppress_teacher_bridge": True},
+                            "_meta": {**meta, "route_id": "voice_chat"},
                         },
                     )
                 )
