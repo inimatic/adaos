@@ -1029,6 +1029,19 @@ def _thin_runtime_reliability_payload(
             "servedBy": "runtime" if not sidecar_enabled else "supervisor_sidecar",
         },
     }
+    compact_state_sync = {
+        "webspaceId": str(state_sync.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
+        "transportState": str(state_sync.get("transport_state") or "unknown").strip() or "unknown",
+        "firstSyncState": str(state_sync.get("first_sync_state") or "unknown").strip() or "unknown",
+        "semanticState": str(state_sync.get("semantic_state") or "unknown").strip() or "unknown",
+        "freshnessState": str(state_sync.get("freshness_state") or "unknown").strip() or "unknown",
+        "lastGoodSyncAt": state_sync.get("last_good_sync_at"),
+        "lastMaterializationAt": state_sync.get("last_materialization_at"),
+        "replay": _coerce_dict(state_sync.get("replay")),
+        "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
+        "blockers": _coerce_list(state_sync.get("blockers")),
+    }
+    compact_webrtc_yjs = _compact_webrtc_yjs_runtime(sync_runtime)
     return {
         "ok": True,
         "available": bool(status_plane.get("available", True)),
@@ -1040,19 +1053,13 @@ def _thin_runtime_reliability_payload(
         "statusPlane": status_plane,
         **sidecar_fields,
         "connectivity": connectivity,
-        "stateSync": {
-            "webspaceId": str(state_sync.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
-            "transportState": str(state_sync.get("transport_state") or "unknown").strip() or "unknown",
-            "firstSyncState": str(state_sync.get("first_sync_state") or "unknown").strip() or "unknown",
-            "semanticState": str(state_sync.get("semantic_state") or "unknown").strip() or "unknown",
-            "freshnessState": str(state_sync.get("freshness_state") or "unknown").strip() or "unknown",
-            "lastGoodSyncAt": state_sync.get("last_good_sync_at"),
-            "lastMaterializationAt": state_sync.get("last_materialization_at"),
-            "replay": _coerce_dict(state_sync.get("replay")),
-            "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
-            "blockers": _coerce_list(state_sync.get("blockers")),
-        },
-        "webrtcYjs": _compact_webrtc_yjs_runtime(sync_runtime),
+        "stateSync": compact_state_sync,
+        "webrtcYjs": compact_webrtc_yjs,
+        "hubBrowserQuality": _compact_hub_browser_quality(
+            connectivity=connectivity,
+            state_sync=compact_state_sync,
+            webrtc_yjs=compact_webrtc_yjs,
+        ),
         "detailsRef": {
             "summaryFull": "/api/node/reliability/summary?mode=full",
             "runtime": "/api/node/reliability",
@@ -1116,6 +1123,257 @@ def _compact_webrtc_yjs_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
         "activeYwsConnections": active_yws,
         "activeWsConnections": active_ws,
         "blockers": blockers,
+    }
+
+
+def _compact_hub_browser_quality(
+    *,
+    connectivity: dict[str, Any],
+    state_sync: dict[str, Any],
+    webrtc_yjs: dict[str, Any],
+    yjs_pressure: dict[str, Any] | None = None,
+    eventbus_backlog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    def _text(payload: dict[str, Any], *keys: str, default: str = "unknown") -> str:
+        for key in keys:
+            raw = payload.get(key)
+            if raw is not None:
+                value = str(raw).strip()
+                if value:
+                    return value
+        return default
+
+    def _camel_or_snake(payload: dict[str, Any], camel: str, snake: str, default: str = "unknown") -> str:
+        return _text(payload, camel, snake, default=default)
+
+    def _gate(
+        *,
+        state: str,
+        required: bool,
+        reason: str | None = None,
+        blockers: list[Any] | None = None,
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "state": state,
+            "required": required,
+            "reason": reason,
+            "blockers": [str(item) for item in (blockers or []) if str(item).strip()],
+            "evidence": evidence or {},
+        }
+
+    def _route_state(route: dict[str, Any]) -> str:
+        transport = _camel_or_snake(route, "transportState", "transport_state").strip().lower()
+        transition = _camel_or_snake(route, "transitionState", "transition_state").strip().lower()
+        blockers = _coerce_list(route.get("blockers"))
+        if blockers or transport in {"degraded", "failed", "offline", "down", "error"}:
+            return "degraded"
+        if transition in {"reconnecting", "link_starting", "starting", "recovering", "waiting_restart"}:
+            return "recovering"
+        if transport in {"ready", "attached", "connected", "online", "ok", "healthy"}:
+            return "ready"
+        return "unknown"
+
+    def _sync_state(sync: dict[str, Any]) -> str:
+        transport = _camel_or_snake(sync, "transportState", "transport_state").strip().lower()
+        first_sync = _camel_or_snake(sync, "firstSyncState", "first_sync_state").strip().lower()
+        semantic = _camel_or_snake(sync, "semanticState", "semantic_state").strip().lower()
+        freshness = _camel_or_snake(sync, "freshnessState", "freshness_state").strip().lower()
+        blockers = _coerce_list(sync.get("blockers"))
+        if blockers or transport in {"degraded", "failed", "offline", "down", "error"}:
+            return "degraded"
+        if first_sync in {"timeout", "failed", "blocked"} or semantic in {"degraded", "blocked", "failed"}:
+            return "degraded"
+        if (
+            transport in {"attached", "ready", "connected", "online", "ok", "healthy"}
+            and first_sync in {"complete", "ready", "done"}
+            and semantic in {"ready", "ok", "healthy"}
+            and freshness in {"fresh", "current", "ready", "ok", "healthy"}
+        ):
+            return "ready"
+        if transport in {"attached", "ready", "connected"} or first_sync in {"starting", "pending", "running"}:
+            return "recovering"
+        return "unknown"
+
+    def _pressure_state(pressure: dict[str, Any]) -> str:
+        if not pressure:
+            return "unknown"
+        policy = _camel_or_snake(pressure, "policyState", "policy_state", default="ok").strip().lower()
+        observed = _camel_or_snake(pressure, "observedState", "observed_state", default="idle").strip().lower()
+        if policy in {"high", "critical", "blocked", "degraded"}:
+            return "degraded"
+        if policy in {"warn", "warning", "throttle", "throttled"} or observed in {"high", "critical"}:
+            return "warning"
+        return "ready"
+
+    def _eventbus_state(backlog: dict[str, Any]) -> str:
+        if not backlog:
+            return "unknown"
+        pending = int(backlog.get("pendingTasks") or backlog.get("pending_tasks") or 0)
+        bounded_total = int(backlog.get("boundedQueueTotal") or backlog.get("bounded_queue_total") or 0)
+        bounded_peak = int(backlog.get("boundedQueuePeak") or backlog.get("bounded_queue_peak") or 0)
+        if bounded_total > 0 or pending > 0:
+            return "warning"
+        if bounded_peak > 0:
+            return "ready"
+        return "ready"
+
+    browser_route = _coerce_dict(
+        connectivity.get("browserControlRoute") or connectivity.get("browser_control_route")
+    )
+    required_link = _coerce_dict(
+        connectivity.get("requiredUpstreamLink") or connectivity.get("required_upstream_link")
+    )
+    pressure = _coerce_dict(yjs_pressure)
+    backlog = _coerce_dict(eventbus_backlog)
+    route_state = _route_state(browser_route)
+    sync_state = _sync_state(state_sync)
+    pressure_state = _pressure_state(pressure)
+    eventbus_state = _eventbus_state(backlog)
+    webrtc_state = _text(webrtc_yjs, "state", default="unknown").strip().lower()
+    webrtc_enabled = bool(webrtc_yjs.get("enabled"))
+    webrtc_gate_state = "ready" if webrtc_state == "ready" else "fallback"
+    if webrtc_state in {"unknown", ""}:
+        webrtc_gate_state = "unknown"
+
+    gates = {
+        "browserControlRoute": _gate(
+            state=route_state,
+            required=True,
+            reason=_camel_or_snake(browser_route, "reason", "reason", default="") or None,
+            blockers=_coerce_list(browser_route.get("blockers")),
+            evidence={
+                "transportState": _camel_or_snake(browser_route, "transportState", "transport_state"),
+                "transitionState": _camel_or_snake(browser_route, "transitionState", "transition_state"),
+                "servedBy": _camel_or_snake(browser_route, "servedBy", "served_by", default="") or None,
+            },
+        ),
+        "stateSync": _gate(
+            state=sync_state,
+            required=True,
+            reason=_camel_or_snake(state_sync, "fallbackMode", "fallback_mode", default="off"),
+            blockers=_coerce_list(state_sync.get("blockers")),
+            evidence={
+                "transportState": _camel_or_snake(state_sync, "transportState", "transport_state"),
+                "firstSyncState": _camel_or_snake(state_sync, "firstSyncState", "first_sync_state"),
+                "semanticState": _camel_or_snake(state_sync, "semanticState", "semantic_state"),
+                "freshnessState": _camel_or_snake(state_sync, "freshnessState", "freshness_state"),
+            },
+        ),
+        "webrtcYjsUpgrade": _gate(
+            state=webrtc_gate_state,
+            required=False,
+            reason=_text(webrtc_yjs, "reason", default="") or None,
+            blockers=_coerce_list(webrtc_yjs.get("blockers")),
+            evidence={
+                "enabled": webrtc_enabled,
+                "state": webrtc_state or "unknown",
+                "peerTotal": int(webrtc_yjs.get("peerTotal") or webrtc_yjs.get("peer_total") or 0),
+                "openYjsChannels": int(webrtc_yjs.get("openYjsChannels") or webrtc_yjs.get("open_yjs_channels") or 0),
+                "activeYwsConnections": int(
+                    webrtc_yjs.get("activeYwsConnections") or webrtc_yjs.get("active_yws_connections") or 0
+                ),
+            },
+        ),
+        "yjsPressure": _gate(
+            state=pressure_state,
+            required=False,
+            reason=_camel_or_snake(pressure, "reason", "reason", default="") or None,
+            blockers=_coerce_list(pressure.get("blockedRoots") or pressure.get("blocked_roots")),
+            evidence={
+                "policyState": _camel_or_snake(pressure, "policyState", "policy_state", default="ok"),
+                "observedState": _camel_or_snake(pressure, "observedState", "observed_state", default="idle"),
+                "recentBytes": int(pressure.get("recentBytes") or pressure.get("recent_bytes") or 0),
+                "recentWrites": int(pressure.get("recentWrites") or pressure.get("recent_writes") or 0),
+            },
+        ),
+        "eventbusBacklog": _gate(
+            state=eventbus_state,
+            required=False,
+            reason="bounded_queue_or_pending_tasks" if eventbus_state == "warning" else None,
+            evidence={
+                "pendingTasks": int(backlog.get("pendingTasks") or backlog.get("pending_tasks") or 0),
+                "boundedQueueTotal": int(backlog.get("boundedQueueTotal") or backlog.get("bounded_queue_total") or 0),
+                "boundedQueuePeak": int(backlog.get("boundedQueuePeak") or backlog.get("bounded_queue_peak") or 0),
+            },
+        ),
+    }
+
+    required_states = [gates["browserControlRoute"]["state"], gates["stateSync"]["state"]]
+    if "degraded" in required_states:
+        logical_state = "degraded"
+    elif "recovering" in required_states:
+        logical_state = "recovering"
+    elif all(state == "ready" for state in required_states):
+        logical_state = "ready"
+    else:
+        logical_state = "unknown"
+
+    all_states = [str(gate.get("state") or "unknown") for gate in gates.values()]
+    if logical_state == "degraded" or "degraded" in all_states:
+        quality_state = "degraded"
+    elif logical_state == "recovering" or "recovering" in all_states:
+        quality_state = "recovering"
+    elif "warning" in all_states:
+        quality_state = "warning"
+    elif "fallback" in all_states:
+        quality_state = "fallback"
+    elif logical_state == "ready":
+        quality_state = "ready"
+    else:
+        quality_state = "unknown"
+
+    fallbacks: list[dict[str, Any]] = []
+    if webrtc_gate_state == "fallback":
+        fallbacks.append(
+            {
+                "channel": "sync",
+                "from": "webrtc_data:yjs",
+                "to": "yws",
+                "reason": _text(webrtc_yjs, "reason", default="webrtc_yjs_not_ready"),
+            }
+        )
+    if route_state != "ready":
+        fallbacks.append(
+            {
+                "channel": "command_event_presence",
+                "from": "preferred_route",
+                "to": "available_ws_or_http",
+                "reason": _camel_or_snake(browser_route, "reason", "reason", default="browser_route_not_ready"),
+            }
+        )
+
+    blockers = sorted(
+        {
+            str(item).strip()
+            for gate in gates.values()
+            for item in _coerce_list(gate.get("blockers"))
+            if str(item).strip()
+        }
+    )
+    warnings = [
+        gate_id
+        for gate_id, gate in gates.items()
+        if str(gate.get("state") or "") in {"warning", "fallback", "recovering"}
+    ]
+    route_kind = _camel_or_snake(required_link, "kind", "kind", default="")
+    route_transport = "root_routed_ws" if route_kind == "hub_root" else "local_or_runtime_ws"
+    return {
+        "schema": "adaos.hub_browser_quality.v1",
+        "logicalState": logical_state,
+        "qualityState": quality_state,
+        "summary": f"logical={logical_state} quality={quality_state}",
+        "activeTransports": {
+            "route": route_transport,
+            "control": "ws" if route_state in {"ready", "recovering"} else "ws_unhealthy",
+            "sync": "yws" if sync_state in {"ready", "recovering"} else "yws_unhealthy",
+            "yjsDirect": "webrtc_data:yjs" if webrtc_state == "ready" else None,
+            "yjsFallback": "yws" if webrtc_state != "ready" else None,
+        },
+        "gates": gates,
+        "fallbacks": fallbacks,
+        "blockers": blockers,
+        "warnings": warnings,
     }
 
 
@@ -1404,6 +1662,7 @@ def _compact_runtime_reliability_payload(
     )
     eventbus_backlog = _coerce_dict(runtime.get("eventbus_backlog"))
     webio_control_items = _coerce_list(eventbus_backlog.get("top_webio_stream_controls"))
+    compact_webrtc_yjs = _compact_webrtc_yjs_runtime(runtime)
     resolved_webspace_id = _coerce_node_webspace_id(
         webspace_id
         or runtime.get("webspace_id")
@@ -1413,6 +1672,43 @@ def _compact_runtime_reliability_payload(
         status_registry or _current_status_registry_snapshot(webspace_id=resolved_webspace_id),
         guard_status_cards_from_runtime(runtime, webspace_id=resolved_webspace_id),
     )
+    compact_state_sync = {
+        "webspaceId": str(state_sync.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
+        "transportState": str(state_sync.get("transport_state") or "unknown").strip() or "unknown",
+        "firstSyncState": str(state_sync.get("first_sync_state") or "unknown").strip() or "unknown",
+        "semanticState": str(state_sync.get("semantic_state") or "unknown").strip() or "unknown",
+        "freshnessState": str(state_sync.get("freshness_state") or "unknown").strip() or "unknown",
+        "lastGoodSyncAt": state_sync.get("last_good_sync_at"),
+        "lastMaterializationAt": state_sync.get("last_materialization_at"),
+        "replay": {
+            "mode": str(replay.get("mode") or "snapshot_plus_diff").strip() or "snapshot_plus_diff",
+            "cursor": str(replay.get("cursor") or "0/0").strip() or "0/0",
+        },
+        "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
+        "blockers": _coerce_list(state_sync.get("blockers")),
+    }
+    compact_connectivity = {
+        "requiredUpstreamLink": {
+            "kind": str(required_upstream_link.get("kind") or "").strip() or None,
+            "scopeId": str(required_upstream_link.get("scope_id") or "").strip() or None,
+            "transportState": str(required_upstream_link.get("transport_state") or "unknown").strip() or "unknown",
+            "transitionState": str(required_upstream_link.get("transition_state") or "unknown").strip() or "unknown",
+            "plannedTransition": _coerce_dict(required_upstream_link.get("planned_transition")),
+            "reason": str(required_upstream_link.get("reason") or "").strip() or None,
+            "blockers": _coerce_list(required_upstream_link.get("blockers")),
+            "servedBy": str(required_upstream_link.get("served_by") or "").strip() or None,
+        },
+        "browserControlRoute": {
+            "kind": str(browser_control_route.get("kind") or "").strip() or "browser_control_route",
+            "scopeId": str(browser_control_route.get("scope_id") or "").strip() or None,
+            "transportState": str(browser_control_route.get("transport_state") or "unknown").strip() or "unknown",
+            "transitionState": str(browser_control_route.get("transition_state") or "unknown").strip() or "unknown",
+            "plannedTransition": _coerce_dict(browser_control_route.get("planned_transition")),
+            "reason": str(browser_control_route.get("reason") or "").strip() or None,
+            "blockers": _coerce_list(browser_control_route.get("blockers")),
+            "servedBy": str(browser_control_route.get("served_by") or "").strip() or None,
+        },
+    }
     return {
         "ok": True,
         "updatedAt": int(time.time() * 1000),
@@ -1426,45 +1722,10 @@ def _compact_runtime_reliability_payload(
             "flows": _coerce_list(hardening.get("flows")),
         },
         **sidecar_fields,
-        "connectivity": {
-            "requiredUpstreamLink": {
-                "kind": str(required_upstream_link.get("kind") or "").strip() or None,
-                "scopeId": str(required_upstream_link.get("scope_id") or "").strip() or None,
-                "transportState": str(required_upstream_link.get("transport_state") or "unknown").strip() or "unknown",
-                "transitionState": str(required_upstream_link.get("transition_state") or "unknown").strip() or "unknown",
-                "plannedTransition": _coerce_dict(required_upstream_link.get("planned_transition")),
-                "reason": str(required_upstream_link.get("reason") or "").strip() or None,
-                "blockers": _coerce_list(required_upstream_link.get("blockers")),
-                "servedBy": str(required_upstream_link.get("served_by") or "").strip() or None,
-            },
-            "browserControlRoute": {
-                "kind": str(browser_control_route.get("kind") or "").strip() or "browser_control_route",
-                "scopeId": str(browser_control_route.get("scope_id") or "").strip() or None,
-                "transportState": str(browser_control_route.get("transport_state") or "unknown").strip() or "unknown",
-                "transitionState": str(browser_control_route.get("transition_state") or "unknown").strip() or "unknown",
-                "plannedTransition": _coerce_dict(browser_control_route.get("planned_transition")),
-                "reason": str(browser_control_route.get("reason") or "").strip() or None,
-                "blockers": _coerce_list(browser_control_route.get("blockers")),
-                "servedBy": str(browser_control_route.get("served_by") or "").strip() or None,
-            },
-        },
-        "stateSync": {
-            "webspaceId": str(state_sync.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
-            "transportState": str(state_sync.get("transport_state") or "unknown").strip() or "unknown",
-            "firstSyncState": str(state_sync.get("first_sync_state") or "unknown").strip() or "unknown",
-            "semanticState": str(state_sync.get("semantic_state") or "unknown").strip() or "unknown",
-            "freshnessState": str(state_sync.get("freshness_state") or "unknown").strip() or "unknown",
-            "lastGoodSyncAt": state_sync.get("last_good_sync_at"),
-            "lastMaterializationAt": state_sync.get("last_materialization_at"),
-            "replay": {
-                "mode": str(replay.get("mode") or "snapshot_plus_diff").strip() or "snapshot_plus_diff",
-                "cursor": str(replay.get("cursor") or "0/0").strip() or "0/0",
-            },
-            "fallbackMode": str(state_sync.get("fallback_mode") or "off").strip() or "off",
-            "blockers": _coerce_list(state_sync.get("blockers")),
-        },
+        "connectivity": compact_connectivity,
+        "stateSync": compact_state_sync,
         "memberAvailability": _compact_member_availability(hub_member_connection_state),
-        "webrtcYjs": _compact_webrtc_yjs_runtime(runtime),
+        "webrtcYjs": compact_webrtc_yjs,
         "yjsPressure": {
             "webspaceId": str(yjs_pressure.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,
             "owner": str(yjs_pressure.get("owner") or "").strip() or None,
@@ -1480,6 +1741,13 @@ def _compact_runtime_reliability_payload(
             "lastRoute": _coerce_dict(yjs_pressure.get("last_route")),
             "lastProjection": _coerce_dict(yjs_pressure.get("last_projection")),
         },
+        "hubBrowserQuality": _compact_hub_browser_quality(
+            connectivity=compact_connectivity,
+            state_sync=compact_state_sync,
+            webrtc_yjs=compact_webrtc_yjs,
+            yjs_pressure=yjs_pressure,
+            eventbus_backlog=eventbus_backlog,
+        ),
         "webioStreamGuard": {
             "available": bool(webio_stream_guard.get("available")),
             "webspaceId": str(webio_stream_guard.get("webspace_id") or resolved_webspace_id).strip() or resolved_webspace_id,

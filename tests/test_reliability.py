@@ -2680,6 +2680,13 @@ def test_node_reliability_summary_endpoint_returns_compact_runtime_snapshot(monk
     assert payload["webrtcYjs"]["enabled"] is False
     assert payload["webrtcYjs"]["state"] == "disabled"
     assert payload["webrtcYjs"]["envValue"] == "0"
+    assert payload["hubBrowserQuality"]["schema"] == "adaos.hub_browser_quality.v1"
+    assert payload["hubBrowserQuality"]["logicalState"] == "degraded"
+    assert payload["hubBrowserQuality"]["qualityState"] == "degraded"
+    assert payload["hubBrowserQuality"]["gates"]["browserControlRoute"]["state"] == "degraded"
+    assert payload["hubBrowserQuality"]["gates"]["stateSync"]["state"] == "ready"
+    assert payload["hubBrowserQuality"]["gates"]["yjsPressure"]["state"] == "warning"
+    assert payload["hubBrowserQuality"]["fallbacks"][0]["from"] == "webrtc_data:yjs"
     assert payload["yjsPressure"]["policyState"] == "warn"
     assert payload["webioStreamGuard"]["totals"]["attempted"] == 4
     assert payload["webioStreamGuard"]["top"]["receiver"] == "infrastate.realtime"
@@ -2762,6 +2769,7 @@ def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) 
     assert payload["sidecarEnablement"]["source"] == "env_override"
     assert payload["sidecarContinuity"]["currentSupport"] == "not_applicable"
     assert payload["routeTunnel"]["ws"]["planned_owner"] == "sidecar"
+    assert payload["hubBrowserQuality"]["schema"] == "adaos.hub_browser_quality.v1"
     assert payload["detailsRef"]["summaryFull"] == "/api/node/reliability/summary?mode=full"
 
     registry.publish(runtime_card)
