@@ -47,6 +47,13 @@ provenance, privacy, MCP audit, rollback, and verification metadata. Teacher
 state exposes retention/threat/budget policy snapshots, budget counters, and a
 bounded deferred enrichment queue for Root/OpenAI failures or empty LLM output.
 
+Current skill-action learning slice: **implemented for skill-owned actions**.
+When a training-example candidate targets a skill action, Apply now persists
+the example and `skillTool` action into the owning `skill.yaml` `nlu.intents`
+artifact. The baseline dispatcher can execute those published skill actions
+without requiring a scenario-level intent mapping, keeping learned ReDevice and
+other skill controls inside the owning skill surface.
+
 Current MCP-aware LLM status: **hybrid bridge implemented**. NLU Teacher still
 collects a bounded Root MCP snapshot for compatibility, but it can also attach
 a scoped Root MCP `responses_tool` descriptor to `/v1/llm/response` so OpenAI

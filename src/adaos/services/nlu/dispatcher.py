@@ -4,7 +4,10 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Mapping
+
+import yaml
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import AgentContext, get_ctx
@@ -277,6 +280,77 @@ def _teacher_skill_action(raw: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _normalize_skill_nlu_action(action: Mapping[str, Any], *, skill_name: str) -> dict[str, Any] | None:
+    action_type = str(action.get("type") or "").strip()
+    skill = str(action.get("skill") or action.get("skill_id") or skill_name or "").strip()
+    tool = str(action.get("tool") or action.get("tool_name") or action.get("method") or "").strip()
+    target = str(action.get("target") or "").strip()
+    if not tool and skill and target.startswith(f"{skill}."):
+        tool = target.rsplit(".", 1)[-1].strip()
+
+    if action_type in {"skillTool", "callSkillTool"} or (skill and tool):
+        if not skill or not tool:
+            return None
+        params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+        return {
+            "type": "skillTool",
+            "skill": skill,
+            "tool": tool,
+            "target": target or f"{skill}.{tool}",
+            "params": dict(params),
+        }
+
+    if action_type in {"callSkill", "callHost"} and target:
+        params = action.get("params") if isinstance(action.get("params"), Mapping) else {}
+        return {"type": action_type, "target": target, "params": dict(params)}
+    return None
+
+
+def _skill_nlu_actions_for_intent(ctx: AgentContext, intent: str) -> list[dict[str, Any]]:
+    intent = str(intent or "").strip()
+    if not intent:
+        return []
+    try:
+        skill_yamls = list(Path(ctx.paths.skills_dir()).glob("*/skill.yaml"))
+    except Exception:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for path in skill_yamls:
+        skill_name = path.parent.name
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        nlu = payload.get("nlu") if isinstance(payload.get("nlu"), Mapping) else {}
+        intents = nlu.get("intents") if isinstance(nlu, Mapping) else None
+        specs: list[Mapping[str, Any]] = []
+        if isinstance(intents, Mapping):
+            spec = intents.get(intent)
+            if isinstance(spec, Mapping):
+                specs.append(spec)
+        elif isinstance(intents, list):
+            for item in intents:
+                if not isinstance(item, Mapping):
+                    continue
+                name = item.get("name") or item.get("intent")
+                if isinstance(name, str) and name.strip() == intent:
+                    specs.append(item)
+        for spec in specs:
+            actions = spec.get("actions")
+            if not isinstance(actions, list):
+                continue
+            for action in actions:
+                if not isinstance(action, Mapping):
+                    continue
+                normalized = _normalize_skill_nlu_action(action, skill_name=skill_name)
+                if normalized:
+                    out.append(normalized)
+    return out
+
+
 def _humanize_action_label(value: Any) -> str:
     token = str(value or "").strip()
     if not token:
@@ -498,6 +572,20 @@ def _execute_action(
         params: dict with optional templates.
     """
     action_type = str(action.get("type") or "").strip() or "callSkill"
+    if action_type in {"skillTool", "callSkillTool"} or (
+        action_type == "callSkill" and action.get("skill") and action.get("tool")
+    ):
+        _execute_skill_tool_action(
+            ctx,
+            action=action,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            raw=raw,
+        )
+        return
+
     target = str(action.get("target") or "").strip()
     if not target:
         _log.debug("nlu.intent %s: action missing target", intent)
@@ -695,6 +783,42 @@ def _dispatch_teacher_skill_action_if_available(
     return True
 
 
+def _dispatch_skill_nlu_action_if_available(
+    ctx: AgentContext,
+    *,
+    intent: str,
+    scenario_id: str,
+    webspace_id: str,
+    slots: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> bool:
+    actions = _skill_nlu_actions_for_intent(ctx, intent)
+    if not actions:
+        return False
+    for action in actions:
+        target = str(action.get("target") or "").strip()
+        _emit_stage(
+            ctx,
+            stage="dispatcher",
+            status="action",
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=payload,
+            reason="skill_nlu_action",
+            action_target=target or None,
+        )
+        _execute_action(
+            ctx,
+            action=action,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            raw=payload,
+        )
+    return True
+
+
 @subscribe("nlp.intent.detected")
 async def _on_nlp_intent_detected(evt: Any) -> None:
     """
@@ -752,6 +876,15 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
+        if _dispatch_skill_nlu_action_if_available(
+            ctx,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            payload=payload,
+        ):
+            return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intents_config")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intents_config")
         return
@@ -768,6 +901,15 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
+        if _dispatch_skill_nlu_action_if_available(
+            ctx,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            payload=payload,
+        ):
+            return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intent_mapping")
         _emit_not_obtained(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intent_mapping")
         return
@@ -776,6 +918,15 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     if not isinstance(actions_cfg, list) or not actions_cfg:
         _log.debug("nlu.intent %s: scenario=%s has no actions", intent, scenario_id)
         if _dispatch_teacher_skill_action_if_available(
+            ctx,
+            intent=intent,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            slots=slots,
+            payload=payload,
+        ):
+            return
+        if _dispatch_skill_nlu_action_if_available(
             ctx,
             intent=intent,
             scenario_id=scenario_id,

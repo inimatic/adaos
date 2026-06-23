@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 @pytest.mark.anyio
@@ -432,3 +433,84 @@ def test_m4_validation_blocks_action_intent_mismatch():
 
     assert validation["status"] == "blocked"
     assert any(item["name"] == "action_intent_match" and item["status"] == "mismatch" for item in validation["failed_checks"])
+
+
+@pytest.mark.anyio
+async def test_training_example_apply_persists_skill_tool_action():
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.candidates_runtime import _on_candidate_apply
+    from adaos.services.nlu.teacher_runtime import _on_example_save
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-training-example-skill-tool-action"
+    skill_name = "test_notes_action_skill"
+    intent = "notes.create_note"
+    candidate_id = "cand.training.skill-tool-action"
+    request_text = "Напишем заметку"
+
+    skill_root = Path(ctx.paths.skills_dir()) / skill_name
+    skill_root.mkdir(parents=True, exist_ok=True)
+    skill_yaml = skill_root / "skill.yaml"
+    skill_yaml.write_text(
+        yaml.safe_dump(
+            {
+                "name": skill_name,
+                "version": "0.0.1",
+                "tools": [{"name": "create_note", "entry": "handlers.main:create_note"}],
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    ctx.bus.subscribe("nlp.teacher.example.save", _on_example_save)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(
+                txn,
+                "nlu_teacher",
+                {
+                    "candidates": [
+                        {
+                            "id": candidate_id,
+                            "kind": "training_example",
+                            "status": "pending",
+                            "text": request_text,
+                            "request_id": "req.training.skill-tool-action",
+                            "target": {"type": "skill", "id": skill_name},
+                            "intent": intent,
+                            "examples": [request_text],
+                            "action_candidate": {
+                                "class": "skill_action",
+                                "side_effect_class": "skill_action",
+                                "id": intent,
+                                "intent": intent,
+                                "owner": {"type": "skill", "id": skill_name},
+                            },
+                        }
+                    ]
+                },
+            )
+
+    await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate_id})
+    await ctx.bus.wait_for_idle(timeout=2.0)
+
+    saved = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
+    intents = saved["nlu"]["intents"]
+    if isinstance(intents, dict):
+        spec = intents[intent]
+    else:
+        spec = next(item for item in intents if item.get("intent") == intent)
+    assert request_text in spec["examples"]
+    assert spec["actions"] == [
+        {
+            "type": "skillTool",
+            "skill": skill_name,
+            "tool": "create_note",
+            "target": f"{skill_name}.create_note",
+            "params": {},
+        }
+    ]

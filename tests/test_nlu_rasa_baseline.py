@@ -419,3 +419,86 @@ async def test_teacher_skill_action_candidate_dispatches_tool_without_scenario_m
     assert outcomes
     assert outcomes[-1]["target"] == "notebook_skill.create_note"
     assert outcomes[-1]["action_type"] == "callSkill"
+
+
+@pytest.mark.anyio
+async def test_skill_owned_nlu_action_dispatches_tool_without_scenario_mapping(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    skill_name = "test_skill_owned_nlu_action"
+    intent = "notes.create_note.learned"
+    skill_root = Path(ctx.paths.skills_dir()) / skill_name
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": skill_name,
+                "version": "0.0.1",
+                "tools": [{"name": "create_note", "entry": "handlers.main:create_note"}],
+                "nlu": {
+                    "intents": {
+                        intent: {
+                            "examples": ["Напишем заметку"],
+                            "actions": [
+                                {
+                                    "type": "skillTool",
+                                    "skill": skill_name,
+                                    "tool": "create_note",
+                                    "target": f"{skill_name}.create_note",
+                                }
+                            ],
+                        }
+                    }
+                },
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    calls: list[tuple[str, str, dict]] = []
+    outcomes: list[dict] = []
+    missed: list[dict] = []
+    ctx.bus.subscribe("nlu.action.dispatched", lambda ev: outcomes.append(dict(ev.payload or {})))
+    ctx.bus.subscribe("nlp.intent.not_obtained", lambda ev: missed.append(dict(ev.payload or {})))
+
+    async def _scenario_id(_ctx, _webspace_id: str) -> str:
+        return "web_desktop"
+
+    def _run_skill_tool(_ctx, skill: str, tool: str, payload: dict) -> dict:
+        calls.append((skill, tool, dict(payload)))
+        return {"ok": True, "note": {"id": "note-learned"}}
+
+    monkeypatch.setattr(dispatcher_module, "_resolve_scenario_id", _scenario_id)
+    monkeypatch.setattr(dispatcher_module, "_run_skill_tool", _run_skill_tool)
+
+    await dispatcher_module._on_nlp_intent_detected(
+        {
+            "intent": intent,
+            "confidence": 0.96,
+            "slots": {},
+            "text": "Напишем заметку",
+            "webspace_id": "desktop",
+            "via": "neural",
+            "request_id": "req.skill-owned-action",
+        }
+    )
+
+    assert calls == [
+        (
+            skill_name,
+            "create_note",
+            {
+                "text": "Напишем заметку",
+                "webspace_id": "desktop",
+                "_meta": {"webspace_id": "desktop", "scenario_id": "web_desktop"},
+            },
+        )
+    ]
+    assert missed == []
+    assert outcomes
+    assert outcomes[-1]["target"] == f"{skill_name}.create_note"
+    assert outcomes[-1]["action_type"] == "callSkill"

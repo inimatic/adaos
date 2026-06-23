@@ -232,6 +232,12 @@ Live-trial blocker:
 - Runtime hardening: repeated attempts for the same phrase now prefer published
   voice-surface bindings over stale regex hypotheses, so a bad earlier
   candidate should no longer block the correct Infrastate inventory binding.
+- Skill-owned actions can now be learned as training examples without scenario
+  mapping. Candidate Apply carries `action_candidate` into the skill artifact,
+  persists a `skillTool` action under `skill.yaml` `nlu.intents`, and the
+  dispatcher executes that published skill action through the normal tool path.
+  This is the first deterministic route for phrases such as ReDevice slideshow
+  controls that belong to a skill rather than to a core UI modal.
 
 ## Gate 3: Nested UI Affordance Execution
 

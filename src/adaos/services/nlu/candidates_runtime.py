@@ -809,6 +809,9 @@ async def _on_candidate_apply(evt: Any) -> None:
                         )
                         return
                     slots = candidate.get("slots") if isinstance(candidate.get("slots"), Mapping) else {}
+                    action_candidate = (
+                        candidate.get("action_candidate") if isinstance(candidate.get("action_candidate"), Mapping) else {}
+                    )
                     next_candidates: list[dict[str, Any]] = []
                     applied_candidate: dict[str, Any] | None = None
                     for item in iter_mappings(teacher.get("candidates")):
@@ -852,6 +855,7 @@ async def _on_candidate_apply(evt: Any) -> None:
                                 "intent": intent.strip(),
                                 **({"target": dict(target)} if isinstance(target, Mapping) else {}),
                                 "slots": dict(slots),
+                                **({"action_candidate": dict(action_candidate)} if action_candidate else {}),
                                 "request_id": request_id,
                                 "source": "nlu_teacher_m3_training_example",
                                 "note": candidate.get("notes") if isinstance(candidate.get("notes"), str) else None,

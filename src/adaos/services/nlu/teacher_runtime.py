@@ -248,6 +248,7 @@ async def _on_example_save(evt: Any) -> None:
     intent = intent.strip()
     slots = payload.get("slots") if isinstance(payload.get("slots"), Mapping) else {}
     target = payload.get("target") if isinstance(payload.get("target"), Mapping) else None
+    action_candidate = payload.get("action_candidate") if isinstance(payload.get("action_candidate"), Mapping) else None
     request_id = payload.get("request_id") if isinstance(payload.get("request_id"), str) else None
     thread_id = payload.get("thread_id") if isinstance(payload.get("thread_id"), str) else None
     candidate_id = payload.get("candidate_id") if isinstance(payload.get("candidate_id"), str) else None
@@ -284,6 +285,7 @@ async def _on_example_save(evt: Any) -> None:
         promotion=artifact_meta["promotion"],
         provenance=artifact_meta["provenance"],
         privacy=artifact_meta["privacy"],
+        action_candidate=action_candidate,
     )
     dataset_item = {
         "id": f"ds.{int(time.time()*1000)}",
@@ -301,6 +303,8 @@ async def _on_example_save(evt: Any) -> None:
         "privacy": artifact_meta["privacy"],
         "result": result,
     }
+    if isinstance(action_candidate, Mapping):
+        dataset_item["action_candidate"] = dict(action_candidate)
     try:
         await _append_dataset_item(webspace_id, dataset_item)
     except Exception:

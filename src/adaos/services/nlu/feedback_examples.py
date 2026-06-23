@@ -121,7 +121,69 @@ def _upsert_skill_intent_list(intents: list[Any], *, intent: str, example: str) 
     return cleaned
 
 
-def write_skill_example(*, ctx: AgentContext | None = None, skill_name: str, intent: str, example: str) -> dict[str, Any]:
+def _skill_tool_action_from_candidate(
+    *,
+    skill_name: str,
+    intent: str,
+    action_candidate: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(action_candidate, Mapping):
+        return None
+    action_class = str(action_candidate.get("class") or "").strip()
+    side_effect = str(action_candidate.get("side_effect_class") or "").strip()
+    if action_class != "skill_action" and side_effect != "skill_action":
+        return None
+
+    owner = action_candidate.get("owner") if isinstance(action_candidate.get("owner"), Mapping) else {}
+    owner_type = str(owner.get("type") or action_candidate.get("owner_type") or "").strip()
+    owner_id = str(owner.get("id") or action_candidate.get("skill") or action_candidate.get("skill_id") or "").strip()
+    if owner_type and owner_type != "skill":
+        return None
+    if owner_id and owner_id != skill_name:
+        return None
+
+    token = str(action_candidate.get("target") or action_candidate.get("id") or intent or "").strip()
+    tool = str(action_candidate.get("tool") or action_candidate.get("tool_name") or action_candidate.get("method") or "").strip()
+    if not tool and token:
+        tool = token.rsplit(".", 1)[-1].strip()
+    if not tool:
+        return None
+
+    params = action_candidate.get("params") if isinstance(action_candidate.get("params"), Mapping) else {}
+    return {
+        "type": "skillTool",
+        "skill": skill_name,
+        "tool": tool,
+        "target": f"{skill_name}.{tool}",
+        "params": dict(params),
+    }
+
+
+def _merge_action(actions: Any, action: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    out = [dict(item) for item in actions if isinstance(item, Mapping)] if isinstance(actions, list) else []
+    if not isinstance(action, Mapping) or not action:
+        return out
+    action_obj = dict(action)
+    for item in out:
+        if (
+            str(item.get("type") or "") == str(action_obj.get("type") or "")
+            and str(item.get("target") or "") == str(action_obj.get("target") or "")
+            and str(item.get("skill") or "") == str(action_obj.get("skill") or "")
+            and str(item.get("tool") or "") == str(action_obj.get("tool") or "")
+        ):
+            return out
+    out.append(action_obj)
+    return out
+
+
+def write_skill_example(
+    *,
+    ctx: AgentContext | None = None,
+    skill_name: str,
+    intent: str,
+    example: str,
+    action_candidate: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     ctx = ctx or get_ctx()
     skill_name = str(skill_name or "").strip()
     intent = str(intent or "").strip()
@@ -144,6 +206,7 @@ def write_skill_example(*, ctx: AgentContext | None = None, skill_name: str, int
         nlu = {}
         payload["nlu"] = nlu
     intents_raw = nlu.get("intents")
+    action = _skill_tool_action_from_candidate(skill_name=skill_name, intent=intent, action_candidate=action_candidate)
     if isinstance(intents_raw, dict):
         spec = intents_raw.get(intent)
         if not isinstance(spec, dict):
@@ -152,15 +215,31 @@ def write_skill_example(*, ctx: AgentContext | None = None, skill_name: str, int
         existing = spec.get("examples")
         existing_list = [str(item) for item in existing if isinstance(item, str)] if isinstance(existing, list) else []
         spec["examples"] = _dedupe_keep_order([*existing_list, example])
-    else:
+        if action:
+            spec["actions"] = _merge_action(spec.get("actions"), action)
+    elif isinstance(intents_raw, list):
         intents_list = intents_raw if isinstance(intents_raw, list) else []
         nlu["intents"] = _upsert_skill_intent_list(intents_list, intent=intent, example=example)
+        if action:
+            for item in nlu["intents"]:
+                name = item.get("name") or item.get("intent")
+                if isinstance(name, str) and name.strip() == intent:
+                    item["actions"] = _merge_action(item.get("actions"), action)
+                    break
+    else:
+        spec = {"examples": [example]}
+        if action:
+            spec["actions"] = _merge_action([], action)
+        nlu["intents"] = {intent: spec}
 
     try:
         path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
     except Exception as exc:
         return {"ok": False, "reason": "skill_write_failed", "path": str(path), "error": str(exc)}
-    return {"ok": True, "target": {"type": "skill", "id": skill_name}, "path": str(path)}
+    result = {"ok": True, "target": {"type": "skill", "id": skill_name}, "path": str(path)}
+    if action:
+        result["action"] = dict(action)
+    return result
 
 
 def append_system_action_feedback(
@@ -269,6 +348,7 @@ def save_feedback_example(
     promotion: Mapping[str, Any] | None = None,
     provenance: Mapping[str, Any] | None = None,
     privacy: Mapping[str, Any] | None = None,
+    action_candidate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ctx = ctx or get_ctx()
     intent = str(intent or "").strip()
@@ -279,7 +359,13 @@ def save_feedback_example(
     if target_type == "scenario" and isinstance(target_id, str):
         result = write_scenario_example(scenario_id=target_id, intent=intent, example=example)
     elif target_type == "skill" and isinstance(target_id, str):
-        result = write_skill_example(ctx=ctx, skill_name=target_id, intent=intent, example=example)
+        result = write_skill_example(
+            ctx=ctx,
+            skill_name=target_id,
+            intent=intent,
+            example=example,
+            action_candidate=action_candidate,
+        )
     elif target_type == "system_action" and isinstance(target_id, str):
         result = append_system_action_feedback(
             ctx=ctx,
