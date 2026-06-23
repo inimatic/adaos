@@ -200,6 +200,24 @@ Every stream or upload must carry:
 - ack or completion status;
 - transport evidence.
 
+## Browser Stream Boundary
+
+Endpoint audio status may be projected into WebUI, but the browser stream must
+remain a control/status stream. It must not carry raw audio, large debug clips,
+or trigger live endpoint refresh work just because a browser subscribes.
+
+Current implementation rules:
+
+- `redevice_voice.state` publishes the selected endpoint, VAD state, STT state,
+  retention summary, latest command, and recent compact events.
+- `webio.stream.snapshot.requested` and `webio.stream.subscription.changed`
+  restore the last cached voice state only.
+- Explicit tools such as `refresh_redevice_voice_state`,
+  `start_redevice_voice`, and `check_redevice_audio_input` may call endpoint
+  inventory or ReDevice bridges.
+- Raw or base64 audio is stored under EndpointAudioService debug retention and
+  exposed through explicit checks, not through the WebUI stream.
+
 ## STT Routing
 
 STT is a routed backend decision:

@@ -125,6 +125,15 @@ Target state: [Device Access and Browsers](device-access-and-browsers.md)
   `redevice_settings`, `slideshow_skill`, and `redevice_voice`.
 - [x] Add `redevice_settings` as the service skill for endpoint settings and status.
 - [~] Keep scenario assignment in `redevice_settings` memory for the first slice.
+- [x] Keep `redevice_settings.state` as a thin browser stream: fleet rows,
+  selected identity/status, summary cards, and lightweight sections only.
+- [x] Move full endpoint manifest, policy, diagnostics, health, and service
+  state inspection behind an explicit skill tool instead of streaming them on
+  every browser snapshot.
+- [x] Make `webio.stream.snapshot.requested` and
+  `webio.stream.subscription.changed` handlers restore the last cached stream
+  snapshot instead of performing live Endpoint Registry or ReDevice bridge
+  refreshes.
 - [ ] Move scenario assignment into core `EndpointAssignment`.
 - [ ] Add native ReDevice Agent support for Wi-Fi/Bluetooth settings intents,
   speaker test, volume, diagnostics, logout, and active-app controls.
