@@ -1708,6 +1708,68 @@ def _coerce_target(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _default_side_effect_class_for_action(*, intent: str, target: Mapping[str, Any] | None) -> str:
+    side_effect = _side_effect_class_for_intent(intent)
+    if side_effect != "unknown":
+        return side_effect
+    target_type = str((target or {}).get("type") or "").strip()
+    if target_type == "skill":
+        return "skill_action"
+    if target_type == "scenario":
+        return "local_state_change"
+    return side_effect
+
+
+def _normalized_action_candidate(
+    *,
+    candidate_id: str,
+    request_id: str,
+    text: str,
+    intent: str | None,
+    target: Mapping[str, Any] | None,
+    slots: Mapping[str, Any],
+    context: Mapping[str, Any],
+    action_candidate: Mapping[str, Any] | None,
+    status: str,
+) -> dict[str, Any] | None:
+    source = dict(action_candidate or {}) if isinstance(action_candidate, Mapping) else {}
+    owner = _coerce_target(target)
+    intent_token = str(source.get("intent") or intent or "").strip()
+    if not source and not intent_token:
+        return None
+
+    out = dict(source)
+    out.setdefault("id", f"act.{candidate_id.removeprefix('cand.')}")
+    out.setdefault("candidate_id", candidate_id)
+    out.setdefault("request_id", request_id)
+    out.setdefault("class", _candidate_class_for_intent(intent=intent_token, target=owner))
+    if intent_token:
+        out.setdefault("intent", intent_token)
+    if text:
+        out.setdefault("text", text)
+    if not isinstance(out.get("slots"), Mapping):
+        out["slots"] = dict(slots or {})
+    if owner and not isinstance(out.get("owner"), Mapping):
+        out["owner"] = dict(owner)
+    if not str(out.get("side_effect_class") or "").strip():
+        out["side_effect_class"] = _default_side_effect_class_for_action(intent=intent_token, target=owner)
+    out.setdefault("status", status)
+    out.setdefault(
+        "action_preview",
+        {
+            "status": "not_run",
+            "reason": "m1_action_candidate_envelope",
+        },
+    )
+    out.setdefault(
+        "scope",
+        {
+            "scenario_id": context.get("current_scenario") if isinstance(context.get("current_scenario"), str) else None,
+        },
+    )
+    return out
+
+
 def _regex_policy_rejection(
     *,
     pattern: str,
@@ -1893,11 +1955,24 @@ def _build_strategy_candidate_entry(
     primary = str(training_strategy.get("primary") or "ignore").strip()
     kind, candidate_class, engine = _strategy_candidate_kind(primary)
     candidate_payload = suggestion.get("candidate") if isinstance(suggestion.get("candidate"), Mapping) else {}
-    action_candidate = suggestion.get("action_candidate") if isinstance(suggestion.get("action_candidate"), Mapping) else None
+    action_candidate_in = suggestion.get("action_candidate") if isinstance(suggestion.get("action_candidate"), Mapping) else None
     template_candidate_in = (
         suggestion.get("template_candidate") if isinstance(suggestion.get("template_candidate"), Mapping) else None
     )
     owner = _coerce_target(target)
+    action_candidate = None
+    if action_candidate_in or (intent and owner and primary in _EXAMPLE_TRAINING_STRATEGIES):
+        action_candidate = _normalized_action_candidate(
+            candidate_id=candidate_id,
+            request_id=request_id,
+            text=text,
+            intent=intent,
+            target=owner,
+            slots=slots,
+            context=context,
+            action_candidate=action_candidate_in,
+            status=status,
+        )
     example_rows = examples[:] if examples else ([text] if text else [])
     strategy_candidate: dict[str, Any] = {
         "id": f"strat.{candidate_id.removeprefix('cand.')}",
@@ -1973,6 +2048,7 @@ def _build_strategy_candidate_entry(
         "training_strategy": dict(training_strategy),
         "strategy_candidate": strategy_candidate,
         **({"builder_task": builder_task} if builder_task else {}),
+        **({"action_candidate": dict(action_candidate)} if action_candidate else {}),
         "llm": dict(llm_meta),
         "notes": notes,
         "status": status,

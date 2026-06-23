@@ -294,7 +294,7 @@ async def test_candidate_test_dispatches_once_for_operator_verification() -> Non
     webspace_id = "ws-test-teacher-dispatch-test"
     candidate = _safe_modal_candidate("cand.teacher.dispatch.test")
     candidate["validation"]["side_effect_policy"] = {
-        "side_effect_class": "local_state_change",
+        "side_effect_class": "skill_action",
         "approval": "operator_apply_allowed",
     }
     await _seed_teacher(webspace_id, candidate)

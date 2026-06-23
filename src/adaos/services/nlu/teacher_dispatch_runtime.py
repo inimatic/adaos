@@ -17,7 +17,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 _log = logging.getLogger("adaos.nlu.teacher.dispatch")
 
 _AUTO_DISPATCH_SIDE_EFFECTS = {"read_only", "ui_navigation"}
-_TEST_DISPATCH_SIDE_EFFECTS = {"read_only", "ui_navigation", "local_state_change"}
+_TEST_DISPATCH_SIDE_EFFECTS = {"read_only", "ui_navigation", "local_state_change", "skill_action"}
 _DISPATCH_TERMINAL_STATUSES = {"requested", "emitted", "succeeded", "failed", "blocked"}
 
 

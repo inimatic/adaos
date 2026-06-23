@@ -1871,6 +1871,96 @@ async def test_llm_teacher_quarantines_overbroad_regex_as_example_strategy(monke
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_enriches_training_example_skill_action_candidate(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.nlu.teacher_validation import validate_candidate_apply
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-llm-training-example-skill-action"
+    request_id = "req.training.skill-action"
+    request_text = "Напишем заметку"
+    intent_name = "notebook.create_note"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": []})
+
+    async def _fake_llm_call(messages, *, request_id=None):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "decision": "create_skill_candidate",
+                                    "intent": intent_name,
+                                    "target": {"type": "skill", "id": "notebook_skill"},
+                                    "examples": [request_text, "Создать заметку"],
+                                    "training_strategy": "rasa_example",
+                                    "confidence": 0.8,
+                                    "notes": "Create a notebook note.",
+                                    "action_candidate": {
+                                        "id": "notebook.create_note",
+                                        "description": "Create a new note in the notebook skill.",
+                                    },
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_llm_call", _fake_llm_call)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.training.skill-action",
+                "request_id": request_id,
+                "text": request_text,
+                "reason": "neural_low_confidence",
+                "via": "neural",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        candidates = list((teacher or {}).get("candidates") or [])
+
+    assert candidates
+    candidate = candidates[-1]
+    assert candidate["kind"] == "training_example"
+    assert candidate["intent"] == intent_name
+    assert candidate["target"] == {"type": "skill", "id": "notebook_skill"}
+
+    action = candidate["action_candidate"]
+    assert action["id"] == "notebook.create_note"
+    assert action["candidate_id"] == candidate["id"]
+    assert action["request_id"] == request_id
+    assert action["class"] == "skill_action"
+    assert action["intent"] == intent_name
+    assert action["owner"] == {"type": "skill", "id": "notebook_skill"}
+    assert action["side_effect_class"] == "skill_action"
+    assert candidate["strategy_candidate"]["action_candidate"] == action
+
+    validation = validate_candidate_apply(webspace_id=webspace_id, candidate=candidate)
+    assert validation["ok"] is True
+    assert validation["side_effect_policy"] == {
+        "side_effect_class": "skill_action",
+        "approval": "operator_apply_allowed",
+    }
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_rejects_install_toggle_for_read_only_inventory_request(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
