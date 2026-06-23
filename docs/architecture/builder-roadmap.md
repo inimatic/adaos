@@ -54,7 +54,7 @@ gate easy to read by priority.
 | 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; Pending Actions core/SDK, global browser surface, and NLU Teacher candidate-confirmation slice exist; Builder/pairing/runtime producer migrations and applied-change evidence are open. | Open: review workbench and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
 | 6. Activation | Open: release record and post-activation repair routing. | Open: durable operation recovery and rollback UX. | None. | None. |
 | 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
-| 8. Product Experience | Open: first entrypoint, phrase-level build flow, non-specialist preview language. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
+| 8. Product Experience | Open: first entrypoint, dedicated Builder conversation, phrase-level build flow, non-specialist preview language. | Open: guided clarification and developer evidence views. | Open: catalog/scenario/skill history. | None. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -103,6 +103,7 @@ Primary references:
 
 - [Root MCP Foundation](root-mcp-foundation.md)
 - [Root MCP Roadmap](root-mcp-roadmap.md)
+- [Conversation and Channel Architecture](conversation-and-channel-architecture.md)
 - [NLU Roadmap](../concepts/nlu-roadmap.md)
 - [Roadmap Inventory](roadmap-inventory.md)
 
@@ -357,6 +358,9 @@ Goal: a non-specialist can say what they want and safely become a creator.
 Open work:
 
 - [ ] `[must]` Define the first user-facing Builder entrypoint.
+- [ ] `[must]` Give Builder a dedicated conversation with isolated context,
+  linked threads for draft/preview/repair work, and Pending Action evidence
+  backlinks.
 - [ ] `[must]` Support the phrase-level flow: "I have an idea. Let's build it."
 - [ ] `[should]` Provide guided clarification when the idea is underspecified.
 - [ ] `[must]` Show assumptions, preview, risks, and expected behavior in non-specialist
@@ -371,6 +375,9 @@ Open work:
 Builder is intentionally cross-cutting. Detailed work remains in:
 
 - [Builder](builder.md): role, pipeline, and source-of-truth terminology
+- [Conversation and Channel Architecture](conversation-and-channel-architecture.md):
+  dedicated Builder conversation, skill-owned chats, and transport-independent
+  context
 - [Roadmap Inventory](roadmap-inventory.md): current cross-roadmap status
 - [Root MCP Roadmap](root-mcp-roadmap.md): descriptor, plane, session, and MCP
   readiness

@@ -161,6 +161,49 @@ Developer-doc gap:
   routing visible to developers. The high-level docs cover the concept, but a
   short developer guide for media-route debugging would be useful.
 
+### Conversations, Channels, Skill Chats, and Messenger Integrations
+
+Authoritative docs:
+
+- [Conversation and Channel Architecture](conversation-and-channel-architecture.md)
+- [Channel Semantics](channel-semantics.md)
+- [SDK IO](../sdk/io.md)
+- [AdaOS Builder](builder.md)
+- [Builder Roadmap](builder-roadmap.md)
+- [Pending Actions](pending-actions.md)
+
+Code anchors:
+
+- `src/adaos/services/chat_io/*`
+- `src/adaos/services/router/service.py`
+- `src/adaos/services/nlu/*`
+- `src/adaos/integrations/telegram/*`
+- `src/adaos/sdk/io/out.py`
+- `src/adaos/integrations/adaos-client/src/app/renderer/*`
+
+Current status:
+
+- [x] Generic chat IO dataclasses and Telegram normalization exist.
+- [x] Telegram text can be bridged into NLU with transport routing metadata.
+- [x] Router projects SDK chat output into the current browser-visible chat
+  path.
+- [ ] There is no first-class `Conversation` service yet.
+- [ ] Conversation identity, thread identity, owner, surface, context policy,
+  and routing policy schemas are not frozen.
+- [ ] Skill-owned chats are not yet declarable in manifests.
+- [ ] The SDK does not yet expose `adaos.sdk.conversation`.
+- [ ] Builder does not yet own a separate conversation context.
+- [ ] NLU Teacher clarification sessions are still chat-local rather than
+  conversation-owned.
+- [ ] Voice, Telegram, and browser chat still have compatibility paths where
+  transport or route ids imply context.
+
+Developer-doc gap:
+
+- LLM skill-development guidance must move from low-level chat/voice helpers to
+  conversation-first examples so generated skills can create private skill
+  chats without binding themselves to Telegram, voice, or browser transport.
+
 ### Root MCP, Planes, and Agent-Facing Governance
 
 Authoritative docs:
