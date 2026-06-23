@@ -118,7 +118,7 @@ Required for a reliable hub-browser quality bar:
 - [x] Add a `hubBrowserQuality` block to reliability summaries.
 - [x] Track recent timeout windows for `hub_open_ack_timeout`,
       `dc_open_timeout`, and repeated Yjs provider closes.
-- [ ] Surface the selected transport and fallback reason per semantic channel.
+- [x] Surface the selected transport and fallback reason per semantic channel.
 - [ ] Separate logical `ready` from quality `ready` in diagnostics and UI.
 - [ ] Report Yjs first-sync latency and pressure as hub-browser quality gates.
 - [ ] Verify root-routed browser behavior through runtime restart and A/B slot
