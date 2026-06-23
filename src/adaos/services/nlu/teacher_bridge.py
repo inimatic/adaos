@@ -56,6 +56,7 @@ _TRANSIENT_PROVIDER_ISSUE_REASONS = {
     "neuro_lite_timeout",
     "neuro_lite_failed",
 }
+_NLU_STAGE_LADDER = ("regex", "neuro_lite", "neural", "rasa")
 
 
 def _nlu_teacher_bridge_write_meta():
@@ -134,6 +135,66 @@ def _provider_issue_evidence(*, reason: str, via: str | None, meta: Mapping[str,
     if fallbacks:
         evidence["fallbacks"] = fallbacks
     return evidence
+
+
+def _active_pipeline_stages(meta: Mapping[str, Any]) -> dict[str, bool]:
+    pipeline = meta.get("nlu_pipeline") if isinstance(meta, Mapping) else None
+    active = pipeline.get("active_stages") if isinstance(pipeline, Mapping) else None
+    if not isinstance(active, Mapping):
+        return {}
+    out: dict[str, bool] = {}
+    for stage in _NLU_STAGE_LADDER:
+        raw = active.get(stage)
+        if raw is None:
+            raw = active.get(f"{stage}_enabled")
+        if raw is not None:
+            out[stage] = bool(raw)
+    return out
+
+
+def _last_active_pipeline_stage(meta: Mapping[str, Any]) -> str:
+    active = _active_pipeline_stages(meta)
+    for stage in reversed(_NLU_STAGE_LADDER):
+        if active.get(stage) is True:
+            return stage
+    return ""
+
+
+def _reason_provider(reason: str) -> str:
+    token = str(reason or "").strip()
+    for provider in ("rasa", "neural", "neuro_lite"):
+        if token.startswith(f"{provider}_"):
+            return provider
+    return ""
+
+
+def _effective_not_obtained_status(*, reason: str, via: str | None, meta: Mapping[str, Any]) -> dict[str, Any]:
+    raw_reason = str(reason or "").strip() or "unknown"
+    raw_via = str(via or "").strip()
+    active = _active_pipeline_stages(meta)
+    last_active = _last_active_pipeline_stage(meta)
+    reason_provider = _reason_provider(raw_reason)
+    via_provider = raw_via if raw_via in _NLU_STAGE_LADDER else ""
+    inactive_reason_provider = bool(reason_provider and active.get(reason_provider) is False)
+    inactive_via_provider = bool(via_provider and active.get(via_provider) is False)
+    effective_via = raw_via or last_active or None
+    effective_reason = raw_reason
+    changed = False
+
+    if last_active and (inactive_reason_provider or inactive_via_provider):
+        effective_via = last_active
+        effective_reason = "no_match" if last_active == "regex" else f"{last_active}_not_obtained"
+        changed = True
+
+    return {
+        "reason": effective_reason,
+        "via": effective_via,
+        "raw_reason": raw_reason,
+        "raw_via": raw_via or None,
+        "active_stages": active,
+        "last_active_stage": last_active or None,
+        "changed": changed,
+    }
 
 
 def _classify_not_obtained_for_teacher(*, reason: str, via: str | None, meta: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -246,12 +307,22 @@ async def _on_not_obtained(evt: Any) -> None:
     text = text.strip()
 
     webspace_id = _resolve_webspace_id(payload)
+    try:
+        from adaos.services.nlu.runtime_flags import is_stage_enabled
+
+        if not await is_stage_enabled(webspace_id, "nlu_teacher"):
+            return
+    except Exception:
+        _log.debug("failed to read NLU Teacher runtime flag webspace=%s", webspace_id, exc_info=True)
     request_id = payload.get("request_id") if isinstance(payload.get("request_id"), str) else None
-    reason = payload.get("reason") if isinstance(payload.get("reason"), str) else "unknown"
-    via = payload.get("via") if isinstance(payload.get("via"), str) else None
+    raw_reason = payload.get("reason") if isinstance(payload.get("reason"), str) else "unknown"
+    raw_via = payload.get("via") if isinstance(payload.get("via"), str) else None
     meta = coerce_dict(payload.get("_meta"))
     if meta.get("suppress_teacher_bridge") is True:
         return
+    status = _effective_not_obtained_status(reason=raw_reason, via=raw_via, meta=meta)
+    reason = str(status.get("reason") or raw_reason or "unknown")
+    via = status.get("via") if isinstance(status.get("via"), str) else None
     classification = _classify_not_obtained_for_teacher(reason=reason, via=via, meta=meta)
 
     item = {
@@ -260,6 +331,9 @@ async def _on_not_obtained(evt: Any) -> None:
         "text": text,
         "reason": reason,
         "via": via,
+        "raw_reason": status.get("raw_reason"),
+        "raw_via": status.get("raw_via"),
+        "effective_status": status,
         "request_id": request_id,
         "classification": dict(classification),
         "status": "pending" if classification.get("teachable") else "skipped",

@@ -37,6 +37,9 @@ Current implemented slice:
   active list, and sends `pending_actions.respond.request`.
 - [x] NLU Teacher candidate confirmations publish Pending Actions and accept
   responses from the Pending Actions registry, browser UI, and voice yes/no.
+- [x] NLU Teacher workbench has a direct candidate Test action for operator
+  verification; broader Pending Actions `test` responses stay available for
+  cross-channel confirmations.
 - [ ] NLU Teacher clarification sessions still use the legacy chat-local flow
   and should be migrated separately if they need cross-channel response.
 - [ ] Builder, pairing, runtime recovery, capability elevation, and guarded

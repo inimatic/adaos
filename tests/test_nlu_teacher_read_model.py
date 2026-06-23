@@ -400,8 +400,30 @@ def test_nlu_teacher_events_build_workbench_signals():
                 "subtitle": "desktop.open_weather",
                 "raw": {"candidate_id": "cand-1"},
             },
+            {
+                "ts": 3.0,
+                "kind": "llm.deferred",
+                "request_id": "req-2",
+                "request_text": "install teacher app",
+                "title": "LLM enrichment deferred",
+                "subtitle": "root_llm_timeout",
+                "raw": {
+                    "reason": "root_llm_timeout",
+                    "error": "gateway_timeout",
+                    "diagnostic": {"category": "gateway_timeout", "status_code": 504},
+                },
+            },
         ],
-        "llm_logs": [{"id": "log-1", "status": "error"}],
+        "llm_logs": [
+            {
+                "id": "log-1",
+                "request_id": "req-2",
+                "ts": 3.0,
+                "status": "error",
+                "error": "gateway_timeout",
+                "diagnostic": {"category": "gateway_timeout", "status_code": 504},
+            }
+        ],
     }
 
     rebuild_events_by_candidate(teacher)
@@ -411,3 +433,7 @@ def test_nlu_teacher_events_build_workbench_signals():
     signal_ids = {item["id"] for item in teacher["workbench_signals"]}
     assert {"teacher.queue", "teacher.acquired", "teacher.quarantine", "teacher.llm_errors", "teacher.latest_event"}.issubset(signal_ids)
     assert teacher["threads_by_request"]
+    req2 = next(item for item in teacher["threads_by_request"] if item["request_id"] == "req-2")
+    assert req2["created_at_label"] == "1970-01-01T00:00:03Z"
+    assert req2["has_error_details"] is True
+    assert "gateway_timeout" in req2["diagnostics"]

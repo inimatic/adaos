@@ -692,6 +692,56 @@ async def test_llm_teacher_reports_openai_upstream_error_separately(monkeypatch)
 
 
 @pytest.mark.anyio
+async def test_llm_teacher_classifies_html_gateway_timeout_diagnostic(monkeypatch):
+    from adaos.services.nlu import llm_teacher_runtime as llm
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-llm-deferred-html-504"
+    html = "<html><head><title>504 Gateway Time-out</title></head><body>nginx</body></html>"
+
+    async def _html_504_llm_call(messages, *, request_id=None, **kwargs):
+        raise llm.RootHttpError(
+            html,
+            status_code=504,
+            payload=html,
+        )
+
+    monkeypatch.setattr(llm, "_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_LLM_TEACHER_ENABLED", True)
+    monkeypatch.setattr(llm, "_collect_root_mcp_authoring_evidence", lambda **kwargs: {})
+    monkeypatch.setattr(llm, "_llm_call", _html_504_llm_call)
+    monkeypatch.setattr(llm, "_LLM_RETRY_MAX_ATTEMPTS", 1)
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("data").set(txn, "nlu_teacher", {"candidates": [], "llm_logs": [], "events": []})
+
+    await llm._on_teacher_request(
+        {
+            "webspace_id": webspace_id,
+            "request": {
+                "id": "teach.html504",
+                "request_id": "req.html504",
+                "text": "show unavailable llm panel",
+                "reason": "rasa_low_confidence",
+                "via": "rasa",
+            },
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        queue = list(teacher.get("deferred_enrichment_queue") or [])
+        logs = list(teacher.get("llm_logs") or [])
+
+    assert queue[-1]["reason"] == "root_llm_timeout"
+    assert queue[-1]["diagnostic"]["category"] == "gateway_timeout"
+    assert queue[-1]["diagnostic"]["status_code"] == 504
+    assert "504 Gateway Time-out" in queue[-1]["diagnostic"]["body_excerpt"]
+    assert logs[-1]["diagnostic"]["content_type"] == "text/html"
+
+
+@pytest.mark.anyio
 async def test_llm_teacher_retries_transient_llm_error_before_success(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm

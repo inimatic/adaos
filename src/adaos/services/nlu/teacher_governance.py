@@ -267,6 +267,7 @@ def append_deferred_enrichment(
     reason: str,
     error: str | None = None,
     log_id: str | None = None,
+    diagnostic: Mapping[str, Any] | None = None,
     meta: Mapping[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
@@ -281,6 +282,7 @@ def append_deferred_enrichment(
         "reason": reason,
         "error": error,
         "log_id": log_id,
+        "diagnostic": _clean(dict(diagnostic or {})) if diagnostic else None,
         "_meta": _clean(dict(meta or {})),
     }
     item = {key: value for key, value in item.items() if value not in (None, "", {}, [])}

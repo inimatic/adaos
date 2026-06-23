@@ -29,12 +29,18 @@ _FLAG_KEYS = {
     "neuro_lite_enabled": "neuro_lite_enabled",
     "rasa": "rasa_enabled",
     "rasa_enabled": "rasa_enabled",
+    "teacher": "nlu_teacher_enabled",
+    "nlu_teacher": "nlu_teacher_enabled",
+    "nlu_teacher_enabled": "nlu_teacher_enabled",
+    "llm_teacher": "nlu_teacher_enabled",
+    "llm_teacher_enabled": "nlu_teacher_enabled",
 }
 DEFAULT_FLAGS: dict[str, bool] = {
     "regex_enabled": True,
     "neuro_lite_enabled": True,
     "neural_enabled": True,
     "rasa_enabled": True,
+    "nlu_teacher_enabled": True,
 }
 
 
@@ -74,6 +80,7 @@ def _env_default(stage: str, fallback: bool) -> bool:
         "neuro_lite_enabled": "ADAOS_NLU_NEURO_LITE_RUNTIME",
         "neural_enabled": "ADAOS_NLU_NEURAL_RUNTIME",
         "rasa_enabled": "ADAOS_NLU_RASA_RUNTIME",
+        "nlu_teacher_enabled": "ADAOS_NLU_TEACHER_RUNTIME",
     }.get(stage)
     if not env_name:
         return fallback

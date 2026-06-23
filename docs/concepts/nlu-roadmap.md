@@ -885,11 +885,17 @@ below remain useful for tracking existing implementation work.
 - [x] `[must]` NLU Teacher Candidate Apply has one primary action that uses the
   backend-resolved owner target; the obsolete duplicate "Apply to scenario"
   shortcut is removed from the current UI.
+- [x] `[must]` Voice Settings exposes a runtime `Use NLU Teacher` gate so an
+  operator can disable LLM Teacher access without changing root policy.
+- [x] `[must]` NLU Teacher User requests show request datetime and structured
+  LLM/root diagnostics, including classified HTML 504 gateway timeouts.
+- [x] `[must]` NLU Teacher Candidates expose a non-applying Test action that
+  executes the proposed action once for operator verification.
 - [x] `[should]` NLU Teacher UI can run a phrase probe without terminal access.
 - [ ] `[could]` NLU Teacher UI shows stage trace, ranking, entities, slots, lookup matches, confidence, and action preview.
 - [ ] `[deferred]` NLU Teacher UI supports Correct/Fix/Save example with target selection and audit metadata for the currently safe existing-API flows.
 - [x] `[must]` Backend/API/MCP preview flow exposes stable template fingerprints and stale-write checks for template corrections.
-- [ ] `[could]` Operator-facing evidence distinguishes NLU gap, service/provider outage, low confidence, unsupported action, and missing capability.
+- [x] `[could]` Operator-facing evidence distinguishes NLU gap, service/provider outage, low confidence, unsupported action, and missing capability.
 
 ## Phase 4a: Dynamic Lookups and Template Inventory
 
@@ -951,13 +957,14 @@ below remain useful for tracking existing implementation work.
   - `POST /api/nlu/teacher/{webspace_id}/probe`
   - `GET /api/nlu/teacher/{webspace_id}/lookups`
   - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
+  - `POST /api/nlu/teacher/{webspace_id}/candidate/test`
   - `POST /api/nlu/teacher/{webspace_id}/example/save`
 - [x] `[must]` Start with a narrow candidate type: regex/template candidate for an existing AdaOS intent, not a generic action candidate.
 - [x] `[must]` Record planned intent, owner hint, proposed regex template, and verification status.
 - [x] `[must]` Record correction-thread link for follow-up correction phrases.
 - [x] `[must]` Record first dispatch status and dispatcher outcome for the
   voice-confirmed safe candidate path.
-- [ ] `[should]` Generalize dispatch status to all candidate/action classes and attach
+- [x] `[should]` Generalize dispatch status to all candidate/action classes and attach
   factual host/skill/endpoint outcome evidence.
 - [x] `[must]` LLM Teacher enablement inherits `root.llm.allow_nlu_teacher` when env
   overrides are unset; disabled LLM runtime records `llm.skipped` instead of

@@ -207,6 +207,16 @@ _SYSTEM_ACTIONS: tuple[dict[str, Any], ...] = (
         "nlu_intents": [],
     },
     {
+        "id": "host.nlp.teacher.candidate.test",
+        "kind": "host_action",
+        "status": "active",
+        "action": "nlp.teacher.candidate.test",
+        "description": "Execute an NLU Teacher candidate once for operator verification without applying it as learned NLU.",
+        "params": {"candidate_id": "string", "webspace_id": "string", "target?": "{type,id}"},
+        "slots": {},
+        "nlu_intents": [],
+    },
+    {
         "id": "host.nlp.teacher.revision.apply",
         "kind": "host_action",
         "status": "active",

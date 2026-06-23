@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timezone
 from collections.abc import Iterable
 from typing import Any, Mapping, Optional
 
@@ -43,6 +44,101 @@ def _json_text(value: Any) -> str:
             return str(value)
         except Exception:
             return ""
+
+
+def _format_ts(value: Any) -> str:
+    try:
+        ts = float(value)
+    except Exception:
+        return ""
+    if ts <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    except Exception:
+        return ""
+
+
+def _min_positive_ts(*groups: list[dict[str, Any]]) -> float:
+    values: list[float] = []
+    for group in groups:
+        for item in group:
+            try:
+                ts = float(item.get("ts") or 0.0)
+            except Exception:
+                ts = 0.0
+            if ts > 0:
+                values.append(ts)
+    return min(values) if values else 0.0
+
+
+def _llm_log_has_error(log: Mapping[str, Any]) -> bool:
+    status = str(log.get("status") or "").strip().lower()
+    return status in {"error", "failed", "timeout"} or log.get("error") not in (None, "", [], {})
+
+
+def _request_diagnostics(
+    *,
+    events: list[dict[str, Any]],
+    llm_logs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for log in llm_logs:
+        if not _llm_log_has_error(log):
+            continue
+        diagnostics.append(
+            {
+                "source": "llm_log",
+                "id": log.get("id"),
+                "status": log.get("status"),
+                "error": log.get("error"),
+                "diagnostic": coerce_dict(log.get("diagnostic")),
+                "retry": coerce_dict(log.get("retry")),
+                "ts": log.get("ts"),
+            }
+        )
+    for event in events:
+        kind = str(event.get("kind") or "").strip()
+        if kind not in {"llm.deferred", "llm.retrying", "llm.skipped"}:
+            continue
+        raw = coerce_dict(event.get("raw"))
+        diagnostic = coerce_dict(raw.get("diagnostic"))
+        if not diagnostic and kind != "llm.deferred":
+            continue
+        diagnostics.append(
+            {
+                "source": "event",
+                "kind": kind,
+                "title": event.get("title"),
+                "subtitle": event.get("subtitle"),
+                "error": raw.get("error"),
+                "reason": raw.get("reason"),
+                "diagnostic": diagnostic,
+                "ts": event.get("ts"),
+            }
+        )
+    return diagnostics
+
+
+def _candidate_action_summary(candidate: Mapping[str, Any]) -> str:
+    action = coerce_dict(candidate.get("action_candidate"))
+    rr = coerce_dict(candidate.get("regex_rule"))
+    target = candidate.get("target") if isinstance(candidate.get("target"), Mapping) else {}
+    parts: list[str] = []
+    intent = action.get("intent") or rr.get("intent") or candidate.get("intent")
+    if isinstance(intent, str) and intent.strip():
+        parts.append(f"intent={intent.strip()}")
+    side_effect = action.get("side_effect_class")
+    if isinstance(side_effect, str) and side_effect.strip():
+        parts.append(f"effect={side_effect.strip()}")
+    target_type = target.get("type") if isinstance(target, Mapping) else None
+    target_id = target.get("id") if isinstance(target, Mapping) else None
+    if isinstance(target_type, str) and isinstance(target_id, str) and target_type.strip() and target_id.strip():
+        parts.append(f"target={target_type.strip()}:{target_id.strip()}")
+    slots = action.get("slots") if isinstance(action.get("slots"), Mapping) else {}
+    if slots:
+        parts.append(f"slots={_json_text(slots).strip()}")
+    return "; ".join(parts)
 
 
 def _compact_candidate_for_thread(candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -157,6 +253,12 @@ def _thread_log_text(
                     lines.append(f"  regex.intent: {intent}")
                 if pattern:
                     lines.append(f"  regex.pattern: {pattern}")
+            action_summary = _candidate_action_summary(c)
+            if action_summary:
+                lines.append(f"  action: {action_summary}")
+            validation = coerce_dict(c.get("validation"))
+            if validation:
+                lines.append(f"  validation: {_json_text(validation).strip()}")
         lines.append("")
 
     if revisions:
@@ -201,6 +303,11 @@ def _thread_log_text(
             status = log.get("status") if isinstance(log.get("status"), str) else ""
             model = log.get("model") if isinstance(log.get("model"), str) else ""
             lines.append(f"- id={log.get('id')} status={status} model={model}".rstrip())
+            if log.get("error") not in (None, "", [], {}):
+                lines.append(f"  error: {log.get('error')}")
+            diagnostic = coerce_dict(log.get("diagnostic"))
+            if diagnostic:
+                lines.append(f"  diagnostic: {_json_text(diagnostic).strip()}")
             resp = coerce_dict(log.get("response"))
             raw_txt = resp.get("raw") if isinstance(resp.get("raw"), str) else ""
             if raw_txt:
@@ -273,6 +380,9 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
         cand = [c for c in candidates if c.get("request_id") == rid]
         rev = [r for r in revisions if r.get("request_id") == rid]
         llm = [l for l in llm_logs if l.get("request_id") == rid]
+        request_ts = _min_positive_ts(req_items, ev, cand, rev, llm)
+        request_time = _format_ts(request_ts)
+        diagnostics = _request_diagnostics(events=ev, llm_logs=llm)
 
         # Default "Apply" action for the request thread: apply the first pending candidate.
         pending_candidate_id = ""
@@ -292,10 +402,14 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
         )
 
         subtitle_parts: list[str] = []
+        if request_time:
+            subtitle_parts.append(request_time)
         if cand:
             subtitle_parts.append(f"candidates={len(cand)}")
         if rev:
             subtitle_parts.append(f"revisions={len(rev)}")
+        if diagnostics:
+            subtitle_parts.append(f"errors={len(diagnostics)}")
         subtitle = ", ".join(subtitle_parts)
 
         threads_by_request.append(
@@ -304,7 +418,11 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
                 "request_id": rid,
                 "title": req_text or rid,
                 "subtitle": subtitle,
+                "created_at": request_ts or None,
+                "created_at_label": request_time,
                 "details": details,
+                "diagnostics": _json_text(diagnostics) if diagnostics else "",
+                "has_error_details": bool(diagnostics),
                 "candidate_id": pending_candidate_id,
             }
         )
@@ -313,6 +431,9 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
             cand_obj = coerce_dict(c.get("candidate"))
             name = cand_obj.get("name") if isinstance(cand_obj.get("name"), str) else ""
             description = cand_obj.get("description") if isinstance(cand_obj.get("description"), str) else ""
+            action_summary = _candidate_action_summary(c)
+            if not description and action_summary:
+                description = action_summary
             target_obj = c.get("target") if isinstance(c.get("target"), Mapping) else None
             target_type = target_obj.get("type") if isinstance(target_obj, Mapping) else None
             target_id = target_obj.get("id") if isinstance(target_obj, Mapping) else None
@@ -327,6 +448,9 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
             if target_label:
                 candidate_meta = f"{cand_kind} → {target_label}".strip()
 
+            if action_summary:
+                candidate_meta = f"{candidate_meta}; {action_summary}".strip("; ")
+
             cid = c.get("id") if isinstance(c.get("id"), str) else ""
             if not cid:
                 continue
@@ -337,6 +461,7 @@ def rebuild_threads(teacher: dict[str, Any]) -> dict[str, Any]:
                     "candidate_kind": cand_kind,
                     "candidate_name": name,
                     "candidate_description": description,
+                    "candidate_action_summary": action_summary,
                     "candidate_target": dict(target_obj) if isinstance(target_obj, Mapping) else None,
                     "candidate_target_type": target_type,
                     "candidate_target_id": target_id,

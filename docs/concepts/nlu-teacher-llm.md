@@ -277,7 +277,8 @@ The NLU Teacher modal should become the operator-facing workbench for testing an
 Current UI status:
 
 - Implemented: User requests tab, Candidates tab, Signals tab, raw JSON event
-  inspection, revision Apply, and candidate Apply.
+  inspection, revision Apply, candidate Apply, candidate Test, request
+  datetime display, and error detail buttons for request diagnostics.
 - Implemented: Signals tab expands details inline through the accordion instead
   of opening an implicit detail modal.
 - Implemented: candidate Apply has a single UI action. It applies the candidate
@@ -288,6 +289,9 @@ Current UI status:
 - Implemented: candidate Apply and Rollback use explicit NLU Teacher API
   endpoints from the client, so the workbench does not depend on the generic
   host-command bridge for durable Teacher mutations.
+- Implemented: Voice Settings exposes `Use NLU Teacher`, backed by
+  `data.nlu_runtime.flags.nlu_teacher_enabled`. This is a runtime/operator
+  gate for LLM Teacher access in addition to root policy.
 - Implemented in backend/API: dry-run phrase probe, dynamic lookup inspection,
   and operator-approved example save with skill/scenario/system-action target
   selection.
@@ -357,6 +361,7 @@ The current backend can apply a stored Teacher candidate without requiring the
 UI to publish directly to the event bus:
 
 - `POST /api/nlu/teacher/{webspace_id}/candidate/apply`
+- `POST /api/nlu/teacher/{webspace_id}/candidate/test`
 - request:
 
 ```json
@@ -370,6 +375,12 @@ The endpoint emits `nlp.teacher.candidate.apply`. For `kind="regex_rule"`
 candidates, AdaOS persists the rule into the selected scenario/skill owner,
 mirrors it into runtime regex state, then immediately re-runs the original
 phrase through the probe path.
+
+`candidate/test` emits `nlp.teacher.candidate.test` and dispatches the
+candidate once through `nlp.intent.detected` with `via="nlu_teacher.test"`.
+It does not apply the candidate as learned NLU. The explicit UI test policy
+allows `read_only`, `ui_navigation`, and `local_state_change` side effects;
+higher-risk classes remain blocked and are recorded as Teacher events.
 
 Before durable mutation, candidate Apply now runs the M4 validation gate:
 
@@ -414,6 +425,13 @@ inflection/noise for long aliases. Example: a phrase such as "show
 infrastructure state" can resolve through the registered infrastructure/Infra
 State modal alias before preview/apply. Short aliases remain exact-only to
 avoid broad accidental matches.
+
+LLM/root failures are recorded with structured diagnostics on `llm_logs`,
+`llm.deferred` events, and `deferred_enrichment_queue[]`. Diagnostics classify
+policy denial, quota, rate limit, gateway timeout, root proxy unavailability,
+and upstream LLM errors. If a root proxy returns an HTML `504 Gateway
+Time-out`, AdaOS stores it as `root_llm_timeout` with
+`diagnostic.category="gateway_timeout"` and a bounded body excerpt.
 
 If the probe result matches the planned candidate intent, AdaOS:
 

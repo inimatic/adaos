@@ -751,6 +751,16 @@ Implementation-sensitive rules for generated skills:
 - emit notifications only as pointers or outcome summaries; the Pending Action
   remains the source of truth for response state and audit
 
+NLU Teacher specific runtime knobs:
+
+- `data.nlu_runtime.flags.nlu_teacher_enabled=false` disables LLM Teacher use
+  for the webspace without changing root policy; skills should not bypass this
+  gate with direct LLM calls for Teacher-style repairs
+- provider-specific examples such as `rasa_example`, `neuro_lite_example`, and
+  `neural_example` are only verifiable for engines active in
+  `data.nlu_runtime.flags`; prefer `descriptor_fix`, `entity_alias`, or
+  `development_task` when the relevant engine is disabled
+
 System-level producers include NLU Teacher confirmations, Builder review,
 pairing/admission, runtime operation recovery, capability elevation,
 destructive or external-IO actions, ambiguous routing, and guard/quarantine

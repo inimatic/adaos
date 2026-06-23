@@ -17,6 +17,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 _log = logging.getLogger("adaos.nlu.teacher.dispatch")
 
 _AUTO_DISPATCH_SIDE_EFFECTS = {"read_only", "ui_navigation"}
+_TEST_DISPATCH_SIDE_EFFECTS = {"read_only", "ui_navigation", "local_state_change"}
 _DISPATCH_TERMINAL_STATUSES = {"requested", "emitted", "succeeded", "failed", "blocked"}
 
 
@@ -84,14 +85,19 @@ def _slots_from_payload(payload: Mapping[str, Any], candidate: Mapping[str, Any]
     return {**dict(action_slots), **dict(preview_slots), **dict(payload_slots), **dict(probe_slots)}
 
 
-def _side_effect_policy(candidate: Mapping[str, Any]) -> tuple[bool, dict[str, Any]]:
+def _side_effect_policy(
+    candidate: Mapping[str, Any],
+    *,
+    allowed_side_effects: set[str] | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    allowed = allowed_side_effects or _AUTO_DISPATCH_SIDE_EFFECTS
     validation = candidate.get("validation") if isinstance(candidate.get("validation"), Mapping) else {}
     policy = validation.get("side_effect_policy") if isinstance(validation.get("side_effect_policy"), Mapping) else {}
     side_effect = str(policy.get("side_effect_class") or "").strip()
     approval = str(policy.get("approval") or "").strip()
     if validation and not validation.get("ok"):
         return False, {"reason": "validation_not_passed", "side_effect_class": side_effect, "approval": approval}
-    if side_effect in _AUTO_DISPATCH_SIDE_EFFECTS and approval in {"operator_apply_allowed", ""}:
+    if side_effect in allowed and approval in {"operator_apply_allowed", ""}:
         return True, {"side_effect_class": side_effect, "approval": approval or "operator_apply_allowed"}
     return False, {
         "reason": "side_effect_policy",
@@ -325,6 +331,117 @@ async def _on_understanding_acquired(evt: Any) -> None:
         bus_emit(get_ctx().bus, "nlp.intent.detected", detected_payload, source="nlu.teacher.dispatch")
     except Exception:
         _log.warning("failed to dispatch acquired teacher understanding webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
+
+
+@subscribe("nlp.teacher.candidate.test")
+async def _on_candidate_test(evt: Any) -> None:
+    payload = _payload(evt)
+    meta = coerce_dict(payload.get("_meta"))
+    webspace_id = _resolve_webspace_id(payload)
+    candidate_id = str(payload.get("candidate_id") or "").strip()
+    if not candidate_id:
+        return
+
+    try:
+        candidate = await _read_candidate(webspace_id, candidate_id)
+    except Exception:
+        _log.debug("failed to read teacher candidate for test dispatch webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
+        return
+    if not candidate:
+        return
+
+    allowed, policy = _side_effect_policy(candidate, allowed_side_effects=_TEST_DISPATCH_SIDE_EFFECTS)
+    now = time.time()
+    if not allowed:
+        patch = {
+            "dispatch_status": "blocked",
+            "dispatch": {
+                "mode": "test",
+                "status": "blocked",
+                "blocked_at": now,
+                "reason": policy.get("reason") or "policy",
+                "side_effect_policy": dict(policy),
+            },
+            "updated_at": now,
+        }
+        try:
+            await _patch_candidate_dispatch(webspace_id=webspace_id, candidate_id=candidate_id, patch=patch)
+            await append_event(
+                webspace_id,
+                make_event(
+                    webspace_id=webspace_id,
+                    request_id=candidate.get("request_id") if isinstance(candidate.get("request_id"), str) else None,
+                    request_text=candidate.get("text") if isinstance(candidate.get("text"), str) else "",
+                    kind="dispatch.test_blocked",
+                    title="Teacher test dispatch blocked",
+                    subtitle=str(policy.get("reason") or "policy"),
+                    raw={"candidate_id": candidate_id, "policy": dict(policy)},
+                    meta=meta,
+                ),
+            )
+        except Exception:
+            _log.debug("failed to record blocked teacher test dispatch webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
+        return
+
+    intent = str(payload.get("intent") or "").strip() or _candidate_intent(candidate)
+    if not intent:
+        return
+    request_id = str(candidate.get("request_id") or payload.get("request_id") or "").strip()
+    text = str(candidate.get("text") or payload.get("text") or "").strip()
+    dispatch_id = f"tdispatch.test.{int(now * 1000)}"
+    detected_payload = {
+        "intent": intent,
+        "confidence": 1.0,
+        "slots": _slots_from_payload(payload, candidate),
+        "text": text,
+        "webspace_id": webspace_id,
+        "request_id": f"{request_id or candidate_id}.teacher_test",
+        "via": "nlu_teacher.test",
+        "_meta": {
+            **dict(meta),
+            "webspace_id": webspace_id,
+            "route_id": str(meta.get("route_id") or meta.get("route") or "api").strip() or "api",
+            "nlu_teacher_candidate_id": candidate_id,
+            "nlu_teacher_dispatch_id": dispatch_id,
+            "nlu_teacher_dispatch": True,
+            "nlu_teacher_test": True,
+            "nlu_teacher_original_request_id": request_id,
+        },
+    }
+    patch = {
+        "dispatch_status": "requested",
+        "dispatched_at": now,
+        "dispatch": {
+            "id": dispatch_id,
+            "mode": "test",
+            "status": "requested",
+            "requested_at": now,
+            "path": "nlp.intent.detected",
+            "intent": intent,
+            "slots": dict(detected_payload["slots"]),
+            "side_effect_policy": dict(policy),
+            "request_id": detected_payload["request_id"],
+        },
+        "updated_at": now,
+    }
+    try:
+        await _patch_candidate_dispatch(webspace_id=webspace_id, candidate_id=candidate_id, patch=patch)
+        await append_event(
+            webspace_id,
+            make_event(
+                webspace_id=webspace_id,
+                request_id=request_id,
+                request_text=text,
+                kind="dispatch.test_requested",
+                title="Teacher test dispatch requested",
+                subtitle=intent,
+                raw={"candidate_id": candidate_id, "detected": detected_payload, "dispatch": patch["dispatch"]},
+                meta=meta,
+            ),
+        )
+        bus_emit(get_ctx().bus, "nlp.intent.detected", detected_payload, source="nlu.teacher.dispatch")
+    except Exception:
+        _log.warning("failed to test-dispatch teacher candidate webspace=%s candidate=%s", webspace_id, candidate_id, exc_info=True)
 
 
 @subscribe("nlu.action.dispatched")

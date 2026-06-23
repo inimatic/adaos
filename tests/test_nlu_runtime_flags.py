@@ -10,6 +10,7 @@ def test_normalize_flags_accepts_stage_aliases() -> None:
             "neuro_lite": "on",
             "neure": 0,
             "rasa": "on",
+            "nlu_teacher": "off",
         }
     )
 
@@ -17,6 +18,7 @@ def test_normalize_flags_accepts_stage_aliases() -> None:
     assert flags["neuro_lite_enabled"] is True
     assert flags["neural_enabled"] is False
     assert flags["rasa_enabled"] is True
+    assert flags["nlu_teacher_enabled"] is False
 
 
 def test_normalize_flag_updates_keeps_partial_updates_partial() -> None:

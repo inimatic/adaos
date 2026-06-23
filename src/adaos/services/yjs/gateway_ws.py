@@ -6252,6 +6252,19 @@ async def process_events_command(
         await _ack()
         return None
 
+    if kind == "nlp.teacher.candidate.test":
+        _publish_bus(
+            "nlp.teacher.candidate.test",
+            {
+                "candidate_id": payload.get("candidate_id"),
+                "target": payload.get("target"),
+                "webspace_id": payload.get("webspace_id"),
+                "_meta": payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {},
+            },
+        )
+        await _ack()
+        return None
+
     if kind == "nlp.teacher.revision.apply":
         _publish_bus(
             "nlp.teacher.revision.apply",

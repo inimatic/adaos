@@ -243,6 +243,54 @@ async def test_teacher_bridge_allows_low_confidence_as_nlu_gap(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_teacher_bridge_uses_last_active_ladder_stage_for_display_reason(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import teacher_bridge
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    ctx = get_ctx()
+    webspace_id = "ws-test-teacher-ladder-status"
+    monkeypatch.setattr(teacher_bridge, "_ENABLED", True)
+
+    requests: list[dict] = []
+    ctx.bus.subscribe("nlp.teacher.request", lambda ev: requests.append(dict(getattr(ev, "payload", None) or {})))
+
+    await teacher_bridge._on_not_obtained(
+        {
+            "text": "open teacher app",
+            "webspace_id": webspace_id,
+            "request_id": "req.ladder.status",
+            "via": "rasa",
+            "reason": "rasa_low_confidence",
+            "_meta": {
+                "webspace_id": webspace_id,
+                "route_id": "voice_chat",
+                "nlu_pipeline": {
+                    "active_stages": {
+                        "regex": True,
+                        "neuro_lite": True,
+                        "neural": True,
+                        "rasa": False,
+                    }
+                },
+            },
+        }
+    )
+
+    assert requests
+    assert requests[-1]["request"]["reason"] == "neural_not_obtained"
+    assert requests[-1]["request"]["raw_reason"] == "rasa_low_confidence"
+    assert requests[-1]["request"]["via"] == "neural"
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        teacher = ydoc.get_map("data").get("nlu_teacher") or {}
+        items = list((teacher or {}).get("items") or [])
+
+    assert items[-1]["effective_status"]["last_active_stage"] == "neural"
+    assert items[-1]["classification"]["reason"] == "neural_not_obtained"
+
+
+@pytest.mark.anyio
 async def test_teacher_bridge_builds_ui_projection_from_primary_miss(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_bridge

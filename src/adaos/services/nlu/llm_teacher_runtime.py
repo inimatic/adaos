@@ -136,6 +136,7 @@ _READ_ONLY_INTENTS = {
 _ALLOWED_TRAINING_STRATEGIES = {
     "regex",
     "rasa_example",
+    "neuro_lite_example",
     "neural_example",
     "entity_alias",
     "descriptor_fix",
@@ -150,6 +151,10 @@ _TRAINING_STRATEGY_ALIASES = {
     "rasa": "rasa_example",
     "rasa_examples": "rasa_example",
     "rasa_training_example": "rasa_example",
+    "neuro_lite": "neuro_lite_example",
+    "neuro_lite_examples": "neuro_lite_example",
+    "neuro_lite_training_example": "neuro_lite_example",
+    "neurolite": "neuro_lite_example",
     "neural": "neural_example",
     "neural_examples": "neural_example",
     "neural_training_example": "neural_example",
@@ -169,9 +174,10 @@ _TRAINING_STRATEGY_ALIASES = {
     "clarify": "clarification",
     "ask_user": "clarification",
 }
-_EXAMPLE_TRAINING_STRATEGIES = {"rasa_example", "neural_example"}
+_EXAMPLE_TRAINING_STRATEGIES = {"rasa_example", "neuro_lite_example", "neural_example"}
 _NON_REGEX_TRAINING_STRATEGIES = {
     "rasa_example",
+    "neuro_lite_example",
     "neural_example",
     "entity_alias",
     "descriptor_fix",
@@ -2115,6 +2121,7 @@ def _compact_context_for_llm_prompt(
         "host_actions_version",
         "request_locale",
         "preferred_locales",
+        "runtime_nlu",
     ):
         if key in context and context.get(key) is not None:
             out[key] = _compact_prompt_value(context.get(key), list_limit=8)
@@ -2886,7 +2893,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         '  \"target\": {\"type\": \"skill\"|\"scenario\", \"id\": string} | null,\n'
         '  \"examples\": string[],\n'
         '  \"slots\": object,  // e.g. {\"city\": {\"type\": \"string\"}}\n'
-        '  \"training_strategy\": \"regex\" | \"rasa_example\" | \"neural_example\" | \"entity_alias\" | \"descriptor_fix\" | \"development_task\" | \"clarification\" | \"ignore\" | object | null,\n'
+        '  \"training_strategy\": \"regex\" | \"rasa_example\" | \"neuro_lite_example\" | \"neural_example\" | \"entity_alias\" | \"descriptor_fix\" | \"development_task\" | \"clarification\" | \"ignore\" | object | null,\n'
         '  \"action_candidate\": object|null,\n'
         '  \"need_clarification\": boolean|null,\n'
         '  \"clarification_question\": string|null,\n'
@@ -2911,6 +2918,7 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- If the UI or skill appears to have the requested internal tool but no voice_capability/voice_affordance describes it, use training_strategy=descriptor_fix with owner evidence instead of inventing an overfitted regex.\n"
         "- If developer_hints describe aliases, primary_actions, slot_schemas, entities, or owner_hints for a skill/scenario, treat them as curated authoring guidance and prefer them over guessing from names alone.\n"
         "- context.root_mcp.desktop_registry_lookup contains canonical modal_id/app_id/scenario_id values and labels/aliases. Use canonical slots for intended actions; display labels are only match evidence.\n"
+        "- context.runtime_nlu.active_stages lists the NLU engines currently enabled by the operator. Do not choose a provider-specific example strategy for an inactive engine as a verified fix.\n"
         "- context.root_mcp.nlu_authoring_phrase_check may contain engine_results for regex, neuro_lite, neural, and Rasa. Treat per-engine miss/low-confidence/abstain as evidence, not as a global failure. Choose the training_strategy that fits the phrase and the engines that can realistically learn it.\n"
         "- context.root_mcp.nlu_training_targets and nlu_templates are the governed placement/inventory surfaces; choose a target that exists there and avoid duplicate examples/regex patterns.\n"
         "- SDK surfaces in context.root_mcp are descriptive only. The LLM must propose AdaOS actions/templates, not direct SDK calls.\n"
@@ -2922,10 +2930,11 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- Use desktop.switch_scenario/open_scenario only when the user explicitly asks to switch/open a scenario (e.g. says scenario/сценарий/переключи сценарий). Generic 'покажи X' for a desktop app/modal is modal opening, not scenario switching.\n"
         "- If this is a fallback after NLU missed and an existing intent/action is the right match, prefer propose_regex_rule so AdaOS can replay the phrase through regex.dynamic.\n"
         "- Use revise_nlu only when a compact safe regex is not enough or the best next step is curated dataset examples for neural/Rasa.\n"
-        "- Choose training_strategy deliberately. Use regex only for stable command phrases and lookup-backed slots. For broad semantic wording, repeated corrections, or ambiguity, prefer rasa_example, neural_example, entity_alias, descriptor_fix, development_task, or clarification.\n"
+        "- Choose training_strategy deliberately. Use regex only for stable command phrases and lookup-backed slots. For broad semantic wording, repeated corrections, or ambiguity, prefer rasa_example, neuro_lite_example, neural_example, entity_alias, descriptor_fix, development_task, or clarification according to active engines.\n"
         "- If regex is not the right strategy, set why_not_regex with a concise reason.\n"
         "- If training_strategy is not regex, do not rely on regex_rule for the proposed improvement. AdaOS will store a non-regex strategy candidate and will not apply the regex.\n"
         "- Use rasa_example for curated examples that should improve intent classification without creating a brittle command regex.\n"
+        "- Use neuro_lite_example for lightweight semantic examples when neuro_lite is active and a deterministic regex would be too brittle.\n"
         "- Use neural_example for broad semantic phrasing that belongs in embedding/model feedback rather than deterministic templates.\n"
         "- Use entity_alias when the main issue is that a user-facing name, STT variant, or localized alias should resolve to a known canonical entity.\n"
         "- Use descriptor_fix when the action appears possible but the owning skill/scenario lacks sufficient llm_hints/nlu_hints, slot schema, examples, or action description.\n"
@@ -3088,6 +3097,80 @@ def _llm_deferred_error(exc: Exception) -> str:
     return f"{code}: {text}" if code and code not in text else text
 
 
+def _llm_error_payload_excerpt(payload: Any, *, limit: int = 1200) -> str:
+    if payload in (None, "", {}, []):
+        return ""
+    if isinstance(payload, str):
+        return str(_truncate(payload, limit) or "")
+    try:
+        return str(_truncate(json.dumps(payload, ensure_ascii=False, default=str), limit) or "")
+    except Exception:
+        return str(_truncate(str(payload), limit) or "")
+
+
+def _llm_diagnostic_category(*, reason: str, status_code: int, code: str, payload: Any, text: str) -> str:
+    lowered = text.lower()
+    payload_text = _llm_error_payload_excerpt(payload, limit=300).lower()
+    if reason == "root_llm_policy_denied":
+        return "policy_denied"
+    if reason == "root_llm_quota_exceeded":
+        return "quota"
+    if reason == "root_llm_rate_limited":
+        return "rate_limit"
+    if status_code == 504 or code in _ROOT_LLM_TIMEOUT_CODES or "504 gateway time-out" in payload_text:
+        return "gateway_timeout"
+    if reason == "root_llm_proxy_unavailable":
+        return "root_proxy_unavailable"
+    if reason == "root_llm_upstream_error":
+        return "llm_upstream_error"
+    if "timeout" in lowered or "timed out" in lowered:
+        return "timeout"
+    return "unavailable"
+
+
+def _llm_error_diagnostic(exc: Exception) -> dict[str, Any]:
+    reason = _llm_deferred_reason(exc)
+    code = _root_http_error_code(exc) if isinstance(exc, RootHttpError) else ""
+    status_code = int(getattr(exc, "status_code", 0) or 0) if isinstance(exc, RootHttpError) else 0
+    payload = getattr(exc, "payload", None) if isinstance(exc, RootHttpError) else None
+    text = str(exc)
+    body_excerpt = _llm_error_payload_excerpt(payload if payload not in (None, "", {}, []) else text)
+    diagnostic: dict[str, Any] = {
+        "category": _llm_diagnostic_category(
+            reason=reason,
+            status_code=status_code,
+            code=code,
+            payload=payload,
+            text=text,
+        ),
+        "reason": reason,
+        "retryable": _llm_deferred_reason_retryable(reason),
+        "message": str(_truncate(text, 500) or ""),
+    }
+    if status_code:
+        diagnostic["status_code"] = status_code
+    if code:
+        diagnostic["error_code"] = code
+    if body_excerpt:
+        diagnostic["body_excerpt"] = body_excerpt
+    if isinstance(payload, Mapping):
+        detail = payload.get("detail")
+        upstream = payload.get("upstream")
+        proxy = payload.get("proxy")
+        if isinstance(detail, Mapping):
+            diagnostic["detail"] = dict(detail)
+        if isinstance(upstream, Mapping):
+            diagnostic["upstream"] = dict(upstream)
+        if isinstance(proxy, Mapping):
+            diagnostic["proxy"] = dict(proxy)
+        content_type = payload.get("content_type") or (upstream.get("content_type") if isinstance(upstream, Mapping) else None)
+        if isinstance(content_type, str) and content_type.strip():
+            diagnostic["content_type"] = content_type.strip()
+    elif isinstance(payload, str) and "<html" in payload.lower():
+        diagnostic["content_type"] = "text/html"
+    return {key: value for key, value in diagnostic.items() if value not in (None, "", {}, [])}
+
+
 _ROOT_LLM_RETRYABLE_REASONS = {
     "root_llm_proxy_unavailable",
     "root_llm_rate_limited",
@@ -3115,6 +3198,7 @@ async def _record_llm_retrying(
     text: str,
     reason: str,
     error: str | None,
+    diagnostic: Mapping[str, Any] | None = None,
     log_id: str | None,
     attempt: int,
     max_attempts: int,
@@ -3126,6 +3210,7 @@ async def _record_llm_retrying(
         "request_id": request_id,
         "reason": reason,
         "error": error,
+        "diagnostic": dict(diagnostic or {}) if diagnostic else None,
         "log_id": log_id,
         "attempt": int(attempt),
         "max_attempts": int(max_attempts),
@@ -3189,6 +3274,7 @@ async def _llm_call_with_retries(
         except Exception as exc:
             reason = _llm_deferred_reason(exc)
             error = _llm_deferred_error(exc)
+            diagnostic = _llm_error_diagnostic(exc)
             retryable = _llm_deferred_reason_retryable(reason)
             will_retry = retryable and attempt < max_attempts
             next_delay_s = _llm_retry_delay_s(attempt) if will_retry else 0.0
@@ -3198,6 +3284,7 @@ async def _llm_call_with_retries(
                     "ts": time.time(),
                     "reason": reason,
                     "error": error,
+                    "diagnostic": diagnostic,
                     "retryable": retryable,
                     "will_retry": will_retry,
                     "next_delay_s": next_delay_s,
@@ -3227,6 +3314,7 @@ async def _llm_call_with_retries(
                     text=request_text,
                     reason=reason,
                     error=error,
+                    diagnostic=diagnostic,
                     log_id=log_id,
                     attempt=attempt,
                     max_attempts=max_attempts,
@@ -3536,6 +3624,7 @@ async def _record_deferred_enrichment(
     text: str,
     reason: str,
     error: str | None,
+    diagnostic: Mapping[str, Any] | None = None,
     log_id: str | None,
     meta: Mapping[str, Any],
 ) -> None:
@@ -3544,6 +3633,7 @@ async def _record_deferred_enrichment(
         "request_id": request_id,
         "reason": reason,
         "error": error,
+        "diagnostic": dict(diagnostic or {}) if diagnostic else None,
         "log_id": log_id,
         "_meta": dict(meta),
     }
@@ -3558,6 +3648,7 @@ async def _record_deferred_enrichment(
                     reason=reason,
                     error=error,
                     log_id=log_id,
+                    diagnostic=diagnostic,
                     meta=meta,
                 )
                 with ydoc.begin_transaction() as txn:
@@ -3670,7 +3761,62 @@ async def _handle_teacher_request(evt: Any) -> None:
         text = text.strip()
         request_id = request_id.strip()
 
+        runtime_flags: dict[str, bool] = {}
+        try:
+            from adaos.services.nlu.runtime_flags import get_runtime_flags
+
+            runtime_flags = await get_runtime_flags(webspace_id)
+        except Exception:
+            _log.debug("failed to read NLU runtime flags webspace=%s", webspace_id, exc_info=True)
+            runtime_flags = {}
+
         if not _teacher_enabled(ctx):
+            return
+        if runtime_flags.get("nlu_teacher_enabled") is False:
+            try:
+                await _append_llm_log(
+                    webspace_id,
+                    {
+                        "id": f"llm.skip.{int(time.time() * 1000)}",
+                        "ts": time.time(),
+                        "request_id": request_id,
+                        "webspace_id": webspace_id,
+                        "model": _MODEL,
+                        "status": "skipped",
+                        "skip_reason": "nlu_teacher_runtime_disabled",
+                        "runtime_flags": dict(runtime_flags),
+                    },
+                )
+            except Exception:
+                _log.debug("failed to append runtime-disabled llm skip log webspace=%s", webspace_id, exc_info=True)
+            try:
+                await append_event(
+                    webspace_id,
+                    make_event(
+                        webspace_id=webspace_id,
+                        request_id=request_id,
+                        request_text=text,
+                        kind="llm.skipped",
+                        title="LLM Teacher skipped",
+                        subtitle="nlu_teacher_runtime_disabled",
+                        raw={"reason": "nlu_teacher_runtime_disabled", "runtime_flags": dict(runtime_flags)},
+                        meta=req_meta,
+                    ),
+                )
+            except Exception:
+                _log.debug("failed to append teacher event (llm.skipped runtime flag) webspace=%s", webspace_id, exc_info=True)
+            bus_emit(
+                ctx.bus,
+                "nlp.teacher.llm.skipped",
+                {
+                    "webspace_id": webspace_id,
+                    "request_id": request_id,
+                    "reason": "nlu_teacher_runtime_disabled",
+                    "runtime_flags": dict(runtime_flags),
+                    "_meta": dict(req_meta),
+                },
+                source="nlu.teacher.llm",
+            )
             return
         if not _llm_teacher_enabled(ctx):
             try:
@@ -3814,6 +3960,21 @@ async def _handle_teacher_request(evt: Any) -> None:
             {str(r.get("target")) for r in routes if r.get("action") == "callHost" and isinstance(r.get("target"), str)}
         )[:150]
         context["skills_manifest"] = skill_manifests
+        if runtime_flags:
+            context["runtime_nlu"] = {
+                "flags": dict(runtime_flags),
+                "active_stages": [
+                    stage
+                    for stage, flag_key in (
+                        ("regex", "regex_enabled"),
+                        ("neuro_lite", "neuro_lite_enabled"),
+                        ("neural", "neural_enabled"),
+                        ("rasa", "rasa_enabled"),
+                    )
+                    if runtime_flags.get(flag_key) is not False
+                ],
+                "nlu_teacher_enabled": runtime_flags.get("nlu_teacher_enabled") is not False,
+            }
         try:
             from adaos.services.nlu.system_actions_catalog import (
                 SYSTEM_ACTION_CATALOG_VERSION,
@@ -3977,6 +4138,7 @@ async def _handle_teacher_request(evt: Any) -> None:
             _log.warning("llm teacher call failed: %s", exc)
             deferred_reason = _llm_deferred_reason(exc)
             deferred_error = _llm_deferred_error(exc)
+            diagnostic = _llm_error_diagnostic(exc)
             try:
                 await _patch_llm_log(
                     webspace_id,
@@ -3984,6 +4146,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                     patch={
                         "status": "error",
                         "error": deferred_error,
+                        "diagnostic": diagnostic,
                         "duration_s": max(0.0, time.time() - started_at),
                     },
                 )
@@ -3995,6 +4158,7 @@ async def _handle_teacher_request(evt: Any) -> None:
                 text=text,
                 reason=deferred_reason,
                 error=deferred_error,
+                diagnostic=diagnostic,
                 log_id=log_id,
                 meta=req_meta,
             )
