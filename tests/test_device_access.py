@@ -126,7 +126,7 @@ def test_sdk_device_access_resolves_old_pair_code_from_admission_history(monkeyp
     assert pair_code == "SNX68P2A"
 
 
-def test_command_profile_for_observed_only_member_disables_policy_commands(monkeypatch) -> None:
+def test_command_profile_for_observed_only_member_allows_detach_and_deny(monkeypatch) -> None:
     device = {
         "ref": "member:member-2",
         "kind": "member",
@@ -154,8 +154,8 @@ def test_command_profile_for_observed_only_member_disables_policy_commands(monke
         "reason": "device_policy_missing",
         "presets": ["permanent", "1h", "1d", "7d", "30d"],
     }
-    assert profile["detach"] == {"enabled": False, "reason": "device_policy_missing"}
-    assert profile["deny"] == {"enabled": False, "reason": "device_policy_missing"}
+    assert profile["detach"] == {"enabled": True}
+    assert profile["deny"] == {"enabled": True}
     assert profile["open_apps"] == {"enabled": True, "node_id": "member-2"}
     assert profile["open_marketplace"] == {"enabled": True, "node_id": "member-2"}
 
@@ -308,12 +308,10 @@ def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -
         {"id": "7d", "label": "7d", "enabled": False, "reason": "device_policy_missing"},
         {"id": "30d", "label": "30d", "enabled": False, "reason": "device_policy_missing"},
     ]
-    assert settings["detach"]["enabled"] is False
-    assert settings["detach"]["reason"] == "device_policy_missing"
+    assert settings["detach"]["enabled"] is True
     assert settings["detach"]["target"] == "browsers_skill.detach_device"
     assert settings["detach"]["params"] == {"device_ref": "member:member-2"}
-    assert settings["deny"]["enabled"] is False
-    assert settings["deny"]["reason"] == "device_policy_missing"
+    assert settings["deny"]["enabled"] is True
     assert settings["deny"]["target"] == "browsers_skill.deny_device"
     assert settings["deny"]["params"] == {"device_ref": "member:member-2"}
     assert settings["reconcile"]["state"] == "attention"

@@ -659,7 +659,7 @@ def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkl
     )
     monkeypatch.setattr(
         "adaos.services.device_inventory.list_devices",
-        lambda kind=None: [
+        lambda kind=None, include_detached=False: [
             {
                 "ref": "member:member-2",
                 "kind": "member",
@@ -705,6 +705,71 @@ def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkl
     assert member["runtime_projection_freshness"]["state"] == "fresh"
     assert member["snapshot_update_state"] == "succeeded"
     assert member["snapshot_runtime_version"] == "0.2.0"
+
+
+def test_hub_member_connection_state_ignores_detached_linkless_members(monkeypatch) -> None:
+    class _FakeDirectory:
+        def list_known_nodes(self):
+            return [
+                {
+                    "node_id": "member-2",
+                    "subnet_id": "sn_1",
+                    "roles": ["member"],
+                    "hostname": "old-member",
+                    "last_seen": 1_700_000_050.0,
+                    "online": False,
+                    "runtime_projection": {
+                        "captured_at": 1_700_000_040.0,
+                        "node_names": ["Old member"],
+                        "ready": False,
+                    },
+                }
+            ]
+
+    monkeypatch.setattr(
+        "adaos.services.subnet.link_manager.hub_link_manager_snapshot",
+        lambda: {"members": [], "member_total": 0, "connected_total": 0, "updated_at": 1_700_000_060.0},
+    )
+    monkeypatch.setattr(
+        "adaos.services.registry.subnet_directory.get_directory",
+        lambda: _FakeDirectory(),
+    )
+    monkeypatch.setattr(
+        "adaos.services.device_inventory.list_devices",
+        lambda kind=None, include_detached=False: [
+            {
+                "ref": "member:member-2",
+                "kind": "member",
+                "identity": {"node_id": "member-2"},
+                "policy": {
+                    "present": True,
+                    "managed_state": "detached",
+                    "admission_policy": "detached",
+                    "effective_name": "Old member",
+                },
+                "runtime": {"connected_to_subnet": False},
+            }
+        ]
+        if include_detached
+        else [],
+    )
+    monkeypatch.setattr(
+        "adaos.services.reliability.time.time",
+        lambda: 1_700_000_060.0,
+    )
+
+    snapshot = hub_member_connection_state_snapshot(
+        role="hub",
+        route_mode="hub",
+        connected_to_hub=None,
+        node_id="hub-1",
+        node_names=["Main Hub"],
+    )
+
+    assert snapshot["assessment"] == {"state": "idle", "reason": "no_members_connected"}
+    assert snapshot["known_total"] == 0
+    assert snapshot["linkless_total"] == 0
+    assert snapshot["known_members"] == []
 
 
 def test_assess_transport_diagnostics_marks_unstable_on_reader_termination_and_tag_change() -> None:

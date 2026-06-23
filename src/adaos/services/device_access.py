@@ -353,22 +353,10 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
     lifetime_enabled = policy_present
     lifetime_reason = None if lifetime_enabled else "device_policy_missing"
     detached_or_denied = managed_state in {"detached", "denied", "revoked"} or revoked
-    detach_enabled = policy_present and not detached_or_denied
-    detach_reason = (
-        None
-        if detach_enabled
-        else "already_detached"
-        if detached_or_denied and policy_present
-        else "device_policy_missing"
-    )
-    deny_enabled = policy_present and managed_state not in {"denied", "revoked"}
-    deny_reason = (
-        None
-        if deny_enabled
-        else "already_denied"
-        if policy_present
-        else "device_policy_missing"
-    )
+    detach_enabled = not detached_or_denied
+    detach_reason = None if detach_enabled else "already_detached"
+    deny_enabled = managed_state not in {"denied", "revoked"}
+    deny_reason = None if deny_enabled else "already_denied"
     apps_enabled = kind == "member" and bool(node_id) and managed_state not in {"detached", "denied", "revoked"}
     apps_reason = None if apps_enabled else "browser_has_no_node_context" if kind == "browser" else "device_unavailable"
 

@@ -272,6 +272,36 @@ def test_device_inventory_detach_unregisters_live_member(monkeypatch) -> None:
     assert calls == [("is_connected", "member-1"), ("unregister", "member-1")]
 
 
+def test_device_inventory_detach_creates_tombstone_for_observed_only_member(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+    _patch_sources(
+        monkeypatch,
+        directory_nodes=[
+            {
+                "node_id": "member-2",
+                "hostname": "old-node",
+                "online": False,
+                "last_seen": 880.0,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        device_inventory._access_links,
+        "detach_link",
+        lambda kind, link_id: calls.append((kind, link_id))
+        or {"kind": kind, "id": link_id, "admission_policy": "detached"},
+    )
+    monkeypatch.setattr(device_inventory, "_get_hub_link_manager", lambda: None)
+
+    result = device_inventory.DeviceInventoryService().detach_device("member:member-2")
+
+    assert result["ok"] is True
+    assert result["entry"] == {"kind": "member", "id": "member-2", "admission_policy": "detached"}
+    assert result["runtime_update"] == {"attempted": False, "applied": False}
+    assert calls == [("member", "member-2")]
+
+
 def test_device_inventory_deny_marks_member_as_denied(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
     _patch_sources(

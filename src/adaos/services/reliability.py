@@ -3511,7 +3511,12 @@ def _member_inventory_overlay(item: dict[str, Any] | None) -> dict[str, Any]:
 def _member_inventory_is_detached(item: dict[str, Any] | None) -> bool:
     payload = item if isinstance(item, dict) else {}
     policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
-    return bool(policy.get("revoked")) or str(policy.get("managed_state") or "").strip().lower() == "revoked"
+    managed_state = str(policy.get("managed_state") or "").strip().lower()
+    admission_policy = str(policy.get("admission_policy") or "").strip().lower()
+    return bool(policy.get("revoked")) or managed_state in {"detached", "denied", "revoked"} or admission_policy in {
+        "detached",
+        "deny",
+    }
 
 
 def _connection_local_node_display(*, role: str, node_id: str, node_names: list[str]) -> dict[str, Any]:

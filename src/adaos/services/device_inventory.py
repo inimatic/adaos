@@ -568,8 +568,6 @@ class DeviceInventoryService:
         if error is not None:
             return error
         assert device is not None
-        if not self._policy_present(device):
-            return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
         policy = _mapping(device.get("policy"))
         if _text(policy.get("managed_state")) in {"detached", "denied", "revoked"}:
             return {"ok": False, "error": "already_detached", "device_ref": _text(device_ref)}
@@ -602,8 +600,6 @@ class DeviceInventoryService:
         if error is not None:
             return error
         assert device is not None
-        if not self._policy_present(device):
-            return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
         policy = _mapping(device.get("policy"))
         if _text(policy.get("managed_state")) in {"denied", "revoked"}:
             return {"ok": False, "error": "already_denied", "device_ref": _text(device_ref)}
