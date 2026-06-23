@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import importlib.metadata
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -62,12 +63,51 @@ def _installed_distribution_version() -> str | None:
         return None
 
 
+def _read_json_object(path: Path) -> dict | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _active_slot_manifest() -> dict | None:
+    candidates: list[Path] = []
+    slot_dir = str(os.getenv("ADAOS_ACTIVE_CORE_SLOT_DIR") or "").strip()
+    if slot_dir:
+        candidates.append(Path(slot_dir).expanduser() / "manifest.json")
+    slot_repo = str(os.getenv("ADAOS_SLOT_REPO_ROOT") or "").strip()
+    if slot_repo:
+        repo_path = Path(slot_repo).expanduser()
+        if repo_path.name == "repo":
+            candidates.append(repo_path.parent / "manifest.json")
+    base_dir = str(os.getenv("ADAOS_BASE_DIR") or "").strip()
+    active_slot = str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or "").strip().upper()
+    if base_dir and active_slot in {"A", "B"}:
+        candidates.append(Path(base_dir).expanduser() / "state" / "core_slots" / "slots" / active_slot / "manifest.json")
+
+    for candidate in candidates:
+        payload = _read_json_object(candidate)
+        if payload:
+            return payload
+    return None
+
+
 def base_version(repo_root: Path | str | None = None) -> str:
     explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
     if explicit:
         return explicit
     root = Path(repo_root).expanduser().resolve() if repo_root is not None else _repo_root()
-    return _pyproject_version(root) or _installed_distribution_version() or _DEFAULT_BASE_VERSION
+    pyproject_version = _pyproject_version(root)
+    if pyproject_version:
+        return pyproject_version
+    if repo_root is None:
+        manifest = _active_slot_manifest()
+        if manifest:
+            manifest_version = str(manifest.get("base_version") or "").strip()
+            if manifest_version:
+                return manifest_version
+    return _installed_distribution_version() or _DEFAULT_BASE_VERSION
 
 
 def _compute_version() -> str:
@@ -84,6 +124,12 @@ def _compute_version() -> str:
             suffix += f".{short_sha}"
         return f"{base}{suffix}"
 
+    manifest = _active_slot_manifest()
+    if manifest:
+        manifest_version = str(manifest.get("build_version") or "").strip()
+        if manifest_version:
+            return manifest_version
+
     return base
 
 
@@ -95,6 +141,12 @@ def _compute_build_date() -> str:
     commit_ts = _git("show", "-s", "--format=%cI", "HEAD")
     if commit_ts:
         return commit_ts
+
+    manifest = _active_slot_manifest()
+    if manifest:
+        manifest_date = str(manifest.get("build_date") or "").strip()
+        if manifest_date:
+            return manifest_date
 
     return datetime.now(tz=timezone.utc).isoformat()
 

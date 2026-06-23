@@ -1452,6 +1452,6 @@ _SUPERVISOR: ServiceSkillSupervisor | None = None
 
 def get_service_supervisor() -> ServiceSkillSupervisor:
     global _SUPERVISOR
-    if _SUPERVISOR is None:
+    if _SUPERVISOR is None or getattr(_SUPERVISOR, "_shutdown_requested", False):
         _SUPERVISOR = ServiceSkillSupervisor()
     return _SUPERVISOR

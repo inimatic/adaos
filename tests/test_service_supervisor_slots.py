@@ -164,6 +164,20 @@ def test_service_supervisor_shutdown_prevents_late_service_restart():
     assert supervisor._health_task is None
 
 
+def test_get_service_supervisor_replaces_shutdown_singleton(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    monkeypatch.setattr(mod, "_SUPERVISOR", supervisor)
+
+    asyncio.run(supervisor.shutdown())
+
+    replacement = mod.get_service_supervisor()
+
+    assert replacement is not supervisor
+    assert replacement._shutdown_requested is False
+
+
 def test_service_supervisor_defaults_dependency_service_to_bucket_venv(tmp_path):
     from adaos.services.skill import service_supervisor as mod
 
