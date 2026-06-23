@@ -2202,14 +2202,15 @@ class RouterService:
             )
             try:
                 # Ensure SDK io.out helpers (chat_append/say) include routing meta.
-                payload: dict[str, Any] = {"text": text, "_meta": meta}
-                webspace_id = str(meta.get("webspace_id") or "").strip()
+                route_meta = dict(meta)
+                payload: dict[str, Any] = {"text": text, "_meta": route_meta}
+                webspace_id = str(route_meta.get("webspace_id") or "").strip()
                 if webspace_id:
                     payload["webspace_id"] = webspace_id
-                target_node_id = str(meta.get("target_node_id") or "").strip()
+                target_node_id = str(route_meta.get("target_node_id") or "").strip()
                 if target_node_id:
                     payload["target_node_id"] = target_node_id
-                with io_meta(meta):
+                with io_meta(route_meta):
                     return mgr.run_tool("voice_chat_skill", "handle_text", payload, bypass_yjs_guard=True)
             finally:
                 if prev is None:

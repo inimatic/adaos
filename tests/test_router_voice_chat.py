@@ -93,35 +93,37 @@ async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_VOICE_CHAT_INTENT_DEMO", raising=False)
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    def _run_voice_fallback(_skill, _tool, payload, **_opts):
+        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+        meta["suppress_teacher_bridge"] = True
+        calls.append((payload["text"], dict(meta)))
+        return {"ok": True, "reply": "ok"}
+
     monkeypatch.setattr(
         router_service_module,
         "SkillManager",
-        lambda **_kwargs: SimpleNamespace(
-            run_tool=lambda _skill, _tool, payload, **_opts: calls.append(
-                (payload["text"], dict(payload.get("_meta") or {}))
-            )
-            or {"ok": True, "reply": "ok"}
-        ),
+        lambda **_kwargs: SimpleNamespace(run_tool=_run_voice_fallback),
     )
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
 
-    bus.publish(
-        Event(
-            type="nlp.intent.not_obtained",
-            source="test",
-            ts=1.0,
-            payload={
-                "text": "какая погода в москве",
-                "reason": "no_intent",
-                "_meta": {"route_id": "voice_chat", "webspace_id": "default"},
-            },
-        )
-    )
+    event_payload = {
+        "text": "какая погода в москве",
+        "reason": "no_intent",
+        "_meta": {"route_id": "voice_chat", "webspace_id": "default"},
+    }
+    bus.publish(Event(type="nlp.intent.not_obtained", source="test", ts=1.0, payload=event_payload))
 
     await bus.wait_for_idle(timeout=1.0)
-    assert calls == [("какая погода в москве", {"route_id": "voice_chat", "webspace_id": "default"})]
+    assert calls == [
+        (
+            "какая погода в москве",
+            {"route_id": "voice_chat", "webspace_id": "default", "suppress_teacher_bridge": True},
+        )
+    ]
+    assert "suppress_teacher_bridge" not in event_payload["_meta"]
 
 
 async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(monkeypatch) -> None:
