@@ -724,12 +724,17 @@ as a chat-local "yes/no" prompt.
 
 Implementation-sensitive rules for generated skills:
 
+- use `adaos.sdk.data.publish_pending_action` and
+  `respond_pending_action`; bus-only integrations should publish command events
+  to `pending_actions.publish.request` or `pending_actions.respond.request`
 - identify the publisher and response handler with `node_id` plus skill or
   system actor identity; `skill_id` alone is not unique
 - omit `ttl_s` or pass `None` when the action should not expire
   automatically; do not pass `0`, `""`, or `"0"` for "no TTL"
 - publish stable action ids such as `approve`, `refuse`, `test`, and
   `postpone`; labels are presentation only
+- set `allowed_actions[].terminal=false` for dry-run actions such as `test`,
+  `preview`, or `postpone`; terminal responses close the Pending Action
 - provide `label_i18n`, `title_i18n`, or `summary_i18n` plus fallback text for
   system-authored strings
 - keep human-confirmed names and device labels as params or display values, not

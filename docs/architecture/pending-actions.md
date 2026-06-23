@@ -1,6 +1,6 @@
 # Pending Actions
 
-Status: target architecture for durable human-in-the-loop reactions.
+Status: target architecture with an initial core service and SDK helper slice.
 
 Pending Actions are the AdaOS core mechanism for asking a human to choose an
 action later, possibly through a different channel than the one that created the
@@ -19,6 +19,25 @@ other governed workflows.
 The core owns durability, idempotency, expiration, channel normalization, and
 response routing. Skills and scenarios use the SDK to publish requests and to
 handle responses.
+
+## Implementation Status
+
+Current implemented slice:
+
+- [x] Core service stores the registry under `data.pending_actions`.
+- [x] Pending Action records are node-aware for producer identity and explicit
+  response targets.
+- [x] SDK helpers expose publish/respond/list/expire entry points.
+- [x] Event command subscriptions support bus-based publish/respond/expire.
+- [x] Responses are recorded idempotently and routed through
+  `response_route.topic`.
+- [ ] Browser FAB/workbench UI.
+- [ ] NLU Teacher migration from chat-local confirmation to Pending Actions.
+- [ ] Builder, pairing, runtime recovery, capability elevation, and guarded
+  skill-action producer migrations.
+- [ ] Notification deep links to Pending Actions without making notifications
+  the source of truth.
+- [ ] Delegated response-handler subscription handshake.
 
 ## Identity
 
@@ -115,6 +134,9 @@ Rules:
 - `ttl_s` may be accepted by SDK helpers as input, but core storage should
   persist the resolved `expires_at`.
 - `allowed_actions[].id` is stable logic. Labels are presentation only.
+- `allowed_actions[].terminal` controls whether a response closes the Pending
+  Action. Default SDK presets keep `test`, `preview`, and `postpone` active,
+  while `approve` and `refuse` are terminal.
 - `*_i18n.key` should be preferred for system strings. Plain text fields remain
   required as fallback for legacy clients, logs, and incomplete dictionaries.
 - `request_locale` is evidence for label choice, not an ownership key.
@@ -201,6 +223,16 @@ The base model is explicit routing:
 The core validates and records the response, then emits to the route. This makes
 cross-skill handling possible without hidden subscriptions.
 
+The initial core service publishes command subscriptions for bus callers:
+
+- `pending_actions.publish.request`
+- `pending_actions.respond.request`
+- `pending_actions.expire.request`
+
+State-change events use separate names such as `pending_actions.created`,
+`pending_actions.responded`, `pending_actions.expired`, and
+`pending_actions.changed`.
+
 One skill may publish an action whose response is handled by another skill, but
 the route must be explicit and policy-checked.
 
@@ -218,10 +250,12 @@ This is intentionally later work. The first implementation should use explicit
 
 ## SDK Contract
 
-The SDK should expose a small first-class API:
+The implemented SDK surface exposes import-light helpers:
 
 ```python
-action = await ctx.pending_actions.publish(
+from adaos.sdk.data import publish_pending_action
+
+action = publish_pending_action(
     kind="nlu.teacher.candidate_confirmation",
     title_i18n={"key": "pending_actions.nlu.confirm_title"},
     title="Confirm command understanding",
@@ -237,6 +271,13 @@ action = await ctx.pending_actions.publish(
     payload_ref={"candidate_id": "cand.123"},
 )
 ```
+
+Available helpers:
+
+- `publish_pending_action(...)`
+- `respond_pending_action(action_id, response_action_id, ...)`
+- `list_pending_actions(...)`
+- `expire_pending_actions(...)`
 
 SDK helpers may provide common action sets, but core storage should always
 contain explicit `allowed_actions`.
