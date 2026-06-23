@@ -110,6 +110,26 @@ def test_browser_snapshot_includes_active_yws_scoped_clients(monkeypatch) -> Non
     assert by_id["dev-browser::tab-1"]["last_webspace_id"] == "desktop"
 
 
+def test_detach_and_deny_have_distinct_admission_policy(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+
+    access_links.touch_member_link("member-1", online=True, connection_state="connected")
+    detached = access_links.detach_link("member", "member-1")
+
+    assert detached["admission_policy"] == "detached"
+    assert detached["revoked"] is False
+    assert detached["connection_state"] == "detached"
+    assert access_links.authorize_link("member", "member-1") == (True, None)
+
+    denied = access_links.deny_link("member", "member-1")
+
+    assert denied["admission_policy"] == "deny"
+    assert denied["revoked"] is True
+    assert denied["connection_state"] == "denied"
+    assert access_links.authorize_link("member", "member-1") == (False, "denied")
+
+
 def test_yws_browser_session_metadata_accepts_client_handshake_fields() -> None:
     metadata = gateway_ws._browser_session_metadata(
         {

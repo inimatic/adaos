@@ -208,10 +208,13 @@ def _build_policy_block(
     entry = policy_entry if isinstance(policy_entry, Mapping) else {}
     present = bool(entry)
     revoked = bool(entry.get("revoked")) if present else False
+    admission_policy = _text(entry.get("admission_policy")) if present else ""
     expired = _is_expired(entry, now=now) if present else False
     managed_state = (
-        "revoked"
-        if revoked
+        "denied"
+        if admission_policy == "deny" or revoked
+        else "detached"
+        if admission_policy == "detached"
         else "expired"
         if expired
         else "managed"
@@ -230,6 +233,9 @@ def _build_policy_block(
         "expires_at": _float_or_none(entry.get("expires_at")),
         "revoked": revoked,
         "revoked_at": _float_or_none(entry.get("revoked_at")),
+        "admission_policy": admission_policy or ("deny" if revoked else "allow"),
+        "detached_at": _float_or_none(entry.get("detached_at")),
+        "denied_at": _float_or_none(entry.get("denied_at")),
         "aliases": _list_of_raw_texts(entry.get("aliases")),
         "labels": _list_of_labels(entry.get("labels")),
     }
@@ -367,8 +373,7 @@ class DeviceInventoryService:
             items = [
                 item
                 for item in items
-                if not bool(_mapping(item.get("policy")).get("revoked"))
-                and _text(_mapping(item.get("policy")).get("managed_state")) != "revoked"
+                if _text(_mapping(item.get("policy")).get("managed_state")) not in {"detached", "denied", "revoked"}
             ]
         items.sort(
             key=lambda item: (
@@ -566,7 +571,7 @@ class DeviceInventoryService:
         if not self._policy_present(device):
             return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
         policy = _mapping(device.get("policy"))
-        if bool(policy.get("revoked")):
+        if _text(policy.get("managed_state")) in {"detached", "denied", "revoked"}:
             return {"ok": False, "error": "already_detached", "device_ref": _text(device_ref)}
         kind, link_id = self._kind_and_link_id(_text(device_ref))
         entry = _access_links.detach_link(kind, link_id)
@@ -583,6 +588,40 @@ class DeviceInventoryService:
 
                     logging.getLogger("adaos.device_inventory").debug(
                         "detach_device runtime unregister failed device_ref=%s", device_ref, exc_info=True
+                    )
+        return {
+            "ok": True,
+            "device_ref": _text(device_ref),
+            "entry": entry,
+            "device": self.get_device(_text(device_ref)),
+            "runtime_update": runtime_update,
+        }
+
+    def deny_device(self, device_ref: str) -> dict[str, Any]:
+        device, error = self._device_or_error(device_ref)
+        if error is not None:
+            return error
+        assert device is not None
+        if not self._policy_present(device):
+            return {"ok": False, "error": "device_policy_missing", "device_ref": _text(device_ref)}
+        policy = _mapping(device.get("policy"))
+        if _text(policy.get("managed_state")) in {"denied", "revoked"}:
+            return {"ok": False, "error": "already_denied", "device_ref": _text(device_ref)}
+        kind, link_id = self._kind_and_link_id(_text(device_ref))
+        entry = _access_links.deny_link(kind, link_id)
+        runtime_update = {"attempted": False, "applied": False}
+        if kind == "member":
+            mgr = _get_hub_link_manager()
+            if mgr is not None:
+                try:
+                    if mgr.is_connected(link_id):
+                        runtime_update = {"attempted": True, "applied": True}
+                        _run_coro(mgr.unregister(link_id))
+                except Exception:
+                    import logging
+
+                    logging.getLogger("adaos.device_inventory").debug(
+                        "deny_device runtime unregister failed device_ref=%s", device_ref, exc_info=True
                     )
         return {
             "ok": True,
@@ -833,12 +872,17 @@ def detach_device(device_ref: str) -> dict[str, Any]:
     return get_device_inventory_service().detach_device(device_ref)
 
 
+def deny_device(device_ref: str) -> dict[str, Any]:
+    return get_device_inventory_service().deny_device(device_ref)
+
+
 __all__ = [
     "DeviceInventoryService",
     "DeviceKind",
     "get_device",
     "get_device_inventory_service",
     "inspect_device",
+    "deny_device",
     "detach_device",
     "list_devices",
     "make_device_ref",

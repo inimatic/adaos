@@ -97,8 +97,8 @@ def test_device_inventory_hides_detached_devices_by_default(monkeypatch) -> None
             {
                 "id": "member-1",
                 "display_name": "Old member",
-                "revoked": True,
-                "revoked_at": 990.0,
+                "admission_policy": "detached",
+                "detached_at": 990.0,
             },
             {
                 "id": "member-2",
@@ -260,14 +260,57 @@ def test_device_inventory_detach_unregisters_live_member(monkeypatch) -> None:
     monkeypatch.setattr(
         device_inventory._access_links,
         "detach_link",
-        lambda kind, link_id: {"kind": kind, "id": link_id, "revoked": True},
+        lambda kind, link_id: {"kind": kind, "id": link_id, "admission_policy": "detached"},
     )
     monkeypatch.setattr(device_inventory, "_get_hub_link_manager", lambda: _FakeManager())
 
     result = device_inventory.DeviceInventoryService().detach_device("member:member-1")
 
     assert result["ok"] is True
-    assert result["entry"] == {"kind": "member", "id": "member-1", "revoked": True}
+    assert result["entry"] == {"kind": "member", "id": "member-1", "admission_policy": "detached"}
+    assert result["runtime_update"] == {"attempted": True, "applied": True}
+    assert calls == [("is_connected", "member-1"), ("unregister", "member-1")]
+
+
+def test_device_inventory_deny_marks_member_as_denied(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+    _patch_sources(
+        monkeypatch,
+        member_entries=[
+            {
+                "id": "member-1",
+                "display_name": "Kitchen tablet",
+                "revoked": False,
+            }
+        ],
+        live_members=[
+            {
+                "node_id": "member-1",
+                "connected": True,
+            }
+        ],
+    )
+
+    class _FakeManager:
+        def is_connected(self, node_id: str) -> bool:
+            calls.append(("is_connected", node_id))
+            return True
+
+        async def unregister(self, node_id: str) -> dict[str, object]:
+            calls.append(("unregister", node_id))
+            return {"ok": True}
+
+    monkeypatch.setattr(
+        device_inventory._access_links,
+        "deny_link",
+        lambda kind, link_id: {"kind": kind, "id": link_id, "admission_policy": "deny", "revoked": True},
+    )
+    monkeypatch.setattr(device_inventory, "_get_hub_link_manager", lambda: _FakeManager())
+
+    result = device_inventory.DeviceInventoryService().deny_device("member:member-1")
+
+    assert result["ok"] is True
+    assert result["entry"] == {"kind": "member", "id": "member-1", "admission_policy": "deny", "revoked": True}
     assert result["runtime_update"] == {"attempted": True, "applied": True}
     assert calls == [("is_connected", "member-1"), ("unregister", "member-1")]
 

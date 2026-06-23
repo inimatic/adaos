@@ -29,6 +29,7 @@ def test_command_profile_for_managed_member_enables_device_and_node_actions(monk
     assert profile["set_lifetime"]["enabled"] is True
     assert profile["set_lifetime"]["presets"] == ["permanent", "1h", "1d", "7d", "30d"]
     assert profile["detach"]["enabled"] is True
+    assert profile["deny"]["enabled"] is True
     assert profile["open_apps"] == {"enabled": True, "node_id": "member-1"}
     assert profile["open_marketplace"] == {"enabled": True, "node_id": "member-1"}
 
@@ -154,6 +155,7 @@ def test_command_profile_for_observed_only_member_disables_policy_commands(monke
         "presets": ["permanent", "1h", "1d", "7d", "30d"],
     }
     assert profile["detach"] == {"enabled": False, "reason": "device_policy_missing"}
+    assert profile["deny"] == {"enabled": False, "reason": "device_policy_missing"}
     assert profile["open_apps"] == {"enabled": True, "node_id": "member-2"}
     assert profile["open_marketplace"] == {"enabled": True, "node_id": "member-2"}
 
@@ -233,6 +235,9 @@ def test_device_settings_schema_includes_lifetime_and_detach_metadata(monkeypatc
     assert settings["detach"]["confirm_message"] == 'Detach device "Kitchen tablet"?'
     assert settings["detach"]["target"] == "browsers_skill.detach_device"
     assert settings["detach"]["params"] == {"device_ref": "member:member-1"}
+    assert settings["deny"]["confirm_message"] == 'Deny future connections from "Kitchen tablet"?'
+    assert settings["deny"]["target"] == "browsers_skill.deny_device"
+    assert settings["deny"]["params"] == {"device_ref": "member:member-1"}
     assert settings["actions"]["open_apps"] == {"enabled": True, "node_id": "member-1"}
     assert settings["reconcile"]["issue_total"] == 0
     assert settings["adopt"] == {
@@ -307,6 +312,10 @@ def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -
     assert settings["detach"]["reason"] == "device_policy_missing"
     assert settings["detach"]["target"] == "browsers_skill.detach_device"
     assert settings["detach"]["params"] == {"device_ref": "member:member-2"}
+    assert settings["deny"]["enabled"] is False
+    assert settings["deny"]["reason"] == "device_policy_missing"
+    assert settings["deny"]["target"] == "browsers_skill.deny_device"
+    assert settings["deny"]["params"] == {"device_ref": "member:member-2"}
     assert settings["reconcile"]["state"] == "attention"
     assert settings["reconcile"]["issues"][0]["id"] == "device_policy_missing"
     assert settings["adopt"] == {
@@ -352,6 +361,7 @@ def test_hub_device_settings_use_local_node_config_policy(monkeypatch) -> None:
     }
     assert settings["lifetime"]["set"]["reason"] == "hub_lifetime_not_applicable"
     assert settings["detach"]["reason"] == "hub_detach_not_applicable"
+    assert settings["deny"]["reason"] == "hub_deny_not_applicable"
 
 
 def test_rename_hub_device_updates_local_node_names(monkeypatch) -> None:
@@ -615,11 +625,52 @@ def test_detach_device_unregisters_live_member_when_connected(monkeypatch) -> No
     monkeypatch.setattr(
         device_access._access_links,
         "detach_link",
-        lambda kind, link_id: {"kind": kind, "id": link_id, "revoked": True},
+        lambda kind, link_id: {"kind": kind, "id": link_id, "admission_policy": "detached"},
     )
     monkeypatch.setattr(device_access._device_inventory, "_get_hub_link_manager", lambda: _FakeManager())
 
     result = device_access.detach_device("member:member-1")
+
+    assert result["ok"] is True
+    assert result["runtime_update"] == {"attempted": True, "applied": True}
+    assert calls == [
+        ("is_connected", "member-1"),
+        ("unregister", "member-1"),
+    ]
+
+
+def test_deny_device_unregisters_live_member_when_connected(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+    device = {
+        "ref": "member:member-1",
+        "kind": "member",
+        "identity": {"node_id": "member-1"},
+        "policy": {"present": True, "managed_state": "managed", "revoked": False},
+    }
+
+    class _FakeManager:
+        def is_connected(self, node_id: str) -> bool:
+            calls.append(("is_connected", node_id))
+            return True
+
+        async def unregister(self, node_id: str) -> dict[str, object]:
+            calls.append(("unregister", node_id))
+            return {"ok": True}
+
+    monkeypatch.setattr(device_access._device_inventory, "get_device", lambda device_ref: dict(device))
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda device_ref: ("member", "member-1"),
+    )
+    monkeypatch.setattr(
+        device_access._access_links,
+        "deny_link",
+        lambda kind, link_id: {"kind": kind, "id": link_id, "admission_policy": "deny", "revoked": True},
+    )
+    monkeypatch.setattr(device_access._device_inventory, "_get_hub_link_manager", lambda: _FakeManager())
+
+    result = device_access.deny_device("member:member-1")
 
     assert result["ok"] is True
     assert result["runtime_update"] == {"attempted": True, "applied": True}
@@ -649,5 +700,6 @@ def test_browser_command_profile_disables_node_context_actions(monkeypatch) -> N
     assert profile is not None
     assert profile["rename"]["enabled"] is True
     assert profile["detach"]["enabled"] is True
+    assert profile["deny"]["enabled"] is True
     assert profile["open_apps"] == {"enabled": False, "reason": "browser_has_no_node_context"}
     assert profile["open_marketplace"] == {"enabled": False, "reason": "browser_has_no_node_context"}

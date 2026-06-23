@@ -294,6 +294,11 @@ def _hub_device_settings(device_ref: str) -> dict[str, Any] | None:
             "confirm_title": "Detach hub",
             "confirm_message": "Local hub cannot be detached from device settings.",
         },
+        "deny": {
+            **_toggle(False, reason="hub_deny_not_applicable"),
+            "confirm_title": "Deny hub",
+            "confirm_message": "Local hub cannot be denied from device settings.",
+        },
         "actions": {
             "open_apps": _toggle(bool(node_id), node_id=node_id or None),
             "open_marketplace": _toggle(bool(node_id), node_id=node_id or None),
@@ -327,6 +332,7 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
             "rename": _toggle(True),
             "set_lifetime": _toggle(False, reason="hub_lifetime_not_applicable"),
             "detach": _toggle(False, reason="hub_detach_not_applicable"),
+            "deny": _toggle(False, reason="hub_deny_not_applicable"),
             "open_apps": _toggle(bool(node_id), node_id=node_id),
             "open_marketplace": _toggle(bool(node_id), node_id=node_id),
         }
@@ -346,15 +352,24 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
     rename_reason = None if rename_enabled else "device_policy_missing"
     lifetime_enabled = policy_present
     lifetime_reason = None if lifetime_enabled else "device_policy_missing"
-    detach_enabled = policy_present and not revoked
+    detached_or_denied = managed_state in {"detached", "denied", "revoked"} or revoked
+    detach_enabled = policy_present and not detached_or_denied
     detach_reason = (
         None
         if detach_enabled
         else "already_detached"
-        if revoked and policy_present
+        if detached_or_denied and policy_present
         else "device_policy_missing"
     )
-    apps_enabled = kind == "member" and bool(node_id) and managed_state != "revoked"
+    deny_enabled = policy_present and managed_state not in {"denied", "revoked"}
+    deny_reason = (
+        None
+        if deny_enabled
+        else "already_denied"
+        if policy_present
+        else "device_policy_missing"
+    )
+    apps_enabled = kind == "member" and bool(node_id) and managed_state not in {"detached", "denied", "revoked"}
     apps_reason = None if apps_enabled else "browser_has_no_node_context" if kind == "browser" else "device_unavailable"
 
     return {
@@ -367,6 +382,7 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
             presets=_LIFETIME_PRESETS,
         ),
         "detach": _toggle(detach_enabled, reason=detach_reason),
+        "deny": _toggle(deny_enabled, reason=deny_reason),
         "open_apps": _toggle(apps_enabled, reason=apps_reason, node_id=node_id),
         "open_marketplace": _toggle(apps_enabled, reason=apps_reason, node_id=node_id),
     }
@@ -388,6 +404,7 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     name_meta = _mapping(profile.get("rename"))
     lifetime_meta = _mapping(profile.get("set_lifetime"))
     detach_meta = _mapping(profile.get("detach"))
+    deny_meta = _mapping(profile.get("deny"))
     reconcile = _device_reconciler.reconcile_device(_text(device_ref)) or {}
     adopt_meta = _mapping(reconcile.get("actions")).get("adopt_device")
     adopt_payload = _mapping(adopt_meta)
@@ -494,6 +511,16 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             ),
             "confirm_title": "Detach device",
             "confirm_message": f'Detach device "{effective_name}"?',
+        },
+        "deny": {
+            **_toggle(
+                bool(deny_meta.get("enabled")),
+                reason=_text(deny_meta.get("reason")) or None,
+                target="browsers_skill.deny_device",
+                params=command_params,
+            ),
+            "confirm_title": "Deny device",
+            "confirm_message": f'Deny future connections from "{effective_name}"?',
         },
         "actions": {
             "open_apps": _mapping(profile.get("open_apps")),
@@ -656,6 +683,12 @@ def detach_device(device_ref: str) -> dict[str, Any]:
     return _device_inventory.get_device_inventory_service().detach_device(_text(device_ref))
 
 
+def deny_device(device_ref: str) -> dict[str, Any]:
+    if _hub_ref_for_device_ref(device_ref):
+        return {"ok": False, "error": "hub_deny_not_applicable", "device_ref": _text(device_ref)}
+    return _device_inventory.get_device_inventory_service().deny_device(_text(device_ref))
+
+
 def adopt_device(device_ref: str, display_name: str | None = None, preset: str = "permanent") -> dict[str, Any]:
     return _device_reconciler.adopt_device(
         _text(device_ref),
@@ -668,6 +701,7 @@ __all__ = [
     "adopt_device",
     "add_device_alias",
     "deprecate_device_alias",
+    "deny_device",
     "detach_device",
     "get_device_settings",
     "get_command_profile",

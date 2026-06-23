@@ -292,6 +292,10 @@ def detach_device(device_ref: str) -> dict:
     return _service.detach_device(str(device_ref or ""))
 
 
+def deny_device(device_ref: str) -> dict:
+    return _service.deny_device(str(device_ref or ""))
+
+
 def list_endpoint_devices(kind: str | None = None, *, sync_registry: bool = True) -> list[dict[str, Any]]:
     normalized = _text(kind).lower() or "redevice"
     if normalized != "redevice":

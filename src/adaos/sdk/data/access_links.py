@@ -332,5 +332,17 @@ def detach_redevice_link(endpoint_id: str) -> dict[str, Any]:
     return _service.detach_link("redevice", endpoint_id)
 
 
+def deny_browser_link(device_id: str) -> dict[str, Any]:
+    return _service.deny_link("browser", device_id)
+
+
+def deny_member_link(node_id: str) -> dict[str, Any]:
+    return _service.deny_link("member", node_id)
+
+
+def deny_redevice_link(endpoint_id: str) -> dict[str, Any]:
+    return _service.deny_link("redevice", endpoint_id)
+
+
 def lifetime_label(entry: dict[str, Any]) -> str:
     return _service.lifetime_label(entry)

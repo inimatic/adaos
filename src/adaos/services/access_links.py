@@ -159,6 +159,11 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
     access_class = str(data.get("access_class") or "").strip().lower()
     if access_class not in {"device", "client"}:
         access_class = "device" if lifetime_mode == "permanent" else "client"
+    admission_policy = str(data.get("admission_policy") or "").strip().lower()
+    if admission_policy not in {"allow", "detached", "deny"}:
+        admission_policy = "deny" if bool(data.get("revoked", False)) else "allow"
+    detached_at = data.get("detached_at")
+    denied_at = data.get("denied_at")
     entry: dict[str, Any] = {
         "id": entry_id,
         "kind": kind,
@@ -169,6 +174,9 @@ def _normalize_entry(kind: LinkKind, entry_id: str, raw: Mapping[str, Any] | Non
         "autorotate": bool(data.get("autorotate", True)),
         "revoked": bool(data.get("revoked", False)),
         "revoked_at": float(data.get("revoked_at") or 0.0) or None,
+        "admission_policy": admission_policy,
+        "detached_at": float(detached_at or 0.0) or None,
+        "denied_at": float(denied_at or 0.0) or None,
         "created_at": float(data.get("created_at") or now),
         "updated_at": float(data.get("updated_at") or now),
         "last_seen_at": float(data.get("last_seen_at") or 0.0) or None,
@@ -286,6 +294,7 @@ _ENTITY_REGISTRY_FIELDS = {
     "last_webspace_id",
     "node_names",
     "os_name",
+    "admission_policy",
     "revoked",
     "user_agent",
 }
@@ -435,6 +444,8 @@ def authorize_link(kind: LinkKind, entry_id: str) -> tuple[bool, str | None]:
     entry = get_link(kind, entry_id)
     if entry is None:
         return True, None
+    if str(entry.get("admission_policy") or "").strip().lower() == "deny":
+        return False, "denied"
     if bool(entry.get("revoked")):
         return False, "revoked"
     if _is_expired(entry):
@@ -956,6 +967,9 @@ def set_link_lifetime(kind: LinkKind, entry_id: str, preset: str) -> dict[str, A
     previous = dict(entry)
     entry["revoked"] = False
     entry["revoked_at"] = None
+    entry["admission_policy"] = "allow"
+    entry["detached_at"] = None
+    entry["denied_at"] = None
     entry["autorotate"] = True
     if preset_token in {"permanent", "device", "indefinite"}:
         entry["lifetime_mode"] = "permanent"
@@ -980,14 +994,38 @@ def detach_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
     registry = _load_registry()
     entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
     previous = dict(entry)
-    entry["revoked"] = True
-    entry["revoked_at"] = _now_ts()
+    now = _now_ts()
+    entry["revoked"] = False
+    entry["revoked_at"] = None
+    entry["admission_policy"] = "detached"
+    entry["detached_at"] = now
     entry["online"] = False
-    entry["connection_state"] = "revoked"
+    entry["connection_state"] = "detached"
     entry = _updated(entry)
     saved = _put_entry(registry, kind, entry)
     _save_registry(registry)
     _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="link.detached")
+    return saved
+
+
+def deny_link(kind: LinkKind, entry_id: str) -> dict[str, Any]:
+    token = str(entry_id or "").strip()
+    if not token:
+        raise ValueError("entry id is required")
+    registry = _load_registry()
+    entry = _get_entry(registry, kind, token) or _normalize_entry(kind, token, {})
+    previous = dict(entry)
+    now = _now_ts()
+    entry["revoked"] = True
+    entry["revoked_at"] = now
+    entry["admission_policy"] = "deny"
+    entry["denied_at"] = now
+    entry["online"] = False
+    entry["connection_state"] = "denied"
+    entry = _updated(entry)
+    saved = _put_entry(registry, kind, entry)
+    _save_registry(registry)
+    _emit_entity_registry_changed_if_needed(kind, previous, saved, reason="link.denied")
     return saved
 
 
