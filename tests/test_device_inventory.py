@@ -302,6 +302,41 @@ def test_device_inventory_detach_creates_tombstone_for_observed_only_member(monk
     assert calls == [("member", "member-2")]
 
 
+def test_device_inventory_repeated_detach_hidden_member_is_idempotent(monkeypatch) -> None:
+    reloads: list[tuple[str, str, str, str]] = []
+    _patch_sources(
+        monkeypatch,
+        member_entries=[
+            {
+                "id": "member-1",
+                "display_name": "Old member",
+                "admission_policy": "detached",
+                "detached_at": 990.0,
+            }
+        ],
+    )
+
+    def _fail_detach(kind: str, link_id: str) -> dict[str, object]:  # noqa: ARG001
+        raise AssertionError("already detached member must not be detached again")
+
+    monkeypatch.setattr(device_inventory._access_links, "detach_link", _fail_detach)
+    monkeypatch.setattr(
+        device_inventory,
+        "_request_webspace_reload_for_device",
+        lambda kind, link_id, device_ref, *, reason: reloads.append((kind, link_id, device_ref, reason))
+        or {"attempted": True, "emitted": True, "webspace_id": "desktop"},
+    )
+
+    result = device_inventory.DeviceInventoryService().detach_device("member:member-1")
+
+    assert result["ok"] is True
+    assert result["status"] == "already_detached"
+    assert result["device_ref"] == "member:member-1"
+    assert result["device"]["policy"]["managed_state"] == "detached"
+    assert result["layout_refresh"] == {"attempted": True, "emitted": True, "webspace_id": "desktop"}
+    assert reloads == [("member", "member-1", "member:member-1", "device.already_detached")]
+
+
 def test_device_inventory_deny_marks_member_as_denied(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
     _patch_sources(

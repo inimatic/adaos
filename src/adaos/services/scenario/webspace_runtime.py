@@ -1490,7 +1490,13 @@ def _detached_member_node_ids() -> set[str]:
         if not isinstance(item, Mapping):
             continue
         policy = item.get("policy") if isinstance(item.get("policy"), Mapping) else {}
-        if not bool(policy.get("revoked")) and str(policy.get("managed_state") or "").strip().lower() != "revoked":
+        managed_state = str(policy.get("managed_state") or "").strip().lower()
+        admission_policy = str(policy.get("admission_policy") or "").strip().lower()
+        if (
+            not bool(policy.get("revoked"))
+            and managed_state not in {"detached", "denied", "revoked"}
+            and admission_policy not in {"detached", "deny", "denied"}
+        ):
             continue
         identity = item.get("identity") if isinstance(item.get("identity"), Mapping) else {}
         node_id = str(identity.get("node_id") or "").strip()

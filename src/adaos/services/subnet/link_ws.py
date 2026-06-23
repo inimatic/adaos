@@ -83,6 +83,11 @@ async def subnet_ws(websocket: WebSocket) -> None:
 
     mgr = get_hub_link_manager()
     node_id: str | None = None
+    hostname: Any = None
+    roles: Any = []
+    node_names: Any = []
+    link = None
+    registered = False
     try:
         try:
             raw = await websocket.receive_json()
@@ -117,13 +122,31 @@ async def subnet_ws(websocket: WebSocket) -> None:
                 return
         except Exception:
             pass
-        link = await mgr.register(
-            node_id,
-            websocket,
-            hostname=str(hostname) if hostname else None,
-            roles=list(roles) if isinstance(roles, list) else [],
-            node_names=list(node_names) if isinstance(node_names, list) else [],
+        await websocket.send_json(
+            {
+                "t": "hello.ack",
+                "ok": True,
+                "hub_node_id": conf.node_id,
+                "subnet_id": conf.subnet_id,
+                "server_time": time.time(),
+            }
         )
+        try:
+            link = await mgr.register(
+                node_id,
+                websocket,
+                hostname=str(hostname) if hostname else None,
+                roles=list(roles) if isinstance(roles, list) else [],
+                node_names=list(node_names) if isinstance(node_names, list) else [],
+            )
+            registered = True
+        except Exception:
+            _log.warning("subnet member registration failed node_id=%s", node_id, exc_info=True)
+            try:
+                await websocket.close(code=1011)
+            except Exception:
+                pass
+            return
         try:
             from adaos.services.access_links import touch_member_link
 
@@ -136,9 +159,6 @@ async def subnet_ws(websocket: WebSocket) -> None:
             )
         except Exception:
             pass
-        await link.send_json(
-            {"t": "hello.ack", "ok": True, "hub_node_id": conf.node_id, "subnet_id": conf.subnet_id, "server_time": time.time()}
-        )
         try:
             await mgr.refresh_member_after_connect(node_id, reason="member_link_connected")
         except Exception:
@@ -256,7 +276,7 @@ async def subnet_ws(websocket: WebSocket) -> None:
 
             _ = link
     finally:
-        if node_id:
+        if node_id and registered:
             try:
                 from adaos.services.access_links import touch_member_link
 

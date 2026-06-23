@@ -177,6 +177,44 @@ def _connected_to_subnet(data: Mapping[str, Any] | None) -> bool | None:
     return _bool_or_none(payload.get("connected_to_hub"))
 
 
+def _request_webspace_reload_for_device(
+    kind: DeviceKind,
+    link_id: str,
+    device_ref: str,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    if kind != "member":
+        return {"attempted": False, "emitted": False, "reason": "not_member"}
+    try:
+        from adaos.services.agent_context import get_ctx
+        from adaos.services.eventbus import emit as bus_emit
+        from adaos.services.yjs.webspace import default_webspace_id
+
+        webspace_id = default_webspace_id()
+        bus_emit(
+            get_ctx().bus,
+            "desktop.webspace.reload",
+            {
+                "webspace_id": webspace_id,
+                "reason": reason,
+                "source_of_truth": "device_inventory",
+                "device_ref": device_ref,
+                "device_kind": kind,
+                "node_id": link_id,
+            },
+            source="device_inventory",
+        )
+        return {"attempted": True, "emitted": True, "webspace_id": webspace_id}
+    except Exception:
+        import logging
+
+        logging.getLogger("adaos.device_inventory").debug(
+            "failed to request webspace reload for device_ref=%s", device_ref, exc_info=True
+        )
+        return {"attempted": True, "emitted": False, "reason": "emit_failed"}
+
+
 def make_device_ref(kind: DeviceKind, link_id: str) -> str:
     token = _text(link_id)
     if not token:
@@ -466,15 +504,18 @@ class DeviceInventoryService:
             )
         return items
 
-    def get_device(self, device_ref: str) -> dict[str, Any] | None:
+    def _find_device(self, device_ref: str, *, include_detached: bool = False) -> dict[str, Any] | None:
         parsed = parse_device_ref(device_ref)
         if parsed is None:
             return None
         kind, token = parsed
-        for item in self.list_devices(kind=kind):
+        for item in self.list_devices(kind=kind, include_detached=include_detached):
             if _text(item.get("ref")) == make_device_ref(kind, token):
                 return item
         return None
+
+    def get_device(self, device_ref: str) -> dict[str, Any] | None:
+        return self._find_device(device_ref, include_detached=False)
 
     def inspect_device(self, device_ref: str) -> dict[str, Any] | None:
         device = self.get_device(device_ref)
@@ -493,12 +534,19 @@ class DeviceInventoryService:
             "reconcile": reconcile,
         }
 
-    def _device_or_error(self, device_ref: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    def _device_or_error(
+        self,
+        device_ref: str,
+        *,
+        include_detached: bool = False,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         token = _text(device_ref)
         parsed = parse_device_ref(token)
         if parsed is None:
             return None, {"ok": False, "error": "invalid_device_ref", "device_ref": token}
         device = get_device(token)
+        if device is None and include_detached:
+            device = self._find_device(token, include_detached=True)
         if device is None:
             return None, {"ok": False, "error": "device_not_found", "device_ref": token}
         return device, None
@@ -564,14 +612,27 @@ class DeviceInventoryService:
         }
 
     def detach_device(self, device_ref: str) -> dict[str, Any]:
-        device, error = self._device_or_error(device_ref)
+        device, error = self._device_or_error(device_ref, include_detached=True)
         if error is not None:
             return error
         assert device is not None
+        kind, link_id = self._kind_and_link_id(_text(device_ref))
         policy = _mapping(device.get("policy"))
         if _text(policy.get("managed_state")) in {"detached", "denied", "revoked"}:
-            return {"ok": False, "error": "already_detached", "device_ref": _text(device_ref)}
-        kind, link_id = self._kind_and_link_id(_text(device_ref))
+            layout_refresh = _request_webspace_reload_for_device(
+                kind,
+                link_id,
+                _text(device_ref),
+                reason="device.already_detached",
+            )
+            return {
+                "ok": True,
+                "status": "already_detached",
+                "device_ref": _text(device_ref),
+                "device": device,
+                "runtime_update": {"attempted": False, "applied": False},
+                "layout_refresh": layout_refresh,
+            }
         entry = _access_links.detach_link(kind, link_id)
         runtime_update = {"attempted": False, "applied": False}
         if kind == "member":
@@ -587,23 +648,43 @@ class DeviceInventoryService:
                     logging.getLogger("adaos.device_inventory").debug(
                         "detach_device runtime unregister failed device_ref=%s", device_ref, exc_info=True
                     )
+        layout_refresh = _request_webspace_reload_for_device(
+            kind,
+            link_id,
+            _text(device_ref),
+            reason="device.detached",
+        )
         return {
             "ok": True,
             "device_ref": _text(device_ref),
             "entry": entry,
             "device": self.get_device(_text(device_ref)),
             "runtime_update": runtime_update,
+            "layout_refresh": layout_refresh,
         }
 
     def deny_device(self, device_ref: str) -> dict[str, Any]:
-        device, error = self._device_or_error(device_ref)
+        device, error = self._device_or_error(device_ref, include_detached=True)
         if error is not None:
             return error
         assert device is not None
+        kind, link_id = self._kind_and_link_id(_text(device_ref))
         policy = _mapping(device.get("policy"))
         if _text(policy.get("managed_state")) in {"denied", "revoked"}:
-            return {"ok": False, "error": "already_denied", "device_ref": _text(device_ref)}
-        kind, link_id = self._kind_and_link_id(_text(device_ref))
+            layout_refresh = _request_webspace_reload_for_device(
+                kind,
+                link_id,
+                _text(device_ref),
+                reason="device.already_denied",
+            )
+            return {
+                "ok": True,
+                "status": "already_denied",
+                "device_ref": _text(device_ref),
+                "device": device,
+                "runtime_update": {"attempted": False, "applied": False},
+                "layout_refresh": layout_refresh,
+            }
         entry = _access_links.deny_link(kind, link_id)
         runtime_update = {"attempted": False, "applied": False}
         if kind == "member":
@@ -619,12 +700,19 @@ class DeviceInventoryService:
                     logging.getLogger("adaos.device_inventory").debug(
                         "deny_device runtime unregister failed device_ref=%s", device_ref, exc_info=True
                     )
+        layout_refresh = _request_webspace_reload_for_device(
+            kind,
+            link_id,
+            _text(device_ref),
+            reason="device.denied",
+        )
         return {
             "ok": True,
             "device_ref": _text(device_ref),
             "entry": entry,
             "device": self.get_device(_text(device_ref)),
             "runtime_update": runtime_update,
+            "layout_refresh": layout_refresh,
         }
 
     def _list_browser_devices(self, *, now: float) -> list[dict[str, Any]]:

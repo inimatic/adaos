@@ -1644,6 +1644,97 @@ def test_resolve_webspace_preserves_live_remote_entries_during_projection_gap(mo
     assert "node:member-1:weather_modal" in resolved.registry["modals"]
 
 
+def test_detached_member_node_ids_include_detached_and_denied_policies(monkeypatch) -> None:
+    from adaos.services import device_inventory
+
+    monkeypatch.setattr(
+        device_inventory,
+        "list_devices",
+        lambda *, kind=None, include_detached=False: [
+            {
+                "identity": {"node_id": "member-detached"},
+                "policy": {"managed_state": "detached", "admission_policy": "detached"},
+            },
+            {
+                "identity": {"node_id": "member-denied"},
+                "policy": {"managed_state": "denied", "admission_policy": "deny"},
+            },
+            {
+                "identity": {"node_id": "member-active"},
+                "policy": {"managed_state": "managed", "admission_policy": "allow"},
+            },
+        ],
+    )
+
+    assert webspace_runtime_module._detached_member_node_ids() == {"member-detached", "member-denied"}
+
+
+def test_resolve_webspace_drops_live_remote_entries_for_detached_members(monkeypatch) -> None:
+    webspace_runtime_module._RESOLVED_WEBSPACE_CACHE.clear()
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "load_config",
+        lambda: SimpleNamespace(role="hub", node_id="hub-1", node_names=["Hub"]),
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Hub",
+            "node_compact_label": "N0",
+            "node_index": 0,
+            "node_color": "#4E79A7",
+        },
+    )
+    monkeypatch.setattr(webspace_runtime_module, "_detached_member_node_ids", lambda: {"member-1"})
+
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime()
+    resolved = runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="desktop",
+            scenario_id="web_desktop",
+            source_mode="workspace",
+            scenario_application={"desktop": {"pageSchema": {"id": "desktop"}}},
+            scenario_catalog={"apps": [{"id": "hub_app", "title": "Hub App"}], "widgets": []},
+            scenario_registry={"modals": ["apps_catalog"], "widgets": []},
+            overlay_snapshot={},
+            live_state={
+                "application": {
+                    "modals": {
+                        "node:member-1:weather_modal": {
+                            "title": "Weather Settings",
+                        }
+                    }
+                },
+                "catalog": {
+                    "apps": [
+                        {"id": "node:member-1:weather_skill", "title": "Weather", "node_id": "member-1"},
+                    ],
+                    "widgets": [
+                        {"id": "node:member-1:infrastate", "title": "Infra State", "node_id": "member-1"},
+                    ],
+                },
+                "registry": {
+                    "modals": ["apps_catalog", "node:member-1:weather_modal"],
+                    "widgets": [],
+                },
+                "desktop": {},
+                "routing": {},
+            },
+            skill_decls=[],
+            desktop_scenarios=[],
+        )
+    )
+
+    app_ids = [str(item.get("id") or "") for item in resolved.catalog["apps"]]
+    widget_ids = [str(item.get("id") or "") for item in resolved.catalog["widgets"]]
+    assert "hub_app" in app_ids
+    assert "node:member-1:weather_skill" not in app_ids
+    assert "node:member-1:infrastate" not in widget_ids
+    assert "node:member-1:weather_modal" not in resolved.application["modals"]
+    assert "node:member-1:weather_modal" not in resolved.registry["modals"]
+
+
 def _patch_switch_dependencies(monkeypatch, *, state: dict[str, _FakeMap] | None = None) -> dict[str, _FakeMap]:
     fake_state = state or {"ui": _FakeMap(), "registry": _FakeMap(), "data": _FakeMap()}
     fake_ctx = get_ctx()
