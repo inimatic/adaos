@@ -116,7 +116,7 @@ Implemented:
 Required for a reliable hub-browser quality bar:
 
 - [x] Add a `hubBrowserQuality` block to reliability summaries.
-- [ ] Track recent timeout windows for `hub_open_ack_timeout`,
+- [x] Track recent timeout windows for `hub_open_ack_timeout`,
       `dc_open_timeout`, and repeated Yjs provider closes.
 - [ ] Surface the selected transport and fallback reason per semantic channel.
 - [ ] Separate logical `ready` from quality `ready` in diagnostics and UI.
