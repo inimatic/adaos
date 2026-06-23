@@ -9,6 +9,7 @@ It describes an ownership boundary, not the full semantics of delivery, replay, 
 Read this together with:
 
 - [Channel Semantics](channel-semantics.md)
+- [Hub-Browser Connectivity](hub-browser-connectivity.md)
 - [Authority And Degraded Mode](authority-and-degraded-mode.md)
 - [Hub-Root Protocol](hub-root-protocol.md)
 - [Transport Ownership](transport-ownership.md)
